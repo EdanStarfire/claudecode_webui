@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(uv sync:*)",
+      "Bash(uv run:*)",
+      "Bash(uv add:*)",
+      "WebFetch",
+      "WebSearch",
+      "Bash(uv run pytest:*)",
+      "Bash(uv pip list:*)",
+      "Bash(timeout 15 uv run:*)",
+      "Bash(timeout 25 uv run:*)",
+      "Bash(find:*)",
+      "Bash(uv pip show:*)",
+      "Bash(cat:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
