@@ -104,6 +104,13 @@ Build a web-based interface that proxies Claude Code sessions through a headless
 - Complete test suite with 64 passing tests covering all Phase 2 functionality
 - Full integration between session management, data storage, SDK interaction, and error handling
 
+**Phase 2.1 - SDK Modernization (2025-09-15)**:
+- **ClaudeSDKClient Integration**: Migrated from function-based `query()` to modern `ClaudeSDKClient` context manager pattern
+- **Enhanced Permission System**: Updated permission callbacks to support new `PermissionResultAllow`/`PermissionResultDeny` return types with backward compatibility
+- **Improved Message Processing**: Enhanced message conversion with better type handling, serialization, and error recovery
+- **Robust Error Handling**: Comprehensive error handling throughout SDK integration with proper logging and state management
+- **Type Safety**: Enhanced type annotations and imports with fallback handling for development environments
+
 ---
 
 ## Phase 3: Basic WebUI (MVP Complete)

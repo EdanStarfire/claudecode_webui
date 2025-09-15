@@ -8,7 +8,7 @@ into a unified system for managing Claude Code sessions.
 import asyncio
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Any, List, Optional, Callable
+from typing import Dict, Any, List, Optional, Callable, Union
 import logging
 
 from .session_manager import SessionManager, SessionState, SessionInfo
@@ -61,7 +61,7 @@ class SessionCoordinator:
         system_prompt: Optional[str] = None,
         tools: List[str] = None,
         model: Optional[str] = None,
-        permission_callback: Optional[Callable] = None,
+        permission_callback: Optional[Callable[[str, Dict[str, Any]], Union[bool, Dict[str, Any]]]] = None,
     ) -> str:
         """Create a new Claude Code session with integrated components"""
         try:
@@ -204,7 +204,6 @@ class SessionCoordinator:
                 sdk_info = sdk.get_info()
                 sdk_info.update({
                     "queue_size": sdk.get_queue_size(),
-                    "is_processing": sdk.is_processing()
                 })
 
             # Get storage stats

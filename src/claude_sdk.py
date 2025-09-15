@@ -2,15 +2,40 @@
 
 import asyncio
 import time
-import uuid
 from pathlib import Path
-from typing import Dict, List, Optional, Callable, Any, AsyncIterator
+from typing import Dict, List, Optional, Callable, Any, Union
 from enum import Enum
 from dataclasses import dataclass, asdict
-from queue import Queue
 
 from .logging_config import get_logger
 from .data_storage import DataStorageManager
+
+# Import SDK components
+try:
+    from claude_code_sdk import (
+        ClaudeSDKClient,
+        ClaudeCodeOptions,
+        PermissionResultAllow,
+        PermissionResultDeny,
+        ToolPermissionContext,
+        AssistantMessage,
+        UserMessage,
+        SystemMessage,
+        ResultMessage,
+        TextBlock
+    )
+except ImportError:
+    # Fallback for development/testing environments
+    ClaudeSDKClient = None
+    ClaudeCodeOptions = None
+    PermissionResultAllow = None
+    PermissionResultDeny = None
+    ToolPermissionContext = None
+    AssistantMessage = None
+    UserMessage = None
+    SystemMessage = None
+    ResultMessage = None
+    TextBlock = None
 
 logger = get_logger(__name__)
 
@@ -53,7 +78,7 @@ class ClaudeSDK:
         storage_manager: Optional[DataStorageManager] = None,
         message_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
         error_callback: Optional[Callable[[str, Exception], None]] = None,
-        permission_callback: Optional[Callable[[str, Dict[str, Any]], bool]] = None,
+        permission_callback: Optional[Callable[[str, Dict[str, Any]], Union[bool, Dict[str, Any]]]] = None,
         permissions: str = "acceptEdits",
         system_prompt: Optional[str] = None,
         tools: List[str] = None,
@@ -87,29 +112,28 @@ class ClaudeSDK:
 
         self.info = SessionInfo(session_id=session_id, working_directory=str(self.working_directory))
 
-        # SDK will be imported dynamically to avoid dependency issues during development
-        self._sdk_query = None
-        self._sdk_options = None
+        # New SDK client pattern
+        self._sdk_client: Optional[ClaudeSDKClient] = None
+        self._sdk_options: Optional[ClaudeCodeOptions] = None
 
         # Interactive conversation support
         self._message_queue = asyncio.Queue()
         self._conversation_task: Optional[asyncio.Task] = None
 
         # Control
-        self._current_iterator: Optional[AsyncIterator] = None
         self._shutdown_event = asyncio.Event()
 
         logger.info(f"Initialized enhanced Claude SDK wrapper for session {session_id}")
 
     async def start(self) -> bool:
         """
-        Start the Claude Code SDK session with interactive conversation support.
+        Start the Claude Code SDK session with new ClaudeSDKClient pattern.
 
         Returns:
             True if started successfully, False otherwise
         """
         try:
-            logger.info(f"Starting enhanced Claude Code SDK session in {self.working_directory}")
+            logger.info(f"Starting Claude Code SDK session with ClaudeSDKClient in {self.working_directory}")
             self.info.state = SessionState.STARTING
             self.info.start_time = time.time()
 
@@ -117,17 +141,19 @@ class ClaudeSDK:
             if not self.working_directory.exists():
                 raise FileNotFoundError(f"Working directory does not exist: {self.working_directory}")
 
-            # Import SDK (required)
-            from claude_code_sdk import query, ClaudeCodeOptions
-            self._sdk_query = query
-            self._sdk_options = ClaudeCodeOptions
-            logger.info("Claude Code SDK imported successfully")
+            # Check SDK components are available
+            if not ClaudeSDKClient or not ClaudeCodeOptions:
+                raise ImportError("Claude Code SDK components not available")
 
-            # Start conversation task for message queue processing
-            self._conversation_task = asyncio.create_task(self._conversation_loop())
+            # Configure SDK options
+            self._sdk_options = self._get_sdk_options()
+            logger.info("Claude Code SDK options configured")
+
+            # Start message processing task
+            self._conversation_task = asyncio.create_task(self._message_processing_loop())
 
             self.info.state = SessionState.RUNNING
-            logger.info(f"Enhanced Claude Code SDK session started successfully")
+            logger.info(f"Claude Code SDK session started successfully")
             return True
 
         except Exception as e:
@@ -171,179 +197,198 @@ class ClaudeSDK:
                 await self._safe_callback(self.error_callback, "message_queue_failed", e)
             return False
 
-    async def _conversation_loop(self):
-        """Main conversation loop that processes queued messages"""
-        logger.info("Starting conversation loop")
-
+    async def _message_processing_loop(self):
+        """
+        Main message processing loop using the new ClaudeSDKClient pattern.
+        """
+        logger.info("Starting message processing loop")
         try:
-            while not self._shutdown_event.is_set():
-                try:
-                    # Wait for message with timeout to allow shutdown checking
-                    message_data = await asyncio.wait_for(
-                        self._message_queue.get(),
-                        timeout=1.0
-                    )
+            # Create SDK client with context manager
+            async with ClaudeSDKClient(self._sdk_options) as client:
+                self._sdk_client = client
+                logger.info("ClaudeSDKClient initialized successfully")
 
-                    if message_data["type"] == "user_message":
-                        await self._process_user_message(message_data["content"])
+                while not self._shutdown_event.is_set():
+                    try:
+                        # Wait for a message from the queue
+                        message_data = await asyncio.wait_for(
+                            self._message_queue.get(),
+                            timeout=1.0
+                        )
 
-                except asyncio.TimeoutError:
-                    # Normal timeout, continue loop
-                    continue
+                        if message_data and message_data.get("content"):
+                            content = message_data["content"]
+                            logger.debug(f"Processing message: {content[:100]}...")
 
-                except Exception as e:
-                    logger.error(f"Error in conversation loop: {e}")
-                    if self.error_callback:
-                        await self._safe_callback(self.error_callback, "conversation_loop_error", e)
-                    await asyncio.sleep(1.0)  # Prevent tight error loop
+                            # Store user message if storage available
+                            if self.storage_manager:
+                                await self.storage_manager.append_message({
+                                    "type": "user",
+                                    "content": content,
+                                    "session_id": self.session_id
+                                })
+
+                            self.info.message_count += 1
+                            self.info.last_activity = time.time()
+
+                            # Send message to Claude using new SDK pattern
+                            await client.query(content)
+
+                            # Process responses
+                            async for response_message in client.receive_response():
+                                if self._shutdown_event.is_set():
+                                    break
+                                await self._process_sdk_message(response_message)
+
+                        self._message_queue.task_done()
+
+                    except asyncio.TimeoutError:
+                        # No message in queue, continue loop
+                        continue
+                    except asyncio.CancelledError:
+                        logger.info("Message processing loop cancelled")
+                        break
+                    except Exception as e:
+                        logger.error(f"Error processing message: {e}")
+                        if self.error_callback:
+                            await self._safe_callback(self.error_callback, "message_processing_error", e)
 
         except Exception as e:
-            logger.error(f"Fatal error in conversation loop: {e}")
-            self.info.state = SessionState.FAILED
-            self.info.error_message = str(e)
-
-        logger.info("Conversation loop ended")
-
-    async def _process_user_message(self, message: str):
-        """Process a single user message through the SDK"""
-        if self._processing_message:
-            logger.warning("Already processing a message, skipping")
-            return
-
-        self._processing_message = True
-        try:
-            logger.debug(f"Processing user message: {message[:100]}...")
-            self.info.state = SessionState.PROCESSING
-
-            # Store user message if storage available
-            if self.storage_manager:
-                await self.storage_manager.append_message({
-                    "type": "user",
-                    "content": message,
-                    "session_id": self.session_id
-                })
-
-            # Run SDK conversation
-            await self._run_sdk_conversation(message)
-
-            self.info.message_count += 1
-            self.info.last_activity = time.time()
-            self.info.state = SessionState.RUNNING
-
-            logger.info(f"Processed message #{self.info.message_count}")
-
-        except Exception as e:
-            logger.error(f"Failed to process user message: {e}")
+            logger.error(f"Fatal error in message processing loop: {e}")
             self.info.state = SessionState.FAILED
             self.info.error_message = str(e)
             if self.error_callback:
-                await self._safe_callback(self.error_callback, "message_processing_failed", e)
+                await self._safe_callback(self.error_callback, "message_processing_loop_error", e)
         finally:
-            self._processing_message = False
+            self._sdk_client = None
+            logger.info("Message processing loop ended")
 
-    async def _can_use_tool_callback(self, tool_name: str, tool_input: Dict[str, Any]) -> bool:
+
+    def _get_sdk_options(self):
+        """Configure SDK options with correct parameter names for new ClaudeSDKClient pattern."""
+
+        # Create callback function with new PermissionResult return types
+        async def can_use_tool_wrapper(
+            tool_name: str,
+            input_params: Dict[str, Any],
+            context: ToolPermissionContext
+        ) -> Union[PermissionResultAllow, PermissionResultDeny]:
+            return await self._can_use_tool_callback(tool_name, input_params, context)
+
+        options_kwargs = {
+            "cwd": str(self.working_directory),
+            "permission_mode": self.permissions,
+            "system_prompt": self.system_prompt,
+            "allowed_tools": self.tools,
+        }
+
+        # Only add can_use_tool callback if permission callback is provided and SDK classes are available
+        if self.permission_callback and PermissionResultAllow and PermissionResultDeny:
+            options_kwargs["can_use_tool"] = can_use_tool_wrapper
+
+        if self.model is not None:
+            options_kwargs["model"] = self.model
+
+        return ClaudeCodeOptions(**options_kwargs)
+
+    async def _process_sdk_message(self, sdk_message: Any):
+        """Process a single message from the SDK stream."""
+        try:
+            converted_message = self._convert_sdk_message(sdk_message)
+            self.info.last_activity = time.time()
+
+            if self.storage_manager:
+                await self._store_sdk_message(converted_message)
+
+            if self.message_callback:
+                await self._safe_callback(self.message_callback, converted_message)
+
+            logger.debug(f"Processed SDK message: {converted_message.get('type', 'unknown')}")
+
+        except Exception as e:
+            logger.error(f"Failed to process SDK message: {e}")
+            if self.error_callback:
+                await self._safe_callback(self.error_callback, "sdk_message_processing_failed", e)
+    
+    async def _store_sdk_message(self, converted_message: Dict[str, Any]):
+        """Store the SDK message in a serializable format."""
+        storage_message = {
+            "type": converted_message.get("type", "unknown"),
+            "content": converted_message.get("content", ""),
+            "session_id": converted_message.get("session_id"),
+            "timestamp": converted_message.get("timestamp"),
+            "sdk_message_type": converted_message.get("sdk_message").__class__.__name__
+            if converted_message.get("sdk_message")
+            else None,
+        }
+        for key, value in converted_message.items():
+            if key not in ["sdk_message"] and isinstance(
+                value, (str, int, float, bool, type(None))
+            ):
+                storage_message[key] = value
+        await self.storage_manager.append_message(storage_message)
+
+    async def _can_use_tool_callback(
+        self,
+        tool_name: str,
+        input_params: Dict[str, Any],
+        context: ToolPermissionContext
+    ) -> Union[PermissionResultAllow, PermissionResultDeny]:
         """
-        Callback to decide if a tool can be used.
+        Callback to decide if a tool can be used using new PermissionResult types.
         Delegates the decision to an external callback if provided.
+
+        Returns:
+            PermissionResultAllow or PermissionResultDeny object
         """
+        logger.info(f"=======================================")
+        logger.info(f"PERMISSION CALLBACK TRIGGERED!")
+        logger.info(f"Tool: {tool_name}")
+        logger.info(f"Input: {input_params}")
+        logger.info(f"Context: {context}")
+        logger.info(f"=======================================")
+
         if self.permission_callback:
             logger.info(f"Delegating permission check for tool '{tool_name}' to external callback.")
             try:
-                # Await the callback if it's a coroutine function
+                # Call the callback - can now await since SDK callback is async
                 if asyncio.iscoroutinefunction(self.permission_callback):
-                    return await self.permission_callback(tool_name, tool_input)
+                    decision = await self.permission_callback(tool_name, input_params)
                 else:
-                    return self.permission_callback(tool_name, tool_input)
+                    decision = self.permission_callback(tool_name, input_params)
+
+                # Convert different response formats to new PermissionResult objects
+                if isinstance(decision, bool):
+                    if decision:
+                        logger.info(f"   ✅ Tool '{tool_name}' approved by callback")
+                        return PermissionResultAllow(updated_input=input_params)
+                    else:
+                        logger.info(f"   ❌ Tool '{tool_name}' denied by callback")
+                        return PermissionResultDeny(message=f"Tool '{tool_name}' denied by permission callback")
+                elif isinstance(decision, dict):
+                    # Handle old format dict responses
+                    behavior = decision.get("behavior", "deny")
+                    if behavior == "allow":
+                        updated_input = decision.get("updated_input", input_params)
+                        return PermissionResultAllow(updated_input=updated_input)
+                    else:
+                        message = decision.get("message", "Tool denied by callback")
+                        return PermissionResultDeny(message=message)
+                elif isinstance(decision, (PermissionResultAllow, PermissionResultDeny)):
+                    # Already in correct format
+                    return decision
+                else:
+                    logger.warning(f"Unexpected permission callback return type: {type(decision)}")
+                    return PermissionResultDeny(message="Invalid callback response")
+
             except Exception as e:
                 logger.error(f"Error in external permission_callback: {e}")
-                return False # Deny on error
+                return PermissionResultDeny(message=f"Permission callback error: {str(e)}")
 
         logger.warning(f"No permission_callback provided. Denying tool use: '{tool_name}'")
-        return False
+        return PermissionResultDeny(message="No permission callback configured")
 
-    async def _run_sdk_conversation(self, message: str) -> None:
-        """Run SDK conversation with enhanced configuration and storage integration."""
-        try:
-            # Configure SDK options with correct parameter names
-            options_kwargs = {
-                "cwd": str(self.working_directory),
-                "permission_mode": self.permissions,
-                "system_prompt": self.system_prompt,
-                "allowed_tools": self.tools,
-                "can_use_tool": self._can_use_tool_callback,
-            }
-
-            # Only add model if specified (let SDK use default otherwise)
-            if self.model is not None:
-                options_kwargs["model"] = self.model
-
-            options = self._sdk_options(**options_kwargs)
-
-            # To enable streaming mode for the can_use_tool callback, the prompt
-            # must be an async iterable yielding a dict, not a string.
-            async def prompt_generator():
-                yield {
-                    "type": "user",
-                    "message": {
-                        "role": "user",
-                        "content": message
-                    }
-                }
-
-            # Create async iterator for streaming messages
-            self._current_iterator = self._sdk_query(prompt=prompt_generator(), options=options)
-
-            async for sdk_message in self._current_iterator:
-                if self._shutdown_event.is_set():
-                    logger.debug("Shutdown requested, breaking from SDK conversation")
-                    break
-
-                # Convert SDK message to our format
-                converted_message = self._convert_sdk_message(sdk_message)
-                self.info.last_activity = time.time()
-
-                # Store message if storage available
-                if self.storage_manager:
-                    # Create JSON-serializable version for storage
-                    storage_message = {
-                        "type": converted_message.get("type", "unknown"),
-                        "content": converted_message.get("content", ""),
-                        "session_id": converted_message.get("session_id"),
-                        "timestamp": converted_message.get("timestamp"),
-                        "sdk_message_type": converted_message.get("sdk_message").__class__.__name__ if converted_message.get("sdk_message") else None
-                    }
-                    # Add any other serializable fields
-                    for key, value in converted_message.items():
-                        if key not in ["sdk_message"] and isinstance(value, (str, int, float, bool, type(None))):
-                            storage_message[key] = value
-
-                    await self.storage_manager.append_message(storage_message)
-
-                # Call message callback
-                if self.message_callback:
-                    await self._safe_callback(self.message_callback, converted_message)
-
-                logger.debug(f"Processed SDK message: {converted_message.get('type', 'unknown')}")
-
-        except Exception as e:
-            logger.error(f"Error in SDK conversation: {e}")
-            self.info.state = SessionState.FAILED
-            self.info.error_message = str(e)
-
-            # Store error message
-            if self.storage_manager:
-                await self.storage_manager.append_message({
-                    "type": "error",
-                    "content": f"SDK conversation failed: {str(e)}",
-                    "session_id": self.session_id,
-                    "error": True,
-                    "timestamp": time.time()
-                })
-
-            if self.error_callback:
-                await self._safe_callback(self.error_callback, "sdk_conversation_failed", e)
-        finally:
-            self._current_iterator = None
+    
 
     async def _safe_callback(self, callback: Callable, *args, **kwargs):
         """Safely execute callback with error handling"""
@@ -358,9 +403,6 @@ class ClaudeSDK:
     def _convert_sdk_message(self, sdk_message: Any) -> Dict[str, Any]:
         """Convert SDK message to a serializable format while preserving type information."""
         try:
-            # Import SDK classes for type checking
-            from claude_code_sdk import UserMessage, AssistantMessage, SystemMessage, ResultMessage
-
             # Handle dict-like objects (for backward compatibility)
             if isinstance(sdk_message, dict):
                 message_dict = {
@@ -373,15 +415,15 @@ class ClaudeSDK:
                 message_dict.update(sdk_message)
                 return message_dict
 
-            # Handle SDK message objects
+            # Handle SDK message objects using imported classes
             message_type = "unknown"
-            if isinstance(sdk_message, UserMessage):
+            if UserMessage and isinstance(sdk_message, UserMessage):
                 message_type = "user"
-            elif isinstance(sdk_message, AssistantMessage):
+            elif AssistantMessage and isinstance(sdk_message, AssistantMessage):
                 message_type = "assistant"
-            elif isinstance(sdk_message, SystemMessage):
+            elif SystemMessage and isinstance(sdk_message, SystemMessage):
                 message_type = "system"
-            elif isinstance(sdk_message, ResultMessage):
+            elif ResultMessage and isinstance(sdk_message, ResultMessage):
                 message_type = "result"
 
             # Create message dict with type and original SDK message
@@ -404,12 +446,27 @@ class ClaudeSDK:
                     for block in content:
                         if hasattr(block, 'text'):
                             text_parts.append(block.text)
+                        elif TextBlock and isinstance(block, TextBlock):
+                            text_parts.append(block.text)
                     message_dict["content"] = " ".join(text_parts) if text_parts else ""
 
             # Copy other common attributes from SDK message
-            for attr in ['message', 'data', 'subtype', 'error', 'usage', 'model']:
+            for attr in ['message', 'data', 'subtype', 'error', 'usage', 'model', 'duration_ms', 'total_cost_usd']:
                 if hasattr(sdk_message, attr):
-                    message_dict[attr] = getattr(sdk_message, attr)
+                    value = getattr(sdk_message, attr)
+                    # Only add serializable values
+                    if isinstance(value, (str, int, float, bool, type(None))):
+                        message_dict[attr] = value
+                    elif isinstance(value, (dict, list)):
+                        # For dict/list, try to include if they appear to contain serializable data
+                        try:
+                            # Test if it's JSON serializable
+                            import json
+                            json.dumps(value)
+                            message_dict[attr] = value
+                        except (TypeError, ValueError):
+                            # If not serializable, skip it
+                            pass
 
             # For unknown objects, add string representation as content
             if message_type == "unknown":
@@ -436,7 +493,7 @@ class ClaudeSDK:
 
     async def terminate(self, timeout: float = 5.0) -> bool:
         """
-        Terminate the enhanced Claude Code SDK session gracefully.
+        Terminate the Claude Code SDK session gracefully with new ClaudeSDKClient pattern.
 
         Args:
             timeout: Seconds to wait for graceful shutdown
@@ -444,21 +501,23 @@ class ClaudeSDK:
         Returns:
             True if terminated successfully, False otherwise
         """
-        logger.info(f"Terminating enhanced Claude Code SDK session {self.session_id}")
+        logger.info(f"Terminating Claude Code SDK session {self.session_id}")
 
         self.info.state = SessionState.TERMINATED
         self._shutdown_event.set()
 
         try:
-            # Cancel conversation task
+            # Cancel message processing task
             if self._conversation_task and not self._conversation_task.done():
                 self._conversation_task.cancel()
                 try:
                     await asyncio.wait_for(self._conversation_task, timeout=timeout)
                 except asyncio.TimeoutError:
-                    logger.warning("Conversation task did not terminate within timeout")
+                    logger.warning("Message processing task did not terminate within timeout")
                 except asyncio.CancelledError:
-                    logger.debug("Conversation task cancelled successfully")
+                    logger.debug("Message processing task cancelled successfully")
+
+            # SDK client will be cleaned up by context manager in the task
 
             # Clear message queue
             while not self._message_queue.empty():
@@ -471,20 +530,18 @@ class ClaudeSDK:
             if self.storage_manager:
                 await self.storage_manager.cleanup()
 
-            logger.info("Enhanced Claude Code SDK session terminated successfully")
+            logger.info("Claude Code SDK session terminated successfully")
             return True
 
         except Exception as e:
-            logger.error(f"Error terminating enhanced SDK session: {e}")
+            logger.error(f"Error terminating SDK session: {e}")
             return False
 
     def get_queue_size(self) -> int:
         """Get current message queue size"""
         return self._message_queue.qsize()
 
-    def is_processing(self) -> bool:
-        """Check if currently processing a message"""
-        return self._processing_message
+    
 
     def get_info(self) -> Dict[str, Any]:
         """Get current session information."""

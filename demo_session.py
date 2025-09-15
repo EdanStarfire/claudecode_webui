@@ -14,6 +14,19 @@ sys.path.insert(0, str(Path(__file__).parent / "src"))
 from src.session_coordinator import SessionCoordinator
 from src.logging_config import setup_logging
 
+# Define the permission handler (now async with correct parameter names)
+async def handle_permissions(tool_name: str, input_params: dict) -> dict:
+    print("\n--- PERMISSION REQUEST ---")
+    print(f"Tool: {tool_name}")
+    print(f"Input: {input_params}")
+    # In a real app, you would prompt the user here (e.g., using input()).
+    # For this demo, we'll just approve it to show the flow.
+    print("Approving request...")
+    print("--------------------------\n")
+    return {
+        "behavior": "allow",
+        "updatedInput": input_params
+    }
 
 async def demo_session():
     """Demonstrate session coordinator functionality."""
@@ -27,16 +40,6 @@ async def demo_session():
     await coordinator.initialize()
     print("OK Session coordinator initialized")
 
-    # Define the permission handler
-    async def handle_permissions(tool_name: str, tool_input: dict) -> bool:
-        print("\n--- PERMISSION REQUEST ---")
-        print(f"Tool: {tool_name}")
-        print(f"Input: {tool_input}")
-        # In a real app, you would prompt the user here (e.g., using input()).
-        # For this demo, we'll just approve it to show the flow.
-        print("Approving request...")
-        print("--------------------------\n")
-        return True
 
     # Create a session with correct parameter names (use default model)
     session_id = await coordinator.create_session(
@@ -78,7 +81,7 @@ async def demo_session():
         await coordinator.send_message(session_id, "Hello, run `echo \"Test\" > temp.txt`")
 
         # Wait a moment for processing
-        await asyncio.sleep(60)
+        await asyncio.sleep(30)
 
         # Get messages
         messages = await coordinator.get_session_messages(session_id, limit=10)
