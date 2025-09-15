@@ -45,7 +45,6 @@ class MessageType(Enum):
 
     # Unknown/extensible
     UNKNOWN = "unknown"
-    SIMULATION = "simulation"
 
 
 @dataclass

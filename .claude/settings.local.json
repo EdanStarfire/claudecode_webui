@@ -12,7 +12,8 @@
       "Bash(timeout 25 uv run:*)",
       "Bash(find:*)",
       "Bash(uv pip show:*)",
-      "Bash(cat:*)"
+      "Bash(cat:*)",
+      "Bash(git push:*)"
     ],
     "deny": [],
     "ask": []

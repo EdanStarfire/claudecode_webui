@@ -129,7 +129,7 @@ class TestSDKDiscoveryTool:
     @pytest.mark.slow
     @pytest.mark.asyncio
     async def test_run_scenario_basic(self, discovery_tool):
-        """Test running a basic scenario with SDK simulation."""
+        """Test running a basic scenario with SDK."""
         scenario = DiscoveryScenario(
             name="test_scenario",
             description="Test scenario",
@@ -140,7 +140,7 @@ class TestSDKDiscoveryTool:
         result = await discovery_tool._run_scenario(scenario)
 
         assert result.scenario_name == "test_scenario"
-        assert result.success is True  # Should succeed with simulation
+        assert result.success is True  # Should succeed with SDK
         assert result.messages_captured >= 0
         assert isinstance(result.message_types_seen, set)
         assert result.execution_time > 0
@@ -280,7 +280,7 @@ class TestSDKDiscoveryTool:
         """Test full discovery run integration (slow test - requires real SDK calls)."""
         discovery_tool = SDKDiscoveryTool(working_directory=temp_dir)
 
-        # Run discovery (will use simulation mode)
+        # Run discovery with actual SDK
         summary = await discovery_tool.run_discovery(save_results=False)
 
         assert "sdk_discovery_info" in summary

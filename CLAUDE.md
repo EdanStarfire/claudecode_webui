@@ -11,20 +11,20 @@ We are building a tool that integrates with the Claude Code Python SDK to provid
 
 ## SDK Usage (REQUIRED)
 ```python
-from claude_code import query, ClaudeCodeOptions
+from claude_code_sdk import query, ClaudeCodeOptions
 
 # Basic streaming conversation
 async def main():
-    async for message in query("Create a Python web server"):
+    async for message in query(prompt="Create a Python web server"):
         print(message)
 
 # With configuration
 options = ClaudeCodeOptions(
-    working_directory="/path/to/project",
-    permissions="acceptEdits",
-    tools=["bash", "edit", "read"]
+    cwd="/path/to/project",
+    permission_mode="acceptEdits",
+    allowed_tools=["bash", "edit", "read"]
 )
-async for message in query("Build the project", options=options):
+async for message in query(prompt="Build the project", options=options):
     process_message(message)
 ```
 
@@ -36,16 +36,23 @@ async for message in query("Build the project", options=options):
 
 ## SDK Configuration (CRITICAL)
 ```python
-from claude_code import ClaudeCodeOptions
+from claude_code_sdk import ClaudeCodeOptions
 
 options = ClaudeCodeOptions(
-    working_directory="/path/to/project",  # Project working directory
-    permissions="acceptEdits",             # Permission mode
-    system_prompt="Custom prompt",         # System prompt override
-    tools=["bash", "edit", "read"],       # Tool allowlist
-    model="claude-3-sonnet-20241022"       # Model selection
+    cwd="/path/to/project",              # Project working directory (NOT working_directory)
+    permission_mode="acceptEdits",       # Permission mode (NOT permissions)
+    system_prompt="Custom prompt",       # System prompt override
+    allowed_tools=["bash", "edit", "read"],  # Tool allowlist (NOT tools)
+    model="claude-3-sonnet-20241022"     # Model selection
 )
 ```
+
+## CRITICAL PARAMETER MAPPING
+- Use `cwd` NOT `working_directory`
+- Use `permission_mode` NOT `permissions`
+- Use `allowed_tools` NOT `tools`
+- Use `prompt=message` NOT positional argument in query()
+- Always import from `claude_code_sdk` NOT `claude_code`
 
 ## Message Stream Format
 - SDK returns streaming messages through async iterator
@@ -60,8 +67,28 @@ options = ClaudeCodeOptions(
 - Unknown message types should be gracefully handled
 - Use try/except blocks around SDK calls
 
+# Development Process Requirements
+
+## Testing and Verification Protocol
+1. ALWAYS test actual SDK integration before claiming functionality works
+2. NEVER assume parameter names or function signatures - verify with actual imports
+3. Create minimal test files to verify integration, then DELETE them when done
+4. Test each component in isolation before building complex architectures
+
+## File Management Protocol
+1. DELETE temporary test files (test_*.py, demo_*.py) after use
+2. Do not leave debugging files in the project directory
+3. Only keep files that are part of the core application
+
+## SDK Integration Requirements
+1. Use exact parameter names from CLAUDE.md specification
+2. Test imports and function calls in isolation first
+3. Handle JSON serialization of SDK objects properly
+4. Always use try/except blocks around SDK calls
+
 # important-instruction-reminders
 Do what has been asked; nothing more, nothing less.
 NEVER create files unless they're absolutely necessary for achieving your goal.
 ALWAYS prefer editing an existing file to creating a new one.
 NEVER proactively create documentation files (*.md) or README files. Only create documentation files if explicitly requested by the User.
+ALWAYS remove temporary test files after debugging is complete.
