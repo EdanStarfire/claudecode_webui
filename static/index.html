@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Claude Code WebUI</title>
+    <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <header class="header">
+            <h1>Claude Code WebUI</h1>
+            <div class="connection-status">
+                <span id="connection-indicator" class="status-indicator disconnected">●</span>
+                <span id="connection-text">Disconnected</span>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <div class="main-content">
+            <!-- Sidebar -->
+            <aside class="sidebar">
+                <div class="session-controls">
+                    <button id="create-session-btn" class="btn btn-primary">+ New Session</button>
+                    <button id="refresh-sessions-btn" class="btn btn-secondary">Refresh</button>
+                </div>
+
+                <div class="session-list">
+                    <h3>Sessions</h3>
+                    <div id="sessions-container">
+                        <!-- Sessions will be populated here -->
+                    </div>
+                </div>
+            </aside>
+
+            <!-- Chat Area -->
+            <main class="chat-area">
+                <div id="no-session-selected" class="no-session">
+                    <h2>No Session Selected</h2>
+                    <p>Create a new session or select an existing one to start chatting with Claude Code.</p>
+                </div>
+
+                <div id="chat-container" class="chat-container hidden">
+                    <!-- Session Info Bar -->
+                    <div class="session-info-bar">
+                        <div class="session-details">
+                            <span id="current-session-id" class="session-id"></span>
+                            <span id="current-session-state" class="session-state"></span>
+                        </div>
+                        <div class="session-actions">
+                            <button id="start-session-btn" class="btn btn-small btn-success">Start</button>
+                            <button id="pause-session-btn" class="btn btn-small btn-warning">Pause</button>
+                            <button id="terminate-session-btn" class="btn btn-small btn-danger">Terminate</button>
+                        </div>
+                    </div>
+
+                    <!-- Messages Area -->
+                    <div id="messages-area" class="messages-area">
+                        <!-- Messages will be populated here -->
+                    </div>
+
+                    <!-- Input Area -->
+                    <div class="input-area">
+                        <div class="input-container">
+                            <textarea id="message-input" placeholder="Type your message to Claude Code..." rows="3"></textarea>
+                            <button id="send-btn" class="btn btn-primary">Send</button>
+                        </div>
+                    </div>
+                </div>
+            </main>
+        </div>
+
+        <!-- Session Creation Modal -->
+        <div id="create-session-modal" class="modal hidden">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h2>Create New Session</h2>
+                    <span id="close-modal" class="close">&times;</span>
+                </div>
+                <form id="create-session-form">
+                    <div class="form-group">
+                        <label for="working-directory">Working Directory:</label>
+                        <input type="text" id="working-directory" name="working_directory" required>
+                        <button type="button" id="browse-directory" class="btn btn-small">Browse</button>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="permissions">Permission Mode:</label>
+                        <select id="permissions" name="permissions">
+                            <option value="default">Default</option>
+                            <option value="acceptEdits">Accept Edits</option>
+                            <option value="denyEdits">Deny Edits</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="system-prompt">System Prompt (optional):</label>
+                        <textarea id="system-prompt" name="system_prompt" rows="3" placeholder="Custom system prompt for Claude Code..."></textarea>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="tools">Allowed Tools (comma-separated):</label>
+                        <input type="text" id="tools" name="tools" placeholder="bash,edit,read,write" value="bash,edit,read,write">
+                    </div>
+
+                    <div class="form-group">
+                        <label for="model">Model (optional):</label>
+                        <input type="text" id="model" name="model" placeholder="claude-3-sonnet-20241022">
+                    </div>
+
+                    <div class="form-actions">
+                        <button type="button" id="cancel-create" class="btn btn-secondary">Cancel</button>
+                        <button type="submit" class="btn btn-primary">Create Session</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- Loading Overlay -->
+        <div id="loading-overlay" class="loading-overlay hidden">
+            <div class="spinner"></div>
+            <p>Loading...</p>
+        </div>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>

@@ -3,7 +3,7 @@
 ## Current Status
 - ✅ **Phase 1**: Claude Code SDK integration and message discovery
 - ✅ **Phase 2**: Session management, data storage, and bidirectional communication
-- ❌ **Phase 3**: Web interface (not yet implemented)
+- ✅ **Phase 3**: Web interface with real-time messaging (COMPLETE!)
 
 ## Prerequisites
 ```bash
@@ -11,9 +11,28 @@
 uv --version
 ```
 
+## 🚀 Quick Start - WebUI
+
+### 1. Start the Web Interface
+```bash
+# Start the Claude Code WebUI server
+uv run python main.py
+```
+
+### 2. Access the Interface
+- Open your browser to: **http://127.0.0.1:8000**
+- Create new sessions via the web interface
+- Chat with Claude Code in real-time
+
+### 3. Using the WebUI
+1. **Create Session**: Click "New Session" and configure settings
+2. **Start Session**: Click "Start" to activate Claude Code SDK
+3. **Chat**: Type messages and see real-time responses
+4. **Manage**: Pause, terminate, or switch between sessions
+
 ## Quick Test (No Claude Code SDK Required)
 
-### 1. Run Component Tests
+### Component Tests
 ```bash
 # Test all components
 uv run pytest src/tests/ -v
@@ -23,15 +42,10 @@ uv run pytest src/tests/test_session_manager.py -v
 uv run pytest src/tests/test_data_storage.py -v
 ```
 
-### 2. Run Simple Integration Test
+### Integration Test
 ```bash
 uv run python simple_test.py
 ```
-This will:
-- Create a session
-- Test data storage
-- Show the `data/` directory structure
-- Verify all components work
 
 ## Running with Claude Code SDK
 
@@ -54,26 +68,45 @@ This will:
 - Send messages and store responses
 - Demonstrate the full pipeline
 
+## API Endpoints
+
+The WebUI provides REST API endpoints for integration:
+
+### Session Management
+```bash
+# List all sessions
+curl http://127.0.0.1:8000/api/sessions
+
+# Create new session
+curl -X POST -H "Content-Type: application/json" \
+  -d '{"working_directory":"/path/to/project","permissions":"acceptEdits","tools":["bash","edit","read"]}' \
+  http://127.0.0.1:8000/api/sessions
+
+# Start a session
+curl -X POST http://127.0.0.1:8000/api/sessions/{session_id}/start
+
+# Send message
+curl -X POST -H "Content-Type: application/json" \
+  -d '{"message":"Hello Claude!"}' \
+  http://127.0.0.1:8000/api/sessions/{session_id}/messages
+
+# Get messages
+curl http://127.0.0.1:8000/api/sessions/{session_id}/messages
+```
+
+### WebSocket Connection
+```javascript
+// Real-time messaging via WebSocket
+const ws = new WebSocket('ws://127.0.0.1:8000/ws/{session_id}');
+ws.send(JSON.stringify({type: 'send_message', content: 'Hello!'}));
+```
+
 ## Available Scripts
 
-### Core Components
+### Core Components Demo
 ```bash
-# Session management demo
-uv run python -c "
-import asyncio
-import sys
-sys.path.insert(0, 'src')
-from src.session_coordinator import SessionCoordinator
-
-async def demo():
-    coordinator = SessionCoordinator()
-    await coordinator.initialize()
-    session_id = await coordinator.create_session(working_directory='.')
-    print(f'Created session: {session_id}')
-    await coordinator.cleanup()
-
-asyncio.run(demo())
-"
+# Session management demo (command line)
+uv run python demo_session.py
 ```
 
 ### SDK Discovery Tool
@@ -145,18 +178,22 @@ setup_logging(log_level='DEBUG', enable_console=True)
 "
 ```
 
-## Next Steps
+## WebUI Features
 
-### To Build the Web Interface (Phase 3)
-1. **FastAPI Web Server**: Create `src/web_server.py`
-2. **WebSocket Endpoints**: Real-time communication
-3. **Static Frontend**: HTML/CSS/JS in `src/static/`
-4. **Integration**: Connect frontend to session coordinator
+### ✅ Implemented Features
+- **Session Dashboard**: Create, manage, and monitor Claude Code sessions
+- **Real-time Chat**: WebSocket-based messaging with Claude Code
+- **Session Management**: Start, pause, terminate sessions
+- **Message History**: Persistent storage and retrieval
+- **Connection Monitoring**: Live connection status and auto-reconnect
+- **Responsive Design**: Works on desktop and mobile
+- **REST API**: Full programmatic access to functionality
 
-### To Deploy
-1. **Production Setup**: Configure logging, error handling
-2. **Security**: Add authentication, rate limiting
-3. **Scaling**: Multiple workers, load balancing
+### 🎯 Production Deployment
+1. **Security**: Add authentication, rate limiting, HTTPS
+2. **Scaling**: Multiple workers, load balancing
+3. **Monitoring**: Health checks, metrics, alerting
+4. **Configuration**: Environment-based settings
 
 ## Troubleshooting
 
@@ -202,4 +239,25 @@ setup_logging(log_level='DEBUG', enable_console=True)
 └─────────────────┘    └──────────────────┘    └─────────────────┘
 ```
 
-The system is ready for Phase 3 web interface development!
+## 🎉 Complete System Architecture
+
+```
+┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
+│                 │    │                  │    │                 │
+│   Web Browser   │◄──►│   FastAPI        │◄──►│   Session       │
+│   (Frontend)    │    │   WebServer      │    │   Coordinator   │
+│                 │    │                  │    │                 │
+└─────────────────┘    └──────────────────┘    └─────────────────┘
+         │                       │                       │
+         │ WebSocket/REST         │ Real-time             │ Manages
+         │                       │ Messaging             │
+         ▼                       ▼                       ▼
+┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
+│                 │    │                  │    │                 │
+│  Static Files   │    │  Claude Code     │    │  Data Storage   │
+│  (HTML/CSS/JS)  │    │  SDK Wrapper     │    │  Manager        │
+│                 │    │                  │    │                 │
+└─────────────────┘    └──────────────────┘    └─────────────────┘
+```
+
+**All three phases complete!** The Claude Code WebUI is ready for use with full web interface, real-time messaging, session management, and persistent storage.
