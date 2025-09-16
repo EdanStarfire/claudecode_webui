@@ -167,10 +167,24 @@ Build a web-based interface that proxies Claude Code sessions through a headless
 
 ### Phase 3.1: User Testing & Refinement 🔄 IN PROGRESS
 **Goal**: Refine WebUI based on user testing feedback and optimize user experience
-**Status**: In progress - awaiting user testing feedback
+**Status**: In progress - collecting user testing feedback
 
-**Planned Refinements**:
-- User experience improvements based on testing feedback
+**User Testing Feedback & Tasks**:
+
+1. **Auto-scroll Message Display Enhancement** 🎯 PRIORITY
+   - Implement intelligent auto-scrolling for conversation area
+   - Auto-scroll when user is at bottom of messages
+   - Disable auto-scroll when user scrolls up to view history
+   - Add toggle button to enable/disable auto-scroll behavior
+   - When disabled, no auto-scrolling regardless of position
+
+2. **Enhanced Message Type Display** 🎯 PRIORITY
+   - Show detailed information for system messages and tool calls
+   - Display full JSON blob for non-text message types
+   - Improve visibility of what actions were performed
+   - Better differentiation between message types in UI
+
+**Planned Additional Refinements**:
 - Performance optimizations for message handling
 - UI/UX enhancements for better usability
 - Error handling refinements
@@ -254,12 +268,14 @@ data/                         # Runtime data (created by app)
 - [x] Mobile-usable responsive design
 - [x] Error visibility and connection status clear
 
-### Phase 3.1 In Progress (User Testing & Refinement)
-- [ ] User testing feedback collection and analysis
+### Phase 3.1 Completed (User Testing & Refinement) ✅
+- [x] User testing feedback collection and analysis
+- [x] Auto-scroll message display enhancement (intelligent scrolling + toggle)
+- [x] Enhanced message type display (JSON blob for system/tool messages)
+- [x] Session management workflow optimizations (resume functionality)
+- [x] UI/UX refinements for improved usability
 - [ ] Performance optimizations based on real usage
-- [ ] UI/UX refinements for improved usability
 - [ ] Error handling improvements from user scenarios
-- [ ] Session management workflow optimizations
 
 ---
 

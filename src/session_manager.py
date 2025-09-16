@@ -42,6 +42,7 @@ class SessionInfo:
     tools: List[str] = None
     model: Optional[str] = None
     error_message: Optional[str] = None
+    claude_code_session_id: Optional[str] = None
 
     def __post_init__(self):
         if self.tools is None:
@@ -123,7 +124,7 @@ class SessionManager:
             working_directory=working_directory,
             permissions=permissions,
             system_prompt=system_prompt,
-            tools=tools or ["bash", "edit", "read"],
+            tools=tools if tools is not None else [],
             model=model
         )
 
@@ -159,7 +160,7 @@ class SessionManager:
                     logger.error(f"Session {session_id} not found")
                     return False
 
-                if session.state not in [SessionState.CREATED, SessionState.PAUSED]:
+                if session.state not in [SessionState.CREATED, SessionState.PAUSED, SessionState.TERMINATED]:
                     logger.warning(f"Cannot start session {session_id} in state {session.state}")
                     return False
 
@@ -277,3 +278,20 @@ class SessionManager:
         except Exception as e:
             logger.error(f"Failed to persist session state for {session_id}: {e}")
             raise
+
+    async def update_claude_code_session_id(self, session_id: str, claude_code_session_id: str):
+        """Update the Claude Code session ID for a session"""
+        async with self._get_session_lock(session_id):
+            try:
+                session = self._active_sessions.get(session_id)
+                if not session:
+                    raise ValueError(f"Session {session_id} not found")
+
+                session.claude_code_session_id = claude_code_session_id
+                session.updated_at = datetime.now(timezone.utc)
+                await self._persist_session_state(session_id)
+                logger.info(f"Updated Claude Code session ID for {session_id}: {claude_code_session_id}")
+
+            except Exception as e:
+                logger.error(f"Failed to update Claude Code session ID for {session_id}: {e}")
+                raise

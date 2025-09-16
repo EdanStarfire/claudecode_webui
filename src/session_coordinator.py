@@ -85,6 +85,7 @@ class SessionCoordinator:
                 session_id=session_id,
                 working_directory=working_directory,
                 storage_manager=storage_manager,
+                session_manager=self.session_manager,
                 message_callback=self._create_message_callback(session_id),
                 error_callback=self._create_error_callback(session_id),
                 permission_callback=permission_callback,
@@ -115,11 +116,50 @@ class SessionCoordinator:
             if not await self.session_manager.start_session(session_id):
                 return False
 
-            # Start SDK
+            # Check if SDK exists and is running
             sdk = self._active_sdks.get(session_id)
+            if sdk and sdk.is_running():
+                logger.info(f"Session {session_id} is already running, skipping start")
+                return True
+
             if not sdk:
-                logger.error(f"No SDK found for session {session_id}")
-                return False
+                logger.info(f"Recreating SDK for existing session {session_id}")
+
+                # Get session info to recreate SDK with same parameters
+                session_info = await self.session_manager.get_session_info(session_id)
+                if not session_info:
+                    logger.error(f"No session info found for {session_id}")
+                    return False
+
+                # Create storage manager
+                from .data_storage import DataStorageManager
+                session_dir = await self.session_manager.get_session_directory(session_id)
+                storage_manager = DataStorageManager(session_dir)
+                await storage_manager.initialize()
+                self._storage_managers[session_id] = storage_manager
+
+                # Recreate SDK instance with session parameters and resume
+                sdk = ClaudeSDK(
+                    session_id=session_id,
+                    working_directory=session_info.working_directory,
+                    storage_manager=storage_manager,
+                    session_manager=self.session_manager,
+                    message_callback=self._create_message_callback(session_id),
+                    error_callback=self._create_error_callback(session_id),
+                    permission_callback=None,  # Use defaults for existing sessions
+                    permissions=session_info.permissions,
+                    system_prompt=session_info.system_prompt,
+                    tools=session_info.tools,
+                    model=session_info.model,
+                    resume_session_id=session_id  # Resume the existing session
+                )
+                self._active_sdks[session_id] = sdk
+
+                # Initialize callback lists if not exists
+                if session_id not in self._message_callbacks:
+                    self._message_callbacks[session_id] = []
+                if session_id not in self._error_callbacks:
+                    self._error_callbacks[session_id] = []
 
             if not await sdk.start():
                 logger.error(f"Failed to start SDK for session {session_id}")

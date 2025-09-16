@@ -56,8 +56,15 @@
                     </div>
 
                     <!-- Messages Area -->
-                    <div id="messages-area" class="messages-area">
-                        <!-- Messages will be populated here -->
+                    <div class="messages-container">
+                        <div class="messages-header">
+                            <button id="auto-scroll-toggle" class="btn btn-small btn-secondary auto-scroll-enabled" title="Toggle auto-scroll">
+                                📜 Auto-scroll: ON
+                            </button>
+                        </div>
+                        <div id="messages-area" class="messages-area">
+                            <!-- Messages will be populated here -->
+                        </div>
                     </div>
 
                     <!-- Input Area -->
@@ -88,9 +95,10 @@
                     <div class="form-group">
                         <label for="permissions">Permission Mode:</label>
                         <select id="permissions" name="permissions">
-                            <option value="default">Default</option>
-                            <option value="acceptEdits">Accept Edits</option>
-                            <option value="denyEdits">Deny Edits</option>
+                            <option value="default">default</option>
+                            <option value="plan">plan</option>
+                            <option value="acceptEdits">acceptEdits</option>
+                            <option value="bypassPermissions">bypassPermissions</option>
                         </select>
                     </div>
 
@@ -100,13 +108,13 @@
                     </div>
 
                     <div class="form-group">
-                        <label for="tools">Allowed Tools (comma-separated):</label>
-                        <input type="text" id="tools" name="tools" placeholder="bash,edit,read,write" value="bash,edit,read,write">
+                        <label for="tools">Allowed Tools (comma-separated, optional):</label>
+                        <input type="text" id="tools" name="tools" placeholder="bash,edit,read,write">
                     </div>
 
                     <div class="form-group">
                         <label for="model">Model (optional):</label>
-                        <input type="text" id="model" name="model" placeholder="claude-3-sonnet-20241022">
+                        <input type="text" id="model" name="model">
                     </div>
 
                     <div class="form-actions">

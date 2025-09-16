@@ -76,13 +76,15 @@ class ClaudeSDK:
         session_id: str,
         working_directory: str,
         storage_manager: Optional[DataStorageManager] = None,
+        session_manager: Optional[Any] = None,
         message_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
         error_callback: Optional[Callable[[str, Exception], None]] = None,
         permission_callback: Optional[Callable[[str, Dict[str, Any]], Union[bool, Dict[str, Any]]]] = None,
         permissions: str = "acceptEdits",
         system_prompt: Optional[str] = None,
         tools: List[str] = None,
-        model: Optional[str] = None
+        model: Optional[str] = None,
+        resume_session_id: Optional[str] = None
     ):
         """
         Initialize enhanced Claude Code SDK wrapper.
@@ -102,13 +104,15 @@ class ClaudeSDK:
         self.session_id = session_id
         self.working_directory = Path(working_directory)
         self.storage_manager = storage_manager
+        self.session_manager = session_manager
         self.message_callback = message_callback
         self.error_callback = error_callback
         self.permission_callback = permission_callback
         self.permissions = permissions
         self.system_prompt = system_prompt
-        self.tools = tools or ["bash", "edit", "read"]
+        self.tools = tools if tools is not None else []
         self.model = model
+        self.resume_session_id = resume_session_id
 
         self.info = SessionInfo(session_id=session_id, working_directory=str(self.working_directory))
 
@@ -122,6 +126,9 @@ class ClaudeSDK:
 
         # Control
         self._shutdown_event = asyncio.Event()
+
+        # Claude Code's actual session ID (captured from init message)
+        self._claude_code_session_id: Optional[str] = None
 
         logger.info(f"Initialized enhanced Claude SDK wrapper for session {session_id}")
 
@@ -145,8 +152,23 @@ class ClaudeSDK:
             if not ClaudeSDKClient or not ClaudeCodeOptions:
                 raise ImportError("Claude Code SDK components not available")
 
-            # Configure SDK options
-            self._sdk_options = self._get_sdk_options()
+            # Check for existing Claude Code session ID if this is a resume operation
+            if self.resume_session_id is not None and self.session_manager:
+                session_info = await self.session_manager.get_session_info(self.session_id)
+                if session_info and session_info.claude_code_session_id:
+                    logger.info(f"Using stored Claude Code session ID for resume: {session_info.claude_code_session_id}")
+                    # Temporarily override resume_session_id with actual Claude Code ID
+                    original_resume_id = self.resume_session_id
+                    self.resume_session_id = session_info.claude_code_session_id
+                    self._sdk_options = self._get_sdk_options()
+                    # Restore original for tracking purposes
+                    self.resume_session_id = original_resume_id
+                else:
+                    logger.warning(f"No stored Claude Code session ID found for WebUI session {self.session_id}, using WebUI ID for resume")
+                    self._sdk_options = self._get_sdk_options()
+            else:
+                # Configure SDK options normally for new sessions
+                self._sdk_options = self._get_sdk_options()
             logger.info("Claude Code SDK options configured")
 
             # Start message processing task
@@ -231,14 +253,16 @@ class ClaudeSDK:
                             self.info.message_count += 1
                             self.info.last_activity = time.time()
 
-                            # Send message to Claude using new SDK pattern
+                            # Send message to Claude using the persistent session pattern
                             await client.query(content)
 
-                            # Process responses
+                            # Process all responses for this query (maintains session continuity)
                             async for response_message in client.receive_response():
                                 if self._shutdown_event.is_set():
                                     break
                                 await self._process_sdk_message(response_message)
+
+                            # Session continues for next message - no re-initialization needed
 
                         self._message_queue.task_done()
 
@@ -289,11 +313,34 @@ class ClaudeSDK:
         if self.model is not None:
             options_kwargs["model"] = self.model
 
+        if self.resume_session_id is not None:
+            options_kwargs["resume"] = self.resume_session_id
+            logger.info(f"Setting resume parameter to: {self.resume_session_id}")
+
+        logger.info(f"ClaudeCodeOptions: {options_kwargs}")
         return ClaudeCodeOptions(**options_kwargs)
 
     async def _process_sdk_message(self, sdk_message: Any):
         """Process a single message from the SDK stream."""
         try:
+            # Capture Claude Code's actual session ID from init message
+            if hasattr(sdk_message, 'subtype') and sdk_message.subtype == 'init':
+                session_id = getattr(sdk_message, 'data', {}).get('session_id') if hasattr(sdk_message, 'data') else None
+                if session_id:
+                    # Only store if this is a different session ID (prevent duplicates)
+                    if not hasattr(self, '_claude_code_session_id') or self._claude_code_session_id != session_id:
+                        self._claude_code_session_id = session_id
+                        logger.info(f"Captured Claude Code session ID: {session_id} for WebUI session: {self.session_id}")
+
+                        # Always store the latest Claude Code session ID for cumulative sessions
+                        if self.session_manager:
+                            await self.session_manager.update_claude_code_session_id(self.session_id, session_id)
+                            if self.resume_session_id is None:
+                                logger.info(f"Stored new Claude Code session ID: {session_id}")
+                            else:
+                                logger.info(f"Resume created new cumulative session {session_id} (was attempting to resume {self.resume_session_id})")
+                                logger.info(f"Updated stored session ID to latest: {session_id}")
+
             converted_message = self._convert_sdk_message(sdk_message)
             self.info.last_activity = time.time()
 
@@ -553,3 +600,4 @@ class ClaudeSDK:
     def is_running(self) -> bool:
         """Check if the session is currently running."""
         return self.info.state in [SessionState.RUNNING, SessionState.PROCESSING]
+

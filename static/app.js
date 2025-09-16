@@ -8,6 +8,11 @@ class ClaudeWebUI {
         this.connectionRetryCount = 0;
         this.maxRetries = 5;
 
+        // Auto-scroll functionality
+        this.autoScrollEnabled = true;
+        this.isUserScrolling = false;
+        this.scrollTimeout = null;
+
         this.init();
     }
 
@@ -43,6 +48,12 @@ class ClaudeWebUI {
                 this.sendMessage();
             }
         });
+
+        // Auto-scroll toggle
+        document.getElementById('auto-scroll-toggle').addEventListener('click', () => this.toggleAutoScroll());
+
+        // Messages area scroll detection
+        document.getElementById('messages-area').addEventListener('scroll', (e) => this.handleScroll(e));
 
         // Modal click outside to close
         document.getElementById('create-session-modal').addEventListener('click', (e) => {
@@ -114,7 +125,7 @@ class ClaudeWebUI {
             });
 
             await this.loadSessions();
-            this.selectSession(data.session_id);
+            await this.selectSession(data.session_id);
 
             return data.session_id;
         } catch (error) {
@@ -131,6 +142,10 @@ class ClaudeWebUI {
         try {
             await this.apiRequest(`/api/sessions/${this.currentSessionId}/start`, { method: 'POST' });
             await this.loadSessionInfo();
+
+            // Small delay to ensure session is fully started before WebSocket connection
+            await new Promise(resolve => setTimeout(resolve, 500));
+
             this.connectWebSocket();
         } catch (error) {
             console.error('Failed to start session:', error);
@@ -311,7 +326,7 @@ class ClaudeWebUI {
     }
 
     // UI Updates
-    selectSession(sessionId) {
+    async selectSession(sessionId) {
         this.currentSessionId = sessionId;
 
         // Update UI
@@ -328,15 +343,27 @@ class ClaudeWebUI {
         document.getElementById('no-session-selected').classList.add('hidden');
         document.getElementById('chat-container').classList.remove('hidden');
 
-        // Load session data
-        this.loadSessionInfo();
-        this.loadMessages();
+        // Load session info first to check state
+        await this.loadSessionInfo();
 
-        // Connect WebSocket if session is active
+        // Auto-start session if it's not active
         const session = this.sessions.get(sessionId);
-        if (session && session.state === 'active') {
+        if (session && session.state !== 'active') {
+            console.log(`Auto-starting session ${sessionId} (current state: ${session.state})`);
+            await this.apiRequest(`/api/sessions/${sessionId}/start`, { method: 'POST' });
+
+            // Small delay to ensure session is fully started
+            await new Promise(resolve => setTimeout(resolve, 500));
+
+            await this.loadSessionInfo();
+            this.connectWebSocket();
+        } else if (session && session.state === 'active') {
+            // Session is already active, just connect WebSocket
             this.connectWebSocket();
         }
+
+        // Load messages after session is ready
+        this.loadMessages();
     }
 
     renderSessions() {
@@ -386,7 +413,7 @@ class ClaudeWebUI {
             this.addMessageToUI(message, false);
         });
 
-        this.scrollToBottom();
+        this.smartScrollToBottom();
     }
 
     addMessageToUI(message, scroll = true) {
@@ -396,16 +423,38 @@ class ClaudeWebUI {
 
         const timestamp = new Date(message.timestamp).toLocaleTimeString();
 
+        // Enhanced message content with JSON display for system/tool messages
+        let contentHtml = '';
+        const content = message.content || '';
+
+        if (message.type === 'system' || message.type === 'result' || this.isJsonContent(content)) {
+            // Show both text content and JSON data
+            if (content) {
+                contentHtml += `<div class="message-content">${this.escapeHtml(content)}</div>`;
+            }
+
+            // Show JSON blob if available
+            if (message.sdk_message || this.isJsonContent(content)) {
+                const jsonData = message.sdk_message || this.tryParseJson(content);
+                if (jsonData) {
+                    contentHtml += `<div class="message-json">${this.formatJson(jsonData)}</div>`;
+                }
+            }
+        } else {
+            // Regular text content
+            contentHtml = `<div class="message-content">${this.escapeHtml(content)}</div>`;
+        }
+
         messageElement.innerHTML = `
             <div class="message-header">${message.type}</div>
-            <div class="message-content">${this.escapeHtml(message.content || '')}</div>
+            ${contentHtml}
             <div class="message-timestamp">${timestamp}</div>
         `;
 
         messagesArea.appendChild(messageElement);
 
         if (scroll) {
-            this.scrollToBottom();
+            this.smartScrollToBottom();
         }
     }
 
@@ -439,7 +488,7 @@ class ClaudeWebUI {
 
     // Modal Management
     showCreateSessionModal() {
-        document.getElementById('working-directory').value = window.location.pathname || '/';
+        document.getElementById('working-directory').value = '.';
         document.getElementById('create-session-modal').classList.remove('hidden');
     }
 
@@ -486,9 +535,84 @@ class ClaudeWebUI {
         alert(`Error: ${message}`);
     }
 
+    // Auto-scroll functionality
+    toggleAutoScroll() {
+        this.autoScrollEnabled = !this.autoScrollEnabled;
+        const button = document.getElementById('auto-scroll-toggle');
+
+        if (this.autoScrollEnabled) {
+            button.textContent = '📜 Auto-scroll: ON';
+            button.className = 'btn btn-small btn-secondary auto-scroll-enabled';
+            this.smartScrollToBottom();
+        } else {
+            button.textContent = '📜 Auto-scroll: OFF';
+            button.className = 'btn btn-small btn-secondary auto-scroll-disabled';
+        }
+    }
+
+    handleScroll(event) {
+        if (this.scrollTimeout) {
+            clearTimeout(this.scrollTimeout);
+        }
+
+        // Mark as user scrolling
+        this.isUserScrolling = true;
+
+        // Reset user scrolling flag after a delay
+        this.scrollTimeout = setTimeout(() => {
+            this.isUserScrolling = false;
+        }, 1000);
+    }
+
+    isAtBottom() {
+        const messagesArea = document.getElementById('messages-area');
+        const threshold = 50; // pixels from bottom
+        return messagesArea.scrollTop + messagesArea.clientHeight >= messagesArea.scrollHeight - threshold;
+    }
+
+    smartScrollToBottom() {
+        if (!this.autoScrollEnabled) {
+            return;
+        }
+
+        // If user is scrolling, don't auto-scroll unless they're at the bottom
+        if (this.isUserScrolling && !this.isAtBottom()) {
+            return;
+        }
+
+        this.scrollToBottom();
+    }
+
     scrollToBottom() {
         const messagesArea = document.getElementById('messages-area');
         messagesArea.scrollTop = messagesArea.scrollHeight;
+    }
+
+    // Message formatting utilities
+    isJsonContent(content) {
+        if (typeof content !== 'string') return false;
+        try {
+            JSON.parse(content);
+            return content.trim().startsWith('{') || content.trim().startsWith('[');
+        } catch {
+            return false;
+        }
+    }
+
+    tryParseJson(content) {
+        try {
+            return JSON.parse(content);
+        } catch {
+            return null;
+        }
+    }
+
+    formatJson(obj) {
+        try {
+            return JSON.stringify(obj, null, 2);
+        } catch {
+            return String(obj);
+        }
     }
 
     escapeHtml(text) {
