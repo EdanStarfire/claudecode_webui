@@ -54,11 +54,20 @@ class WebSocketManager:
         logger.info(f"WebSocket disconnected for session {session_id}")
 
     async def send_message(self, session_id: str, message: dict):
+        logger.info(f"WebSocketManager: Attempting to send message to session {session_id}, active connections: {len(self.active_connections.get(session_id, []))}")
         if session_id in self.active_connections:
             dead_connections = []
-            for connection in self.active_connections[session_id]:
+            for connection in self.active_connections[session_id][:]:  # Create a copy to iterate safely
                 try:
+                    # Check if connection is still open before attempting to send
+                    if connection.client_state.value != 1:  # 1 = OPEN state
+                        logger.warning(f"WebSocket connection for session {session_id} is not open (state: {connection.client_state.value})")
+                        dead_connections.append(connection)
+                        continue
+
+                    logger.info(f"WebSocketManager: Sending message to WebSocket connection for session {session_id}")
                     await connection.send_text(json.dumps(message))
+                    logger.info(f"WebSocketManager: Message sent successfully to WebSocket connection for session {session_id}")
                 except Exception as e:
                     logger.error(f"Error sending WebSocket message: {e}")
                     dead_connections.append(connection)
@@ -151,6 +160,11 @@ class ClaudeWebUI:
                 info = await self.coordinator.get_session_info(session_id)
                 if not info:
                     raise HTTPException(status_code=404, detail="Session not found")
+
+                # Log session state for debugging
+                session_state = info.get('session', {}).get('state', 'unknown')
+                logger.info(f"API returning session {session_id} with state: {session_state}")
+
                 return info
             except HTTPException:
                 raise
@@ -162,6 +176,12 @@ class ClaudeWebUI:
         async def start_session(session_id: str):
             """Start a session"""
             try:
+                # Ensure WebSocket callback is registered for this session before starting
+                self.coordinator.add_message_callback(
+                    session_id,
+                    self._create_message_callback(session_id)
+                )
+
                 success = await self.coordinator.start_session(session_id)
                 return {"success": success}
             except Exception as e:
@@ -213,12 +233,48 @@ class ClaudeWebUI:
         @self.app.websocket("/ws/{session_id}")
         async def websocket_endpoint(websocket: WebSocket, session_id: str):
             """WebSocket endpoint for real-time communication"""
+            # Validate session exists and is active before accepting connection
+            try:
+                session_info = await self.coordinator.get_session_info(session_id)
+                if not session_info:
+                    logger.warning(f"WebSocket connection attempted for non-existent session: {session_id}")
+                    await websocket.close(code=4404)
+                    return
+
+                session_state = session_info.get('session', {}).get('state')
+                if session_state not in ['active', 'running']:
+                    logger.warning(f"WebSocket connection attempted for inactive session: {session_id} (state: {session_state})")
+                    await websocket.close(code=4003)
+                    return
+
+            except Exception as e:
+                logger.error(f"Error validating session {session_id} for WebSocket: {e}")
+                await websocket.close(code=4500)
+                return
+
             await self.websocket_manager.connect(websocket, session_id)
+            logger.info(f"WebSocket loop starting for session {session_id}")
+
+            # Send initial ping to establish connection
+            try:
+                await websocket.send_text(json.dumps({
+                    "type": "connection_established",
+                    "session_id": session_id,
+                    "timestamp": datetime.now(timezone.utc).isoformat()
+                }))
+            except Exception as e:
+                logger.error(f"Failed to send initial message to WebSocket {session_id}: {e}")
+                # Clean up the connection that was already registered
+                self.websocket_manager.disconnect(websocket, session_id)
+                return
+
             try:
                 while True:
                     # Wait for incoming messages with proper error handling
                     try:
+                        logger.debug(f"WebSocket waiting for message from session {session_id}")
                         message = await asyncio.wait_for(websocket.receive_text(), timeout=30.0)
+                        logger.debug(f"WebSocket received message from session {session_id}: {message[:100]}...")
                         message_data = json.loads(message)
 
                         if message_data.get("type") == "send_message":
@@ -239,14 +295,18 @@ class ClaudeWebUI:
                         continue
 
             except WebSocketDisconnect:
+                logger.info(f"WebSocket disconnected gracefully for session {session_id}")
                 self.websocket_manager.disconnect(websocket, session_id)
             except Exception as e:
-                logger.error(f"WebSocket error: {e}")
+                logger.error(f"WebSocket error for session {session_id}: {e}")
                 self.websocket_manager.disconnect(websocket, session_id)
+            finally:
+                logger.info(f"WebSocket loop ended for session {session_id}")
 
     def _create_message_callback(self, session_id: str):
         """Create message callback for WebSocket broadcasting"""
         async def callback(session_id: str, message_data: Any):
+            logger.info(f"WebSocket callback triggered for session {session_id}, message type: {getattr(message_data, 'type', 'unknown')}")
             try:
                 # Convert message to JSON-serializable format
                 if hasattr(message_data, '__dict__'):
@@ -266,7 +326,9 @@ class ClaudeWebUI:
                         "timestamp": datetime.now(timezone.utc).isoformat()
                     }
 
+                logger.info(f"Attempting to send WebSocket message for session {session_id}: {serialized['type']}")
                 await self.websocket_manager.send_message(session_id, serialized)
+                logger.info(f"WebSocket message sent successfully for session {session_id}")
 
             except Exception as e:
                 logger.error(f"Error in message callback: {e}")

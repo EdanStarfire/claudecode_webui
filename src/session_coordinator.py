@@ -155,7 +155,7 @@ class SessionCoordinator:
                 )
                 self._active_sdks[session_id] = sdk
 
-                # Initialize callback lists if not exists
+                # Initialize callback lists if not exists (preserve existing callbacks)
                 if session_id not in self._message_callbacks:
                     self._message_callbacks[session_id] = []
                 if session_id not in self._error_callbacks:
@@ -298,6 +298,7 @@ class SessionCoordinator:
         if session_id not in self._message_callbacks:
             self._message_callbacks[session_id] = []
         self._message_callbacks[session_id].append(callback)
+        logger.info(f"Added message callback for session {session_id}, total callbacks: {len(self._message_callbacks[session_id])}")
 
     def add_error_callback(self, session_id: str, callback: Callable):
         """Add callback for session errors"""
@@ -318,6 +319,7 @@ class SessionCoordinator:
 
                 # Call registered callbacks
                 callbacks = self._message_callbacks.get(session_id, [])
+                logger.info(f"Processing message for session {session_id}, found {len(callbacks)} callbacks")
                 for cb in callbacks:
                     try:
                         if asyncio.iscoroutinefunction(cb):

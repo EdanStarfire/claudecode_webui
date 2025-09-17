@@ -263,9 +263,16 @@ class ClaudeWebUI {
                 }
             };
 
-            this.websocket.onclose = () => {
-                console.log('WebSocket disconnected');
+            this.websocket.onclose = (event) => {
+                console.log('WebSocket disconnected', event.code, event.reason);
                 this.updateConnectionStatus('disconnected');
+
+                // Don't retry on specific error codes (session invalid/inactive)
+                if (event.code === 4404 || event.code === 4003 || event.code === 4500) {
+                    console.log(`WebSocket closed with error code ${event.code}, not retrying`);
+                    return;
+                }
+
                 this.scheduleReconnect();
             };
 
@@ -314,6 +321,9 @@ class ClaudeWebUI {
             case 'state_change':
                 this.handleStateChange(data.data);
                 break;
+            case 'connection_established':
+                console.log('WebSocket connection confirmed for session:', data.session_id);
+                break;
             case 'ping':
                 // Respond to server ping to keep connection alive
                 if (this.websocket && this.websocket.readyState === WebSocket.OPEN) {
@@ -348,16 +358,29 @@ class ClaudeWebUI {
 
         // Auto-start session if it's not active
         const session = this.sessions.get(sessionId);
-        if (session && session.state !== 'active') {
+        if (session && session.state !== 'active' && session.state !== 'running') {
             console.log(`Auto-starting session ${sessionId} (current state: ${session.state})`);
             await this.apiRequest(`/api/sessions/${sessionId}/start`, { method: 'POST' });
 
-            // Small delay to ensure session is fully started
-            await new Promise(resolve => setTimeout(resolve, 500));
+            // Wait for session to be fully active before connecting WebSocket
+            let attempts = 0;
+            const maxAttempts = 10;
+            while (attempts < maxAttempts) {
+                await new Promise(resolve => setTimeout(resolve, 200));
+                await this.loadSessionInfo();
+                const updatedSession = this.sessions.get(sessionId);
+                if (updatedSession && (updatedSession.state === 'active' || updatedSession.state === 'running')) {
+                    console.log(`Session ${sessionId} is now active, connecting WebSocket`);
+                    this.connectWebSocket();
+                    break;
+                }
+                attempts++;
+            }
 
-            await this.loadSessionInfo();
-            this.connectWebSocket();
-        } else if (session && session.state === 'active') {
+            if (attempts >= maxAttempts) {
+                console.warn(`Session ${sessionId} did not become active after ${maxAttempts} attempts`);
+            }
+        } else if (session && (session.state === 'active' || session.state === 'running')) {
             // Session is already active, just connect WebSocket
             this.connectWebSocket();
         }
@@ -397,6 +420,13 @@ class ClaudeWebUI {
         document.getElementById('current-session-id').textContent = this.currentSessionId;
         document.getElementById('current-session-state').textContent = sessionData.session.state;
         document.getElementById('current-session-state').className = `session-state ${sessionData.session.state}`;
+
+        // Update the sessions Map with current session state
+        if (this.currentSessionId && this.sessions.has(this.currentSessionId)) {
+            const existingSession = this.sessions.get(this.currentSessionId);
+            existingSession.state = sessionData.session.state;
+            this.sessions.set(this.currentSessionId, existingSession);
+        }
 
         // Update button states
         const state = sessionData.session.state;
