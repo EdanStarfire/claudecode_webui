@@ -259,12 +259,12 @@ class ClaudeWebUI:
 
         @self.app.get("/api/sessions/{session_id}/messages")
         async def get_messages(session_id: str, limit: Optional[int] = 50, offset: int = 0):
-            """Get messages from a session"""
+            """Get messages from a session with pagination metadata"""
             try:
-                messages = await self.coordinator.get_session_messages(
+                result = await self.coordinator.get_session_messages(
                     session_id, limit=limit, offset=offset
                 )
-                return {"messages": messages}
+                return result
             except Exception as e:
                 logger.error(f"Failed to get messages: {e}")
                 raise HTTPException(status_code=500, detail=str(e))

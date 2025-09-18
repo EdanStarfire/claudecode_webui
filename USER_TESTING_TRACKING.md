@@ -15,9 +15,10 @@
 [x] bug: On terminate, the browser still tries to re-open the websocket afterwards, which fails in a loop
 [x] feat: Remove start/pause/terminate session buttons from UI and replace with a single "exit session" that disconnects the session's websocket (same as deselecting the conversation) and stops displaying the messages for that conversation in the UIs conversation window.
 [x] bug: Any sessions that are in state "active" should be resumed on application startup - otherwise, it's expecting a working client SDK session and there is none.
-[ ] bug: When reshowing all the session messages from the past, the LAST assistant message doesn't seem to show in the UI.
-[ ] bug: When reshowing all the session messages from the past, the init and result messages from the past should also be suppressed.
-[ ] feat: When resuming an SDK client (with the resume function, not just reconnecting via the websocket due to session switching), we should send a system message to the messages.jsonl and the webui that says that a new session is being started to resume conversation.
+[x] bug: When reshowing all the session messages from the past, the LAST assistant message doesn't seem to show in the UI.
+[x] bug: When reshowing all the session messages from the past, the init and result messages from the past should also be suppressed.
+[x] feat: When resuming an SDK client (with the resume function, not just reconnecting via the websocket due to session switching), we should send a system message to the messages.jsonl and the webui that says that a new session is being started to resume conversation.
 [ ] feat: Implement cancel "working" state using client.interrupt  - example: https://github.com/anthropics/claude-code-sdk-python/blob/main/examples/streaming_mode.py
 [ ] qol: figure out how to represent blank messages from the messages.jsonl
 [ ] bug: The websocket appears to loop connect/disconnect in a certain scenario - unsure what it is, but it does occur.
+[ ] feat: capture permission prompt functionality in a generic sense

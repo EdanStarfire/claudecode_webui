@@ -245,33 +245,52 @@ class ClaudeWebUI {
         }
     }
 
+    shouldDisplayMessage(message) {
+        // Filter out init system messages
+        if (message.type === 'system' && message.subtype === 'init') {
+            console.log('Filtering out init system message with subtype:', message.subtype);
+            return false;
+        }
+
+        // Filter out result messages
+        if (message.type === 'result') {
+            console.log('Filtering out result message');
+            return false;
+        }
+
+        // Allow client_launched system messages to be displayed
+        if (message.type === 'system' && message.subtype === 'client_launched') {
+            console.log('Displaying client launched system message');
+            return true;
+        }
+
+        // Display all other message types
+        return true;
+    }
+
     handleIncomingMessage(message) {
         console.log('Processing incoming message:', message);
 
-        // Handle special message types that control progress indicator
-        if (message.type === 'system') {
-            // Check if this is an init message by looking for subtype
-            if (message.subtype === 'init') {
-                console.log('Filtering out init system message with subtype:', message.subtype);
-                // Don't show init messages, just ensure progress indicator is visible
-                if (!this.isProcessing) {
-                    this.showProcessingIndicator();
-                }
-                return;
+        // Handle progress indicator for init messages
+        if (message.type === 'system' && message.subtype === 'init') {
+            // Don't show init messages, just ensure progress indicator is visible
+            if (!this.isProcessing) {
+                this.showProcessingIndicator();
             }
         }
 
+        // Handle progress indicator for result messages
         if (message.type === 'result') {
-            console.log('Filtering out result message and hiding progress indicator');
+            console.log('Hiding progress indicator for result message');
             // Hide progress indicator when we get a result message
             this.hideProcessingIndicator();
-            // Don't add result messages to the UI
-            return;
         }
 
-        // For all other messages, add them to the UI normally
-        console.log('Adding message to UI:', message.type);
-        this.addMessageToUI(message);
+        // Use the unified filtering logic to determine if message should be displayed
+        if (this.shouldDisplayMessage(message)) {
+            console.log('Adding message to UI:', message.type);
+            this.addMessageToUI(message);
+        }
     }
 
     async loadSessionInfo() {
@@ -289,8 +308,31 @@ class ClaudeWebUI {
         if (!this.currentSessionId) return;
 
         try {
-            const data = await this.apiRequest(`/api/sessions/${this.currentSessionId}/messages`);
-            this.renderMessages(data.messages);
+            console.log('Loading all messages with pagination...');
+            const allMessages = [];
+            let offset = 0;
+            const pageSize = 50;
+            let hasMore = true;
+
+            // Load all messages using pagination
+            while (hasMore) {
+                console.log(`Loading messages page: offset=${offset}, limit=${pageSize}`);
+                const response = await this.apiRequest(
+                    `/api/sessions/${this.currentSessionId}/messages?limit=${pageSize}&offset=${offset}`
+                );
+
+                // Add messages from this page
+                allMessages.push(...response.messages);
+
+                // Check if there are more pages
+                hasMore = response.has_more;
+                offset += pageSize;
+
+                console.log(`Loaded ${response.messages.length} messages, total so far: ${allMessages.length}, has_more: ${hasMore}`);
+            }
+
+            console.log(`Finished loading all ${allMessages.length} messages`);
+            this.renderMessages(allMessages);
         } catch (error) {
             console.error('Failed to load messages:', error);
         }
@@ -652,7 +694,10 @@ class ClaudeWebUI {
         messagesArea.innerHTML = '';
 
         messages.forEach(message => {
-            this.addMessageToUI(message, false);
+            // Apply the same filtering logic used for live messages
+            if (this.shouldDisplayMessage(message)) {
+                this.addMessageToUI(message, false);
+            }
         });
 
         this.smartScrollToBottom();

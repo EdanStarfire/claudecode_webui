@@ -126,7 +126,9 @@ class SessionCoordinator:
                 logger.info(f"Session {session_id} is already running, skipping start")
                 return True
 
+            sdk_was_created = False
             if not sdk:
+                sdk_was_created = True
                 logger.info(f"Recreating SDK for existing session {session_id}")
 
                 # Get session info to recreate SDK with same parameters
@@ -168,6 +170,10 @@ class SessionCoordinator:
             if not await sdk.start():
                 logger.error(f"Failed to start SDK for session {session_id}")
                 return False
+
+            # Send system message for SDK client launch/resume
+            if sdk_was_created:  # Only if we actually created/resumed the SDK
+                await self._send_client_launched_message(session_id)
 
             logger.info(f"Started integrated session {session_id}")
             await self._notify_state_change(session_id, SessionState.ACTIVE)
@@ -283,19 +289,45 @@ class SessionCoordinator:
         session_id: str,
         limit: Optional[int] = None,
         offset: int = 0
-    ) -> List[Dict[str, Any]]:
-        """Get messages from a session"""
+    ) -> Dict[str, Any]:
+        """Get messages from a session with pagination metadata"""
         try:
             storage = self._storage_managers.get(session_id)
             if not storage:
                 logger.error(f"No storage manager found for session {session_id}")
-                return []
+                return {
+                    "messages": [],
+                    "total_count": 0,
+                    "limit": limit or 50,
+                    "offset": offset,
+                    "has_more": False
+                }
 
-            return await storage.read_messages(limit=limit, offset=offset)
+            # Get messages and total count
+            messages = await storage.read_messages(limit=limit, offset=offset)
+            total_count = await storage.get_message_count()
+
+            # Calculate pagination metadata
+            actual_limit = limit or 50
+            has_more = (offset + len(messages)) < total_count
+
+            return {
+                "messages": messages,
+                "total_count": total_count,
+                "limit": actual_limit,
+                "offset": offset,
+                "has_more": has_more
+            }
 
         except Exception as e:
             logger.error(f"Failed to get messages for session {session_id}: {e}")
-            return []
+            return {
+                "messages": [],
+                "total_count": 0,
+                "limit": limit or 50,
+                "offset": offset,
+                "has_more": False
+            }
 
     def add_message_callback(self, session_id: str, callback: Callable):
         """Add callback for session messages"""
@@ -364,6 +396,35 @@ class SessionCoordinator:
                 logger.error(f"Error processing error callback for {session_id}: {e}")
 
         return callback
+
+    async def _send_client_launched_message(self, session_id: str):
+        """Send a system message indicating the Claude SDK client was launched/resumed"""
+        try:
+            from datetime import datetime, timezone
+
+            # Create system message for client launch
+            message_data = {
+                "type": "system",
+                "subtype": "client_launched",
+                "content": "Claude Code client launched",
+                "session_id": session_id,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "sdk_message_type": "SystemMessage"
+            }
+
+            # Store message in storage
+            storage = self._storage_managers.get(session_id)
+            if storage:
+                await storage.append_message(message_data)
+
+            # Send through message callback system for real-time display
+            callback = self._create_message_callback(session_id)
+            await callback(message_data)
+
+            logger.info(f"Sent client launched message for session {session_id}")
+
+        except Exception as e:
+            logger.error(f"Failed to send client launched message for {session_id}: {e}")
 
     async def _notify_state_change(self, session_id: str, new_state: SessionState):
         """Notify registered callbacks about state changes"""
