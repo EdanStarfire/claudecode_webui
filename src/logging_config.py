@@ -46,17 +46,18 @@ def setup_logging(
         },
         "handlers": {},
         "loggers": {
-            # Application modules
-            "claude_sdk": {"level": log_level, "propagate": True},
+            # Application modules - enhanced for debugging session lifecycle issues
+            "claude_sdk": {"level": "DEBUG", "propagate": True},  # Force DEBUG for SDK lifecycle analysis
             "session_manager": {"level": log_level, "propagate": True},
+            "session_coordinator": {"level": "DEBUG", "propagate": True},  # Enhanced for session coordination
             "message_parser": {"level": log_level, "propagate": True},
             "sdk_discovery_tool": {"level": log_level, "propagate": True},
-            "web_server": {"level": log_level, "propagate": True},
+            "web_server": {"level": "DEBUG", "propagate": True},  # Enhanced for WebSocket lifecycle analysis
 
             # Third-party modules (less verbose)
             "fastapi": {"level": "WARNING", "propagate": True},
             "uvicorn": {"level": "INFO", "propagate": True},
-            "websockets": {"level": "WARNING", "propagate": True},
+            "websockets": {"level": "INFO", "propagate": True},  # Slightly more verbose for WebSocket debugging
         },
         "root": {
             "level": log_level,
@@ -109,8 +110,31 @@ def setup_logging(
             "encoding": "utf8"
         }
 
+        # Specialized SDK lifecycle debugging log
+        config["handlers"]["file_sdk_lifecycle"] = {
+            "class": "logging.handlers.RotatingFileHandler",
+            "level": "DEBUG",
+            "formatter": "detailed",
+            "filename": f"{log_dir}/sdk_lifecycle_debug.log",
+            "maxBytes": 10485760,  # 10MB
+            "backupCount": 5,
+            "encoding": "utf8"
+        }
+
+        # WebSocket lifecycle debugging log
+        config["handlers"]["file_websocket_lifecycle"] = {
+            "class": "logging.handlers.RotatingFileHandler",
+            "level": "DEBUG",
+            "formatter": "detailed",
+            "filename": f"{log_dir}/websocket_lifecycle_debug.log",
+            "maxBytes": 10485760,  # 10MB
+            "backupCount": 5,
+            "encoding": "utf8"
+        }
+
         config["root"]["handlers"].extend(["file_app", "file_error"])
-        config["loggers"]["claude_sdk"]["handlers"] = ["file_claude"]
+        config["loggers"]["claude_sdk"]["handlers"] = ["file_claude", "file_sdk_lifecycle"]
+        config["loggers"]["web_server"]["handlers"] = ["file_websocket_lifecycle"]
 
     # Apply configuration
     logging.config.dictConfig(config)

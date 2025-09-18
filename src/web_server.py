@@ -32,8 +32,51 @@ class MessageRequest(BaseModel):
     message: str
 
 
+class UIWebSocketManager:
+    """Manages global UI WebSocket connections for session state updates"""
+
+    def __init__(self):
+        self.active_connections: List[WebSocket] = []
+
+    async def connect(self, websocket: WebSocket):
+        await websocket.accept()
+        self.active_connections.append(websocket)
+        logger.info(f"UI WebSocket connected. Total UI connections: {len(self.active_connections)}")
+
+    def disconnect(self, websocket: WebSocket):
+        if websocket in self.active_connections:
+            self.active_connections.remove(websocket)
+        logger.info(f"UI WebSocket disconnected. Total UI connections: {len(self.active_connections)}")
+
+    async def broadcast_to_all(self, message: dict):
+        """Broadcast message to all connected UI clients"""
+        if not self.active_connections:
+            logger.debug("No UI WebSocket connections available for broadcasting")
+            return
+
+        dead_connections = []
+        for connection in self.active_connections[:]:  # Create a copy to iterate safely
+            try:
+                # Check if connection is still open before attempting to send
+                if connection.client_state.value != 1:  # 1 = OPEN state
+                    logger.warning(f"UI WebSocket connection is not open (state: {connection.client_state.value})")
+                    dead_connections.append(connection)
+                    continue
+
+                await connection.send_json(message)
+                logger.debug(f"Broadcasted message to UI WebSocket: {message.get('type', 'unknown')}")
+
+            except Exception as e:
+                logger.error(f"Error sending to UI WebSocket connection: {e}")
+                dead_connections.append(connection)
+
+        # Clean up dead connections
+        for dead_connection in dead_connections:
+            self.disconnect(dead_connection)
+
+
 class WebSocketManager:
-    """Manages WebSocket connections for real-time communication"""
+    """Manages WebSocket connections for session-specific messaging"""
 
     def __init__(self):
         self.active_connections: Dict[str, List[WebSocket]] = {}
@@ -84,6 +127,7 @@ class ClaudeWebUI:
         self.app = FastAPI(title="Claude Code WebUI", version="1.0.0")
         self.coordinator = SessionCoordinator(data_dir)
         self.websocket_manager = WebSocketManager()
+        self.ui_websocket_manager = UIWebSocketManager()
 
         # Setup routes
         self._setup_routes()
@@ -131,11 +175,6 @@ class ClaudeWebUI:
                     permission_callback=self._create_permission_callback()
                 )
 
-                # Register message callback for this session
-                self.coordinator.add_message_callback(
-                    session_id,
-                    self._create_message_callback(session_id)
-                )
 
                 return {"session_id": session_id}
 
@@ -176,7 +215,7 @@ class ClaudeWebUI:
         async def start_session(session_id: str):
             """Start a session"""
             try:
-                # Ensure WebSocket callback is registered for this session before starting
+                # Register WebSocket callback for this session (works for both new and resumed sessions)
                 self.coordinator.add_message_callback(
                     session_id,
                     self._create_message_callback(session_id)
@@ -230,78 +269,209 @@ class ClaudeWebUI:
                 logger.error(f"Failed to get messages: {e}")
                 raise HTTPException(status_code=500, detail=str(e))
 
-        @self.app.websocket("/ws/{session_id}")
+        @self.app.websocket("/ws/ui")
+        async def ui_websocket_endpoint(websocket: WebSocket):
+            """Global UI WebSocket endpoint for session state updates"""
+            logger.info("UI WebSocket connection request received")
+            await self.ui_websocket_manager.connect(websocket)
+
+            try:
+                # Send initial session list on connection
+                sessions_data = await self.coordinator.list_sessions()
+                initial_message = {
+                    "type": "sessions_list",
+                    "data": {
+                        "sessions": sessions_data  # Already converted to dicts by coordinator.list_sessions()
+                    }
+                }
+                await websocket.send_json(initial_message)
+                logger.info("Sent initial sessions list to UI WebSocket")
+
+                # Keep connection alive and handle incoming messages
+                while True:
+                    try:
+                        # Wait for any incoming messages (ping, etc.)
+                        message = await asyncio.wait_for(websocket.receive_text(), timeout=30.0)
+                        logger.debug(f"UI WebSocket received: {message}")
+
+                        # Handle ping/pong for keepalive
+                        try:
+                            message_data = json.loads(message)
+                            if message_data.get("type") == "ping":
+                                await websocket.send_json({"type": "pong", "timestamp": datetime.now(timezone.utc).isoformat()})
+                        except json.JSONDecodeError:
+                            logger.warning(f"Invalid JSON in UI WebSocket message: {message}")
+
+                    except asyncio.TimeoutError:
+                        # Send periodic ping to keep connection alive
+                        await websocket.send_json({
+                            "type": "ping",
+                            "timestamp": datetime.now(timezone.utc).isoformat()
+                        })
+
+            except WebSocketDisconnect:
+                logger.info("UI WebSocket disconnected")
+            except Exception as e:
+                logger.error(f"Error in UI WebSocket: {e}")
+            finally:
+                self.ui_websocket_manager.disconnect(websocket)
+
+        @self.app.websocket("/ws/session/{session_id}")
         async def websocket_endpoint(websocket: WebSocket, session_id: str):
-            """WebSocket endpoint for real-time communication"""
+            """WebSocket endpoint for session-specific messaging"""
+            import time
+            ws_connection_start_time = time.time()
+            logger.info(f"[WS_LIFECYCLE] WebSocket connection attempt for session {session_id} at {ws_connection_start_time}")
+
             # Validate session exists and is active before accepting connection
             try:
+                session_validation_time = time.time()
+                logger.info(f"[WS_LIFECYCLE] Validating session {session_id} at {session_validation_time}")
+
                 session_info = await self.coordinator.get_session_info(session_id)
                 if not session_info:
-                    logger.warning(f"WebSocket connection attempted for non-existent session: {session_id}")
+                    rejection_time = time.time()
+                    logger.warning(f"[WS_LIFECYCLE] WebSocket connection REJECTED for non-existent session: {session_id} at {rejection_time}")
                     await websocket.close(code=4404)
                     return
 
                 session_state = session_info.get('session', {}).get('state')
-                if session_state not in ['active', 'running']:
-                    logger.warning(f"WebSocket connection attempted for inactive session: {session_id} (state: {session_state})")
+                logger.info(f"[WS_LIFECYCLE] Session {session_id} state: {session_state}")
+
+                if session_state != 'active':
+                    rejection_time = time.time()
+                    logger.warning(f"[WS_LIFECYCLE] WebSocket connection REJECTED for non-active session: {session_id} (state: {session_state}) at {rejection_time}")
+                    logger.info(f"[WS_LIFECYCLE] WebSocket will only connect to sessions in 'active' state (SDK fully initialized)")
                     await websocket.close(code=4003)
                     return
 
+                validation_success_time = time.time()
+                logger.info(f"[WS_LIFECYCLE] Session validation successful for {session_id} at {validation_success_time}")
+
             except Exception as e:
-                logger.error(f"Error validating session {session_id} for WebSocket: {e}")
+                validation_error_time = time.time()
+                logger.error(f"[WS_LIFECYCLE] Error validating session {session_id} for WebSocket at {validation_error_time}: {e}")
                 await websocket.close(code=4500)
                 return
 
+            # Accept WebSocket connection
+            connection_accept_time = time.time()
+            logger.info(f"[WS_LIFECYCLE] Accepting WebSocket connection for session {session_id} at {connection_accept_time}")
+
             await self.websocket_manager.connect(websocket, session_id)
-            logger.info(f"WebSocket loop starting for session {session_id}")
+
+            connection_established_time = time.time()
+            logger.info(f"[WS_LIFECYCLE] WebSocket connection ESTABLISHED for session {session_id} at {connection_established_time}")
+            logger.info(f"[WS_LIFECYCLE] Connection establishment took {connection_established_time - ws_connection_start_time:.3f}s")
+            logger.info(f"[WS_LIFECYCLE] WebSocket loop starting for session {session_id}")
 
             # Send initial ping to establish connection
             try:
+                initial_message_time = time.time()
+                logger.info(f"[WS_LIFECYCLE] Sending initial connection_established message at {initial_message_time}")
+
                 await websocket.send_text(json.dumps({
                     "type": "connection_established",
                     "session_id": session_id,
                     "timestamp": datetime.now(timezone.utc).isoformat()
                 }))
+
+                initial_message_sent_time = time.time()
+                logger.info(f"[WS_LIFECYCLE] Initial message sent successfully at {initial_message_sent_time}")
+
             except Exception as e:
-                logger.error(f"Failed to send initial message to WebSocket {session_id}: {e}")
+                initial_message_error_time = time.time()
+                logger.error(f"[WS_LIFECYCLE] Failed to send initial message to WebSocket {session_id} at {initial_message_error_time}: {e}")
                 # Clean up the connection that was already registered
                 self.websocket_manager.disconnect(websocket, session_id)
+                logger.info(f"[WS_LIFECYCLE] WebSocket disconnected due to initial message failure for session {session_id}")
                 return
 
+            message_loop_iteration = 0
             try:
+                logger.info(f"[WS_LIFECYCLE] Starting message loop for session {session_id}")
+
                 while True:
+                    message_loop_iteration += 1
+                    loop_iteration_start_time = time.time()
+                    logger.debug(f"[WS_LIFECYCLE] Message loop iteration {message_loop_iteration} started at {loop_iteration_start_time}")
+
                     # Wait for incoming messages with proper error handling
                     try:
-                        logger.debug(f"WebSocket waiting for message from session {session_id}")
+                        message_wait_start_time = time.time()
+                        logger.debug(f"[WS_LIFECYCLE] WebSocket waiting for message from session {session_id} (timeout=30s)")
+
                         message = await asyncio.wait_for(websocket.receive_text(), timeout=30.0)
-                        logger.debug(f"WebSocket received message from session {session_id}: {message[:100]}...")
+
+                        message_received_time = time.time()
+                        logger.debug(f"[WS_LIFECYCLE] WebSocket received message from session {session_id} at {message_received_time}: {message[:100]}...")
+                        logger.debug(f"[WS_LIFECYCLE] Message wait took {message_received_time - message_wait_start_time:.3f}s")
+
                         message_data = json.loads(message)
+                        logger.debug(f"[WS_LIFECYCLE] Message type: {message_data.get('type', 'unknown')}")
 
                         if message_data.get("type") == "send_message":
                             # Handle message sending through WebSocket
                             content = message_data.get("content", "")
                             if content:
+                                message_processing_start_time = time.time()
+                                logger.info(f"[WS_LIFECYCLE] Forwarding message to coordinator for session {session_id} at {message_processing_start_time}")
+                                logger.info(f"[WS_LIFECYCLE] Message content preview: {content[:100]}...")
+
                                 await self.coordinator.send_message(session_id, content)
+
+                                message_processing_end_time = time.time()
+                                logger.info(f"[WS_LIFECYCLE] Message forwarded to coordinator at {message_processing_end_time}")
+                                logger.info(f"[WS_LIFECYCLE] Message forwarding took {message_processing_end_time - message_processing_start_time:.3f}s")
 
                     except asyncio.TimeoutError:
                         # Send ping to keep connection alive
+                        timeout_time = time.time()
+                        logger.debug(f"[WS_LIFECYCLE] WebSocket timeout for session {session_id} at {timeout_time} - sending ping")
+
                         try:
+                            ping_start_time = time.time()
                             await websocket.send_text(json.dumps({"type": "ping", "timestamp": datetime.now(timezone.utc).isoformat()}))
-                        except Exception:
+
+                            ping_sent_time = time.time()
+                            logger.debug(f"[WS_LIFECYCLE] Ping sent successfully at {ping_sent_time}")
+
+                        except Exception as ping_error:
                             # Connection is dead, break the loop
+                            connection_death_time = time.time()
+                            logger.warning(f"[WS_LIFECYCLE] WebSocket connection DEAD for session {session_id} at {connection_death_time}: {ping_error}")
+                            logger.info(f"[WS_LIFECYCLE] Breaking message loop due to dead connection")
                             break
+
                     except json.JSONDecodeError as e:
-                        logger.warning(f"Invalid JSON received on WebSocket: {e}")
+                        json_error_time = time.time()
+                        logger.warning(f"[WS_LIFECYCLE] Invalid JSON received on WebSocket for session {session_id} at {json_error_time}: {e}")
                         continue
 
-            except WebSocketDisconnect:
-                logger.info(f"WebSocket disconnected gracefully for session {session_id}")
+                    loop_iteration_end_time = time.time()
+                    logger.debug(f"[WS_LIFECYCLE] Message loop iteration {message_loop_iteration} completed at {loop_iteration_end_time}")
+
+            except WebSocketDisconnect as disconnect_error:
+                disconnect_time = time.time()
+                logger.info(f"[WS_LIFECYCLE] WebSocket DISCONNECTED gracefully for session {session_id} at {disconnect_time}")
+                logger.info(f"[WS_LIFECYCLE] Disconnect details: {disconnect_error}")
+                logger.info(f"[WS_LIFECYCLE] Total message loop iterations: {message_loop_iteration}")
                 self.websocket_manager.disconnect(websocket, session_id)
-            except Exception as e:
-                logger.error(f"WebSocket error for session {session_id}: {e}")
+
+            except Exception as ws_error:
+                error_time = time.time()
+                logger.error(f"[WS_LIFECYCLE] WebSocket ERROR for session {session_id} at {error_time}: {ws_error}")
+                logger.error(f"[WS_LIFECYCLE] Error type: {type(ws_error)}")
+                logger.error(f"[WS_LIFECYCLE] Total message loop iterations before error: {message_loop_iteration}")
                 self.websocket_manager.disconnect(websocket, session_id)
+
             finally:
-                logger.info(f"WebSocket loop ended for session {session_id}")
+                cleanup_time = time.time()
+                total_connection_time = cleanup_time - ws_connection_start_time
+                logger.info(f"[WS_LIFECYCLE] WebSocket cleanup for session {session_id} at {cleanup_time}")
+                logger.info(f"[WS_LIFECYCLE] Total WebSocket connection duration: {total_connection_time:.3f}s")
+                logger.info(f"[WS_LIFECYCLE] Total message loop iterations: {message_loop_iteration}")
+                logger.info(f"[WS_LIFECYCLE] WebSocket loop ENDED for session {session_id}")
 
     def _create_message_callback(self, session_id: str):
         """Create message callback for WebSocket broadcasting"""
@@ -340,11 +510,20 @@ class ClaudeWebUI:
         try:
             session_id = state_data.get("session_id")
             if session_id:
-                message = {
-                    "type": "state_change",
-                    "data": state_data
-                }
-                await self.websocket_manager.send_message(session_id, message)
+                # Get full session info for real-time updates
+                session_info = await self.coordinator.session_manager.get_session_info(session_id)
+                if session_info:
+                    message = {
+                        "type": "state_change",
+                        "data": {
+                            "session_id": session_id,
+                            "session": session_info.to_dict(),
+                            "timestamp": state_data.get("timestamp")
+                        }
+                    }
+                    # Broadcast to all UI WebSocket connections instead of session-specific
+                    await self.ui_websocket_manager.broadcast_to_all(message)
+                    logger.info(f"Broadcasted state change for session {session_id} to all UI clients")
         except Exception as e:
             logger.error(f"Error handling state change: {e}")
 
@@ -378,11 +557,20 @@ class ClaudeWebUI:
 
             content = getattr(message_data, 'content', str(message_data)) if hasattr(message_data, 'content') else ""
 
-            return {
+            # Include metadata fields, especially subtype for init message detection
+            result = {
                 "type": msg_type,
                 "content": content,
                 "timestamp": getattr(message_data, 'timestamp', datetime.now(timezone.utc).isoformat())
             }
+
+            # Add subtype if available in metadata
+            if hasattr(message_data, 'metadata') and message_data.metadata:
+                subtype = message_data.metadata.get('subtype')
+                if subtype:
+                    result['subtype'] = subtype
+
+            return result
         except Exception as e:
             logger.error(f"Error serializing message: {e}")
             return {

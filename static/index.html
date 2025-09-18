@@ -49,9 +49,7 @@
                             <span id="current-session-state" class="session-state"></span>
                         </div>
                         <div class="session-actions">
-                            <button id="start-session-btn" class="btn btn-small btn-success">Start</button>
-                            <button id="pause-session-btn" class="btn btn-small btn-warning">Pause</button>
-                            <button id="terminate-session-btn" class="btn btn-small btn-danger">Terminate</button>
+                            <button id="exit-session-btn" class="btn btn-small btn-secondary">Exit Session</button>
                         </div>
                     </div>
 
@@ -69,6 +67,12 @@
 
                     <!-- Input Area -->
                     <div class="input-area">
+                        <!-- Progress Indicator -->
+                        <div id="claude-progress" class="claude-progress hidden">
+                            <div class="progress-spinner"></div>
+                            <span class="progress-text">Claude Code is processing...</span>
+                        </div>
+
                         <div class="input-container">
                             <textarea id="message-input" placeholder="Type your message to Claude Code..." rows="3"></textarea>
                             <button id="send-btn" class="btn btn-primary">Send</button>

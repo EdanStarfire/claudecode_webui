@@ -3,29 +3,40 @@
 class ClaudeWebUI {
     constructor() {
         this.currentSessionId = null;
-        this.websocket = null;
         this.sessions = new Map();
-        this.connectionRetryCount = 0;
-        this.maxRetries = 5;
+
+        // Session-specific WebSocket for message streaming
+        this.sessionWebsocket = null;
+        this.sessionConnectionRetryCount = 0;
+        this.maxSessionRetries = 5;
+        this.intentionalSessionDisconnect = false;
+
+        // Global UI WebSocket for session state updates
+        this.uiWebsocket = null;
+        this.uiConnectionRetryCount = 0;
+        this.maxUIRetries = 10;
 
         // Auto-scroll functionality
         this.autoScrollEnabled = true;
         this.isUserScrolling = false;
         this.scrollTimeout = null;
 
+        // Processing state management
+        this.isProcessing = false;
+
         this.init();
     }
 
     init() {
         this.setupEventListeners();
-        this.loadSessions();
+        this.connectUIWebSocket();
         this.updateConnectionStatus('disconnected');
     }
 
     setupEventListeners() {
         // Session controls
         document.getElementById('create-session-btn').addEventListener('click', () => this.showCreateSessionModal());
-        document.getElementById('refresh-sessions-btn').addEventListener('click', () => this.loadSessions());
+        document.getElementById('refresh-sessions-btn').addEventListener('click', () => this.refreshSessions());
 
         // Modal controls
         document.getElementById('close-modal').addEventListener('click', () => this.hideCreateSessionModal());
@@ -36,9 +47,7 @@ class ClaudeWebUI {
         document.getElementById('browse-directory').addEventListener('click', () => this.browseDirectory());
 
         // Session actions
-        document.getElementById('start-session-btn').addEventListener('click', () => this.startSession());
-        document.getElementById('pause-session-btn').addEventListener('click', () => this.pauseSession());
-        document.getElementById('terminate-session-btn').addEventListener('click', () => this.terminateSession());
+        document.getElementById('exit-session-btn').addEventListener('click', () => this.exitSession());
 
         // Message sending
         document.getElementById('send-btn').addEventListener('click', () => this.sendMessage());
@@ -124,7 +133,7 @@ class ClaudeWebUI {
                 body: JSON.stringify(payload)
             });
 
-            await this.loadSessions();
+            // No need to call loadSessions() - UI WebSocket will receive state change notification automatically
             await this.selectSession(data.session_id);
 
             return data.session_id;
@@ -136,60 +145,43 @@ class ClaudeWebUI {
         }
     }
 
-    async startSession() {
+    exitSession() {
         if (!this.currentSessionId) return;
 
-        try {
-            await this.apiRequest(`/api/sessions/${this.currentSessionId}/start`, { method: 'POST' });
-            await this.loadSessionInfo();
+        console.log(`Exiting session ${this.currentSessionId}`);
 
-            // Small delay to ensure session is fully started before WebSocket connection
-            await new Promise(resolve => setTimeout(resolve, 500));
+        // Clean disconnect from WebSocket
+        this.disconnectSessionWebSocket();
 
-            this.connectWebSocket();
-        } catch (error) {
-            console.error('Failed to start session:', error);
-        }
-    }
+        // Clear current session
+        this.currentSessionId = null;
 
-    async pauseSession() {
-        if (!this.currentSessionId) return;
+        // Reset UI to no session selected state
+        document.getElementById('no-session-selected').classList.remove('hidden');
+        document.getElementById('chat-container').classList.add('hidden');
 
-        try {
-            await this.apiRequest(`/api/sessions/${this.currentSessionId}/pause`, { method: 'POST' });
-            await this.loadSessionInfo();
-        } catch (error) {
-            console.error('Failed to pause session:', error);
-        }
-    }
+        // Remove active state from all session items
+        document.querySelectorAll('.session-item').forEach(item => {
+            item.classList.remove('active');
+        });
 
-    async terminateSession() {
-        if (!this.currentSessionId) return;
+        // Clear messages area
+        document.getElementById('messages-area').innerHTML = '';
 
-        if (!confirm('Are you sure you want to terminate this session?')) {
-            return;
-        }
-
-        try {
-            await this.apiRequest(`/api/sessions/${this.currentSessionId}/terminate`, { method: 'POST' });
-            this.disconnectWebSocket();
-            await this.loadSessions();
-            await this.loadSessionInfo();
-        } catch (error) {
-            console.error('Failed to terminate session:', error);
-        }
+        // Reset processing state when exiting session
+        this.hideProcessingIndicator();
     }
 
     async sendMessage() {
         const input = document.getElementById('message-input');
         const message = input.value.trim();
 
-        if (!message || !this.currentSessionId) return;
+        if (!message || !this.currentSessionId || this.isProcessing) return;
 
         try {
             // Send via WebSocket if connected
-            if (this.websocket && this.websocket.readyState === WebSocket.OPEN) {
-                this.websocket.send(JSON.stringify({
+            if (this.websocket && this.sessionWebsocket.readyState === WebSocket.OPEN) {
+                this.sessionWebsocket.send(JSON.stringify({
                     type: 'send_message',
                     content: message
                 }));
@@ -208,10 +200,78 @@ class ClaudeWebUI {
                 timestamp: new Date().toISOString()
             });
 
+            // Show processing indicator
+            this.showProcessingIndicator();
+
             input.value = '';
         } catch (error) {
             console.error('Failed to send message:', error);
         }
+    }
+
+    showProcessingIndicator() {
+        this.isProcessing = true;
+        const progressElement = document.getElementById('claude-progress');
+        const sendButton = document.getElementById('send-btn');
+        const messageInput = document.getElementById('message-input');
+
+        if (progressElement) {
+            progressElement.classList.remove('hidden');
+        }
+        if (sendButton) {
+            sendButton.disabled = true;
+            sendButton.textContent = 'Processing...';
+        }
+        if (messageInput) {
+            messageInput.disabled = true;
+        }
+    }
+
+    hideProcessingIndicator() {
+        this.isProcessing = false;
+        const progressElement = document.getElementById('claude-progress');
+        const sendButton = document.getElementById('send-btn');
+        const messageInput = document.getElementById('message-input');
+
+        if (progressElement) {
+            progressElement.classList.add('hidden');
+        }
+        if (sendButton) {
+            sendButton.disabled = false;
+            sendButton.textContent = 'Send';
+        }
+        if (messageInput) {
+            messageInput.disabled = false;
+        }
+    }
+
+    handleIncomingMessage(message) {
+        console.log('Processing incoming message:', message);
+
+        // Handle special message types that control progress indicator
+        if (message.type === 'system') {
+            // Check if this is an init message by looking for subtype
+            if (message.subtype === 'init') {
+                console.log('Filtering out init system message with subtype:', message.subtype);
+                // Don't show init messages, just ensure progress indicator is visible
+                if (!this.isProcessing) {
+                    this.showProcessingIndicator();
+                }
+                return;
+            }
+        }
+
+        if (message.type === 'result') {
+            console.log('Filtering out result message and hiding progress indicator');
+            // Hide progress indicator when we get a result message
+            this.hideProcessingIndicator();
+            // Don't add result messages to the UI
+            return;
+        }
+
+        // For all other messages, add them to the UI normally
+        console.log('Adding message to UI:', message.type);
+        this.addMessageToUI(message);
     }
 
     async loadSessionInfo() {
@@ -236,25 +296,125 @@ class ClaudeWebUI {
         }
     }
 
-    // WebSocket Management
-    connectWebSocket() {
+    // UI WebSocket Management (for session state updates)
+    connectUIWebSocket() {
+        if (this.uiWebsocket && this.uiWebsocket.readyState === WebSocket.OPEN) {
+            console.log('UI WebSocket already connected');
+            return;
+        }
+
+        console.log('Connecting to UI WebSocket...');
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const wsUrl = `${protocol}//${window.location.host}/ws/ui`;
+
+        this.uiWebsocket = new WebSocket(wsUrl);
+
+        this.uiWebsocket.onopen = () => {
+            console.log('UI WebSocket connected successfully');
+            this.uiConnectionRetryCount = 0;
+        };
+
+        this.uiWebsocket.onmessage = (event) => {
+            try {
+                const data = JSON.parse(event.data);
+                this.handleUIWebSocketMessage(data);
+            } catch (error) {
+                console.error('Error parsing UI WebSocket message:', error);
+            }
+        };
+
+        this.uiWebsocket.onclose = (event) => {
+            console.log('UI WebSocket disconnected', event.code, event.reason);
+            this.uiWebsocket = null;
+
+            // Auto-reconnect UI WebSocket (it should always stay connected)
+            if (this.uiConnectionRetryCount < this.maxUIRetries) {
+                this.uiConnectionRetryCount++;
+                const delay = Math.min(1000 * Math.pow(2, this.uiConnectionRetryCount), 30000);
+                console.log(`Reconnecting UI WebSocket in ${delay}ms (attempt ${this.uiConnectionRetryCount}/${this.maxUIRetries})`);
+
+                setTimeout(() => {
+                    this.connectUIWebSocket();
+                }, delay);
+            } else {
+                console.log('Max UI WebSocket reconnection attempts reached');
+            }
+        };
+
+        this.uiWebsocket.onerror = (error) => {
+            console.error('UI WebSocket error:', error);
+        };
+    }
+
+    handleUIWebSocketMessage(data) {
+        console.log('UI WebSocket message received:', data.type);
+
+        switch (data.type) {
+            case 'sessions_list':
+                // Initial sessions list on connection
+                this.updateSessionsList(data.data.sessions);
+                break;
+            case 'state_change':
+                // Real-time session state change
+                this.handleStateChange(data.data);
+                break;
+            case 'ping':
+                // Respond to server ping
+                if (this.uiWebsocket && this.uiWebsocket.readyState === WebSocket.OPEN) {
+                    this.uiWebsocket.send(JSON.stringify({type: 'pong', timestamp: new Date().toISOString()}));
+                }
+                break;
+            case 'pong':
+                // Server responded to our ping
+                console.debug('UI WebSocket pong received');
+                break;
+            default:
+                console.log('Unknown UI WebSocket message type:', data.type);
+        }
+    }
+
+    updateSessionsList(sessions) {
+        console.log(`Updating sessions list with ${sessions.length} sessions`);
+        this.sessions.clear();
+        sessions.forEach(session => {
+            this.sessions.set(session.session_id, session);
+        });
+        this.renderSessions();
+    }
+
+    refreshSessions() {
+        console.log('Refreshing sessions via API fallback');
+        // Fallback to API call if UI WebSocket is not available
+        this.loadSessions();
+    }
+
+    // Session WebSocket Management (for message streaming)
+    connectSessionWebSocket() {
         if (!this.currentSessionId) return;
 
-        this.disconnectWebSocket();
+        // Only disconnect if we have an existing connection to a different session
+        if (this.sessionWebsocket && this.sessionWebsocket.readyState === WebSocket.OPEN) {
+            console.log('Closing existing session WebSocket connection before creating new one');
+            this.disconnectSessionWebSocket();
+        }
 
+        // Reset intentional disconnect flag for new connections
+        this.intentionalSessionDisconnect = false;
+
+        console.log(`Connecting session WebSocket for session: ${this.currentSessionId}`);
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const wsUrl = `${protocol}//${window.location.host}/ws/${this.currentSessionId}`;
+        const wsUrl = `${protocol}//${window.location.host}/ws/session/${this.currentSessionId}`;
 
         try {
-            this.websocket = new WebSocket(wsUrl);
+            this.sessionWebsocket = new WebSocket(wsUrl);
 
-            this.websocket.onopen = () => {
+            this.sessionWebsocket.onopen = () => {
                 console.log('WebSocket connected');
                 this.updateConnectionStatus('connected');
-                this.connectionRetryCount = 0;
+                this.sessionConnectionRetryCount = 0;
             };
 
-            this.websocket.onmessage = (event) => {
+            this.sessionWebsocket.onmessage = (event) => {
                 try {
                     const data = JSON.parse(event.data);
                     this.handleWebSocketMessage(data);
@@ -263,9 +423,15 @@ class ClaudeWebUI {
                 }
             };
 
-            this.websocket.onclose = (event) => {
+            this.sessionWebsocket.onclose = (event) => {
                 console.log('WebSocket disconnected', event.code, event.reason);
                 this.updateConnectionStatus('disconnected');
+
+                // Don't retry if this was an intentional disconnect
+                if (this.intentionalSessionDisconnect) {
+                    console.log('WebSocket closed intentionally, not retrying');
+                    return;
+                }
 
                 // Don't retry on specific error codes (session invalid/inactive)
                 if (event.code === 4404 || event.code === 4003 || event.code === 4500) {
@@ -276,7 +442,7 @@ class ClaudeWebUI {
                 this.scheduleReconnect();
             };
 
-            this.websocket.onerror = (error) => {
+            this.sessionWebsocket.onerror = (error) => {
                 console.error('WebSocket error:', error);
                 this.updateConnectionStatus('disconnected');
             };
@@ -287,23 +453,31 @@ class ClaudeWebUI {
         }
     }
 
-    disconnectWebSocket() {
-        if (this.websocket) {
-            this.websocket.close();
-            this.websocket = null;
+    disconnectSessionWebSocket() {
+        if (this.sessionWebsocket) {
+            // Mark as intentional disconnect to prevent reconnection
+            this.intentionalSessionDisconnect = true;
+            this.sessionWebsocket.close();
+            this.sessionWebsocket = null;
         }
         this.updateConnectionStatus('disconnected');
     }
 
     scheduleReconnect() {
-        if (this.connectionRetryCount < this.maxRetries) {
-            this.connectionRetryCount++;
-            const delay = Math.min(1000 * Math.pow(2, this.connectionRetryCount), 30000);
+        // Don't reconnect if this was an intentional disconnect
+        if (this.intentionalSessionDisconnect) {
+            console.log('Reconnect cancelled due to intentional disconnect');
+            return;
+        }
 
-            console.log(`Scheduling WebSocket reconnect in ${delay}ms (attempt ${this.connectionRetryCount})`);
+        if (this.sessionConnectionRetryCount < this.maxSessionRetries) {
+            this.sessionConnectionRetryCount++;
+            const delay = Math.min(1000 * Math.pow(2, this.sessionConnectionRetryCount), 30000);
+
+            console.log(`Scheduling WebSocket reconnect in ${delay}ms (attempt ${this.sessionConnectionRetryCount})`);
             setTimeout(() => {
-                if (this.currentSessionId) {
-                    this.connectWebSocket();
+                if (this.currentSessionId && !this.intentionalSessionDisconnect) {
+                    this.connectSessionWebSocket();
                 }
             }, delay);
         } else {
@@ -316,7 +490,7 @@ class ClaudeWebUI {
 
         switch (data.type) {
             case 'message':
-                this.addMessageToUI(data.data);
+                this.handleIncomingMessage(data.data);
                 break;
             case 'state_change':
                 this.handleStateChange(data.data);
@@ -326,8 +500,8 @@ class ClaudeWebUI {
                 break;
             case 'ping':
                 // Respond to server ping to keep connection alive
-                if (this.websocket && this.websocket.readyState === WebSocket.OPEN) {
-                    this.websocket.send(JSON.stringify({type: 'pong', timestamp: new Date().toISOString()}));
+                if (this.websocket && this.sessionWebsocket.readyState === WebSocket.OPEN) {
+                    this.sessionWebsocket.send(JSON.stringify({type: 'pong', timestamp: new Date().toISOString()}));
                 }
                 break;
             default:
@@ -337,6 +511,20 @@ class ClaudeWebUI {
 
     // UI Updates
     async selectSession(sessionId) {
+        // If already connected to this session, don't reconnect
+        if (this.currentSessionId === sessionId && this.websocket && this.sessionWebsocket.readyState === WebSocket.OPEN) {
+            console.log(`Already connected to session ${sessionId}`);
+            return;
+        }
+
+        // Clean disconnect from previous session
+        if (this.currentSessionId && this.currentSessionId !== sessionId) {
+            console.log(`Switching from session ${this.currentSessionId} to ${sessionId}`);
+            this.disconnectSessionWebSocket();
+            // Wait a moment for the disconnection to complete
+            await new Promise(resolve => setTimeout(resolve, 100));
+        }
+
         this.currentSessionId = sessionId;
 
         // Update UI
@@ -356,33 +544,57 @@ class ClaudeWebUI {
         // Load session info first to check state
         await this.loadSessionInfo();
 
-        // Auto-start session if it's not active
+        // Auto-start session if it's not active/running/starting
         const session = this.sessions.get(sessionId);
-        if (session && session.state !== 'active' && session.state !== 'running') {
+        if (session && session.state !== 'active' && session.state !== 'running' && session.state !== 'starting') {
             console.log(`Auto-starting session ${sessionId} (current state: ${session.state})`);
             await this.apiRequest(`/api/sessions/${sessionId}/start`, { method: 'POST' });
 
             // Wait for session to be fully active before connecting WebSocket
             let attempts = 0;
-            const maxAttempts = 10;
+            const maxAttempts = 15; // Increased from 10 to allow for longer SDK initialization
+            const pollInterval = 1000; // Increased from 200ms to 1 second
             while (attempts < maxAttempts) {
-                await new Promise(resolve => setTimeout(resolve, 200));
+                await new Promise(resolve => setTimeout(resolve, pollInterval));
                 await this.loadSessionInfo();
                 const updatedSession = this.sessions.get(sessionId);
                 if (updatedSession && (updatedSession.state === 'active' || updatedSession.state === 'running')) {
                     console.log(`Session ${sessionId} is now active, connecting WebSocket`);
-                    this.connectWebSocket();
+                    this.connectSessionWebSocket();
                     break;
                 }
                 attempts++;
+                console.log(`Waiting for session ${sessionId} to become active... (attempt ${attempts}/${maxAttempts})`);
             }
 
             if (attempts >= maxAttempts) {
-                console.warn(`Session ${sessionId} did not become active after ${maxAttempts} attempts`);
+                console.warn(`Session ${sessionId} did not become active after ${maxAttempts} attempts (${maxAttempts * pollInterval / 1000} seconds)`);
             }
         } else if (session && (session.state === 'active' || session.state === 'running')) {
             // Session is already active, just connect WebSocket
-            this.connectWebSocket();
+            this.connectSessionWebSocket();
+        } else if (session && session.state === 'starting') {
+            // Session is starting, wait for it to become active
+            console.log(`Session ${sessionId} is starting, waiting for it to become active...`);
+            let attempts = 0;
+            const maxAttempts = 15;
+            const pollInterval = 1000;
+            while (attempts < maxAttempts) {
+                await new Promise(resolve => setTimeout(resolve, pollInterval));
+                await this.loadSessionInfo();
+                const updatedSession = this.sessions.get(sessionId);
+                if (updatedSession && (updatedSession.state === 'active' || updatedSession.state === 'running')) {
+                    console.log(`Session ${sessionId} is now active, connecting WebSocket`);
+                    this.connectSessionWebSocket();
+                    break;
+                }
+                attempts++;
+                console.log(`Waiting for session ${sessionId} to become active... (attempt ${attempts}/${maxAttempts})`);
+            }
+
+            if (attempts >= maxAttempts) {
+                console.warn(`Session ${sessionId} did not become active after ${maxAttempts} attempts (${maxAttempts * pollInterval / 1000} seconds)`);
+            }
         }
 
         // Load messages after session is ready
@@ -401,6 +613,12 @@ class ClaudeWebUI {
         this.sessions.forEach((session, sessionId) => {
             const sessionElement = document.createElement('div');
             sessionElement.className = 'session-item';
+
+            // Add active class if this is the currently selected session
+            if (sessionId === this.currentSessionId) {
+                sessionElement.classList.add('active');
+            }
+
             sessionElement.setAttribute('data-session-id', sessionId);
             sessionElement.addEventListener('click', () => this.selectSession(sessionId));
 
@@ -427,12 +645,6 @@ class ClaudeWebUI {
             existingSession.state = sessionData.session.state;
             this.sessions.set(this.currentSessionId, existingSession);
         }
-
-        // Update button states
-        const state = sessionData.session.state;
-        document.getElementById('start-session-btn').disabled = state === 'active';
-        document.getElementById('pause-session-btn').disabled = state !== 'active';
-        document.getElementById('terminate-session-btn').disabled = state === 'terminated';
     }
 
     renderMessages(messages) {
@@ -490,9 +702,31 @@ class ClaudeWebUI {
 
     handleStateChange(stateData) {
         console.log('Session state changed:', stateData);
-        this.loadSessions();
-        if (stateData.session_id === this.currentSessionId) {
-            this.loadSessionInfo();
+
+        // Update specific session in real-time instead of reloading all sessions
+        const sessionId = stateData.session_id;
+        const sessionInfo = stateData.session;
+
+        if (sessionInfo) {
+            // Update the session in our local sessions map
+            this.sessions.set(sessionId, sessionInfo);
+
+            // Re-render sessions to reflect the state change
+            this.renderSessions();
+
+            // If this is the current session, update the session info display
+            if (sessionId === this.currentSessionId) {
+                this.updateSessionInfo({ session: sessionInfo });
+            }
+        }
+    }
+
+    updateSpecificSession(sessionId, sessionInfo) {
+        this.sessions.set(sessionId, sessionInfo);
+        this.renderSessions();
+
+        if (sessionId === this.currentSessionId) {
+            this.updateSessionInfo({ session: sessionInfo });
         }
     }
 
@@ -585,18 +819,23 @@ class ClaudeWebUI {
             clearTimeout(this.scrollTimeout);
         }
 
-        // Mark as user scrolling
-        this.isUserScrolling = true;
+        // Only mark as user scrolling if they scroll away from the bottom
+        if (!this.isAtBottom()) {
+            this.isUserScrolling = true;
+        } else {
+            // If user scrolls to bottom, don't consider it user scrolling
+            this.isUserScrolling = false;
+        }
 
         // Reset user scrolling flag after a delay
         this.scrollTimeout = setTimeout(() => {
             this.isUserScrolling = false;
-        }, 1000);
+        }, 1500);
     }
 
     isAtBottom() {
         const messagesArea = document.getElementById('messages-area');
-        const threshold = 50; // pixels from bottom
+        const threshold = 100; // pixels from bottom
         return messagesArea.scrollTop + messagesArea.clientHeight >= messagesArea.scrollHeight - threshold;
     }
 
@@ -605,12 +844,14 @@ class ClaudeWebUI {
             return;
         }
 
-        // If user is scrolling, don't auto-scroll unless they're at the bottom
-        if (this.isUserScrolling && !this.isAtBottom()) {
-            return;
+        // Always scroll if user is not actively scrolling
+        // Or if user is scrolling but near the bottom
+        if (!this.isUserScrolling || this.isAtBottom()) {
+            // Use requestAnimationFrame for smoother scrolling
+            requestAnimationFrame(() => {
+                this.scrollToBottom();
+            });
         }
-
-        this.scrollToBottom();
     }
 
     scrollToBottom() {
@@ -659,7 +900,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
 // Handle page unload
 window.addEventListener('beforeunload', () => {
-    if (window.claudeWebUI && window.claudeWebUI.websocket) {
-        window.claudeWebUI.disconnectWebSocket();
+    if (window.claudeWebUI) {
+        if (window.claudeWebUI.sessionWebsocket) {
+            window.claudeWebUI.disconnectSessionWebSocket();
+        }
+        if (window.claudeWebUI.uiWebsocket) {
+            window.claudeWebUI.uiWebsocket.close();
+        }
     }
 });

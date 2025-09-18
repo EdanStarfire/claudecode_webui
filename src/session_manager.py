@@ -11,7 +11,7 @@ import uuid
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
-from typing import Dict, Optional, Any, List
+from typing import Dict, Optional, Any, List, Callable
 from dataclasses import dataclass, asdict
 import logging
 
@@ -73,6 +73,7 @@ class SessionManager:
         self.sessions_dir = self.data_dir / "sessions"
         self._active_sessions: Dict[str, SessionInfo] = {}
         self._session_locks: Dict[str, asyncio.Lock] = {}
+        self._state_change_callbacks: List[Callable] = []
 
     async def initialize(self):
         """Initialize session manager and load existing sessions"""
@@ -96,7 +97,20 @@ class SessionManager:
                             with open(state_file, 'r') as f:
                                 data = json.load(f)
                             session_info = SessionInfo.from_dict(data)
+
+                            # Reset active/starting sessions to created state on startup
+                            # since there are no SDK instances running for them
+                            original_state = session_info.state
+                            if session_info.state in [SessionState.ACTIVE, SessionState.STARTING]:
+                                session_info.state = SessionState.CREATED
+                                session_info.updated_at = datetime.now(timezone.utc)
+                                logger.info(f"Reset session {session_info.session_id} from {original_state.value} to {session_info.state.value} on startup")
+
                             self._active_sessions[session_info.session_id] = session_info
+
+                            # Save the updated state if it was modified
+                            if original_state != session_info.state:
+                                await self._persist_session_state(session_info.session_id)
                             self._session_locks[session_info.session_id] = asyncio.Lock()
                             logger.debug(f"Loaded session {session_info.session_id} with state {session_info.state}")
                         except Exception as e:
@@ -166,17 +180,36 @@ class SessionManager:
 
                 await self._update_session_state(session_id, SessionState.STARTING)
 
-                # Perform any session startup tasks here
-                await asyncio.sleep(0.1)  # Placeholder for startup logic
-
-                await self._update_session_state(session_id, SessionState.ACTIVE)
-                logger.info(f"Started session {session_id}")
+                # Session will remain in STARTING state until SDK is ready
+                # SDK will call mark_session_active() when context manager is initialized
+                logger.info(f"Session {session_id} moved to STARTING state - waiting for SDK initialization")
                 return True
 
             except Exception as e:
                 logger.error(f"Failed to start session {session_id}: {e}")
                 await self._update_session_state(session_id, SessionState.ERROR, str(e))
                 return False
+
+    async def mark_session_active(self, session_id: str) -> bool:
+        """Mark session as active when SDK is ready"""
+        try:
+            async with self._get_session_lock(session_id):
+                session = self._active_sessions.get(session_id)
+                if not session:
+                    logger.error(f"Session {session_id} not found")
+                    return False
+
+                if session.state != SessionState.STARTING:
+                    logger.warning(f"Cannot activate session {session_id} in state {session.state}")
+                    return False
+
+                await self._update_session_state(session_id, SessionState.ACTIVE)
+                logger.info(f"Session {session_id} marked as ACTIVE - SDK ready")
+                return True
+
+        except Exception as e:
+            logger.error(f"Failed to mark session {session_id} as active: {e}")
+            return False
 
     async def pause_session(self, session_id: str) -> bool:
         """Pause an active session"""
@@ -263,6 +296,7 @@ class SessionManager:
             session.error_message = error_message
 
         await self._persist_session_state(session_id)
+        await self._notify_state_change_callbacks(session_id, new_state)
 
     async def _persist_session_state(self, session_id: str):
         """Persist session state to filesystem"""
@@ -295,3 +329,15 @@ class SessionManager:
             except Exception as e:
                 logger.error(f"Failed to update Claude Code session ID for {session_id}: {e}")
                 raise
+
+    def add_state_change_callback(self, callback: Callable):
+        """Add callback for session state changes"""
+        self._state_change_callbacks.append(callback)
+
+    async def _notify_state_change_callbacks(self, session_id: str, new_state: SessionState):
+        """Notify registered callbacks about state changes"""
+        for callback in self._state_change_callbacks:
+            try:
+                await callback(session_id, new_state)
+            except Exception as e:
+                logger.error(f"Error in state change callback: {e}")

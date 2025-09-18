@@ -49,6 +49,10 @@ class SessionCoordinator:
         """Initialize the session coordinator"""
         try:
             await self.session_manager.initialize()
+
+            # Register callback to receive session manager state changes
+            self.session_manager.add_state_change_callback(self._on_session_manager_state_change)
+
             logger.info("Session coordinator initialized successfully")
         except Exception as e:
             logger.error(f"Failed to initialize session coordinator: {e}")
@@ -381,6 +385,11 @@ class SessionCoordinator:
 
         except Exception as e:
             logger.error(f"Error notifying state change for {session_id}: {e}")
+
+    async def _on_session_manager_state_change(self, session_id: str, new_state: SessionState):
+        """Handle state changes from session manager"""
+        logger.info(f"Received state change from session manager: {session_id} -> {new_state.value}")
+        await self._notify_state_change(session_id, new_state)
 
     async def cleanup(self):
         """Cleanup all resources"""

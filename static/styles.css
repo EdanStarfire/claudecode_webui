@@ -168,6 +168,7 @@ body {
     flex: 1;
     display: flex;
     flex-direction: column;
+    min-height: 0; /* Important: allows flex item to shrink */
 }
 
 .session-info-bar {
@@ -208,7 +209,7 @@ body {
     flex: 1;
     display: flex;
     flex-direction: column;
-    overflow: hidden;
+    min-height: 0; /* Important: allows flex item to shrink */
 }
 
 .messages-header {
@@ -233,12 +234,11 @@ body {
 /* Messages Area */
 .messages-area {
     flex: 1;
-    overflow-y: auto;
+    overflow-y: scroll; /* Force scrollbar to always show */
     padding: 1rem;
-    display: flex;
-    flex-direction: column;
-    gap: 1rem;
+    min-height: 0; /* Important: allows flex item to shrink below content size */
     scroll-behavior: smooth;
+    height: 100%; /* Ensure definite height */
 }
 
 .message {
@@ -246,23 +246,27 @@ body {
     padding: 0.75rem 1rem;
     border-radius: 12px;
     word-wrap: break-word;
+    margin-bottom: 1rem;
 }
 
 .message.user {
-    align-self: flex-end;
+    margin-left: auto;
+    margin-right: 0;
     background: #007bff;
     color: white;
 }
 
 .message.assistant {
-    align-self: flex-start;
+    margin-left: 0;
+    margin-right: auto;
     background: #f8f9fa;
     border: 1px solid #e1e5e9;
     color: #333;
 }
 
 .message.system {
-    align-self: center;
+    margin-left: auto;
+    margin-right: auto;
     background: #fff3cd;
     border: 1px solid #ffeaa7;
     color: #856404;
@@ -272,7 +276,8 @@ body {
 }
 
 .message.result {
-    align-self: flex-start;
+    margin-left: 0;
+    margin-right: auto;
     background: #d1ecf1;
     border: 1px solid #bee5eb;
     color: #0c5460;
@@ -323,6 +328,40 @@ body {
     border-top: 1px solid #e1e5e9;
     padding: 1rem;
     background: #f8f9fa;
+}
+
+/* Progress Indicator */
+.claude-progress {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.75rem;
+    padding: 0.75rem 1rem;
+    margin-bottom: 1rem;
+    background: #ffffff;
+    border: 1px solid #dee2e6;
+    border-radius: 8px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+    transition: all 0.3s ease;
+}
+
+.claude-progress.hidden {
+    display: none;
+}
+
+.progress-spinner {
+    width: 20px;
+    height: 20px;
+    border: 2px solid #e9ecef;
+    border-top: 2px solid #007bff;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+}
+
+.progress-text {
+    color: #495057;
+    font-size: 0.9rem;
+    font-weight: 500;
 }
 
 .input-container {

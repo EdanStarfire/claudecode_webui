@@ -97,7 +97,8 @@ class SystemMessageHandler(MessageHandler):
                 raw_data=message_data,
                 metadata={
                     "sdk_message": sdk_msg,
-                    "session_id": message_data.get("session_id")
+                    "session_id": message_data.get("session_id"),
+                    "subtype": message_data.get("subtype", "unknown")
                 }
             )
 
