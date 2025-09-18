@@ -24,7 +24,63 @@ class ClaudeWebUI {
         // Processing state management
         this.isProcessing = false;
 
+        // Status indicator configuration
+        this.statusColors = this.initializeStatusColors();
+
+        // Sidebar state management
+        this.sidebarCollapsed = false;
+        this.sidebarWidth = 300;
+        this.isResizing = false;
+
         this.init();
+    }
+
+    initializeStatusColors() {
+        return {
+            // Session states
+            session: {
+                'CREATED': { color: 'grey', animate: false, text: 'Created' },
+                'created': { color: 'grey', animate: false, text: 'Created' },
+                'Starting': { color: 'green', animate: true, text: 'Starting' },
+                'starting': { color: 'green', animate: true, text: 'Starting' },
+                'running': { color: 'green', animate: false, text: 'Running' },
+                'active': { color: 'green', animate: false, text: 'Active' },
+                'processing': { color: 'blue', animate: true, text: 'Processing' },
+                'completed': { color: 'grey', animate: false, text: 'Completed' },
+                'failed': { color: 'red', animate: false, text: 'Failed' },
+                'terminated': { color: 'grey', animate: false, text: 'Terminated' },
+                'paused': { color: 'grey', animate: false, text: 'Paused' },
+                'unknown': { color: 'purple', animate: true, text: 'Unknown' }
+            },
+            // WebSocket states
+            websocket: {
+                'connecting': { color: 'green', animate: true, text: 'Connecting' },
+                'connected': { color: 'green', animate: false, text: 'Connected' },
+                'disconnected': { color: 'red', animate: false, text: 'Disconnected' },
+                'unknown': { color: 'purple', animate: true, text: 'Unknown' }
+            }
+        };
+    }
+
+    createStatusIndicator(state, type, actualState = null) {
+        const config = this.statusColors[type] && this.statusColors[type][state]
+            ? this.statusColors[type][state]
+            : this.statusColors[type]['unknown'];
+
+        const indicator = document.createElement('span');
+        indicator.className = `status-dot status-dot-${config.color}`;
+
+        if (config.animate) {
+            indicator.classList.add('status-dot-blink');
+        }
+
+        // Set hover text - show actual state for unknown states
+        const hoverText = actualState && state === 'unknown'
+            ? `Unknown state: ${actualState}`
+            : config.text;
+        indicator.title = hoverText;
+
+        return indicator;
     }
 
     init() {
@@ -49,6 +105,10 @@ class ClaudeWebUI {
         // Session actions
         document.getElementById('exit-session-btn').addEventListener('click', () => this.exitSession());
 
+        // Sidebar controls
+        document.getElementById('sidebar-collapse-btn').addEventListener('click', () => this.toggleSidebar());
+        document.getElementById('sidebar-resize-handle').addEventListener('mousedown', (e) => this.startResize(e));
+
         // Message sending
         document.getElementById('send-btn').addEventListener('click', () => this.sendMessage());
         document.getElementById('message-input').addEventListener('keydown', (e) => {
@@ -70,6 +130,9 @@ class ClaudeWebUI {
                 this.hideCreateSessionModal();
             }
         });
+
+        // Window resize handling for sidebar constraints
+        window.addEventListener('resize', () => this.handleWindowResize());
     }
 
     // API Methods
@@ -586,56 +649,61 @@ class ClaudeWebUI {
         // Load session info first to check state
         await this.loadSessionInfo();
 
-        // Auto-start session if it's not active/running/starting
+        // Check if session needs to be started or is ready for use
         const session = this.sessions.get(sessionId);
-        if (session && session.state !== 'active' && session.state !== 'running' && session.state !== 'starting') {
-            console.log(`Auto-starting session ${sessionId} (current state: ${session.state})`);
-            await this.apiRequest(`/api/sessions/${sessionId}/start`, { method: 'POST' });
-
-            // Wait for session to be fully active before connecting WebSocket
-            let attempts = 0;
-            const maxAttempts = 15; // Increased from 10 to allow for longer SDK initialization
-            const pollInterval = 1000; // Increased from 200ms to 1 second
-            while (attempts < maxAttempts) {
-                await new Promise(resolve => setTimeout(resolve, pollInterval));
-                await this.loadSessionInfo();
-                const updatedSession = this.sessions.get(sessionId);
-                if (updatedSession && (updatedSession.state === 'active' || updatedSession.state === 'running')) {
-                    console.log(`Session ${sessionId} is now active, connecting WebSocket`);
-                    this.connectSessionWebSocket();
-                    break;
+        if (session) {
+            if (session.state === 'active' || session.state === 'running') {
+                // Session is already active, just connect WebSocket
+                console.log(`Session ${sessionId} is already active, connecting WebSocket`);
+                this.connectSessionWebSocket();
+            } else if (session.state === 'starting') {
+                // Session is starting, wait for it to become active
+                console.log(`Session ${sessionId} is starting, waiting for it to become active...`);
+                let attempts = 0;
+                const maxAttempts = 15;
+                const pollInterval = 1000;
+                while (attempts < maxAttempts) {
+                    await new Promise(resolve => setTimeout(resolve, pollInterval));
+                    await this.loadSessionInfo();
+                    const updatedSession = this.sessions.get(sessionId);
+                    if (updatedSession && (updatedSession.state === 'active' || updatedSession.state === 'running')) {
+                        console.log(`Session ${sessionId} is now active, connecting WebSocket`);
+                        this.connectSessionWebSocket();
+                        break;
+                    }
+                    attempts++;
+                    console.log(`Waiting for session ${sessionId} to become active... (attempt ${attempts}/${maxAttempts})`);
                 }
-                attempts++;
-                console.log(`Waiting for session ${sessionId} to become active... (attempt ${attempts}/${maxAttempts})`);
-            }
 
-            if (attempts >= maxAttempts) {
-                console.warn(`Session ${sessionId} did not become active after ${maxAttempts} attempts (${maxAttempts * pollInterval / 1000} seconds)`);
-            }
-        } else if (session && (session.state === 'active' || session.state === 'running')) {
-            // Session is already active, just connect WebSocket
-            this.connectSessionWebSocket();
-        } else if (session && session.state === 'starting') {
-            // Session is starting, wait for it to become active
-            console.log(`Session ${sessionId} is starting, waiting for it to become active...`);
-            let attempts = 0;
-            const maxAttempts = 15;
-            const pollInterval = 1000;
-            while (attempts < maxAttempts) {
-                await new Promise(resolve => setTimeout(resolve, pollInterval));
-                await this.loadSessionInfo();
-                const updatedSession = this.sessions.get(sessionId);
-                if (updatedSession && (updatedSession.state === 'active' || updatedSession.state === 'running')) {
-                    console.log(`Session ${sessionId} is now active, connecting WebSocket`);
-                    this.connectSessionWebSocket();
-                    break;
+                if (attempts >= maxAttempts) {
+                    console.warn(`Session ${sessionId} did not become active after ${maxAttempts} attempts (${maxAttempts * pollInterval / 1000} seconds)`);
                 }
-                attempts++;
-                console.log(`Waiting for session ${sessionId} to become active... (attempt ${attempts}/${maxAttempts})`);
-            }
+            } else {
+                // Session needs to be started (both fresh sessions and existing sessions)
+                // The server-side logic will handle whether to create fresh or resume based on claude_code_session_id
+                console.log(`Starting session ${sessionId} (current state: ${session.state})`);
+                await this.apiRequest(`/api/sessions/${sessionId}/start`, { method: 'POST' });
 
-            if (attempts >= maxAttempts) {
-                console.warn(`Session ${sessionId} did not become active after ${maxAttempts} attempts (${maxAttempts * pollInterval / 1000} seconds)`);
+                // Wait for session to be fully active before connecting WebSocket
+                let attempts = 0;
+                const maxAttempts = 15; // Increased from 10 to allow for longer SDK initialization
+                const pollInterval = 1000; // Increased from 200ms to 1 second
+                while (attempts < maxAttempts) {
+                    await new Promise(resolve => setTimeout(resolve, pollInterval));
+                    await this.loadSessionInfo();
+                    const updatedSession = this.sessions.get(sessionId);
+                    if (updatedSession && (updatedSession.state === 'active' || updatedSession.state === 'running')) {
+                        console.log(`Session ${sessionId} is now active, connecting WebSocket`);
+                        this.connectSessionWebSocket();
+                        break;
+                    }
+                    attempts++;
+                    console.log(`Waiting for session ${sessionId} to become active... (attempt ${attempts}/${maxAttempts})`);
+                }
+
+                if (attempts >= maxAttempts) {
+                    console.warn(`Session ${sessionId} did not become active after ${maxAttempts} attempts (${maxAttempts * pollInterval / 1000} seconds)`);
+                }
             }
         }
 
@@ -664,13 +732,18 @@ class ClaudeWebUI {
             sessionElement.setAttribute('data-session-id', sessionId);
             sessionElement.addEventListener('click', () => this.selectSession(sessionId));
 
+            // Create status indicator
+            const statusIndicator = this.createStatusIndicator(session.state, 'session', session.state);
+
             sessionElement.innerHTML = `
-                <div class="session-id">${sessionId}</div>
-                <span class="session-status ${session.state}">${session.state}</span>
-                <div class="session-info">
-                    ${session.working_directory}
+                <div class="session-header">
+                    <div class="session-id" title="${sessionId}">${sessionId}</div>
                 </div>
             `;
+
+            // Insert status indicator at the beginning
+            const sessionHeader = sessionElement.querySelector('.session-header');
+            sessionHeader.insertBefore(statusIndicator, sessionHeader.firstChild);
 
             container.appendChild(sessionElement);
         });
@@ -678,8 +751,15 @@ class ClaudeWebUI {
 
     updateSessionInfo(sessionData) {
         document.getElementById('current-session-id').textContent = this.currentSessionId;
-        document.getElementById('current-session-state').textContent = sessionData.session.state;
-        document.getElementById('current-session-state').className = `session-state ${sessionData.session.state}`;
+
+        // Update session state indicator
+        const stateContainer = document.getElementById('current-session-state');
+        stateContainer.innerHTML = '';
+
+        // Create new status dot
+        const statusDot = this.createStatusIndicator(sessionData.session.state, 'session', sessionData.session.state);
+        stateContainer.appendChild(statusDot);
+        stateContainer.className = `session-state-indicator ${sessionData.session.state}`;
 
         // Update the sessions Map with current session state
         if (this.currentSessionId && this.sessions.has(this.currentSessionId)) {
@@ -776,23 +856,17 @@ class ClaudeWebUI {
     }
 
     updateConnectionStatus(status) {
-        const indicator = document.getElementById('connection-indicator');
-        const text = document.getElementById('connection-text');
+        const indicatorContainer = document.getElementById('connection-indicator');
 
-        indicator.className = `status-indicator ${status}`;
+        // Clear existing indicator
+        indicatorContainer.innerHTML = '';
 
-        switch (status) {
-            case 'connected':
-                text.textContent = 'Connected';
-                break;
-            case 'connecting':
-                text.textContent = 'Connecting...';
-                break;
-            case 'disconnected':
-            default:
-                text.textContent = 'Disconnected';
-                break;
-        }
+        // Create new status dot
+        const statusDot = this.createStatusIndicator(status, 'websocket', status);
+        indicatorContainer.appendChild(statusDot);
+
+        // Keep the container class for any legacy styling
+        indicatorContainer.className = `connection-status-indicator ${status}`;
     }
 
     // Modal Management
@@ -935,6 +1009,71 @@ class ClaudeWebUI {
         const div = document.createElement('div');
         div.textContent = text;
         return div.innerHTML;
+    }
+
+    // Sidebar Management
+    toggleSidebar() {
+        const sidebar = document.getElementById('sidebar');
+        this.sidebarCollapsed = !this.sidebarCollapsed;
+
+        if (this.sidebarCollapsed) {
+            // Store current width before collapsing
+            this.sidebarWidth = sidebar.offsetWidth;
+            // Force collapse width via inline style to override any previous inline styles
+            sidebar.style.width = '50px';
+            sidebar.classList.add('collapsed');
+            document.getElementById('sidebar-collapse-btn').title = 'Expand sidebar';
+        } else {
+            // Restore the previous width
+            sidebar.style.width = `${this.sidebarWidth}px`;
+            sidebar.classList.remove('collapsed');
+            document.getElementById('sidebar-collapse-btn').title = 'Collapse sidebar';
+        }
+    }
+
+    startResize(e) {
+        // Don't allow resize when collapsed
+        if (this.sidebarCollapsed) return;
+
+        this.isResizing = true;
+        document.addEventListener('mousemove', this.handleResize.bind(this));
+        document.addEventListener('mouseup', this.stopResize.bind(this));
+        e.preventDefault();
+    }
+
+    handleResize(e) {
+        if (!this.isResizing) return;
+
+        const sidebar = document.getElementById('sidebar');
+        const containerRect = document.querySelector('.main-content').getBoundingClientRect();
+        const newWidth = e.clientX - containerRect.left;
+
+        // Enforce constraints: min 200px, max 30% of viewport width
+        const minWidth = 200;
+        const maxWidth = window.innerWidth * 0.3;
+        const constrainedWidth = Math.max(minWidth, Math.min(newWidth, maxWidth));
+
+        this.sidebarWidth = constrainedWidth;
+        sidebar.style.width = `${constrainedWidth}px`;
+    }
+
+    stopResize() {
+        this.isResizing = false;
+        document.removeEventListener('mousemove', this.handleResize.bind(this));
+        document.removeEventListener('mouseup', this.stopResize.bind(this));
+    }
+
+    handleWindowResize() {
+        if (!this.sidebarCollapsed) {
+            const sidebar = document.getElementById('sidebar');
+            const maxWidth = window.innerWidth * 0.3;
+
+            // Ensure sidebar doesn't exceed 30% of new window width
+            if (this.sidebarWidth > maxWidth) {
+                this.sidebarWidth = maxWidth;
+                sidebar.style.width = `${maxWidth}px`;
+            }
+        }
     }
 }
 

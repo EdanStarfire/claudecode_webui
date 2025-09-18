@@ -12,18 +12,20 @@
         <header class="header">
             <h1>Claude Code WebUI</h1>
             <div class="connection-status">
-                <span id="connection-indicator" class="status-indicator disconnected">●</span>
-                <span id="connection-text">Disconnected</span>
+                <span id="connection-indicator" class="connection-status-indicator disconnected"></span>
             </div>
         </header>
 
         <!-- Main Content -->
         <div class="main-content">
             <!-- Sidebar -->
-            <aside class="sidebar">
-                <div class="session-controls">
-                    <button id="create-session-btn" class="btn btn-primary">+ New Session</button>
-                    <button id="refresh-sessions-btn" class="btn btn-secondary">Refresh</button>
+            <aside class="sidebar" id="sidebar">
+                <div class="sidebar-header">
+                    <button id="sidebar-collapse-btn" class="btn btn-small btn-secondary" title="Collapse sidebar">‹</button>
+                    <div class="session-controls">
+                        <button id="create-session-btn" class="btn btn-primary btn-icon" title="New Session">✚</button>
+                        <button id="refresh-sessions-btn" class="btn btn-secondary btn-icon" title="Refresh Sessions">↻</button>
+                    </div>
                 </div>
 
                 <div class="session-list">
@@ -32,6 +34,7 @@
                         <!-- Sessions will be populated here -->
                     </div>
                 </div>
+                <div class="sidebar-resize-handle" id="sidebar-resize-handle"></div>
             </aside>
 
             <!-- Chat Area -->
@@ -45,8 +48,8 @@
                     <!-- Session Info Bar -->
                     <div class="session-info-bar">
                         <div class="session-details">
+                            <span id="current-session-state" class="session-state-indicator"></span>
                             <span id="current-session-id" class="session-id"></span>
-                            <span id="current-session-state" class="session-state"></span>
                         </div>
                         <div class="session-actions">
                             <button id="exit-session-btn" class="btn btn-small btn-secondary">Exit Session</button>

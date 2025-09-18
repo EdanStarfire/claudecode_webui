@@ -396,6 +396,65 @@ data/                         # Runtime data (created by app)
 
 **Impact**: Completed all outstanding user testing items, enhanced message system reliability, and improved session state visibility
 
+### Phase 3.5: UI/UX Polish & Quality of Life ✅ COMPLETED
+**Goal**: Streamline UI indicators, enhance sidebar functionality, and improve overall user experience
+**Status**: Completed 2025-09-18
+
+**Feature Implementation**:
+1. **Streamlined Status Indicators** ✅
+   - Replaced text-based status indicators with color-coded status dots
+   - Implemented animated dots for transitional states (connecting, processing, starting)
+   - Added hover tooltips for status explanations
+   - Unified status system for both WebSocket and session states
+
+2. **Enhanced Sidebar Functionality** ✅
+   - Added collapsible sidebar with toggle button (50px collapsed width)
+   - Implemented resizable sidebar with 200px-30% viewport width constraints
+   - Added visual resize handle with hover effects
+   - Maintained responsive design across collapse/expand states
+
+3. **Session List Improvements** ✅
+   - Replaced verbose session info with clean status dots and truncated titles
+   - Removed redundant session-info section from session list items
+   - Added status indicators to session headers with proper alignment
+   - Implemented single-line session titles with ellipsis overflow
+
+4. **Icon-Based Controls** ✅
+   - Converted "New Session" and "Refresh" buttons to icon-based design
+   - Implemented heavy plus sign (✚) for new session creation
+   - Added refresh icon (↻) for session list refresh
+   - Enhanced visual hierarchy with consistent icon styling
+
+5. **Session Management Logic Enhancement** ✅
+   - Improved session loading logic for existing sessions with storage manager initialization
+   - Enhanced session resumption to check for valid Claude Code session IDs
+   - Fixed session startup reliability with proper state validation
+   - Added comprehensive error handling for session initialization edge cases
+
+**Technical Implementation**:
+- `static/app.js`: Complete status indicator system, sidebar management, enhanced session loading
+- `static/styles.css`: Status dot styling, sidebar animations, icon button design, responsive layout
+- `static/index.html`: Updated structure for new sidebar and status components
+- `src/session_coordinator.py`: Enhanced existing session storage initialization and resume logic
+- `USER_TESTING_TRACKING.md`: Updated completion status for all QOL improvements
+
+**User Experience Impact**:
+- Clean, professional interface with intuitive visual feedback
+- Flexible workspace with customizable sidebar width
+- Reduced visual clutter while maintaining full functionality
+- Improved session management reliability for existing sessions
+- Enhanced accessibility with hover tooltips and clear visual states
+
+**Quality of Life Improvements Completed**:
+- ✅ Clean status indicators (Connected indicator, session status dots)
+- ✅ Collapsible and resizable sidebar functionality
+- ✅ Session title truncation and improved session list display
+- ✅ Icon-based action buttons for cleaner interface
+- ✅ Enhanced session loading for existing sessions
+- ✅ Improved session resume logic with proper validation
+
+**Impact**: Significantly enhanced user experience with professional UI polish, flexible workspace design, and improved session management reliability
+
 ---
 
 ## Future Phases (Post-MVP)

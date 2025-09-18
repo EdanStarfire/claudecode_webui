@@ -53,10 +53,35 @@ class SessionCoordinator:
             # Register callback to receive session manager state changes
             self.session_manager.add_state_change_callback(self._on_session_manager_state_change)
 
+            # Initialize storage managers for all existing sessions
+            await self._initialize_existing_session_storage()
+
             logger.info("Session coordinator initialized successfully")
         except Exception as e:
             logger.error(f"Failed to initialize session coordinator: {e}")
             raise
+
+    async def _initialize_existing_session_storage(self):
+        """Initialize storage managers for all existing sessions"""
+        try:
+            # Get all existing sessions
+            sessions = await self.session_manager.list_sessions()
+            logger.info(f"Initializing storage managers for {len(sessions)} existing sessions")
+
+            for session in sessions:
+                session_id = session.session_id
+                if session_id not in self._storage_managers:
+                    # Create storage manager for this session
+                    from .data_storage import DataStorageManager
+                    session_dir = await self.session_manager.get_session_directory(session_id)
+                    storage_manager = DataStorageManager(session_dir)
+                    await storage_manager.initialize()
+                    self._storage_managers[session_id] = storage_manager
+                    logger.info(f"Initialized storage manager for session {session_id}")
+
+        except Exception as e:
+            logger.error(f"Failed to initialize storage managers for existing sessions: {e}")
+            # Don't raise - this shouldn't block coordinator initialization
 
     async def create_session(
         self,
@@ -144,7 +169,15 @@ class SessionCoordinator:
                 await storage_manager.initialize()
                 self._storage_managers[session_id] = storage_manager
 
-                # Recreate SDK instance with session parameters and resume
+                # Check if we have a valid Claude Code session ID to resume
+                resume_sdk_session = None
+                if session_info.claude_code_session_id:
+                    logger.info(f"Resuming session with Claude Code session ID: {session_info.claude_code_session_id}")
+                    resume_sdk_session = session_id  # Use WebUI session ID as resume identifier
+                else:
+                    logger.info(f"No Claude Code session ID found - starting fresh session for {session_id}")
+
+                # Recreate SDK instance with session parameters
                 sdk = ClaudeSDK(
                     session_id=session_id,
                     working_directory=session_info.working_directory,
@@ -157,7 +190,7 @@ class SessionCoordinator:
                     system_prompt=session_info.system_prompt,
                     tools=session_info.tools,
                     model=session_info.model,
-                    resume_session_id=session_id  # Resume the existing session
+                    resume_session_id=resume_sdk_session  # Only resume if we have a Claude Code session ID
                 )
                 self._active_sdks[session_id] = sdk
 

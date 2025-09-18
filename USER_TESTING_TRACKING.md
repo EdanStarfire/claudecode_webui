@@ -18,7 +18,19 @@
 [x] bug: When reshowing all the session messages from the past, the LAST assistant message doesn't seem to show in the UI.
 [x] bug: When reshowing all the session messages from the past, the init and result messages from the past should also be suppressed.
 [x] feat: When resuming an SDK client (with the resume function, not just reconnecting via the websocket due to session switching), we should send a system message to the messages.jsonl and the webui that says that a new session is being started to resume conversation.
-[ ] feat: Implement cancel "working" state using client.interrupt  - example: https://github.com/anthropics/claude-code-sdk-python/blob/main/examples/streaming_mode.py
-[ ] qol: figure out how to represent blank messages from the messages.jsonl
-[ ] bug: The websocket appears to loop connect/disconnect in a certain scenario - unsure what it is, but it does occur.
+[ ] bug: In messages.jsonl, some messages have blank content (result, system messages for example) from the SDK - these should be more descriptive and include appropriate metadata we need to ensure we understand what the message is doing.
+[x] bug: The websocket appears to loop connect/disconnect in a certain scenario - unsure what it is, but it does occur.
+[ ] feat: Handle displaying tool calls with enough detail to understand what it is doing
+[ ] feat: Handle displaying tool results with enough detail to understand what was done
 [ ] feat: capture permission prompt functionality in a generic sense
+[ ] feat: Implement cancel "working" state using client.interrupt  - example: https://github.com/anthropics/claude-code-sdk-python/blob/main/examples/streaming_mode.py
+[x] qol: Clean up UI indicators (Connected at top right, just a colored dot with status as hover text)
+[x] qol: Clean up UI indicators (Make session indicators in session list colored icons on the left of the session name with status as hover text)
+[x] qol: Clean up UI indicators (Make session indicators in session header colored icons on the left of the session name with status as hover text)
+[x] qol: Clean up UI indicators (Make session titles truncated to a single line (...) on the front-end only)
+[ ] feat: Sessions support naming, default naming is date-time stamp?
+[x] bug: Cannot load a session when messages.jsonl are empty but exists (or something along that line)
+[ ] bug: processing indicators remain even when switching sessions
+[x] bug: The session-info section in the session list can be removed as we don't need that second line now.
+[x] feat: Make sidebar for session info collapsable AND adjustable to like max of 30% width.
+[x] QOL: Make +New Session button just a heavy + sign button, and the refresh button just the normal refesh icon button.
