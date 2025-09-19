@@ -209,11 +209,13 @@ class SessionCoordinator:
                 # Extract user-friendly error message
                 error_message = self._extract_claude_cli_error(raw_error_message)
 
-                # Update session state to ERROR
+                # Update session state to ERROR and reset processing state
                 try:
                     await self.session_manager.update_session_state(session_id, SessionState.ERROR, error_message)
+                    # Also ensure processing state is reset when going to error state
+                    await self.session_manager.update_processing_state(session_id, False)
                     await self._notify_state_change(session_id, SessionState.ERROR)
-                    logger.info(f"Updated session {session_id} state to ERROR")
+                    logger.info(f"Updated session {session_id} state to ERROR and reset processing state")
                 except Exception as state_error:
                     logger.error(f"Failed to update session state to ERROR: {state_error}")
 
@@ -288,11 +290,25 @@ class SessionCoordinator:
                 logger.error(f"No SDK found for session {session_id}")
                 return False
 
+            # Mark session as processing before sending message
+            await self.session_manager.update_processing_state(session_id, True)
+
             # Send message through SDK (will be queued and processed)
-            return await sdk.send_message(message)
+            result = await sdk.send_message(message)
+
+            # If message sending failed, reset processing state
+            if not result:
+                await self.session_manager.update_processing_state(session_id, False)
+
+            return result
 
         except Exception as e:
             logger.error(f"Failed to send message to session {session_id}: {e}")
+            # Reset processing state on error
+            try:
+                await self.session_manager.update_processing_state(session_id, False)
+            except Exception:
+                pass  # Don't fail on state update error
             return False
 
     async def get_session_info(self, session_id: str) -> Optional[Dict[str, Any]]:
@@ -409,6 +425,15 @@ class SessionCoordinator:
                 # Parse message using message parser
                 parsed_message = self.message_parser.parse_message(message_data)
 
+                # Check if this message indicates processing completion
+                if parsed_message.type.value == 'result':
+                    # Message processing completed - reset processing state
+                    try:
+                        await self.session_manager.update_processing_state(session_id, False)
+                        logger.info(f"Reset processing state for session {session_id} after result message")
+                    except Exception as e:
+                        logger.error(f"Failed to reset processing state for session {session_id}: {e}")
+
                 # Call registered callbacks
                 callbacks = self._message_callbacks.get(session_id, [])
                 logger.info(f"Processing message for session {session_id}, found {len(callbacks)} callbacks")
@@ -439,6 +464,13 @@ class SessionCoordinator:
 
                 logger.error(f"SDK error in session {session_id}: {error_type} - {error}")
 
+                # Reset processing state on any error
+                try:
+                    await self.session_manager.update_processing_state(session_id, False)
+                    logger.info(f"Reset processing state for session {session_id} after error: {error_type}")
+                except Exception as e:
+                    logger.error(f"Failed to reset processing state for session {session_id}: {e}")
+
                 # Handle critical errors that require session state updates
                 if error_type in ["startup_failed", "message_processing_loop_error", "immediate_cli_failure"]:
                     logger.info(f"Handling critical SDK error: {error_type}")
@@ -446,11 +478,13 @@ class SessionCoordinator:
                     # Extract user-friendly error message
                     user_error_message = self._extract_claude_cli_error(str(error))
 
-                    # Update session state to ERROR
+                    # Update session state to ERROR and reset processing state
                     try:
                         await self.session_manager.update_session_state(session_id, SessionState.ERROR, user_error_message)
+                        # Also ensure processing state is reset when going to error state
+                        await self.session_manager.update_processing_state(session_id, False)
                         await self._notify_state_change(session_id, SessionState.ERROR)
-                        logger.info(f"Updated session {session_id} state to ERROR due to SDK error")
+                        logger.info(f"Updated session {session_id} state to ERROR and reset processing state due to SDK error")
                     except Exception as state_error:
                         logger.error(f"Failed to update session state to ERROR: {state_error}")
 

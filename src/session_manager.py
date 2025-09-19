@@ -43,6 +43,7 @@ class SessionInfo:
     model: Optional[str] = None
     error_message: Optional[str] = None
     claude_code_session_id: Optional[str] = None
+    is_processing: bool = False
 
     def __post_init__(self):
         if self.tools is None:
@@ -101,15 +102,26 @@ class SessionManager:
                             # Reset active/starting sessions to created state on startup
                             # since there are no SDK instances running for them
                             original_state = session_info.state
+                            original_processing = session_info.is_processing
+                            state_changed = False
+
                             if session_info.state in [SessionState.ACTIVE, SessionState.STARTING]:
                                 session_info.state = SessionState.CREATED
                                 session_info.updated_at = datetime.now(timezone.utc)
+                                state_changed = True
                                 logger.info(f"Reset session {session_info.session_id} from {original_state.value} to {session_info.state.value} on startup")
+
+                            # Reset processing state since no SDKs are running on startup
+                            if session_info.is_processing:
+                                session_info.is_processing = False
+                                session_info.updated_at = datetime.now(timezone.utc)
+                                state_changed = True
+                                logger.info(f"Reset processing state for session {session_info.session_id} from {original_processing} to False on startup")
 
                             self._active_sessions[session_info.session_id] = session_info
 
                             # Save the updated state if it was modified
-                            if original_state != session_info.state:
+                            if state_changed:
                                 await self._persist_session_state(session_info.session_id)
                             self._session_locks[session_info.session_id] = asyncio.Lock()
                             logger.debug(f"Loaded session {session_info.session_id} with state {session_info.state}")
@@ -268,6 +280,25 @@ class SessionManager:
                 return True
             except Exception as e:
                 logger.error(f"Failed to update session {session_id} state to {new_state.value}: {e}")
+                return False
+
+    async def update_processing_state(self, session_id: str, is_processing: bool) -> bool:
+        """Update session processing state"""
+        async with self._get_session_lock(session_id):
+            try:
+                session = self._active_sessions.get(session_id)
+                if not session:
+                    logger.error(f"Session {session_id} not found")
+                    return False
+
+                session.is_processing = is_processing
+                session.updated_at = datetime.now(timezone.utc)
+                await self._persist_session_state(session_id)
+                await self._notify_state_change_callbacks(session_id, session.state)
+                logger.info(f"Updated session {session_id} processing state to {is_processing}")
+                return True
+            except Exception as e:
+                logger.error(f"Failed to update session {session_id} processing state: {e}")
                 return False
 
     async def get_session_info(self, session_id: str) -> Optional[SessionInfo]:

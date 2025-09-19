@@ -27,12 +27,17 @@
 [x] bug: The session-info section in the session list can be removed as we don't need that second line now.
 [x] feat: Make sidebar for session info collapsable AND adjustable to like max of 30% width.
 [x] QOL: Make +New Session button just a heavy + sign button, and the refresh button just the normal refesh icon button.
-[ ] bug: processing indicators remain even when switching sessions while it is displayed
 [x] bug: failed sessions are not propagated to the webUI
-[ ] bug: failed sessions cannot be re-started: "WARNING - src.session_manager - Cannot start session {session_id} in state SessionState.ERROR"
+[x] bug: failed sessions try to restart when they shouldn't: "WARNING - src.session_manager - Cannot start session {session_id} in state SessionState.ERROR"
+[x] qol: instead of capturing the SDK error mesage in the chat, can we place it at the top in the bar with the "Exit session" button? If the session is in an error state, we can avoid trying to initialize the streaming message and just get the last error message from the state + the error state itself and avoid trying to create the message WebSoc
+[x] bug: When going from IS PROCESSING session to ERROR session, the processing bar is not hidden
+[x] bug: When going from an ERROR session to an in processing session, the processing bar is shown, but the input box and button are still in error mode
+[x] bug: When starting up, all sessions that are in an `is_processing = true` state need to be reset to `is_processing = false` since no SDKs could possibly be processing (have not been launched by the app yet), otherwise they NEVER clear the is_processing state.
+[x] qol: make the state color circles be purple for "in processing" sessions so that you can see when something's working on something vs waiting for input
 [ ] feat: Sessions support naming, default naming is date-time stamp?
 [ ] feat: Handle displaying tool calls with enough detail to understand what it is doing
 [ ] feat: Handle displaying tool results with enough detail to understand what was done
 [ ] feat: capture permission prompt functionality in a generic sense
 [ ] feat: Implement cancel "working" state using client.interrupt  - example: https://github.com/anthropics/claude-code-sdk-python/blob/main/examples/streaming_mode.py
+[ ] feat: Enable deletion of sessions.
 [ ] bug: In messages.jsonl, some messages have blank content (result, system messages for example) from the SDK - these should be more descriptive and include appropriate metadata we need to ensure we understand what the message is doing.

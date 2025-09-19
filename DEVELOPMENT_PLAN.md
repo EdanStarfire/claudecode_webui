@@ -512,6 +512,71 @@ data/                         # Runtime data (created by app)
 
 **Impact**: Significantly improved error handling and session reliability, providing users with clear feedback when sessions fail and preventing problematic restart attempts
 
+### Phase 3.7: Processing State Management & UI Polish ✅ COMPLETED
+**Goal**: Implement authoritative backend processing state management and enhance error state UI feedback
+**Status**: Completed 2025-09-19
+
+**Feature Implementation**:
+1. **Backend Processing State Authority** ✅
+   - Added `is_processing` field to `SessionInfo` class in session manager
+   - Implemented authoritative processing state management through backend instead of frontend inference
+   - Added `update_processing_state()` method for comprehensive processing state control
+   - Enhanced session coordinator to manage processing state during message sending and completion
+
+2. **Startup State Reliability** ✅
+   - Added startup reset for stale processing states (sessions marked as processing when no SDKs are running)
+   - Enhanced session manager initialization to reset both session states and processing states on startup
+   - Implemented comprehensive state validation to prevent orphaned processing states
+   - Added logging for state reset operations during application startup
+
+3. **Processing State Lifecycle Management** ✅
+   - Enhanced `send_message()` to set processing state before sending and reset on failure
+   - Added processing state reset on result message completion in message processing loop
+   - Implemented automatic processing state reset on any SDK error conditions
+   - Enhanced error handling to ensure processing state is always properly reset
+
+4. **Enhanced Error State UI Feedback** ✅
+   - Added session error message display in top information bar for ERROR state sessions
+   - Implemented input control state management (disabled for error states, enabled for active states)
+   - Enhanced error state styling with red error message banner and disabled input styling
+   - Added comprehensive frontend state synchronization with backend processing and error states
+
+5. **UI/UX Polish Enhancements** ✅
+   - Changed processing indicator color to purple for better visual distinction from other states
+   - Enhanced status dot sizing for better visibility (0.75em instead of 0.6em)
+   - Added disabled input and button styling for better visual feedback
+   - Improved session list display with backend processing state integration
+
+6. **Frontend State Synchronization** ✅
+   - Removed frontend-based processing detection, now uses authoritative backend state
+   - Enhanced session selection logic to handle error states without WebSocket initialization attempts
+   - Added `updateProcessingState()` and `updateControlsBasedOnSessionState()` methods
+   - Implemented backend processing state synchronization in session rendering and info loading
+
+**Technical Implementation**:
+- `src/session_manager.py`: Added `is_processing` field and `update_processing_state()` method, startup state reset
+- `src/session_coordinator.py`: Enhanced processing state management throughout message lifecycle and error handling
+- `static/app.js`: Complete frontend processing state overhaul with backend synchronization
+- `static/index.html`: Added session error message element for top bar display
+- `static/styles.css`: Enhanced error state styling, disabled input styling, improved status dot sizing
+- `USER_TESTING_TRACKING.md`: Updated completion status for processing state bugs and UI improvements
+
+**User Experience Impact**:
+- Reliable processing state indicators that cannot get stuck or out of sync
+- Clear error state feedback with actionable information displayed prominently
+- Better visual distinction between different session states (purple for processing)
+- Improved input control management preventing user confusion during error states
+- Enhanced session startup reliability with automatic stale state cleanup
+
+**Critical Issues Resolved**:
+- Processing indicators no longer remain stuck when switching sessions during processing
+- Processing states are properly reset on application startup, preventing orphaned processing states
+- Error sessions now display clear error messages in the top bar instead of attempting to initialize streaming
+- Input controls are properly managed based on session state, preventing user confusion
+- Purple processing indicators provide better visual feedback for active processing sessions
+
+**Impact**: Achieved fully reliable processing state management with authoritative backend control, enhanced error state user feedback, and comprehensive UI polish for professional user experience
+
 ---
 
 ## Future Phases (Post-MVP)

@@ -67,8 +67,8 @@ body {
 
 /* Status Dots - New Streamlined Indicators */
 .status-dot {
-    width: 0.6em;
-    height: 0.6em;
+    width: 0.75em;
+    height: 0.75em;
     border-radius: 50%;
     display: inline-block;
     border: 1px solid;
@@ -315,6 +315,35 @@ body {
     gap: 0.5rem;
 }
 
+/* Error state styling */
+.session-info-bar.error {
+    background: #f8d7da;
+    border-bottom: 1px solid #f5c6cb;
+    color: #721c24;
+}
+
+.session-error-message {
+    background: #dc3545;
+    color: white;
+    padding: 0.25rem 0.5rem;
+    border-radius: 4px;
+    font-size: 0.85rem;
+    margin-left: 0.5rem;
+    max-width: 400px;
+    word-wrap: break-word;
+}
+
+.session-error-message.hidden {
+    display: none;
+}
+
+.session-details {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
 /* Messages Container */
 .messages-container {
     flex: 1;
@@ -498,6 +527,14 @@ body {
     box-shadow: 0 0 0 3px rgba(0,123,255,0.25);
 }
 
+#message-input:disabled {
+    background-color: #e9ecef;
+    color: #6c757d;
+    border-color: #dee2e6;
+    cursor: not-allowed;
+    opacity: 0.6;
+}
+
 /* Buttons */
 .btn {
     padding: 0.5rem 1rem;
@@ -519,6 +556,15 @@ body {
 
 .btn:active {
     transform: translateY(0);
+}
+
+.btn:disabled {
+    background-color: #e9ecef !important;
+    color: #6c757d !important;
+    cursor: not-allowed;
+    opacity: 0.6;
+    transform: none !important;
+    box-shadow: none !important;
 }
 
 .btn-primary {

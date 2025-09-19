@@ -45,7 +45,7 @@ class ClaudeWebUI {
                 'starting': { color: 'green', animate: true, text: 'Starting' },
                 'running': { color: 'green', animate: false, text: 'Running' },
                 'active': { color: 'green', animate: false, text: 'Active' },
-                'processing': { color: 'blue', animate: true, text: 'Processing' },
+                'processing': { color: 'purple', animate: true, text: 'Processing' },
                 'completed': { color: 'grey', animate: false, text: 'Completed' },
                 'failed': { color: 'red', animate: false, text: 'Failed' },
                 'error': { color: 'red', animate: false, text: 'Failed' },
@@ -234,6 +234,9 @@ class ClaudeWebUI {
 
         // Reset processing state when exiting session
         this.hideProcessingIndicator();
+
+        // Re-enable input controls when exiting session
+        this.setInputControlsEnabled(true);
     }
 
     async sendMessage() {
@@ -264,9 +267,6 @@ class ClaudeWebUI {
                 timestamp: new Date().toISOString()
             });
 
-            // Show processing indicator
-            this.showProcessingIndicator();
-
             input.value = '';
         } catch (error) {
             console.error('Failed to send message:', error);
@@ -288,6 +288,8 @@ class ClaudeWebUI {
         }
         if (messageInput) {
             messageInput.disabled = true;
+            // Ensure processing state styling, not error state styling
+            messageInput.placeholder = "Processing...";
         }
     }
 
@@ -295,19 +297,46 @@ class ClaudeWebUI {
         this.isProcessing = false;
         const progressElement = document.getElementById('claude-progress');
         const sendButton = document.getElementById('send-btn');
-        const messageInput = document.getElementById('message-input');
 
         if (progressElement) {
             progressElement.classList.add('hidden');
         }
         if (sendButton) {
-            sendButton.disabled = false;
             sendButton.textContent = 'Send';
         }
-        if (messageInput) {
-            messageInput.disabled = false;
+
+        // Re-enable controls only if current session is not in error state
+        this.updateControlsBasedOnSessionState();
+    }
+
+    updateProcessingState(isProcessing) {
+        this.isProcessing = isProcessing;
+
+        if (isProcessing) {
+            this.showProcessingIndicator();
+        } else {
+            this.hideProcessingIndicator();
         }
     }
+
+    updateControlsBasedOnSessionState() {
+        if (!this.currentSessionId) {
+            // No session selected, enable controls
+            this.setInputControlsEnabled(true);
+            return;
+        }
+
+        const session = this.sessions.get(this.currentSessionId);
+        if (session && session.state === 'error') {
+            // Session is in error state, keep controls disabled
+            this.setInputControlsEnabled(false);
+        } else {
+            // Session is not in error state, enable controls
+            this.setInputControlsEnabled(true);
+        }
+    }
+
+    // Frontend processing detection methods removed - now using backend state propagation
 
     shouldDisplayMessage(message) {
         // Filter out init system messages
@@ -343,12 +372,7 @@ class ClaudeWebUI {
             }
         }
 
-        // Handle progress indicator for result messages
-        if (message.type === 'result') {
-            console.log('Hiding progress indicator for result message');
-            // Hide progress indicator when we get a result message
-            this.hideProcessingIndicator();
-        }
+        // Processing state is now handled by backend - no manual indicator management needed
 
         // Use the unified filtering logic to determine if message should be displayed
         if (this.shouldDisplayMessage(message)) {
@@ -633,6 +657,8 @@ class ClaudeWebUI {
 
         this.currentSessionId = sessionId;
 
+        // Processing state will be set by loadSessionInfo() call below
+
         // Update UI
         document.querySelectorAll('.session-item').forEach(item => {
             item.classList.remove('active');
@@ -653,7 +679,11 @@ class ClaudeWebUI {
         // Check if session needs to be started or is ready for use
         const session = this.sessions.get(sessionId);
         if (session) {
-            if (session.state === 'active' || session.state === 'running') {
+            if (session.state === 'error') {
+                // Session is in error state, skip WebSocket initialization
+                console.log(`Session ${sessionId} is in error state, skipping WebSocket connection`);
+                // Just load messages without attempting to connect
+            } else if (session.state === 'active' || session.state === 'running') {
                 // Session is already active, just connect WebSocket
                 console.log(`Session ${sessionId} is already active, connecting WebSocket`);
                 this.connectSessionWebSocket();
@@ -667,7 +697,10 @@ class ClaudeWebUI {
                     await new Promise(resolve => setTimeout(resolve, pollInterval));
                     await this.loadSessionInfo();
                     const updatedSession = this.sessions.get(sessionId);
-                    if (updatedSession && (updatedSession.state === 'active' || updatedSession.state === 'running')) {
+                    if (updatedSession && updatedSession.state === 'error') {
+                        console.log(`Session ${sessionId} entered error state during startup, stopping wait`);
+                        break;
+                    } else if (updatedSession && (updatedSession.state === 'active' || updatedSession.state === 'running')) {
                         console.log(`Session ${sessionId} is now active, connecting WebSocket`);
                         this.connectSessionWebSocket();
                         break;
@@ -693,7 +726,10 @@ class ClaudeWebUI {
                     await new Promise(resolve => setTimeout(resolve, pollInterval));
                     await this.loadSessionInfo();
                     const updatedSession = this.sessions.get(sessionId);
-                    if (updatedSession && (updatedSession.state === 'active' || updatedSession.state === 'running')) {
+                    if (updatedSession && updatedSession.state === 'error') {
+                        console.log(`Session ${sessionId} entered error state during startup, stopping wait`);
+                        break;
+                    } else if (updatedSession && (updatedSession.state === 'active' || updatedSession.state === 'running')) {
                         console.log(`Session ${sessionId} is now active, connecting WebSocket`);
                         this.connectSessionWebSocket();
                         break;
@@ -710,6 +746,9 @@ class ClaudeWebUI {
 
         // Load messages after session is ready
         this.loadMessages();
+
+        // Load session info to get current processing state from backend
+        this.loadSessionInfo();
     }
 
     renderSessions() {
@@ -733,8 +772,10 @@ class ClaudeWebUI {
             sessionElement.setAttribute('data-session-id', sessionId);
             sessionElement.addEventListener('click', () => this.selectSession(sessionId));
 
-            // Create status indicator
-            const statusIndicator = this.createStatusIndicator(session.state, 'session', session.state);
+            // Create status indicator - show processing state if is_processing is true
+            const isProcessing = session.is_processing || false;
+            const displayState = isProcessing ? 'processing' : session.state;
+            const statusIndicator = this.createStatusIndicator(displayState, 'session', session.state);
 
             sessionElement.innerHTML = `
                 <div class="session-header">
@@ -757,15 +798,48 @@ class ClaudeWebUI {
         const stateContainer = document.getElementById('current-session-state');
         stateContainer.innerHTML = '';
 
-        // Create new status dot
-        const statusDot = this.createStatusIndicator(sessionData.session.state, 'session', sessionData.session.state);
+        // Create new status dot - show processing state if is_processing is true
+        const isProcessing = sessionData.session.is_processing || false;
+        const displayState = isProcessing ? 'processing' : sessionData.session.state;
+        const statusDot = this.createStatusIndicator(displayState, 'session', sessionData.session.state);
         stateContainer.appendChild(statusDot);
-        stateContainer.className = `session-state-indicator ${sessionData.session.state}`;
+        stateContainer.className = `session-state-indicator ${displayState}`;
+
+        // Handle error state display
+        const sessionInfoBar = document.getElementById('session-info-bar');
+        const errorMessageElement = document.getElementById('session-error-message');
+
+        if (sessionData.session.state === 'error' && sessionData.session.error_message) {
+            // Show error message in top bar
+            errorMessageElement.textContent = sessionData.session.error_message;
+            errorMessageElement.classList.remove('hidden');
+            sessionInfoBar.classList.add('error');
+            console.log('Displaying error message in top bar:', sessionData.session.error_message);
+
+            // For error state: clear any processing indicator and disable input controls
+            this.updateProcessingState(false);
+            this.setInputControlsEnabled(false);
+        } else {
+            // Hide error message and remove error styling
+            errorMessageElement.classList.add('hidden');
+            sessionInfoBar.classList.remove('error');
+
+            // Check processing state from backend and update UI accordingly
+            const backendProcessingState = sessionData.session.is_processing || false;
+            this.updateProcessingState(backendProcessingState);
+
+            // For non-error sessions: enable controls if not processing, keep disabled if processing
+            if (!backendProcessingState) {
+                this.setInputControlsEnabled(true);
+            }
+        }
 
         // Update the sessions Map with current session state
         if (this.currentSessionId && this.sessions.has(this.currentSessionId)) {
             const existingSession = this.sessions.get(this.currentSessionId);
             existingSession.state = sessionData.session.state;
+            existingSession.error_message = sessionData.session.error_message;
+            existingSession.is_processing = sessionData.session.is_processing || false;
             this.sessions.set(this.currentSessionId, existingSession);
         }
     }
@@ -917,6 +991,25 @@ class ClaudeWebUI {
 
     showError(message) {
         alert(`Error: ${message}`);
+    }
+
+    setInputControlsEnabled(enabled) {
+        const messageInput = document.getElementById('message-input');
+        const sendButton = document.getElementById('send-btn');
+
+        if (enabled) {
+            // Enable input controls
+            messageInput.disabled = false;
+            sendButton.disabled = false;
+            messageInput.placeholder = "Type your message to Claude Code...";
+            console.log('Input controls enabled');
+        } else {
+            // Disable input controls for error state
+            messageInput.disabled = true;
+            sendButton.disabled = true;
+            messageInput.placeholder = "Session is in error state - input disabled";
+            console.log('Input controls disabled due to error state');
+        }
     }
 
     // Auto-scroll functionality
