@@ -338,10 +338,10 @@ class ClaudeWebUI:
                 session_state = session_info.get('session', {}).get('state')
                 logger.info(f"[WS_LIFECYCLE] Session {session_id} state: {session_state}")
 
-                if session_state != 'active':
+                if session_state not in ['active', 'error']:
                     rejection_time = time.time()
-                    logger.warning(f"[WS_LIFECYCLE] WebSocket connection REJECTED for non-active session: {session_id} (state: {session_state}) at {rejection_time}")
-                    logger.info(f"[WS_LIFECYCLE] WebSocket will only connect to sessions in 'active' state (SDK fully initialized)")
+                    logger.warning(f"[WS_LIFECYCLE] WebSocket connection REJECTED for session: {session_id} (state: {session_state}) at {rejection_time}")
+                    logger.info(f"[WS_LIFECYCLE] WebSocket will only connect to sessions in 'active' or 'error' state")
                     await websocket.close(code=4003)
                     return
 

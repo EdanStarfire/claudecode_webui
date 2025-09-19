@@ -2,6 +2,7 @@
 
 import asyncio
 import time
+import logging
 from pathlib import Path
 from typing import Dict, List, Optional, Callable, Any, Union
 from enum import Enum
@@ -49,6 +50,45 @@ class SessionState(Enum):
     COMPLETED = "completed"
     FAILED = "failed"
     TERMINATED = "terminated"
+
+
+class SDKErrorDetectionHandler(logging.Handler):
+    """Custom log handler to detect immediate SDK CLI failures."""
+
+    def __init__(self, session_id: str, error_callback: Optional[Callable] = None):
+        super().__init__()
+        self.session_id = session_id
+        self.error_callback = error_callback
+        self.logger = get_logger(__name__)
+
+    def emit(self, record):
+        """Handle log records from claude_code_sdk._internal.query."""
+        try:
+            if (record.levelno >= logging.ERROR and
+                "Fatal error in message reader" in record.getMessage()):
+                self.logger.error(f"[SDK_LOG_DETECTION] Immediate CLI failure detected for session {self.session_id}: {record.getMessage()}")
+
+                if self.error_callback:
+                    # Schedule the error callback to run in the event loop
+                    loop = asyncio.get_event_loop()
+                    if loop.is_running():
+                        loop.create_task(self._trigger_error_callback(record.getMessage()))
+                    else:
+                        asyncio.run(self._trigger_error_callback(record.getMessage()))
+        except Exception as e:
+            # Prevent logging errors from breaking the handler
+            pass
+
+    async def _trigger_error_callback(self, error_message: str):
+        """Trigger the error callback asynchronously."""
+        try:
+            if self.error_callback:
+                if asyncio.iscoroutinefunction(self.error_callback):
+                    await self.error_callback("immediate_cli_failure", Exception(error_message))
+                else:
+                    self.error_callback("immediate_cli_failure", Exception(error_message))
+        except Exception as e:
+            self.logger.error(f"Error in SDK error callback: {e}")
 
 
 @dataclass
@@ -144,7 +184,41 @@ class ClaudeSDK:
             "total_responses_received": 0
         }
 
+        # Set up SDK error detection handler to capture immediate CLI failures
+        self._sdk_error_handler = None
+        self._setup_sdk_error_detection()
+
         logger.info(f"Initialized enhanced Claude SDK wrapper for session {session_id}")
+
+    def _setup_sdk_error_detection(self):
+        """Set up SDK error detection handler to capture immediate CLI failures."""
+        try:
+            # Get the SDK logger that emits the "Fatal error in message reader" error
+            sdk_logger = logging.getLogger('claude_code_sdk._internal.query')
+
+            # Create our error detection handler
+            self._sdk_error_handler = SDKErrorDetectionHandler(
+                session_id=self.session_id,
+                error_callback=self.error_callback
+            )
+
+            # Add our handler to the SDK logger
+            sdk_logger.addHandler(self._sdk_error_handler)
+
+            logger.debug(f"SDK error detection handler set up for session {self.session_id}")
+        except Exception as e:
+            logger.error(f"Failed to set up SDK error detection: {e}")
+
+    def _cleanup_sdk_error_detection(self):
+        """Clean up SDK error detection handler."""
+        try:
+            if self._sdk_error_handler:
+                sdk_logger = logging.getLogger('claude_code_sdk._internal.query')
+                sdk_logger.removeHandler(self._sdk_error_handler)
+                self._sdk_error_handler = None
+                logger.debug(f"SDK error detection handler cleaned up for session {self.session_id}")
+        except Exception as e:
+            logger.error(f"Failed to clean up SDK error detection: {e}")
 
     async def start(self) -> bool:
         """
@@ -243,66 +317,36 @@ class ClaudeSDK:
         Main message processing loop using the new ClaudeSDKClient pattern.
         """
         loop_start_time = time.time()
-        logger.info(f"[SDK_LIFECYCLE] Starting message processing loop at {loop_start_time}")
+        logger.info(f"Starting message processing loop for session {self.session_id}")
 
         try:
-            # Create SDK client with context manager
-            context_manager_entry_time = time.time()
-            logger.info(f"[SDK_LIFECYCLE] Entering ClaudeSDKClient context manager at {context_manager_entry_time}")
-            logger.info(f"[SDK_LIFECYCLE] SDK options: {self._sdk_options}")
-
             async with ClaudeSDKClient(self._sdk_options) as client:
-                context_manager_active_time = time.time()
+                logger.info(f"Chkpnt1: SDK client initialized")
                 self._sdk_client = client
 
                 # Update health monitoring state
                 self._session_health_checks["context_manager_active"] = True
                 self._session_health_checks["client_object_valid"] = True
-                self._session_health_checks["session_start_time"] = context_manager_active_time
-
-                logger.info(f"[SDK_LIFECYCLE] ClaudeSDKClient context manager active at {context_manager_active_time}")
-                logger.info(f"[SDK_LIFECYCLE] Context manager initialization took {context_manager_active_time - context_manager_entry_time:.3f}s")
-                logger.info(f"[SDK_LIFECYCLE] Client object: {client}")
-                logger.info(f"[SDK_LIFECYCLE] Client state: active and ready for messages")
+                self._session_health_checks["session_start_time"] = time.time()
 
                 # NOW the SDK is truly ready - change session state to RUNNING
                 self.info.state = SessionState.RUNNING
-                logger.info(f"[SDK_LIFECYCLE] Session state changed to RUNNING - SDK ready for WebSocket connections")
+                logger.info(f"Session {self.session_id} state changed to RUNNING")
 
                 # Also notify session manager that SDK is ready
                 if self.session_manager:
                     await self.session_manager.mark_session_active(self.session_id)
-                    logger.info(f"[SDK_LIFECYCLE] Session manager notified - session marked as ACTIVE")
 
-                # Perform initial health check
-                self._log_session_health(client, "context_manager_initialization")
-
-                loop_iteration = 0
                 while not self._shutdown_event.is_set():
-                    loop_iteration += 1
-                    iteration_start_time = time.time()
-                    logger.debug(f"[SDK_LIFECYCLE] Loop iteration {loop_iteration} started at {iteration_start_time}")
-                    logger.debug(f"[SDK_LIFECYCLE] Queue size: {self._message_queue.qsize()}")
-                    logger.debug(f"[SDK_LIFECYCLE] Shutdown event set: {self._shutdown_event.is_set()}")
-
                     try:
-                        # Wait for a message from the queue
-                        queue_wait_start_time = time.time()
-                        logger.debug(f"[SDK_LIFECYCLE] Waiting for message from queue (timeout=1.0s)")
-
                         message_data = await asyncio.wait_for(
                             self._message_queue.get(),
                             timeout=1.0
                         )
 
-                        queue_wait_end_time = time.time()
-                        logger.debug(f"[SDK_LIFECYCLE] Message received from queue after {queue_wait_end_time - queue_wait_start_time:.3f}s")
-
                         if message_data and message_data.get("content"):
                             content = message_data["content"]
-                            message_start_time = time.time()
-                            logger.info(f"[SDK_LIFECYCLE] Processing message at {message_start_time}: {content[:100]}...")
-                            logger.info(f"[SDK_LIFECYCLE] Session state before processing: {self.info.state}")
+                            logger.info(f"Processing message: {content[:100]}...")
 
                             # Store user message if storage available
                             if self.storage_manager:
@@ -315,124 +359,36 @@ class ClaudeSDK:
                             self.info.message_count += 1
                             self.info.last_activity = time.time()
 
-                            # Send message to Claude using the persistent session pattern
-                            query_start_time = time.time()
-                            logger.info(f"[SDK_LIFECYCLE] Sending query to SDK client at {query_start_time}")
-                            logger.info(f"[SDK_LIFECYCLE] Client object before query: {client}")
-
-                            # Health check before query
-                            self._log_session_health(client, "before_query")
-
                             await client.query(content)
                             self._session_health_checks["total_queries_sent"] += 1
-                            self._session_health_checks["last_successful_query"] = query_start_time
-
-                            query_end_time = time.time()
-                            logger.info(f"[SDK_LIFECYCLE] Query sent successfully at {query_end_time}")
-                            logger.info(f"[SDK_LIFECYCLE] Query took {query_end_time - query_start_time:.3f}s")
-                            logger.info(f"[SDK_LIFECYCLE] Client object after query: {client}")
-
-                            # Health check after query
-                            self._log_session_health(client, "after_query")
+                            self._session_health_checks["last_successful_query"] = time.time()
 
                             # Process all responses for this query (maintains session continuity)
-                            response_start_time = time.time()
-                            response_count = 0
-                            logger.info(f"[SDK_LIFECYCLE] Starting response processing at {response_start_time}")
-
                             async for response_message in client.receive_response():
-                                response_count += 1
-                                response_msg_time = time.time()
-                                logger.debug(f"[SDK_LIFECYCLE] Received response {response_count} at {response_msg_time}")
-
                                 if self._shutdown_event.is_set():
-                                    logger.info(f"[SDK_LIFECYCLE] Shutdown event detected, breaking response loop")
                                     break
                                 await self._process_sdk_message(response_message)
                                 self._session_health_checks["total_responses_received"] += 1
 
                             self._session_health_checks["last_successful_response"] = time.time()
-                            response_end_time = time.time()
-                            logger.info(f"[SDK_LIFECYCLE] Response processing completed at {response_end_time}")
-                            logger.info(f"[SDK_LIFECYCLE] Processed {response_count} responses in {response_end_time - response_start_time:.3f}s")
-                            logger.info(f"[SDK_LIFECYCLE] Client object after response processing: {client}")
-                            logger.info(f"[SDK_LIFECYCLE] Session continues - ready for next message")
 
-                            # Health check after response processing
-                            self._log_session_health(client, "after_response_processing")
-
-                            # Session continues for next message - no re-initialization needed
-                            message_end_time = time.time()
-                            logger.info(f"[SDK_LIFECYCLE] Message processing completed at {message_end_time}")
-                            logger.info(f"[SDK_LIFECYCLE] Total message processing took {message_end_time - message_start_time:.3f}s")
 
                         self._message_queue.task_done()
-                        logger.debug(f"[SDK_LIFECYCLE] Message queue task marked as done")
 
                     except asyncio.TimeoutError:
                         # No message in queue, continue loop
-                        timeout_time = time.time()
-                        logger.debug(f"[SDK_LIFECYCLE] Queue timeout at {timeout_time} - no messages available, continuing loop")
-                        logger.debug(f"[SDK_LIFECYCLE] Client object during timeout: {client}")
-                        logger.debug(f"[SDK_LIFECYCLE] Session remains active during timeout")
-
-                        # Periodic health check during idle periods (every 10th timeout)
-                        if loop_iteration % 10 == 0:
-                            self._log_session_health(client, "idle_timeout_health_check")
-
                         continue
                     except asyncio.CancelledError:
-                        cancellation_time = time.time()
-                        logger.info(f"[SDK_LIFECYCLE] Message processing loop cancelled at {cancellation_time}")
+                        logger.info(f"Message processing loop cancelled")
                         break
                     except Exception as e:
-                        error_time = time.time()
-                        logger.error(f"[SDK_LIFECYCLE] Error processing message at {error_time}: {e}")
-                        logger.error(f"[SDK_LIFECYCLE] Client object during error: {client}")
-                        logger.error(f"[SDK_LIFECYCLE] Exception type: {type(e)}")
-                        logger.error(f"[SDK_LIFECYCLE] Exception details: {e}")
-
-                        # Comprehensive error tracking
-                        import traceback
-                        logger.error(f"[ERROR_TRACKING] Full exception traceback:")
-                        for line in traceback.format_exception(type(e), e, e.__traceback__):
-                            logger.error(f"[ERROR_TRACKING] {line.rstrip()}")
-
-                        logger.error(f"[ERROR_TRACKING] Exception occurred during message processing:")
-                        logger.error(f"[ERROR_TRACKING] - Loop iteration: {loop_iteration}")
-                        logger.error(f"[ERROR_TRACKING] - Queue size: {self._message_queue.qsize()}")
-                        logger.error(f"[ERROR_TRACKING] - Session state: {self.info.state}")
-                        logger.error(f"[ERROR_TRACKING] - Shutdown event: {self._shutdown_event.is_set()}")
-                        logger.error(f"[ERROR_TRACKING] - Total queries sent: {self._session_health_checks['total_queries_sent']}")
-                        logger.error(f"[ERROR_TRACKING] - Total responses received: {self._session_health_checks['total_responses_received']}")
-
-                        # Health check during error
-                        try:
-                            self._log_session_health(client, "during_error_handling")
-                        except Exception as health_check_error:
-                            logger.error(f"[ERROR_TRACKING] Health check failed during error handling: {health_check_error}")
-
+                        logger.error(f"Error processing message: {e}")
                         if self.error_callback:
                             await self._safe_callback(self.error_callback, "message_processing_error", e)
-
-                    iteration_end_time = time.time()
-                    logger.debug(f"[SDK_LIFECYCLE] Loop iteration {loop_iteration} completed at {iteration_end_time}")
-                    logger.debug(f"[SDK_LIFECYCLE] Iteration took {iteration_end_time - iteration_start_time:.3f}s")
-
-            # Context manager exit point
-            context_manager_exit_time = time.time()
 
             # Update health monitoring state
             self._session_health_checks["context_manager_active"] = False
             self._session_health_checks["client_object_valid"] = False
-
-            logger.info(f"[SDK_LIFECYCLE] ClaudeSDKClient context manager EXITED at {context_manager_exit_time}")
-            logger.info(f"[SDK_LIFECYCLE] Context manager was active for {context_manager_exit_time - context_manager_active_time:.3f}s")
-            logger.info(f"[SDK_LIFECYCLE] Total loop iterations: {loop_iteration}")
-            logger.info(f"[SDK_LIFECYCLE] Loop exit reason: shutdown_event={self._shutdown_event.is_set()}")
-
-            # Final health check at context manager exit
-            self._log_session_health(None, "context_manager_exit")
 
         except Exception as e:
             fatal_error_time = time.time()
@@ -440,6 +396,7 @@ class ClaudeSDK:
             logger.error(f"[SDK_LIFECYCLE] Exception type: {type(e)}")
             logger.error(f"[SDK_LIFECYCLE] Exception details: {e}")
             logger.error(f"[SDK_LIFECYCLE] Session state before error: {self.info.state}")
+
 
             # Comprehensive fatal error tracking
             import traceback
@@ -515,6 +472,27 @@ class ClaudeSDK:
     async def _process_sdk_message(self, sdk_message: Any):
         """Process a single message from the SDK stream."""
         try:
+            # Check for fatal error messages that indicate immediate CLI failures
+            logger.info(f"Chkpnt2: sdk_message_received = {sdk_message}")
+            if hasattr(sdk_message, 'type') and sdk_message.type == 'error':
+                error_content = str(sdk_message.content) if hasattr(sdk_message, 'content') else str(sdk_message)
+                if "Fatal error in message reader" in error_content:
+                    logger.error(f"[FATAL_ERROR_DETECTION] Immediate CLI failure detected: {error_content}")
+
+                    # Extract the underlying error details
+                    fatal_error = error_content
+                    if "Command failed with exit code" in error_content:
+                        # This is the immediate CLI failure we want to surface
+                        logger.info(f"[FATAL_ERROR_DETECTION] CLI command failure: {error_content}")
+                        fatal_error = "Claude Code command failed - see details above"
+
+                    # Trigger immediate error callback to update session state
+                    if self.error_callback:
+                        logger.info(f"[FATAL_ERROR_DETECTION] Triggering immediate error callback")
+                        await self._safe_callback(self.error_callback, "immediate_cli_failure", Exception(fatal_error))
+
+                    return  # Don't process this error message further
+
             # Capture Claude Code's actual session ID from init message
             if hasattr(sdk_message, 'subtype') and sdk_message.subtype == 'init':
                 session_id = getattr(sdk_message, 'data', {}).get('session_id') if hasattr(sdk_message, 'data') else None
@@ -769,11 +747,16 @@ class ClaudeSDK:
             if self.storage_manager:
                 await self.storage_manager.cleanup()
 
+            # Cleanup SDK error detection handler
+            self._cleanup_sdk_error_detection()
+
             logger.info("Claude Code SDK session terminated successfully")
             return True
 
         except Exception as e:
             logger.error(f"Error terminating SDK session: {e}")
+            # Cleanup SDK error detection handler even on error
+            self._cleanup_sdk_error_detection()
             return False
 
     def get_queue_size(self) -> int:

@@ -259,6 +259,17 @@ class SessionManager:
                 await self._update_session_state(session_id, SessionState.ERROR, str(e))
                 return False
 
+    async def update_session_state(self, session_id: str, new_state: SessionState, error_message: Optional[str] = None) -> bool:
+        """Update session state with optional error message"""
+        async with self._get_session_lock(session_id):
+            try:
+                await self._update_session_state(session_id, new_state, error_message)
+                logger.info(f"Updated session {session_id} state to {new_state.value}")
+                return True
+            except Exception as e:
+                logger.error(f"Failed to update session {session_id} state to {new_state.value}: {e}")
+                return False
+
     async def get_session_info(self, session_id: str) -> Optional[SessionInfo]:
         """Get session information"""
         return self._active_sessions.get(session_id)

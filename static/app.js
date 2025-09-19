@@ -48,6 +48,7 @@ class ClaudeWebUI {
                 'processing': { color: 'blue', animate: true, text: 'Processing' },
                 'completed': { color: 'grey', animate: false, text: 'Completed' },
                 'failed': { color: 'red', animate: false, text: 'Failed' },
+                'error': { color: 'red', animate: false, text: 'Failed' },
                 'terminated': { color: 'grey', animate: false, text: 'Terminated' },
                 'paused': { color: 'grey', animate: false, text: 'Paused' },
                 'unknown': { color: 'purple', animate: true, text: 'Unknown' }

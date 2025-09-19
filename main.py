@@ -20,7 +20,7 @@ def main():
     """Main function to start the Claude Code WebUI server."""
 
     # Setup logging
-    setup_logging(log_level="INFO", enable_console=True)
+    setup_logging(log_level="DEBUG", enable_console=True)
 
     # Create FastAPI app
     app = create_app()

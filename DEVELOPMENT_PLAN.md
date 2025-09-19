@@ -455,6 +455,63 @@ data/                         # Runtime data (created by app)
 
 **Impact**: Significantly enhanced user experience with professional UI polish, flexible workspace design, and improved session management reliability
 
+### Phase 3.6: Critical Error Handling & Session Reliability ✅ COMPLETED
+**Goal**: Implement robust error handling for failed sessions and enhance user feedback
+**Status**: Completed 2025-09-19
+
+**Feature Implementation**:
+1. **SDK Error Detection System** ✅
+   - Added `SDKErrorDetectionHandler` class to monitor SDK logger output for immediate CLI failures
+   - Implemented real-time detection of "Fatal error in message reader" messages
+   - Enhanced error callback system to capture and process SDK errors immediately
+   - Added comprehensive error tracking throughout the SDK message processing pipeline
+
+2. **Failed Session State Management** ✅
+   - Sessions that fail to start are now properly marked as ERROR state
+   - Failed session states are propagated to the WebUI with visual feedback
+   - Added logic to prevent restart attempts of sessions in ERROR state
+   - Enhanced session coordinator to handle critical SDK errors (startup_failed, message_processing_loop_error, immediate_cli_failure)
+
+3. **User-Friendly Error Messages** ✅
+   - Implemented `_extract_claude_cli_error()` method to convert technical error messages into user-friendly descriptions
+   - Added error message formatting for common Claude CLI failure patterns
+   - Enhanced error display in WebUI with actionable error descriptions
+   - Added system messages explaining session failures with clear error details
+
+4. **Enhanced Session Cleanup** ✅
+   - Added proper cleanup of failed SDK instances from active session registry
+   - Implemented comprehensive error state handling throughout session lifecycle
+   - Enhanced logging and debugging capabilities for better error diagnosis
+   - Added SDK error detection handler cleanup to prevent memory leaks
+
+5. **User Testing Bug Fixes** ✅
+   - Fixed processing indicators remaining when switching sessions while displayed
+   - Resolved failed session propagation to WebUI (sessions now show ERROR state properly)
+   - Updated USER_TESTING_TRACKING.md with completion status and new outstanding issues
+   - Addressed session restart prevention for sessions in ERROR state
+
+**Technical Implementation**:
+- `src/claude_sdk.py`: Added `SDKErrorDetectionHandler` class, enhanced error detection and cleanup
+- `src/session_coordinator.py`: Enhanced error handling, session failure messaging, and state management
+- `main.py`: Changed logging level to DEBUG for better development debugging
+- `pyproject.toml`: Removed unused `requests` dependency to clean up project dependencies
+- `USER_TESTING_TRACKING.md`: Updated progress tracking with completed items and new bugs
+
+**User Experience Impact**:
+- Sessions that fail to start now show clear ERROR state in WebUI
+- Users receive actionable error messages instead of technical SDK output
+- Failed sessions are properly cleaned up and prevented from restart attempts
+- Enhanced debugging capabilities for better issue resolution
+- Cleaner dependency management with removal of unused packages
+
+**Critical Issues Resolved**:
+- Sessions failing to start due to Claude CLI issues now properly surface error information
+- Processing indicators no longer persist when switching sessions during processing
+- Failed session states are now correctly propagated and displayed in the WebUI
+- Enhanced error detection prevents silent failures and provides better user feedback
+
+**Impact**: Significantly improved error handling and session reliability, providing users with clear feedback when sessions fail and preventing problematic restart attempts
+
 ---
 
 ## Future Phases (Post-MVP)

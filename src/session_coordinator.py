@@ -202,6 +202,29 @@ class SessionCoordinator:
 
             if not await sdk.start():
                 logger.error(f"Failed to start SDK for session {session_id}")
+
+                # Get the error message from the SDK
+                raw_error_message = getattr(sdk.info, 'error_message', 'Unknown error occurred while starting Claude Code')
+
+                # Extract user-friendly error message
+                error_message = self._extract_claude_cli_error(raw_error_message)
+
+                # Update session state to ERROR
+                try:
+                    await self.session_manager.update_session_state(session_id, SessionState.ERROR, error_message)
+                    await self._notify_state_change(session_id, SessionState.ERROR)
+                    logger.info(f"Updated session {session_id} state to ERROR")
+                except Exception as state_error:
+                    logger.error(f"Failed to update session state to ERROR: {state_error}")
+
+                # Send system message explaining the failure
+                await self._send_session_failure_message(session_id, error_message)
+
+                # Clean up the failed SDK
+                if session_id in self._active_sdks:
+                    del self._active_sdks[session_id]
+                    logger.info(f"Cleaned up failed SDK for session {session_id}")
+
                 return False
 
             # Send system message for SDK client launch/resume
@@ -414,6 +437,31 @@ class SessionCoordinator:
                     "timestamp": datetime.now(timezone.utc).isoformat()
                 }
 
+                logger.error(f"SDK error in session {session_id}: {error_type} - {error}")
+
+                # Handle critical errors that require session state updates
+                if error_type in ["startup_failed", "message_processing_loop_error", "immediate_cli_failure"]:
+                    logger.info(f"Handling critical SDK error: {error_type}")
+
+                    # Extract user-friendly error message
+                    user_error_message = self._extract_claude_cli_error(str(error))
+
+                    # Update session state to ERROR
+                    try:
+                        await self.session_manager.update_session_state(session_id, SessionState.ERROR, user_error_message)
+                        await self._notify_state_change(session_id, SessionState.ERROR)
+                        logger.info(f"Updated session {session_id} state to ERROR due to SDK error")
+                    except Exception as state_error:
+                        logger.error(f"Failed to update session state to ERROR: {state_error}")
+
+                    # Send system message explaining the runtime failure
+                    await self._send_session_failure_message(session_id, user_error_message)
+
+                    # Clean up the failed SDK
+                    if session_id in self._active_sdks:
+                        del self._active_sdks[session_id]
+                        logger.info(f"Cleaned up failed SDK for session {session_id}")
+
                 # Call registered callbacks
                 callbacks = self._error_callbacks.get(session_id, [])
                 for cb in callbacks:
@@ -458,6 +506,78 @@ class SessionCoordinator:
 
         except Exception as e:
             logger.error(f"Failed to send client launched message for {session_id}: {e}")
+
+    async def _send_session_failure_message(self, session_id: str, error_message: str):
+        """Send a system message indicating the session failed to start"""
+        try:
+            from datetime import datetime, timezone
+            # Create system message for session failure
+            message_data = {
+                "type": "system",
+                "subtype": "session_failed",
+                "content": f"Session failed to start: {error_message}",
+                "session_id": session_id,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "sdk_message_type": "SystemMessage",
+                "error_details": error_message
+            }
+
+            # Store message in storage
+            storage = self._storage_managers.get(session_id)
+            if storage:
+                await storage.append_message(message_data)
+
+            # Send through message callback system for real-time display
+            callback = self._create_message_callback(session_id)
+            await callback(message_data)
+
+            logger.info(f"Sent session failure message for session {session_id}: {error_message}")
+        except Exception as e:
+            logger.error(f"Failed to send session failure message for {session_id}: {e}")
+
+    def _extract_claude_cli_error(self, error_message: str) -> str:
+        """Extract and format user-friendly error messages from Claude CLI output"""
+        try:
+            error_str = str(error_message).strip()
+
+            # Common Claude CLI error patterns and their user-friendly versions
+            error_patterns = {
+                "Command failed with exit code 1": "Claude Code command failed",
+                "Fatal error in message reader": "Claude Code CLI failed during startup",
+                "not a valid UUID": "Invalid session ID format",
+                "--resume requires a valid session ID": "Session resume failed - invalid session ID",
+                "Check stderr output for details": "See error details above",
+                "Claude Code command failed - see details above": "Claude Code CLI failed - check error details"
+            }
+
+            # Check for known patterns and provide clearer descriptions
+            for pattern, friendly_msg in error_patterns.items():
+                if pattern in error_str:
+                    # If it's a UUID error, try to extract the actual UUID from the message
+                    if "not a valid UUID" in error_str and "Provided value" in error_str:
+                        # Try to extract the invalid UUID value
+                        import re
+                        uuid_match = re.search(r'Provided value "([^"]+)"', error_str)
+                        if uuid_match:
+                            invalid_uuid = uuid_match.group(1)
+                            return f"Invalid session ID format: '{invalid_uuid}' is not a valid UUID"
+
+                    # For resume errors, provide more context
+                    if "--resume requires a valid session ID" in error_str:
+                        return "Session resume failed: Invalid or missing Claude Code session ID. This may indicate the session was corrupted or manually modified."
+
+                    return friendly_msg
+
+            # If no patterns match, return the original message but clean it up
+            cleaned_msg = error_str.replace("Error output: Check stderr output for details", "").strip()
+            if cleaned_msg:
+                return cleaned_msg
+            else:
+                return "Unknown Claude Code error occurred"
+
+        except Exception as e:
+            logger.warning(f"Failed to extract CLI error message: {e}")
+            return str(error_message)
 
     async def _notify_state_change(self, session_id: str, new_state: SessionState):
         """Notify registered callbacks about state changes"""
