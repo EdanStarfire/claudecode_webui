@@ -67,6 +67,13 @@ options = ClaudeCodeOptions(
 - Unknown message types should be gracefully handled
 - Use try/except blocks around SDK calls
 
+## Permission Mode Behavior (CRITICAL)
+- `permission_mode="default"` means "prompt for everything NOT pre-approved"
+- Pre-approved tools are defined in `.claude/settings.json` or `.claude/settings.local.json`
+- Tools like WebFetch, Edit, Write, etc. require permission prompts unless explicitly pre-approved
+- Only tools in the settings file's `permissions.allow` array bypass permission prompts
+- Most tools should trigger permission callbacks in `default` mode - lack of prompts indicates SDK integration issues
+
 # Development Process Requirements
 
 ## Testing and Verification Protocol

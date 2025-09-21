@@ -38,8 +38,9 @@
 [ ] feat: Handle displaying tool calls with enough detail to understand what it is doing
 [ ] feat: Handle displaying tool results with enough detail to understand what was done
 [x] bug: permissions_callback not sent to resumed sessions like it should be - it is passed to new sessions though
-[ ] feat: implement permissions_callback handling
+[x] feat: implement permissions_callback handling
 [x] feat: capture permission prompt functionality in a generic sense (web_server.py:582 function)
+[ ] qol: use the Claude provided tool use ID for tracking the permission request + approval/denial instead of an internally generated UUID
 [ ] feat: capture ThinkingBlock messages for surfacing later on
 [ ] feat: Implement cancel "working" state using client.interrupt  - example: https://github.com/anthropics/claude-code-sdk-python/blob/main/examples/streaming_mode.py
 [x] feat: Enable deletion of a session from session header.

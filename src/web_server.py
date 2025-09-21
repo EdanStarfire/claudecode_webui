@@ -615,6 +615,19 @@ class ClaudeWebUI:
                     await storage_manager.append_message(permission_request)
                     logger.debug(f"Stored permission request message for session {session_id}")
 
+                    # Broadcast permission request to WebSocket clients
+                    try:
+                        websocket_message = {
+                            "type": "message",
+                            "session_id": session_id,
+                            "data": permission_request,
+                            "timestamp": datetime.now(timezone.utc).isoformat()
+                        }
+                        await self.websocket_manager.send_message(session_id, websocket_message)
+                        logger.info(f"Broadcasted permission request to WebSocket for session {session_id}")
+                    except Exception as ws_error:
+                        logger.error(f"Failed to broadcast permission request to WebSocket: {ws_error}")
+
             except Exception as e:
                 logger.error(f"Failed to store permission request message: {e}")
 
@@ -654,6 +667,19 @@ class ClaudeWebUI:
                 if storage_manager:
                     await storage_manager.append_message(permission_response)
                     logger.debug(f"Stored permission response message for session {session_id}")
+
+                    # Broadcast permission response to WebSocket clients
+                    try:
+                        websocket_message = {
+                            "type": "message",
+                            "session_id": session_id,
+                            "data": permission_response,
+                            "timestamp": datetime.now(timezone.utc).isoformat()
+                        }
+                        await self.websocket_manager.send_message(session_id, websocket_message)
+                        logger.info(f"Broadcasted permission response to WebSocket for session {session_id}")
+                    except Exception as ws_error:
+                        logger.error(f"Failed to broadcast permission response to WebSocket: {ws_error}")
 
             except Exception as e:
                 logger.error(f"Failed to store permission response message: {e}")

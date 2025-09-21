@@ -456,15 +456,37 @@ class SessionCoordinator:
                 }
 
             # Get messages and total count
-            messages = await storage.read_messages(limit=limit, offset=offset)
+            raw_messages = await storage.read_messages(limit=limit, offset=offset)
             total_count = await storage.get_message_count()
+
+            # Parse historical messages to ensure consistent metadata (tool_uses, etc.)
+            parsed_messages = []
+            for raw_message in raw_messages:
+                try:
+                    parsed_message = self.message_parser.parse_message(raw_message)
+                    # Convert back to dict format for JSON serialization
+                    serialized = {
+                        "type": parsed_message.type.value,
+                        "content": parsed_message.content,
+                        "timestamp": parsed_message.timestamp,
+                        "session_id": parsed_message.session_id,
+                        "metadata": parsed_message.metadata
+                    }
+                    # Preserve any additional fields from the raw message
+                    for key, value in raw_message.items():
+                        if key not in serialized and key != "sdk_message":
+                            serialized[key] = value
+                    parsed_messages.append(serialized)
+                except Exception as e:
+                    logger.warning(f"Failed to parse historical message, using raw: {e}")
+                    parsed_messages.append(raw_message)
 
             # Calculate pagination metadata
             actual_limit = limit or 50
-            has_more = (offset + len(messages)) < total_count
+            has_more = (offset + len(parsed_messages)) < total_count
 
             return {
-                "messages": messages,
+                "messages": parsed_messages,
                 "total_count": total_count,
                 "limit": actual_limit,
                 "offset": offset,

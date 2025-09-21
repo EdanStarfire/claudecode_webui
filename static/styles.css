@@ -868,3 +868,270 @@ form {
         margin: 1rem;
     }
 }
+
+/* Tool Call UI Styles */
+.tool-call-container {
+    margin: 1rem 0;
+    position: relative;
+}
+
+.tool-call-card {
+    background: #fff;
+    border: 2px solid #e1e5e9;
+    border-radius: 12px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    overflow: hidden;
+    transition: all 0.3s ease;
+}
+
+.tool-call-card:hover {
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+}
+
+.tool-call-header {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 1rem;
+    background: #f8f9fa;
+    border-bottom: 1px solid #e1e5e9;
+    font-weight: 600;
+}
+
+.tool-status-icon {
+    font-size: 1.2rem;
+    min-width: 1.5rem;
+    text-align: center;
+}
+
+.tool-name {
+    flex-grow: 1;
+    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+    color: #2c3e50;
+}
+
+.tool-collapse-btn {
+    background: none;
+    border: none;
+    font-size: 1rem;
+    cursor: pointer;
+    padding: 0.25rem;
+    border-radius: 4px;
+    color: #6c757d;
+    transition: all 0.2s ease;
+}
+
+.tool-collapse-btn:hover {
+    background: #e1e5e9;
+    color: #495057;
+}
+
+.tool-call-details {
+    padding: 1rem;
+}
+
+.tool-parameters {
+    margin-bottom: 1rem;
+}
+
+.tool-parameters strong {
+    display: block;
+    margin-bottom: 0.5rem;
+    color: #495057;
+}
+
+.tool-params-json {
+    background: #f8f9fa;
+    border: 1px solid #e1e5e9;
+    border-radius: 6px;
+    padding: 0.75rem;
+    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+    font-size: 0.9rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+}
+
+.tool-permission-prompt {
+    background: #fff3cd;
+    border: 1px solid #ffeaa7;
+    border-radius: 8px;
+    padding: 1rem;
+    margin: 1rem 0;
+    text-align: center;
+}
+
+.tool-permission-prompt p {
+    margin-bottom: 0.75rem;
+}
+
+.permission-buttons {
+    display: flex;
+    gap: 0.75rem;
+    justify-content: center;
+    margin-top: 1rem;
+}
+
+.permission-approve {
+    background: #28a745;
+    border: none;
+    color: white;
+    padding: 0.5rem 1rem;
+    border-radius: 6px;
+    cursor: pointer;
+    font-weight: 500;
+    transition: background 0.2s ease;
+}
+
+.permission-approve:hover {
+    background: #218838;
+}
+
+.permission-deny {
+    background: #dc3545;
+    border: none;
+    color: white;
+    padding: 0.5rem 1rem;
+    border-radius: 6px;
+    cursor: pointer;
+    font-weight: 500;
+    transition: background 0.2s ease;
+}
+
+.permission-deny:hover {
+    background: #c82333;
+}
+
+.tool-result {
+    margin: 1rem 0;
+    border-radius: 8px;
+    padding: 1rem;
+}
+
+.tool-result-success {
+    background: #d4edda;
+    border: 1px solid #c3e6cb;
+}
+
+.tool-result-error {
+    background: #f8d7da;
+    border: 1px solid #f5c6cb;
+}
+
+.tool-result strong {
+    display: block;
+    margin-bottom: 0.5rem;
+    color: #495057;
+}
+
+.tool-result-content {
+    background: rgba(255,255,255,0.7);
+    border: 1px solid rgba(0,0,0,0.1);
+    border-radius: 4px;
+    padding: 0.75rem;
+    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+    font-size: 0.9rem;
+    line-height: 1.4;
+    overflow-x: auto;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+}
+
+.tool-explanation {
+    margin: 1rem 0;
+    padding: 1rem;
+    background: #e7f3ff;
+    border: 1px solid #b8daff;
+    border-radius: 8px;
+}
+
+.tool-explanation strong {
+    display: block;
+    margin-bottom: 0.5rem;
+    color: #495057;
+}
+
+.tool-explanation-content {
+    line-height: 1.6;
+    color: #495057;
+}
+
+/* Tool Call Collapsed State */
+.tool-call-collapsed {
+    background: #f8f9fa;
+    border: 1px solid #dee2e6;
+    border-radius: 8px;
+    padding: 0.75rem 1rem;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+    font-size: 0.9rem;
+}
+
+.tool-call-collapsed:hover {
+    background: #e9ecef;
+    border-color: #ced4da;
+}
+
+.tool-collapsed-summary {
+    flex-grow: 1;
+    color: #495057;
+}
+
+.tool-expand-icon {
+    color: #6c757d;
+    font-size: 0.8rem;
+    margin-left: 0.5rem;
+}
+
+/* Tool Status Color Coding */
+.tool-status-pending {
+    border-left: 4px solid #ffc107;
+}
+
+.tool-status-permission_required {
+    border-left: 4px solid #fd7e14;
+}
+
+.tool-status-executing {
+    border-left: 4px solid #007bff;
+}
+
+.tool-status-completed {
+    border-left: 4px solid #28a745;
+}
+
+.tool-status-error {
+    border-left: 4px solid #dc3545;
+}
+
+/* Responsive adjustments for tool calls */
+@media (max-width: 768px) {
+    .tool-call-header {
+        padding: 0.75rem;
+        flex-wrap: wrap;
+    }
+
+    .tool-call-details {
+        padding: 0.75rem;
+    }
+
+    .permission-buttons {
+        flex-direction: column;
+        align-items: center;
+    }
+
+    .permission-buttons .btn {
+        width: 100%;
+        max-width: 200px;
+    }
+
+    .tool-params-json,
+    .tool-result-content {
+        font-size: 0.8rem;
+    }
+}

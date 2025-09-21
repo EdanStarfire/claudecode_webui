@@ -674,6 +674,92 @@ data/                         # Runtime data (created by app)
 
 **Impact**: Completed advanced session management features providing full session lifecycle control, enhanced debugging capabilities, and professional user experience with reliable Windows compatibility
 
+### Phase 3.9: Comprehensive Tool Call Management & Permission Integration ✅ COMPLETED
+**Goal**: Implement comprehensive tool call lifecycle management with real-time permission integration and enhanced UI
+**Status**: Completed 2025-09-21
+
+**Feature Implementation**:
+1. **Tool Call Lifecycle Management System** ✅
+   - Implemented comprehensive `ToolCallManager` class for complete tool use → permission → execution → result flow
+   - Added tool signature mapping to correlate permission requests with specific tool uses
+   - Enhanced tool call state tracking with detailed status management (pending, permission_required, executing, completed, error)
+   - Implemented expandable/collapsible tool call interface with smart auto-collapse behavior
+
+2. **Real-time Permission Integration** ✅
+   - Added permission request and response handlers (`PermissionRequestHandler`, `PermissionResponseHandler`)
+   - Enhanced WebSocket broadcasting for permission requests and responses with real-time UI updates
+   - Implemented permission decision tracking within tool call lifecycle
+   - Added historical tool call support for permission requests without corresponding tool uses
+
+3. **Interactive Tool Call UI** ✅
+   - Created comprehensive tool call cards with status indicators, parameter summaries, and result display
+   - Added expandable/collapsible tool interfaces with click-to-expand functionality
+   - Implemented status-based styling with color-coded tool call states and animated indicators
+   - Enhanced permission request display within tool call context with approval/denial status
+
+4. **Enhanced Message Processing** ✅
+   - Added support for historical message parsing with `raw_sdk_response` data
+   - Enhanced tool use and tool result extraction from SDK responses for both live and historical messages
+   - Improved thinking block handling and tool metadata preservation
+   - Updated message filtering to handle permission messages through tool call system instead of standalone display
+
+5. **Permission System Documentation** ✅
+   - Enhanced `CLAUDE.md` with critical permission mode behavior documentation
+   - Added explanation of default permission mode requiring prompts for non-pre-approved tools
+   - Documented `.claude/settings.json` configuration for pre-approved tools
+   - Updated settings to remove `WebFetch` and `WebSearch` from pre-approved list for testing
+
+**User Testing Completion**:
+- ✅ Comprehensive tool call lifecycle visualization with real-time status updates
+- ✅ Permission request and response integration within tool call UI context
+- ✅ Enhanced tool parameter display with smart parameter summarization
+- ✅ Tool call result display with error handling and status indication
+- ✅ Historical tool call support for message replay functionality
+
+**Technical Implementation**:
+- `static/app.js`: Complete `ToolCallManager` class with 500+ lines of tool lifecycle management
+- `src/message_parser.py`: Added permission handlers and enhanced historical message support
+- `src/web_server.py`: Enhanced permission request/response WebSocket broadcasting
+- `src/session_coordinator.py`: Improved historical message parsing with consistent metadata
+- `static/styles.css`: Comprehensive tool call styling with status-based colors and animations
+- `CLAUDE.md`: Enhanced permission system documentation and behavior clarification
+- `.claude/settings.local.json`: Updated permission settings for testing compliance
+
+**UI/UX Enhancements**:
+1. **Tool Call Visual Design** ✅
+   - Status-based color coding (blue for pending, orange for permission, green for completed, red for errors)
+   - Animated status indicators for transitional states with smooth CSS transitions
+   - Smart parameter summarization for tool call headers with truncation for readability
+   - Expandable tool detail view with full parameter and result display
+
+2. **Permission Integration UI** ✅
+   - Permission requests appear within tool call context instead of separate messages
+   - Permission approval/denial status clearly indicated with visual feedback
+   - Tool call status updates in real-time as permissions are granted/denied
+   - Seamless transition from permission request to tool execution visualization
+
+3. **Interactive Controls** ✅
+   - Click-to-expand/collapse tool call details with visual expand/collapse indicators
+   - Auto-collapse completed tool calls to reduce visual clutter
+   - Smart UI state management preventing permission message duplication
+   - Enhanced message filtering to route tool-related content through tool call system
+
+**User Experience Impact**:
+- Complete visibility into Claude Code's tool usage with real-time status updates
+- Intuitive permission management integrated directly into tool call workflow
+- Reduced message clutter through intelligent tool call aggregation and filtering
+- Professional tool call visualization with clear status progression and interactive controls
+- Enhanced debugging capabilities with comprehensive tool parameter and result visibility
+
+**Critical Features Implemented**:
+- Tool call lifecycle tracking from initial use through permission approval to execution completion
+- Real-time permission request integration with tool call UI context
+- Historical tool call reconstruction for message replay functionality
+- Smart tool call state management with auto-collapse and expansion controls
+- Comprehensive error handling throughout tool call and permission workflows
+
+**Impact**: Delivered comprehensive tool call management system providing complete visibility into Claude Code's tool usage workflow, seamlessly integrated permission handling, and professional interactive UI for monitoring and understanding AI assistant actions
+
 ---
 
 ## Future Phases (Post-MVP)

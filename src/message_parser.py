@@ -29,6 +29,10 @@ class MessageType(Enum):
     TOOL_RESULT = "tool_result"
     TOOL_ERROR = "tool_error"
 
+    # Permission handling
+    PERMISSION_REQUEST = "permission_request"
+    PERMISSION_RESPONSE = "permission_response"
+
     # Content blocks
     THINKING = "thinking"
 
@@ -174,6 +178,51 @@ class AssistantMessageHandler(MessageHandler):
                 }
             )
 
+        # Handle historical messages with raw_sdk_response
+        elif "raw_sdk_response" in message_data:
+            try:
+                import json
+                sdk_response = json.loads(message_data["raw_sdk_response"])
+                text_parts = []
+                thinking_parts = []
+                tool_uses = []
+
+                # Extract content from SDK response blocks
+                if "content" in sdk_response and isinstance(sdk_response["content"], list):
+                    for block in sdk_response["content"]:
+                        if block.get("type") == "text":
+                            text_parts.append(block.get("text", ""))
+                        elif block.get("type") == "thinking":
+                            thinking_parts.append(block.get("text", ""))
+                        elif block.get("type") == "tool_use":
+                            tool_uses.append({
+                                "id": block.get("id"),
+                                "name": block.get("name"),
+                                "input": block.get("input", {})
+                            })
+
+                content = " ".join(text_parts) if text_parts else "Assistant response"
+                if thinking_parts:
+                    content = f"[Thinking: {' '.join(thinking_parts)}] {content}"
+
+                return ParsedMessage(
+                    type=MessageType.ASSISTANT,
+                    timestamp=message_data.get("timestamp", time.time()),
+                    session_id=message_data.get("session_id"),
+                    content=content,
+                    raw_data=message_data,
+                    metadata={
+                        "model": sdk_response.get("model"),
+                        "session_id": message_data.get("session_id"),
+                        "has_thinking": len(thinking_parts) > 0,
+                        "thinking_content": thinking_parts,
+                        "tool_uses": tool_uses,
+                        "has_tool_uses": len(tool_uses) > 0
+                    }
+                )
+            except (json.JSONDecodeError, KeyError) as e:
+                logger.warning(f"Failed to parse raw_sdk_response in assistant message: {e}")
+
         # Fallback to dict-based parsing
         message = message_data.get("message", {})
         content_parts = message.get("content", [])
@@ -258,6 +307,54 @@ class UserMessageHandler(MessageHandler):
                     "has_tool_uses": len(tool_uses) > 0
                 }
             )
+
+        # Handle historical messages with raw_sdk_response
+        elif "raw_sdk_response" in message_data:
+            try:
+                import json
+                sdk_response = json.loads(message_data["raw_sdk_response"])
+                text_parts = []
+                tool_results = []
+                tool_uses = []
+
+                # Extract content from SDK response blocks
+                if "content" in sdk_response and isinstance(sdk_response["content"], list):
+                    for block in sdk_response["content"]:
+                        if block.get("type") == "text":
+                            text_parts.append(block.get("text", ""))
+                        elif block.get("type") == "tool_result":
+                            tool_results.append({
+                                "tool_use_id": block.get("tool_use_id"),
+                                "content": block.get("content", ""),
+                                "is_error": block.get("is_error", False)
+                            })
+                        elif block.get("type") == "tool_use":
+                            tool_uses.append({
+                                "id": block.get("id"),
+                                "name": block.get("name"),
+                                "input": block.get("input", {})
+                            })
+
+                content = " ".join(text_parts) if text_parts else ""
+                if tool_results and not content:
+                    content = f"Tool results: {len(tool_results)} results"
+
+                return ParsedMessage(
+                    type=MessageType.USER,
+                    timestamp=message_data.get("timestamp", time.time()),
+                    session_id=message_data.get("session_id"),
+                    content=content,
+                    raw_data=message_data,
+                    metadata={
+                        "session_id": message_data.get("session_id"),
+                        "tool_results": tool_results,
+                        "tool_uses": tool_uses,
+                        "has_tool_results": len(tool_results) > 0,
+                        "has_tool_uses": len(tool_uses) > 0
+                    }
+                )
+            except (json.JSONDecodeError, KeyError) as e:
+                logger.warning(f"Failed to parse raw_sdk_response in user message: {e}")
 
         # Fallback to dict-based parsing
         message = message_data.get("message", {})
@@ -531,6 +628,55 @@ class ErrorHandler(MessageHandler):
         )
 
 
+class PermissionRequestHandler(MessageHandler):
+    """Handler for permission request messages."""
+
+    def can_handle(self, message_data: Dict[str, Any]) -> bool:
+        return message_data.get("type") == "permission_request"
+
+    def parse(self, message_data: Dict[str, Any]) -> ParsedMessage:
+        return ParsedMessage(
+            type=MessageType.PERMISSION_REQUEST,
+            timestamp=message_data.get("timestamp", time.time()),
+            session_id=message_data.get("session_id"),
+            content=message_data.get("content", f"Permission requested for tool: {message_data.get('tool_name', 'unknown')}"),
+            raw_data=message_data,
+            metadata={
+                "tool_name": message_data.get("tool_name"),
+                "input_params": message_data.get("input_params", {}),
+                "request_id": message_data.get("request_id"),
+                "session_id": message_data.get("session_id")
+            }
+        )
+
+
+class PermissionResponseHandler(MessageHandler):
+    """Handler for permission response messages."""
+
+    def can_handle(self, message_data: Dict[str, Any]) -> bool:
+        return message_data.get("type") == "permission_response"
+
+    def parse(self, message_data: Dict[str, Any]) -> ParsedMessage:
+        decision = message_data.get("decision", "unknown")
+        tool_name = message_data.get("tool_name", "unknown")
+
+        return ParsedMessage(
+            type=MessageType.PERMISSION_RESPONSE,
+            timestamp=message_data.get("timestamp", time.time()),
+            session_id=message_data.get("session_id"),
+            content=message_data.get("content", f"Permission {decision} for tool: {tool_name}"),
+            raw_data=message_data,
+            metadata={
+                "request_id": message_data.get("request_id"),
+                "decision": decision,
+                "reasoning": message_data.get("reasoning"),
+                "tool_name": tool_name,
+                "response_time_ms": message_data.get("response_time_ms"),
+                "session_id": message_data.get("session_id")
+            }
+        )
+
+
 class UnknownMessageHandler(MessageHandler):
     """Handler for unknown message types - always handles as fallback."""
 
@@ -589,6 +735,10 @@ class MessageParser:
             ThinkingBlockHandler(),
             ToolUseHandler(),
             ToolResultHandler(),
+
+            # Permission handlers
+            PermissionRequestHandler(),
+            PermissionResponseHandler(),
 
             # Generic handlers
             ErrorHandler(),

@@ -4,8 +4,6 @@
       "Bash(uv sync:*)",
       "Bash(uv run:*)",
       "Bash(uv add:*)",
-      "WebFetch",
-      "WebSearch",
       "Bash(uv run pytest:*)",
       "Bash(uv pip list:*)",
       "Bash(timeout 15 uv run:*)",
@@ -14,7 +12,8 @@
       "Bash(uv pip show:*)",
       "Bash(cat:*)",
       "Bash(git push:*)",
-      "Bash(netstat:*)"
+      "Bash(netstat:*)",
+      "Bash(node:*)"
     ],
     "deny": [],
     "ask": []

@@ -1,5 +1,214 @@
 // Claude Code WebUI JavaScript Application
 
+// Tool Call Manager for handling tool use lifecycle
+class ToolCallManager {
+    constructor() {
+        this.toolCalls = new Map(); // tool_use_id -> ToolCallState
+        this.toolSignatureToId = new Map(); // "toolName:hash(params)" -> tool_use_id
+        this.permissionToToolMap = new Map(); // permission_request_id -> tool_use_id
+        this.assistantTurnToolGroups = new Map(); // assistant_message_timestamp -> [tool_use_ids]
+    }
+
+    createToolSignature(toolName, inputParams) {
+        // Create unique signature from tool name + params
+        const paramsHash = JSON.stringify(inputParams, Object.keys(inputParams).sort());
+        return `${toolName}:${paramsHash}`;
+    }
+
+    handleToolUse(toolUseBlock) {
+        console.log('ToolCallManager: Handling tool use', toolUseBlock);
+
+        const signature = this.createToolSignature(toolUseBlock.name, toolUseBlock.input);
+        this.toolSignatureToId.set(signature, toolUseBlock.id);
+
+        // Create tool call state
+        const toolCallState = {
+            id: toolUseBlock.id,
+            name: toolUseBlock.name,
+            input: toolUseBlock.input,
+            signature: signature,
+            status: 'pending', // pending, permission_required, executing, completed, error
+            permissionRequestId: null,
+            permissionDecision: null,
+            result: null,
+            explanation: null,
+            timestamp: new Date().toISOString(),
+            isExpanded: true // Start expanded, can be collapsed later
+        };
+
+        this.toolCalls.set(toolUseBlock.id, toolCallState);
+        return toolCallState;
+    }
+
+    handlePermissionRequest(permissionRequest) {
+        console.log('ToolCallManager: Handling permission request', permissionRequest);
+
+        const signature = this.createToolSignature(permissionRequest.tool_name, permissionRequest.input_params);
+        const toolUseId = this.toolSignatureToId.get(signature);
+
+        if (toolUseId) {
+            this.permissionToToolMap.set(permissionRequest.request_id, toolUseId);
+
+            // Update tool state
+            const toolCall = this.toolCalls.get(toolUseId);
+            if (toolCall) {
+                toolCall.status = 'permission_required';
+                toolCall.permissionRequestId = permissionRequest.request_id;
+                return toolCall;
+            }
+        } else {
+            // Handle historical/unknown tools gracefully
+            console.debug('ToolCallManager: Creating historical tool call for unknown tool', permissionRequest);
+
+            // Generate a unique ID for this historical tool call
+            const historicalId = `historical_${permissionRequest.request_id}`;
+
+            // Create a basic tool call record for historical tools
+            const historicalToolCall = {
+                id: historicalId,
+                name: permissionRequest.tool_name,
+                input: permissionRequest.input_params,
+                signature: signature,
+                status: 'permission_required',
+                permissionRequestId: permissionRequest.request_id,
+                permissionDecision: null,
+                result: null,
+                explanation: null,
+                timestamp: new Date().toISOString(),
+                isExpanded: false,
+                isHistorical: true  // Flag to indicate this is a historical tool call
+            };
+
+            // Store the historical tool call
+            this.toolCalls.set(historicalId, historicalToolCall);
+            this.permissionToToolMap.set(permissionRequest.request_id, historicalId);
+
+            return historicalToolCall;
+        }
+        return null;
+    }
+
+    handlePermissionResponse(permissionResponse) {
+        console.log('ToolCallManager: Handling permission response', permissionResponse);
+
+        const toolUseId = this.permissionToToolMap.get(permissionResponse.request_id);
+        if (toolUseId) {
+            const toolCall = this.toolCalls.get(toolUseId);
+            if (toolCall) {
+                toolCall.permissionDecision = permissionResponse.decision;
+
+                if (permissionResponse.decision === 'allow') {
+                    toolCall.status = 'executing';
+                } else {
+                    toolCall.status = 'completed';
+                    toolCall.result = { error: true, message: permissionResponse.reasoning || 'Permission denied' };
+                    // Auto-collapse tool call when permission is denied
+                    toolCall.isExpanded = false;
+                }
+
+                return toolCall;
+            }
+        }
+        return null;
+    }
+
+    handleToolResult(toolResultBlock) {
+        console.log('ToolCallManager: Handling tool result', toolResultBlock);
+
+        const toolUseId = toolResultBlock.tool_use_id;
+        const toolCall = this.toolCalls.get(toolUseId);
+
+        if (toolCall) {
+            toolCall.status = toolResultBlock.is_error ? 'error' : 'completed';
+            toolCall.result = {
+                error: toolResultBlock.is_error,
+                content: toolResultBlock.content
+            };
+
+            // Auto-collapse tool call when completed
+            toolCall.isExpanded = false;
+
+            return toolCall;
+        }
+        return null;
+    }
+
+    handleAssistantExplanation(assistantMessage, relatedToolIds) {
+        console.log('ToolCallManager: Handling assistant explanation', assistantMessage, relatedToolIds);
+
+        // Update explanation for related tools
+        relatedToolIds.forEach(toolId => {
+            const toolCall = this.toolCalls.get(toolId);
+            if (toolCall) {
+                toolCall.explanation = assistantMessage.content;
+            }
+        });
+    }
+
+    getToolCall(toolUseId) {
+        return this.toolCalls.get(toolUseId);
+    }
+
+    getAllToolCalls() {
+        return Array.from(this.toolCalls.values());
+    }
+
+    toggleToolExpansion(toolUseId) {
+        const toolCall = this.toolCalls.get(toolUseId);
+        if (toolCall) {
+            toolCall.isExpanded = !toolCall.isExpanded;
+            return toolCall;
+        }
+        return null;
+    }
+
+    generateCollapsedSummary(toolCall) {
+        const statusIcon = {
+            'pending': '🔄',
+            'permission_required': '❓',
+            'executing': '⚡',
+            'completed': toolCall.permissionDecision === 'deny' ? '❌' : '✅',
+            'error': '💥'
+        }[toolCall.status] || '🔧';
+
+        const statusText = {
+            'pending': 'Pending',
+            'permission_required': 'Awaiting Permission',
+            'executing': 'Executing',
+            'completed': toolCall.permissionDecision === 'deny' ? 'Denied' : 'Completed',
+            'error': 'Error'
+        }[toolCall.status] || 'Unknown';
+
+        // Create parameter summary
+        const paramSummary = this.createParameterSummary(toolCall.input);
+
+        return `${statusIcon} ${toolCall.name}${paramSummary} - ${statusText}`;
+    }
+
+    createParameterSummary(input) {
+        if (!input || Object.keys(input).length === 0) return '';
+
+        // Show key parameters in a readable format
+        const keys = Object.keys(input);
+        if (keys.length === 1) {
+            const value = input[keys[0]];
+            const truncated = typeof value === 'string' && value.length > 30 ?
+                value.substring(0, 30) + '...' : value;
+            return ` (${keys[0]}="${truncated}")`;
+        } else if (keys.length <= 3) {
+            const pairs = keys.map(key => {
+                const value = input[key];
+                const truncated = typeof value === 'string' && value.length > 15 ?
+                    value.substring(0, 15) + '...' : value;
+                return `${key}="${truncated}"`;
+            });
+            return ` (${pairs.join(', ')})`;
+        } else {
+            return ` (${keys.length} parameters)`;
+        }
+    }
+}
+
 class ClaudeWebUI {
     constructor() {
         this.currentSessionId = null;
@@ -34,6 +243,9 @@ class ClaudeWebUI {
 
         // Session deletion state tracking
         this.deletingSessions = new Set();
+
+        // Tool call management
+        this.toolCallManager = new ToolCallManager();
 
         this.init();
     }
@@ -366,6 +578,12 @@ class ClaudeWebUI {
             return false;
         }
 
+        // Filter out permission messages (handled by tool call system)
+        if (message.type === 'permission_request' || message.type === 'permission_response') {
+            console.log('Filtering out permission message:', message.type);
+            return false;
+        }
+
         // Allow client_launched system messages to be displayed
         if (message.type === 'system' && message.subtype === 'client_launched') {
             console.log('Displaying client launched system message');
@@ -387,12 +605,283 @@ class ClaudeWebUI {
             }
         }
 
+        // Check if this is a tool-related message and handle it
+        const toolHandled = this.handleToolRelatedMessage(message);
+
+        // If it's a tool-related message, don't show it in the regular message flow
+        if (toolHandled) {
+            return;
+        }
+
         // Processing state is now handled by backend - no manual indicator management needed
 
         // Use the unified filtering logic to determine if message should be displayed
         if (this.shouldDisplayMessage(message)) {
             console.log('Adding message to UI:', message.type);
             this.addMessageToUI(message);
+        }
+    }
+
+    handleToolRelatedMessage(message, skipToolUseCreation = false) {
+        try {
+            // Handle assistant messages with tool use blocks (skip if already processed in first pass)
+            if (!skipToolUseCreation && message.type === 'assistant' && message.metadata && message.metadata.tool_uses && Array.isArray(message.metadata.tool_uses)) {
+                const toolUses = message.metadata.tool_uses;
+                let hasToolUse = false;
+
+                toolUses.forEach(toolUse => {
+                    hasToolUse = true;
+                    const toolUseBlock = {
+                        id: toolUse.id,
+                        name: toolUse.name,
+                        input: toolUse.input
+                    };
+
+                    const toolCall = this.toolCallManager.handleToolUse(toolUseBlock);
+                    this.renderToolCall(toolCall);
+                });
+
+                return hasToolUse;
+            }
+
+            // Handle permission requests
+            if (message.type === 'permission_request') {
+                const permissionRequest = {
+                    request_id: message.request_id,
+                    tool_name: message.tool_name,
+                    input_params: message.input_params
+                };
+
+                const toolCall = this.toolCallManager.handlePermissionRequest(permissionRequest);
+                if (toolCall) {
+                    this.updateToolCall(toolCall);
+                }
+                return true;
+            }
+
+            // Handle permission responses
+            if (message.type === 'permission_response') {
+                const permissionResponse = {
+                    request_id: message.request_id,
+                    decision: message.decision,
+                    reasoning: message.reasoning
+                };
+
+                const toolCall = this.toolCallManager.handlePermissionResponse(permissionResponse);
+                if (toolCall) {
+                    this.updateToolCall(toolCall);
+                }
+                return true;
+            }
+
+            // Handle tool result blocks (in user messages)
+            if (message.type === 'user' && message.metadata && message.metadata.tool_results && Array.isArray(message.metadata.tool_results)) {
+                const toolResults = message.metadata.tool_results;
+                let hasToolResult = false;
+
+                toolResults.forEach(toolResult => {
+                    hasToolResult = true;
+                    const toolResultBlock = {
+                        tool_use_id: toolResult.tool_use_id,
+                        content: toolResult.content,
+                        is_error: toolResult.is_error
+                    };
+
+                    const toolCall = this.toolCallManager.handleToolResult(toolResultBlock);
+                    if (toolCall) {
+                        this.updateToolCall(toolCall);
+                    }
+                });
+
+                return hasToolResult;
+            }
+
+            return false;
+        } catch (error) {
+            console.error('Error handling tool-related message:', error, message);
+            return false;
+        }
+    }
+
+    renderToolCall(toolCall) {
+        console.log('Rendering tool call:', toolCall);
+
+        const messagesArea = document.getElementById('messages-area');
+        const toolCallElement = this.createToolCallElement(toolCall);
+
+        // Add to DOM
+        messagesArea.appendChild(toolCallElement);
+        this.smartScrollToBottom();
+    }
+
+    updateToolCall(toolCall) {
+        console.log('Updating tool call:', toolCall);
+
+        const existingElement = document.getElementById(`tool-call-${toolCall.id}`);
+        if (existingElement) {
+            const updatedElement = this.createToolCallElement(toolCall);
+            existingElement.replaceWith(updatedElement);
+        } else {
+            this.renderToolCall(toolCall);
+        }
+    }
+
+    createToolCallElement(toolCall) {
+        const element = document.createElement('div');
+        element.className = 'tool-call-container';
+        element.id = `tool-call-${toolCall.id}`;
+
+        if (toolCall.isExpanded) {
+            element.innerHTML = this.createExpandedToolCallHTML(toolCall);
+        } else {
+            element.innerHTML = this.createCollapsedToolCallHTML(toolCall);
+        }
+
+        // Add event delegation for click handlers
+        this.setupToolCallEventListeners(element, toolCall);
+
+        return element;
+    }
+
+    createExpandedToolCallHTML(toolCall) {
+        const statusClass = `tool-status-${toolCall.status}`;
+        const statusIcon = {
+            'pending': '🔄',
+            'permission_required': '❓',
+            'executing': '⚡',
+            'completed': toolCall.permissionDecision === 'deny' ? '❌' : '✅',
+            'error': '💥'
+        }[toolCall.status] || '🔧';
+
+        let content = `
+            <div class="tool-call-card ${statusClass}">
+                <div class="tool-call-header">
+                    <span class="tool-status-icon">${statusIcon}</span>
+                    <span class="tool-name">${this.escapeHtml(toolCall.name)}</span>
+                    <button class="tool-collapse-btn" data-tool-id="${toolCall.id}" title="Collapse">
+                        ▼
+                    </button>
+                </div>
+
+                <div class="tool-call-details">
+                    <div class="tool-parameters">
+                        <strong>Parameters:</strong>
+                        <pre class="tool-params-json">${this.escapeHtml(JSON.stringify(toolCall.input, null, 2))}</pre>
+                    </div>
+                </div>
+        `;
+
+        // Add permission prompt if needed
+        if (toolCall.status === 'permission_required') {
+            content += `
+                <div class="tool-permission-prompt">
+                    <p><strong>🔐 Permission Required</strong></p>
+                    <p>Claude Code wants to use the ${toolCall.name} tool. Do you want to allow this?</p>
+                    <div class="permission-buttons">
+                        <button class="btn btn-success permission-approve" data-request-id="${toolCall.permissionRequestId}" data-decision="allow">
+                            ✅ Approve
+                        </button>
+                        <button class="btn btn-danger permission-deny" data-request-id="${toolCall.permissionRequestId}" data-decision="deny">
+                            ❌ Deny
+                        </button>
+                    </div>
+                </div>
+            `;
+        }
+
+        // Add result if available
+        if (toolCall.result) {
+            const resultClass = toolCall.result.error ? 'tool-result-error' : 'tool-result-success';
+            content += `
+                <div class="tool-result ${resultClass}">
+                    <strong>Result:</strong>
+                    <pre class="tool-result-content">${this.escapeHtml(toolCall.result.content || toolCall.result.message || 'No content')}</pre>
+                </div>
+            `;
+        }
+
+        // Add explanation if available
+        if (toolCall.explanation) {
+            content += `
+                <div class="tool-explanation">
+                    <strong>Explanation:</strong>
+                    <div class="tool-explanation-content">${this.escapeHtml(toolCall.explanation)}</div>
+                </div>
+            `;
+        }
+
+        content += '</div>';
+        return content;
+    }
+
+    createCollapsedToolCallHTML(toolCall) {
+        const summary = this.toolCallManager.generateCollapsedSummary(toolCall);
+
+        return `
+            <div class="tool-call-collapsed" data-tool-id="${toolCall.id}" title="Click to expand">
+                <span class="tool-collapsed-summary">${this.escapeHtml(summary)}</span>
+                <span class="tool-expand-icon">▶</span>
+            </div>
+        `;
+    }
+
+    setupToolCallEventListeners(element, toolCall) {
+        // Handle collapse/expand button clicks
+        const collapseBtn = element.querySelector('.tool-collapse-btn');
+        if (collapseBtn) {
+            collapseBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this.toggleToolCallExpansion(toolCall.id);
+            });
+        }
+
+        // Handle collapsed card clicks for expansion
+        const collapsedCard = element.querySelector('.tool-call-collapsed');
+        if (collapsedCard) {
+            collapsedCard.addEventListener('click', () => {
+                this.toggleToolCallExpansion(toolCall.id);
+            });
+        }
+
+        // Handle permission button clicks
+        const approveBtn = element.querySelector('.permission-approve');
+        const denyBtn = element.querySelector('.permission-deny');
+
+        if (approveBtn) {
+            approveBtn.addEventListener('click', () => {
+                const requestId = approveBtn.getAttribute('data-request-id');
+                this.handlePermissionDecision(requestId, 'allow');
+            });
+        }
+
+        if (denyBtn) {
+            denyBtn.addEventListener('click', () => {
+                const requestId = denyBtn.getAttribute('data-request-id');
+                this.handlePermissionDecision(requestId, 'deny');
+            });
+        }
+    }
+
+    toggleToolCallExpansion(toolUseId) {
+        const toolCall = this.toolCallManager.toggleToolExpansion(toolUseId);
+        if (toolCall) {
+            this.updateToolCall(toolCall);
+        }
+    }
+
+    handlePermissionDecision(requestId, decision) {
+        console.log('Permission decision:', requestId, decision);
+
+        // Send permission response to backend
+        if (this.sessionWebsocket && this.sessionWebsocket.readyState === WebSocket.OPEN) {
+            const response = {
+                type: 'permission_response',
+                request_id: requestId,
+                decision: decision,
+                timestamp: new Date().toISOString()
+            };
+
+            this.sessionWebsocket.send(JSON.stringify(response));
         }
     }
 
@@ -985,10 +1474,49 @@ class ClaudeWebUI {
         const messagesArea = document.getElementById('messages-area');
         messagesArea.innerHTML = '';
 
+        // Clear the tool call manager for fresh loading
+        this.toolCallManager = new ToolCallManager();
+
+        // Two-pass processing for historical messages to handle tool call restoration properly
+
+        // Pass 1: Create all tool calls from assistant messages with tool_uses
+        let toolUseCount = 0;
+        messages.forEach((message, index) => {
+            if (message.type === 'assistant' && message.metadata && message.metadata.tool_uses && Array.isArray(message.metadata.tool_uses)) {
+                const toolUses = message.metadata.tool_uses;
+                toolUseCount += toolUses.length;
+                toolUses.forEach(toolUse => {
+                    const toolUseBlock = {
+                        id: toolUse.id,
+                        name: toolUse.name,
+                        input: toolUse.input
+                    };
+                    this.toolCallManager.handleToolUse(toolUseBlock);
+                });
+            }
+        });
+        console.log(`Tool call restoration: Found ${toolUseCount} tool uses in ${messages.length} messages`);
+
+        // Pass 2: Process all messages including permission requests and results
         messages.forEach(message => {
-            // Apply the same filtering logic used for live messages
-            if (this.shouldDisplayMessage(message)) {
+            // Check if this is a tool-related message and handle it (skip tool use creation since already done)
+            const toolHandled = this.handleToolRelatedMessage(message, true);
+
+            // If not a tool-related message, display it normally
+            if (!toolHandled && this.shouldDisplayMessage(message)) {
                 this.addMessageToUI(message, false);
+            }
+        });
+
+        // Render all tool calls that were processed during restoration
+        this.toolCallManager.getAllToolCalls().forEach(toolCall => {
+            // Check if this tool call is already rendered
+            const existingElement = document.getElementById(`tool-call-${toolCall.id}`);
+            if (!existingElement) {
+                this.renderToolCall(toolCall);
+            } else {
+                // Update existing tool call with final state
+                this.updateToolCall(toolCall);
             }
         });
 
@@ -1414,6 +1942,7 @@ class ClaudeWebUI {
 // Initialize the application when the DOM is loaded
 document.addEventListener('DOMContentLoaded', () => {
     window.claudeWebUI = new ClaudeWebUI();
+    window.app = window.claudeWebUI; // Make app available globally for onclick handlers
 });
 
 // Handle page unload
