@@ -85,22 +85,26 @@ class SessionCoordinator:
 
     async def create_session(
         self,
+        session_id: str,
         working_directory: str,
         permissions: str = "acceptEdits",
         system_prompt: Optional[str] = None,
         tools: List[str] = None,
         model: Optional[str] = None,
+        name: Optional[str] = None,
         permission_callback: Optional[Callable[[str, Dict[str, Any]], Union[bool, Dict[str, Any]]]] = None,
     ) -> str:
         """Create a new Claude Code session with integrated components"""
         try:
             # Create session through session manager
-            session_id = await self.session_manager.create_session(
+            await self.session_manager.create_session(
+                session_id=session_id,
                 working_directory=working_directory,
                 permissions=permissions,
                 system_prompt=system_prompt,
                 tools=tools,
-                model=model
+                model=model,
+                name=name
             )
 
             # Initialize storage manager for this session
@@ -138,7 +142,11 @@ class SessionCoordinator:
             logger.error(f"Failed to create integrated session: {e}")
             raise
 
-    async def start_session(self, session_id: str) -> bool:
+    async def get_session_storage(self, session_id: str):
+        """Get storage manager for a session"""
+        return self._storage_managers.get(session_id)
+
+    async def start_session(self, session_id: str, permission_callback: Optional[Callable[[str, Dict[str, Any]], Union[bool, Dict[str, Any]]]] = None) -> bool:
         """Start a session with SDK integration"""
         try:
             # Start session through session manager
@@ -185,7 +193,7 @@ class SessionCoordinator:
                     session_manager=self.session_manager,
                     message_callback=self._create_message_callback(session_id),
                     error_callback=self._create_error_callback(session_id),
-                    permission_callback=None,  # Use defaults for existing sessions
+                    permission_callback=permission_callback,  # Use provided permission callback for resumed sessions
                     permissions=session_info.permissions,
                     system_prompt=session_info.system_prompt,
                     tools=session_info.tools,
@@ -280,6 +288,78 @@ class SessionCoordinator:
 
         except Exception as e:
             logger.error(f"Failed to terminate integrated session {session_id}: {e}")
+            return False
+
+    async def update_session_name(self, session_id: str, name: str) -> bool:
+        """Update session name"""
+        try:
+            success = await self.session_manager.update_session_name(session_id, name)
+            if success:
+                # Notify about state change to trigger UI updates
+                session_info = await self.session_manager.get_session_info(session_id)
+                if session_info:
+                    await self._notify_state_change(session_id, session_info.state)
+            logger.info(f"Updated session {session_id} name to '{name}'")
+            return success
+        except Exception as e:
+            logger.error(f"Failed to update session {session_id} name: {e}")
+            return False
+
+    async def delete_session(self, session_id: str) -> bool:
+        """Delete a session and cleanup all resources"""
+        try:
+            # Step 1: First terminate the SDK if it's running
+            sdk = self._active_sdks.get(session_id)
+            if sdk:
+                logger.info(f"Terminating SDK for session {session_id} before deletion")
+                await sdk.terminate()
+                del self._active_sdks[session_id]
+                # Give SDK time to fully close
+                await asyncio.sleep(0.2)
+
+            # Step 2: Clean up storage manager and ensure all files are closed
+            if session_id in self._storage_managers:
+                storage_manager = self._storage_managers[session_id]
+                logger.info(f"Cleaning up storage manager for session {session_id}")
+                await storage_manager.cleanup()
+                del self._storage_managers[session_id]
+                # Give storage manager time to close all file handles
+                await asyncio.sleep(0.2)
+
+            # Step 3: Clean up callbacks
+            if session_id in self._message_callbacks:
+                del self._message_callbacks[session_id]
+            if session_id in self._error_callbacks:
+                del self._error_callbacks[session_id]
+
+            # Step 4: Force multiple garbage collections to ensure all handles are released
+            import gc
+            gc.collect()
+            await asyncio.sleep(0.1)
+            gc.collect()
+            await asyncio.sleep(0.1)
+
+            # Step 5: Additional Windows-specific cleanup
+            import os
+            if os.name == 'nt':  # Windows
+                logger.info(f"Performing Windows-specific cleanup for session {session_id}")
+                # Force close any remaining handles that might be held by the system
+                gc.collect()
+                await asyncio.sleep(0.3)
+
+            # Step 6: Delete through session manager (this removes from active sessions and deletes files)
+            logger.info(f"Deleting session files for session {session_id}")
+            success = await self.session_manager.delete_session(session_id)
+
+            if success:
+                logger.info(f"Successfully deleted integrated session {session_id}")
+                # Notify about session deletion (using a special state change)
+                await self._notify_state_change(session_id, "deleted")
+
+            return success
+
+        except Exception as e:
+            logger.error(f"Failed to delete integrated session {session_id}: {e}")
             return False
 
     async def send_message(self, session_id: str, message: str) -> bool:

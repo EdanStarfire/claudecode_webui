@@ -44,6 +44,7 @@ class SessionInfo:
     error_message: Optional[str] = None
     claude_code_session_id: Optional[str] = None
     is_processing: bool = False
+    name: Optional[str] = None
 
     def __post_init__(self):
         if self.tools is None:
@@ -132,15 +133,20 @@ class SessionManager:
 
     async def create_session(
         self,
+        session_id: str,
         working_directory: Optional[str] = None,
         permissions: str = "acceptEdits",
         system_prompt: Optional[str] = None,
         tools: List[str] = None,
-        model: Optional[str] = None
-    ) -> str:
-        """Create a new session with unique ID"""
-        session_id = str(uuid.uuid4())
+        model: Optional[str] = None,
+        name: Optional[str] = None
+    ) -> None:
+        """Create a new session with provided ID"""
         now = datetime.now(timezone.utc)
+
+        # Generate default name if not provided
+        if name is None:
+            name = now.strftime("%Y-%m-%d %H:%M:%S")
 
         session_info = SessionInfo(
             session_id=session_id,
@@ -151,7 +157,8 @@ class SessionManager:
             permissions=permissions,
             system_prompt=system_prompt,
             tools=tools if tools is not None else [],
-            model=model
+            model=model,
+            name=name
         )
 
         try:
@@ -166,7 +173,6 @@ class SessionManager:
             await self._persist_session_state(session_id)
 
             logger.info(f"Created session {session_id}")
-            return session_id
 
         except Exception as e:
             logger.error(f"Failed to create session {session_id}: {e}")
@@ -371,6 +377,97 @@ class SessionManager:
             except Exception as e:
                 logger.error(f"Failed to update Claude Code session ID for {session_id}: {e}")
                 raise
+
+    async def update_session_name(self, session_id: str, name: str) -> bool:
+        """Update session name"""
+        async with self._get_session_lock(session_id):
+            try:
+                session = self._active_sessions.get(session_id)
+                if not session:
+                    logger.error(f"Session {session_id} not found")
+                    return False
+
+                session.name = name.strip()
+                session.updated_at = datetime.now(timezone.utc)
+                await self._persist_session_state(session_id)
+                await self._notify_state_change_callbacks(session_id, session.state)
+                logger.info(f"Updated session {session_id} name to '{name}'")
+                return True
+            except Exception as e:
+                logger.error(f"Failed to update session {session_id} name: {e}")
+                return False
+
+    async def delete_session(self, session_id: str) -> bool:
+        """Delete a session and all its data"""
+        async with self._get_session_lock(session_id):
+            try:
+                session = self._active_sessions.get(session_id)
+                if not session:
+                    logger.error(f"Session {session_id} not found")
+                    return False
+
+                # First try to delete session directory and all contents
+                import shutil
+                import os
+                session_dir = self.sessions_dir / session_id
+                if session_dir.exists():
+                    try:
+                        shutil.rmtree(session_dir)
+                        logger.info(f"Deleted session directory: {session_dir}")
+                    except Exception as e:
+                        logger.warning(f"Standard deletion failed for {session_dir}: {e}")
+
+                        # Try Windows-specific fallback deletion
+                        if os.name == 'nt':  # Windows
+                            try:
+                                logger.info(f"Attempting Windows-specific deletion for {session_dir}")
+
+                                # Method 1: Try to remove directory after ensuring we're not in it
+                                import subprocess
+                                import time
+
+                                # Force garbage collection to clear any directory references
+                                import gc
+                                gc.collect()
+                                time.sleep(0.5)
+
+                                # Use Windows rmdir command as fallback
+                                result = subprocess.run(
+                                    ['rmdir', '/s', '/q', str(session_dir)],
+                                    shell=True,
+                                    capture_output=True,
+                                    text=True
+                                )
+
+                                if result.returncode == 0:
+                                    logger.info(f"Successfully deleted directory using Windows rmdir: {session_dir}")
+                                else:
+                                    logger.error(f"Windows rmdir failed: {result.stderr}")
+                                    # Don't proceed with memory cleanup if file deletion failed
+                                    return False
+
+                            except Exception as fallback_e:
+                                logger.error(f"Windows fallback deletion also failed for {session_dir}: {fallback_e}")
+                                # Don't proceed with memory cleanup if file deletion failed
+                                return False
+                        else:
+                            # Not Windows, re-raise original error
+                            logger.error(f"Failed to delete session directory {session_dir}: {e}")
+                            return False
+
+                # Only remove from memory after successful file deletion
+                del self._active_sessions[session_id]
+
+                # Remove session lock
+                if session_id in self._session_locks:
+                    del self._session_locks[session_id]
+
+                logger.info(f"Successfully deleted session {session_id}")
+                return True
+
+            except Exception as e:
+                logger.error(f"Failed to delete session {session_id}: {e}")
+                return False
 
     def add_state_change_callback(self, callback: Callable):
         """Add callback for session state changes"""

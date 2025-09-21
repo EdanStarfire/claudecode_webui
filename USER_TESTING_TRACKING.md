@@ -34,10 +34,16 @@
 [x] bug: When going from an ERROR session to an in processing session, the processing bar is shown, but the input box and button are still in error mode
 [x] bug: When starting up, all sessions that are in an `is_processing = true` state need to be reset to `is_processing = false` since no SDKs could possibly be processing (have not been launched by the app yet), otherwise they NEVER clear the is_processing state.
 [x] qol: make the state color circles be purple for "in processing" sessions so that you can see when something's working on something vs waiting for input
-[ ] feat: Sessions support naming, default naming is date-time stamp?
+[x] feat: Sessions support naming, default naming is date-time stamp?
 [ ] feat: Handle displaying tool calls with enough detail to understand what it is doing
 [ ] feat: Handle displaying tool results with enough detail to understand what was done
-[ ] feat: capture permission prompt functionality in a generic sense
+[x] bug: permissions_callback not sent to resumed sessions like it should be - it is passed to new sessions though
+[ ] feat: implement permissions_callback handling
+[x] feat: capture permission prompt functionality in a generic sense (web_server.py:582 function)
+[ ] feat: capture ThinkingBlock messages for surfacing later on
 [ ] feat: Implement cancel "working" state using client.interrupt  - example: https://github.com/anthropics/claude-code-sdk-python/blob/main/examples/streaming_mode.py
-[ ] feat: Enable deletion of sessions.
-[ ] bug: In messages.jsonl, some messages have blank content (result, system messages for example) from the SDK - these should be more descriptive and include appropriate metadata we need to ensure we understand what the message is doing.
+[x] feat: Enable deletion of a session from session header.
+[x] bug: In messages.jsonl, some messages have blank content (result, system messages for example) from the SDK - these should be more descriptive and include appropriate metadata we need to ensure we understand what the message is doing.
+[ ] feat: Allow session re-ordering
+[ ] feat: New sessions should go to the top of the list
+

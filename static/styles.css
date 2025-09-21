@@ -254,6 +254,42 @@ body {
     min-width: 0;
 }
 
+/* Session name inline editing */
+.session-name {
+    flex: 1;
+    min-width: 0;
+}
+
+.session-name-display {
+    font-weight: 600;
+    font-size: 0.9rem;
+    color: #495057;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    cursor: text;
+    display: inline-block;
+    width: 100%;
+}
+
+.session-name-display:hover {
+    background: rgba(0, 0, 0, 0.05);
+    border-radius: 2px;
+}
+
+.session-name-edit {
+    font-weight: 600;
+    font-size: 0.9rem;
+    color: #495057;
+    background: white;
+    border: 1px solid #007bff;
+    border-radius: 2px;
+    padding: 2px 4px;
+    width: 100%;
+    outline: none;
+    box-shadow: 0 0 0 2px rgba(0, 123, 255, 0.25);
+}
+
 /* Chat Area */
 .chat-area {
     flex: 1;
@@ -585,6 +621,15 @@ body {
     background: #545b62;
 }
 
+.btn-danger {
+    background: #dc3545;
+    color: white;
+}
+
+.btn-danger:hover {
+    background: #c82333;
+}
+
 .btn-success {
     background: #28a745;
     color: white;
@@ -686,6 +731,20 @@ body {
 
 .close:hover {
     color: #495057;
+}
+
+.modal-body {
+    padding: 1.5rem;
+}
+
+.warning-text {
+    color: #856404;
+    background-color: #fff3cd;
+    border: 1px solid #ffeaa7;
+    border-radius: 4px;
+    padding: 0.5rem;
+    margin-top: 1rem;
+    font-size: 0.9rem;
 }
 
 /* Form */

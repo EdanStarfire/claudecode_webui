@@ -32,6 +32,9 @@ class ClaudeWebUI {
         this.sidebarWidth = 300;
         this.isResizing = false;
 
+        // Session deletion state tracking
+        this.deletingSessions = new Set();
+
         this.init();
     }
 
@@ -104,7 +107,13 @@ class ClaudeWebUI {
         document.getElementById('browse-directory').addEventListener('click', () => this.browseDirectory());
 
         // Session actions
+        document.getElementById('delete-session-btn').addEventListener('click', () => this.showDeleteSessionModal());
         document.getElementById('exit-session-btn').addEventListener('click', () => this.exitSession());
+
+        // Delete modal controls
+        document.getElementById('close-delete-modal').addEventListener('click', () => this.hideDeleteSessionModal());
+        document.getElementById('cancel-delete').addEventListener('click', () => this.hideDeleteSessionModal());
+        document.getElementById('confirm-delete').addEventListener('click', () => this.confirmDeleteSession());
 
         // Sidebar controls
         document.getElementById('sidebar-collapse-btn').addEventListener('click', () => this.toggleSidebar());
@@ -129,6 +138,12 @@ class ClaudeWebUI {
         document.getElementById('create-session-modal').addEventListener('click', (e) => {
             if (e.target.id === 'create-session-modal') {
                 this.hideCreateSessionModal();
+            }
+        });
+
+        document.getElementById('delete-session-modal').addEventListener('click', (e) => {
+            if (e.target.id === 'delete-session-modal') {
+                this.hideDeleteSessionModal();
             }
         });
 
@@ -384,11 +399,29 @@ class ClaudeWebUI {
     async loadSessionInfo() {
         if (!this.currentSessionId) return;
 
+        // Skip if this session is being deleted
+        if (this.deletingSessions.has(this.currentSessionId)) {
+            console.log(`Skipping loadSessionInfo for session ${this.currentSessionId} - deletion in progress`);
+            return;
+        }
+
+        // Skip if session no longer exists in our local map
+        if (!this.sessions.has(this.currentSessionId)) {
+            console.log(`Skipping loadSessionInfo for session ${this.currentSessionId} - not in local sessions map`);
+            return;
+        }
+
         try {
             const data = await this.apiRequest(`/api/sessions/${this.currentSessionId}`);
             this.updateSessionInfo(data);
         } catch (error) {
-            console.error('Failed to load session info:', error);
+            // If it's a 404, the session was likely deleted - handle gracefully
+            if (error.message.includes('404')) {
+                console.log(`Session ${this.currentSessionId} not found (404) - likely deleted, clearing from UI`);
+                this.handleSessionDeleted(this.currentSessionId);
+            } else {
+                console.error('Failed to load session info:', error);
+            }
         }
     }
 
@@ -770,16 +803,26 @@ class ClaudeWebUI {
             }
 
             sessionElement.setAttribute('data-session-id', sessionId);
-            sessionElement.addEventListener('click', () => this.selectSession(sessionId));
+            sessionElement.addEventListener('click', (e) => {
+                // Don't select session if clicking on input field
+                if (e.target.tagName === 'INPUT') return;
+                this.selectSession(sessionId);
+            });
 
             // Create status indicator - show processing state if is_processing is true
             const isProcessing = session.is_processing || false;
             const displayState = isProcessing ? 'processing' : session.state;
             const statusIndicator = this.createStatusIndicator(displayState, 'session', session.state);
 
+            // Use session name if available, fallback to session ID
+            const displayName = session.name || sessionId;
+
             sessionElement.innerHTML = `
                 <div class="session-header">
-                    <div class="session-id" title="${sessionId}">${sessionId}</div>
+                    <div class="session-name" title="${sessionId}">
+                        <span class="session-name-display">${this.escapeHtml(displayName)}</span>
+                        <input class="session-name-edit" type="text" value="${this.escapeHtml(displayName)}" style="display: none;">
+                    </div>
                 </div>
             `;
 
@@ -787,12 +830,106 @@ class ClaudeWebUI {
             const sessionHeader = sessionElement.querySelector('.session-header');
             sessionHeader.insertBefore(statusIndicator, sessionHeader.firstChild);
 
+            // Add double-click editing functionality
+            const nameDisplay = sessionElement.querySelector('.session-name-display');
+            const nameInput = sessionElement.querySelector('.session-name-edit');
+
+            nameDisplay.addEventListener('dblclick', (e) => {
+                e.stopPropagation();
+                this.startEditingSessionName(sessionId, nameDisplay, nameInput);
+            });
+
+            this.setupSessionNameInput(sessionId, nameDisplay, nameInput);
+
             container.appendChild(sessionElement);
         });
     }
 
+    startEditingSessionName(sessionId, nameDisplay, nameInput) {
+        // Hide display, show input
+        nameDisplay.style.display = 'none';
+        nameInput.style.display = 'inline-block';
+        nameInput.focus();
+        nameInput.select();
+    }
+
+    setupSessionNameInput(sessionId, nameDisplay, nameInput) {
+        // Handle Enter key to save
+        nameInput.addEventListener('keydown', (e) => {
+            e.stopPropagation();
+            if (e.key === 'Enter') {
+                this.saveSessionName(sessionId, nameDisplay, nameInput);
+            } else if (e.key === 'Escape') {
+                this.cancelEditingSessionName(nameDisplay, nameInput);
+            }
+        });
+
+        // Handle click outside to cancel
+        nameInput.addEventListener('blur', () => {
+            this.cancelEditingSessionName(nameDisplay, nameInput);
+        });
+    }
+
+    async saveSessionName(sessionId, nameDisplay, nameInput) {
+        const newName = nameInput.value.trim();
+        if (!newName) {
+            this.cancelEditingSessionName(nameDisplay, nameInput);
+            return;
+        }
+
+        try {
+            const response = await this.apiRequest(`/api/sessions/${sessionId}/name`, {
+                method: 'PUT',
+                body: JSON.stringify({ name: newName })
+            });
+
+            if (response.success) {
+                // Update local session data
+                if (this.sessions.has(sessionId)) {
+                    const session = this.sessions.get(sessionId);
+                    session.name = newName;
+                    this.sessions.set(sessionId, session);
+                }
+
+                // Update display
+                nameDisplay.textContent = newName;
+                nameDisplay.style.display = 'inline-block';
+                nameInput.style.display = 'none';
+
+                // Update header if this is the current session
+                if (sessionId === this.currentSessionId) {
+                    this.updateSessionHeaderName(newName);
+                }
+            } else {
+                throw new Error('Failed to update session name');
+            }
+        } catch (error) {
+            console.error('Failed to save session name:', error);
+            this.cancelEditingSessionName(nameDisplay, nameInput);
+            this.showError('Failed to update session name');
+        }
+    }
+
+    cancelEditingSessionName(nameDisplay, nameInput) {
+        // Reset input value to original
+        nameInput.value = nameDisplay.textContent;
+        // Show display, hide input
+        nameDisplay.style.display = 'inline-block';
+        nameInput.style.display = 'none';
+    }
+
+    updateSessionHeaderName(name) {
+        // Update the header to display session name instead of ID
+        const currentSessionIdElement = document.getElementById('current-session-id');
+        if (currentSessionIdElement) {
+            currentSessionIdElement.textContent = name;
+        }
+    }
+
     updateSessionInfo(sessionData) {
-        document.getElementById('current-session-id').textContent = this.currentSessionId;
+        // Display session name if available, fallback to session ID
+        const sessionName = sessionData.session.name || this.currentSessionId;
+        document.getElementById('current-session-id').textContent = sessionName;
 
         // Update session state indicator
         const stateContainer = document.getElementById('current-session-state');
@@ -907,6 +1044,12 @@ class ClaudeWebUI {
         const sessionId = stateData.session_id;
         const sessionInfo = stateData.session;
 
+        // Skip processing if this session is being deleted
+        if (this.deletingSessions.has(sessionId)) {
+            console.log(`Ignoring state change for session ${sessionId} - deletion in progress`);
+            return;
+        }
+
         if (sessionInfo) {
             // Update the session in our local sessions map
             this.sessions.set(sessionId, sessionInfo);
@@ -922,12 +1065,33 @@ class ClaudeWebUI {
     }
 
     updateSpecificSession(sessionId, sessionInfo) {
+        // Skip if session is being deleted
+        if (this.deletingSessions.has(sessionId)) {
+            return;
+        }
+
         this.sessions.set(sessionId, sessionInfo);
         this.renderSessions();
 
         if (sessionId === this.currentSessionId) {
             this.updateSessionInfo({ session: sessionInfo });
         }
+    }
+
+    handleSessionDeleted(sessionId) {
+        // Clean up a session that was deleted externally
+        console.log(`Handling external deletion of session ${sessionId}`);
+
+        // Remove from sessions map
+        this.sessions.delete(sessionId);
+
+        // If it was the current session, exit it
+        if (this.currentSessionId === sessionId) {
+            this.exitSession();
+        }
+
+        // Re-render sessions
+        this.renderSessions();
     }
 
     updateConnectionStatus(status) {
@@ -976,6 +1140,82 @@ class ClaudeWebUI {
         const input = document.getElementById('working-directory');
         if (!input.value) {
             input.value = prompt('Enter working directory:', '/') || input.value;
+        }
+    }
+
+    showDeleteSessionModal() {
+        if (!this.currentSessionId) return;
+
+        // Get session info to display the name
+        const session = this.sessions.get(this.currentSessionId);
+        const sessionName = session?.name || this.currentSessionId;
+
+        // Update modal content
+        document.getElementById('delete-session-name').textContent = sessionName;
+        document.getElementById('delete-session-modal').classList.remove('hidden');
+    }
+
+    hideDeleteSessionModal() {
+        document.getElementById('delete-session-modal').classList.add('hidden');
+    }
+
+    async confirmDeleteSession() {
+        if (!this.currentSessionId) return;
+
+        const sessionIdToDelete = this.currentSessionId;
+
+        try {
+            this.showLoading(true);
+
+            // Mark session as being deleted to prevent race conditions
+            this.deletingSessions.add(sessionIdToDelete);
+
+            // Remove from local sessions map immediately to prevent further operations
+            this.sessions.delete(sessionIdToDelete);
+
+            const response = await this.apiRequest(`/api/sessions/${sessionIdToDelete}`, {
+                method: 'DELETE'
+            });
+
+            if (response.success) {
+                // Session successfully deleted
+                this.hideDeleteSessionModal();
+
+                // If this was the current session, exit it
+                if (this.currentSessionId === sessionIdToDelete) {
+                    this.exitSession();
+                }
+
+                // Refresh the sessions list
+                this.renderSessions();
+
+                console.log(`Session ${sessionIdToDelete} deleted successfully`);
+            } else {
+                // Restore session to map if deletion failed
+                const sessionData = await this.apiRequest(`/api/sessions/${sessionIdToDelete}`).catch(() => null);
+                if (sessionData) {
+                    this.sessions.set(sessionIdToDelete, sessionData.session);
+                }
+                throw new Error('Failed to delete session');
+            }
+        } catch (error) {
+            console.error('Failed to delete session:', error);
+            this.showError(`Failed to delete session: ${error.message}`);
+
+            // Try to restore session to map if deletion failed
+            try {
+                const sessionData = await this.apiRequest(`/api/sessions/${sessionIdToDelete}`);
+                if (sessionData && sessionData.session) {
+                    this.sessions.set(sessionIdToDelete, sessionData.session);
+                    this.renderSessions();
+                }
+            } catch (restoreError) {
+                console.log('Could not restore session data after failed deletion');
+            }
+        } finally {
+            // Always remove from deleting set
+            this.deletingSessions.delete(sessionIdToDelete);
+            this.showLoading(false);
         }
     }
 

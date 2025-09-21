@@ -53,6 +53,7 @@
                             <div id="session-error-message" class="session-error-message hidden"></div>
                         </div>
                         <div class="session-actions">
+                            <button id="delete-session-btn" class="btn btn-small btn-danger" title="Delete Session">🗑️</button>
                             <button id="exit-session-btn" class="btn btn-small btn-secondary">Exit Session</button>
                         </div>
                     </div>
@@ -130,6 +131,25 @@
                         <button type="submit" class="btn btn-primary">Create Session</button>
                     </div>
                 </form>
+            </div>
+        </div>
+
+        <!-- Delete Session Confirmation Modal -->
+        <div id="delete-session-modal" class="modal hidden">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h2>Delete Session</h2>
+                    <span id="close-delete-modal" class="close">&times;</span>
+                </div>
+                <div class="modal-body">
+                    <p>Are you sure you want to delete this session?</p>
+                    <p><strong id="delete-session-name"></strong></p>
+                    <p class="warning-text">⚠️ This action cannot be undone. All session data, messages, and files will be permanently deleted.</p>
+                </div>
+                <div class="form-actions">
+                    <button type="button" id="cancel-delete" class="btn btn-secondary">Cancel</button>
+                    <button type="button" id="confirm-delete" class="btn btn-danger">Delete Session</button>
+                </div>
             </div>
         </div>
 

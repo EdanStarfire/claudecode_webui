@@ -148,6 +148,11 @@ class ClaudeSDK:
         self.message_callback = message_callback
         self.error_callback = error_callback
         self.permission_callback = permission_callback
+        logger.info(f"DEBUG: ClaudeSDK initialized with permission_callback: {permission_callback is not None}")
+        if permission_callback:
+            logger.info(f"DEBUG: Permission callback type: {type(permission_callback)}")
+        else:
+            logger.warning("DEBUG: No permission callback provided to ClaudeSDK!")
         self.permissions = permissions
         self.system_prompt = system_prompt
         self.tools = tools if tools is not None else []
@@ -321,7 +326,6 @@ class ClaudeSDK:
 
         try:
             async with ClaudeSDKClient(self._sdk_options) as client:
-                logger.info(f"Chkpnt1: SDK client initialized")
                 self._sdk_client = client
 
                 # Update health monitoring state
@@ -456,8 +460,16 @@ class ClaudeSDK:
         }
 
         # Only add can_use_tool callback if permission callback is provided and SDK classes are available
+        logger.info(f"DEBUG: Callback registration check:")
+        logger.info(f"DEBUG: - permission_callback exists: {self.permission_callback is not None}")
+        logger.info(f"DEBUG: - PermissionResultAllow available: {PermissionResultAllow is not None}")
+        logger.info(f"DEBUG: - PermissionResultDeny available: {PermissionResultDeny is not None}")
+
         if self.permission_callback and PermissionResultAllow and PermissionResultDeny:
             options_kwargs["can_use_tool"] = can_use_tool_wrapper
+            logger.info("DEBUG: ✅ Permission callback registered with SDK!")
+        else:
+            logger.warning("DEBUG: ❌ Permission callback NOT registered - missing requirements")
 
         if self.model is not None:
             options_kwargs["model"] = self.model
@@ -466,6 +478,8 @@ class ClaudeSDK:
             options_kwargs["resume"] = self.resume_session_id
             logger.info(f"Setting resume parameter to: {self.resume_session_id}")
 
+        logger.info(f"DEBUG: Final SDK options keys: {list(options_kwargs.keys())}")
+        logger.info(f"DEBUG: can_use_tool included: {'can_use_tool' in options_kwargs}")
         logger.info(f"ClaudeCodeOptions: {options_kwargs}")
         return ClaudeCodeOptions(**options_kwargs)
 
@@ -473,7 +487,6 @@ class ClaudeSDK:
         """Process a single message from the SDK stream."""
         try:
             # Check for fatal error messages that indicate immediate CLI failures
-            logger.info(f"Chkpnt2: sdk_message_received = {sdk_message}")
             if hasattr(sdk_message, 'type') and sdk_message.type == 'error':
                 error_content = str(sdk_message.content) if hasattr(sdk_message, 'content') else str(sdk_message)
                 if "Fatal error in message reader" in error_content:
@@ -514,8 +527,11 @@ class ClaudeSDK:
             converted_message = self._convert_sdk_message(sdk_message)
             self.info.last_activity = time.time()
 
+            # Debug log raw SDK response structure
+            logger.debug(f"Raw SDK response: {sdk_message=}")
+
             if self.storage_manager:
-                await self._store_sdk_message(converted_message)
+                await self._store_sdk_message(converted_message, sdk_message)
 
             if self.message_callback:
                 await self._safe_callback(self.message_callback, converted_message)
@@ -527,7 +543,7 @@ class ClaudeSDK:
             if self.error_callback:
                 await self._safe_callback(self.error_callback, "sdk_message_processing_failed", e)
     
-    async def _store_sdk_message(self, converted_message: Dict[str, Any]):
+    async def _store_sdk_message(self, converted_message: Dict[str, Any], raw_sdk_message: Any = None):
         """Store the SDK message in a serializable format."""
         storage_message = {
             "type": converted_message.get("type", "unknown"),
@@ -538,6 +554,26 @@ class ClaudeSDK:
             if converted_message.get("sdk_message")
             else None,
         }
+
+        # Add raw SDK response for debugging
+        if raw_sdk_message is not None:
+            try:
+                import json
+                # Capture all non-private attributes
+                raw_data = {}
+                for attr in dir(raw_sdk_message):
+                    if not attr.startswith('_') and not callable(getattr(raw_sdk_message, attr, None)):
+                        try:
+                            value = getattr(raw_sdk_message, attr)
+                            json.dumps(value)  # Test if serializable
+                            raw_data[attr] = value
+                        except (TypeError, ValueError):
+                            raw_data[attr] = str(value)
+                storage_message["raw_sdk_response"] = json.dumps(raw_data)
+            except Exception as e:
+                # Final fallback
+                storage_message["raw_sdk_response"] = json.dumps(str(raw_sdk_message))
+
         for key, value in converted_message.items():
             if key not in ["sdk_message"] and isinstance(
                 value, (str, int, float, bool, type(None))

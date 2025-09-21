@@ -219,6 +219,7 @@ class UserMessageHandler(MessageHandler):
             sdk_msg = message_data["sdk_message"]
             text_parts = []
             tool_results = []
+            tool_uses = []
 
             # Extract content from different block types
             if hasattr(sdk_msg, 'content'):
@@ -230,6 +231,12 @@ class UserMessageHandler(MessageHandler):
                             "tool_use_id": block.tool_use_id,
                             "content": block.content,
                             "is_error": block.is_error if hasattr(block, 'is_error') else False
+                        })
+                    elif isinstance(block, ToolUseBlock):
+                        tool_uses.append({
+                            "id": block.id,
+                            "name": block.name,
+                            "input": block.input
                         })
 
             content = " ".join(text_parts) if text_parts else ""
@@ -246,7 +253,9 @@ class UserMessageHandler(MessageHandler):
                     "sdk_message": sdk_msg,
                     "session_id": message_data.get("session_id"),
                     "tool_results": tool_results,
-                    "has_tool_results": len(tool_results) > 0
+                    "tool_uses": tool_uses,
+                    "has_tool_results": len(tool_results) > 0,
+                    "has_tool_uses": len(tool_uses) > 0
                 }
             )
 
@@ -254,8 +263,9 @@ class UserMessageHandler(MessageHandler):
         message = message_data.get("message", {})
         content_parts = message.get("content", [])
 
-        # Check if this contains tool results
+        # Check if this contains tool results and tool uses
         tool_results = []
+        tool_uses = []
         text_content = ""
 
         if isinstance(content_parts, list):
@@ -264,6 +274,12 @@ class UserMessageHandler(MessageHandler):
                     tool_results.append({
                         "tool_use_id": part.get("tool_use_id"),
                         "content": part.get("content", "")
+                    })
+                elif part.get("type") == "tool_use":
+                    tool_uses.append({
+                        "id": part.get("id"),
+                        "name": part.get("name"),
+                        "input": part.get("input", {})
                     })
                 elif part.get("type") == "text":
                     text_content += part.get("text", "")
@@ -279,8 +295,10 @@ class UserMessageHandler(MessageHandler):
             metadata={
                 "role": message.get("role"),
                 "tool_results": tool_results,
+                "tool_uses": tool_uses,
                 "session_id": message_data.get("session_id"),
-                "has_tool_results": len(tool_results) > 0
+                "has_tool_results": len(tool_results) > 0,
+                "has_tool_uses": len(tool_uses) > 0
             }
         )
 

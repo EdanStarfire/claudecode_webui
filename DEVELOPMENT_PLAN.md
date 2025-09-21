@@ -577,6 +577,103 @@ data/                         # Runtime data (created by app)
 
 **Impact**: Achieved fully reliable processing state management with authoritative backend control, enhanced error state user feedback, and comprehensive UI polish for professional user experience
 
+### Phase 3.8: Advanced Session Features & System Enhancements ✅ COMPLETED
+**Goal**: Implement advanced session management features including naming, deletion, and enhanced permission system
+**Status**: Completed 2025-09-20
+
+**Feature Implementation**:
+1. **Session Naming System** ✅
+   - Added `name` field to `SessionInfo` class with auto-generated timestamp defaults
+   - Implemented inline session name editing functionality in UI with click-to-edit
+   - Added REST API endpoints for session name updates (`PUT /api/sessions/{id}/name`)
+   - Enhanced session creation to accept custom names with fallback to timestamp format
+
+2. **Session Deletion System** ✅
+   - Implemented comprehensive session deletion with proper resource cleanup sequencing
+   - Added Windows-specific file handle management and forced cleanup with garbage collection
+   - Enhanced storage manager cleanup with multiple GC cycles and Windows rmdir fallback
+   - Added session deletion REST API endpoint (`DELETE /api/sessions/{id}`)
+   - Implemented UI delete buttons (🗑️) in session headers with confirmation
+
+3. **Permission System Enhancement** ✅
+   - Added comprehensive permission callback debugging and logging throughout SDK pipeline
+   - Fixed permission callback propagation to resumed sessions (was missing from resume flow)
+   - Enhanced SDK options generation with proper permission callback registration validation
+   - Added debug logging for permission system troubleshooting and verification
+
+4. **Enhanced Message Processing** ✅
+   - Added tool use detection and metadata capture in message parser for better tool visibility
+   - Enhanced SDK message storage with raw SDK response data for comprehensive debugging
+   - Improved message metadata preservation through the entire processing pipeline
+   - Added comprehensive SDK response structure logging for development debugging
+
+**User Testing Completion**:
+- ✅ Session naming with default timestamp format (YYYY-MM-DD HH:MM:SS)
+- ✅ Session deletion functionality with proper cleanup and UI integration
+- ✅ Permission callback system preparation (captures permission prompts generically)
+- ✅ Enhanced message content with tool use/result metadata for better debugging
+- ✅ Comprehensive tool call and tool result detection improvements
+
+**Technical Infrastructure Improvements**:
+1. **Windows File Handling** ✅
+   - Enhanced storage cleanup with Windows-specific directory handle management
+   - Added forced garbage collection sequences for reliable file handle release
+   - Implemented fallback deletion methods using Windows `rmdir` command for stubborn directories
+   - Added comprehensive cleanup sequencing with async delays for reliable session deletion
+
+2. **SDK Integration Debugging** ✅
+   - Added extensive permission callback registration logging with type verification
+   - Enhanced SDK client initialization with debug checkpoints and validation
+   - Improved error detection and callback management throughout SDK lifecycle
+   - Added raw SDK response capture for comprehensive debugging and troubleshooting
+
+3. **Session Lifecycle Management** ✅
+   - Enhanced session creation with pre-generated IDs for proper callback setup
+   - Improved session deletion with proper resource cleanup sequencing and validation
+   - Added comprehensive error handling throughout session lifecycle operations
+   - Enhanced session coordinator with storage manager access methods for integration
+
+**UI/UX Enhancements**:
+1. **Session Management UI** ✅
+   - Added delete buttons (🗑️) to session headers with hover effects and confirmation
+   - Implemented inline session name editing with click-to-edit functionality and proper validation
+   - Enhanced session list display with better name truncation and ellipsis handling
+   - Added proper loading states and feedback for session management operations
+
+2. **Error Handling & Feedback** ✅
+   - Enhanced error messages throughout session management with specific details
+   - Added proper loading states during session operations with visual feedback
+   - Improved feedback for failed operations with actionable error information
+   - Added comprehensive logging for debugging session management issues
+
+**Technical Implementation**:
+- `src/session_manager.py`: Added `name` field, `update_session_name()`, and `delete_session()` with Windows cleanup
+- `src/session_coordinator.py`: Enhanced session deletion, name updates, and storage manager integration
+- `src/web_server.py`: Added session name and deletion REST API endpoints with proper error handling
+- `src/claude_sdk.py`: Permission system debugging, raw message capture, and SDK integration enhancements
+- `src/data_storage.py`: Windows file handle cleanup with garbage collection and Path object management
+- `src/message_parser.py`: Tool use detection, metadata improvements, and message processing enhancements
+- `static/app.js`: Session deletion UI, inline name editing, and enhanced session management functionality
+- `static/index.html`: Delete button UI elements and session management interface components
+- `static/styles.css`: Delete button styling, inline editing, and session management UI polish
+- `USER_TESTING_TRACKING.md`: Updated completion status for all advanced session features
+
+**User Experience Impact**:
+- Complete session lifecycle management with naming, editing, and deletion capabilities
+- Reliable session deletion even on Windows with stubborn file handle issues
+- Enhanced debugging capabilities for permission system troubleshooting
+- Better tool visibility with comprehensive tool use and result metadata capture
+- Professional session management interface with intuitive controls and feedback
+
+**Critical Issues Resolved**:
+- Session deletion now works reliably on Windows with proper file handle cleanup
+- Permission callbacks are properly propagated to resumed sessions (was previously missing)
+- Session naming provides better organization with timestamps and custom names
+- Enhanced message processing provides better debugging and tool visibility
+- Comprehensive error handling throughout advanced session management features
+
+**Impact**: Completed advanced session management features providing full session lifecycle control, enhanced debugging capabilities, and professional user experience with reliable Windows compatibility
+
 ---
 
 ## Future Phases (Post-MVP)

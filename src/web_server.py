@@ -26,10 +26,15 @@ class SessionCreateRequest(BaseModel):
     system_prompt: Optional[str] = None
     tools: List[str] = []
     model: Optional[str] = None
+    name: Optional[str] = None
 
 
 class MessageRequest(BaseModel):
     message: str
+
+
+class SessionNameUpdateRequest(BaseModel):
+    name: str
 
 
 class UIWebSocketManager:
@@ -95,6 +100,21 @@ class WebSocketManager:
             if not self.active_connections[session_id]:
                 del self.active_connections[session_id]
         logger.info(f"WebSocket disconnected for session {session_id}")
+
+    async def force_disconnect_session(self, session_id: str):
+        """Force disconnect all WebSocket connections for a specific session"""
+        if session_id in self.active_connections:
+            connections = self.active_connections[session_id].copy()
+            logger.info(f"Force disconnecting {len(connections)} WebSocket connections for session {session_id}")
+            for websocket in connections:
+                try:
+                    await websocket.close(code=1012, reason="Session being deleted")
+                except Exception as e:
+                    logger.warning(f"Error closing WebSocket for session {session_id}: {e}")
+            # Clear the connections list
+            if session_id in self.active_connections:
+                del self.active_connections[session_id]
+            logger.info(f"All WebSocket connections for session {session_id} have been disconnected")
 
     async def send_message(self, session_id: str, message: dict):
         logger.info(f"WebSocketManager: Attempting to send message to session {session_id}, active connections: {len(self.active_connections.get(session_id, []))}")
@@ -166,13 +186,19 @@ class ClaudeWebUI:
         async def create_session(request: SessionCreateRequest):
             """Create a new Claude Code session"""
             try:
+                # Pre-generate session ID so we can pass it to permission callback
+                import uuid
+                session_id = str(uuid.uuid4())
+
                 session_id = await self.coordinator.create_session(
+                    session_id=session_id,
                     working_directory=request.working_directory,
                     permissions=request.permissions,
                     system_prompt=request.system_prompt,
                     tools=request.tools,
                     model=request.model,
-                    permission_callback=self._create_permission_callback()
+                    name=request.name,
+                    permission_callback=self._create_permission_callback(session_id)
                 )
 
 
@@ -221,7 +247,7 @@ class ClaudeWebUI:
                     self._create_message_callback(session_id)
                 )
 
-                success = await self.coordinator.start_session(session_id)
+                success = await self.coordinator.start_session(session_id, permission_callback=self._create_permission_callback(session_id))
                 return {"success": success}
             except Exception as e:
                 logger.error(f"Failed to start session: {e}")
@@ -245,6 +271,37 @@ class ClaudeWebUI:
                 return {"success": success}
             except Exception as e:
                 logger.error(f"Failed to terminate session: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @self.app.put("/api/sessions/{session_id}/name")
+        async def update_session_name(session_id: str, request: SessionNameUpdateRequest):
+            """Update session name"""
+            try:
+                success = await self.coordinator.update_session_name(session_id, request.name)
+                if not success:
+                    raise HTTPException(status_code=404, detail="Session not found")
+                return {"success": success}
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"Failed to update session name: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @self.app.delete("/api/sessions/{session_id}")
+        async def delete_session(session_id: str):
+            """Delete a session and all its data"""
+            try:
+                # First force disconnect any WebSocket connections for this session
+                await self.websocket_manager.force_disconnect_session(session_id)
+
+                success = await self.coordinator.delete_session(session_id)
+                if not success:
+                    raise HTTPException(status_code=404, detail="Session not found")
+                return {"success": success}
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"Failed to delete session: {e}")
                 raise HTTPException(status_code=500, detail=str(e))
 
         @self.app.post("/api/sessions/{session_id}/messages")
@@ -527,23 +584,82 @@ class ClaudeWebUI:
         except Exception as e:
             logger.error(f"Error handling state change: {e}")
 
-    def _create_permission_callback(self):
+    def _create_permission_callback(self, session_id: str):
         """Create permission callback for tool usage"""
         async def permission_callback(tool_name: str, input_params: dict) -> dict:
-            logger.info(f"Permission requested for tool: {tool_name}")
+            import uuid
+            import time
 
-            # For now, auto-approve common tools
-            safe_tools = ["read", "write", "edit", "bash", "glob", "grep"]
+            # Generate unique request ID to correlate request/response
+            request_id = str(uuid.uuid4())
+            request_time = time.time()
+
+            logger.info(f"PERMISSION CALLBACK TRIGGERED: tool={tool_name}, session={session_id}, request_id={request_id}")
+            logger.info(f"Permission requested for tool: {tool_name} (request_id: {request_id})")
+
+            # Store permission request message
+            try:
+                permission_request = {
+                    "type": "permission_request",
+                    "content": f"Permission requested for tool: {tool_name}",
+                    "session_id": session_id,
+                    "timestamp": request_time,
+                    "tool_name": tool_name,
+                    "input_params": input_params,
+                    "request_id": request_id
+                }
+
+                # Get storage manager for this session
+                storage_manager = await self.coordinator.get_session_storage(session_id)
+                if storage_manager:
+                    await storage_manager.append_message(permission_request)
+                    logger.debug(f"Stored permission request message for session {session_id}")
+
+            except Exception as e:
+                logger.error(f"Failed to store permission request message: {e}")
+
+            # Process permission decision (current auto-approval logic)
+            decision_time = time.time()
+            safe_tools = ["read", "write", "glob", "grep"]
+
             if tool_name.lower() in safe_tools:
-                return {
+                decision = "allow"
+                reasoning = f"Tool '{tool_name}' is in safe tools list"
+                response = {
                     "behavior": "allow",
                     "updated_input": input_params
                 }
             else:
-                return {
+                decision = "deny"
+                reasoning = f"Tool '{tool_name}' not in safe tools list"
+                response = {
                     "behavior": "deny",
-                    "message": f"Tool '{tool_name}' not in safe tools list"
+                    "message": reasoning
                 }
+
+            # Store permission response message
+            try:
+                permission_response = {
+                    "type": "permission_response",
+                    "content": f"Permission {decision} for tool: {tool_name} - {reasoning}",
+                    "session_id": session_id,
+                    "timestamp": decision_time,
+                    "request_id": request_id,
+                    "decision": decision,
+                    "reasoning": reasoning,
+                    "tool_name": tool_name,
+                    "response_time_ms": int((decision_time - request_time) * 1000)
+                }
+
+                if storage_manager:
+                    await storage_manager.append_message(permission_response)
+                    logger.debug(f"Stored permission response message for session {session_id}")
+
+            except Exception as e:
+                logger.error(f"Failed to store permission response message: {e}")
+
+            logger.info(f"Permission {decision} for tool: {tool_name} (request_id: {request_id})")
+            return response
 
         return permission_callback
 
@@ -564,8 +680,27 @@ class ClaudeWebUI:
                 "timestamp": getattr(message_data, 'timestamp', datetime.now(timezone.utc).isoformat())
             }
 
-            # Add subtype if available in metadata
+            # Add full metadata if available
             if hasattr(message_data, 'metadata') and message_data.metadata:
+                # Create a serializable copy of metadata (exclude non-serializable objects)
+                metadata_copy = {}
+                for key, value in message_data.metadata.items():
+                    try:
+                        # Test if value is JSON serializable by trying to serialize it
+                        import json
+                        json.dumps(value)
+                        metadata_copy[key] = value
+                    except (TypeError, ValueError):
+                        # Skip non-serializable values (like SDK objects)
+                        if key == 'sdk_message':
+                            continue
+                        # Convert other objects to string representation
+                        metadata_copy[key] = str(value)
+
+                if metadata_copy:
+                    result['metadata'] = metadata_copy
+
+                # Maintain backward compatibility - still add subtype to root level
                 subtype = message_data.metadata.get('subtype')
                 if subtype:
                     result['subtype'] = subtype

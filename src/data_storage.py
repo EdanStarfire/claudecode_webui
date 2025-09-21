@@ -269,9 +269,36 @@ class DataStorageManager:
         return corruption_report
 
     async def cleanup(self):
-        """Cleanup and final integrity check"""
+        """Cleanup and ensure all file handles and directory references are closed"""
         try:
+            # Force garbage collection to close any lingering file handles
+            import gc
+            gc.collect()
+
+            # Final integrity update
             await self._update_integrity()
-            logger.debug(f"Cleaned up storage for {self.session_dir.name}")
+
+            # Additional cleanup to ensure file handles are released
+            # Python file handles should auto-close, but force GC again to be sure
+            gc.collect()
+
+            session_name = self.session_dir.name
+
+            # On Windows, clear the Path object references to release directory handles
+            import os
+            if os.name == 'nt':  # Windows
+                # Clear all path references that might hold directory handles
+                self.session_dir = None
+                self.messages_file = None
+                self.state_file = None
+                self.history_file = None
+                self.integrity_file = None
+                # Force another GC to clear the Path objects
+                gc.collect()
+
+            logger.debug(f"Cleaned up storage for {session_name}")
         except Exception as e:
             logger.error(f"Failed to cleanup storage: {e}")
+            # Still force GC even on error
+            import gc
+            gc.collect()
