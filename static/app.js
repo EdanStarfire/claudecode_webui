@@ -608,8 +608,11 @@ class ClaudeWebUI {
         // Check if this is a tool-related message and handle it
         const toolHandled = this.handleToolRelatedMessage(message);
 
-        // If it's a tool-related message, don't show it in the regular message flow
-        if (toolHandled) {
+        // Check if this is a thinking block message and handle it
+        const thinkingHandled = this.handleThinkingBlockMessage(message);
+
+        // If it's a tool-related or thinking block message, don't show it in the regular message flow
+        if (toolHandled || thinkingHandled) {
             return;
         }
 
@@ -699,6 +702,40 @@ class ClaudeWebUI {
             return false;
         } catch (error) {
             console.error('Error handling tool-related message:', error, message);
+            return false;
+        }
+    }
+
+    handleThinkingBlockMessage(message) {
+        try {
+            // Check if this is an assistant message with thinking blocks
+            if (message.type === 'assistant' && message.metadata && message.metadata.thinking_blocks && Array.isArray(message.metadata.thinking_blocks)) {
+                const thinkingBlocks = message.metadata.thinking_blocks;
+
+                if (thinkingBlocks.length > 0) {
+                    console.log('Processing thinking blocks:', thinkingBlocks);
+
+                    thinkingBlocks.forEach(thinkingBlock => {
+                        // Generate a unique ID for this thinking block
+                        const thinkingId = `thinking_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
+                        const thinkingBlockData = {
+                            id: thinkingId,
+                            content: thinkingBlock.content,
+                            timestamp: thinkingBlock.timestamp || message.timestamp,
+                            isExpanded: false // Start collapsed
+                        };
+
+                        this.renderThinkingBlock(thinkingBlockData);
+                    });
+
+                    return true; // Indicate that we handled thinking blocks
+                }
+            }
+
+            return false; // No thinking blocks found
+        } catch (error) {
+            console.error('Error handling thinking block message:', error, message);
             return false;
         }
     }
@@ -883,6 +920,133 @@ class ClaudeWebUI {
 
             this.sessionWebsocket.send(JSON.stringify(response));
         }
+    }
+
+    renderThinkingBlock(thinkingBlock) {
+        console.log('Rendering thinking block:', thinkingBlock);
+
+        const messagesArea = document.getElementById('messages-area');
+        const thinkingElement = this.createThinkingBlockElement(thinkingBlock);
+
+        // Add to DOM
+        messagesArea.appendChild(thinkingElement);
+        this.smartScrollToBottom();
+    }
+
+    createThinkingBlockElement(thinkingBlock) {
+        const element = document.createElement('div');
+        element.className = 'thinking-block-container';
+        element.id = `thinking-block-${thinkingBlock.id}`;
+
+        // Store the content as a data attribute on the container for persistence
+        element.setAttribute('data-thinking-content', thinkingBlock.content);
+        element.setAttribute('data-thinking-id', thinkingBlock.id);
+
+        if (thinkingBlock.isExpanded) {
+            element.innerHTML = this.createExpandedThinkingBlockHTML(thinkingBlock);
+        } else {
+            element.innerHTML = this.createCollapsedThinkingBlockHTML(thinkingBlock);
+        }
+
+        // Add event delegation for click handlers
+        this.setupThinkingBlockEventListeners(element, thinkingBlock);
+
+        return element;
+    }
+
+    createExpandedThinkingBlockHTML(thinkingBlock) {
+        return `
+            <div class="thinking-block-card">
+                <div class="thinking-block-header">
+                    <span class="thinking-icon">🧠</span>
+                    <span class="thinking-label">Claude's Thinking</span>
+                    <button class="thinking-collapse-btn" data-thinking-id="${thinkingBlock.id}" title="Collapse">
+                        ▼
+                    </button>
+                </div>
+                <div class="thinking-block-content">
+                    <pre class="thinking-text">${this.escapeHtml(thinkingBlock.content)}</pre>
+                </div>
+            </div>
+        `;
+    }
+
+    createCollapsedThinkingBlockHTML(thinkingBlock) {
+        // Create a truncated preview (first line + ...)
+        const firstLine = thinkingBlock.content.split('\n')[0];
+        const truncated = firstLine.length > 80 ? firstLine.substring(0, 80) + '...' : firstLine;
+        const summary = truncated || 'Claude was thinking...';
+
+        return `
+            <div class="thinking-block-collapsed" data-thinking-id="${thinkingBlock.id}" title="Click to expand">
+                <span class="thinking-collapsed-summary">🧠 Thinking: ${this.escapeHtml(summary)}</span>
+                <span class="thinking-expand-icon">▶</span>
+            </div>
+        `;
+    }
+
+    setupThinkingBlockEventListeners(element, thinkingBlock) {
+        // Handle collapse button clicks
+        const collapseBtn = element.querySelector('.thinking-collapse-btn');
+        if (collapseBtn) {
+            collapseBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this.toggleThinkingBlockExpansion(thinkingBlock.id);
+            });
+        }
+
+        // Handle collapsed card clicks for expansion
+        const collapsedCard = element.querySelector('.thinking-block-collapsed');
+        if (collapsedCard) {
+            collapsedCard.addEventListener('click', () => {
+                this.toggleThinkingBlockExpansion(thinkingBlock.id);
+            });
+        }
+    }
+
+    toggleThinkingBlockExpansion(thinkingId) {
+        // Simple implementation - toggle expanded state and re-render
+        const element = document.getElementById(`thinking-block-${thinkingId}`);
+        if (element) {
+            // Find current state from DOM structure
+            const isCurrentlyExpanded = element.querySelector('.thinking-block-card') !== null;
+
+            // Create updated thinking block data
+            const thinkingBlock = {
+                id: thinkingId,
+                content: this.extractContentFromElement(element),
+                isExpanded: !isCurrentlyExpanded
+            };
+
+            // Re-render with new state
+            const newElement = this.createThinkingBlockElement(thinkingBlock);
+            element.replaceWith(newElement);
+        }
+    }
+
+    extractContentFromElement(element) {
+        // First try to get content from the container's data attribute
+        const containerContent = element.getAttribute('data-thinking-content');
+        if (containerContent) {
+            return containerContent;
+        }
+
+        // Fallback: Extract content from expanded thinking text element
+        const expandedContent = element.querySelector('.thinking-text');
+        if (expandedContent) {
+            return expandedContent.textContent;
+        }
+
+        // Last resort: Try to get from collapsed element's data attribute
+        const collapsedElement = element.querySelector('.thinking-block-collapsed');
+        if (collapsedElement) {
+            const collapsedContent = collapsedElement.getAttribute('data-content');
+            if (collapsedContent) {
+                return collapsedContent;
+            }
+        }
+
+        return 'Content not available';
     }
 
     async loadSessionInfo() {
@@ -1502,8 +1666,11 @@ class ClaudeWebUI {
             // Check if this is a tool-related message and handle it (skip tool use creation since already done)
             const toolHandled = this.handleToolRelatedMessage(message, true);
 
-            // If not a tool-related message, display it normally
-            if (!toolHandled && this.shouldDisplayMessage(message)) {
+            // Check if this is a thinking block message and handle it
+            const thinkingHandled = this.handleThinkingBlockMessage(message);
+
+            // If not a tool-related or thinking block message, display it normally
+            if (!toolHandled && !thinkingHandled && this.shouldDisplayMessage(message)) {
                 this.addMessageToUI(message, false);
             }
         });

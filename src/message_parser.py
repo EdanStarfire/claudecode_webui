@@ -1,6 +1,7 @@
 """Extensible message parser for Claude Code SDK streaming messages."""
 
 import time
+import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Dict, Any, List, Optional, Set, Type, Callable
@@ -14,6 +15,47 @@ from claude_code_sdk import (
 from .logging_config import get_logger
 
 logger = get_logger(__name__)
+
+
+def extract_thinking_from_string(content_str: str) -> Optional[str]:
+    """
+    Extract thinking content from ThinkingBlock string representation.
+
+    Handles format: "[ThinkingBlock(thinking='...', signature='...')]"
+    Extracts only the thinking content, ignoring the signature completely.
+    Preserves Unicode characters as-is.
+
+    Args:
+        content_str: String containing ThinkingBlock representation
+
+    Returns:
+        Extracted thinking content with basic escape sequences decoded, or None if not found
+    """
+    if not isinstance(content_str, str):
+        return None
+
+    # Match ThinkingBlock(thinking='...', signature='...')
+    # Use non-greedy match for thinking content to stop at first ', signature='
+    pattern = r"\[ThinkingBlock\(thinking='(.*?)', signature="
+    match = re.search(pattern, content_str, re.DOTALL)
+
+    if match:
+        thinking_text = match.group(1)
+
+        # Decode only basic escape sequences, preserve Unicode as-is
+        thinking_text = thinking_text.replace('\\\\n', '\n')     # Double-escaped newlines
+        thinking_text = thinking_text.replace('\\n', '\n')       # Single-escaped newlines
+        thinking_text = thinking_text.replace('\\\\t', '\t')     # Double-escaped tabs
+        thinking_text = thinking_text.replace('\\t', '\t')       # Single-escaped tabs
+        thinking_text = thinking_text.replace('\\\\r', '\r')     # Double-escaped carriage returns
+        thinking_text = thinking_text.replace('\\r', '\r')       # Single-escaped carriage returns
+        thinking_text = thinking_text.replace("\\'", "'")        # Escaped single quotes
+        thinking_text = thinking_text.replace('\\"', '"')        # Escaped double quotes
+        thinking_text = thinking_text.replace('\\\\', '\\')      # Escaped backslashes (do this last)
+
+        return thinking_text.strip()
+
+    return None
 
 
 class MessageType(Enum):
@@ -136,118 +178,103 @@ class AssistantMessageHandler(MessageHandler):
         return message_data.get("type") == "assistant"
 
     def parse(self, message_data: Dict[str, Any]) -> ParsedMessage:
-        # Handle SDK message object
-        if "sdk_message" in message_data and isinstance(message_data["sdk_message"], AssistantMessage):
-            sdk_msg = message_data["sdk_message"]
-            text_parts = []
-            thinking_parts = []
-            tool_uses = []
+        # Initialize collections
+        text_parts = []
+        thinking_parts = []
+        thinking_blocks = []
+        tool_uses = []
 
-            # Extract content from different block types
-            if hasattr(sdk_msg, 'content'):
-                for block in sdk_msg.content:
-                    if isinstance(block, TextBlock):
-                        text_parts.append(block.text)
-                    elif isinstance(block, ThinkingBlock):
-                        thinking_parts.append(block.text)
-                    elif isinstance(block, ToolUseBlock):
-                        tool_uses.append({
-                            "id": block.id,
-                            "name": block.name,
-                            "input": block.input
-                        })
+        # STEP 1: Check for direct content field first (most common case)
+        direct_content = message_data.get("content", "")
+        if isinstance(direct_content, str) and direct_content.strip():
+            text_parts.append(direct_content)
 
-            content = " ".join(text_parts) if text_parts else "Assistant response"
-            if thinking_parts:
-                content = f"[Thinking: {' '.join(thinking_parts)}] {content}"
-
-            return ParsedMessage(
-                type=MessageType.ASSISTANT,
-                timestamp=message_data.get("timestamp", time.time()),
-                session_id=message_data.get("session_id"),
-                content=content,
-                raw_data=message_data,
-                metadata={
-                    "sdk_message": sdk_msg,
-                    "model": sdk_msg.model if hasattr(sdk_msg, 'model') else None,
-                    "session_id": message_data.get("session_id"),
-                    "has_thinking": len(thinking_parts) > 0,
-                    "thinking_content": thinking_parts,
-                    "tool_uses": tool_uses,
-                    "has_tool_uses": len(tool_uses) > 0
-                }
-            )
-
-        # Handle historical messages with raw_sdk_response
-        elif "raw_sdk_response" in message_data:
-            try:
-                import json
-                sdk_response = json.loads(message_data["raw_sdk_response"])
-                text_parts = []
-                thinking_parts = []
-                tool_uses = []
-
-                # Extract content from SDK response blocks
-                if "content" in sdk_response and isinstance(sdk_response["content"], list):
-                    for block in sdk_response["content"]:
-                        if block.get("type") == "text":
-                            text_parts.append(block.get("text", ""))
-                        elif block.get("type") == "thinking":
-                            thinking_parts.append(block.get("text", ""))
-                        elif block.get("type") == "tool_use":
+        # STEP 2: If no direct content, check for complex SDK structures
+        else:
+            # Handle SDK message object
+            if "sdk_message" in message_data and isinstance(message_data["sdk_message"], AssistantMessage):
+                sdk_msg = message_data["sdk_message"]
+                if hasattr(sdk_msg, 'content'):
+                    for block in sdk_msg.content:
+                        if isinstance(block, TextBlock):
+                            text_parts.append(block.text)
+                        elif isinstance(block, ThinkingBlock):
+                            thinking_content = block.thinking
+                            thinking_parts.append(thinking_content)
+                            thinking_blocks.append({
+                                "content": thinking_content,
+                                "timestamp": message_data.get("timestamp", time.time())
+                            })
+                        elif isinstance(block, ToolUseBlock):
                             tool_uses.append({
-                                "id": block.get("id"),
-                                "name": block.get("name"),
-                                "input": block.get("input", {})
+                                "id": block.id,
+                                "name": block.name,
+                                "input": block.input
                             })
 
-                content = " ".join(text_parts) if text_parts else "Assistant response"
-                if thinking_parts:
-                    content = f"[Thinking: {' '.join(thinking_parts)}] {content}"
+            # Handle raw_sdk_response
+            elif "raw_sdk_response" in message_data:
+                try:
+                    import json
+                    sdk_response = json.loads(message_data["raw_sdk_response"])
+                    content_field = sdk_response.get("content", "")
 
-                return ParsedMessage(
-                    type=MessageType.ASSISTANT,
-                    timestamp=message_data.get("timestamp", time.time()),
-                    session_id=message_data.get("session_id"),
-                    content=content,
-                    raw_data=message_data,
-                    metadata={
-                        "model": sdk_response.get("model"),
-                        "session_id": message_data.get("session_id"),
-                        "has_thinking": len(thinking_parts) > 0,
-                        "thinking_content": thinking_parts,
-                        "tool_uses": tool_uses,
-                        "has_tool_uses": len(tool_uses) > 0
-                    }
-                )
-            except (json.JSONDecodeError, KeyError) as e:
-                logger.warning(f"Failed to parse raw_sdk_response in assistant message: {e}")
+                    if isinstance(content_field, str) and "ThinkingBlock" in content_field:
+                        thinking_content = extract_thinking_from_string(content_field)
+                        if thinking_content:
+                            thinking_parts.append(thinking_content)
+                            thinking_blocks.append({
+                                "content": thinking_content,
+                                "timestamp": message_data.get("timestamp", time.time())
+                            })
+                    elif isinstance(content_field, str) and "TextBlock" in content_field:
+                        import re
+                        text_pattern = r"\[TextBlock\(text='(.*?)'\)\]"
+                        text_match = re.search(text_pattern, content_field, re.DOTALL)
+                        if text_match:
+                            text_content = text_match.group(1)
+                            text_content = text_content.replace('\\n', '\n').replace("\\'", "'").replace('\\"', '"')
+                            text_parts.append(text_content)
+                    elif isinstance(content_field, list):
+                        for block in content_field:
+                            if block.get("type") == "text":
+                                text_parts.append(block.get("text", ""))
+                            elif block.get("type") == "thinking":
+                                thinking_content = block.get("text", "")
+                                thinking_parts.append(thinking_content)
+                                thinking_blocks.append({
+                                    "content": thinking_content,
+                                    "timestamp": message_data.get("timestamp", time.time())
+                                })
+                except (json.JSONDecodeError, KeyError) as e:
+                    logger.warning(f"Failed to parse raw_sdk_response in assistant message: {e}")
 
-        # Fallback to dict-based parsing
-        message = message_data.get("message", {})
-        content_parts = message.get("content", [])
+            # Handle nested message structure (legacy)
+            else:
+                message = message_data.get("message", {})
+                content_parts = message.get("content", [])
+                if isinstance(content_parts, list):
+                    text_parts = [part.get("text", "") for part in content_parts if part.get("type") == "text"]
+                elif isinstance(content_parts, str):
+                    text_parts = [content_parts]
 
-        # Extract text content
-        text_content = ""
-        if isinstance(content_parts, list):
-            text_parts = [part.get("text", "") for part in content_parts if part.get("type") == "text"]
-            text_content = " ".join(text_parts)
-        elif isinstance(content_parts, str):
-            text_content = content_parts
+        # Combine all text content
+        content = " ".join(text_parts) if text_parts else "Assistant response"
 
         return ParsedMessage(
             type=MessageType.ASSISTANT,
             timestamp=message_data.get("timestamp", time.time()),
             session_id=message_data.get("session_id"),
-            content=text_content,
+            content=content,
             raw_data=message_data,
             metadata={
-                "message_id": message.get("id"),
-                "model": message.get("model"),
-                "role": message.get("role"),
+                "model": message_data.get("model"),
                 "session_id": message_data.get("session_id"),
-                "usage": message.get("usage", {}),
-                "stop_reason": message.get("stop_reason")
+                "has_thinking": len(thinking_parts) > 0,
+                "thinking_content": thinking_parts,
+                "thinking_blocks": thinking_blocks,
+                "tool_uses": tool_uses,
+                "has_tool_uses": len(tool_uses) > 0
             }
         )
 
@@ -357,31 +384,40 @@ class UserMessageHandler(MessageHandler):
                 logger.warning(f"Failed to parse raw_sdk_response in user message: {e}")
 
         # Fallback to dict-based parsing
-        message = message_data.get("message", {})
-        content_parts = message.get("content", [])
-
-        # Check if this contains tool results and tool uses
+        # Initialize variables
         tool_results = []
         tool_uses = []
         text_content = ""
 
-        if isinstance(content_parts, list):
-            for part in content_parts:
-                if part.get("type") == "tool_result":
-                    tool_results.append({
-                        "tool_use_id": part.get("tool_use_id"),
-                        "content": part.get("content", "")
-                    })
-                elif part.get("type") == "tool_use":
-                    tool_uses.append({
-                        "id": part.get("id"),
-                        "name": part.get("name"),
-                        "input": part.get("input", {})
-                    })
-                elif part.get("type") == "text":
-                    text_content += part.get("text", "")
-        elif isinstance(content_parts, str):
-            text_content = content_parts
+        # First check for direct content field (for simple user messages)
+        direct_content = message_data.get("content", "")
+        if isinstance(direct_content, str) and direct_content:
+            text_content = direct_content
+        else:
+            # Check nested message structure
+            message = message_data.get("message", {})
+            content_parts = message.get("content", [])
+
+            if isinstance(content_parts, list):
+                for part in content_parts:
+                    if part.get("type") == "tool_result":
+                        tool_results.append({
+                            "tool_use_id": part.get("tool_use_id"),
+                            "content": part.get("content", "")
+                        })
+                    elif part.get("type") == "tool_use":
+                        tool_uses.append({
+                            "id": part.get("id"),
+                            "name": part.get("name"),
+                            "input": part.get("input", {})
+                        })
+                    elif part.get("type") == "text":
+                        text_content += part.get("text", "")
+            elif isinstance(content_parts, str):
+                text_content = content_parts
+
+        # Get role from message if available, fallback to empty dict
+        message = message_data.get("message", {})
 
         return ParsedMessage(
             type=MessageType.USER,
@@ -455,7 +491,7 @@ class ThinkingBlockHandler(MessageHandler):
             if hasattr(sdk_msg, 'content'):
                 for block in sdk_msg.content:
                     if isinstance(block, ThinkingBlock):
-                        thinking_content = block.text
+                        thinking_content = block.thinking
                         break
 
             return ParsedMessage(
