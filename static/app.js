@@ -332,11 +332,11 @@ class ClaudeWebUI {
         document.getElementById('sidebar-resize-handle').addEventListener('mousedown', (e) => this.startResize(e));
 
         // Message sending
-        document.getElementById('send-btn').addEventListener('click', () => this.sendMessage());
+        document.getElementById('send-btn').addEventListener('click', () => this.handleSendButtonClick());
         document.getElementById('message-input').addEventListener('keydown', (e) => {
             if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
-                this.sendMessage();
+                this.handleSendButtonClick();
             }
         });
 
@@ -466,6 +466,17 @@ class ClaudeWebUI {
         this.setInputControlsEnabled(true);
     }
 
+    handleSendButtonClick() {
+        if (this.isProcessing && !this.isInterrupting) {
+            // Currently processing, button should act as Stop
+            this.sendInterrupt();
+        } else if (!this.isProcessing && !this.isInterrupting) {
+            // Not processing, button should act as Send
+            this.sendMessage();
+        }
+        // If isInterrupting is true, button is disabled so this shouldn't be called
+    }
+
     async sendMessage() {
         const input = document.getElementById('message-input');
         const message = input.value.trim();
@@ -500,8 +511,54 @@ class ClaudeWebUI {
         }
     }
 
+    async sendInterrupt() {
+        if (!this.currentSessionId || !this.isProcessing) {
+            console.log('DEBUG: sendInterrupt() called but conditions not met:', {
+                currentSessionId: this.currentSessionId,
+                isProcessing: this.isProcessing
+            });
+            return;
+        }
+
+        try {
+            console.log('DEBUG: Sending interrupt request for session:', this.currentSessionId);
+            console.log('DEBUG: WebSocket state check:', {
+                sessionWebsocket: !!this.sessionWebsocket,
+                readyState: this.sessionWebsocket?.readyState,
+                OPEN: WebSocket.OPEN
+            });
+
+            // Update button to "Stopping..." state
+            this.showStoppingIndicator();
+
+            // Send interrupt via WebSocket if connected
+            if (this.sessionWebsocket && this.sessionWebsocket.readyState === WebSocket.OPEN) {
+                const interruptMessage = {
+                    type: 'interrupt_session'
+                };
+                console.log('DEBUG: Sending interrupt message via WebSocket:', interruptMessage);
+                this.sessionWebsocket.send(JSON.stringify(interruptMessage));
+                console.log('DEBUG: Interrupt message sent successfully');
+            } else {
+                console.warn('DEBUG: WebSocket not connected, cannot send interrupt');
+                console.log('DEBUG: WebSocket connection details:', {
+                    sessionWebsocket: !!this.sessionWebsocket,
+                    readyState: this.sessionWebsocket?.readyState,
+                    expectedState: WebSocket.OPEN
+                });
+                // Fallback: we could add a REST API endpoint for interrupt if needed
+                this.hideProcessingIndicator();
+            }
+
+        } catch (error) {
+            console.error('DEBUG: Failed to send interrupt:', error);
+            this.hideProcessingIndicator();
+        }
+    }
+
     showProcessingIndicator() {
         this.isProcessing = true;
+        this.isInterrupting = false;
         const progressElement = document.getElementById('claude-progress');
         const sendButton = document.getElementById('send-btn');
         const messageInput = document.getElementById('message-input');
@@ -510,8 +567,9 @@ class ClaudeWebUI {
             progressElement.classList.remove('hidden');
         }
         if (sendButton) {
-            sendButton.disabled = true;
-            sendButton.textContent = 'Processing...';
+            sendButton.disabled = false; // Keep enabled for Stop functionality
+            sendButton.textContent = 'Stop';
+            sendButton.className = 'btn btn-danger'; // Change to red Stop button
         }
         if (messageInput) {
             messageInput.disabled = true;
@@ -522,6 +580,7 @@ class ClaudeWebUI {
 
     hideProcessingIndicator() {
         this.isProcessing = false;
+        this.isInterrupting = false;
         const progressElement = document.getElementById('claude-progress');
         const sendButton = document.getElementById('send-btn');
 
@@ -530,10 +589,22 @@ class ClaudeWebUI {
         }
         if (sendButton) {
             sendButton.textContent = 'Send';
+            sendButton.className = 'btn btn-primary'; // Restore primary button styling
         }
 
         // Re-enable controls only if current session is not in error state
         this.updateControlsBasedOnSessionState();
+    }
+
+    showStoppingIndicator() {
+        this.isInterrupting = true;
+        const sendButton = document.getElementById('send-btn');
+
+        if (sendButton) {
+            sendButton.disabled = true;
+            sendButton.textContent = 'Stopping...';
+            sendButton.className = 'btn btn-warning'; // Change to orange/warning color for stopping
+        }
     }
 
     updateProcessingState(isProcessing) {
@@ -588,6 +659,43 @@ class ClaudeWebUI {
         if (message.type === 'system' && message.subtype === 'client_launched') {
             console.log('Displaying client launched system message');
             return true;
+        }
+
+        // Allow interrupt system messages to be displayed
+        if (message.type === 'system' && message.subtype === 'interrupt') {
+            console.log('Displaying interrupt system message');
+            return true;
+        }
+
+        // Debug all user messages to find interrupt messages
+        if (message.type === 'user') {
+            console.log('DEBUG: User message found:', {
+                type: message.type,
+                content: message.content,
+                contentLength: message.content?.length,
+                contentJson: JSON.stringify(message.content)
+            });
+        }
+
+        // Filter out redundant user interrupt messages
+        if (message.type === 'user' &&
+            (message.content === '[Request interrupted by user]' ||
+             (message.content === '' && message.raw_sdk_response &&
+              message.raw_sdk_response.includes('[Request interrupted by user]')))) {
+            console.log('DEBUG: Filtering out redundant user interrupt message:', message);
+            return false;
+        }
+        // Filter out assistant messages with tool uses (handled by expandable tool cards)
+        if (message.type === 'assistant' && message.metadata && message.metadata.has_tool_uses) {
+            console.log('DEBUG: Filtering out assistant message with tool uses (handled by tool cards):', message.type);
+            return false;
+        }
+        // Filter out user messages with tool results (handled by expandable tool cards)
+        if (message.type === 'user' &&
+            (message.metadata && message.metadata.has_tool_results ||
+             (message.raw_sdk_response && message.raw_sdk_response.includes('ToolResultBlock')))) {
+            console.log('DEBUG: Filtering out user message with tool results (handled by tool cards):', message.type);
+            return false;
         }
 
         // Display all other message types
@@ -1320,8 +1428,25 @@ class ClaudeWebUI {
                     this.sessionWebsocket.send(JSON.stringify({type: 'pong', timestamp: new Date().toISOString()}));
                 }
                 break;
+            case 'interrupt_response':
+                this.handleInterruptResponse(data);
+                break;
             default:
                 console.log('Unknown WebSocket message type:', data.type);
+        }
+    }
+
+    handleInterruptResponse(data) {
+        console.log('Interrupt response received:', data);
+
+        if (data.success) {
+            console.log('Interrupt successful:', data.message);
+            // Interrupt was successful, hide processing indicators
+            this.hideProcessingIndicator();
+        } else {
+            console.warn('Interrupt failed:', data.message);
+            // Interrupt failed, return to processing state (not stopping state)
+            this.showProcessingIndicator();
         }
     }
 

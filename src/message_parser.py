@@ -235,6 +235,46 @@ class AssistantMessageHandler(MessageHandler):
                             text_content = text_match.group(1)
                             text_content = text_content.replace('\\n', '\n').replace("\\'", "'").replace('\\"', '"')
                             text_parts.append(text_content)
+                    elif isinstance(content_field, str) and "ToolUseBlock" in content_field:
+                        import re
+                        import ast
+                        # Extract tool use information from string format using more robust regex
+                        # Match everything from ToolUseBlock( to the closing ) accounting for nested structures
+                        tool_pattern = r"\[ToolUseBlock\(id='([^']+)', name='([^']+)', input=(.*?)\)\]"
+                        tool_match = re.search(tool_pattern, content_field, re.DOTALL)
+                        if tool_match:
+                            tool_id = tool_match.group(1)
+                            tool_name = tool_match.group(2)
+                            tool_input_str = tool_match.group(3)
+
+                            # Handle the input parameter more carefully
+                            tool_input = {}
+                            try:
+                                # Try to evaluate as a Python literal (safest approach)
+                                tool_input = ast.literal_eval(tool_input_str)
+                            except (ValueError, SyntaxError):
+                                try:
+                                    # Fallback: try JSON after some basic cleanup
+                                    import json
+                                    # Replace single quotes with double quotes for JSON
+                                    json_str = tool_input_str.replace("'", '"')
+                                    tool_input = json.loads(json_str)
+                                except (json.JSONDecodeError, ValueError):
+                                    # Final fallback: extract basic key-value pairs manually
+                                    tool_input = {"raw": tool_input_str}
+
+                            tool_uses.append({
+                                "id": tool_id,
+                                "name": tool_name,
+                                "input": tool_input
+                            })
+
+                            # Create more descriptive content based on input
+                            if isinstance(tool_input, dict) and tool_input:
+                                key_count = len(tool_input)
+                                text_parts.append(f"Using tool: {tool_name} ({key_count} parameters)")
+                            else:
+                                text_parts.append(f"Using tool: {tool_name}")
                     elif isinstance(content_field, list):
                         for block in content_field:
                             if block.get("type") == "text":
@@ -345,8 +385,33 @@ class UserMessageHandler(MessageHandler):
                 tool_uses = []
 
                 # Extract content from SDK response blocks
-                if "content" in sdk_response and isinstance(sdk_response["content"], list):
-                    for block in sdk_response["content"]:
+                content_field = sdk_response.get("content", "")
+
+                # Handle string format with block representations
+                if isinstance(content_field, str) and "ToolResultBlock" in content_field:
+                    import re
+                    # Extract tool result information from string format
+                    result_pattern = r"\[ToolResultBlock\(tool_use_id='([^']+)', content='(.*?)', is_error=([^)]+)\)\]"
+                    result_match = re.search(result_pattern, content_field, re.DOTALL)
+                    if result_match:
+                        tool_use_id = result_match.group(1)
+                        result_content = result_match.group(2)
+                        is_error_str = result_match.group(3)
+                        is_error = is_error_str == 'True' if is_error_str != 'None' else False
+
+                        # Decode escaped content
+                        result_content = result_content.replace('\\n', '\n').replace("\\'", "'").replace('\\"', '"')
+
+                        tool_results.append({
+                            "tool_use_id": tool_use_id,
+                            "content": result_content,
+                            "is_error": is_error
+                        })
+                        # Create summary content for display
+                        content_preview = result_content[:100] + "..." if len(result_content) > 100 else result_content
+                        text_parts.append(f"Tool result: {content_preview}")
+                elif isinstance(content_field, list):
+                    for block in content_field:
                         if block.get("type") == "text":
                             text_parts.append(block.get("text", ""))
                         elif block.get("type") == "tool_result":

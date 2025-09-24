@@ -391,6 +391,58 @@ class SessionCoordinator:
                 pass  # Don't fail on state update error
             return False
 
+    async def interrupt_session(self, session_id: str) -> bool:
+        """Interrupt the current Claude Code SDK session"""
+        try:
+            logger.info(f"Interrupt requested for session {session_id} through coordinator")
+
+            # Check if SDK exists and is active
+            sdk = self._active_sdks.get(session_id)
+            if not sdk:
+                logger.warning(f"No active SDK found for session {session_id} - cannot interrupt")
+                return False
+
+            # Check session state
+            session_info = await self.session_manager.get_session_info(session_id)
+            if not session_info:
+                logger.warning(f"Session {session_id} not found - cannot interrupt")
+                return False
+
+            # Only allow interrupt for active/processing sessions
+            if session_info.state not in [SessionState.ACTIVE] and not session_info.is_processing:
+                logger.warning(f"Session {session_id} not in interruptible state (state: {session_info.state}, processing: {session_info.is_processing})")
+                return False
+
+            # Update processing state to indicate interrupting
+            # Note: We don't have an "INTERRUPTING" state, so we'll just leave it processing until interrupt completes
+            logger.info(f"Attempting to interrupt session {session_id}")
+
+            # Call SDK interrupt method
+            result = await sdk.interrupt_session()
+
+            if result:
+                logger.info(f"Successfully initiated interrupt for session {session_id}")
+
+                # Send interrupt system message via callback system (following client_launched pattern)
+                await self._send_interrupt_message(session_id)
+
+                # Note: Processing state will be reset by the SDK's interrupt handling in the message processing loop
+            else:
+                logger.warning(f"Failed to initiate interrupt for session {session_id}")
+                # Reset processing state if interrupt initiation failed
+                await self.session_manager.update_processing_state(session_id, False)
+
+            return result
+
+        except Exception as e:
+            logger.error(f"Failed to interrupt session {session_id}: {e}")
+            # Reset processing state on error
+            try:
+                await self.session_manager.update_processing_state(session_id, False)
+            except Exception:
+                pass  # Don't fail on state update error
+            return False
+
     async def get_session_info(self, session_id: str) -> Optional[Dict[str, Any]]:
         """Get comprehensive session information"""
         try:
@@ -670,6 +722,35 @@ class SessionCoordinator:
             logger.info(f"Sent session failure message for session {session_id}: {error_message}")
         except Exception as e:
             logger.error(f"Failed to send session failure message for {session_id}: {e}")
+
+    async def _send_interrupt_message(self, session_id: str):
+        """Send interrupt system message via callback system (following client_launched pattern)"""
+        try:
+            from datetime import datetime, timezone
+
+            # Create interrupt system message
+            message_data = {
+                "type": "system",
+                "subtype": "interrupt",
+                "content": "Session interrupted by user",
+                "session_id": session_id,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "sdk_message_type": "SystemMessage"
+            }
+
+            # Store message in storage
+            storage = self._storage_managers.get(session_id)
+            if storage:
+                await storage.append_message(message_data)
+
+            # Send through message callback system for real-time display
+            callback = self._create_message_callback(session_id)
+            await callback(message_data)
+
+            logger.info(f"Sent interrupt message for session {session_id}")
+
+        except Exception as e:
+            logger.error(f"Failed to send interrupt message for {session_id}: {e}")
 
     def _extract_claude_cli_error(self, error_message: str) -> str:
         """Extract and format user-friendly error messages from Claude CLI output"""

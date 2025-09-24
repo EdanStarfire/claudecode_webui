@@ -842,6 +842,78 @@ data/                         # Runtime data (created by app)
 
 **Impact**: Delivered comprehensive thinking block visualization system providing complete insight into Claude's reasoning process, with professional interactive UI that enhances user understanding of AI assistant decision-making while maintaining clean, organized visual presentation
 
+### Phase 3.11: Session Interrupt Implementation ✅ COMPLETED
+**Goal**: Implement comprehensive session interrupt functionality allowing users to stop ongoing Claude Code sessions
+**Status**: Completed 2025-09-23
+
+**Feature Implementation**:
+1. **SDK-Level Interrupt Support** ✅
+   - Added `interrupt_session()` method in `ClaudeSDK` class for graceful session termination
+   - Implemented interrupt request queuing system during active message processing
+   - Enhanced interrupt handling using SDK's `client.interrupt()` method with proper async coordination
+   - Added interrupt validation and state checks to ensure only appropriate sessions can be interrupted
+
+2. **Session Coordinator Integration** ✅
+   - Added `interrupt_session()` method in session coordinator for managing interrupt requests
+   - Enhanced state validation and session health checks before interrupt attempts
+   - Implemented system message generation for interrupt events with proper timestamp handling
+   - Added comprehensive error handling and state recovery for failed interrupt attempts
+
+3. **WebSocket Protocol Extension** ✅
+   - Added new `interrupt_session` WebSocket message type for client interrupt requests
+   - Implemented `interrupt_response` acknowledgment messages for client feedback
+   - Enhanced real-time interrupt status feedback to clients with success/failure reporting
+   - Added comprehensive error handling throughout WebSocket interrupt message flow
+
+4. **UI/UX Enhancement for Interrupt Functionality** ✅
+   - Transformed Send button into Stop button during processing states with visual indication
+   - Added "Stopping..." intermediate state with proper visual feedback and disabled controls
+   - Implemented interrupt confirmation and error handling with user-friendly messaging
+   - Enhanced button state management for processing/interrupting/idle states with proper color coding
+
+5. **Message Parser Improvements** ✅
+   - Enhanced `AssistantMessageHandler` to parse string-format `ToolUseBlock` messages from SDK
+   - Added robust tool extraction using regex patterns and AST literal evaluation for safety
+   - Improved `UserMessageHandler` for `ToolResultBlock` parsing with comprehensive error handling
+   - Better error handling for malformed tool messages with graceful fallback behavior
+
+**Technical Implementation**:
+- `src/claude_sdk.py`: Complete interrupt system with async message queue handling and SDK client interrupt coordination
+- `src/session_coordinator.py`: Enhanced interrupt management with proper state validation and system messaging
+- `src/web_server.py`: WebSocket interrupt protocol with acknowledgment and error handling
+- `static/app.js`: Client-side interrupt UI with Send/Stop button transformation and state management
+- `static/styles.css`: Enhanced button styling for Stop/Stopping states with visual feedback
+- `src/message_parser.py`: Improved string-format tool parsing with regex and AST safety measures
+
+**User Testing Completion**:
+- ✅ Session interrupt implementation with client interrupt() method integration
+- ✅ Send button transforms to Stop button during processing with visual feedback
+- ✅ Interrupt confirmation system with proper success/error messaging
+- ✅ Enhanced tool message parsing for improved SDK compatibility
+- ✅ Comprehensive interrupt flow testing from UI through SDK to completion
+
+**User Experience Impact**:
+- Complete session control allowing users to stop long-running or problematic Claude Code sessions
+- Intuitive UI with Send/Stop button transformation providing clear visual feedback
+- Reliable interrupt handling with proper error recovery and user messaging
+- Enhanced tool message compatibility improving overall SDK integration reliability
+- Professional interrupt workflow with proper state management throughout the entire process
+
+**Technical Architecture**:
+- Asynchronous interrupt handling system compatible with Claude Code SDK streaming architecture
+- Comprehensive state validation ensuring interrupts only occur for appropriate session states
+- Robust error handling and recovery throughout the interrupt workflow
+- Clean separation of interrupt logic from regular message processing with proper coordination
+
+**Critical Features Implemented**:
+- SDK client interrupt integration with proper async coordination and error handling
+- WebSocket-based interrupt protocol with real-time client feedback and acknowledgment
+- UI state management for interrupt functionality with visual feedback and proper button states
+- System message integration for interrupt events with timestamp and metadata preservation
+- Comprehensive error handling throughout interrupt workflow with proper state recovery
+
+**Impact**: Delivered complete session interrupt functionality providing users with full control over Claude Code sessions, professional UI integration with clear visual feedback, and robust error handling ensuring reliable interrupt behavior across all system components
+
 ---
 
 ## Future Phases (Post-MVP)

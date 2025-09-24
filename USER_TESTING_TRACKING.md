@@ -43,7 +43,7 @@
 [ ] feat: Interactive permission prompt mechanism
 [ ] qol: use the Claude provided tool use ID for tracking the permission request + approval/denial instead of an internally generated UUID
 [x] feat: capture ThinkingBlock messages for surfacing later on
-[ ] feat: Implement cancel "working" state using client.interrupt  - example: https://github.com/anthropics/claude-code-sdk-python/blob/main/examples/streaming_mode.py
+[x] feat: Implement cancel "working" state using client.interrupt  - example: https://github.com/anthropics/claude-code-sdk-python/blob/main/examples/streaming_mode.py
 [x] feat: Enable deletion of a session from session header.
 [x] bug: In messages.jsonl, some messages have blank content (result, system messages for example) from the SDK - these should be more descriptive and include appropriate metadata we need to ensure we understand what the message is doing.
 [ ] feat: Allow session re-ordering

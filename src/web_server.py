@@ -465,7 +465,8 @@ class ClaudeWebUI:
                         logger.debug(f"[WS_LIFECYCLE] Message wait took {message_received_time - message_wait_start_time:.3f}s")
 
                         message_data = json.loads(message)
-                        logger.debug(f"[WS_LIFECYCLE] Message type: {message_data.get('type', 'unknown')}")
+                        logger.info(f"[WS_LIFECYCLE] DEBUG: Received message type: '{message_data.get('type', 'unknown')}' from session {session_id}")
+                        logger.info(f"[WS_LIFECYCLE] DEBUG: Full message data: {message_data}")
 
                         if message_data.get("type") == "send_message":
                             # Handle message sending through WebSocket
@@ -480,6 +481,56 @@ class ClaudeWebUI:
                                 message_processing_end_time = time.time()
                                 logger.info(f"[WS_LIFECYCLE] Message forwarded to coordinator at {message_processing_end_time}")
                                 logger.info(f"[WS_LIFECYCLE] Message forwarding took {message_processing_end_time - message_processing_start_time:.3f}s")
+
+                        elif message_data.get("type") == "interrupt_session":
+                            # Handle session interrupt through WebSocket
+                            interrupt_start_time = time.time()
+                            logger.info(f"[WS_LIFECYCLE] DEBUG: INTERRUPT REQUEST RECEIVED for session {session_id} at {interrupt_start_time}")
+                            logger.info(f"[WS_LIFECYCLE] DEBUG: Full interrupt message data: {message_data}")
+
+                            try:
+                                # Forward interrupt request to coordinator
+                                result = await self.coordinator.interrupt_session(session_id)
+                                interrupt_end_time = time.time()
+
+                                if result:
+                                    logger.info(f"[WS_LIFECYCLE] Interrupt successfully initiated for session {session_id} at {interrupt_end_time}")
+                                    logger.info(f"[WS_LIFECYCLE] Interrupt processing took {interrupt_end_time - interrupt_start_time:.3f}s")
+
+                                    # Send success response back to client
+                                    await websocket.send_text(json.dumps({
+                                        "type": "interrupt_response",
+                                        "success": True,
+                                        "message": "Interrupt initiated successfully",
+                                        "session_id": session_id,
+                                        "timestamp": datetime.now(timezone.utc).isoformat()
+                                    }))
+                                else:
+                                    logger.warning(f"[WS_LIFECYCLE] Interrupt failed for session {session_id} at {interrupt_end_time}")
+
+                                    # Send failure response back to client
+                                    await websocket.send_text(json.dumps({
+                                        "type": "interrupt_response",
+                                        "success": False,
+                                        "message": "Failed to initiate interrupt",
+                                        "session_id": session_id,
+                                        "timestamp": datetime.now(timezone.utc).isoformat()
+                                    }))
+
+                            except Exception as interrupt_error:
+                                logger.error(f"[WS_LIFECYCLE] Interrupt error for session {session_id}: {interrupt_error}")
+
+                                # Send error response back to client
+                                try:
+                                    await websocket.send_text(json.dumps({
+                                        "type": "interrupt_response",
+                                        "success": False,
+                                        "message": f"Interrupt error: {str(interrupt_error)}",
+                                        "session_id": session_id,
+                                        "timestamp": datetime.now(timezone.utc).isoformat()
+                                    }))
+                                except Exception as response_error:
+                                    logger.error(f"[WS_LIFECYCLE] Failed to send interrupt error response: {response_error}")
 
                     except asyncio.TimeoutError:
                         # Send ping to keep connection alive

@@ -3,6 +3,7 @@
 import asyncio
 import time
 import logging
+import contextlib
 from pathlib import Path
 from typing import Dict, List, Optional, Callable, Any, Union
 from enum import Enum
@@ -317,6 +318,48 @@ class ClaudeSDK:
                 await self._safe_callback(self.error_callback, "message_queue_failed", e)
             return False
 
+    async def interrupt_session(self) -> bool:
+        """
+        Interrupt the current Claude Code SDK session.
+
+        This method attempts to gracefully interrupt any ongoing SDK operations
+        by calling the interrupt() method on the active SDK client.
+
+        Returns:
+            True if interrupt was sent successfully, False otherwise
+        """
+        try:
+            logger.info(f"DEBUG: INTERRUPT REQUESTED for session {self.session_id}")
+
+            # Check if we have an active SDK client
+            if not self._sdk_client:
+                logger.warning(f"DEBUG: No active SDK client for session {self.session_id} - cannot interrupt")
+                return False
+
+            # Check if we're in a state that can be interrupted
+            if self.info.state not in [SessionState.RUNNING, SessionState.PROCESSING]:
+                logger.warning(f"DEBUG: Session {self.session_id} not in interruptible state: {self.info.state}")
+                return False
+
+            logger.info(f"DEBUG: Session {self.session_id} state check passed: {self.info.state}")
+            logger.info(f"DEBUG: SDK client exists: {bool(self._sdk_client)}")
+
+            # Add interrupt request to message queue to be processed by the message loop
+            logger.info(f"DEBUG: Adding interrupt request to message queue for session {self.session_id}")
+            await self._message_queue.put({
+                "type": "interrupt_request",
+                "timestamp": time.time()
+            })
+
+            logger.info(f"DEBUG: INTERRUPT REQUEST QUEUED for session {self.session_id}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to interrupt session {self.session_id}: {e}")
+            if self.error_callback:
+                await self._safe_callback(self.error_callback, "interrupt_failed", e)
+            return False
+
     async def _message_processing_loop(self):
         """
         Main message processing loop using the new ClaudeSDKClient pattern.
@@ -348,9 +391,99 @@ class ClaudeSDK:
                             timeout=1.0
                         )
 
-                        if message_data and message_data.get("content"):
+                        # Handle different message types
+                        message_type = message_data.get("type", "unknown") if message_data else "unknown"
+
+                        if message_type == "user_message" and message_data.get("content"):
                             content = message_data["content"]
-                            logger.info(f"Processing message: {content[:100]}...")
+                            logger.info(f"Processing user message: {content[:100]}...")
+
+                            # Store user message if storage available
+                            if self.storage_manager:
+                                await self.storage_manager.append_message({
+                                    "type": "user",
+                                    "content": content,
+                                    "session_id": self.session_id
+                                })
+
+                            self.info.message_count += 1
+                            self.info.last_activity = time.time()
+
+                            await client.query(content)
+                            self._session_health_checks["total_queries_sent"] += 1
+                            self._session_health_checks["last_successful_query"] = time.time()
+
+                            # Process all responses for this query using background task pattern (like GitHub example)
+                            async def consume_messages():
+                                async for response_message in client.receive_response():
+                                    if self._shutdown_event.is_set():
+                                        break
+                                    await self._process_sdk_message(response_message)
+                                    self._session_health_checks["total_responses_received"] += 1
+
+                            # Start message consumption task
+                            consume_task = asyncio.create_task(consume_messages())
+
+                            # Monitor for interrupt requests while consuming messages
+                            try:
+                                while not consume_task.done():
+                                    try:
+                                        # Check for interrupt requests with short timeout
+                                        interrupt_check = await asyncio.wait_for(
+                                            self._message_queue.get(),
+                                            timeout=0.1
+                                        )
+
+                                        if interrupt_check and interrupt_check.get("type") == "interrupt_request":
+                                            logger.info(f"DEBUG: INTERRUPT RECEIVED while processing messages for session {self.session_id}")
+                                            logger.info(f"DEBUG: Calling client.interrupt() for session {self.session_id}")
+                                            await client.interrupt()
+                                            logger.info(f"DEBUG: INTERRUPT SENT successfully to SDK for session {self.session_id}")
+
+                                            # Note: Interrupt message storage and notification is now handled by session coordinator
+
+                                            # Notify through callback
+                                            if self.message_callback:
+                                                await self._safe_callback(self.message_callback, self.session_id, {
+                                                    "type": "system",
+                                                    "content": "Session interrupted successfully",
+                                                    "subtype": "interrupt_success",
+                                                    "session_id": self.session_id,
+                                                    "timestamp": time.time()
+                                                })
+
+                                            # Mark task as done and break monitoring loop
+                                            self._message_queue.task_done()
+                                            break
+                                        else:
+                                            # Put non-interrupt message back for later processing
+                                            await self._message_queue.put(interrupt_check)
+                                            self._message_queue.task_done()
+
+                                    except asyncio.TimeoutError:
+                                        # No messages in queue, continue monitoring
+                                        continue
+
+                            except Exception as monitor_error:
+                                logger.error(f"Error in interrupt monitoring: {monitor_error}")
+
+                            # Wait for message consumption to complete
+                            with contextlib.suppress(asyncio.CancelledError):
+                                await consume_task
+
+                            self._session_health_checks["last_successful_response"] = time.time()
+
+                        elif message_type == "interrupt_request":
+                            # This case should not happen anymore since we handle interrupts during message processing
+                            logger.warning(f"DEBUG: RECEIVED INTERRUPT REQUEST outside of message processing for session {self.session_id}")
+                            logger.warning(f"DEBUG: This should not happen - interrupts should be handled during active message processing")
+                            # Just mark as done since interrupt should be handled during active message processing
+                            pass
+
+                        elif message_data and message_data.get("content"):
+                            # Fallback for older format (backwards compatibility)
+                            content = message_data["content"]
+                            logger.info(f"Processing legacy message format: {content[:100]}...")
 
                             # Store user message if storage available
                             if self.storage_manager:
