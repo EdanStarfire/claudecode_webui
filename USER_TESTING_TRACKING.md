@@ -51,3 +51,28 @@
 [x] bug: listen on all available IPs, not just 127.0.0.1
 [ ] bug: Layout on mobile is... yucky.
 [ ] feat: Support diff views properly for permissions prompts
+[ ] qol: Shrink session start / session interrupted cards to 1-liners (de-emphasized)
+[ ] qol: Redirect app.log to the data/session folder for debugging purposes
+[ ] bug: autoscroll doesn't scroll when permissions are prompted for
+[ ] feat: Implement Todolist in WebUI
+[ ] feat: Implement Todolist clearing ability in WebUI
+[ ] feat: Implement mode switching (plan, autoaccept writes, normal)
+[ ] qol: Remove data integrity check
+-- Tool Handling:
+[ ] feat: Handle TodoWrite tool content display
+[ ] feat: Handle Read tool content display
+[ ] feat: Handle Write tool content display
+[ ] feat: Handle Edit tool (diff) content display
+[ ] feat: Handle MultiEdit tool (diff) content display
+[ ] feat: Handle Task tool content display
+[ ] feat: Handle NotebookEdit tool content display
+[ ] feat: Handle Glob tool content display
+[ ] feat: Handle Grep tool content display
+[ ] feat: Handle ExitPlanMode tool content display
+[ ] feat: Handle WebFetch tool content display
+[ ] feat: Handle WebSearch tool content display
+[ ] feat: Handle SlashCommand tool content display
+[ ] feat: Handle BashOutput tool content display
+[ ] feat: Handle KillShell tool content display
+[ ] feat: Handle Bash tool content display
+[ ] feat: Handle MCP tool content display
