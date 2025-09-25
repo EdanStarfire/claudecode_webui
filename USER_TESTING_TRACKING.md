@@ -40,7 +40,7 @@
 [x] bug: permissions_callback not sent to resumed sessions like it should be - it is passed to new sessions though
 [x] feat: implement permissions_callback handling
 [x] feat: capture permission prompt functionality in a generic sense (web_server.py:582 function)
-[ ] feat: Interactive permission prompt mechanism
+[x] feat: Interactive permission prompt mechanism
 [ ] qol: use the Claude provided tool use ID for tracking the permission request + approval/denial instead of an internally generated UUID
 [x] feat: capture ThinkingBlock messages for surfacing later on
 [x] feat: Implement cancel "working" state using client.interrupt  - example: https://github.com/anthropics/claude-code-sdk-python/blob/main/examples/streaming_mode.py
@@ -48,4 +48,6 @@
 [x] bug: In messages.jsonl, some messages have blank content (result, system messages for example) from the SDK - these should be more descriptive and include appropriate metadata we need to ensure we understand what the message is doing.
 [ ] feat: Allow session re-ordering
 [ ] feat: New sessions should go to the top of the list
-
+[x] bug: listen on all available IPs, not just 127.0.0.1
+[ ] bug: Layout on mobile is... yucky.
+[ ] feat: Support diff views properly for permissions prompts

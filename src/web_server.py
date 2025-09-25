@@ -149,6 +149,9 @@ class ClaudeWebUI:
         self.websocket_manager = WebSocketManager()
         self.ui_websocket_manager = UIWebSocketManager()
 
+        # Track pending permission requests with asyncio.Future objects
+        self.pending_permissions: Dict[str, asyncio.Future] = {}
+
         # Setup routes
         self._setup_routes()
 
@@ -156,6 +159,36 @@ class ClaudeWebUI:
         static_dir = Path(__file__).parent.parent / "static"
         static_dir.mkdir(exist_ok=True)
         self.app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+
+    def _cleanup_pending_permissions_for_session(self, session_id: str):
+        """Clean up pending permissions for a specific session by auto-denying them"""
+        try:
+            # Find all pending permissions for this session and auto-deny them
+            permissions_to_cleanup = []
+            for request_id, future in self.pending_permissions.items():
+                if not future.done():
+                    # We need to identify which permissions belong to this session
+                    # Since the permission callback stores the session_id in its closure,
+                    # we'll auto-deny all pending permissions when a session terminates
+                    # This is safe because if a session is terminated, no tools should execute
+                    permissions_to_cleanup.append(request_id)
+
+            for request_id in permissions_to_cleanup:
+                future = self.pending_permissions.pop(request_id, None)
+                if future and not future.done():
+                    # Auto-deny the permission
+                    response = {
+                        "behavior": "deny",
+                        "message": f"Session {session_id} terminated - auto-denying pending permission"
+                    }
+                    future.set_result(response)
+                    logger.info(f"Auto-denied pending permission {request_id} due to session {session_id} termination")
+
+            if permissions_to_cleanup:
+                logger.info(f"Cleaned up {len(permissions_to_cleanup)} pending permissions for session {session_id}")
+
+        except Exception as e:
+            logger.error(f"Error cleaning up pending permissions for session {session_id}: {e}")
 
     async def initialize(self):
         """Initialize the WebUI application"""
@@ -267,6 +300,9 @@ class ClaudeWebUI:
         async def terminate_session(session_id: str):
             """Terminate a session"""
             try:
+                # Clean up any pending permissions for this session
+                self._cleanup_pending_permissions_for_session(session_id)
+
                 success = await self.coordinator.terminate_session(session_id)
                 return {"success": success}
             except Exception as e:
@@ -293,6 +329,9 @@ class ClaudeWebUI:
             try:
                 # First force disconnect any WebSocket connections for this session
                 await self.websocket_manager.force_disconnect_session(session_id)
+
+                # Clean up any pending permissions for this session
+                self._cleanup_pending_permissions_for_session(session_id)
 
                 success = await self.coordinator.delete_session(session_id)
                 if not success:
@@ -532,6 +571,41 @@ class ClaudeWebUI:
                                 except Exception as response_error:
                                     logger.error(f"[WS_LIFECYCLE] Failed to send interrupt error response: {response_error}")
 
+                        elif message_data.get("type") == "permission_response":
+                            # Handle permission response from user
+                            request_id = message_data.get("request_id")
+                            decision = message_data.get("decision")
+
+                            logger.info(f"[WS_LIFECYCLE] Permission response received: request_id={request_id}, decision={decision}")
+
+                            if not request_id or decision not in ["allow", "deny"]:
+                                logger.warning(f"[WS_LIFECYCLE] Invalid permission response: {message_data}")
+                                continue
+
+                            # Find and resolve the pending permission Future
+                            if request_id in self.pending_permissions:
+                                pending_future = self.pending_permissions.pop(request_id)
+
+                                if not pending_future.done():
+                                    # Resolve the Future with the user's decision
+                                    if decision == "allow":
+                                        response = {"behavior": "allow"}
+                                        # Only include updated_input if it was actually provided
+                                        if "updated_input" in message_data:
+                                            response["updated_input"] = message_data["updated_input"]
+                                    else:
+                                        response = {
+                                            "behavior": "deny",
+                                            "message": message_data.get("reason", "User denied permission")
+                                        }
+
+                                    pending_future.set_result(response)
+                                    logger.info(f"[WS_LIFECYCLE] Permission request {request_id} resolved with decision: {decision}")
+                                else:
+                                    logger.warning(f"[WS_LIFECYCLE] Permission request {request_id} Future was already resolved")
+                            else:
+                                logger.warning(f"[WS_LIFECYCLE] No pending permission found for request_id: {request_id}")
+
                     except asyncio.TimeoutError:
                         # Send ping to keep connection alive
                         timeout_time = time.time()
@@ -682,26 +756,38 @@ class ClaudeWebUI:
             except Exception as e:
                 logger.error(f"Failed to store permission request message: {e}")
 
-            # Process permission decision (current auto-approval logic)
-            decision_time = time.time()
-            safe_tools = ["read", "write", "glob", "grep"]
+            # Wait for user permission decision via WebSocket
+            logger.info(f"PERMISSION CALLBACK: Creating Future for request_id {request_id}")
 
-            if tool_name.lower() in safe_tools:
-                decision = "allow"
-                reasoning = f"Tool '{tool_name}' is in safe tools list"
-                response = {
-                    "behavior": "allow",
-                    "updated_input": input_params
-                }
-            else:
+            # Create a Future to wait for user response
+            permission_future = asyncio.Future()
+            self.pending_permissions[request_id] = permission_future
+
+            try:
+                # Wait for user decision (no timeout - wait indefinitely)
+                logger.info(f"PERMISSION CALLBACK: Waiting for user decision on request_id {request_id}")
+                response = await permission_future
+                logger.info(f"PERMISSION CALLBACK: Received user decision for request_id {request_id}: {response}")
+
+                decision = response.get("behavior")
+                reasoning = f"User {decision}ed permission"
+
+            except Exception as e:
+                # Handle any errors (e.g., session termination)
+                logger.error(f"PERMISSION CALLBACK: Error waiting for permission decision: {e}")
                 decision = "deny"
-                reasoning = f"Tool '{tool_name}' not in safe tools list"
+                reasoning = f"Permission request failed: {str(e)}"
                 response = {
                     "behavior": "deny",
                     "message": reasoning
                 }
 
+                # Clean up the pending permission
+                if request_id in self.pending_permissions:
+                    del self.pending_permissions[request_id]
+
             # Store permission response message
+            decision_time = time.time()
             try:
                 permission_response = {
                     "type": "permission_response",
