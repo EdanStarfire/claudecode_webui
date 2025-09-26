@@ -11,6 +11,7 @@ from dataclasses import dataclass, asdict
 
 from .logging_config import get_logger
 from .data_storage import DataStorageManager
+from .message_parser import MessageProcessor, MessageParser
 
 # Import SDK components
 try:
@@ -175,6 +176,10 @@ class ClaudeSDK:
 
         # Claude Code's actual session ID (captured from init message)
         self._claude_code_session_id: Optional[str] = None
+
+        # Initialize MessageProcessor for unified message handling
+        self._message_parser = MessageParser()
+        self._message_processor = MessageProcessor(self._message_parser)
 
         # Session health monitoring
         self._session_health_checks = {
@@ -677,42 +682,76 @@ class ClaudeSDK:
                 await self._safe_callback(self.error_callback, "sdk_message_processing_failed", e)
     
     async def _store_sdk_message(self, converted_message: Dict[str, Any], raw_sdk_message: Any = None):
-        """Store the SDK message in a serializable format."""
-        storage_message = {
-            "type": converted_message.get("type", "unknown"),
-            "content": converted_message.get("content", ""),
-            "session_id": converted_message.get("session_id"),
-            "timestamp": converted_message.get("timestamp"),
-            "sdk_message_type": converted_message.get("sdk_message").__class__.__name__
-            if converted_message.get("sdk_message")
-            else None,
-        }
+        """Store the SDK message using unified MessageProcessor for consistent format."""
+        try:
+            # Process the message through MessageProcessor to get standardized metadata
+            parsed_message = self._message_processor.process_message(converted_message, source="sdk")
 
-        # Add raw SDK response for debugging
-        if raw_sdk_message is not None:
+            # Prepare for storage using MessageProcessor
+            storage_data = self._message_processor.prepare_for_storage(parsed_message)
+
+            # Ensure raw SDK data is preserved for debugging
+            raw_sdk_data = self._capture_raw_sdk_data(raw_sdk_message or converted_message.get("sdk_message"))
+            if raw_sdk_data:
+                # Store only the standardized field name
+                storage_data["raw_sdk_message"] = raw_sdk_data
+
+            # Add SDK-specific metadata
+            if converted_message.get("sdk_message"):
+                storage_data["sdk_message_type"] = converted_message.get("sdk_message").__class__.__name__
+
+            logger.debug(f"Storing processed SDK message: {storage_data.get('type', 'unknown')}")
+            await self.storage_manager.append_message(storage_data)
+
+        except Exception as e:
+            logger.error(f"Failed to store SDK message through MessageProcessor: {e}")
+            # Fallback to original storage format if processing fails
+            storage_message = {
+                "type": converted_message.get("type", "unknown"),
+                "content": converted_message.get("content", ""),
+                "session_id": converted_message.get("session_id"),
+                "timestamp": converted_message.get("timestamp"),
+                "error": f"MessageProcessor storage failed: {str(e)}"
+            }
+            await self.storage_manager.append_message(storage_message)
+
+    def _capture_raw_sdk_data(self, sdk_message: Any) -> Optional[str]:
+        """Capture raw SDK message data in a standardized, serializable format."""
+        if sdk_message is None:
+            return None
+
+        try:
+            import json
+
+            # For SDK objects, capture all non-private attributes comprehensively
+            raw_data = {}
+
+            # Add type information
+            raw_data["__class__"] = sdk_message.__class__.__name__
+            raw_data["__module__"] = getattr(sdk_message.__class__, "__module__", "unknown")
+
+            # Capture all accessible attributes
+            for attr in dir(sdk_message):
+                if not attr.startswith('_') and not callable(getattr(sdk_message, attr, None)):
+                    try:
+                        value = getattr(sdk_message, attr)
+                        # Try to serialize the value
+                        json.dumps(value)
+                        raw_data[attr] = value
+                    except (TypeError, ValueError):
+                        # If not directly serializable, convert to string representation
+                        raw_data[attr] = str(value)
+
+            # Store as JSON string
+            return json.dumps(raw_data)
+
+        except Exception as e:
+            logger.warning(f"Failed to capture raw SDK data: {e}")
+            # Ultimate fallback - string representation
             try:
-                import json
-                # Capture all non-private attributes
-                raw_data = {}
-                for attr in dir(raw_sdk_message):
-                    if not attr.startswith('_') and not callable(getattr(raw_sdk_message, attr, None)):
-                        try:
-                            value = getattr(raw_sdk_message, attr)
-                            json.dumps(value)  # Test if serializable
-                            raw_data[attr] = value
-                        except (TypeError, ValueError):
-                            raw_data[attr] = str(value)
-                storage_message["raw_sdk_response"] = json.dumps(raw_data)
-            except Exception as e:
-                # Final fallback
-                storage_message["raw_sdk_response"] = json.dumps(str(raw_sdk_message))
-
-        for key, value in converted_message.items():
-            if key not in ["sdk_message"] and isinstance(
-                value, (str, int, float, bool, type(None))
-            ):
-                storage_message[key] = value
-        await self.storage_manager.append_message(storage_message)
+                return json.dumps({"__fallback__": str(sdk_message)})
+            except Exception:
+                return json.dumps({"__fallback__": "failed to serialize"})
 
     async def _can_use_tool_callback(
         self,

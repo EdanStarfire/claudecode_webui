@@ -15,6 +15,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 
 from .session_coordinator import SessionCoordinator
+from .message_parser import MessageProcessor, MessageParser
 from .logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -148,6 +149,10 @@ class ClaudeWebUI:
         self.coordinator = SessionCoordinator(data_dir)
         self.websocket_manager = WebSocketManager()
         self.ui_websocket_manager = UIWebSocketManager()
+
+        # Initialize MessageProcessor for unified WebSocket message formatting
+        self._message_parser = MessageParser()
+        self._message_processor = MessageProcessor(self._message_parser)
 
         # Track pending permission requests with asyncio.Future objects
         self.pending_permissions: Dict[str, asyncio.Future] = {}
@@ -656,27 +661,26 @@ class ClaudeWebUI:
                 logger.info(f"[WS_LIFECYCLE] WebSocket loop ENDED for session {session_id}")
 
     def _create_message_callback(self, session_id: str):
-        """Create message callback for WebSocket broadcasting"""
+        """Create message callback for WebSocket broadcasting using unified MessageProcessor"""
         async def callback(session_id: str, message_data: Any):
             logger.info(f"WebSocket callback triggered for session {session_id}, message type: {getattr(message_data, 'type', 'unknown')}")
             try:
-                # Convert message to JSON-serializable format
+                # Process message and prepare for WebSocket using MessageProcessor
                 if hasattr(message_data, '__dict__'):
-                    # Handle dataclass/object messages
-                    serialized = {
-                        "type": "message",
-                        "session_id": session_id,
-                        "data": self._serialize_message(message_data),
-                        "timestamp": datetime.now(timezone.utc).isoformat()
-                    }
+                    # Handle ParsedMessage objects (from MessageProcessor)
+                    websocket_data = self._message_processor.prepare_for_websocket(message_data)
                 else:
-                    # Handle dict messages
-                    serialized = {
-                        "type": "message",
-                        "session_id": session_id,
-                        "data": message_data,
-                        "timestamp": datetime.now(timezone.utc).isoformat()
-                    }
+                    # Handle raw dict messages - process them first
+                    processed_message = self._message_processor.process_message(message_data, source="websocket")
+                    websocket_data = self._message_processor.prepare_for_websocket(processed_message)
+
+                # Wrap in standard WebSocket envelope
+                serialized = {
+                    "type": "message",
+                    "session_id": session_id,
+                    "data": websocket_data,
+                    "timestamp": datetime.now(timezone.utc).isoformat()
+                }
 
                 logger.info(f"Attempting to send WebSocket message for session {session_id}: {serialized['type']}")
                 await self.websocket_manager.send_message(session_id, serialized)
@@ -734,11 +738,35 @@ class ClaudeWebUI:
                     "request_id": request_id
                 }
 
-                # Get storage manager for this session
-                storage_manager = await self.coordinator.get_session_storage(session_id)
-                if storage_manager:
-                    await storage_manager.append_message(permission_request)
-                    logger.debug(f"Stored permission request message for session {session_id}")
+                # Store using unified MessageProcessor for consistency
+                try:
+                    processed_message = self._message_processor.process_message(permission_request, source="permission")
+                    storage_data = self._message_processor.prepare_for_storage(processed_message)
+
+                    storage_manager = await self.coordinator.get_session_storage(session_id)
+                    if storage_manager:
+                        await storage_manager.append_message(storage_data)
+                        logger.debug(f"Stored processed permission request message for session {session_id}")
+
+                    # Broadcast permission request to WebSocket clients
+                    try:
+                        websocket_data = self._message_processor.prepare_for_websocket(processed_message)
+                        websocket_message = {
+                            "type": "message",
+                            "session_id": session_id,
+                            "data": websocket_data,
+                            "timestamp": datetime.now(timezone.utc).isoformat()
+                        }
+                        await self.websocket_manager.send_message(session_id, websocket_message)
+                        logger.info(f"Broadcasted permission request to WebSocket for session {session_id}")
+                    except Exception as ws_error:
+                        logger.error(f"Failed to broadcast permission request to WebSocket: {ws_error}")
+                except Exception as storage_error:
+                    logger.error(f"Failed to store permission request with MessageProcessor: {storage_error}")
+                    # Fallback to direct storage
+                    storage_manager = await self.coordinator.get_session_storage(session_id)
+                    if storage_manager:
+                        await storage_manager.append_message(permission_request)
 
                     # Broadcast permission request to WebSocket clients
                     try:
@@ -801,9 +829,19 @@ class ClaudeWebUI:
                     "response_time_ms": int((decision_time - request_time) * 1000)
                 }
 
-                if storage_manager:
-                    await storage_manager.append_message(permission_response)
-                    logger.debug(f"Stored permission response message for session {session_id}")
+                # Store using unified MessageProcessor for consistency
+                try:
+                    processed_message = self._message_processor.process_message(permission_response, source="permission")
+                    storage_data = self._message_processor.prepare_for_storage(processed_message)
+
+                    if storage_manager:
+                        await storage_manager.append_message(storage_data)
+                        logger.debug(f"Stored processed permission response message for session {session_id}")
+                except Exception as storage_error:
+                    logger.error(f"Failed to store permission response with MessageProcessor: {storage_error}")
+                    # Fallback to direct storage
+                    if storage_manager:
+                        await storage_manager.append_message(permission_response)
 
                     # Broadcast permission response to WebSocket clients
                     try:
@@ -826,56 +864,7 @@ class ClaudeWebUI:
 
         return permission_callback
 
-    def _serialize_message(self, message_data: Any) -> dict:
-        """Serialize message data for JSON transmission"""
-        try:
-            if hasattr(message_data, 'type'):
-                msg_type = message_data.type.value if hasattr(message_data.type, 'value') else str(message_data.type)
-            else:
-                msg_type = "unknown"
-
-            content = getattr(message_data, 'content', str(message_data)) if hasattr(message_data, 'content') else ""
-
-            # Include metadata fields, especially subtype for init message detection
-            result = {
-                "type": msg_type,
-                "content": content,
-                "timestamp": getattr(message_data, 'timestamp', datetime.now(timezone.utc).isoformat())
-            }
-
-            # Add full metadata if available
-            if hasattr(message_data, 'metadata') and message_data.metadata:
-                # Create a serializable copy of metadata (exclude non-serializable objects)
-                metadata_copy = {}
-                for key, value in message_data.metadata.items():
-                    try:
-                        # Test if value is JSON serializable by trying to serialize it
-                        import json
-                        json.dumps(value)
-                        metadata_copy[key] = value
-                    except (TypeError, ValueError):
-                        # Skip non-serializable values (like SDK objects)
-                        if key == 'sdk_message':
-                            continue
-                        # Convert other objects to string representation
-                        metadata_copy[key] = str(value)
-
-                if metadata_copy:
-                    result['metadata'] = metadata_copy
-
-                # Maintain backward compatibility - still add subtype to root level
-                subtype = message_data.metadata.get('subtype')
-                if subtype:
-                    result['subtype'] = subtype
-
-            return result
-        except Exception as e:
-            logger.error(f"Error serializing message: {e}")
-            return {
-                "type": "unknown",
-                "content": str(message_data),
-                "timestamp": datetime.now(timezone.utc).isoformat()
-            }
+# _serialize_message method removed - now using MessageProcessor.prepare_for_websocket() for unified formatting
 
     def _default_html(self) -> str:
         """Default HTML content when no index.html exists"""

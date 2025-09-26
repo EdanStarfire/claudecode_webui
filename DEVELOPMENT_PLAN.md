@@ -982,6 +982,64 @@ data/                         # Runtime data (created by app)
 
 **Impact**: Completed transformation from auto-approval to interactive permission system, providing users with full control over Claude Code tool usage while maintaining robust error handling and proper resource management throughout the permission lifecycle
 
+### Phase 3.14: Message Handling Architectural Refactor ✅ COMPLETED
+**Goal**: Consolidate and unify message processing architecture to eliminate dual processing paths
+**Status**: Completed 2025-09-25
+
+**Feature Implementation**:
+1. **Unified Message Processing Pipeline** ✅
+   - Deleted `CONSOLIDATE_MESSAGE_HANDLING.md` comprehensive implementation plan (303 lines)
+   - Implemented `MessageProcessor` class for unified message handling across real-time and historical flows
+   - Added standardized `_extract_business_data()` methods to all message handlers
+   - Enhanced raw SDK data preservation with `raw_sdk_message` standardization
+
+2. **Raw SDK Data Architecture Overhaul** ✅
+   - Removed string parsing of raw SDK responses (eliminated `extract_thinking_from_string()`)
+   - Added `_capture_raw_sdk_data()` method for comprehensive SDK object serialization
+   - Implemented `_get_raw_sdk_data()` with migration support for field naming consistency
+   - Enhanced business logic separation from raw SDK format dependencies
+
+3. **MessageParser Architectural Enhancement** ✅
+   - Added abstract `_extract_business_data()` method to `MessageHandler` base class
+   - Implemented `_standardize_metadata_fields()` for consistent metadata structure
+   - Enhanced `SystemMessageHandler` with comprehensive business data extraction
+   - Added robust metadata extraction from both SDK objects and dictionary data
+
+4. **Storage and Processing Integration** ✅
+   - Updated `_store_sdk_message()` to use MessageProcessor for consistent storage format
+   - Enhanced comprehensive error handling and fallback mechanisms throughout storage pipeline
+   - Improved message processing consistency between real-time and historical flows
+   - Added future-proofing for SDK format changes without breaking application functionality
+
+**User Testing Completion**:
+- ✅ Unified message processing paths eliminating fallbacks and duplicate processing
+- ✅ Consistent message behavior regardless of real-time vs historical loading source
+- ✅ Enhanced code organization for smaller file sizes and easier maintenance
+- ✅ Business logic completely independent of raw SDK format changes
+
+**Technical Implementation**:
+- `src/claude_sdk.py`: Added MessageProcessor integration, enhanced `_store_sdk_message()` and `_capture_raw_sdk_data()` methods
+- `src/message_parser.py`: Major architectural refactor with abstract business data extraction, removed string parsing logic
+- `src/session_coordinator.py`: Integration with new MessageProcessor architecture
+- `src/web_server.py`: Updated for unified message processing pipeline
+- `static/app.js`: Consolidated message processing paths for real-time and historical messages
+
+**Architectural Achievements**:
+- **Single Source of Truth**: One processing pipeline handles all messages consistently
+- **Future-Proof Design**: SDK format changes won't break application functionality
+- **Clean Separation**: Business logic completely independent of raw SDK format
+- **Maintainability**: Changes to message handling only need to be made in one place
+- **Data Preservation**: Raw SDK data preserved for debugging while removing business dependencies
+
+**User Experience Impact**:
+- Consistent message behavior whether messages arrive real-time or are loaded from storage
+- Eliminated inconsistencies in tool call handling and message display
+- Enhanced reliability through unified processing architecture
+- Improved debugging capabilities with preserved raw SDK data
+- Reduced complexity and improved code maintainability
+
+**Impact**: Completed major architectural refactor consolidating message handling across the entire application, ensuring consistent behavior regardless of message source, eliminating dual processing paths, and creating future-proof architecture that maintains functionality as the Claude Code SDK evolves
+
 ---
 
 ## Future Phases (Post-MVP)

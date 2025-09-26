@@ -14,7 +14,7 @@ import logging
 from .session_manager import SessionManager, SessionState, SessionInfo
 from .data_storage import DataStorageManager
 from .claude_sdk import ClaudeSDK
-from .message_parser import MessageParser
+from .message_parser import MessageParser, MessageProcessor
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +35,7 @@ class SessionCoordinator:
         self.data_dir = data_dir or Path("data")
         self.session_manager = SessionManager(self.data_dir)
         self.message_parser = MessageParser()
+        self.message_processor = MessageProcessor(self.message_parser)
 
         # Active SDK instances
         self._active_sdks: Dict[str, ClaudeSDK] = {}
@@ -511,27 +512,41 @@ class SessionCoordinator:
             raw_messages = await storage.read_messages(limit=limit, offset=offset)
             total_count = await storage.get_message_count()
 
-            # Parse historical messages to ensure consistent metadata (tool_uses, etc.)
+            # Convert stored messages to WebSocket format (skip re-processing if already processed)
             parsed_messages = []
             for raw_message in raw_messages:
                 try:
-                    parsed_message = self.message_parser.parse_message(raw_message)
-                    # Convert back to dict format for JSON serialization
-                    serialized = {
-                        "type": parsed_message.type.value,
-                        "content": parsed_message.content,
-                        "timestamp": parsed_message.timestamp,
-                        "session_id": parsed_message.session_id,
-                        "metadata": parsed_message.metadata
-                    }
-                    # Preserve any additional fields from the raw message
-                    for key, value in raw_message.items():
-                        if key not in serialized and key != "sdk_message":
-                            serialized[key] = value
-                    parsed_messages.append(serialized)
+                    # Check if message is already fully processed (has metadata)
+                    if isinstance(raw_message.get("metadata"), dict) and raw_message.get("type") and raw_message.get("content") is not None:
+                        # Message is already processed, just prepare for WebSocket
+                        websocket_data = {
+                            "type": raw_message["type"],
+                            "content": raw_message["content"],
+                            "timestamp": raw_message.get("timestamp"),
+                            "metadata": raw_message["metadata"],
+                            "session_id": raw_message.get("session_id")
+                        }
+                        # Maintain backward compatibility with subtype at root level
+                        if raw_message.get("metadata") and 'subtype' in raw_message["metadata"]:
+                            websocket_data["subtype"] = raw_message["metadata"]['subtype']
+
+                        parsed_messages.append(websocket_data)
+                    else:
+                        # Message needs processing - run through MessageProcessor
+                        processed_message = self.message_processor.process_message(raw_message, source="storage")
+                        websocket_data = self.message_processor.prepare_for_websocket(processed_message)
+                        parsed_messages.append(websocket_data)
                 except Exception as e:
-                    logger.warning(f"Failed to parse historical message, using raw: {e}")
-                    parsed_messages.append(raw_message)
+                    logger.warning(f"Failed to prepare historical message for WebSocket: {e}")
+                    # Fallback to basic format
+                    fallback_data = {
+                        "type": processed_message.type.value,
+                        "content": processed_message.content,
+                        "timestamp": processed_message.timestamp
+                    }
+                    if processed_message.session_id:
+                        fallback_data["session_id"] = processed_message.session_id
+                    parsed_messages.append(fallback_data)
 
             # Calculate pagination metadata
             actual_limit = limit or 50
@@ -572,12 +587,36 @@ class SessionCoordinator:
         """Add callback for session state changes"""
         self._state_change_callbacks.append(callback)
 
+    async def _store_processed_message(self, session_id: str, message_data: Dict[str, Any]):
+        """Store message using unified MessageProcessor for consistent format."""
+        try:
+            # Process the message through MessageProcessor
+            parsed_message = self.message_processor.process_message(message_data, source="system")
+
+            # Prepare for storage using MessageProcessor
+            storage_data = self.message_processor.prepare_for_storage(parsed_message)
+
+            # Store in session storage
+            storage = self._storage_managers.get(session_id)
+            if storage:
+                logger.debug(f"Storing processed system message: {storage_data.get('type', 'unknown')}")
+                await storage.append_message(storage_data)
+            else:
+                logger.warning(f"No storage manager found for session {session_id}")
+
+        except Exception as e:
+            logger.error(f"Failed to store processed message for session {session_id}: {e}")
+            # Fallback to direct storage
+            storage = self._storage_managers.get(session_id)
+            if storage:
+                await storage.append_message(message_data)
+
     def _create_message_callback(self, session_id: str) -> Callable:
-        """Create message callback for a session"""
+        """Create message callback for a session using unified MessageProcessor"""
         async def callback(message_data: Dict[str, Any]):
             try:
-                # Parse message using message parser
-                parsed_message = self.message_parser.parse_message(message_data)
+                # Process message using unified MessageProcessor
+                parsed_message = self.message_processor.process_message(message_data, source="sdk")
 
                 # Check if this message indicates processing completion
                 if parsed_message.type.value == 'result':
@@ -588,9 +627,10 @@ class SessionCoordinator:
                     except Exception as e:
                         logger.error(f"Failed to reset processing state for session {session_id}: {e}")
 
-                # Call registered callbacks
+                # Call registered callbacks with processed message (maintain backward compatibility)
                 callbacks = self._message_callbacks.get(session_id, [])
                 logger.info(f"Processing message for session {session_id}, found {len(callbacks)} callbacks")
+
                 for cb in callbacks:
                     try:
                         if asyncio.iscoroutinefunction(cb):
@@ -681,10 +721,8 @@ class SessionCoordinator:
                 "sdk_message_type": "SystemMessage"
             }
 
-            # Store message in storage
-            storage = self._storage_managers.get(session_id)
-            if storage:
-                await storage.append_message(message_data)
+            # Process and store message using unified MessageProcessor
+            await self._store_processed_message(session_id, message_data)
 
             # Send through message callback system for real-time display
             callback = self._create_message_callback(session_id)
@@ -710,10 +748,8 @@ class SessionCoordinator:
                 "error_details": error_message
             }
 
-            # Store message in storage
-            storage = self._storage_managers.get(session_id)
-            if storage:
-                await storage.append_message(message_data)
+            # Process and store message using unified MessageProcessor
+            await self._store_processed_message(session_id, message_data)
 
             # Send through message callback system for real-time display
             callback = self._create_message_callback(session_id)
@@ -738,10 +774,8 @@ class SessionCoordinator:
                 "sdk_message_type": "SystemMessage"
             }
 
-            # Store message in storage
-            storage = self._storage_managers.get(session_id)
-            if storage:
-                await storage.append_message(message_data)
+            # Process and store message using unified MessageProcessor
+            await self._store_processed_message(session_id, message_data)
 
             # Send through message callback system for real-time display
             callback = self._create_message_callback(session_id)

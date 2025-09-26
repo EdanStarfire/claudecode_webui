@@ -11,6 +11,14 @@ class ToolCallManager {
 
     createToolSignature(toolName, inputParams) {
         // Create unique signature from tool name + params
+        if (!toolName) {
+            console.error('createToolSignature called with undefined toolName:', toolName, inputParams);
+            return 'unknown:{}';
+        }
+        if (!inputParams || typeof inputParams !== 'object') {
+            console.warn('createToolSignature called with invalid inputParams:', toolName, inputParams);
+            return `${toolName}:{}`;
+        }
         const paramsHash = JSON.stringify(inputParams, Object.keys(inputParams).sort());
         return `${toolName}:${paramsHash}`;
     }
@@ -637,77 +645,95 @@ class ClaudeWebUI {
     // Frontend processing detection methods removed - now using backend state propagation
 
     shouldDisplayMessage(message) {
-        // Filter out init system messages
-        if (message.type === 'system' && message.subtype === 'init') {
-            console.log('Filtering out init system message with subtype:', message.subtype);
-            return false;
+        // Get subtype from metadata or root level for backward compatibility
+        const subtype = message.subtype || message.metadata?.subtype;
+
+        // === SYSTEM MESSAGE FILTERING ===
+        if (message.type === 'system') {
+            // Filter out init messages (not user-visible)
+            if (subtype === 'init') {
+                return false;
+            }
+
+            // Allow user-relevant system messages
+            if (subtype === 'client_launched' || subtype === 'interrupt') {
+                return true;
+            }
+
+            // Allow other system messages (errors, status, etc.)
+            return true;
         }
 
-        // Filter out result messages
+        // === INFRASTRUCTURE MESSAGE FILTERING ===
+        // Filter out result messages (internal completion markers)
         if (message.type === 'result') {
-            console.log('Filtering out result message');
             return false;
         }
 
-        // Filter out permission messages (handled by tool call system)
+        // Filter out permission messages (handled by tool call UI)
         if (message.type === 'permission_request' || message.type === 'permission_response') {
-            console.log('Filtering out permission message:', message.type);
             return false;
         }
 
-        // Allow client_launched system messages to be displayed
-        if (message.type === 'system' && message.subtype === 'client_launched') {
-            console.log('Displaying client launched system message');
-            return true;
+        // === TOOL-RELATED MESSAGE FILTERING ===
+        // Filter out assistant messages with tool uses (replaced by tool call cards)
+        if (message.type === 'assistant' && this._hasToolUses(message)) {
+            return false;
         }
 
-        // Allow interrupt system messages to be displayed
-        if (message.type === 'system' && message.subtype === 'interrupt') {
-            console.log('Displaying interrupt system message');
-            return true;
+        // Filter out user messages with tool results (replaced by tool call cards)
+        if (message.type === 'user' && this._hasToolResults(message)) {
+            return false;
         }
 
-        // Debug all user messages to find interrupt messages
+        // === USER MESSAGE FILTERING ===
         if (message.type === 'user') {
-            console.log('DEBUG: User message found:', {
-                type: message.type,
-                content: message.content,
-                contentLength: message.content?.length,
-                contentJson: JSON.stringify(message.content)
-            });
+            // Filter out interrupt messages (shown as system messages instead)
+            if (message.content === '[Request interrupted by user]' ||
+                message.content === '[Request interrupted by user for tool use]' ||
+                subtype === 'interrupt') {
+                return false;
+            }
         }
 
-        // Filter out redundant user interrupt messages
-        if (message.type === 'user' &&
-            (message.content === '[Request interrupted by user]' ||
-             (message.content === '' && message.raw_sdk_response &&
-              message.raw_sdk_response.includes('[Request interrupted by user]')))) {
-            console.log('DEBUG: Filtering out redundant user interrupt message:', message);
-            return false;
-        }
-        // Filter out assistant messages with tool uses (handled by expandable tool cards)
-        if (message.type === 'assistant' && message.metadata && message.metadata.has_tool_uses) {
-            console.log('DEBUG: Filtering out assistant message with tool uses (handled by tool cards):', message.type);
-            return false;
-        }
-        // Filter out user messages with tool results (handled by expandable tool cards)
-        if (message.type === 'user' &&
-            (message.metadata && message.metadata.has_tool_results ||
-             (message.raw_sdk_response && message.raw_sdk_response.includes('ToolResultBlock')))) {
-            console.log('DEBUG: Filtering out user message with tool results (handled by tool cards):', message.type);
-            return false;
-        }
-
-        // Display all other message types
+        // === DEFAULT ===
+        // Display all other message types (regular user/assistant messages, etc.)
         return true;
     }
 
-    handleIncomingMessage(message) {
-        console.log('Processing incoming message:', message);
+    /**
+     * Check if message has tool uses using metadata
+     */
+    _hasToolUses(message) {
+        return message.metadata &&
+               message.metadata.has_tool_uses === true &&
+               message.metadata.tool_uses &&
+               Array.isArray(message.metadata.tool_uses) &&
+               message.metadata.tool_uses.length > 0;
+    }
 
-        // Handle progress indicator for init messages
-        if (message.type === 'system' && message.subtype === 'init') {
-            // Don't show init messages, just ensure progress indicator is visible
+
+    /**
+     * Check if message has tool results using metadata
+     */
+    _hasToolResults(message) {
+        return message.metadata &&
+               message.metadata.has_tool_results === true &&
+               message.metadata.tool_results &&
+               Array.isArray(message.metadata.tool_results) &&
+               message.metadata.tool_results.length > 0;
+    }
+
+    /**
+     * Unified message processing function for both real-time and historical messages
+     * @param {Object} message - The message to process
+     * @param {string} source - Source of message: 'websocket' or 'historical'
+     */
+    processMessage(message, source = 'websocket') {
+        console.log(`Processing message from ${source}:`, message);
+
+        // Handle progress indicator for init messages (real-time only)
+        if (source === 'websocket' && message.type === 'system' && message.subtype === 'init') {
             if (!this.isProcessing) {
                 this.showProcessingIndicator();
             }
@@ -719,24 +745,31 @@ class ClaudeWebUI {
         // Check if this is a thinking block message and handle it
         const thinkingHandled = this.handleThinkingBlockMessage(message);
 
+
         // If it's a tool-related or thinking block message, don't show it in the regular message flow
         if (toolHandled || thinkingHandled) {
-            return;
+            return { handled: true, displayed: false };
         }
-
-        // Processing state is now handled by backend - no manual indicator management needed
 
         // Use the unified filtering logic to determine if message should be displayed
         if (this.shouldDisplayMessage(message)) {
-            console.log('Adding message to UI:', message.type);
-            this.addMessageToUI(message);
+            console.log(`Adding ${source} message to UI:`, message.type);
+            this.addMessageToUI(message, source === 'historical');
+            return { handled: true, displayed: true };
         }
+
+        return { handled: true, displayed: false };
     }
 
-    handleToolRelatedMessage(message, skipToolUseCreation = false) {
+    handleIncomingMessage(message) {
+        // Use unified processing for real-time messages
+        this.processMessage(message, 'websocket');
+    }
+
+    handleToolRelatedMessage(message) {
         try {
-            // Handle assistant messages with tool use blocks (skip if already processed in first pass)
-            if (!skipToolUseCreation && message.type === 'assistant' && message.metadata && message.metadata.tool_uses && Array.isArray(message.metadata.tool_uses)) {
+            // Handle assistant messages with tool use blocks
+            if (message.type === 'assistant' && message.metadata && message.metadata.tool_uses && Array.isArray(message.metadata.tool_uses)) {
                 const toolUses = message.metadata.tool_uses;
                 let hasToolUse = false;
 
@@ -758,9 +791,9 @@ class ClaudeWebUI {
             // Handle permission requests
             if (message.type === 'permission_request') {
                 const permissionRequest = {
-                    request_id: message.request_id,
-                    tool_name: message.tool_name,
-                    input_params: message.input_params
+                    request_id: message.request_id || message.metadata?.request_id,
+                    tool_name: message.tool_name || message.metadata?.tool_name,
+                    input_params: message.input_params || message.metadata?.input_params
                 };
 
                 const toolCall = this.toolCallManager.handlePermissionRequest(permissionRequest);
@@ -773,9 +806,9 @@ class ClaudeWebUI {
             // Handle permission responses
             if (message.type === 'permission_response') {
                 const permissionResponse = {
-                    request_id: message.request_id,
-                    decision: message.decision,
-                    reasoning: message.reasoning
+                    request_id: message.request_id || message.metadata?.request_id,
+                    decision: message.decision || message.metadata?.decision,
+                    reasoning: message.reasoning || message.metadata?.reasoning
                 };
 
                 const toolCall = this.toolCallManager.handlePermissionResponse(permissionResponse);
@@ -1766,86 +1799,71 @@ class ClaudeWebUI {
         // Clear the tool call manager for fresh loading
         this.toolCallManager = new ToolCallManager();
 
-        // Two-pass processing for historical messages to handle tool call restoration properly
+        // Single-pass processing for historical messages using unified logic
+        console.log(`Processing ${messages.length} historical messages with unified single-pass approach`);
 
-        // Pass 1: Create all tool calls from assistant messages with tool_uses
         let toolUseCount = 0;
-        messages.forEach((message, index) => {
-            if (message.type === 'assistant' && message.metadata && message.metadata.tool_uses && Array.isArray(message.metadata.tool_uses)) {
-                const toolUses = message.metadata.tool_uses;
-                toolUseCount += toolUses.length;
-                toolUses.forEach(toolUse => {
-                    const toolUseBlock = {
-                        id: toolUse.id,
-                        name: toolUse.name,
-                        input: toolUse.input
-                    };
-                    this.toolCallManager.handleToolUse(toolUseBlock);
-                });
-            }
-        });
-        console.log(`Tool call restoration: Found ${toolUseCount} tool uses in ${messages.length} messages`);
-
-        // Pass 2: Process all messages including permission requests and results
         messages.forEach(message => {
-            // Check if this is a tool-related message and handle it (skip tool use creation since already done)
-            const toolHandled = this.handleToolRelatedMessage(message, true);
+            // Process each message in order - tool calls will be created as needed
+            const result = this.processMessage(message, 'historical');
 
-            // Check if this is a thinking block message and handle it
-            const thinkingHandled = this.handleThinkingBlockMessage(message);
-
-            // If not a tool-related or thinking block message, display it normally
-            if (!toolHandled && !thinkingHandled && this.shouldDisplayMessage(message)) {
-                this.addMessageToUI(message, false);
+            // Count tool uses for logging
+            if (message.type === 'assistant' && message.metadata && message.metadata.tool_uses) {
+                toolUseCount += message.metadata.tool_uses.length;
             }
         });
 
-        // Render all tool calls that were processed during restoration
-        this.toolCallManager.getAllToolCalls().forEach(toolCall => {
-            // Check if this tool call is already rendered
-            const existingElement = document.getElementById(`tool-call-${toolCall.id}`);
-            if (!existingElement) {
-                this.renderToolCall(toolCall);
-            } else {
-                // Update existing tool call with final state
-                this.updateToolCall(toolCall);
-            }
-        });
-
+        console.log(`Single-pass processing complete: Found ${toolUseCount} tool uses in ${messages.length} messages`);
         this.smartScrollToBottom();
     }
 
     addMessageToUI(message, scroll = true) {
         const messagesArea = document.getElementById('messages-area');
         const messageElement = document.createElement('div');
-        messageElement.className = `message ${message.type}`;
+
+        // Use metadata for enhanced styling if available
+        const subtype = message.subtype || message.metadata?.subtype;
+        const messageClass = subtype ? `message ${message.type} ${subtype}` : `message ${message.type}`;
+        messageElement.className = messageClass;
 
         const timestamp = new Date(message.timestamp).toLocaleTimeString();
 
-        // Enhanced message content with JSON display for system/tool messages
+        // Build content using standardized approach
         let contentHtml = '';
         const content = message.content || '';
 
-        if (message.type === 'system' || message.type === 'result' || this.isJsonContent(content)) {
-            // Show both text content and JSON data
+        // Determine display mode based on message type and metadata
+        const shouldShowMetadata = this._shouldShowMetadata(message);
+        const shouldShowJsonContent = this.isJsonContent(content);
+
+        if (shouldShowMetadata || shouldShowJsonContent) {
+            // Show primary text content
             if (content) {
                 contentHtml += `<div class="message-content">${this.escapeHtml(content)}</div>`;
             }
 
-            // Show JSON blob if available
-            if (message.sdk_message || this.isJsonContent(content)) {
-                const jsonData = message.sdk_message || this.tryParseJson(content);
+            // Show metadata or JSON content for debugging/system messages
+            if (shouldShowMetadata) {
+                const debugData = this._getDisplayMetadata(message);
+                if (debugData) {
+                    contentHtml += `<div class="message-json">${this.formatJson(debugData)}</div>`;
+                }
+            } else if (shouldShowJsonContent) {
+                const jsonData = this.tryParseJson(content);
                 if (jsonData) {
                     contentHtml += `<div class="message-json">${this.formatJson(jsonData)}</div>`;
                 }
             }
         } else {
-            // Regular text content
-            contentHtml = `<div class="message-content">${this.escapeHtml(content)}</div>`;
+            // Regular text content with smart formatting
+            contentHtml = this._formatMessageContent(message, content);
         }
 
+        // Build message header with enhanced information
+        const headerText = this._getMessageHeader(message);
+
         messageElement.innerHTML = `
-            <div class="message-header">${message.type}</div>
+            <div class="message-header">${headerText}</div>
             ${contentHtml}
             <div class="message-timestamp">${timestamp}</div>
         `;
@@ -1855,6 +1873,93 @@ class ClaudeWebUI {
         if (scroll) {
             this.smartScrollToBottom();
         }
+    }
+
+    /**
+     * Determine if metadata should be shown for debugging purposes
+     */
+    _shouldShowMetadata(message) {
+        // Show metadata for result messages (internal completion data)
+        if (message.type === 'result') {
+            return true;
+        }
+
+        // For system messages, only show metadata for debugging/error types
+        if (message.type === 'system') {
+            const subtype = message.subtype || message.metadata?.subtype;
+            // Show metadata for internal/debug system messages, not user-facing ones
+            if (subtype === 'interrupt' || subtype === 'client_launched') {
+                return false; // User-facing system messages should be clean
+            }
+            return true; // Other system messages (init, errors, etc.) show metadata
+        }
+
+        // Don't show metadata for regular user and assistant messages
+        if (message.type === 'user' || message.type === 'assistant') {
+            return false;
+        }
+
+        // Show metadata for other message types or unusual cases
+        return false;
+    }
+
+    /**
+     * Get relevant metadata for display (excluding raw data)
+     */
+    _getDisplayMetadata(message) {
+        if (!message.metadata) {
+            return null;
+        }
+
+        // Create clean metadata object excluding raw SDK data
+        const displayMetadata = {};
+
+        for (const [key, value] of Object.entries(message.metadata)) {
+            // Skip raw SDK data fields
+            if (key === 'raw_sdk_message' || key === 'raw_sdk_response' || key === 'sdk_message') {
+                continue;
+            }
+
+            // Skip processing metadata
+            if (key === 'source' || key === 'processed_at') {
+                continue;
+            }
+
+            // Include relevant metadata
+            displayMetadata[key] = value;
+        }
+
+        return Object.keys(displayMetadata).length > 0 ? displayMetadata : null;
+    }
+
+    /**
+     * Format message content with smart handling
+     */
+    _formatMessageContent(message, content) {
+        // Handle empty content
+        if (!content) {
+            // Show placeholder for empty user messages that might have been tool results
+            if (message.type === 'user' && message.metadata?.has_tool_results) {
+                return `<div class="message-content message-empty">[Tool results handled by tool call UI]</div>`;
+            }
+            return `<div class="message-content message-empty">[Empty message]</div>`;
+        }
+
+        // Regular content with proper escaping
+        return `<div class="message-content">${this.escapeHtml(content)}</div>`;
+    }
+
+    /**
+     * Get enhanced message header with subtype information
+     */
+    _getMessageHeader(message) {
+        const subtype = message.subtype || message.metadata?.subtype;
+
+        if (subtype) {
+            return `${message.type} (${subtype})`;
+        }
+
+        return message.type;
     }
 
     handleStateChange(stateData) {
