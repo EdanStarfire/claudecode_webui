@@ -38,6 +38,11 @@ class SessionNameUpdateRequest(BaseModel):
     name: str
 
 
+class SessionReorderRequest(BaseModel):
+    session_ids: List[str]
+    project_id: Optional[str] = None
+
+
 class UIWebSocketManager:
     """Manages global UI WebSocket connections for session state updates"""
 
@@ -368,6 +373,20 @@ class ClaudeWebUI:
                 return result
             except Exception as e:
                 logger.error(f"Failed to get messages: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @self.app.put("/api/sessions/reorder")
+        async def reorder_sessions(request: SessionReorderRequest):
+            """Reorder sessions by updating their order values"""
+            try:
+                success = await self.coordinator.session_manager.reorder_sessions(
+                    request.session_ids, request.project_id
+                )
+                if not success:
+                    raise HTTPException(status_code=400, detail="Failed to reorder sessions")
+                return {"success": success}
+            except Exception as e:
+                logger.error(f"Failed to reorder sessions: {e}")
                 raise HTTPException(status_code=500, detail=str(e))
 
         @self.app.websocket("/ws/ui")

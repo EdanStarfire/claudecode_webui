@@ -237,6 +237,38 @@ body {
     border-color: #2196f3;
 }
 
+/* Drag and Drop Styles */
+.session-item.dragging {
+    opacity: 0.6;
+    transform: rotate(5deg);
+    border: 2px dashed #007bff;
+    background: #f0f8ff;
+    box-shadow: 0 4px 8px rgba(0, 123, 255, 0.3);
+}
+
+.session-item[draggable="true"] {
+    cursor: move;
+}
+
+.session-item[draggable="true"]:hover {
+    cursor: move;
+}
+
+.drop-indicator {
+    height: 3px;
+    background: #007bff;
+    border-radius: 2px;
+    margin: 2px 0;
+    opacity: 0.8;
+    animation: pulse 1s infinite;
+}
+
+@keyframes pulse {
+    0% { opacity: 0.6; }
+    50% { opacity: 1; }
+    100% { opacity: 0.6; }
+}
+
 .session-header {
     display: flex;
     align-items: center;
@@ -428,8 +460,9 @@ body {
 .message.user {
     margin-left: auto;
     margin-right: 0;
-    background: #007bff;
-    color: white;
+    background: #e3f2fd;
+    border: 1px solid #2196f3;
+    color: #333;
 }
 
 .message.assistant {

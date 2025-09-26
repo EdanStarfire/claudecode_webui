@@ -221,6 +221,7 @@ class ClaudeWebUI {
     constructor() {
         this.currentSessionId = null;
         this.sessions = new Map();
+        this.orderedSessions = []; // Maintains session order from backend
 
         // Session-specific WebSocket for message streaming
         this.sessionWebsocket = null;
@@ -400,9 +401,11 @@ class ClaudeWebUI {
             this.showLoading(true);
             const data = await this.apiRequest('/api/sessions');
             this.sessions.clear();
+            this.orderedSessions = [];
 
             data.sessions.forEach(session => {
                 this.sessions.set(session.session_id, session);
+                this.orderedSessions.push(session);
             });
 
             this.renderSessions();
@@ -432,7 +435,8 @@ class ClaudeWebUI {
                 body: JSON.stringify(payload)
             });
 
-            // No need to call loadSessions() - UI WebSocket will receive state change notification automatically
+            // Refresh session list to get correct order (new session at top, existing sessions shifted down)
+            await this.refreshSessions();
             await this.selectSession(data.session_id);
 
             return data.session_id;
@@ -1333,16 +1337,19 @@ class ClaudeWebUI {
     updateSessionsList(sessions) {
         console.log(`Updating sessions list with ${sessions.length} sessions`);
         this.sessions.clear();
+        // Store sessions in order received from backend (which is sorted by order field)
+        this.orderedSessions = [];
         sessions.forEach(session => {
             this.sessions.set(session.session_id, session);
+            this.orderedSessions.push(session);
         });
         this.renderSessions();
     }
 
-    refreshSessions() {
+    async refreshSessions() {
         console.log('Refreshing sessions via API fallback');
         // Fallback to API call if UI WebSocket is not available
-        this.loadSessions();
+        await this.loadSessions();
     }
 
     // Session WebSocket Management (for message streaming)
@@ -1486,7 +1493,7 @@ class ClaudeWebUI {
     // UI Updates
     async selectSession(sessionId) {
         // If already connected to this session, don't reconnect
-        if (this.currentSessionId === sessionId && this.websocket && this.sessionWebsocket.readyState === WebSocket.OPEN) {
+        if (this.currentSessionId === sessionId && this.sessionWebsocket && this.sessionWebsocket.readyState === WebSocket.OPEN) {
             console.log(`Already connected to session ${sessionId}`);
             return;
         }
@@ -1599,12 +1606,13 @@ class ClaudeWebUI {
         const container = document.getElementById('sessions-container');
         container.innerHTML = '';
 
-        if (this.sessions.size === 0) {
+        if (this.orderedSessions.length === 0) {
             container.innerHTML = '<p class="text-muted">No sessions available</p>';
             return;
         }
 
-        this.sessions.forEach((session, sessionId) => {
+        this.orderedSessions.forEach((session) => {
+            const sessionId = session.session_id;
             const sessionElement = document.createElement('div');
             sessionElement.className = 'session-item';
 
@@ -1614,11 +1622,22 @@ class ClaudeWebUI {
             }
 
             sessionElement.setAttribute('data-session-id', sessionId);
+
+            // Add drag-and-drop attributes
+            sessionElement.draggable = true;
+            sessionElement.setAttribute('data-order', session.order || 999999);
             sessionElement.addEventListener('click', (e) => {
-                // Don't select session if clicking on input field
+                // Don't select session if clicking on input field or name display during editing
                 if (e.target.tagName === 'INPUT') return;
+                if (e.target.classList.contains('session-name-display') &&
+                    e.target.parentElement.querySelector('.session-name-edit').style.display !== 'none') {
+                    return; // Name is being edited, ignore click
+                }
                 this.selectSession(sessionId);
             });
+
+            // Add drag-and-drop event listeners
+            this.addDragDropListeners(sessionElement, sessionId);
 
             // Create status indicator - show processing state if is_processing is true
             const isProcessing = session.is_processing || false;
@@ -1699,7 +1718,9 @@ class ClaudeWebUI {
                 if (this.sessions.has(sessionId)) {
                     const session = this.sessions.get(sessionId);
                     session.name = newName;
-                    this.sessions.set(sessionId, session);
+
+                    // Update session data consistently (with re-render since we're done editing)
+                    this.updateSessionData(sessionId, session);
                 }
 
                 // Update display
@@ -1788,7 +1809,9 @@ class ClaudeWebUI {
             existingSession.state = sessionData.session.state;
             existingSession.error_message = sessionData.session.error_message;
             existingSession.is_processing = sessionData.session.is_processing || false;
-            this.sessions.set(this.currentSessionId, existingSession);
+
+            // Update session data consistently (with automatic re-render)
+            this.updateSessionData(this.currentSessionId, existingSession);
         }
     }
 
@@ -1986,11 +2009,8 @@ class ClaudeWebUI {
         }
 
         if (sessionInfo) {
-            // Update the session in our local sessions map
-            this.sessions.set(sessionId, sessionInfo);
-
-            // Re-render sessions to reflect the state change
-            this.renderSessions();
+            // Update session data consistently (with automatic re-render)
+            this.updateSessionData(sessionId, sessionInfo);
 
             // If this is the current session, update the session info display
             if (sessionId === this.currentSessionId) {
@@ -2005,8 +2025,8 @@ class ClaudeWebUI {
             return;
         }
 
-        this.sessions.set(sessionId, sessionInfo);
-        this.renderSessions();
+        // Update session data consistently (with automatic re-render)
+        this.updateSessionData(sessionId, sessionInfo);
 
         if (sessionId === this.currentSessionId) {
             this.updateSessionInfo({ session: sessionInfo });
@@ -2019,6 +2039,9 @@ class ClaudeWebUI {
 
         // Remove from sessions map
         this.sessions.delete(sessionId);
+
+        // Remove from orderedSessions array
+        this.orderedSessions = this.orderedSessions.filter(s => s.session_id !== sessionId);
 
         // If it was the current session, exit it
         if (this.currentSessionId === sessionId) {
@@ -2278,6 +2301,187 @@ class ClaudeWebUI {
         const div = document.createElement('div');
         div.textContent = text;
         return div.innerHTML;
+    }
+
+    // Session Data Management Helper
+    updateSessionData(sessionId, sessionInfo, skipRender = false) {
+        // Update sessions Map
+        this.sessions.set(sessionId, sessionInfo);
+
+        // Update orderedSessions array
+        const index = this.orderedSessions.findIndex(s => s.session_id === sessionId);
+        if (index !== -1) {
+            this.orderedSessions[index] = sessionInfo;
+        } else {
+            // Session not found in ordered list, add it
+            console.warn(`Session ${sessionId} not found in orderedSessions, adding it`);
+            this.orderedSessions.push(sessionInfo);
+        }
+
+        // Optionally trigger re-render
+        if (!skipRender) {
+            this.renderSessions();
+        }
+    }
+
+    // Drag and Drop Methods
+    addDragDropListeners(sessionElement, sessionId) {
+        // Store drag state
+        if (!this.dragState) {
+            this.dragState = {
+                draggedElement: null,
+                draggedSessionId: null,
+                dropIndicator: null,
+                insertBefore: false
+            };
+        }
+
+        sessionElement.addEventListener('dragstart', (e) => {
+            this.dragState.draggedElement = sessionElement;
+            this.dragState.draggedSessionId = sessionId;
+            sessionElement.classList.add('dragging');
+
+            // Set drag data
+            e.dataTransfer.effectAllowed = 'move';
+            e.dataTransfer.setData('text/plain', sessionId);
+        });
+
+        sessionElement.addEventListener('dragend', (e) => {
+            sessionElement.classList.remove('dragging');
+            this.removeDragVisualEffects();
+        });
+
+        sessionElement.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'move';
+
+            if (this.dragState.draggedElement && sessionElement !== this.dragState.draggedElement) {
+                this.showDropIndicator(sessionElement, e);
+            }
+        });
+
+        sessionElement.addEventListener('dragenter', (e) => {
+            e.preventDefault();
+        });
+
+        sessionElement.addEventListener('dragleave', (e) => {
+            // Only hide indicator if we're actually leaving the element
+            if (!sessionElement.contains(e.relatedTarget)) {
+                this.hideDropIndicator();
+            }
+        });
+
+        sessionElement.addEventListener('drop', (e) => {
+            e.preventDefault();
+            this.handleSessionDrop(sessionElement, sessionId);
+        });
+    }
+
+    showDropIndicator(targetElement, event) {
+        this.hideDropIndicator();
+
+        const rect = targetElement.getBoundingClientRect();
+        const midpoint = rect.top + rect.height / 2;
+        const insertBefore = event.clientY < midpoint;
+
+        // Create drop indicator
+        const indicator = document.createElement('div');
+        indicator.className = 'drop-indicator';
+        indicator.textContent = ''; // Empty line to show where drop will occur
+
+        this.dragState.dropIndicator = indicator;
+        this.dragState.insertBefore = insertBefore; // Store the insert position
+
+        if (insertBefore) {
+            targetElement.parentNode.insertBefore(indicator, targetElement);
+        } else {
+            targetElement.parentNode.insertBefore(indicator, targetElement.nextSibling);
+        }
+    }
+
+    hideDropIndicator() {
+        if (this.dragState.dropIndicator) {
+            this.dragState.dropIndicator.remove();
+            this.dragState.dropIndicator = null;
+            this.dragState.insertBefore = false;
+        }
+    }
+
+    removeDragVisualEffects() {
+        this.hideDropIndicator();
+        // Remove any other drag effects
+        document.querySelectorAll('.session-item.dragging').forEach(el => {
+            el.classList.remove('dragging');
+        });
+    }
+
+    async handleSessionDrop(targetElement, targetSessionId) {
+        if (!this.dragState.draggedSessionId || this.dragState.draggedSessionId === targetSessionId) {
+            this.removeDragVisualEffects();
+            return;
+        }
+
+        const draggedSessionId = this.dragState.draggedSessionId;
+
+        try {
+            // Calculate new order based on drop position
+            const newOrder = this.calculateNewOrder(draggedSessionId, targetSessionId);
+
+            // Call reorder API
+            await this.reorderSessions(newOrder);
+
+        } catch (error) {
+            console.error('Failed to reorder sessions:', error);
+            this.showError('Failed to reorder sessions');
+        } finally {
+            this.removeDragVisualEffects();
+        }
+    }
+
+    calculateNewOrder(draggedSessionId, targetSessionId) {
+        // Get current session IDs in order
+        const currentOrder = this.orderedSessions.map(s => s.session_id);
+
+        // Remove dragged session from current position
+        const filteredOrder = currentOrder.filter(id => id !== draggedSessionId);
+
+        // Find target position
+        const targetIndex = filteredOrder.indexOf(targetSessionId);
+
+        // Use the stored insert position from showDropIndicator
+        const insertBefore = this.dragState.insertBefore || false;
+
+        // Insert dragged session at new position
+        const newIndex = insertBefore ? targetIndex : targetIndex + 1;
+        filteredOrder.splice(newIndex, 0, draggedSessionId);
+
+        return filteredOrder;
+    }
+
+    async reorderSessions(sessionIds) {
+        try {
+            const response = await this.apiRequest('/api/sessions/reorder', {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    session_ids: sessionIds,
+                    project_id: null // For now, no project grouping
+                })
+            });
+
+            if (response.success) {
+                console.log('Sessions reordered successfully');
+                // Explicitly refresh session list to ensure immediate update
+                await this.refreshSessions();
+            } else {
+                throw new Error('Reorder request failed');
+            }
+        } catch (error) {
+            console.error('Failed to reorder sessions via API:', error);
+            throw error;
+        }
     }
 
     // Sidebar Management

@@ -50,9 +50,11 @@
 [x] bug: Session start messages (init) not visible in WebUI - were being suppressed by message filtering
 [x] bug: Client_launched messages not appearing in messages.jsonl - sdk_was_created logic was incorrect
 [ ] qol: use the Claude provided tool use ID for tracking the permission request + approval/denial instead of an internally generated UUID
-[ ] feat: Allow session re-ordering
-[ ] feat: New sessions should go to the top of the list
+[x] feat: Allow session re-ordering
+[x] feat: New sessions should go to the top of the list
+[x] bug: Session renaming doesn't show in session list immediately.
 [ ] bug: Layout on mobile is... yucky.
+[x] qol: User messages bubbles should be blue border with light blue back with black text for consistency with the assistant messages
 [ ] feat: Support diff views properly for permissions prompts
 [x] qol: Shrink session start / session interrupted cards to 1-liners (de-emphasized)
 [ ] qol: Redirect app.log to the data/session folder for debugging purposes
