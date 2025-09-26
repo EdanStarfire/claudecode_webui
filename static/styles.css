@@ -435,20 +435,31 @@ body {
 .message.assistant {
     margin-left: 0;
     margin-right: auto;
-    background: #f8f9fa;
-    border: 1px solid #e1e5e9;
+    background: #f3f0ff;
+    border: 1px solid #8b5cf6;
     color: #333;
 }
 
 .message.system {
     margin-left: auto;
     margin-right: auto;
-    background: #fff3cd;
-    border: 1px solid #ffeaa7;
-    color: #856404;
+    background: #f8f9fa;
+    border: 1px solid #e1e5e9;
+    color: #6c757d;
     max-width: 90%;
     text-align: center;
-    font-size: 0.9rem;
+    font-size: 0.85rem;
+    padding: 0.5rem 0.75rem;
+    opacity: 0.8;
+}
+
+/* Session state messages (client_launched, interrupt) - smaller and more subtle */
+.message.system.client_launched,
+.message.system.interrupt {
+    font-size: 0.75rem;
+    padding: 0.35rem 0.5rem;
+    margin-bottom: 0.5rem;
+    font-weight: 500;
 }
 
 .message.result {

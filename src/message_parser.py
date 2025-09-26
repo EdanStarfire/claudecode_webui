@@ -161,7 +161,12 @@ class SystemMessageHandler(MessageHandler):
                 "init"
             )
 
-            extracted["content"] = f"System {subtype}: {message_data.get('session_id', 'unknown')}"
+            # Use provided content or generate default
+            provided_content = message_data.get("content")
+            if provided_content:
+                extracted["content"] = provided_content
+            else:
+                extracted["content"] = f"System {subtype}: {message_data.get('session_id', 'unknown')}"
             extracted["metadata"]["subtype"] = subtype
             extracted["metadata"]["working_directory"] = message_data.get("cwd")
             extracted["metadata"]["permissions"] = message_data.get("permissionMode")

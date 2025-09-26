@@ -157,57 +157,62 @@ class SessionCoordinator:
             # Check if SDK exists and is running
             sdk = self._active_sdks.get(session_id)
             if sdk and sdk.is_running():
-                logger.info(f"Session {session_id} is already running, skipping start")
+                logger.info(f"Session {session_id} is already running, skipping start - NO CLIENT_LAUNCHED MESSAGE")
                 return True
 
-            sdk_was_created = False
+            # We need to create or recreate the SDK in either case:
+            # - No SDK exists: Create new SDK
+            # - SDK exists but not running: Recreate SDK to restart it
+            sdk_was_created = True
+
             if not sdk:
-                sdk_was_created = True
-                logger.info(f"Recreating SDK for existing session {session_id}")
+                logger.info(f"No SDK found for session {session_id} - CREATING NEW SDK")
+            else:
+                logger.info(f"SDK exists but not running for session {session_id} - RECREATING SDK")
 
-                # Get session info to recreate SDK with same parameters
-                session_info = await self.session_manager.get_session_info(session_id)
-                if not session_info:
-                    logger.error(f"No session info found for {session_id}")
-                    return False
+            # Get session info to create/recreate SDK with same parameters
+            session_info = await self.session_manager.get_session_info(session_id)
+            if not session_info:
+                logger.error(f"No session info found for {session_id}")
+                return False
 
-                # Create storage manager
-                from .data_storage import DataStorageManager
-                session_dir = await self.session_manager.get_session_directory(session_id)
-                storage_manager = DataStorageManager(session_dir)
-                await storage_manager.initialize()
-                self._storage_managers[session_id] = storage_manager
+            # Create storage manager
+            from .data_storage import DataStorageManager
+            session_dir = await self.session_manager.get_session_directory(session_id)
+            storage_manager = DataStorageManager(session_dir)
+            await storage_manager.initialize()
+            self._storage_managers[session_id] = storage_manager
 
-                # Check if we have a valid Claude Code session ID to resume
-                resume_sdk_session = None
-                if session_info.claude_code_session_id:
-                    logger.info(f"Resuming session with Claude Code session ID: {session_info.claude_code_session_id}")
-                    resume_sdk_session = session_id  # Use WebUI session ID as resume identifier
-                else:
-                    logger.info(f"No Claude Code session ID found - starting fresh session for {session_id}")
+            # Check if we have a valid Claude Code session ID to resume
+            resume_sdk_session = None
+            if session_info.claude_code_session_id:
+                logger.info(f"Resuming session with Claude Code session ID: {session_info.claude_code_session_id}")
+                resume_sdk_session = session_id  # Use WebUI session ID as resume identifier
+            else:
+                logger.info(f"No Claude Code session ID found - starting fresh session for {session_id}")
 
-                # Recreate SDK instance with session parameters
-                sdk = ClaudeSDK(
-                    session_id=session_id,
-                    working_directory=session_info.working_directory,
-                    storage_manager=storage_manager,
-                    session_manager=self.session_manager,
-                    message_callback=self._create_message_callback(session_id),
-                    error_callback=self._create_error_callback(session_id),
-                    permission_callback=permission_callback,  # Use provided permission callback for resumed sessions
-                    permissions=session_info.permissions,
-                    system_prompt=session_info.system_prompt,
-                    tools=session_info.tools,
-                    model=session_info.model,
-                    resume_session_id=resume_sdk_session  # Only resume if we have a Claude Code session ID
-                )
-                self._active_sdks[session_id] = sdk
+            # Create/recreate SDK instance with session parameters
+            sdk = ClaudeSDK(
+                session_id=session_id,
+                working_directory=session_info.working_directory,
+                storage_manager=storage_manager,
+                session_manager=self.session_manager,
+                message_callback=self._create_message_callback(session_id),
+                error_callback=self._create_error_callback(session_id),
+                permission_callback=permission_callback,  # Use provided permission callback for resumed sessions
+                permissions=session_info.permissions,
+                system_prompt=session_info.system_prompt,
+                tools=session_info.tools,
+                model=session_info.model,
+                resume_session_id=resume_sdk_session  # Only resume if we have a Claude Code session ID
+            )
+            self._active_sdks[session_id] = sdk
 
-                # Initialize callback lists if not exists (preserve existing callbacks)
-                if session_id not in self._message_callbacks:
-                    self._message_callbacks[session_id] = []
-                if session_id not in self._error_callbacks:
-                    self._error_callbacks[session_id] = []
+            # Initialize callback lists if not exists (preserve existing callbacks)
+            if session_id not in self._message_callbacks:
+                self._message_callbacks[session_id] = []
+            if session_id not in self._error_callbacks:
+                self._error_callbacks[session_id] = []
 
             if not await sdk.start():
                 logger.error(f"Failed to start SDK for session {session_id}")
@@ -239,8 +244,12 @@ class SessionCoordinator:
                 return False
 
             # Send system message for SDK client launch/resume
+            logger.info(f"Session {session_id}: sdk_was_created = {sdk_was_created}")
             if sdk_was_created:  # Only if we actually created/resumed the SDK
+                logger.info(f"CALLING _send_client_launched_message for session {session_id}")
                 await self._send_client_launched_message(session_id)
+            else:
+                logger.info(f"NOT calling _send_client_launched_message for session {session_id} because sdk_was_created = False")
 
             logger.info(f"Started integrated session {session_id}")
             await self._notify_state_change(session_id, SessionState.ACTIVE)
@@ -711,27 +720,35 @@ class SessionCoordinator:
         try:
             from datetime import datetime, timezone
 
+            logger.info(f"DEBUG: _send_client_launched_message called for session {session_id}")
+
             # Create system message for client launch
             message_data = {
                 "type": "system",
                 "subtype": "client_launched",
-                "content": "Claude Code client launched",
+                "content": "Claude Code Launched",
                 "session_id": session_id,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "sdk_message_type": "SystemMessage"
             }
 
+            logger.info(f"DEBUG: About to store processed message: {message_data}")
+
             # Process and store message using unified MessageProcessor
             await self._store_processed_message(session_id, message_data)
+
+            logger.info(f"DEBUG: Message stored, about to send via callback")
 
             # Send through message callback system for real-time display
             callback = self._create_message_callback(session_id)
             await callback(message_data)
 
-            logger.info(f"Sent client launched message for session {session_id}")
+            logger.info(f"SUCCESS: Sent client launched message for session {session_id}")
 
         except Exception as e:
-            logger.error(f"Failed to send client launched message for {session_id}: {e}")
+            logger.error(f"ERROR: Failed to send client launched message for {session_id}: {e}")
+            import traceback
+            logger.error(f"ERROR: Traceback: {traceback.format_exc()}")
 
     async def _send_session_failure_message(self, session_id: str, error_message: str):
         """Send a system message indicating the session failed to start"""
@@ -768,7 +785,7 @@ class SessionCoordinator:
             message_data = {
                 "type": "system",
                 "subtype": "interrupt",
-                "content": "Session interrupted by user",
+                "content": "User Interrupted Processing",
                 "session_id": session_id,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "sdk_message_type": "SystemMessage"

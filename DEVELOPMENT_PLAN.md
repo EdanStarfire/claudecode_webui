@@ -1040,6 +1040,66 @@ data/                         # Runtime data (created by app)
 
 **Impact**: Completed major architectural refactor consolidating message handling across the entire application, ensuring consistent behavior regardless of message source, eliminating dual processing paths, and creating future-proof architecture that maintains functionality as the Claude Code SDK evolves
 
+### Phase 3.15: System Message Display & Data Integrity Refactor ✅ COMPLETED
+**Goal**: Improve system message display and remove unnecessary data integrity overhead
+**Status**: Completed 2025-09-26
+
+**Feature Implementation**:
+1. **Data Integrity System Removal** ✅
+   - Removed complete integrity checking system (hash calculation, verification, integrity files)
+   - Eliminated integrity file creation and maintenance throughout storage operations
+   - Simplified storage operations by removing integrity update calls and validation overhead
+   - Updated class documentation and test expectations to reflect integrity system removal
+
+2. **System Message Display Enhancement** ✅
+   - Fixed session start logic to properly detect SDK recreation scenarios and generate client_launched messages
+   - Enhanced client_launched and session interrupt message generation with improved content and logging
+   - Implemented one-liner display format for session state messages (client_launched, interrupt)
+   - Fixed message filtering to properly handle init vs user-visible system messages
+
+3. **Session State Message Improvements** ✅
+   - Enhanced session coordinator logic to ensure client_launched messages appear correctly in WebUI
+   - Improved SDK creation detection logic preventing missing client_launched notifications
+   - Added comprehensive debugging and logging for session state message generation
+   - Fixed session initialization message handling with proper content when available
+
+4. **WebUI Display Refinements** ✅
+   - Added special styling for session state messages as clean one-liners with tooltips
+   - Implemented refined CSS styling with better visual hierarchy for system messages
+   - Enhanced message display logic to show session state changes without clutter
+   - Added tooltips for client_launched messages showing session ID information
+
+**User Testing Completion**:
+- ✅ Session start messages (init) now properly visible in WebUI after filtering improvements
+- ✅ Client_launched messages now appear correctly in messages.jsonl with proper SDK detection
+- ✅ System messages display as clean one-liners for better UX (client_launched, interrupt)
+- ✅ Data integrity check removal eliminating unnecessary computational overhead
+- ✅ Enhanced system message styling with improved visual presentation
+
+**Technical Implementation**:
+- `src/data_storage.py`: Complete integrity system removal, simplified storage operations, updated documentation
+- `src/session_coordinator.py`: Enhanced session startup logic, improved client_launched message generation
+- `src/message_parser.py`: Enhanced system message handling with better content processing
+- `static/app.js`: Improved message filtering and special handling for session state messages
+- `static/styles.css`: Enhanced system message styling with one-liner format and better visual hierarchy
+- `src/tests/test_data_storage.py`: Updated test expectations removing integrity verification tests
+
+**User Experience Impact**:
+- Cleaner system message display with one-liner session state messages reducing visual clutter
+- Reliable session start message visibility providing better session lifecycle feedback
+- Improved session state tracking with proper client_launched message generation
+- Enhanced visual hierarchy with refined system message styling and tooltips
+- Eliminated unnecessary data integrity overhead improving system performance
+
+**Critical Issues Resolved**:
+- Session start messages now properly visible in WebUI after message filtering improvements
+- Client_launched messages appear correctly in storage with fixed SDK creation detection logic
+- System message display refined with clean one-liner format for better user experience
+- Data integrity system removed eliminating startup failures and performance overhead
+- Enhanced session state messaging providing better visibility into session lifecycle
+
+**Impact**: Improved system message display with clean visual presentation, resolved session start message visibility issues, enhanced session lifecycle feedback, and removed unnecessary data integrity overhead for better performance and reliability
+
 ---
 
 ## Future Phases (Post-MVP)

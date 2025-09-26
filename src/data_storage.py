@@ -2,11 +2,10 @@
 Data Storage System for Claude Code WebUI
 
 Handles persistent storage of session data including activity logs,
-message history, and state persistence with integrity checking.
+message history, and state persistence.
 """
 
 import json
-import hashlib
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Any, List, Optional
@@ -23,7 +22,6 @@ class DataStorageManager:
         self.messages_file = self.session_dir / "messages.jsonl"
         self.state_file = self.session_dir / "state.json"
         self.history_file = self.session_dir / "history.json"
-        self.integrity_file = self.session_dir / ".integrity"
 
     async def initialize(self):
         """Initialize storage directory and files"""
@@ -57,8 +55,6 @@ class DataStorageManager:
                 json.dump(message_data, f, ensure_ascii=False)
                 f.write('\n')
 
-            # Update integrity hash
-            await self._update_integrity()
 
             logger.debug(f"Appended message to {self.session_dir.name}")
         except Exception as e:
@@ -154,53 +150,12 @@ class DataStorageManager:
             with open(self.history_file, 'w', encoding='utf-8') as f:
                 json.dump(history_data, f, indent=2, ensure_ascii=False)
 
-            await self._update_integrity()
         except Exception as e:
             logger.error(f"Failed to write history: {e}")
             raise
 
-    async def _calculate_integrity_hash(self) -> str:
-        """Calculate integrity hash for all data files"""
-        hash_md5 = hashlib.md5()
 
-        # Hash messages file
-        if self.messages_file.exists():
-            with open(self.messages_file, 'rb') as f:
-                for chunk in iter(lambda: f.read(4096), b""):
-                    hash_md5.update(chunk)
 
-        # Hash state file
-        if self.state_file.exists():
-            with open(self.state_file, 'rb') as f:
-                for chunk in iter(lambda: f.read(4096), b""):
-                    hash_md5.update(chunk)
-
-        # Hash history file
-        if self.history_file.exists():
-            with open(self.history_file, 'rb') as f:
-                for chunk in iter(lambda: f.read(4096), b""):
-                    hash_md5.update(chunk)
-
-        return hash_md5.hexdigest()
-
-    async def _update_integrity(self):
-        """Update integrity hash file"""
-        try:
-            integrity_hash = await self._calculate_integrity_hash()
-            integrity_data = {
-                'hash': integrity_hash,
-                'updated_at': datetime.now(timezone.utc).isoformat()
-            }
-
-            with open(self.integrity_file, 'w') as f:
-                json.dump(integrity_data, f)
-        except Exception as e:
-            logger.error(f"Failed to update integrity: {e}")
-
-    async def _verify_integrity(self) -> bool:
-        """Verify data integrity against stored hash - DISABLED"""
-        # Integrity check disabled to prevent session startup issues
-        return True
 
     async def detect_corruption(self) -> Dict[str, Any]:
         """Detect and report data corruption issues - DISABLED"""
@@ -276,7 +231,6 @@ class DataStorageManager:
             gc.collect()
 
             # Final integrity update
-            await self._update_integrity()
 
             # Additional cleanup to ensure file handles are released
             # Python file handles should auto-close, but force GC again to be sure
@@ -292,7 +246,6 @@ class DataStorageManager:
                 self.messages_file = None
                 self.state_file = None
                 self.history_file = None
-                self.integrity_file = None
                 # Force another GC to clear the Path objects
                 gc.collect()
 

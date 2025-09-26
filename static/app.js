@@ -650,7 +650,7 @@ class ClaudeWebUI {
 
         // === SYSTEM MESSAGE FILTERING ===
         if (message.type === 'system') {
-            // Filter out init messages (not user-visible)
+            // Filter out init messages (internal SDK initialization, not user-visible)
             if (subtype === 'init') {
                 return false;
             }
@@ -1826,6 +1826,11 @@ class ClaudeWebUI {
         const messageClass = subtype ? `message ${message.type} ${subtype}` : `message ${message.type}`;
         messageElement.className = messageClass;
 
+        // Add tooltip for client_launched messages
+        if (message.type === 'system' && subtype === 'client_launched') {
+            messageElement.title = `Session ID: ${message.session_id || 'Unknown'}`;
+        }
+
         const timestamp = new Date(message.timestamp).toLocaleTimeString();
 
         // Build content using standardized approach
@@ -1859,14 +1864,19 @@ class ClaudeWebUI {
             contentHtml = this._formatMessageContent(message, content);
         }
 
-        // Build message header with enhanced information
-        const headerText = this._getMessageHeader(message);
-
-        messageElement.innerHTML = `
-            <div class="message-header">${headerText}</div>
-            ${contentHtml}
-            <div class="message-timestamp">${timestamp}</div>
-        `;
+        // Special handling for session state messages (client_launched, interrupt)
+        if (message.type === 'system' && (subtype === 'client_launched' || subtype === 'interrupt')) {
+            // Simple one-liner for session state messages - just the content
+            messageElement.innerHTML = `${contentHtml}`;
+        } else {
+            // Regular message format with header and timestamp
+            const headerText = this._getMessageHeader(message);
+            messageElement.innerHTML = `
+                <div class="message-header">${headerText}</div>
+                ${contentHtml}
+                <div class="message-timestamp">${timestamp}</div>
+            `;
+        }
 
         messagesArea.appendChild(messageElement);
 
@@ -1888,10 +1898,10 @@ class ClaudeWebUI {
         if (message.type === 'system') {
             const subtype = message.subtype || message.metadata?.subtype;
             // Show metadata for internal/debug system messages, not user-facing ones
-            if (subtype === 'interrupt' || subtype === 'client_launched') {
+            if (subtype === 'interrupt' || subtype === 'client_launched' || subtype === 'init') {
                 return false; // User-facing system messages should be clean
             }
-            return true; // Other system messages (init, errors, etc.) show metadata
+            return true; // Other system messages (errors, etc.) show metadata
         }
 
         // Don't show metadata for regular user and assistant messages

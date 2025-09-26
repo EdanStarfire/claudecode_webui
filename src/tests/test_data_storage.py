@@ -64,7 +64,7 @@ class TestDataStorageManager:
         assert manager.session_dir.exists()
         assert manager.messages_file.exists()
         assert manager.history_file.exists()
-        assert manager.integrity_file.exists()
+        # Integrity file removed - no longer used
 
     @pytest.mark.asyncio
     async def test_append_single_message(self, temp_storage_manager, sample_message):
@@ -199,18 +199,7 @@ class TestDataStorageManager:
         assert history[0]["index"] == 5  # First item should be index 5 (items 0-4 removed)
         assert history[-1]["index"] == 1004  # Last item should be index 1004
 
-    @pytest.mark.asyncio
-    async def test_integrity_verification(self, temp_storage_manager, sample_message):
-        """Test data integrity verification."""
-        manager = temp_storage_manager
-
-        # Add a message
-        await manager.append_message(sample_message)
-
-        # Verify integrity
-        corruption_report = await manager.detect_corruption()
-        assert corruption_report["corrupted"] is False
-        assert len(corruption_report["issues"]) == 0
+    # Integrity verification tests removed - feature no longer used
 
     @pytest.mark.asyncio
     async def test_corruption_detection_invalid_json(self, temp_storage_manager, sample_message):
@@ -337,7 +326,7 @@ class TestDataStorageManager:
         await manager.cleanup()
 
         # Verify integrity file is updated
-        assert manager.integrity_file.exists()
+        # Integrity file removed - no longer used
 
     @pytest.mark.asyncio
     async def test_empty_file_handling(self, temp_storage_manager):

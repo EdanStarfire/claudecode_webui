@@ -47,18 +47,20 @@
 [x] bug: In messages.jsonl, some messages have blank content (result, system messages for example) from the SDK - these should be more descriptive and include appropriate metadata we need to ensure we understand what the message is doing.
 [x] bug: listen on all available IPs, not just 127.0.0.1
 [x] qol: Refactor to remove fallbacks and duplicate processing / separate flows for real-time and historical webUI interaction
+[x] bug: Session start messages (init) not visible in WebUI - were being suppressed by message filtering
+[x] bug: Client_launched messages not appearing in messages.jsonl - sdk_was_created logic was incorrect
 [ ] qol: use the Claude provided tool use ID for tracking the permission request + approval/denial instead of an internally generated UUID
 [ ] feat: Allow session re-ordering
 [ ] feat: New sessions should go to the top of the list
 [ ] bug: Layout on mobile is... yucky.
 [ ] feat: Support diff views properly for permissions prompts
-[ ] qol: Shrink session start / session interrupted cards to 1-liners (de-emphasized)
+[x] qol: Shrink session start / session interrupted cards to 1-liners (de-emphasized)
 [ ] qol: Redirect app.log to the data/session folder for debugging purposes
 [ ] bug: autoscroll doesn't scroll when permissions are prompted for
 [ ] feat: Implement Todolist in WebUI
 [ ] feat: Implement Todolist clearing ability in WebUI
 [ ] feat: Implement mode switching (plan, autoaccept writes, normal)
-[ ] qol: Remove data integrity check
+[x] qol: Remove data integrity check
 [ ] qol: Refactor code files for smaller sizes and easier organization
 -- Tool Handling:
 [ ] feat: Handle TodoWrite tool content display
