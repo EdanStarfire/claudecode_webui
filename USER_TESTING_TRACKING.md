@@ -59,17 +59,17 @@
 [x] qol: Shrink session start / session interrupted cards to 1-liners (de-emphasized)
 [ ] qol: Redirect app.log to the data/session folder for debugging purposes
 [ ] bug: autoscroll doesn't scroll when permissions are prompted for
-[ ] feat: Implement Todolist in WebUI
-[ ] feat: Implement Todolist clearing ability in WebUI
 [ ] feat: Implement mode switching (plan, autoaccept writes, normal)
 [x] qol: Remove data integrity check
 [ ] qol: Refactor code files for smaller sizes and easier organization
+[x] qol: Clicking on an expanded tool call header should collapse the tool call, not just the arrow at the far right.
+[x] qol: Make tool use blocks horizontally scrollable
 -- Tool Handling:
-[ ] feat: Handle TodoWrite tool content display
-[ ] feat: Handle Read tool content display
-[ ] feat: Handle Write tool content display
-[ ] feat: Handle Edit tool (diff) content display
-[ ] feat: Handle MultiEdit tool (diff) content display
+[x] feat: Handle TodoWrite tool content display
+[x] feat: Handle Read tool content display
+[x] feat: Handle Write tool content display
+[x] feat: Handle Edit tool (diff) content display
+[x] feat: Handle MultiEdit tool (diff) content display
 [ ] feat: Handle Task tool content display
 [ ] feat: Handle NotebookEdit tool content display
 [ ] feat: Handle Glob tool content display

@@ -328,6 +328,7 @@ body {
     display: flex;
     flex-direction: column;
     background: #fff;
+    min-width: 0;
 }
 
 .no-session {
@@ -350,6 +351,7 @@ body {
     display: flex;
     flex-direction: column;
     min-height: 0; /* Important: allows flex item to shrink */
+    min-width: 0; /* Important: allows flex item to shrink horizontally */
 }
 
 .session-info-bar {
@@ -418,6 +420,7 @@ body {
     display: flex;
     flex-direction: column;
     min-height: 0; /* Important: allows flex item to shrink */
+    min-width: 0; /* Important: allows flex item to shrink horizontally */
 }
 
 .messages-header {
@@ -443,6 +446,7 @@ body {
 .messages-area {
     flex: 1;
     overflow-y: scroll; /* Force scrollbar to always show */
+    overflow-x: hidden; /* Prevent horizontal expansion */
     padding: 1rem;
     min-height: 0; /* Important: allows flex item to shrink below content size */
     scroll-behavior: smooth;
@@ -996,6 +1000,12 @@ form {
     background: #f8f9fa;
     border-bottom: 1px solid #e1e5e9;
     font-weight: 600;
+    cursor: pointer;
+    user-select: none;
+}
+
+.tool-call-header:hover {
+    background: #e9ecef;
 }
 
 .tool-status-icon {
@@ -1049,8 +1059,11 @@ form {
     font-size: 0.9rem;
     line-height: 1.4;
     overflow-x: auto;
-    white-space: pre-wrap;
-    word-wrap: break-word;
+    white-space: pre;
+    overflow-wrap: normal;
+    max-width: 100%;
+    width: 100%;
+    box-sizing: border-box;
 }
 
 .tool-permission-prompt {
@@ -1104,7 +1117,7 @@ form {
 }
 
 .tool-result {
-    margin: 1rem 0;
+    margin: 1rem;
     border-radius: 8px;
     padding: 1rem;
 }
@@ -1134,8 +1147,11 @@ form {
     font-size: 0.9rem;
     line-height: 1.4;
     overflow-x: auto;
-    white-space: pre-wrap;
-    word-wrap: break-word;
+    white-space: pre;
+    overflow-wrap: normal;
+    max-width: 100%;
+    width: 100%;
+    box-sizing: border-box;
 }
 
 .tool-explanation {
@@ -1207,6 +1223,486 @@ form {
 
 .tool-status-error {
     border-left: 4px solid #dc3545;
+}
+
+/* Tool-Specific Styles */
+
+/* Read Tool Handler Styles */
+.tool-read-params {
+    background: #f0f8ff;
+    border: 1px solid #d0e8ff;
+    border-radius: 6px;
+    padding: 1rem;
+}
+
+.read-file-path {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+}
+
+.read-icon {
+    font-size: 1.2rem;
+}
+
+.read-file-path code.file-path {
+    background: rgba(0,0,0,0.05);
+    padding: 0.25rem 0.5rem;
+    border-radius: 4px;
+    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+    font-size: 0.85rem;
+    color: #0056b3;
+    word-break: break-all;
+}
+
+.read-range {
+    color: #6c757d;
+    font-size: 0.85rem;
+    font-style: italic;
+    margin-left: 0.5rem;
+}
+
+.read-result-header {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-bottom: 0.5rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid rgba(0,0,0,0.1);
+}
+
+.read-line-count {
+    font-weight: 600;
+    color: #495057;
+    font-size: 0.9rem;
+}
+
+.read-preview-note {
+    color: #6c757d;
+    font-size: 0.85rem;
+    font-style: italic;
+}
+
+.read-content-preview {
+    background: #ffffff;
+    border: 1px solid rgba(0,0,0,0.1);
+    border-radius: 4px;
+    padding: 0.75rem;
+    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+    font-size: 0.85rem;
+    line-height: 1.5;
+    overflow-x: auto;
+    overflow-y: auto;
+    white-space: pre;
+    max-height: 400px;
+    max-width: 100%;
+    overflow-wrap: normal;
+    width: 100%;
+    box-sizing: border-box;
+}
+
+.read-more-indicator {
+    text-align: center;
+    color: #6c757d;
+    font-size: 1.2rem;
+    font-weight: bold;
+    padding: 0.5rem;
+    margin-top: 0.5rem;
+}
+
+/* Edit Tool Handler Styles */
+.tool-edit-params {
+    background: #fff8e6;
+    border: 1px solid #ffe4a0;
+    border-radius: 6px;
+    padding: 1rem;
+}
+
+.edit-file-path {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    margin-bottom: 1rem;
+}
+
+.edit-icon {
+    font-size: 1.2rem;
+}
+
+.edit-replace-all-badge {
+    background: #ff9800;
+    color: white;
+    padding: 0.25rem 0.5rem;
+    border-radius: 4px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    margin-left: 0.5rem;
+}
+
+.edit-diff-container {
+    margin-top: 0.75rem;
+}
+
+.edit-diff-header {
+    margin-bottom: 0.5rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid rgba(0,0,0,0.1);
+}
+
+.diff-label {
+    font-weight: 600;
+    color: #495057;
+}
+
+.diff-view {
+    background: #ffffff;
+    border: 1px solid #dee2e6;
+    border-radius: 4px;
+    overflow-x: auto;
+    overflow-y: auto;
+    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+    font-size: 0.85rem;
+    max-height: 400px;
+    max-width: 100%;
+    width: 100%;
+    box-sizing: border-box;
+}
+
+.diff-line {
+    display: flex;
+    align-items: flex-start;
+    line-height: 1.5;
+    padding: 0.25rem 0.5rem;
+    white-space: pre;
+    overflow-wrap: normal;
+}
+
+.diff-marker {
+    display: inline-block;
+    width: 1.5rem;
+    text-align: center;
+    font-weight: bold;
+    flex-shrink: 0;
+    user-select: none;
+    margin-right: 0.75rem;
+}
+
+.diff-content {
+    flex: 1;
+    min-width: 0;
+}
+
+.diff-unchanged {
+    background: #ffffff;
+    color: #495057;
+}
+
+.diff-unchanged .diff-marker {
+    color: #ced4da;
+}
+
+.diff-removed {
+    background: #ffebe9;
+    color: #d73a49;
+}
+
+.diff-removed .diff-marker {
+    color: #d73a49;
+    background: #ffd7d5;
+}
+
+.diff-added {
+    background: #e6ffed;
+    color: #28a745;
+}
+
+.diff-added .diff-marker {
+    color: #28a745;
+    background: #c3f5d0;
+}
+
+.edit-success-message {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem 0;
+}
+
+.success-icon {
+    font-size: 1.2rem;
+}
+
+/* MultiEdit Tool Handler Styles */
+.multiedit-count-badge {
+    background: #6f42c1;
+    color: white;
+    padding: 0.25rem 0.5rem;
+    border-radius: 4px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    margin-left: 0.5rem;
+}
+
+.multiedit-edit-block {
+    margin-bottom: 1rem;
+}
+
+.multiedit-edit-block:last-child {
+    margin-bottom: 0;
+}
+
+.multiedit-edit-header {
+    background: rgba(111, 66, 193, 0.1);
+    border-left: 3px solid #6f42c1;
+    padding: 0.5rem 0.75rem;
+    margin-bottom: 0.5rem;
+    border-radius: 4px;
+}
+
+.multiedit-edit-label {
+    font-weight: 600;
+    color: #6f42c1;
+    font-size: 0.85rem;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+/* Write Tool Handler Styles */
+.tool-write-params {
+    background: #e8f5e9;
+    border: 1px solid #a5d6a7;
+    border-radius: 6px;
+    padding: 1rem;
+}
+
+.write-file-path {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    margin-bottom: 1rem;
+}
+
+.write-icon {
+    font-size: 1.2rem;
+}
+
+.write-content-container {
+    margin-top: 0.75rem;
+}
+
+.write-content-header {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-bottom: 0.5rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid rgba(0,0,0,0.1);
+}
+
+.write-label {
+    font-weight: 600;
+    color: #495057;
+}
+
+.write-line-count {
+    font-weight: 600;
+    color: #495057;
+    font-size: 0.9rem;
+}
+
+.write-preview-note {
+    color: #6c757d;
+    font-size: 0.85rem;
+    font-style: italic;
+}
+
+.write-content-preview {
+    background: #ffffff;
+    border: 1px solid rgba(0,0,0,0.1);
+    border-radius: 4px;
+    padding: 0.75rem;
+    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+    font-size: 0.85rem;
+    line-height: 1.5;
+    overflow-x: auto;
+    overflow-y: auto;
+    white-space: pre;
+    max-height: 400px;
+    overflow-wrap: normal;
+    max-width: 100%;
+    width: 100%;
+    box-sizing: border-box;
+}
+
+.write-more-indicator {
+    text-align: center;
+    color: #6c757d;
+    font-size: 1.2rem;
+    font-weight: bold;
+    padding: 0.5rem;
+    margin-top: 0.5rem;
+}
+
+.write-success-message {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem 0;
+}
+
+/* TodoWrite Tool Handler Styles */
+.tool-todo-params {
+    background: #fff3e0;
+    border: 1px solid #ffcc80;
+    border-radius: 6px;
+    padding: 1rem;
+}
+
+.todo-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    margin-bottom: 1rem;
+    padding-bottom: 0.75rem;
+    border-bottom: 2px solid rgba(0,0,0,0.1);
+}
+
+.todo-icon {
+    font-size: 1.2rem;
+}
+
+.todo-summary {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    margin-left: auto;
+}
+
+.todo-count {
+    padding: 0.25rem 0.5rem;
+    border-radius: 4px;
+    font-size: 0.75rem;
+    font-weight: 600;
+}
+
+.todo-count-completed {
+    background: #c8e6c9;
+    color: #2e7d32;
+}
+
+.todo-count-in-progress {
+    background: #fff9c4;
+    color: #f57f17;
+}
+
+.todo-count-pending {
+    background: #e0e0e0;
+    color: #616161;
+}
+
+.todo-active-tasks {
+    margin-bottom: 1rem;
+    padding: 0.75rem;
+    background: #fff9f0;
+    border: 2px solid #ff9800;
+    border-radius: 6px;
+}
+
+.todo-header-active {
+    padding: 0.5rem 0;
+    color: #333;
+    font-weight: 500;
+    line-height: 1.5;
+    display: flex;
+    align-items: flex-start;
+    gap: 0.5rem;
+}
+
+.todo-header-active:not(:last-child) {
+    border-bottom: 1px solid rgba(255, 152, 0, 0.2);
+}
+
+.todo-checklist {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.todo-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.75rem;
+    padding: 0.5rem 0.75rem;
+    border-radius: 4px;
+    background: #ffffff;
+    border: 1px solid #e0e0e0;
+    transition: all 0.2s ease;
+}
+
+.todo-item:hover {
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+.todo-checkbox {
+    font-size: 1.2rem;
+    line-height: 1;
+    flex-shrink: 0;
+    width: 1.5rem;
+    text-align: center;
+}
+
+.todo-content {
+    flex: 1;
+    line-height: 1.5;
+    color: #333;
+}
+
+.todo-pending .todo-checkbox {
+    color: #9e9e9e;
+}
+
+.todo-pending .todo-content {
+    color: #616161;
+}
+
+.todo-in_progress {
+    border-left: 3px solid #ff9800;
+    background: #fff9f0;
+}
+
+.todo-in_progress .todo-checkbox {
+    color: #ff9800;
+}
+
+.todo-in_progress .todo-content {
+    color: #333;
+    font-weight: 500;
+}
+
+.todo-completed {
+    border-left: 3px solid #4caf50;
+    background: #f1f8f4;
+}
+
+.todo-completed .todo-checkbox {
+    color: #4caf50;
+}
+
+.todo-completed .todo-content {
+    color: #757575;
+    text-decoration: line-through;
+}
+
+.todo-success-message {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem 0;
 }
 
 /* Thinking Block UI Styles */

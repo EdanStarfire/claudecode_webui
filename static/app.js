@@ -217,6 +217,671 @@ class ToolCallManager {
     }
 }
 
+// Tool Handler Registry for custom tool display rendering
+class ToolHandlerRegistry {
+    constructor() {
+        this.handlers = new Map(); // toolName -> handler
+        this.patternHandlers = []; // Array of {pattern: RegExp, handler}
+    }
+
+    /**
+     * Register a handler for a specific tool name
+     * @param {string} toolName - Name of the tool (e.g., "Read", "Edit")
+     * @param {Object} handler - Handler object with render methods
+     */
+    registerHandler(toolName, handler) {
+        this.handlers.set(toolName, handler);
+    }
+
+    /**
+     * Register a handler for tools matching a pattern
+     * @param {RegExp|string} pattern - Pattern to match tool names (e.g., /^mcp__/, "mcp__*")
+     * @param {Object} handler - Handler object with render methods
+     */
+    registerPatternHandler(pattern, handler) {
+        const regex = typeof pattern === 'string'
+            ? new RegExp('^' + pattern.replace(/\*/g, '.*') + '$')
+            : pattern;
+        this.patternHandlers.push({ pattern: regex, handler });
+    }
+
+    /**
+     * Get handler for a specific tool name
+     * @param {string} toolName - Name of the tool
+     * @returns {Object|null} Handler object or null if no handler found
+     */
+    getHandler(toolName) {
+        // Check exact match first
+        if (this.handlers.has(toolName)) {
+            return this.handlers.get(toolName);
+        }
+
+        // Check pattern matches
+        for (const { pattern, handler } of this.patternHandlers) {
+            if (pattern.test(toolName)) {
+                return handler;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Check if a handler exists for a tool
+     * @param {string} toolName - Name of the tool
+     * @returns {boolean}
+     */
+    hasHandler(toolName) {
+        return this.getHandler(toolName) !== null;
+    }
+}
+
+// Default Tool Handler - provides standard rendering
+class DefaultToolHandler {
+    renderParameters(toolCall, escapeHtmlFn) {
+        return `
+            <div class="tool-parameters">
+                <strong>Parameters:</strong>
+                <pre class="tool-params-json">${escapeHtmlFn(JSON.stringify(toolCall.input, null, 2))}</pre>
+            </div>
+        `;
+    }
+
+    renderResult(toolCall, escapeHtmlFn) {
+        if (!toolCall.result) return '';
+
+        const resultClass = toolCall.result.error ? 'tool-result-error' : 'tool-result-success';
+        return `
+            <div class="tool-result ${resultClass}">
+                <strong>Result:</strong>
+                <pre class="tool-result-content">${escapeHtmlFn(toolCall.result.content || toolCall.result.message || 'No content')}</pre>
+            </div>
+        `;
+    }
+
+    getCollapsedSummary(toolCall) {
+        // Return null to use default summary generation
+        return null;
+    }
+}
+
+// Read Tool Handler - custom display for Read tool
+class ReadToolHandler {
+    renderParameters(toolCall, escapeHtmlFn) {
+        const filePath = toolCall.input.file_path || 'Unknown';
+        const offset = toolCall.input.offset;
+        const limit = toolCall.input.limit;
+
+        let rangeInfo = '';
+        if (offset !== undefined || limit !== undefined) {
+            const startLine = offset !== undefined ? offset + 1 : 1;
+            const endLine = limit !== undefined ? (offset || 0) + limit : '∞';
+            rangeInfo = `<span class="read-range">Lines ${startLine}-${endLine}</span>`;
+        }
+
+        return `
+            <div class="tool-parameters tool-read-params">
+                <div class="read-file-path">
+                    <span class="read-icon">📄</span>
+                    <strong>Reading:</strong>
+                    <code class="file-path">${escapeHtmlFn(filePath)}</code>
+                    ${rangeInfo}
+                </div>
+            </div>
+        `;
+    }
+
+    renderResult(toolCall, escapeHtmlFn) {
+        if (!toolCall.result) return '';
+
+        const resultClass = toolCall.result.error ? 'tool-result-error' : 'tool-result-success';
+
+        if (toolCall.result.error) {
+            return `
+                <div class="tool-result ${resultClass}">
+                    <strong>Error:</strong>
+                    <pre class="tool-result-content">${escapeHtmlFn(toolCall.result.content || toolCall.result.message || 'No content')}</pre>
+                </div>
+            `;
+        }
+
+        // Parse file content and show preview
+        const content = toolCall.result.content || '';
+        const lines = content.split('\n');
+        const previewLimit = 20;
+        const hasMore = lines.length > previewLimit;
+        const previewLines = lines.slice(0, previewLimit);
+
+        return `
+            <div class="tool-result ${resultClass}">
+                <strong>Content Preview:</strong>
+                <div class="read-result-header">
+                    <span class="read-line-count">${lines.length} lines</span>
+                    ${hasMore ? `<span class="read-preview-note">(showing first ${previewLimit})</span>` : ''}
+                </div>
+                <pre class="tool-result-content read-content-preview">${escapeHtmlFn(previewLines.join('\n'))}</pre>
+                ${hasMore ? '<div class="read-more-indicator">...</div>' : ''}
+            </div>
+        `;
+    }
+
+    getCollapsedSummary(toolCall) {
+        const statusIcon = {
+            'pending': '🔄',
+            'permission_required': '❓',
+            'executing': '⚡',
+            'completed': toolCall.permissionDecision === 'deny' ? '❌' : '✅',
+            'error': '💥'
+        }[toolCall.status] || '🔧';
+
+        const filePath = toolCall.input.file_path || 'Unknown';
+        const fileName = filePath.split(/[/\\]/).pop();
+
+        let statusText = '';
+        if (toolCall.status === 'completed' && !toolCall.result?.error) {
+            const lines = (toolCall.result?.content || '').split('\n').length;
+            statusText = `${lines} lines`;
+        } else if (toolCall.result?.error) {
+            statusText = 'Error';
+        } else {
+            statusText = {
+                'pending': 'Pending',
+                'permission_required': 'Awaiting Permission',
+                'executing': 'Executing',
+                'completed': 'Completed',
+                'error': 'Error'
+            }[toolCall.status] || 'Unknown';
+        }
+
+        return `${statusIcon} Read ${fileName} - ${statusText}`;
+    }
+}
+
+// Edit Tool Handler - custom display for Edit tool with diff view
+class EditToolHandler {
+    renderParameters(toolCall, escapeHtmlFn) {
+        const filePath = toolCall.input.file_path || 'Unknown';
+        const oldString = toolCall.input.old_string || '';
+        const newString = toolCall.input.new_string || '';
+        const replaceAll = toolCall.input.replace_all || false;
+
+        // Generate diff view
+        const diffHtml = this.generateDiffView(oldString, newString, escapeHtmlFn);
+
+        return `
+            <div class="tool-parameters tool-edit-params">
+                <div class="edit-file-path">
+                    <span class="edit-icon">✏️</span>
+                    <strong>Editing:</strong>
+                    <code class="file-path">${escapeHtmlFn(filePath)}</code>
+                    ${replaceAll ? '<span class="edit-replace-all-badge">Replace All</span>' : ''}
+                </div>
+                <div class="edit-diff-container">
+                    <div class="edit-diff-header">
+                        <span class="diff-label">Changes:</span>
+                    </div>
+                    ${diffHtml}
+                </div>
+            </div>
+        `;
+    }
+
+    generateDiffView(oldString, newString, escapeHtmlFn) {
+        // Split into lines for line-by-line comparison
+        const oldLines = oldString.split('\n');
+        const newLines = newString.split('\n');
+
+        // Simple line-by-line diff (not a full LCS algorithm, but good enough for display)
+        const maxLines = Math.max(oldLines.length, newLines.length);
+        let diffHtml = '<div class="diff-view">';
+
+        for (let i = 0; i < maxLines; i++) {
+            const oldLine = i < oldLines.length ? oldLines[i] : null;
+            const newLine = i < newLines.length ? newLines[i] : null;
+
+            if (oldLine !== null && newLine !== null) {
+                if (oldLine === newLine) {
+                    // Unchanged line
+                    diffHtml += `<div class="diff-line diff-unchanged">
+                        <span class="diff-marker"> </span>
+                        <span class="diff-content">${escapeHtmlFn(oldLine)}</span>
+                    </div>`;
+                } else {
+                    // Changed line - show both old and new
+                    diffHtml += `<div class="diff-line diff-removed">
+                        <span class="diff-marker">-</span>
+                        <span class="diff-content">${escapeHtmlFn(oldLine)}</span>
+                    </div>`;
+                    diffHtml += `<div class="diff-line diff-added">
+                        <span class="diff-marker">+</span>
+                        <span class="diff-content">${escapeHtmlFn(newLine)}</span>
+                    </div>`;
+                }
+            } else if (oldLine !== null) {
+                // Line removed
+                diffHtml += `<div class="diff-line diff-removed">
+                    <span class="diff-marker">-</span>
+                    <span class="diff-content">${escapeHtmlFn(oldLine)}</span>
+                </div>`;
+            } else if (newLine !== null) {
+                // Line added
+                diffHtml += `<div class="diff-line diff-added">
+                    <span class="diff-marker">+</span>
+                    <span class="diff-content">${escapeHtmlFn(newLine)}</span>
+                </div>`;
+            }
+        }
+
+        diffHtml += '</div>';
+        return diffHtml;
+    }
+
+    renderResult(toolCall, escapeHtmlFn) {
+        if (!toolCall.result) return '';
+
+        const resultClass = toolCall.result.error ? 'tool-result-error' : 'tool-result-success';
+
+        if (toolCall.result.error) {
+            return `
+                <div class="tool-result ${resultClass}">
+                    <strong>Error:</strong>
+                    <pre class="tool-result-content">${escapeHtmlFn(toolCall.result.content || toolCall.result.message || 'No content')}</pre>
+                </div>
+            `;
+        }
+
+        // Success message
+        return `
+            <div class="tool-result ${resultClass}">
+                <div class="edit-success-message">
+                    <span class="success-icon">✅</span>
+                    <strong>File edited successfully</strong>
+                </div>
+            </div>
+        `;
+    }
+
+    getCollapsedSummary(toolCall) {
+        const statusIcon = {
+            'pending': '🔄',
+            'permission_required': '❓',
+            'executing': '⚡',
+            'completed': toolCall.permissionDecision === 'deny' ? '❌' : '✅',
+            'error': '💥'
+        }[toolCall.status] || '🔧';
+
+        const filePath = toolCall.input.file_path || 'Unknown';
+        const fileName = filePath.split(/[/\\]/).pop();
+
+        // Count lines changed
+        const oldLines = (toolCall.input.old_string || '').split('\n').length;
+        const newLines = (toolCall.input.new_string || '').split('\n').length;
+        const linesChanged = Math.max(oldLines, newLines);
+
+        let statusText = '';
+        if (toolCall.status === 'completed' && !toolCall.result?.error) {
+            statusText = `${linesChanged} lines changed`;
+        } else if (toolCall.result?.error) {
+            statusText = 'Error';
+        } else {
+            statusText = {
+                'pending': 'Pending',
+                'permission_required': 'Awaiting Permission',
+                'executing': 'Executing',
+                'completed': 'Completed',
+                'error': 'Error'
+            }[toolCall.status] || 'Unknown';
+        }
+
+        return `${statusIcon} Edit ${fileName} - ${statusText}`;
+    }
+}
+
+// MultiEdit Tool Handler - custom display for MultiEdit tool with multiple diffs
+class MultiEditToolHandler {
+    renderParameters(toolCall, escapeHtmlFn) {
+        const filePath = toolCall.input.file_path || 'Unknown';
+        const edits = toolCall.input.edits || [];
+
+        // Generate diff view for each edit
+        const editsHtml = edits.map((edit, index) => {
+            const diffHtml = this.generateDiffView(edit.old_string || '', edit.new_string || '', escapeHtmlFn);
+            return `
+                <div class="multiedit-edit-block">
+                    <div class="multiedit-edit-header">
+                        <span class="multiedit-edit-label">Edit ${index + 1} of ${edits.length}</span>
+                    </div>
+                    ${diffHtml}
+                </div>
+            `;
+        }).join('');
+
+        return `
+            <div class="tool-parameters tool-edit-params">
+                <div class="edit-file-path">
+                    <span class="edit-icon">✏️</span>
+                    <strong>Multi-Editing:</strong>
+                    <code class="file-path">${escapeHtmlFn(filePath)}</code>
+                    <span class="multiedit-count-badge">${edits.length} edits</span>
+                </div>
+                <div class="edit-diff-container">
+                    ${editsHtml}
+                </div>
+            </div>
+        `;
+    }
+
+    generateDiffView(oldString, newString, escapeHtmlFn) {
+        // Reuse the same diff generation logic as EditToolHandler
+        const oldLines = oldString.split('\n');
+        const newLines = newString.split('\n');
+
+        const maxLines = Math.max(oldLines.length, newLines.length);
+        let diffHtml = '<div class="diff-view">';
+
+        for (let i = 0; i < maxLines; i++) {
+            const oldLine = i < oldLines.length ? oldLines[i] : null;
+            const newLine = i < newLines.length ? newLines[i] : null;
+
+            if (oldLine !== null && newLine !== null) {
+                if (oldLine === newLine) {
+                    // Unchanged line
+                    diffHtml += `<div class="diff-line diff-unchanged">
+                        <span class="diff-marker"> </span>
+                        <span class="diff-content">${escapeHtmlFn(oldLine)}</span>
+                    </div>`;
+                } else {
+                    // Changed line - show both old and new
+                    diffHtml += `<div class="diff-line diff-removed">
+                        <span class="diff-marker">-</span>
+                        <span class="diff-content">${escapeHtmlFn(oldLine)}</span>
+                    </div>`;
+                    diffHtml += `<div class="diff-line diff-added">
+                        <span class="diff-marker">+</span>
+                        <span class="diff-content">${escapeHtmlFn(newLine)}</span>
+                    </div>`;
+                }
+            } else if (oldLine !== null) {
+                // Line removed
+                diffHtml += `<div class="diff-line diff-removed">
+                    <span class="diff-marker">-</span>
+                    <span class="diff-content">${escapeHtmlFn(oldLine)}</span>
+                </div>`;
+            } else if (newLine !== null) {
+                // Line added
+                diffHtml += `<div class="diff-line diff-added">
+                    <span class="diff-marker">+</span>
+                    <span class="diff-content">${escapeHtmlFn(newLine)}</span>
+                </div>`;
+            }
+        }
+
+        diffHtml += '</div>';
+        return diffHtml;
+    }
+
+    renderResult(toolCall, escapeHtmlFn) {
+        if (!toolCall.result) return '';
+
+        const resultClass = toolCall.result.error ? 'tool-result-error' : 'tool-result-success';
+
+        if (toolCall.result.error) {
+            return `
+                <div class="tool-result ${resultClass}">
+                    <strong>Error:</strong>
+                    <pre class="tool-result-content">${escapeHtmlFn(toolCall.result.content || toolCall.result.message || 'No content')}</pre>
+                </div>
+            `;
+        }
+
+        // Success message
+        const editCount = (toolCall.input.edits || []).length;
+        return `
+            <div class="tool-result ${resultClass}">
+                <div class="edit-success-message">
+                    <span class="success-icon">✅</span>
+                    <strong>${editCount} edits applied successfully</strong>
+                </div>
+            </div>
+        `;
+    }
+
+    getCollapsedSummary(toolCall) {
+        const statusIcon = {
+            'pending': '🔄',
+            'permission_required': '❓',
+            'executing': '⚡',
+            'completed': toolCall.permissionDecision === 'deny' ? '❌' : '✅',
+            'error': '💥'
+        }[toolCall.status] || '🔧';
+
+        const filePath = toolCall.input.file_path || 'Unknown';
+        const fileName = filePath.split(/[/\\]/).pop();
+        const editCount = (toolCall.input.edits || []).length;
+
+        let statusText = '';
+        if (toolCall.status === 'completed' && !toolCall.result?.error) {
+            statusText = `${editCount} edits`;
+        } else if (toolCall.result?.error) {
+            statusText = 'Error';
+        } else {
+            statusText = {
+                'pending': 'Pending',
+                'permission_required': 'Awaiting Permission',
+                'executing': 'Executing',
+                'completed': 'Completed',
+                'error': 'Error'
+            }[toolCall.status] || 'Unknown';
+        }
+
+        return `${statusIcon} MultiEdit ${fileName} - ${statusText}`;
+    }
+}
+
+// Write Tool Handler - custom display for Write tool (creating new files)
+class WriteToolHandler {
+    renderParameters(toolCall, escapeHtmlFn) {
+        const filePath = toolCall.input.file_path || 'Unknown';
+        const content = toolCall.input.content || '';
+        const lines = content.split('\n');
+        const previewLimit = 20;
+        const hasMore = lines.length > previewLimit;
+        const previewLines = lines.slice(0, previewLimit);
+
+        return `
+            <div class="tool-parameters tool-write-params">
+                <div class="write-file-path">
+                    <span class="write-icon">📝</span>
+                    <strong>Writing new file:</strong>
+                    <code class="file-path">${escapeHtmlFn(filePath)}</code>
+                </div>
+                <div class="write-content-container">
+                    <div class="write-content-header">
+                        <span class="write-label">Content:</span>
+                        <span class="write-line-count">${lines.length} lines</span>
+                        ${hasMore ? `<span class="write-preview-note">(showing first ${previewLimit})</span>` : ''}
+                    </div>
+                    <pre class="write-content-preview">${escapeHtmlFn(previewLines.join('\n'))}</pre>
+                    ${hasMore ? '<div class="write-more-indicator">...</div>' : ''}
+                </div>
+            </div>
+        `;
+    }
+
+    renderResult(toolCall, escapeHtmlFn) {
+        if (!toolCall.result) return '';
+
+        const resultClass = toolCall.result.error ? 'tool-result-error' : 'tool-result-success';
+
+        if (toolCall.result.error) {
+            return `
+                <div class="tool-result ${resultClass}">
+                    <strong>Error:</strong>
+                    <pre class="tool-result-content">${escapeHtmlFn(toolCall.result.content || toolCall.result.message || 'No content')}</pre>
+                </div>
+            `;
+        }
+
+        // Success message
+        const lines = (toolCall.input.content || '').split('\n').length;
+        return `
+            <div class="tool-result ${resultClass}">
+                <div class="write-success-message">
+                    <span class="success-icon">✅</span>
+                    <strong>File created successfully (${lines} lines written)</strong>
+                </div>
+            </div>
+        `;
+    }
+
+    getCollapsedSummary(toolCall) {
+        const statusIcon = {
+            'pending': '🔄',
+            'permission_required': '❓',
+            'executing': '⚡',
+            'completed': toolCall.permissionDecision === 'deny' ? '❌' : '✅',
+            'error': '💥'
+        }[toolCall.status] || '🔧';
+
+        const filePath = toolCall.input.file_path || 'Unknown';
+        const fileName = filePath.split(/[/\\]/).pop();
+
+        let statusText = '';
+        if (toolCall.status === 'completed' && !toolCall.result?.error) {
+            const lines = (toolCall.input.content || '').split('\n').length;
+            statusText = `${lines} lines`;
+        } else if (toolCall.result?.error) {
+            statusText = 'Error';
+        } else {
+            statusText = {
+                'pending': 'Pending',
+                'permission_required': 'Awaiting Permission',
+                'executing': 'Executing',
+                'completed': 'Completed',
+                'error': 'Error'
+            }[toolCall.status] || 'Unknown';
+        }
+
+        return `${statusIcon} Write ${fileName} - ${statusText}`;
+    }
+}
+
+// TodoWrite Tool Handler - custom display for TodoWrite tool (task tracking)
+class TodoWriteToolHandler {
+    renderParameters(toolCall, escapeHtmlFn) {
+        const todos = toolCall.input.todos || [];
+
+        // Count todos by status
+        const pending = todos.filter(t => t.status === 'pending').length;
+        const inProgress = todos.filter(t => t.status === 'in_progress').length;
+        const completed = todos.filter(t => t.status === 'completed').length;
+
+        // Generate checklist
+        const checklistHtml = todos.map((todo, index) => {
+            const checkboxIcon = {
+                'pending': '☐',
+                'in_progress': '◐',
+                'completed': '☑'
+            }[todo.status] || '☐';
+
+            const itemClass = `todo-item todo-${todo.status}`;
+
+            return `
+                <div class="${itemClass}">
+                    <span class="todo-checkbox">${checkboxIcon}</span>
+                    <span class="todo-content">${escapeHtmlFn(todo.content)}</span>
+                </div>
+            `;
+        }).join('');
+
+        return `
+            <div class="tool-parameters tool-todo-params">
+                <div class="todo-header">
+                    <span class="todo-icon">📋</span>
+                    <strong>Task List:</strong>
+                    <div class="todo-summary">
+                        ${completed > 0 ? `<span class="todo-count todo-count-completed">${completed} completed</span>` : ''}
+                        ${inProgress > 0 ? `<span class="todo-count todo-count-in-progress">${inProgress} in progress</span>` : ''}
+                        ${pending > 0 ? `<span class="todo-count todo-count-pending">${pending} pending</span>` : ''}
+                    </div>
+                </div>
+                <div class="todo-checklist">
+                    ${checklistHtml}
+                </div>
+            </div>
+        `;
+    }
+
+    renderResult(toolCall, escapeHtmlFn) {
+        if (!toolCall.result) return '';
+
+        const resultClass = toolCall.result.error ? 'tool-result-error' : 'tool-result-success';
+
+        if (toolCall.result.error) {
+            return `
+                <div class="tool-result ${resultClass}">
+                    <strong>Error:</strong>
+                    <pre class="tool-result-content">${escapeHtmlFn(toolCall.result.content || toolCall.result.message || 'No content')}</pre>
+                </div>
+            `;
+        }
+
+        // Success message
+        const todoCount = (toolCall.input.todos || []).length;
+        return `
+            <div class="tool-result ${resultClass}">
+                <div class="todo-success-message">
+                    <span class="success-icon">✅</span>
+                    <strong>Task list updated (${todoCount} tasks)</strong>
+                </div>
+            </div>
+        `;
+    }
+
+    getCollapsedSummary(toolCall) {
+        const statusIcon = {
+            'pending': '🔄',
+            'permission_required': '❓',
+            'executing': '⚡',
+            'completed': toolCall.permissionDecision === 'deny' ? '❌' : '✅',
+            'error': '💥'
+        }[toolCall.status] || '🔧';
+
+        const todos = toolCall.input.todos || [];
+        const completed = todos.filter(t => t.status === 'completed').length;
+        const pending = todos.filter(t => t.status === 'pending').length;
+        const inProgressTodos = todos.filter(t => t.status === 'in_progress');
+        const total = todos.length;
+
+        let statusText = '';
+        if (toolCall.status === 'completed' && !toolCall.result?.error) {
+            // Build status text with counts
+            const parts = [];
+            if (completed > 0) parts.push(`${completed} completed`);
+            if (pending > 0) parts.push(`${pending} pending`);
+            statusText = parts.join(', ');
+
+            // Add in-progress tasks if any
+            if (inProgressTodos.length > 0) {
+                const inProgressText = inProgressTodos.map(t => `◐ ${t.content}`).join(' | ');
+                statusText = statusText ? `${statusText} | ${inProgressText}` : inProgressText;
+            }
+        } else if (toolCall.result?.error) {
+            statusText = 'Error';
+        } else {
+            statusText = {
+                'pending': 'Pending',
+                'permission_required': 'Awaiting Permission',
+                'executing': 'Executing',
+                'completed': 'Completed',
+                'error': 'Error'
+            }[toolCall.status] || 'Unknown';
+        }
+
+        return `${statusIcon} TodoWrite - ${statusText}`;
+    }
+}
+
 class ClaudeWebUI {
     constructor() {
         this.currentSessionId = null;
@@ -256,7 +921,24 @@ class ClaudeWebUI {
         // Tool call management
         this.toolCallManager = new ToolCallManager();
 
+        // Tool handler registry for custom tool display
+        this.toolHandlerRegistry = new ToolHandlerRegistry();
+        this.defaultToolHandler = new DefaultToolHandler();
+        this.initializeToolHandlers();
+
         this.init();
+    }
+
+    initializeToolHandlers() {
+        // Register built-in tool handlers
+        this.toolHandlerRegistry.registerHandler('Read', new ReadToolHandler());
+        this.toolHandlerRegistry.registerHandler('Edit', new EditToolHandler());
+        this.toolHandlerRegistry.registerHandler('MultiEdit', new MultiEditToolHandler());
+        this.toolHandlerRegistry.registerHandler('Write', new WriteToolHandler());
+        this.toolHandlerRegistry.registerHandler('TodoWrite', new TodoWriteToolHandler());
+
+        // Register pattern handlers for MCP tools (can be customized later)
+        // this.toolHandlerRegistry.registerPatternHandler('mcp__*', new McpToolHandler());
     }
 
     initializeStatusColors() {
@@ -935,6 +1617,9 @@ class ClaudeWebUI {
             'error': '💥'
         }[toolCall.status] || '🔧';
 
+        // Get handler for this tool
+        const handler = this.toolHandlerRegistry.getHandler(toolCall.name) || this.defaultToolHandler;
+
         let content = `
             <div class="tool-call-card ${statusClass}">
                 <div class="tool-call-header">
@@ -946,10 +1631,7 @@ class ClaudeWebUI {
                 </div>
 
                 <div class="tool-call-details">
-                    <div class="tool-parameters">
-                        <strong>Parameters:</strong>
-                        <pre class="tool-params-json">${this.escapeHtml(JSON.stringify(toolCall.input, null, 2))}</pre>
-                    </div>
+                    ${handler.renderParameters(toolCall, this.escapeHtml.bind(this))}
                 </div>
         `;
 
@@ -971,15 +1653,9 @@ class ClaudeWebUI {
             `;
         }
 
-        // Add result if available
+        // Add result if available using handler
         if (toolCall.result) {
-            const resultClass = toolCall.result.error ? 'tool-result-error' : 'tool-result-success';
-            content += `
-                <div class="tool-result ${resultClass}">
-                    <strong>Result:</strong>
-                    <pre class="tool-result-content">${this.escapeHtml(toolCall.result.content || toolCall.result.message || 'No content')}</pre>
-                </div>
-            `;
+            content += handler.renderResult(toolCall, this.escapeHtml.bind(this));
         }
 
         // Add explanation if available
@@ -997,7 +1673,17 @@ class ClaudeWebUI {
     }
 
     createCollapsedToolCallHTML(toolCall) {
-        const summary = this.toolCallManager.generateCollapsedSummary(toolCall);
+        // Get handler for this tool
+        const handler = this.toolHandlerRegistry.getHandler(toolCall.name);
+
+        // Use handler's custom summary if available, otherwise use default
+        let summary;
+        if (handler && handler.getCollapsedSummary) {
+            const customSummary = handler.getCollapsedSummary(toolCall);
+            summary = customSummary !== null ? customSummary : this.toolCallManager.generateCollapsedSummary(toolCall);
+        } else {
+            summary = this.toolCallManager.generateCollapsedSummary(toolCall);
+        }
 
         return `
             <div class="tool-call-collapsed" data-tool-id="${toolCall.id}" title="Click to expand">
@@ -1013,6 +1699,15 @@ class ClaudeWebUI {
         if (collapseBtn) {
             collapseBtn.addEventListener('click', (e) => {
                 e.stopPropagation();
+                this.toggleToolCallExpansion(toolCall.id);
+            });
+        }
+
+        // Handle expanded card header clicks for collapsing
+        const expandedHeader = element.querySelector('.tool-call-header');
+        if (expandedHeader) {
+            expandedHeader.style.cursor = 'pointer';
+            expandedHeader.addEventListener('click', () => {
                 this.toggleToolCallExpansion(toolCall.id);
             });
         }
