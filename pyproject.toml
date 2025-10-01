@@ -8,7 +8,7 @@ dependencies = [
     "uvicorn>=0.24.0",
     "websockets>=12.0",
     "pydantic>=2.5.0",
-    "claude-code-sdk>=0.0.22",
+    "claude-agent-sdk",
 ]
 
 [project.optional-dependencies]

@@ -1263,6 +1263,106 @@ data/                         # Runtime data (created by app)
 
 **Impact**: Delivered extensible tool handler system with 5 specialized handlers providing enhanced visualization for common Claude Code tools, professional diff displays for code editing, interactive task tracking, and comprehensive documentation enabling future expansion of tool-specific display capabilities
 
+### Phase 3.18: Claude Agent SDK Migration & Tool Handler Expansion ✅ COMPLETED
+**Goal**: Migrate from Claude Code SDK to Claude Agent SDK and expand tool handler coverage
+**Status**: Completed 2025-09-30
+
+**Feature Implementation**:
+1. **SDK Migration (v0.0.22 → v0.1.0)** ✅
+   - Updated all imports from `claude_code_sdk` to `claude_agent_sdk`
+   - Renamed `ClaudeCodeOptions` → `ClaudeAgentOptions` throughout codebase
+   - Updated dependency in `pyproject.toml` to use `claude-agent-sdk`
+   - Enhanced CLAUDE.md with critical SDK v0.1.0 breaking changes documentation
+
+2. **SDK Configuration Breaking Changes** ✅
+   - Added explicit Claude Code preset system prompt configuration:
+     ```python
+     system_prompt={"type": "preset", "preset": "claude_code"}
+     ```
+   - Added explicit settings sources configuration to restore filesystem settings loading:
+     ```python
+     setting_sources=["user", "project", "local"]
+     ```
+   - Updated SDK options generation with proper default configurations
+
+3. **Message Parser Enhancements** ✅
+   - Fixed `ToolResultBlock` content handling to normalize list-based content (e.g., from Task tool)
+   - Added proper handling for structured content arrays with format `[{"type": "text", "text": "..."}]`
+   - Improved string conversion for non-string content in tool results
+
+4. **Tool Handler Expansion** ✅
+   - **Grep Tool Handler**: Content search with pattern matching, file grouping, and match count display
+   - **Glob Tool Handler**: File pattern matching with file list display
+   - **Task Tool Handler**: Agent task execution with report formatting and structured output
+   - **WebFetch Tool Handler**: Web content fetching with URL display and fetch status
+   - **WebSearch Tool Handler**: Web search results with query and result count display
+   - **Bash Tool Handler**: Command execution with command display and output formatting
+   - **BashOutput Tool Handler**: Background shell output with shell ID and output display
+   - **KillShell Tool Handler**: Shell termination with shell ID display
+
+5. **Tool Handler UI Enhancements** ✅
+   - Enhanced tool call header formatting with consistent ": " separator for all handlers
+   - Improved parameter and result display formatting across all tool types
+   - Added specialized CSS classes for new tool types with appropriate color theming
+   - Better vertical alignment in tool parameters blocks
+   - Enhanced file path and code block styling throughout tool displays
+
+6. **Test Updates** ✅
+   - Relaxed timing-dependent assertions in `test_claude_sdk.py` for async SDK initialization
+   - Added state transition handling for session state checks
+   - Improved test reliability for async operations
+
+**User Testing Completion**:
+- ✅ Grep tool content display with file grouping and match visualization
+- ✅ Glob tool file list display with pattern matching
+- ✅ Task tool agent report display with structured formatting
+- ✅ WebFetch tool URL and fetch status display
+- ✅ WebSearch tool query and result display
+- ✅ Bash tool command execution and output formatting
+- ✅ BashOutput tool background shell output display
+- ✅ KillShell tool termination status display
+
+**Technical Implementation**:
+- `pyproject.toml`: Updated dependency from `claude-code-sdk` to `claude-agent-sdk`
+- `src/claude_sdk.py`: Complete SDK migration with updated imports and options configuration
+- `src/message_parser.py`: Enhanced tool result content handling and normalization
+- `src/tests/test_claude_sdk.py`: Updated test assertions for async behavior
+- `static/app.js`: Added 8 new tool handlers (1500+ lines) with specialized display logic
+- `static/styles.css`: Enhanced styling for all new tool types with color theming
+- `CLAUDE.md`: Comprehensive SDK v0.1.0 documentation with breaking changes
+- `USER_TESTING_TRACKING.md`: Updated completion status for all tool handlers
+
+**Tool Handler Coverage**:
+- **File Operations**: Read, Write, Edit, MultiEdit, Glob (5 handlers)
+- **Search Operations**: Grep (1 handler)
+- **Task Management**: TodoWrite, Task (2 handlers)
+- **Web Operations**: WebFetch, WebSearch (2 handlers)
+- **Shell Operations**: Bash, BashOutput, KillShell (3 handlers)
+- **Total Coverage**: 13 specialized tool handlers
+
+**User Experience Impact**:
+- Seamless SDK migration with no user-visible breaking changes
+- Expanded tool visualization coverage from 5 to 13 specialized handlers
+- Enhanced understanding of all major Claude Code tool operations
+- Professional display formatting across all tool types with consistent theming
+- Better visibility into search operations, web interactions, and shell commands
+- Improved debugging capabilities with comprehensive tool parameter and result display
+
+**Critical Issues Resolved**:
+- SDK v0.1.0 breaking changes properly handled with explicit configuration
+- Tool result content normalization for structured data arrays (Task tool)
+- Consistent tool display formatting across all handler types
+- Enhanced message parser robustness for varied tool result formats
+
+**Architectural Achievements**:
+- **Complete SDK Modernization**: Migrated to latest Claude Agent SDK with proper configuration
+- **Comprehensive Tool Coverage**: 13 handlers covering all major tool categories
+- **Robust Content Handling**: Normalized processing for varied SDK response formats
+- **Consistent User Experience**: Unified styling and interaction patterns across all tools
+- **Future-Proof Architecture**: Extensible system supporting easy addition of new tools
+
+**Impact**: Successfully migrated to Claude Agent SDK v0.1.0 while expanding tool handler coverage from 5 to 13 specialized handlers, providing comprehensive visualization for all major Claude Code tool operations, enhanced message processing robustness, and maintaining seamless user experience throughout the migration
+
 ---
 
 ## Future Phases (Post-MVP)

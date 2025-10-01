@@ -393,7 +393,7 @@ class ReadToolHandler {
             }[toolCall.status] || 'Unknown';
         }
 
-        return `${statusIcon} Read ${fileName} - ${statusText}`;
+        return `${statusIcon} Read: ${fileName} - ${statusText}`;
     }
 }
 
@@ -533,7 +533,7 @@ class EditToolHandler {
             }[toolCall.status] || 'Unknown';
         }
 
-        return `${statusIcon} Edit ${fileName} - ${statusText}`;
+        return `${statusIcon} Edit: ${fileName} - ${statusText}`;
     }
 }
 
@@ -674,7 +674,7 @@ class MultiEditToolHandler {
             }[toolCall.status] || 'Unknown';
         }
 
-        return `${statusIcon} MultiEdit ${fileName} - ${statusText}`;
+        return `${statusIcon} MultiEdit: ${fileName} - ${statusText}`;
     }
 }
 
@@ -762,7 +762,7 @@ class WriteToolHandler {
             }[toolCall.status] || 'Unknown';
         }
 
-        return `${statusIcon} Write ${fileName} - ${statusText}`;
+        return `${statusIcon} Write: ${fileName} - ${statusText}`;
     }
 }
 
@@ -878,7 +878,874 @@ class TodoWriteToolHandler {
             }[toolCall.status] || 'Unknown';
         }
 
-        return `${statusIcon} TodoWrite - ${statusText}`;
+        return `${statusIcon} TodoWrite: ${statusText}`;
+    }
+}
+
+// Grep Tool Handler - custom display for Grep tool
+class GrepToolHandler {
+    renderParameters(toolCall, escapeHtmlFn) {
+        const pattern = toolCall.input.pattern || '';
+        const path = toolCall.input.path || '.';
+        const outputMode = toolCall.input.output_mode || 'files_with_matches';
+        const caseInsensitive = toolCall.input['-i'] || false;
+        const showLineNumbers = toolCall.input['-n'] || false;
+        const contextAfter = toolCall.input['-A'];
+        const contextBefore = toolCall.input['-B'];
+        const contextBoth = toolCall.input['-C'];
+        const glob = toolCall.input.glob || null;
+        const type = toolCall.input.type || null;
+        const headLimit = toolCall.input.head_limit;
+        const multiline = toolCall.input.multiline || false;
+
+        let searchInfo = `<span class="grep-pattern"><code>${escapeHtmlFn(pattern)}</code></span>`;
+
+        // Build flags list
+        const flags = [];
+        if (caseInsensitive) flags.push('case-insensitive');
+        if (showLineNumbers) flags.push('line numbers');
+        if (multiline) flags.push('multiline');
+        if (contextBoth !== undefined) flags.push(`±${contextBoth} lines context`);
+        else {
+            if (contextBefore !== undefined) flags.push(`-${contextBefore} lines before`);
+            if (contextAfter !== undefined) flags.push(`+${contextAfter} lines after`);
+        }
+        if (headLimit !== undefined) flags.push(`limit ${headLimit}`);
+
+        if (flags.length > 0) {
+            searchInfo += ` <span class="grep-flags">(${flags.join(', ')})</span>`;
+        }
+
+        let pathInfo = `<code class="file-path">${escapeHtmlFn(path)}</code>`;
+        if (glob) {
+            pathInfo += ` <span class="grep-glob">matching ${escapeHtmlFn(glob)}</span>`;
+        }
+        if (type) {
+            pathInfo += ` <span class="grep-type">type: ${escapeHtmlFn(type)}</span>`;
+        }
+
+        return `
+            <div class="tool-parameters tool-grep-params">
+                <div class="grep-search-info">
+                    <span class="grep-icon">🔍</span>
+                    <strong>Searching for:</strong> ${searchInfo}
+                </div>
+                <div class="grep-path-info">
+                    <strong>In:</strong> ${pathInfo}
+                </div>
+                <div class="grep-mode-info">
+                    <strong>Mode:</strong> <span class="grep-mode">${escapeHtmlFn(outputMode)}</span>
+                </div>
+            </div>
+        `;
+    }
+
+    renderResult(toolCall, escapeHtmlFn) {
+        if (!toolCall.result) return '';
+
+        const resultClass = toolCall.result.error ? 'tool-result-error' : 'tool-result-success';
+
+        if (toolCall.result.error) {
+            return `
+                <div class="tool-result ${resultClass}">
+                    <strong>Error:</strong>
+                    <pre class="tool-result-content">${escapeHtmlFn(toolCall.result.content || toolCall.result.message || 'No content')}</pre>
+                </div>
+            `;
+        }
+
+        const content = toolCall.result.content || '';
+        const outputMode = toolCall.input.output_mode || 'files_with_matches';
+
+        // Handle files_with_matches mode - just list files
+        if (outputMode === 'files_with_matches') {
+            const lines = content.split('\n').filter(line => line.trim());
+
+            // First line might be a summary like "Found 2 files"
+            const foundMatch = lines[0].match(/^Found (\d+) files?/);
+            const fileCount = foundMatch ? foundMatch[1] : lines.length;
+            const fileList = foundMatch ? lines.slice(1) : lines;
+
+            if (fileList.length === 0) {
+                return `
+                    <div class="tool-result ${resultClass}">
+                        <strong>No matches found</strong>
+                    </div>
+                `;
+            }
+
+            return `
+                <div class="tool-result ${resultClass}">
+                    <div class="grep-result-header">
+                        <strong>Found ${fileCount} file${fileCount !== '1' ? 's' : ''}:</strong>
+                    </div>
+                    <div class="grep-file-list">
+                        ${fileList.map(file => `<div class="grep-file-item"><code>${escapeHtmlFn(file)}</code></div>`).join('')}
+                    </div>
+                </div>
+            `;
+        }
+
+        // Handle content mode - show lines grouped by file
+        if (outputMode === 'content') {
+            const lines = content.split('\n').filter(line => line.trim());
+
+            if (lines.length === 0) {
+                return `
+                    <div class="tool-result ${resultClass}">
+                        <strong>No matches found</strong>
+                    </div>
+                `;
+            }
+
+            // Group lines by file (format: filepath:line_number:content)
+            const fileGroups = new Map();
+            lines.forEach(line => {
+                // Match pattern: filepath:line_number:content
+                const match = line.match(/^([^:]+):(\d+):(.*)$/);
+                if (match) {
+                    const [, filepath, lineNum, lineContent] = match;
+                    if (!fileGroups.has(filepath)) {
+                        fileGroups.set(filepath, []);
+                    }
+                    fileGroups.get(filepath).push({
+                        lineNum: lineNum,
+                        content: lineContent
+                    });
+                }
+            });
+
+            if (fileGroups.size === 0) {
+                // Fallback if format doesn't match
+                return `
+                    <div class="tool-result ${resultClass}">
+                        <strong>Results:</strong>
+                        <pre class="tool-result-content">${escapeHtmlFn(content)}</pre>
+                    </div>
+                `;
+            }
+
+            let resultHtml = `
+                <div class="tool-result ${resultClass}">
+                    <div class="grep-result-header">
+                        <strong>Found matches in ${fileGroups.size} file${fileGroups.size !== 1 ? 's' : ''}:</strong>
+                    </div>
+                    <div class="grep-content-results">
+            `;
+
+            fileGroups.forEach((matches, filepath) => {
+                resultHtml += `
+                    <div class="grep-file-group">
+                        <div class="grep-file-header">
+                            <code class="file-path">${escapeHtmlFn(filepath)}</code>
+                            <span class="grep-match-count">(${matches.length} match${matches.length !== 1 ? 'es' : ''})</span>
+                        </div>
+                        <div class="grep-matches">
+                            ${matches.map(m => `
+                                <div class="grep-match-line">
+                                    <span class="grep-line-num">${m.lineNum}:</span>
+                                    <code class="grep-line-content">${escapeHtmlFn(m.content)}</code>
+                                </div>
+                            `).join('')}
+                        </div>
+                    </div>
+                `;
+            });
+
+            resultHtml += `
+                    </div>
+                </div>
+            `;
+
+            return resultHtml;
+        }
+
+        // Handle count mode or unknown modes
+        return `
+            <div class="tool-result ${resultClass}">
+                <strong>Results:</strong>
+                <pre class="tool-result-content">${escapeHtmlFn(content)}</pre>
+            </div>
+        `;
+    }
+
+    getCollapsedSummary(toolCall) {
+        const statusIcon = {
+            'pending': '🔄',
+            'permission_required': '❓',
+            'executing': '⚡',
+            'completed': toolCall.permissionDecision === 'deny' ? '❌' : '✅',
+            'error': '💥'
+        }[toolCall.status] || '🔧';
+
+        const pattern = toolCall.input.pattern || 'pattern';
+        const outputMode = toolCall.input.output_mode || 'files_with_matches';
+
+        let statusText = '';
+        if (toolCall.status === 'completed' && !toolCall.result?.error) {
+            const content = toolCall.result?.content || '';
+            const lines = content.split('\n').filter(line => line.trim());
+
+            if (outputMode === 'files_with_matches') {
+                const foundMatch = lines[0].match(/^Found (\d+) files?/);
+                const fileCount = foundMatch ? foundMatch[1] : lines.length - 1;
+                statusText = `${fileCount} file${fileCount !== '1' ? 's' : ''}`;
+            } else if (outputMode === 'content') {
+                statusText = `${lines.length} match${lines.length !== 1 ? 'es' : ''}`;
+            } else {
+                statusText = 'Completed';
+            }
+        } else if (toolCall.result?.error) {
+            statusText = 'Error';
+        } else {
+            statusText = {
+                'pending': 'Pending',
+                'permission_required': 'Awaiting Permission',
+                'executing': 'Executing',
+                'completed': 'Completed',
+                'error': 'Error'
+            }[toolCall.status] || 'Unknown';
+        }
+
+        return `${statusIcon} Grep: "${pattern}" - ${statusText}`;
+    }
+}
+
+// Glob Tool Handler - custom display for Glob tool (file name pattern matching)
+class GlobToolHandler {
+    renderParameters(toolCall, escapeHtmlFn) {
+        const pattern = toolCall.input.pattern || '';
+        const path = toolCall.input.path || '.';
+
+        return `
+            <div class="tool-parameters tool-glob-params">
+                <div class="glob-search-info">
+                    <span class="glob-icon">📁</span>
+                    <strong>Finding files matching:</strong>
+                    <span class="glob-pattern"><code>${escapeHtmlFn(pattern)}</code></span>
+                </div>
+                ${path !== '.' ? `
+                    <div class="glob-path-info">
+                        <strong>In directory:</strong>
+                        <code class="file-path">${escapeHtmlFn(path)}</code>
+                    </div>
+                ` : ''}
+            </div>
+        `;
+    }
+
+    renderResult(toolCall, escapeHtmlFn) {
+        if (!toolCall.result) return '';
+
+        const resultClass = toolCall.result.error ? 'tool-result-error' : 'tool-result-success';
+
+        if (toolCall.result.error) {
+            return `
+                <div class="tool-result ${resultClass}">
+                    <strong>Error:</strong>
+                    <pre class="tool-result-content">${escapeHtmlFn(toolCall.result.content || toolCall.result.message || 'No content')}</pre>
+                </div>
+            `;
+        }
+
+        const content = toolCall.result.content || '';
+        const files = content.split('\n').filter(line => line.trim());
+
+        if (files.length === 0) {
+            return `
+                <div class="tool-result ${resultClass}">
+                    <strong>No matching files found</strong>
+                </div>
+            `;
+        }
+
+        return `
+            <div class="tool-result ${resultClass}">
+                <div class="glob-result-header">
+                    <strong>Found ${files.length} file${files.length !== 1 ? 's' : ''}:</strong>
+                </div>
+                <div class="glob-file-list">
+                    ${files.map(file => `<div class="glob-file-item"><code>${escapeHtmlFn(file)}</code></div>`).join('')}
+                </div>
+            </div>
+        `;
+    }
+
+    getCollapsedSummary(toolCall) {
+        const statusIcon = {
+            'pending': '🔄',
+            'permission_required': '❓',
+            'executing': '⚡',
+            'completed': toolCall.permissionDecision === 'deny' ? '❌' : '✅',
+            'error': '💥'
+        }[toolCall.status] || '🔧';
+
+        const pattern = toolCall.input.pattern || 'pattern';
+
+        let statusText = '';
+        if (toolCall.status === 'completed' && !toolCall.result?.error) {
+            const content = toolCall.result?.content || '';
+            const fileCount = content.split('\n').filter(line => line.trim()).length;
+            statusText = `${fileCount} file${fileCount !== 1 ? 's' : ''}`;
+        } else if (toolCall.result?.error) {
+            statusText = 'Error';
+        } else {
+            statusText = {
+                'pending': 'Pending',
+                'permission_required': 'Awaiting Permission',
+                'executing': 'Executing',
+                'completed': 'Completed',
+                'error': 'Error'
+            }[toolCall.status] || 'Unknown';
+        }
+
+        return `${statusIcon} Glob: "${pattern}" - ${statusText}`;
+    }
+}
+
+// WebFetch Tool Handler - custom display for WebFetch tool
+class WebFetchToolHandler {
+    renderParameters(toolCall, escapeHtmlFn) {
+        const url = toolCall.input.url || '';
+        const prompt = toolCall.input.prompt || '';
+
+        return `
+            <div class="tool-parameters tool-webfetch-params">
+                <div class="webfetch-url-info">
+                    <span class="webfetch-icon">🌐</span>
+                    <strong>Fetching:</strong>
+                    <a href="${escapeHtmlFn(url)}" target="_blank" rel="noopener noreferrer" class="webfetch-url">${escapeHtmlFn(url)}</a>
+                </div>
+                ${prompt ? `
+                    <div class="webfetch-prompt-info">
+                        <strong>Task:</strong>
+                        <span class="webfetch-prompt">${escapeHtmlFn(prompt)}</span>
+                    </div>
+                ` : ''}
+            </div>
+        `;
+    }
+
+    renderResult(toolCall, escapeHtmlFn) {
+        if (!toolCall.result) return '';
+
+        const resultClass = toolCall.result.error ? 'tool-result-error' : 'tool-result-success';
+
+        if (toolCall.result.error) {
+            return `
+                <div class="tool-result ${resultClass}">
+                    <strong>Error:</strong>
+                    <pre class="tool-result-content">${escapeHtmlFn(toolCall.result.content || toolCall.result.message || 'No content')}</pre>
+                </div>
+            `;
+        }
+
+        const content = toolCall.result.content || '';
+        const lines = content.split('\n');
+        const previewLimit = 15;
+        const hasMore = lines.length > previewLimit;
+        const previewLines = lines.slice(0, previewLimit);
+
+        return `
+            <div class="tool-result ${resultClass}">
+                <div class="webfetch-result-header">
+                    <strong>Response:</strong>
+                    <span class="webfetch-line-count">${lines.length} lines</span>
+                    ${hasMore ? `<span class="webfetch-preview-note">(showing first ${previewLimit})</span>` : ''}
+                </div>
+                <pre class="tool-result-content webfetch-content-preview">${escapeHtmlFn(previewLines.join('\n'))}</pre>
+                ${hasMore ? '<div class="webfetch-more-indicator">...</div>' : ''}
+            </div>
+        `;
+    }
+
+    getCollapsedSummary(toolCall) {
+        const statusIcon = {
+            'pending': '🔄',
+            'permission_required': '❓',
+            'executing': '⚡',
+            'completed': toolCall.permissionDecision === 'deny' ? '❌' : '✅',
+            'error': '💥'
+        }[toolCall.status] || '🔧';
+
+        const url = toolCall.input.url || '';
+        const domain = url.match(/^https?:\/\/([^\/]+)/)?.[1] || url;
+
+        let statusText = '';
+        if (toolCall.status === 'completed' && !toolCall.result?.error) {
+            statusText = 'Fetched';
+        } else if (toolCall.result?.error) {
+            statusText = 'Error';
+        } else {
+            statusText = {
+                'pending': 'Pending',
+                'permission_required': 'Awaiting Permission',
+                'executing': 'Fetching',
+                'completed': 'Completed',
+                'error': 'Error'
+            }[toolCall.status] || 'Unknown';
+        }
+
+        return `${statusIcon} WebFetch: ${domain} - ${statusText}`;
+    }
+}
+
+// WebSearch Tool Handler - custom display for WebSearch tool
+class WebSearchToolHandler {
+    renderParameters(toolCall, escapeHtmlFn) {
+        const query = toolCall.input.query || '';
+        const allowedDomains = toolCall.input.allowed_domains || [];
+        const blockedDomains = toolCall.input.blocked_domains || [];
+
+        return `
+            <div class="tool-parameters tool-websearch-params">
+                <div class="websearch-query-info">
+                    <span class="websearch-icon">🔎</span>
+                    <strong>Searching for:</strong>
+                    <span class="websearch-query">${escapeHtmlFn(query)}</span>
+                </div>
+                ${allowedDomains.length > 0 ? `
+                    <div class="websearch-filter-info">
+                        <strong>Allowed domains:</strong>
+                        <span class="websearch-domains">${allowedDomains.map(d => escapeHtmlFn(d)).join(', ')}</span>
+                    </div>
+                ` : ''}
+                ${blockedDomains.length > 0 ? `
+                    <div class="websearch-filter-info">
+                        <strong>Blocked domains:</strong>
+                        <span class="websearch-domains">${blockedDomains.map(d => escapeHtmlFn(d)).join(', ')}</span>
+                    </div>
+                ` : ''}
+            </div>
+        `;
+    }
+
+    renderResult(toolCall, escapeHtmlFn) {
+        if (!toolCall.result) return '';
+
+        const resultClass = toolCall.result.error ? 'tool-result-error' : 'tool-result-success';
+
+        if (toolCall.result.error) {
+            return `
+                <div class="tool-result ${resultClass}">
+                    <strong>Error:</strong>
+                    <pre class="tool-result-content">${escapeHtmlFn(toolCall.result.content || toolCall.result.message || 'No content')}</pre>
+                </div>
+            `;
+        }
+
+        const content = toolCall.result.content || '';
+
+        // Try to parse the Links JSON from the content
+        const linksMatch = content.match(/Links: (\[.*?\])/s);
+        let links = [];
+        if (linksMatch) {
+            try {
+                links = JSON.parse(linksMatch[1]);
+            } catch (e) {
+                // Failed to parse, will show raw content
+            }
+        }
+
+        // Extract the summary after the Links section
+        const summaryMatch = content.match(/Links: \[.*?\]\n\n(.*)/s);
+        const summary = summaryMatch ? summaryMatch[1] : content;
+
+        if (links.length > 0) {
+            return `
+                <div class="tool-result ${resultClass}">
+                    <div class="websearch-links-section">
+                        <strong>Found ${links.length} result${links.length !== 1 ? 's' : ''}:</strong>
+                        <div class="websearch-links">
+                            ${links.map(link => `
+                                <div class="websearch-link-item">
+                                    <a href="${escapeHtmlFn(link.url)}" target="_blank" rel="noopener noreferrer" class="websearch-link-title">
+                                        ${escapeHtmlFn(link.title)}
+                                    </a>
+                                    <div class="websearch-link-url">${escapeHtmlFn(link.url)}</div>
+                                </div>
+                            `).join('')}
+                        </div>
+                    </div>
+                    <div class="websearch-summary-section">
+                        <strong>Summary:</strong>
+                        <div class="websearch-summary">${escapeHtmlFn(summary)}</div>
+                    </div>
+                </div>
+            `;
+        }
+
+        // Fallback to simple content display
+        return `
+            <div class="tool-result ${resultClass}">
+                <strong>Results:</strong>
+                <pre class="tool-result-content">${escapeHtmlFn(content)}</pre>
+            </div>
+        `;
+    }
+
+    getCollapsedSummary(toolCall) {
+        const statusIcon = {
+            'pending': '🔄',
+            'permission_required': '❓',
+            'executing': '⚡',
+            'completed': toolCall.permissionDecision === 'deny' ? '❌' : '✅',
+            'error': '💥'
+        }[toolCall.status] || '🔧';
+
+        const query = toolCall.input.query || 'search';
+
+        let statusText = '';
+        if (toolCall.status === 'completed' && !toolCall.result?.error) {
+            // Try to extract result count
+            const content = toolCall.result?.content || '';
+            const linksMatch = content.match(/Links: (\[.*?\])/s);
+            if (linksMatch) {
+                try {
+                    const links = JSON.parse(linksMatch[1]);
+                    statusText = `${links.length} result${links.length !== 1 ? 's' : ''}`;
+                } catch (e) {
+                    statusText = 'Completed';
+                }
+            } else {
+                statusText = 'Completed';
+            }
+        } else if (toolCall.result?.error) {
+            statusText = 'Error';
+        } else {
+            statusText = {
+                'pending': 'Pending',
+                'permission_required': 'Awaiting Permission',
+                'executing': 'Searching',
+                'completed': 'Completed',
+                'error': 'Error'
+            }[toolCall.status] || 'Unknown';
+        }
+
+        return `${statusIcon} WebSearch: "${query}" - ${statusText}`;
+    }
+}
+
+class BashToolHandler {
+    renderParameters(toolCall, escapeHtmlFn) {
+        const command = toolCall.input.command || '';
+        const description = toolCall.input.description || '';
+        const timeout = toolCall.input.timeout;
+        const runInBackground = toolCall.input.run_in_background || false;
+
+        let html = '<div class="tool-bash-params">';
+
+        // Header with bash icon
+        html += '<div class="bash-header">';
+        html += '<span class="bash-icon">💻</span>';
+        html += '<div class="bash-header-content">';
+        if (description) {
+            html += `<div><strong>Description:</strong> ${escapeHtmlFn(description)}</div>`;
+        }
+
+        // Display flags inline
+        const flags = [];
+        if (timeout) {
+            flags.push(`timeout: ${timeout}ms`);
+        }
+        if (runInBackground) {
+            flags.push('background');
+        }
+        if (flags.length > 0) {
+            html += `<div class="bash-flags">${flags.join(', ')}</div>`;
+        }
+
+        html += '</div>';
+        html += '</div>';
+
+        // Command section (displayed as text block for potentially long commands)
+        html += '<div class="bash-command-section">';
+        html += '<div class="bash-command-label"><strong>Command:</strong></div>';
+        html += '<div class="bash-command-content">';
+        html += escapeHtmlFn(command);
+        html += '</div>';
+        html += '</div>';
+
+        html += '</div>';
+        return html;
+    }
+
+    renderResult(toolCall, escapeHtmlFn) {
+        if (!toolCall.result) return '';
+
+        const content = toolCall.result.content || '';
+        const resultClass = toolCall.result.error ? 'tool-result-error' : 'tool-result-success';
+
+        if (!content) {
+            return `<div class="tool-result ${resultClass}"><strong>Output:</strong><div class="bash-result-empty">No output</div></div>`;
+        }
+
+        return `
+            <div class="tool-result ${resultClass}">
+                <strong>Output:</strong>
+                <pre class="bash-result-content">${escapeHtmlFn(content)}</pre>
+            </div>
+        `;
+    }
+
+    getCollapsedSummary(toolCall, escapeHtmlFn) {
+        const description = toolCall.input.description || toolCall.input.command || 'Bash';
+        const runInBackground = toolCall.input.run_in_background || false;
+
+        // Status-based icons
+        const statusIcon = {
+            'pending': '⏳',
+            'running': '▶️',
+            'completed': '✅',
+            'error': '❌'
+        }[toolCall.status] || '💻';
+
+        const bgFlag = runInBackground ? '(background) ' : '';
+        return `${statusIcon} Bash: ${bgFlag}${description}`;
+    }
+}
+
+class BashOutputToolHandler {
+    renderParameters(toolCall, escapeHtmlFn) {
+        const bashId = toolCall.input.bash_id || '';
+        const filter = toolCall.input.filter || '';
+
+        let html = '<div class="tool-bash-params">';
+
+        // Header with bash output icon
+        html += '<div class="bash-header">';
+        html += '<span class="bash-icon">📋</span>';
+        html += '<div class="bash-header-content">';
+        html += `<div><strong>Shell ID:</strong> ${escapeHtmlFn(bashId)}</div>`;
+        if (filter) {
+            html += `<div><strong>Filter:</strong> ${escapeHtmlFn(filter)}</div>`;
+        }
+        html += '</div>';
+        html += '</div>';
+
+        html += '</div>';
+        return html;
+    }
+
+    renderResult(toolCall, escapeHtmlFn) {
+        if (!toolCall.result) return '';
+
+        const content = toolCall.result.content || '';
+        const resultClass = toolCall.result.error ? 'tool-result-error' : 'tool-result-success';
+
+        if (!content) {
+            return `<div class="tool-result ${resultClass}"><strong>Output:</strong><div class="bash-result-empty">No output</div></div>`;
+        }
+
+        // Parse XML tags from content
+        const statusMatch = content.match(/<status>(.*?)<\/status>/);
+        const exitCodeMatch = content.match(/<exit_code>(.*?)<\/exit_code>/);
+        const stdoutMatch = content.match(/<stdout>(.*?)<\/stdout>/s);
+        const timestampMatch = content.match(/<timestamp>(.*?)<\/timestamp>/);
+
+        const status = statusMatch ? statusMatch[1] : '';
+        const exitCode = exitCodeMatch ? exitCodeMatch[1] : '';
+        const stdout = stdoutMatch ? stdoutMatch[1].trim() : '';
+        const timestamp = timestampMatch ? timestampMatch[1] : '';
+
+        // Determine status icon and color based on status and exit code
+        let statusIcon = '❓'; // Unknown/default
+        let statusColor = 'gray';
+
+        if (status === 'running') {
+            statusIcon = '▶️';
+            statusColor = 'yellow';
+        } else if (status === 'completed') {
+            if (exitCode === '0') {
+                statusIcon = '✅';
+                statusColor = 'green';
+            } else {
+                statusIcon = '❌';
+                statusColor = 'red';
+            }
+        } else if (status === 'error' || status === 'killed') {
+            statusIcon = '❌';
+            statusColor = 'red';
+        }
+
+        let html = `<div class="tool-result ${resultClass}"><strong>Output:</strong>`;
+
+        // Display stdout as text block
+        if (stdout) {
+            html += '<pre class="bashoutput-stdout-content">';
+            html += escapeHtmlFn(stdout);
+            html += '</pre>';
+        }
+
+        // Display timestamp and exit code footer with status icon
+        if (timestamp || exitCode) {
+            html += '<div class="bashoutput-footer">';
+            html += `${statusIcon} Checked: `;
+            if (timestamp) {
+                html += escapeHtmlFn(timestamp);
+            }
+            if (exitCode) {
+                html += ` (Exit Code: ${escapeHtmlFn(exitCode)})`;
+            }
+            html += '</div>';
+        }
+
+        html += '</div>';
+        return html;
+    }
+
+    getCollapsedSummary(toolCall, escapeHtmlFn) {
+        const bashId = toolCall.input.bash_id || 'unknown';
+
+        // Parse result content for status and exit code
+        const content = toolCall.result?.content || '';
+        const statusMatch = content.match(/<status>(.*?)<\/status>/);
+        const exitCodeMatch = content.match(/<exit_code>(.*?)<\/exit_code>/);
+
+        const bashStatus = statusMatch ? statusMatch[1] : '';
+        const exitCode = exitCodeMatch ? exitCodeMatch[1] : '';
+
+        // Status-based icons
+        let statusIcon = '📋';
+        if (bashStatus === 'running') {
+            statusIcon = '▶️';
+        } else if (bashStatus === 'completed') {
+            statusIcon = exitCode === '0' ? '✅' : '❌';
+        } else if (bashStatus === 'error' || bashStatus === 'killed') {
+            statusIcon = '❌';
+        } else if (toolCall.status === 'pending') {
+            statusIcon = '⏳';
+        }
+
+        // Build summary
+        let summary = `${statusIcon} BashOutput:`;
+        if (bashStatus) {
+            summary += ` (${bashStatus})`;
+        }
+        summary += ` ${bashId}`;
+        if (exitCode) {
+            summary += ` (Exit Code: ${exitCode})`;
+        }
+
+        return summary;
+    }
+}
+
+class KillShellToolHandler {
+    renderParameters(toolCall, escapeHtmlFn) {
+        const shellId = toolCall.input.shell_id || '';
+
+        let html = '<div class="tool-bash-params">';
+
+        // Header with kill icon
+        html += '<div class="bash-header">';
+        html += '<span class="bash-icon">🛑</span>';
+        html += '<div class="bash-header-content">';
+        html += `<div><strong>Shell ID:</strong> ${escapeHtmlFn(shellId)}</div>`;
+        html += '</div>';
+        html += '</div>';
+
+        html += '</div>';
+        return html;
+    }
+
+    renderResult(toolCall, escapeHtmlFn) {
+        if (!toolCall.result) return '';
+
+        const content = toolCall.result.content || '';
+        const resultClass = toolCall.result.error ? 'tool-result-error' : 'tool-result-success';
+
+        if (!content) {
+            return `<div class="tool-result ${resultClass}"><strong>Result:</strong><div class="bash-result-empty">No result</div></div>`;
+        }
+
+        return `
+            <div class="tool-result ${resultClass}">
+                <strong>Result:</strong>
+                <div class="killshell-result-content">${escapeHtmlFn(content)}</div>
+            </div>
+        `;
+    }
+
+    getCollapsedSummary(toolCall, escapeHtmlFn) {
+        const shellId = toolCall.input.shell_id || 'unknown';
+
+        // Status-based icons
+        const statusIcon = {
+            'pending': '⏳',
+            'running': '▶️',
+            'completed': toolCall.result?.error ? '❌' : '✅',
+            'error': '❌'
+        }[toolCall.status] || '🛑';
+
+        return `${statusIcon} KillShell: ${shellId}`;
+    }
+}
+
+class TaskToolHandler {
+    renderParameters(toolCall, escapeHtmlFn) {
+        const subagentType = toolCall.input.subagent_type || 'general-purpose';
+        const description = toolCall.input.description || '';
+        const prompt = toolCall.input.prompt || '';
+
+        let html = '<div class="tool-task-params">';
+
+        // Header with agent icon
+        html += '<div class="task-header">';
+        html += '<span class="task-icon">🤖</span>';
+        html += '<div class="task-header-content">';
+        html += `<div><strong>Agent Type:</strong> ${escapeHtmlFn(subagentType)}</div>`;
+        if (description) {
+            html += `<div><strong>Task:</strong> ${escapeHtmlFn(description)}</div>`;
+        }
+        html += '</div>';
+        html += '</div>';
+
+        // Prompt section (displayed as text block for potentially large content)
+        if (prompt) {
+            html += '<div class="task-prompt-section">';
+            html += '<div class="task-prompt-label"><strong>Prompt:</strong></div>';
+            html += '<div class="task-prompt-content">';
+            html += escapeHtmlFn(prompt);
+            html += '</div>';
+            html += '</div>';
+        }
+
+        html += '</div>';
+        return html;
+    }
+
+    renderResult(toolCall, escapeHtmlFn) {
+        if (!toolCall.result) return '';
+
+        const content = toolCall.result.content || '';
+        const resultClass = toolCall.result.error ? 'tool-result-error' : 'tool-result-success';
+
+        if (!content) {
+            return `<div class="tool-result ${resultClass}"><strong>Agent Response:</strong><div class="task-result-empty">No result returned</div></div>`;
+        }
+
+        return `
+            <div class="tool-result ${resultClass}">
+                <strong>Agent Response:</strong>
+                <div class="task-result-content">${escapeHtmlFn(content)}</div>
+            </div>
+        `;
+    }
+
+    getCollapsedSummary(toolCall, escapeHtmlFn) {
+        const description = toolCall.input.description || 'Task';
+        const subagentType = toolCall.input.subagent_type || 'general-purpose';
+
+        // Status-based icons
+        const statusIcon = {
+            'pending': '⏳',
+            'running': '▶️',
+            'completed': '✅',
+            'error': '❌'
+        }[toolCall.status] || '🤖';
+
+        return `${statusIcon} Task: (${subagentType}) ${description}`;
     }
 }
 
@@ -936,6 +1803,14 @@ class ClaudeWebUI {
         this.toolHandlerRegistry.registerHandler('MultiEdit', new MultiEditToolHandler());
         this.toolHandlerRegistry.registerHandler('Write', new WriteToolHandler());
         this.toolHandlerRegistry.registerHandler('TodoWrite', new TodoWriteToolHandler());
+        this.toolHandlerRegistry.registerHandler('Grep', new GrepToolHandler());
+        this.toolHandlerRegistry.registerHandler('Glob', new GlobToolHandler());
+        this.toolHandlerRegistry.registerHandler('WebFetch', new WebFetchToolHandler());
+        this.toolHandlerRegistry.registerHandler('WebSearch', new WebSearchToolHandler());
+        this.toolHandlerRegistry.registerHandler('Bash', new BashToolHandler());
+        this.toolHandlerRegistry.registerHandler('BashOutput', new BashOutputToolHandler());
+        this.toolHandlerRegistry.registerHandler('KillShell', new KillShellToolHandler());
+        this.toolHandlerRegistry.registerHandler('Task', new TaskToolHandler());
 
         // Register pattern handlers for MCP tools (can be customized later)
         // this.toolHandlerRegistry.registerPatternHandler('mcp__*', new McpToolHandler());

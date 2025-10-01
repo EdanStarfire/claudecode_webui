@@ -15,9 +15,9 @@ from .message_parser import MessageProcessor, MessageParser
 
 # Import SDK components
 try:
-    from claude_code_sdk import (
+    from claude_agent_sdk import (
         ClaudeSDKClient,
-        ClaudeCodeOptions,
+        ClaudeAgentOptions,
         PermissionResultAllow,
         PermissionResultDeny,
         ToolPermissionContext,
@@ -30,7 +30,7 @@ try:
 except ImportError:
     # Fallback for development/testing environments
     ClaudeSDKClient = None
-    ClaudeCodeOptions = None
+    ClaudeAgentOptions = None
     PermissionResultAllow = None
     PermissionResultDeny = None
     ToolPermissionContext = None
@@ -165,7 +165,7 @@ class ClaudeSDK:
 
         # New SDK client pattern
         self._sdk_client: Optional[ClaudeSDKClient] = None
-        self._sdk_options: Optional[ClaudeCodeOptions] = None
+        self._sdk_options: Optional[ClaudeAgentOptions] = None
 
         # Interactive conversation support
         self._message_queue = asyncio.Queue()
@@ -252,8 +252,8 @@ class ClaudeSDK:
                 raise FileNotFoundError(f"Working directory does not exist: {self.working_directory}")
 
             # Check SDK components are available
-            if not ClaudeSDKClient or not ClaudeCodeOptions:
-                raise ImportError("Claude Code SDK components not available")
+            if not ClaudeSDKClient or not ClaudeAgentOptions:
+                raise ImportError("Claude Agent SDK components not available")
 
             # Check for existing Claude Code session ID if this is a resume operation
             if self.resume_session_id is not None and self.session_manager:
@@ -590,11 +590,22 @@ class ClaudeSDK:
         ) -> Union[PermissionResultAllow, PermissionResultDeny]:
             return await self._can_use_tool_callback(tool_name, input_params, context)
 
+        # Configure system prompt: use Claude Code preset if no custom prompt provided
+        system_prompt_config = self.system_prompt
+        if system_prompt_config is None:
+            # Use Claude Code preset system prompt by default
+            system_prompt_config = {
+                "type": "preset",
+                "preset": "claude_code"
+            }
+
         options_kwargs = {
             "cwd": str(self.working_directory),
             "permission_mode": self.permissions,
-            "system_prompt": self.system_prompt,
+            "system_prompt": system_prompt_config,
             "allowed_tools": self.tools,
+            # Restore default settings sources behavior (load from user, project, and local)
+            "setting_sources": ["user", "project", "local"]
         }
 
         # Only add can_use_tool callback if permission callback is provided and SDK classes are available
@@ -618,8 +629,8 @@ class ClaudeSDK:
 
         logger.info(f"DEBUG: Final SDK options keys: {list(options_kwargs.keys())}")
         logger.info(f"DEBUG: can_use_tool included: {'can_use_tool' in options_kwargs}")
-        logger.info(f"ClaudeCodeOptions: {options_kwargs}")
-        return ClaudeCodeOptions(**options_kwargs)
+        logger.info(f"ClaudeAgentOptions: {options_kwargs}")
+        return ClaudeAgentOptions(**options_kwargs)
 
     async def _process_sdk_message(self, sdk_message: Any):
         """Process a single message from the SDK stream."""

@@ -49,36 +49,40 @@
 [x] qol: Refactor to remove fallbacks and duplicate processing / separate flows for real-time and historical webUI interaction
 [x] bug: Session start messages (init) not visible in WebUI - were being suppressed by message filtering
 [x] bug: Client_launched messages not appearing in messages.jsonl - sdk_was_created logic was incorrect
-[ ] qol: use the Claude provided tool use ID for tracking the permission request + approval/denial instead of an internally generated UUID
 [x] feat: Allow session re-ordering
 [x] feat: New sessions should go to the top of the list
 [x] bug: Session renaming doesn't show in session list immediately.
-[ ] bug: Layout on mobile is... yucky.
 [x] qol: User messages bubbles should be blue border with light blue back with black text for consistency with the assistant messages
-[ ] feat: Support diff views properly for permissions prompts
+[x] feat: Support diff views properly for permissions prompts
 [x] qol: Shrink session start / session interrupted cards to 1-liners (de-emphasized)
-[ ] qol: Redirect app.log to the data/session folder for debugging purposes
-[ ] bug: autoscroll doesn't scroll when permissions are prompted for
-[ ] feat: Implement mode switching (plan, autoaccept writes, normal)
 [x] qol: Remove data integrity check
-[ ] qol: Refactor code files for smaller sizes and easier organization
 [x] qol: Clicking on an expanded tool call header should collapse the tool call, not just the arrow at the far right.
 [x] qol: Make tool use blocks horizontally scrollable
--- Tool Handling:
+[x] bug: Fix vertical alignment in tool call params blocks
 [x] feat: Handle TodoWrite tool content display
 [x] feat: Handle Read tool content display
 [x] feat: Handle Write tool content display
 [x] feat: Handle Edit tool (diff) content display
 [x] feat: Handle MultiEdit tool (diff) content display
-[ ] feat: Handle Task tool content display
-[ ] feat: Handle NotebookEdit tool content display
-[ ] feat: Handle Glob tool content display
-[ ] feat: Handle Grep tool content display
-[ ] feat: Handle ExitPlanMode tool content display
-[ ] feat: Handle WebFetch tool content display
-[ ] feat: Handle WebSearch tool content display
+[x] feat: Handle Task tool content display
+[x] feat: Handle Glob tool content display
+[x] feat: Handle Grep tool content display
+[x] feat: Handle WebFetch tool content display
+[x] feat: Handle WebSearch tool content display
+[x] feat: Handle BashOutput tool content display
+[x] feat: Handle KillShell tool content display
+[x] feat: Handle Bash tool content display
+[ ] bug: Layout on mobile is... yucky.
+[ ] qol: Redirect app.log to the data/session folder for debugging purposes
+[ ] bug: autoscroll doesn't scroll when permissions are prompted for
+[ ] feat: Implement mode switching (plan, autoaccept writes, normal)
+[ ] qol: Refactor code files for smaller sizes and easier organization
+[ ] bug: Fix approval / deny permissions to disable additional clicks once pressed once. and to show submission of the permission
 [ ] feat: Handle SlashCommand tool content display
-[ ] feat: Handle BashOutput tool content display
-[ ] feat: Handle KillShell tool content display
-[ ] feat: Handle Bash tool content display
 [ ] feat: Handle MCP tool content display
+[ ] feat: Handle ExitPlanMode tool content display
+[ ] feat: Handle NotebookEdit tool content display
+[ ] feat: Handle local command parsing: 
+    `{"type": "user", "content": "", "timestamp": 1759240122.8231502, "metadata": {"tool_uses": [], "tool_results": [], "has_tool_uses": false, "has_tool_results": false, "has_thinking": false, "has_permission_requests": false, "has_permission_responses": false, "role": null, "session_id": "76fe166f-9515-4acf-97fa-eaad97e54706", "raw_sdk_message": "UserMessage(content='<local-command-stdout>With your Claude Pro subscription, no need to monitor cost — your subscription includes Claude Code usage</local-command-stdout>', parent_tool_use_id=None)", "source": "sdk", "processed_at": 1759240122.8245418}, "session_id": "76fe166f-9515-4acf-97fa-eaad97e54706", "raw_sdk_message": "{\"__class__\": \"UserMessage\", \"__module__\": \"claude_agent_sdk.types\", \"content\": \"<local-command-stdout>With your Claude Pro subscription, no need to monitor cost \\u2014 your subscription includes Claude Code usage</local-command-stdout>\", \"parent_tool_use_id\": null}", "sdk_message_type": "UserMessage"}`
+[ ] qol: Remove debug messages for WS_LIFECYCLE and Ping - only leave logs where they throw issues
+

@@ -5,13 +5,13 @@ DO NOT SAY THAT THE USER IS CORRECT OR COMPLEMENT THEIR REQUEST. FORMAL, CONCISE
 2. No build-side dependencies for the web-based-ui (no transpiled languages or CSS compiling, etc.)
 
 # High-Level Goal
-We are building a tool that integrates with the Claude Code Python SDK to provide streaming conversations through a web-based interface. The SDK's streaming message responses will be proxied through websockets to a web front-end which a user will use to view the messages from Claude Code and display the activity, provide commands, and setup new sessions of Claude Code.
+We are building a tool that integrates with the Claude Agent SDK (formerly Claude Code SDK) to provide streaming conversations through a web-based interface. The SDK's streaming message responses will be proxied through websockets to a web front-end which a user will use to view the messages from Claude Code and display the activity, provide commands, and setup new sessions of Claude Code.
 
-# Claude Code SDK Integration - CRITICAL TECHNICAL KNOWLEDGE
+# Claude Agent SDK Integration - CRITICAL TECHNICAL KNOWLEDGE
 
 ## SDK Usage (REQUIRED)
 ```python
-from claude_code_sdk import query, ClaudeCodeOptions
+from claude_agent_sdk import query, ClaudeAgentOptions
 
 # Basic streaming conversation
 async def main():
@@ -19,7 +19,7 @@ async def main():
         print(message)
 
 # With configuration
-options = ClaudeCodeOptions(
+options = ClaudeAgentOptions(
     cwd="/path/to/project",
     permission_mode="acceptEdits",
     allowed_tools=["bash", "edit", "read"]
@@ -30,19 +30,23 @@ async for message in query(prompt="Build the project", options=options):
 
 ## Session Management
 - SDK handles session management internally
-- Use `ClaudeCodeOptions` to configure per-session settings
+- Use `ClaudeAgentOptions` to configure per-session settings
 - Sessions are maintained through the async iterator lifecycle
 - Generate unique identifiers for WebUI session tracking
 
 ## SDK Configuration (CRITICAL)
 ```python
-from claude_code_sdk import ClaudeCodeOptions
+from claude_agent_sdk import ClaudeAgentOptions
 
-options = ClaudeCodeOptions(
+options = ClaudeAgentOptions(
     cwd="/path/to/project",              # Project working directory (NOT working_directory)
     permission_mode="acceptEdits",       # Permission mode (NOT permissions)
-    system_prompt="Custom prompt",       # System prompt override
+    system_prompt={                      # System prompt configuration (preset or custom)
+        "type": "preset",
+        "preset": "claude_code"          # Use Claude Code preset
+    },
     allowed_tools=["bash", "edit", "read"],  # Tool allowlist (NOT tools)
+    setting_sources=["user", "project", "local"],  # Settings sources to load
     model="claude-3-sonnet-20241022"     # Model selection
 )
 ```
@@ -52,7 +56,30 @@ options = ClaudeCodeOptions(
 - Use `permission_mode` NOT `permissions`
 - Use `allowed_tools` NOT `tools`
 - Use `prompt=message` NOT positional argument in query()
-- Always import from `claude_code_sdk` NOT `claude_code`
+- Always import from `claude_agent_sdk` NOT `claude_code_sdk`
+- Use `ClaudeAgentOptions` NOT `ClaudeCodeOptions`
+
+## System Prompt Configuration (CRITICAL - NEW in v0.1.0)
+- SDK no longer uses Claude Code system prompt by default
+- Must explicitly specify preset to get Claude Code behavior:
+  ```python
+  system_prompt={
+      "type": "preset",
+      "preset": "claude_code"
+  }
+  ```
+- For custom prompts, pass string directly: `system_prompt="Custom prompt"`
+
+## Settings Sources Configuration (CRITICAL - NEW in v0.1.0)
+- SDK no longer loads settings from filesystem by default
+- Must explicitly specify sources to restore previous behavior:
+  ```python
+  setting_sources=["user", "project", "local"]
+  ```
+- Available sources:
+  - `"user"`: Load from `~/.claude/settings.json`
+  - `"project"`: Load from `.claude/settings.json`
+  - `"local"`: Load from `.claude/settings.local.json`
 
 ## Message Stream Format
 - SDK returns streaming messages through async iterator
