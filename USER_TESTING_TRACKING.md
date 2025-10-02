@@ -72,24 +72,31 @@
 [x] feat: Handle BashOutput tool content display
 [x] feat: Handle KillShell tool content display
 [x] feat: Handle Bash tool content display
-[ ] bug: Layout on mobile is... yucky.
-[ ] qol: Redirect app.log to the data/session folder for debugging purposes
 [x] bug: autoscroll doesn't scroll when permissions are prompted for
 [x] feat: Implement mode switching (plan, autoaccept writes, normal)
-[ ] qol: Refactor code files for smaller sizes and easier organization
 [x] bug: Fix approval / deny permissions to disable additional clicks once pressed once. and to show submission of the permission
+[x] feat: Handle ExitPlanMode tool content display
+[x] bug: delete session modal needs margins or padding
+[x] bug: delete session should remove session from session list on left
+[x] bug: assistant message content should be trimmed to remove leading/trailing newlines
+
+# Polish
+[ ] bug: Layout on mobile is... yucky.
+[ ] qol: Better diff viewer (currently just alternates different lines)
+[ ] qol: Loading screen for when switching sessions to hide the previous session's content while loading
+
+# Cleanup
+[ ] qol: Redirect app.log to the data/session folder for debugging purposes
+[ ] qol: Refactor code files for smaller sizes and easier organization
+[ ] qol: Remove debug messages for WS_LIFECYCLE and Ping - only leave logs where they throw issues
+
+# Advanced Functionality
 [ ] feat: Handle SlashCommand tool content display
 [ ] feat: Handle MCP tool content display
-[x] feat: Handle ExitPlanMode tool content display
 [ ] feat: ExitPlanMode supports alternate exit mode
 [ ] feat: ToolPermission prompts support suggestions for additional permissions
 [ ] feat: Handle NotebookEdit tool content display
 [ ] feat: Handle local command parsing: 
     `{"type": "user", "content": "", "timestamp": 1759240122.8231502, "metadata": {"tool_uses": [], "tool_results": [], "has_tool_uses": false, "has_tool_results": false, "has_thinking": false, "has_permission_requests": false, "has_permission_responses": false, "role": null, "session_id": "76fe166f-9515-4acf-97fa-eaad97e54706", "raw_sdk_message": "UserMessage(content='<local-command-stdout>With your Claude Pro subscription, no need to monitor cost — your subscription includes Claude Code usage</local-command-stdout>', parent_tool_use_id=None)", "source": "sdk", "processed_at": 1759240122.8245418}, "session_id": "76fe166f-9515-4acf-97fa-eaad97e54706", "raw_sdk_message": "{\"__class__\": \"UserMessage\", \"__module__\": \"claude_agent_sdk.types\", \"content\": \"<local-command-stdout>With your Claude Pro subscription, no need to monitor cost \\u2014 your subscription includes Claude Code usage</local-command-stdout>\", \"parent_tool_use_id\": null}", "sdk_message_type": "UserMessage"}`
-[ ] qol: Remove debug messages for WS_LIFECYCLE and Ping - only leave logs where they throw issues
-[x] bug: delete session modal needs margins or padding
-[x] bug: delete session should remove session from session list on left
-[x] bug: assistant message content should be trimmed to remove leading/trailing newlines
-[ ] qol: Better diff viewer (currently just alternates different lines)
-[ ] qol: Loading screen for when switching sessions to hide the previous session's content while loading
 [ ] feat: Enable bypassPermissions mode switch with confirmation and warning
+[ ] feat: Support markdown for assistant responses (and user input?)
