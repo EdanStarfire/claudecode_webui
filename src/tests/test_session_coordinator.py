@@ -25,7 +25,7 @@ def sample_session_config():
     """Sample session configuration for testing."""
     return {
         "working_directory": "/test/project",
-        "permissions": "acceptEdits",
+        "permission_mode": "acceptEdits",
         "system_prompt": "Test system prompt",
         "tools": ["bash", "edit", "read"],
         "model": "claude-3-sonnet-20241022"
@@ -78,7 +78,7 @@ class TestSessionCoordinator:
 
         # Verify SDK has default configuration
         sdk = coordinator._active_sdks[session_id]
-        assert sdk.permissions == "acceptEdits"
+        assert sdk.current_permission_mode == "acceptEdits"
         assert sdk.tools == ["bash", "edit", "read"]
         assert sdk.model is None  # No default model set
 

@@ -37,7 +37,7 @@ class SessionInfo:
     created_at: datetime
     updated_at: datetime
     working_directory: Optional[str] = None
-    permissions: str = "acceptEdits"
+    current_permission_mode: str = "acceptEdits"
     system_prompt: Optional[str] = None
     tools: List[str] = None
     model: Optional[str] = None
@@ -137,7 +137,7 @@ class SessionManager:
         self,
         session_id: str,
         working_directory: Optional[str] = None,
-        permissions: str = "acceptEdits",
+        permission_mode: str = "acceptEdits",
         system_prompt: Optional[str] = None,
         tools: List[str] = None,
         model: Optional[str] = None,
@@ -159,7 +159,7 @@ class SessionManager:
             created_at=now,
             updated_at=now,
             working_directory=working_directory,
-            permissions=permissions,
+            current_permission_mode=permission_mode,
             system_prompt=system_prompt,
             tools=tools if tools is not None else [],
             model=model,
@@ -408,6 +408,31 @@ class SessionManager:
                 return True
             except Exception as e:
                 logger.error(f"Failed to update session {session_id} name: {e}")
+                return False
+
+    async def update_permission_mode(self, session_id: str, mode: str) -> bool:
+        """Update session permission mode"""
+        async with self._get_session_lock(session_id):
+            try:
+                session = self._active_sessions.get(session_id)
+                if not session:
+                    logger.error(f"Session {session_id} not found")
+                    return False
+
+                # Validate mode
+                valid_modes = ["default", "acceptEdits", "plan", "bypassPermissions"]
+                if mode not in valid_modes:
+                    logger.error(f"Invalid permission mode: {mode}")
+                    return False
+
+                session.current_permission_mode = mode
+                session.updated_at = datetime.now(timezone.utc)
+                await self._persist_session_state(session_id)
+                await self._notify_state_change_callbacks(session_id, session.state)
+                logger.info(f"Updated session {session_id} permission mode to '{mode}'")
+                return True
+            except Exception as e:
+                logger.error(f"Failed to update session {session_id} permission mode: {e}")
                 return False
 
     async def delete_session(self, session_id: str) -> bool:

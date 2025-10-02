@@ -88,7 +88,7 @@ class SessionCoordinator:
         self,
         session_id: str,
         working_directory: str,
-        permissions: str = "acceptEdits",
+        permission_mode: str = "acceptEdits",
         system_prompt: Optional[str] = None,
         tools: List[str] = None,
         model: Optional[str] = None,
@@ -101,7 +101,7 @@ class SessionCoordinator:
             await self.session_manager.create_session(
                 session_id=session_id,
                 working_directory=working_directory,
-                permissions=permissions,
+                permission_mode=permission_mode,
                 system_prompt=system_prompt,
                 tools=tools,
                 model=model,
@@ -123,7 +123,7 @@ class SessionCoordinator:
                 message_callback=self._create_message_callback(session_id),
                 error_callback=self._create_error_callback(session_id),
                 permission_callback=permission_callback,
-                permissions=permissions,
+                permissions=permission_mode,
                 system_prompt=system_prompt,
                 tools=tools,
                 model=model
@@ -200,7 +200,7 @@ class SessionCoordinator:
                 message_callback=self._create_message_callback(session_id),
                 error_callback=self._create_error_callback(session_id),
                 permission_callback=permission_callback,  # Use provided permission callback for resumed sessions
-                permissions=session_info.permissions,
+                permissions=session_info.current_permission_mode,
                 system_prompt=session_info.system_prompt,
                 tools=session_info.tools,
                 model=session_info.model,
@@ -446,6 +446,81 @@ class SessionCoordinator:
 
         except Exception as e:
             logger.error(f"Failed to interrupt session {session_id}: {e}")
+            return False
+
+    async def set_permission_mode(self, session_id: str, mode: str) -> bool:
+        """Set the permission mode for a session"""
+        try:
+            logger.info(f"Setting permission mode to '{mode}' for session {session_id} through coordinator")
+
+            # Validate mode
+            valid_modes = ["default", "acceptEdits", "plan", "bypassPermissions"]
+            if mode not in valid_modes:
+                logger.error(f"Invalid permission mode: {mode}")
+                return False
+
+            # Check if SDK exists and is active
+            sdk = self._active_sdks.get(session_id)
+            if not sdk:
+                logger.warning(f"No active SDK found for session {session_id} - cannot set permission mode")
+                return False
+
+            # Check session state
+            session_info = await self.session_manager.get_session_info(session_id)
+            if not session_info:
+                logger.warning(f"Session {session_id} not found - cannot set permission mode")
+                return False
+
+            # Only allow permission mode change for active sessions
+            if session_info.state not in [SessionState.ACTIVE]:
+                logger.warning(f"Session {session_id} not in active state (state: {session_info.state})")
+                return False
+
+            # Call SDK set_permission_mode method
+            sdk_result = await sdk.set_permission_mode(mode)
+
+            if sdk_result:
+                # Update session manager's tracking of current permission mode
+                await self.session_manager.update_permission_mode(session_id, mode)
+                logger.info(f"Successfully set permission mode to '{mode}' for session {session_id}")
+            else:
+                logger.warning(f"Failed to set permission mode for session {session_id}")
+
+            return sdk_result
+
+        except Exception as e:
+            logger.error(f"Failed to set permission mode for session {session_id}: {e}")
+            return False
+
+    async def send_message(self, session_id: str, message: str) -> bool:
+        """Send a message to a session"""
+        try:
+            # Check if SDK exists and is active
+            sdk = self._active_sdks.get(session_id)
+            if not sdk:
+                logger.warning(f"No active SDK found for session {session_id}")
+                return False
+
+            # Check session state
+            session_info = await self.session_manager.get_session_info(session_id)
+            if not session_info:
+                logger.warning(f"Session {session_id} not found")
+                return False
+
+            # Only allow sending messages to active sessions
+            if session_info.state not in [SessionState.ACTIVE]:
+                logger.warning(f"Session {session_id} not active (state: {session_info.state})")
+                return False
+
+            # Update processing state before sending message
+            await self.session_manager.update_processing_state(session_id, True)
+
+            # Send message via SDK
+            result = await sdk.send_message(message)
+            return result
+
+        except Exception as e:
+            logger.error(f"Failed to send message to session {session_id}: {e}")
             # Reset processing state on error
             try:
                 await self.session_manager.update_processing_state(session_id, False)

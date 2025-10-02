@@ -82,6 +82,14 @@
                             <textarea id="message-input" placeholder="Type your message to Claude Code..." rows="3"></textarea>
                             <button id="send-btn" class="btn btn-primary">Send</button>
                         </div>
+
+                        <!-- Status Bar -->
+                        <div id="status-bar" class="status-bar hidden">
+                            <div class="permission-mode-clickable" id="permission-mode-clickable" title="Click to cycle modes • Requires approval for most tools">
+                                <span class="permission-mode-icon" id="permission-mode-icon">🔒</span>
+                                <span class="permission-mode-text" id="permission-mode-text">Mode: default</span>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </main>
@@ -102,8 +110,8 @@
                     </div>
 
                     <div class="form-group">
-                        <label for="permissions">Permission Mode:</label>
-                        <select id="permissions" name="permissions">
+                        <label for="permission-mode">Permission Mode:</label>
+                        <select id="permission-mode" name="permission_mode">
                             <option value="default">default</option>
                             <option value="plan">plan</option>
                             <option value="acceptEdits">acceptEdits</option>

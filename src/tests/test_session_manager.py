@@ -24,7 +24,7 @@ def sample_session_config():
     """Sample session configuration for testing."""
     return {
         "working_directory": "/test/project",
-        "permissions": "acceptEdits",
+        "permission_mode": "acceptEdits",
         "system_prompt": "Test system prompt",
         "tools": ["bash", "edit", "read"],
         "model": "claude-3-sonnet-20241022"
@@ -51,7 +51,7 @@ class TestSessionInfo:
         assert info.created_at == now
         assert info.updated_at == now
         assert info.working_directory is None
-        assert info.permissions == "acceptEdits"
+        assert info.current_permission_mode == "acceptEdits"
         assert info.tools == ["bash", "edit", "read"]
         assert info.model is None  # No default model
 
@@ -133,7 +133,7 @@ class TestSessionManager:
         assert session_info.session_id == session_id
         assert session_info.state == SessionState.CREATED
         assert session_info.working_directory == sample_session_config["working_directory"]
-        assert session_info.permissions == sample_session_config["permissions"]
+        assert session_info.current_permission_mode == sample_session_config["permission_mode"]
 
         # Check that session directory and state file were created
         session_dir = manager.sessions_dir / session_id
@@ -150,7 +150,7 @@ class TestSessionManager:
         session_id = await manager.create_session()
 
         session_info = manager._active_sessions[session_id]
-        assert session_info.permissions == "acceptEdits"
+        assert session_info.current_permission_mode == "acceptEdits"
         assert session_info.tools == ["bash", "edit", "read"]
         assert session_info.model is None  # No default model
 

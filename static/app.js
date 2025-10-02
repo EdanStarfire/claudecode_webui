@@ -1749,6 +1749,89 @@ class TaskToolHandler {
     }
 }
 
+// ExitPlanMode Tool Handler - displays plan and handles mode transition
+class ExitPlanModeToolHandler {
+    renderParameters(toolCall, escapeHtmlFn) {
+        const plan = toolCall.input.plan || '';
+
+        let html = '<div class="tool-exitplan-params">';
+
+        // Header with plan icon
+        html += '<div class="exitplan-header">';
+        html += '<span class="exitplan-icon">📋</span>';
+        html += '<div class="exitplan-header-content">';
+        html += '<div><strong>Plan Submitted for Approval:</strong></div>';
+        html += '</div>';
+        html += '</div>';
+
+        // Plan section
+        if (plan) {
+            html += '<div class="exitplan-plan-section">';
+            html += '<div class="exitplan-plan-content">';
+            html += escapeHtmlFn(plan);
+            html += '</div>';
+            html += '</div>';
+        }
+
+        html += '</div>';
+        return html;
+    }
+
+    renderResult(toolCall, escapeHtmlFn) {
+        if (!toolCall.result) return '';
+
+        const content = toolCall.result.content || '';
+        const resultClass = toolCall.result.error ? 'tool-result-error' : 'tool-result-success';
+
+        if (toolCall.result.error) {
+            return `
+                <div class="tool-result ${resultClass}">
+                    <strong>Plan Rejected:</strong>
+                    <div class="exitplan-result-content">${escapeHtmlFn(content)}</div>
+                </div>
+            `;
+        }
+
+        // Successful plan approval
+        return `
+            <div class="tool-result ${resultClass}">
+                <div class="exitplan-approved">
+                    <strong>✅ Plan Approved</strong>
+                    <div class="exitplan-mode-change">Permission mode changed to: <strong>default</strong></div>
+                </div>
+            </div>
+        `;
+    }
+
+    getCollapsedSummary(toolCall, escapeHtmlFn) {
+        // Status-based icons
+        const statusIcon = {
+            'pending': '⏳',
+            'permission_required': '❓',
+            'executing': '📋',
+            'completed': toolCall.result?.error ? '❌' : '✅',
+            'error': '❌'
+        }[toolCall.status] || '📋';
+
+        let statusText = '';
+        if (toolCall.status === 'completed' && !toolCall.result?.error) {
+            statusText = 'Plan Approved - Mode: default';
+        } else if (toolCall.result?.error) {
+            statusText = 'Plan Rejected';
+        } else {
+            statusText = {
+                'pending': 'Pending',
+                'permission_required': 'Awaiting Approval',
+                'executing': 'Submitting',
+                'completed': 'Completed',
+                'error': 'Error'
+            }[toolCall.status] || 'Unknown';
+        }
+
+        return `${statusIcon} ExitPlanMode: ${statusText}`;
+    }
+}
+
 class ClaudeWebUI {
     constructor() {
         this.currentSessionId = null;
@@ -1793,6 +1876,9 @@ class ClaudeWebUI {
         this.defaultToolHandler = new DefaultToolHandler();
         this.initializeToolHandlers();
 
+        // Permission mode tracking
+        this.currentPermissionMode = 'default'; // default, acceptEdits, plan, etc.
+
         this.init();
     }
 
@@ -1811,6 +1897,7 @@ class ClaudeWebUI {
         this.toolHandlerRegistry.registerHandler('BashOutput', new BashOutputToolHandler());
         this.toolHandlerRegistry.registerHandler('KillShell', new KillShellToolHandler());
         this.toolHandlerRegistry.registerHandler('Task', new TaskToolHandler());
+        this.toolHandlerRegistry.registerHandler('ExitPlanMode', new ExitPlanModeToolHandler());
 
         // Register pattern handlers for MCP tools (can be customized later)
         // this.toolHandlerRegistry.registerPatternHandler('mcp__*', new McpToolHandler());
@@ -1909,6 +1996,9 @@ class ClaudeWebUI {
         // Auto-scroll toggle
         document.getElementById('auto-scroll-toggle').addEventListener('click', () => this.toggleAutoScroll());
 
+        // Permission mode cycling - click on icon/text area to cycle
+        document.getElementById('permission-mode-clickable').addEventListener('click', () => this.cyclePermissionMode());
+
         // Messages area scroll detection
         document.getElementById('messages-area').addEventListener('scroll', (e) => this.handleScroll(e));
 
@@ -1981,7 +2071,7 @@ class ClaudeWebUI {
 
             const payload = {
                 working_directory: formData.working_directory,
-                permissions: formData.permissions,
+                permission_mode: formData.permission_mode,
                 system_prompt: formData.system_prompt || null,
                 tools: tools,
                 model: formData.model || null
@@ -2298,6 +2388,9 @@ class ClaudeWebUI {
             if (!this.isProcessing) {
                 this.showProcessingIndicator();
             }
+
+            // Extract and store permission mode from init message
+            this.extractPermissionMode(message);
         }
 
         // Check if this is a tool-related message and handle it
@@ -2325,6 +2418,85 @@ class ClaudeWebUI {
     handleIncomingMessage(message) {
         // Use unified processing for real-time messages
         this.processMessage(message, 'websocket');
+    }
+
+    /**
+     * Extract permission mode from system init messages
+     */
+    extractPermissionMode(message) {
+        try {
+            // Try to get permission mode from metadata or raw SDK message
+            let permissionMode = null;
+
+            // Check metadata first
+            if (message.metadata && message.metadata.raw_sdk_message) {
+                const rawMsg = message.metadata.raw_sdk_message;
+
+                // Parse if it's a string
+                if (typeof rawMsg === 'string') {
+                    try {
+                        const parsed = JSON.parse(rawMsg);
+                        if (parsed.data && parsed.data.permissionMode) {
+                            permissionMode = parsed.data.permissionMode;
+                        }
+                    } catch (e) {
+                        // Try to extract from string representation
+                        const match = rawMsg.match(/'permissionMode':\s*'([^']+)'/);
+                        if (match) {
+                            permissionMode = match[1];
+                        }
+                    }
+                } else if (typeof rawMsg === 'object' && rawMsg.data && rawMsg.data.permissionMode) {
+                    permissionMode = rawMsg.data.permissionMode;
+                }
+            }
+
+            if (permissionMode && permissionMode !== this.currentPermissionMode) {
+                console.log(`Permission mode changed from ${this.currentPermissionMode} to ${permissionMode}`);
+                this.currentPermissionMode = permissionMode;
+                this.updatePermissionModeUI(permissionMode);
+            }
+        } catch (error) {
+            console.error('Error extracting permission mode:', error);
+        }
+    }
+
+    /**
+     * Update UI to reflect current permission mode
+     */
+    updatePermissionModeUI(mode) {
+        console.log(`Updating UI - Current permission mode: ${mode}`);
+
+        // Update permission mode text in the status bar
+        const permissionModeText = document.getElementById('permission-mode-text');
+        const permissionModeIcon = document.getElementById('permission-mode-icon');
+        const permissionModeClickable = document.getElementById('permission-mode-clickable');
+
+        if (permissionModeText) {
+            permissionModeText.textContent = `Mode: ${mode}`;
+        }
+
+        // Update icon and title based on mode
+        if (permissionModeIcon && permissionModeClickable) {
+            const modeConfig = {
+                'default': {
+                    icon: '🔒',
+                    title: 'Click to cycle modes • Requires approval for most tools'
+                },
+                'acceptEdits': {
+                    icon: '✅',
+                    title: 'Click to cycle modes • Auto-approves Read, Edit, Write, MultiEdit'
+                },
+                'plan': {
+                    icon: '📋',
+                    title: 'Click to cycle modes • Planning mode - must approve plan to proceed'
+                }
+            };
+
+            const config = modeConfig[mode] || modeConfig['default'];
+            permissionModeIcon.textContent = config.icon;
+            permissionModeClickable.title = config.title;
+        }
     }
 
     handleToolRelatedMessage(message) {
@@ -2395,6 +2567,12 @@ class ClaudeWebUI {
                     const toolCall = this.toolCallManager.handleToolResult(toolResultBlock);
                     if (toolCall) {
                         this.updateToolCall(toolCall);
+
+                        // Check if this is ExitPlanMode completing successfully
+                        if (toolCall.name === 'ExitPlanMode' && toolCall.status === 'completed' && !toolCall.result?.error) {
+                            console.log('ExitPlanMode completed successfully - updating permission mode to default');
+                            this.setPermissionMode('default');
+                        }
                     }
                 });
 
@@ -2460,6 +2638,8 @@ class ClaudeWebUI {
         if (existingElement) {
             const updatedElement = this.createToolCallElement(toolCall);
             existingElement.replaceWith(updatedElement);
+            // Trigger autoscroll when updating tool calls (e.g., when permission prompts appear)
+            this.smartScrollToBottom();
         } else {
             this.renderToolCall(toolCall);
         }
@@ -2601,15 +2781,33 @@ class ClaudeWebUI {
 
         if (approveBtn) {
             approveBtn.addEventListener('click', () => {
+                // Disable both buttons immediately to prevent duplicate clicks
+                if (approveBtn.disabled || denyBtn.disabled) return;
+
+                approveBtn.disabled = true;
+                denyBtn.disabled = true;
+
+                // Update button text to show submission
+                approveBtn.textContent = '⏳ Submitting...';
+
                 const requestId = approveBtn.getAttribute('data-request-id');
-                this.handlePermissionDecision(requestId, 'allow');
+                this.handlePermissionDecision(requestId, 'allow', approveBtn, denyBtn);
             });
         }
 
         if (denyBtn) {
             denyBtn.addEventListener('click', () => {
+                // Disable both buttons immediately to prevent duplicate clicks
+                if (approveBtn.disabled || denyBtn.disabled) return;
+
+                approveBtn.disabled = true;
+                denyBtn.disabled = true;
+
+                // Update button text to show submission
+                denyBtn.textContent = '⏳ Submitting...';
+
                 const requestId = denyBtn.getAttribute('data-request-id');
-                this.handlePermissionDecision(requestId, 'deny');
+                this.handlePermissionDecision(requestId, 'deny', approveBtn, denyBtn);
             });
         }
     }
@@ -2621,7 +2819,7 @@ class ClaudeWebUI {
         }
     }
 
-    handlePermissionDecision(requestId, decision) {
+    handlePermissionDecision(requestId, decision, approveBtn, denyBtn) {
         console.log('Permission decision:', requestId, decision);
 
         // Send permission response to backend
@@ -2634,6 +2832,26 @@ class ClaudeWebUI {
             };
 
             this.sessionWebsocket.send(JSON.stringify(response));
+
+            // Update button to show submitted state
+            if (decision === 'allow' && approveBtn) {
+                approveBtn.textContent = '✅ Approved';
+                approveBtn.classList.add('submitted');
+            } else if (decision === 'deny' && denyBtn) {
+                denyBtn.textContent = '❌ Denied';
+                denyBtn.classList.add('submitted');
+            }
+        } else {
+            // Re-enable buttons if WebSocket is not available
+            console.error('Cannot send permission response: WebSocket not connected');
+            if (approveBtn) {
+                approveBtn.disabled = false;
+                approveBtn.textContent = '✅ Approve';
+            }
+            if (denyBtn) {
+                denyBtn.disabled = false;
+                denyBtn.textContent = '❌ Deny';
+            }
         }
     }
 
@@ -2790,6 +3008,37 @@ class ClaudeWebUI {
             } else {
                 console.error('Failed to load session info:', error);
             }
+        }
+    }
+
+    async setPermissionMode(mode) {
+        if (!this.currentSessionId) {
+            console.error('Cannot set permission mode: no active session');
+            return;
+        }
+
+        try {
+            console.log(`Setting permission mode to: ${mode}`);
+
+            // Update local state immediately for responsive UI
+            this.currentPermissionMode = mode;
+            this.updatePermissionModeUI(mode);
+
+            // Persist to backend
+            const response = await this.apiRequest(`/api/sessions/${this.currentSessionId}/permission-mode`, {
+                method: 'POST',
+                body: JSON.stringify({ mode: mode })
+            });
+
+            if (response.success) {
+                console.log(`Permission mode successfully set to: ${response.mode}`);
+            } else {
+                console.error('Failed to set permission mode on backend');
+            }
+        } catch (error) {
+            console.error('Error setting permission mode:', error);
+            // Optionally revert UI if backend call fails
+            // this.extractPermissionMode(lastKnownState);
         }
     }
 
@@ -3379,9 +3628,100 @@ class ClaudeWebUI {
             existingSession.state = sessionData.session.state;
             existingSession.error_message = sessionData.session.error_message;
             existingSession.is_processing = sessionData.session.is_processing || false;
+            existingSession.current_permission_mode = sessionData.session.current_permission_mode || 'acceptEdits';
 
             // Update session data consistently (with automatic re-render)
             this.updateSessionData(this.currentSessionId, existingSession);
+        }
+
+        // Update permission mode display
+        this.updatePermissionModeDisplay(sessionData.session);
+    }
+
+    updatePermissionModeDisplay(session) {
+        const statusBar = document.getElementById('status-bar');
+        const permissionModeClickable = document.getElementById('permission-mode-clickable');
+        const permissionModeIcon = document.getElementById('permission-mode-icon');
+        const permissionModeText = document.getElementById('permission-mode-text');
+
+        const currentMode = session.current_permission_mode || 'acceptEdits';
+        const isActive = session.state === 'active';
+
+        // Show/hide status bar based on session state
+        if (isActive) {
+            statusBar.classList.remove('hidden');
+        } else {
+            statusBar.classList.add('hidden');
+            return;
+        }
+
+        // Update mode display
+        const modeConfig = {
+            'default': {
+                icon: '🔒',
+                label: 'Mode: default',
+                description: 'Click to cycle modes • Requires approval for most tools',
+                color: 'grey'
+            },
+            'acceptEdits': {
+                icon: '✏️',
+                label: 'Mode: acceptEdits',
+                description: 'Click to cycle modes • Auto-approves file edits',
+                color: 'green'
+            },
+            'plan': {
+                icon: '📋',
+                label: 'Mode: plan',
+                description: 'Click to cycle modes • Read-only mode',
+                color: 'blue'
+            }
+        };
+
+        const config = modeConfig[currentMode] || modeConfig['acceptEdits'];
+
+        permissionModeIcon.textContent = config.icon;
+        permissionModeText.textContent = config.label;
+
+        // Set description as tooltip on the clickable area
+        permissionModeClickable.title = config.description;
+
+        // Update bar styling with color
+        statusBar.className = `status-bar status-bar-${config.color}`;
+    }
+
+    async cyclePermissionMode() {
+        if (!this.currentSessionId) return;
+
+        const session = this.sessions.get(this.currentSessionId);
+        if (!session || session.state !== 'active') {
+            console.log('Cannot cycle permission mode - session not active');
+            return;
+        }
+
+        // Define cycle order (excluding bypassPermissions for safety)
+        const modeOrder = ['default', 'acceptEdits', 'plan'];
+        const currentMode = session.current_permission_mode || 'acceptEdits';
+        const currentIndex = modeOrder.indexOf(currentMode);
+        const nextIndex = (currentIndex + 1) % modeOrder.length;
+        const nextMode = modeOrder[nextIndex];
+
+        console.log(`Cycling permission mode from ${currentMode} to ${nextMode}`);
+
+        try {
+            const response = await this.apiRequest(`/api/sessions/${this.currentSessionId}/permission-mode`, {
+                method: 'POST',
+                body: JSON.stringify({ mode: nextMode })
+            });
+
+            if (response.success) {
+                console.log(`Successfully changed permission mode to ${nextMode}`);
+                // Update local session data
+                session.current_permission_mode = nextMode;
+                this.updatePermissionModeDisplay(session);
+            }
+        } catch (error) {
+            console.error('Failed to cycle permission mode:', error);
+            this.showError(`Failed to change permission mode: ${error.message}`);
         }
     }
 
@@ -3548,8 +3888,11 @@ class ClaudeWebUI {
             return `<div class="message-content message-empty">[Empty message]</div>`;
         }
 
+        // Trim leading/trailing whitespace for assistant messages
+        const displayContent = message.type === 'assistant' ? content.trim() : content;
+
         // Regular content with proper escaping
-        return `<div class="message-content">${this.escapeHtml(content)}</div>`;
+        return `<div class="message-content">${this.escapeHtml(displayContent)}</div>`;
     }
 
     /**
@@ -3701,6 +4044,9 @@ class ClaudeWebUI {
             // Remove from local sessions map immediately to prevent further operations
             this.sessions.delete(sessionIdToDelete);
 
+            // Remove from orderedSessions array immediately
+            this.orderedSessions = this.orderedSessions.filter(s => s.session_id !== sessionIdToDelete);
+
             const response = await this.apiRequest(`/api/sessions/${sessionIdToDelete}`, {
                 method: 'DELETE'
             });
@@ -3719,10 +4065,15 @@ class ClaudeWebUI {
 
                 console.log(`Session ${sessionIdToDelete} deleted successfully`);
             } else {
-                // Restore session to map if deletion failed
+                // Restore session to map and orderedSessions if deletion failed
                 const sessionData = await this.apiRequest(`/api/sessions/${sessionIdToDelete}`).catch(() => null);
-                if (sessionData) {
+                if (sessionData && sessionData.session) {
                     this.sessions.set(sessionIdToDelete, sessionData.session);
+                    // Re-add to orderedSessions if not already present
+                    if (!this.orderedSessions.find(s => s.session_id === sessionIdToDelete)) {
+                        this.orderedSessions.push(sessionData.session);
+                    }
+                    this.renderSessions();
                 }
                 throw new Error('Failed to delete session');
             }
@@ -3730,11 +4081,15 @@ class ClaudeWebUI {
             console.error('Failed to delete session:', error);
             this.showError(`Failed to delete session: ${error.message}`);
 
-            // Try to restore session to map if deletion failed
+            // Try to restore session to map and orderedSessions if deletion failed
             try {
                 const sessionData = await this.apiRequest(`/api/sessions/${sessionIdToDelete}`);
                 if (sessionData && sessionData.session) {
                     this.sessions.set(sessionIdToDelete, sessionData.session);
+                    // Re-add to orderedSessions if not already present
+                    if (!this.orderedSessions.find(s => s.session_id === sessionIdToDelete)) {
+                        this.orderedSessions.push(sessionData.session);
+                    }
                     this.renderSessions();
                 }
             } catch (restoreError) {

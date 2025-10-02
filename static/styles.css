@@ -588,6 +588,66 @@ body {
     font-weight: 500;
 }
 
+/* Status Bar */
+.status-bar {
+    display: flex;
+    align-items: center;
+    padding: 0.5rem 0.75rem;
+    margin-top: 0.75rem;
+    background: #ffffff;
+    border: 1px solid #dee2e6;
+    border-radius: 6px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+}
+
+.status-bar.hidden {
+    display: none;
+}
+
+.permission-mode-clickable {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.25rem 0.5rem;
+    margin: -0.25rem 0;
+    border-radius: 4px;
+    cursor: pointer;
+    user-select: none;
+    transition: all 0.15s ease;
+}
+
+.permission-mode-clickable:hover {
+    background: #e9ecef;
+}
+
+.permission-mode-clickable:active {
+    background: #dee2e6;
+}
+
+.permission-mode-icon {
+    font-size: 1.25rem;
+    line-height: 1;
+}
+
+.permission-mode-text {
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: #2c3e50;
+}
+
+/* Status Bar Color Variants */
+.status-bar.status-bar-grey {
+    border-left: 4px solid #6c757d;
+}
+
+.status-bar.status-bar-green {
+    border-left: 4px solid #28a745;
+}
+
+.status-bar.status-bar-blue {
+    border-left: 4px solid #007bff;
+}
+
 .input-container {
     display: flex;
     gap: 0.5rem;
@@ -896,6 +956,8 @@ form {
     gap: 1rem;
     justify-content: flex-end;
     margin-top: 2rem;
+    padding: 1.5rem;
+    padding-top: 1rem;
 }
 
 /* Loading */
@@ -1096,8 +1158,17 @@ form {
     transition: background 0.2s ease;
 }
 
-.permission-approve:hover {
+.permission-approve:hover:not(:disabled) {
     background: #218838;
+}
+
+.permission-approve:disabled {
+    opacity: 0.7;
+    cursor: not-allowed;
+}
+
+.permission-approve.submitted {
+    background: #1e7e34;
 }
 
 .permission-deny {
@@ -1111,8 +1182,17 @@ form {
     transition: background 0.2s ease;
 }
 
-.permission-deny:hover {
+.permission-deny:hover:not(:disabled) {
     background: #c82333;
+}
+
+.permission-deny:disabled {
+    opacity: 0.7;
+    cursor: not-allowed;
+}
+
+.permission-deny.submitted {
+    background: #bd2130;
 }
 
 .tool-result {
@@ -2309,6 +2389,78 @@ form {
     color: #6c757d;
     font-style: italic;
     padding: 0.5rem;
+}
+
+/* ExitPlanMode Tool Handler Styles */
+.tool-exitplan-params {
+    background: #fff5e6;
+    border: 1px solid #ffd580;
+    border-radius: 6px;
+    padding: 1rem;
+}
+
+.exitplan-header {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.75rem;
+    margin-bottom: 1rem;
+    padding-bottom: 0.75rem;
+    border-bottom: 2px solid rgba(255, 140, 0, 0.2);
+}
+
+.exitplan-icon {
+    font-size: 1rem;
+    flex-shrink: 0;
+}
+
+.exitplan-header-content {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.exitplan-plan-section {
+    margin-top: 0.75rem;
+}
+
+.exitplan-plan-content {
+    background: #ffffff;
+    border: 1px solid rgba(255, 140, 0, 0.2);
+    border-radius: 4px;
+    padding: 0.75rem;
+    white-space: pre-wrap;
+    line-height: 1.6;
+    color: #212529;
+    max-height: 300px;
+    overflow-y: auto;
+}
+
+.exitplan-approved {
+    padding: 0.75rem;
+    background: #d4edda;
+    border: 1px solid #c3e6cb;
+    border-radius: 4px;
+}
+
+.exitplan-mode-change {
+    margin-top: 0.5rem;
+    padding: 0.5rem;
+    background: #fff3cd;
+    border: 1px solid #ffeaa7;
+    border-radius: 4px;
+    color: #856404;
+    font-size: 0.9rem;
+}
+
+.exitplan-result-content {
+    background: #f8f9fa;
+    border: 1px solid rgba(0,0,0,0.1);
+    border-radius: 4px;
+    padding: 0.75rem;
+    white-space: pre-wrap;
+    line-height: 1.6;
+    color: #212529;
 }
 
 /* Bash Tool Handler Styles */

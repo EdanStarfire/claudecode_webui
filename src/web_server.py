@@ -23,7 +23,7 @@ logger = get_logger(__name__)
 
 class SessionCreateRequest(BaseModel):
     working_directory: str
-    permissions: str = "acceptEdits"
+    permission_mode: str = "acceptEdits"
     system_prompt: Optional[str] = None
     tools: List[str] = []
     model: Optional[str] = None
@@ -41,6 +41,10 @@ class SessionNameUpdateRequest(BaseModel):
 class SessionReorderRequest(BaseModel):
     session_ids: List[str]
     project_id: Optional[str] = None
+
+
+class PermissionModeRequest(BaseModel):
+    mode: str
 
 
 class UIWebSocketManager:
@@ -236,7 +240,7 @@ class ClaudeWebUI:
                 session_id = await self.coordinator.create_session(
                     session_id=session_id,
                     working_directory=request.working_directory,
-                    permissions=request.permissions,
+                    permission_mode=request.permission_mode,
                     system_prompt=request.system_prompt,
                     tools=request.tools,
                     model=request.model,
@@ -387,6 +391,25 @@ class ClaudeWebUI:
                 return {"success": success}
             except Exception as e:
                 logger.error(f"Failed to reorder sessions: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @self.app.post("/api/sessions/{session_id}/permission-mode")
+        async def set_permission_mode(session_id: str, request: PermissionModeRequest):
+            """Set the permission mode for a session"""
+            try:
+                # Validate mode
+                valid_modes = ["default", "acceptEdits", "plan", "bypassPermissions"]
+                if request.mode not in valid_modes:
+                    raise HTTPException(status_code=400, detail=f"Invalid permission mode: {request.mode}")
+
+                success = await self.coordinator.set_permission_mode(session_id, request.mode)
+                if not success:
+                    raise HTTPException(status_code=400, detail="Failed to set permission mode")
+                return {"success": success, "mode": request.mode}
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"Failed to set permission mode: {e}")
                 raise HTTPException(status_code=500, detail=str(e))
 
         @self.app.websocket("/ws/ui")

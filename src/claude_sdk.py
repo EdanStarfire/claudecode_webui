@@ -155,7 +155,7 @@ class ClaudeSDK:
             logger.info(f"DEBUG: Permission callback type: {type(permission_callback)}")
         else:
             logger.warning("DEBUG: No permission callback provided to ClaudeSDK!")
-        self.permissions = permissions
+        self.current_permission_mode = permissions
         self.system_prompt = system_prompt
         self.tools = tools if tools is not None else []
         self.model = model
@@ -363,6 +363,50 @@ class ClaudeSDK:
             logger.error(f"Failed to interrupt session {self.session_id}: {e}")
             if self.error_callback:
                 await self._safe_callback(self.error_callback, "interrupt_failed", e)
+            return False
+
+    async def set_permission_mode(self, mode: str) -> bool:
+        """
+        Set the permission mode for the current session.
+
+        Args:
+            mode: Permission mode ("default", "acceptEdits", "plan", "bypassPermissions")
+
+        Returns:
+            True if mode was set successfully, False otherwise
+        """
+        try:
+            logger.info(f"Setting permission mode to '{mode}' for session {self.session_id}")
+
+            # Validate mode
+            valid_modes = ["default", "acceptEdits", "plan", "bypassPermissions"]
+            if mode not in valid_modes:
+                logger.error(f"Invalid permission mode: {mode}")
+                return False
+
+            # Check if we have an active SDK client
+            if not self._sdk_client:
+                logger.warning(f"No active SDK client for session {self.session_id} - cannot set permission mode")
+                return False
+
+            # Check if we're in a valid state
+            if self.info.state not in [SessionState.RUNNING, SessionState.PROCESSING]:
+                logger.warning(f"Session {self.session_id} not in valid state for permission mode change: {self.info.state}")
+                return False
+
+            # Call SDK's set_permission_mode method
+            await self._sdk_client.set_permission_mode(mode)
+
+            # Update local permissions tracking
+            self.current_permission_mode = mode
+
+            logger.info(f"Successfully set permission mode to '{mode}' for session {self.session_id}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to set permission mode for session {self.session_id}: {e}")
+            if self.error_callback:
+                await self._safe_callback(self.error_callback, "set_permission_mode_failed", e)
             return False
 
     async def _message_processing_loop(self):
@@ -601,7 +645,7 @@ class ClaudeSDK:
 
         options_kwargs = {
             "cwd": str(self.working_directory),
-            "permission_mode": self.permissions,
+            "permission_mode": self.current_permission_mode,
             "system_prompt": system_prompt_config,
             "allowed_tools": self.tools,
             # Restore default settings sources behavior (load from user, project, and local)
