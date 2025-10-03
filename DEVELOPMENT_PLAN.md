@@ -1478,6 +1478,94 @@ data/                         # Runtime data (created by app)
 
 **Impact**: Delivered comprehensive permission mode system with intuitive UI for cycling between modes, professional ExitPlanMode workflow, enhanced permission prompt UX with duplicate prevention, and improved session management polish providing users with complete control over Claude Code's permission behavior
 
+### Phase 3.20: Logging System Refactor ✅ COMPLETED
+**Goal**: Implement granular debug logging system with category-based control for enhanced debugging
+**Status**: Completed 2025-10-03
+
+**Feature Implementation**:
+1. **Category-Based Logging Architecture** ✅
+   - Redesigned logging system with specialized logger categories (WEBSOCKET, SDK, PERMISSIONS, STORAGE, PARSER, ERROR_HANDLER)
+   - Implemented `get_logger()` function for retrieving category-specific loggers
+   - Created `configure_logging()` with individual debug flags for each category
+   - Added DEBUG-level log filtering based on enabled debug flags
+
+2. **Command-Line Debug Flag System** ✅
+   - Added comprehensive command-line argument parsing for debug control
+   - Implemented individual debug flags (--debug-websocket, --debug-sdk, --debug-permissions, --debug-storage, --debug-parser, --debug-error-handler)
+   - Added --debug-all flag for enabling all debug logging simultaneously
+   - Enhanced --host and --port options for server configuration flexibility
+
+3. **Module-Level Logger Integration** ✅
+   - Updated `src/claude_sdk.py` with specialized `sdk_logger` and `perm_logger`
+   - Enhanced `src/session_coordinator.py` with `ws_logger` and `perm_logger`
+   - Added `src/web_server.py` WebSocket lifecycle logging with `ws_logger`
+   - Updated `src/data_storage.py` with `storage_logger`
+   - Enhanced `src/message_parser.py` with `parser_logger`
+
+4. **Log Output Cleanup** ✅
+   - Removed verbose prefix tags ([SDK_LIFECYCLE], [ERROR_TRACKING], etc.) - now handled by logger categories
+   - Converted chatty DEBUG logs to use category-specific loggers
+   - Maintained INFO-level and above logs for operational visibility
+   - Reduced noise in default logging while maintaining full debuggability
+
+5. **Frontend Documentation Updates** ✅
+   - Updated `static/app.js` console logging comments to reference new debug flags
+   - Added documentation for server-side debug flag usage
+
+**User Testing Completion**:
+- ✅ Granular debug control with individual category flags
+- ✅ Clean default logging output without debug clutter
+- ✅ Enhanced debuggability when specific categories enabled
+- ✅ Command-line flag system for flexible debug configuration
+- ✅ Category-based logger integration across all modules
+
+**Technical Implementation**:
+- `main.py`: Added argparse for debug flags, enhanced server configuration options
+- `src/logging_config.py`: Complete logging architecture redesign with category-based system
+- `src/claude_sdk.py`: Specialized logger integration (sdk_logger, perm_logger)
+- `src/session_coordinator.py`: WebSocket and permission logger integration
+- `src/web_server.py`: WebSocket lifecycle logger integration
+- `src/data_storage.py`: Storage operation logger integration
+- `src/message_parser.py`: Message parsing logger integration
+- `static/app.js`: Updated logging documentation
+
+**Debug Flag Usage Examples**:
+```bash
+# Enable WebSocket debugging only
+python main.py --debug-websocket
+
+# Enable SDK and permission debugging
+python main.py --debug-sdk --debug-permissions
+
+# Enable all debug logging
+python main.py --debug-all
+
+# Configure server host/port with debug flags
+python main.py --host 192.168.1.100 --port 9000 --debug-websocket
+```
+
+**User Experience Impact**:
+- Clean default logging experience without overwhelming debug output
+- Precise debugging control for specific system components
+- Enhanced troubleshooting capabilities with targeted debug logging
+- Improved developer experience with professional logging architecture
+- Flexible command-line configuration for different debugging scenarios
+
+**Critical Issues Resolved**:
+- Eliminated overwhelming debug log clutter in default operation
+- Provided granular control over logging verbosity by category
+- Enhanced debugging capabilities without sacrificing clean default experience
+- Improved code maintainability with consistent logger usage patterns
+
+**Architectural Achievements**:
+- **Category-Based Design**: Specialized loggers for each system component
+- **Command-Line Control**: Flexible debug flag system for runtime configuration
+- **Clean Separation**: Debug logs only appear when explicitly enabled
+- **Extensible System**: Easy to add new logger categories as needed
+- **Consistent Patterns**: Unified logger usage across all modules
+
+**Impact**: Delivered comprehensive logging system refactor providing precise control over debug output verbosity, clean default logging experience, enhanced debugging capabilities with category-specific control, and improved developer experience with professional logging architecture supporting flexible troubleshooting scenarios
+
 ---
 
 ## Future Phases (Post-MVP)

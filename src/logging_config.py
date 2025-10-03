@@ -1,175 +1,218 @@
-"""Comprehensive logging configuration for Claude Code WebUI."""
+"""Comprehensive logging configuration for Claude Code WebUI.
+
+This module provides a multi-tier logging system with:
+- Configurable debug logging via CLI flags
+- Category-specific log files
+- Standardized log formatting
+- Console and file output control
+"""
 
 import logging
-import logging.config
-import os
+import logging.handlers
 from pathlib import Path
-from typing import Dict, Any
+from typing import Optional
 
 
-def setup_logging(
-    log_level: str = "INFO",
-    log_dir: str = "data/logs",
-    enable_console: bool = True,
-    enable_file: bool = True
-) -> None:
+class StandardizedFormatter(logging.Formatter):
+    """Custom formatter with standardized timestamp and category formatting.
+
+    Format: YYYY-MM-DDTHH:mm:ss.mmm LEVEL - [CATEGORY] Message
     """
-    Configure comprehensive logging for the application.
+
+    def format(self, record):
+        """Format log record with timestamp, level, category, and message."""
+        # Get timestamp with milliseconds
+        timestamp = self.formatTime(record, '%Y-%m-%dT%H:%M:%S')
+        ms = f"{record.msecs:03.0f}"
+
+        # Get category from record (default to logger name)
+        category = getattr(record, 'category', record.name.upper())
+
+        # Format: YYYY-MM-DDTHH:mm:ss.mmm LEVEL - [CATEGORY] Message
+        return f"{timestamp}.{ms} {record.levelname} - [{category}] {record.getMessage()}"
+
+
+class CategoryAdapter(logging.LoggerAdapter):
+    """Logger adapter that adds category to log records."""
+
+    def __init__(self, logger, category):
+        super().__init__(logger, {})
+        self.category = category
+
+    def process(self, msg, kwargs):
+        """Add category to the log record."""
+        # Get the record's extra dict or create one
+        extra = kwargs.get('extra', {})
+        extra['category'] = self.category
+        kwargs['extra'] = extra
+        return msg, kwargs
+
+
+# Global registry of configured loggers
+_configured_loggers = {}
+_log_config = {}
+
+
+def configure_logging(
+    debug_websocket: bool = False,
+    debug_sdk: bool = False,
+    debug_permissions: bool = False,
+    debug_storage: bool = False,
+    debug_parser: bool = False,
+    debug_error_handler: bool = False,
+    debug_all: bool = False,
+    log_dir: str = "data/logs"
+) -> None:
+    """Configure the logging system with CLI flag controls.
 
     Args:
-        log_level: Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+        debug_websocket: Enable WebSocket lifecycle debugging
+        debug_sdk: Enable SDK integration debugging
+        debug_permissions: Enable permission callback debugging
+        debug_storage: Enable data storage debugging
+        debug_parser: Enable message parser debugging
+        debug_error_handler: Enable error handler debugging
+        debug_all: Enable all debug logging
         log_dir: Directory for log files
-        enable_console: Whether to enable console logging
-        enable_file: Whether to enable file logging
     """
+    global _log_config
+
     # Ensure log directory exists
     Path(log_dir).mkdir(parents=True, exist_ok=True)
 
-    # Define log format
-    log_format = (
-        "%(asctime)s - %(name)s - %(levelname)s - "
-        "%(filename)s:%(lineno)d - %(funcName)s - %(message)s"
+    # Store configuration for get_logger to reference
+    _log_config = {
+        'debug_websocket': debug_websocket or debug_all,
+        'debug_sdk': debug_sdk or debug_all,
+        'debug_permissions': debug_permissions or debug_all,
+        'debug_storage': debug_storage or debug_all,
+        'debug_parser': debug_parser or debug_all,
+        'debug_error_handler': debug_error_handler or debug_all,
+        'log_dir': log_dir
+    }
+
+    # Create formatter
+    formatter = StandardizedFormatter()
+
+    # Create shared error handler (all ERROR+ logs go here)
+    error_handler = logging.handlers.RotatingFileHandler(
+        f"{log_dir}/error.log",
+        maxBytes=10485760,  # 10MB
+        backupCount=5,
+        encoding='utf8'
     )
+    error_handler.setLevel(logging.ERROR)
+    error_handler.setFormatter(formatter)
 
-    # Build logging configuration
-    config: Dict[str, Any] = {
-        "version": 1,
-        "disable_existing_loggers": False,
-        "formatters": {
-            "detailed": {
-                "format": log_format,
-                "datefmt": "%Y-%m-%d %H:%M:%S"
-            },
-            "simple": {
-                "format": "%(levelname)s - %(name)s - %(message)s"
-            }
-        },
-        "handlers": {},
-        "loggers": {
-            # Application modules - enhanced for debugging session lifecycle issues
-            "claude_sdk": {"level": "DEBUG", "propagate": True},  # Force DEBUG for SDK lifecycle analysis
-            "session_manager": {"level": log_level, "propagate": True},
-            "session_coordinator": {"level": "DEBUG", "propagate": True},  # Enhanced for session coordination
-            "message_parser": {"level": log_level, "propagate": True},
-            "sdk_discovery_tool": {"level": log_level, "propagate": True},
-            "web_server": {"level": "DEBUG", "propagate": True},  # Enhanced for WebSocket lifecycle analysis
+    # Create console handler for errors
+    console_error_handler = logging.StreamHandler()
+    console_error_handler.setLevel(logging.ERROR)
+    console_error_handler.setFormatter(formatter)
 
-            # Third-party modules (less verbose)
-            "fastapi": {"level": "WARNING", "propagate": True},
-            "uvicorn": {"level": "INFO", "propagate": True},
-            "websockets": {"level": "INFO", "propagate": True},  # Slightly more verbose for WebSocket debugging
+    # Configure logger definitions
+    logger_configs = {
+        'websocket_debug': {
+            'file': f"{log_dir}/websocket_debug.log",
+            'enabled': _log_config['debug_websocket'],
+            'console': _log_config['debug_websocket'],
+            'level': logging.DEBUG
         },
-        "root": {
-            "level": log_level,
-            "handlers": []
+        'sdk_debug': {
+            'file': f"{log_dir}/sdk_debug.log",
+            'enabled': _log_config['debug_sdk'] or _log_config['debug_permissions'],
+            'console': _log_config['debug_sdk'] or _log_config['debug_permissions'],
+            'level': logging.DEBUG
+        },
+        'coordinator': {
+            'file': f"{log_dir}/coordinator.log",
+            'enabled': True,  # Always enabled
+            'console': True,  # Always to console
+            'level': logging.INFO
+        },
+        'storage': {
+            'file': f"{log_dir}/storage.log",
+            'enabled': _log_config['debug_storage'],
+            'console': _log_config['debug_storage'],
+            'level': logging.DEBUG
+        },
+        'parser': {
+            'file': f"{log_dir}/parser.log",
+            'enabled': _log_config['debug_parser'],
+            'console': _log_config['debug_parser'],
+            'level': logging.DEBUG
+        },
+        'error_handler': {
+            'file': f"{log_dir}/error.log",
+            'enabled': _log_config['debug_error_handler'],
+            'console': _log_config['debug_error_handler'],
+            'level': logging.DEBUG
         }
     }
 
-    # Add console handler if enabled
-    if enable_console:
-        config["handlers"]["console"] = {
-            "class": "logging.StreamHandler",
-            "level": log_level,
-            "formatter": "simple",
-            "stream": "ext://sys.stdout"
-        }
-        config["root"]["handlers"].append("console")
+    # Create loggers with handlers
+    for logger_name, config in logger_configs.items():
+        logger = logging.getLogger(logger_name)
+        logger.setLevel(config['level'])
+        logger.handlers.clear()
+        logger.propagate = False
 
-    # Add file handlers if enabled
-    if enable_file:
-        # Main application log
-        config["handlers"]["file_app"] = {
-            "class": "logging.handlers.RotatingFileHandler",
-            "level": log_level,
-            "formatter": "detailed",
-            "filename": f"{log_dir}/app.log",
-            "maxBytes": 10485760,  # 10MB
-            "backupCount": 5,
-            "encoding": "utf8"
-        }
+        if config['enabled']:
+            # File handler
+            file_handler = logging.handlers.RotatingFileHandler(
+                config['file'],
+                maxBytes=10485760,  # 10MB
+                backupCount=5,
+                encoding='utf8'
+            )
+            file_handler.setLevel(config['level'])
+            file_handler.setFormatter(formatter)
+            logger.addHandler(file_handler)
 
-        # Error-only log
-        config["handlers"]["file_error"] = {
-            "class": "logging.handlers.RotatingFileHandler",
-            "level": "ERROR",
-            "formatter": "detailed",
-            "filename": f"{log_dir}/error.log",
-            "maxBytes": 10485760,  # 10MB
-            "backupCount": 5,
-            "encoding": "utf8"
-        }
+            # Console handler if enabled
+            if config['console']:
+                console_handler = logging.StreamHandler()
+                console_handler.setLevel(config['level'])
+                console_handler.setFormatter(formatter)
+                logger.addHandler(console_handler)
 
-        # Claude Code SDK log
-        config["handlers"]["file_claude"] = {
-            "class": "logging.handlers.RotatingFileHandler",
-            "level": "DEBUG",
-            "formatter": "detailed",
-            "filename": f"{log_dir}/claude_sdk.log",
-            "maxBytes": 10485760,  # 10MB
-            "backupCount": 10,
-            "encoding": "utf8"
-        }
+        # Always add error handler to send ERROR+ to error.log
+        logger.addHandler(error_handler)
 
-        # Specialized SDK lifecycle debugging log
-        config["handlers"]["file_sdk_lifecycle"] = {
-            "class": "logging.handlers.RotatingFileHandler",
-            "level": "DEBUG",
-            "formatter": "detailed",
-            "filename": f"{log_dir}/sdk_lifecycle_debug.log",
-            "maxBytes": 10485760,  # 10MB
-            "backupCount": 5,
-            "encoding": "utf8"
-        }
+        # Always add console error handler for ERROR+ to console
+        logger.addHandler(console_error_handler)
 
-        # WebSocket lifecycle debugging log
-        config["handlers"]["file_websocket_lifecycle"] = {
-            "class": "logging.handlers.RotatingFileHandler",
-            "level": "DEBUG",
-            "formatter": "detailed",
-            "filename": f"{log_dir}/websocket_lifecycle_debug.log",
-            "maxBytes": 10485760,  # 10MB
-            "backupCount": 5,
-            "encoding": "utf8"
-        }
+    # Configure root logger for general errors
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.WARNING)
+    root_logger.handlers.clear()
+    root_logger.addHandler(error_handler)
+    root_logger.addHandler(console_error_handler)
 
-        config["root"]["handlers"].extend(["file_app", "file_error"])
-        config["loggers"]["claude_sdk"]["handlers"] = ["file_claude", "file_sdk_lifecycle"]
-        config["loggers"]["web_server"]["handlers"] = ["file_websocket_lifecycle"]
-
-    # Apply configuration
-    logging.config.dictConfig(config)
-
-    # Log startup message
-    logger = logging.getLogger(__name__)
-    logger.info(
-        f"Logging configured - Level: {log_level}, "
-        f"Console: {enable_console}, File: {enable_file}"
-    )
+    # Log configuration status
+    coord_logger = logging.getLogger('coordinator')
+    coord_logger.info("Logging system configured")
 
 
-def get_logger(name: str) -> logging.Logger:
-    """
-    Get a logger instance for the specified module.
+def get_logger(name: str, category: Optional[str] = None) -> logging.Logger:
+    """Get a logger instance with optional category.
 
     Args:
-        name: Logger name (typically __name__ from calling module)
+        name: Logger name (e.g., 'websocket_debug', 'sdk_debug', 'coordinator')
+        category: Optional category tag for log messages (e.g., 'WS_LIFECYCLE', 'SDK')
 
     Returns:
-        Configured logger instance
+        Configured logger instance or CategoryAdapter if category provided
     """
-    return logging.getLogger(name)
+    logger = logging.getLogger(name)
+
+    if category:
+        # Return adapter that adds category to all log records
+        return CategoryAdapter(logger, category)
+
+    return logger
 
 
-def set_module_log_level(module_name: str, level: str) -> None:
-    """
-    Dynamically adjust log level for a specific module.
-
-    Args:
-        module_name: Name of the module logger
-        level: New log level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
-    """
-    logger = logging.getLogger(module_name)
-    logger.setLevel(getattr(logging, level.upper()))
-
-    main_logger = logging.getLogger(__name__)
-    main_logger.info(f"Set {module_name} log level to {level}")
+# Convenience function for getting main application logger
+def get_main_logger() -> logging.Logger:
+    """Get the main application logger for general errors."""
+    return logging.getLogger()

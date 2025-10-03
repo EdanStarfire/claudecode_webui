@@ -15,7 +15,11 @@ from .session_manager import SessionManager, SessionState, SessionInfo
 from .data_storage import DataStorageManager
 from .claude_sdk import ClaudeSDK
 from .message_parser import MessageParser, MessageProcessor
+from .logging_config import get_logger
 
+# Get specialized logger for coordinator actions
+coord_logger = get_logger('coordinator', category='COORDINATOR')
+# Keep standard logger for errors
 logger = logging.getLogger(__name__)
 
 
@@ -46,6 +50,9 @@ class SessionCoordinator:
         self._error_callbacks: Dict[str, List[Callable]] = {}
         self._state_change_callbacks: List[Callable] = []
 
+        # Track recent tool uses for ExitPlanMode detection
+        self._recent_tool_uses: Dict[str, Dict[str, str]] = {}  # session_id -> {tool_use_id: tool_name}
+
     async def initialize(self):
         """Initialize the session coordinator"""
         try:
@@ -57,7 +64,7 @@ class SessionCoordinator:
             # Initialize storage managers for all existing sessions
             await self._initialize_existing_session_storage()
 
-            logger.info("Session coordinator initialized successfully")
+            coord_logger.info("Session coordinator initialized successfully")
         except Exception as e:
             logger.error(f"Failed to initialize session coordinator: {e}")
             raise
@@ -67,7 +74,7 @@ class SessionCoordinator:
         try:
             # Get all existing sessions
             sessions = await self.session_manager.list_sessions()
-            logger.info(f"Initializing storage managers for {len(sessions)} existing sessions")
+            # logger.info(f"Initializing storage managers for {len(sessions)} existing sessions")
 
             for session in sessions:
                 session_id = session.session_id
@@ -78,7 +85,7 @@ class SessionCoordinator:
                     storage_manager = DataStorageManager(session_dir)
                     await storage_manager.initialize()
                     self._storage_managers[session_id] = storage_manager
-                    logger.info(f"Initialized storage manager for session {session_id}")
+                    # logger.info(f"Initialized storage manager for session {session_id}")
 
         except Exception as e:
             logger.error(f"Failed to initialize storage managers for existing sessions: {e}")
@@ -134,7 +141,7 @@ class SessionCoordinator:
             self._message_callbacks[session_id] = []
             self._error_callbacks[session_id] = []
 
-            logger.info(f"Created integrated session {session_id}")
+            coord_logger.info(f"Session {session_id} created")
             await self._notify_state_change(session_id, SessionState.CREATED)
 
             return session_id
@@ -157,7 +164,7 @@ class SessionCoordinator:
             # Check if SDK exists and is running
             sdk = self._active_sdks.get(session_id)
             if sdk and sdk.is_running():
-                logger.info(f"Session {session_id} is already running, skipping start - NO CLIENT_LAUNCHED MESSAGE")
+                # logger.info(f"Session {session_id} is already running, skipping start - NO CLIENT_LAUNCHED MESSAGE")
                 return True
 
             # We need to create or recreate the SDK in either case:
@@ -165,10 +172,10 @@ class SessionCoordinator:
             # - SDK exists but not running: Recreate SDK to restart it
             sdk_was_created = True
 
-            if not sdk:
-                logger.info(f"No SDK found for session {session_id} - CREATING NEW SDK")
-            else:
-                logger.info(f"SDK exists but not running for session {session_id} - RECREATING SDK")
+            # if not sdk:
+            #     logger.info(f"No SDK found for session {session_id} - CREATING NEW SDK")
+            # else:
+            #     logger.info(f"SDK exists but not running for session {session_id} - RECREATING SDK")
 
             # Get session info to create/recreate SDK with same parameters
             session_info = await self.session_manager.get_session_info(session_id)
@@ -185,11 +192,13 @@ class SessionCoordinator:
 
             # Check if we have a valid Claude Code session ID to resume
             resume_sdk_session = None
+            # if session_info.claude_code_session_id:
+            #     logger.info(f"Resuming session with Claude Code session ID: {session_info.claude_code_session_id}")
+            #     resume_sdk_session = session_id  # Use WebUI session ID as resume identifier
+            # else:
+            #     logger.info(f"No Claude Code session ID found - starting fresh session for {session_id}")
             if session_info.claude_code_session_id:
-                logger.info(f"Resuming session with Claude Code session ID: {session_info.claude_code_session_id}")
                 resume_sdk_session = session_id  # Use WebUI session ID as resume identifier
-            else:
-                logger.info(f"No Claude Code session ID found - starting fresh session for {session_id}")
 
             # Create/recreate SDK instance with session parameters
             sdk = ClaudeSDK(
@@ -229,7 +238,7 @@ class SessionCoordinator:
                     # Also ensure processing state is reset when going to error state
                     await self.session_manager.update_processing_state(session_id, False)
                     await self._notify_state_change(session_id, SessionState.ERROR)
-                    logger.info(f"Updated session {session_id} state to ERROR and reset processing state")
+                    # logger.info(f"Updated session {session_id} state to ERROR and reset processing state")
                 except Exception as state_error:
                     logger.error(f"Failed to update session state to ERROR: {state_error}")
 
@@ -239,19 +248,19 @@ class SessionCoordinator:
                 # Clean up the failed SDK
                 if session_id in self._active_sdks:
                     del self._active_sdks[session_id]
-                    logger.info(f"Cleaned up failed SDK for session {session_id}")
+                    # logger.info(f"Cleaned up failed SDK for session {session_id}")
 
                 return False
 
             # Send system message for SDK client launch/resume
-            logger.info(f"Session {session_id}: sdk_was_created = {sdk_was_created}")
+            # logger.info(f"Session {session_id}: sdk_was_created = {sdk_was_created}")
             if sdk_was_created:  # Only if we actually created/resumed the SDK
-                logger.info(f"CALLING _send_client_launched_message for session {session_id}")
+                # logger.info(f"CALLING _send_client_launched_message for session {session_id}")
                 await self._send_client_launched_message(session_id)
-            else:
-                logger.info(f"NOT calling _send_client_launched_message for session {session_id} because sdk_was_created = False")
+            # else:
+            #     logger.info(f"NOT calling _send_client_launched_message for session {session_id} because sdk_was_created = False")
 
-            logger.info(f"Started integrated session {session_id}")
+            coord_logger.info(f"Session {session_id} started")
             await self._notify_state_change(session_id, SessionState.ACTIVE)
             return True
 
@@ -293,7 +302,7 @@ class SessionCoordinator:
             if success:
                 await self._notify_state_change(session_id, SessionState.TERMINATED)
 
-            logger.info(f"Terminated integrated session {session_id}")
+            coord_logger.info(f"Session {session_id} stopped")
             return success
 
         except Exception as e:
@@ -309,7 +318,7 @@ class SessionCoordinator:
                 session_info = await self.session_manager.get_session_info(session_id)
                 if session_info:
                     await self._notify_state_change(session_id, session_info.state)
-            logger.info(f"Updated session {session_id} name to '{name}'")
+            coord_logger.info(f"Updated session {session_id} name to '{name}'")
             return success
         except Exception as e:
             logger.error(f"Failed to update session {session_id} name: {e}")
@@ -321,7 +330,7 @@ class SessionCoordinator:
             # Step 1: First terminate the SDK if it's running
             sdk = self._active_sdks.get(session_id)
             if sdk:
-                logger.info(f"Terminating SDK for session {session_id} before deletion")
+                # logger.info(f"Terminating SDK for session {session_id} before deletion")
                 await sdk.terminate()
                 del self._active_sdks[session_id]
                 # Give SDK time to fully close
@@ -330,7 +339,7 @@ class SessionCoordinator:
             # Step 2: Clean up storage manager and ensure all files are closed
             if session_id in self._storage_managers:
                 storage_manager = self._storage_managers[session_id]
-                logger.info(f"Cleaning up storage manager for session {session_id}")
+                # logger.info(f"Cleaning up storage manager for session {session_id}")
                 await storage_manager.cleanup()
                 del self._storage_managers[session_id]
                 # Give storage manager time to close all file handles
@@ -352,17 +361,17 @@ class SessionCoordinator:
             # Step 5: Additional Windows-specific cleanup
             import os
             if os.name == 'nt':  # Windows
-                logger.info(f"Performing Windows-specific cleanup for session {session_id}")
+                # logger.info(f"Performing Windows-specific cleanup for session {session_id}")
                 # Force close any remaining handles that might be held by the system
                 gc.collect()
                 await asyncio.sleep(0.3)
 
             # Step 6: Delete through session manager (this removes from active sessions and deletes files)
-            logger.info(f"Deleting session files for session {session_id}")
+            # logger.info(f"Deleting session files for session {session_id}")
             success = await self.session_manager.delete_session(session_id)
 
             if success:
-                logger.info(f"Successfully deleted integrated session {session_id}")
+                coord_logger.info(f"Session {session_id} deleted")
                 # Notify about session deletion (using a special state change)
                 await self._notify_state_change(session_id, "deleted")
 
@@ -404,7 +413,7 @@ class SessionCoordinator:
     async def interrupt_session(self, session_id: str) -> bool:
         """Interrupt the current Claude Code SDK session"""
         try:
-            logger.info(f"Interrupt requested for session {session_id} through coordinator")
+            coord_logger.info(f"Interrupt requested for session {session_id}")
 
             # Check if SDK exists and is active
             sdk = self._active_sdks.get(session_id)
@@ -425,13 +434,13 @@ class SessionCoordinator:
 
             # Update processing state to indicate interrupting
             # Note: We don't have an "INTERRUPTING" state, so we'll just leave it processing until interrupt completes
-            logger.info(f"Attempting to interrupt session {session_id}")
+            # logger.info(f"Attempting to interrupt session {session_id}")
 
             # Call SDK interrupt method
             result = await sdk.interrupt_session()
 
             if result:
-                logger.info(f"Successfully initiated interrupt for session {session_id}")
+                coord_logger.info(f"Session {session_id} interrupted")
 
                 # Send interrupt system message via callback system (following client_launched pattern)
                 await self._send_interrupt_message(session_id)
@@ -451,7 +460,7 @@ class SessionCoordinator:
     async def set_permission_mode(self, session_id: str, mode: str) -> bool:
         """Set the permission mode for a session"""
         try:
-            logger.info(f"Setting permission mode to '{mode}' for session {session_id} through coordinator")
+            coord_logger.info(f"Setting permission mode to '{mode}' for session {session_id}")
 
             # Validate mode
             valid_modes = ["default", "acceptEdits", "plan", "bypassPermissions"]
@@ -482,7 +491,7 @@ class SessionCoordinator:
             if sdk_result:
                 # Update session manager's tracking of current permission mode
                 await self.session_manager.update_permission_mode(session_id, mode)
-                logger.info(f"Successfully set permission mode to '{mode}' for session {session_id}")
+                coord_logger.info(f"Permission mode set to '{mode}' for session {session_id}")
             else:
                 logger.warning(f"Failed to set permission mode for session {session_id}")
 
@@ -659,7 +668,7 @@ class SessionCoordinator:
         if session_id not in self._message_callbacks:
             self._message_callbacks[session_id] = []
         self._message_callbacks[session_id].append(callback)
-        logger.info(f"Added message callback for session {session_id}, total callbacks: {len(self._message_callbacks[session_id])}")
+        # logger.info(f"Added message callback for session {session_id}, total callbacks: {len(self._message_callbacks[session_id])}")
 
     def add_error_callback(self, session_id: str, callback: Callable):
         """Add callback for session errors"""
@@ -683,7 +692,7 @@ class SessionCoordinator:
             # Store in session storage
             storage = self._storage_managers.get(session_id)
             if storage:
-                logger.debug(f"Storing processed system message: {storage_data.get('type', 'unknown')}")
+                # logger.debug(f"Storing processed system message: {storage_data.get('type', 'unknown')}")
                 await storage.append_message(storage_data)
             else:
                 logger.warning(f"No storage manager found for session {session_id}")
@@ -702,18 +711,51 @@ class SessionCoordinator:
                 # Process message using unified MessageProcessor
                 parsed_message = self.message_processor.process_message(message_data, source="sdk")
 
+                # Track tool uses from assistant messages for ExitPlanMode detection
+                if parsed_message.type.value == 'assistant' and parsed_message.metadata:
+                    tool_uses = parsed_message.metadata.get('tool_uses', [])
+                    if session_id not in self._recent_tool_uses:
+                        self._recent_tool_uses[session_id] = {}
+                    for tool_use in tool_uses:
+                        tool_id = tool_use.get('id')
+                        tool_name = tool_use.get('name')
+                        if tool_id and tool_name:
+                            self._recent_tool_uses[session_id][tool_id] = tool_name
+
+                # Check for ExitPlanMode completion in tool results
+                if parsed_message.type.value == 'user' and parsed_message.metadata:
+                    tool_results = parsed_message.metadata.get('tool_results', [])
+                    for tool_result in tool_results:
+                        tool_use_id = tool_result.get('tool_use_id')
+                        is_error = tool_result.get('is_error', False)
+
+                        # Check if this tool use was ExitPlanMode
+                        if tool_use_id and not is_error:
+                            tool_uses = self._recent_tool_uses.get(session_id, {})
+                            tool_name = tool_uses.get(tool_use_id)
+
+                            if tool_name == 'ExitPlanMode':
+                                # ExitPlanMode completed successfully - reset to default mode
+                                session_info = await self.session_manager.get_session_info(session_id)
+                                if session_info and session_info.current_permission_mode == 'plan':
+                                    await self.session_manager.update_permission_mode(session_id, 'default')
+                                    coord_logger.info(f"Permission mode reset to default after ExitPlanMode for session {session_id}")
+
+                                # Clean up tracked tool use
+                                del tool_uses[tool_use_id]
+
                 # Check if this message indicates processing completion
                 if parsed_message.type.value == 'result':
                     # Message processing completed - reset processing state
                     try:
                         await self.session_manager.update_processing_state(session_id, False)
-                        logger.info(f"Reset processing state for session {session_id} after result message")
+                        # logger.info(f"Reset processing state for session {session_id} after result message")
                     except Exception as e:
                         logger.error(f"Failed to reset processing state for session {session_id}: {e}")
 
                 # Call registered callbacks with processed message (maintain backward compatibility)
                 callbacks = self._message_callbacks.get(session_id, [])
-                logger.info(f"Processing message for session {session_id}, found {len(callbacks)} callbacks")
+                # logger.info(f"Processing message for session {session_id}, found {len(callbacks)} callbacks")
 
                 for cb in callbacks:
                     try:
@@ -745,13 +787,13 @@ class SessionCoordinator:
                 # Reset processing state on any error
                 try:
                     await self.session_manager.update_processing_state(session_id, False)
-                    logger.info(f"Reset processing state for session {session_id} after error: {error_type}")
+                    # logger.info(f"Reset processing state for session {session_id} after error: {error_type}")
                 except Exception as e:
                     logger.error(f"Failed to reset processing state for session {session_id}: {e}")
 
                 # Handle critical errors that require session state updates
                 if error_type in ["startup_failed", "message_processing_loop_error", "immediate_cli_failure"]:
-                    logger.info(f"Handling critical SDK error: {error_type}")
+                    # logger.info(f"Handling critical SDK error: {error_type}")
 
                     # Extract user-friendly error message
                     user_error_message = self._extract_claude_cli_error(str(error))
@@ -762,7 +804,7 @@ class SessionCoordinator:
                         # Also ensure processing state is reset when going to error state
                         await self.session_manager.update_processing_state(session_id, False)
                         await self._notify_state_change(session_id, SessionState.ERROR)
-                        logger.info(f"Updated session {session_id} state to ERROR and reset processing state due to SDK error")
+                        # logger.info(f"Updated session {session_id} state to ERROR and reset processing state due to SDK error")
                     except Exception as state_error:
                         logger.error(f"Failed to update session state to ERROR: {state_error}")
 
@@ -772,7 +814,7 @@ class SessionCoordinator:
                     # Clean up the failed SDK
                     if session_id in self._active_sdks:
                         del self._active_sdks[session_id]
-                        logger.info(f"Cleaned up failed SDK for session {session_id}")
+                        # logger.info(f"Cleaned up failed SDK for session {session_id}")
 
                 # Call registered callbacks
                 callbacks = self._error_callbacks.get(session_id, [])
@@ -795,7 +837,7 @@ class SessionCoordinator:
         try:
             from datetime import datetime, timezone
 
-            logger.info(f"DEBUG: _send_client_launched_message called for session {session_id}")
+            # logger.info(f"DEBUG: _send_client_launched_message called for session {session_id}")
 
             # Create system message for client launch
             message_data = {
@@ -807,18 +849,18 @@ class SessionCoordinator:
                 "sdk_message_type": "SystemMessage"
             }
 
-            logger.info(f"DEBUG: About to store processed message: {message_data}")
+            # logger.info(f"DEBUG: About to store processed message: {message_data}")
 
             # Process and store message using unified MessageProcessor
             await self._store_processed_message(session_id, message_data)
 
-            logger.info(f"DEBUG: Message stored, about to send via callback")
+            # logger.info(f"DEBUG: Message stored, about to send via callback")
 
             # Send through message callback system for real-time display
             callback = self._create_message_callback(session_id)
             await callback(message_data)
 
-            logger.info(f"SUCCESS: Sent client launched message for session {session_id}")
+            # logger.info(f"SUCCESS: Sent client launched message for session {session_id}")
 
         except Exception as e:
             logger.error(f"ERROR: Failed to send client launched message for {session_id}: {e}")
@@ -847,7 +889,7 @@ class SessionCoordinator:
             callback = self._create_message_callback(session_id)
             await callback(message_data)
 
-            logger.info(f"Sent session failure message for session {session_id}: {error_message}")
+            coord_logger.info(f"Session failure message sent for session {session_id}")
         except Exception as e:
             logger.error(f"Failed to send session failure message for {session_id}: {e}")
 
@@ -873,7 +915,7 @@ class SessionCoordinator:
             callback = self._create_message_callback(session_id)
             await callback(message_data)
 
-            logger.info(f"Sent interrupt message for session {session_id}")
+            coord_logger.info(f"Interrupt message sent for session {session_id}")
 
         except Exception as e:
             logger.error(f"Failed to send interrupt message for {session_id}: {e}")
@@ -945,7 +987,7 @@ class SessionCoordinator:
 
     async def _on_session_manager_state_change(self, session_id: str, new_state: SessionState):
         """Handle state changes from session manager"""
-        logger.info(f"Received state change from session manager: {session_id} -> {new_state.value}")
+        # logger.info(f"Received state change from session manager: {session_id} -> {new_state.value}")
         await self._notify_state_change(session_id, new_state)
 
     async def cleanup(self):
@@ -956,7 +998,7 @@ class SessionCoordinator:
             for session_id in session_ids:
                 await self.terminate_session(session_id)
 
-            logger.info("Session coordinator cleanup completed")
+            coord_logger.info("Session coordinator cleanup completed")
 
         except Exception as e:
             logger.error(f"Error during session coordinator cleanup: {e}")

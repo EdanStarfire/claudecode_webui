@@ -18,7 +18,10 @@ from .session_coordinator import SessionCoordinator
 from .message_parser import MessageProcessor, MessageParser
 from .logging_config import get_logger
 
-logger = get_logger(__name__)
+# Get specialized logger for WebSocket lifecycle debugging
+ws_logger = get_logger('websocket_debug', category='WS_LIFECYCLE')
+# Keep standard logger for errors
+logger = logging.getLogger(__name__)
 
 
 class SessionCreateRequest(BaseModel):
@@ -464,54 +467,54 @@ class ClaudeWebUI:
             """WebSocket endpoint for session-specific messaging"""
             import time
             ws_connection_start_time = time.time()
-            logger.info(f"[WS_LIFECYCLE] WebSocket connection attempt for session {session_id} at {ws_connection_start_time}")
+            ws_logger.debug(f"WebSocket connection attempt for session {session_id} at {ws_connection_start_time}")
 
             # Validate session exists and is active before accepting connection
             try:
                 session_validation_time = time.time()
-                logger.info(f"[WS_LIFECYCLE] Validating session {session_id} at {session_validation_time}")
+                ws_logger.debug(f"Validating session {session_id} at {session_validation_time}")
 
                 session_info = await self.coordinator.get_session_info(session_id)
                 if not session_info:
                     rejection_time = time.time()
-                    logger.warning(f"[WS_LIFECYCLE] WebSocket connection REJECTED for non-existent session: {session_id} at {rejection_time}")
+                    ws_logger.debug(f"WebSocket connection REJECTED for non-existent session: {session_id} at {rejection_time}")
                     await websocket.close(code=4404)
                     return
 
                 session_state = session_info.get('session', {}).get('state')
-                logger.info(f"[WS_LIFECYCLE] Session {session_id} state: {session_state}")
+                ws_logger.debug(f"Session {session_id} state: {session_state}")
 
                 if session_state not in ['active', 'error']:
                     rejection_time = time.time()
-                    logger.warning(f"[WS_LIFECYCLE] WebSocket connection REJECTED for session: {session_id} (state: {session_state}) at {rejection_time}")
-                    logger.info(f"[WS_LIFECYCLE] WebSocket will only connect to sessions in 'active' or 'error' state")
+                    ws_logger.debug(f"WebSocket connection REJECTED for session: {session_id} (state: {session_state}) at {rejection_time}")
+                    ws_logger.debug(f"WebSocket will only connect to sessions in 'active' or 'error' state")
                     await websocket.close(code=4003)
                     return
 
                 validation_success_time = time.time()
-                logger.info(f"[WS_LIFECYCLE] Session validation successful for {session_id} at {validation_success_time}")
+                ws_logger.debug(f"Session validation successful for {session_id} at {validation_success_time}")
 
             except Exception as e:
                 validation_error_time = time.time()
-                logger.error(f"[WS_LIFECYCLE] Error validating session {session_id} for WebSocket at {validation_error_time}: {e}")
+                logger.error(f"Error validating session {session_id} for WebSocket at {validation_error_time}: {e}")
                 await websocket.close(code=4500)
                 return
 
             # Accept WebSocket connection
             connection_accept_time = time.time()
-            logger.info(f"[WS_LIFECYCLE] Accepting WebSocket connection for session {session_id} at {connection_accept_time}")
+            ws_logger.debug(f"Accepting WebSocket connection for session {session_id} at {connection_accept_time}")
 
             await self.websocket_manager.connect(websocket, session_id)
 
             connection_established_time = time.time()
-            logger.info(f"[WS_LIFECYCLE] WebSocket connection ESTABLISHED for session {session_id} at {connection_established_time}")
-            logger.info(f"[WS_LIFECYCLE] Connection establishment took {connection_established_time - ws_connection_start_time:.3f}s")
-            logger.info(f"[WS_LIFECYCLE] WebSocket loop starting for session {session_id}")
+            ws_logger.info(f"WebSocket connection ESTABLISHED for session {session_id} at {connection_established_time}")
+            ws_logger.debug(f"Connection establishment took {connection_established_time - ws_connection_start_time:.3f}s")
+            ws_logger.debug(f"WebSocket loop starting for session {session_id}")
 
             # Send initial ping to establish connection
             try:
                 initial_message_time = time.time()
-                logger.info(f"[WS_LIFECYCLE] Sending initial connection_established message at {initial_message_time}")
+                ws_logger.debug(f"Sending initial connection_established message at {initial_message_time}")
 
                 await websocket.send_text(json.dumps({
                     "type": "connection_established",
@@ -520,59 +523,59 @@ class ClaudeWebUI:
                 }))
 
                 initial_message_sent_time = time.time()
-                logger.info(f"[WS_LIFECYCLE] Initial message sent successfully at {initial_message_sent_time}")
+                ws_logger.debug(f"Initial message sent successfully at {initial_message_sent_time}")
 
             except Exception as e:
                 initial_message_error_time = time.time()
-                logger.error(f"[WS_LIFECYCLE] Failed to send initial message to WebSocket {session_id} at {initial_message_error_time}: {e}")
+                logger.error(f"Failed to send initial message to WebSocket {session_id} at {initial_message_error_time}: {e}")
                 # Clean up the connection that was already registered
                 self.websocket_manager.disconnect(websocket, session_id)
-                logger.info(f"[WS_LIFECYCLE] WebSocket disconnected due to initial message failure for session {session_id}")
+                ws_logger.debug(f"WebSocket disconnected due to initial message failure for session {session_id}")
                 return
 
             message_loop_iteration = 0
             try:
-                logger.info(f"[WS_LIFECYCLE] Starting message loop for session {session_id}")
+                ws_logger.debug(f"Starting message loop for session {session_id}")
 
                 while True:
                     message_loop_iteration += 1
                     loop_iteration_start_time = time.time()
-                    logger.debug(f"[WS_LIFECYCLE] Message loop iteration {message_loop_iteration} started at {loop_iteration_start_time}")
+                    ws_logger.debug(f"Message loop iteration {message_loop_iteration} started at {loop_iteration_start_time}")
 
                     # Wait for incoming messages with proper error handling
                     try:
                         message_wait_start_time = time.time()
-                        logger.debug(f"[WS_LIFECYCLE] WebSocket waiting for message from session {session_id} (timeout=30s)")
+                        ws_logger.debug(f"WebSocket waiting for message from session {session_id} (timeout=30s)")
 
                         message = await asyncio.wait_for(websocket.receive_text(), timeout=30.0)
 
                         message_received_time = time.time()
-                        logger.debug(f"[WS_LIFECYCLE] WebSocket received message from session {session_id} at {message_received_time}: {message[:100]}...")
-                        logger.debug(f"[WS_LIFECYCLE] Message wait took {message_received_time - message_wait_start_time:.3f}s")
+                        ws_logger.debug(f"WebSocket received message from session {session_id} at {message_received_time}: {message[:100]}...")
+                        ws_logger.debug(f"Message wait took {message_received_time - message_wait_start_time:.3f}s")
 
                         message_data = json.loads(message)
-                        logger.info(f"[WS_LIFECYCLE] DEBUG: Received message type: '{message_data.get('type', 'unknown')}' from session {session_id}")
-                        logger.info(f"[WS_LIFECYCLE] DEBUG: Full message data: {message_data}")
+                        ws_logger.debug(f"DEBUG: Received message type: '{message_data.get('type', 'unknown')}' from session {session_id}")
+                        ws_logger.debug(f"DEBUG: Full message data: {message_data}")
 
                         if message_data.get("type") == "send_message":
                             # Handle message sending through WebSocket
                             content = message_data.get("content", "")
                             if content:
                                 message_processing_start_time = time.time()
-                                logger.info(f"[WS_LIFECYCLE] Forwarding message to coordinator for session {session_id} at {message_processing_start_time}")
-                                logger.info(f"[WS_LIFECYCLE] Message content preview: {content[:100]}...")
+                                ws_logger.debug(f"Forwarding message to coordinator for session {session_id} at {message_processing_start_time}")
+                                ws_logger.debug(f"Message content preview: {content[:100]}...")
 
                                 await self.coordinator.send_message(session_id, content)
 
                                 message_processing_end_time = time.time()
-                                logger.info(f"[WS_LIFECYCLE] Message forwarded to coordinator at {message_processing_end_time}")
-                                logger.info(f"[WS_LIFECYCLE] Message forwarding took {message_processing_end_time - message_processing_start_time:.3f}s")
+                                ws_logger.debug(f"Message forwarded to coordinator at {message_processing_end_time}")
+                                ws_logger.debug(f"Message forwarding took {message_processing_end_time - message_processing_start_time:.3f}s")
 
                         elif message_data.get("type") == "interrupt_session":
                             # Handle session interrupt through WebSocket
                             interrupt_start_time = time.time()
-                            logger.info(f"[WS_LIFECYCLE] DEBUG: INTERRUPT REQUEST RECEIVED for session {session_id} at {interrupt_start_time}")
-                            logger.info(f"[WS_LIFECYCLE] DEBUG: Full interrupt message data: {message_data}")
+                            ws_logger.debug(f"DEBUG: INTERRUPT REQUEST RECEIVED for session {session_id} at {interrupt_start_time}")
+                            ws_logger.debug(f"DEBUG: Full interrupt message data: {message_data}")
 
                             try:
                                 # Forward interrupt request to coordinator
@@ -580,8 +583,8 @@ class ClaudeWebUI:
                                 interrupt_end_time = time.time()
 
                                 if result:
-                                    logger.info(f"[WS_LIFECYCLE] Interrupt successfully initiated for session {session_id} at {interrupt_end_time}")
-                                    logger.info(f"[WS_LIFECYCLE] Interrupt processing took {interrupt_end_time - interrupt_start_time:.3f}s")
+                                    ws_logger.debug(f"Interrupt successfully initiated for session {session_id} at {interrupt_end_time}")
+                                    ws_logger.debug(f"Interrupt processing took {interrupt_end_time - interrupt_start_time:.3f}s")
 
                                     # Send success response back to client
                                     await websocket.send_text(json.dumps({
@@ -592,7 +595,7 @@ class ClaudeWebUI:
                                         "timestamp": datetime.now(timezone.utc).isoformat()
                                     }))
                                 else:
-                                    logger.warning(f"[WS_LIFECYCLE] Interrupt failed for session {session_id} at {interrupt_end_time}")
+                                    ws_logger.debug(f"Interrupt failed for session {session_id} at {interrupt_end_time}")
 
                                     # Send failure response back to client
                                     await websocket.send_text(json.dumps({
@@ -604,7 +607,7 @@ class ClaudeWebUI:
                                     }))
 
                             except Exception as interrupt_error:
-                                logger.error(f"[WS_LIFECYCLE] Interrupt error for session {session_id}: {interrupt_error}")
+                                logger.error(f"Interrupt error for session {session_id}: {interrupt_error}")
 
                                 # Send error response back to client
                                 try:
@@ -616,17 +619,17 @@ class ClaudeWebUI:
                                         "timestamp": datetime.now(timezone.utc).isoformat()
                                     }))
                                 except Exception as response_error:
-                                    logger.error(f"[WS_LIFECYCLE] Failed to send interrupt error response: {response_error}")
+                                    logger.error(f"Failed to send interrupt error response: {response_error}")
 
                         elif message_data.get("type") == "permission_response":
                             # Handle permission response from user
                             request_id = message_data.get("request_id")
                             decision = message_data.get("decision")
 
-                            logger.info(f"[WS_LIFECYCLE] Permission response received: request_id={request_id}, decision={decision}")
+                            ws_logger.debug(f"Permission response received: request_id={request_id}, decision={decision}")
 
                             if not request_id or decision not in ["allow", "deny"]:
-                                logger.warning(f"[WS_LIFECYCLE] Invalid permission response: {message_data}")
+                                ws_logger.debug(f"Invalid permission response: {message_data}")
                                 continue
 
                             # Find and resolve the pending permission Future
@@ -647,60 +650,60 @@ class ClaudeWebUI:
                                         }
 
                                     pending_future.set_result(response)
-                                    logger.info(f"[WS_LIFECYCLE] Permission request {request_id} resolved with decision: {decision}")
+                                    ws_logger.debug(f"Permission request {request_id} resolved with decision: {decision}")
                                 else:
-                                    logger.warning(f"[WS_LIFECYCLE] Permission request {request_id} Future was already resolved")
+                                    ws_logger.debug(f"Permission request {request_id} Future was already resolved")
                             else:
-                                logger.warning(f"[WS_LIFECYCLE] No pending permission found for request_id: {request_id}")
+                                ws_logger.debug(f"No pending permission found for request_id: {request_id}")
 
                     except asyncio.TimeoutError:
                         # Send ping to keep connection alive
                         timeout_time = time.time()
-                        logger.debug(f"[WS_LIFECYCLE] WebSocket timeout for session {session_id} at {timeout_time} - sending ping")
+                        ws_logger.debug(f"WebSocket timeout for session {session_id} at {timeout_time} - sending ping")
 
                         try:
                             ping_start_time = time.time()
                             await websocket.send_text(json.dumps({"type": "ping", "timestamp": datetime.now(timezone.utc).isoformat()}))
 
                             ping_sent_time = time.time()
-                            logger.debug(f"[WS_LIFECYCLE] Ping sent successfully at {ping_sent_time}")
+                            ws_logger.debug(f"Ping sent successfully at {ping_sent_time}")
 
                         except Exception as ping_error:
                             # Connection is dead, break the loop
                             connection_death_time = time.time()
-                            logger.warning(f"[WS_LIFECYCLE] WebSocket connection DEAD for session {session_id} at {connection_death_time}: {ping_error}")
-                            logger.info(f"[WS_LIFECYCLE] Breaking message loop due to dead connection")
+                            ws_logger.debug(f"WebSocket connection DEAD for session {session_id} at {connection_death_time}: {ping_error}")
+                            ws_logger.debug(f"Breaking message loop due to dead connection")
                             break
 
                     except json.JSONDecodeError as e:
                         json_error_time = time.time()
-                        logger.warning(f"[WS_LIFECYCLE] Invalid JSON received on WebSocket for session {session_id} at {json_error_time}: {e}")
+                        ws_logger.debug(f"Invalid JSON received on WebSocket for session {session_id} at {json_error_time}: {e}")
                         continue
 
                     loop_iteration_end_time = time.time()
-                    logger.debug(f"[WS_LIFECYCLE] Message loop iteration {message_loop_iteration} completed at {loop_iteration_end_time}")
+                    ws_logger.debug(f"Message loop iteration {message_loop_iteration} completed at {loop_iteration_end_time}")
 
             except WebSocketDisconnect as disconnect_error:
                 disconnect_time = time.time()
-                logger.info(f"[WS_LIFECYCLE] WebSocket DISCONNECTED gracefully for session {session_id} at {disconnect_time}")
-                logger.info(f"[WS_LIFECYCLE] Disconnect details: {disconnect_error}")
-                logger.info(f"[WS_LIFECYCLE] Total message loop iterations: {message_loop_iteration}")
+                ws_logger.info(f"WebSocket DISCONNECTED gracefully for session {session_id} at {disconnect_time}")
+                ws_logger.debug(f"Disconnect details: {disconnect_error}")
+                ws_logger.debug(f"Total message loop iterations: {message_loop_iteration}")
                 self.websocket_manager.disconnect(websocket, session_id)
 
             except Exception as ws_error:
                 error_time = time.time()
-                logger.error(f"[WS_LIFECYCLE] WebSocket ERROR for session {session_id} at {error_time}: {ws_error}")
-                logger.error(f"[WS_LIFECYCLE] Error type: {type(ws_error)}")
-                logger.error(f"[WS_LIFECYCLE] Total message loop iterations before error: {message_loop_iteration}")
+                logger.error(f"WebSocket ERROR for session {session_id} at {error_time}: {ws_error}")
+                logger.error(f"Error type: {type(ws_error)}")
+                logger.error(f"Total message loop iterations before error: {message_loop_iteration}")
                 self.websocket_manager.disconnect(websocket, session_id)
 
             finally:
                 cleanup_time = time.time()
                 total_connection_time = cleanup_time - ws_connection_start_time
-                logger.info(f"[WS_LIFECYCLE] WebSocket cleanup for session {session_id} at {cleanup_time}")
-                logger.info(f"[WS_LIFECYCLE] Total WebSocket connection duration: {total_connection_time:.3f}s")
-                logger.info(f"[WS_LIFECYCLE] Total message loop iterations: {message_loop_iteration}")
-                logger.info(f"[WS_LIFECYCLE] WebSocket loop ENDED for session {session_id}")
+                ws_logger.debug(f"WebSocket cleanup for session {session_id} at {cleanup_time}")
+                ws_logger.debug(f"Total WebSocket connection duration: {total_connection_time:.3f}s")
+                ws_logger.debug(f"Total message loop iterations: {message_loop_iteration}")
+                ws_logger.info(f"WebSocket loop ENDED for session {session_id}")
 
     def _create_message_callback(self, session_id: str):
         """Create message callback for WebSocket broadcasting using unified MessageProcessor"""

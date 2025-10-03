@@ -13,8 +13,12 @@ from claude_agent_sdk import (
 )
 
 from .logging_config import get_logger
+import logging
 
-logger = get_logger(__name__)
+# Get specialized logger for parser debugging
+parser_logger = get_logger('parser', category='PARSER')
+# Keep standard logger for errors
+logger = logging.getLogger(__name__)
 
 
 
@@ -1100,7 +1104,7 @@ class MessageParser:
         # Register default handlers
         self._register_default_handlers()
 
-        logger.info("MessageParser initialized with default handlers")
+        parser_logger.debug("MessageParser initialized with default handlers")
 
     def _register_default_handlers(self) -> None:
         """Register the default set of message handlers."""
@@ -1141,7 +1145,7 @@ class MessageParser:
         else:
             self.handlers.append(handler)
 
-        logger.debug(f"Registered handler: {handler.__class__.__name__}")
+        parser_logger.debug(f"Registered handler: {handler.__class__.__name__}")
 
     def parse_message(self, message_data: Dict[str, Any]) -> ParsedMessage:
         """
@@ -1172,7 +1176,7 @@ class MessageParser:
                         self.stats["unknown_types"] += 1
                         logger.warning(f"Unknown message type: {original_type}")
 
-                    logger.debug(f"Parsed message: {parsed.type.value}")
+                    parser_logger.debug(f"Parsed message: {parsed.type.value}")
                     return parsed
 
             # Should never reach here due to UnknownMessageHandler fallback
@@ -1219,7 +1223,7 @@ class MessageParser:
             "type_counts": {}
         }
         self.unknown_types.clear()
-        logger.info("MessageParser stats reset")
+        parser_logger.debug("MessageParser stats reset")
 
     def get_unknown_types(self) -> List[str]:
         """Get list of unknown message types encountered."""
@@ -1232,7 +1236,7 @@ class MessageProcessor:
     def __init__(self, message_parser: MessageParser):
         """Initialize with a MessageParser instance."""
         self.parser = message_parser
-        self.logger = get_logger(f"{__name__}.MessageProcessor")
+        self.logger = parser_logger  # Use specialized parser logger
 
     def process_message(self, message_data: Dict[str, Any], source: str = "sdk") -> ParsedMessage:
         """
@@ -1423,5 +1427,5 @@ class MessageProcessor:
                 )
                 processed_messages.append(error_message)
 
-        self.logger.info(f"Processed {len(processed_messages)} messages from {source}")
+        self.logger.debug(f"Processed {len(processed_messages)} messages from {source}")
         return processed_messages

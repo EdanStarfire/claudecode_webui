@@ -11,6 +11,11 @@ from pathlib import Path
 from typing import Dict, Any, List, Optional
 import logging
 
+from .logging_config import get_logger
+
+# Get specialized logger for storage debugging
+storage_logger = get_logger('storage', category='STORAGE')
+# Keep standard logger for errors
 logger = logging.getLogger(__name__)
 
 
@@ -38,7 +43,7 @@ class DataStorageManager:
             # Data integrity check disabled to prevent session startup issues
             # await self._verify_integrity()
 
-            logger.debug(f"Initialized storage for session {self.session_dir.name}")
+            storage_logger.debug(f"Initialized storage for session {self.session_dir.name}")
         except Exception as e:
             logger.error(f"Failed to initialize storage: {e}")
             raise
@@ -56,7 +61,7 @@ class DataStorageManager:
                 f.write('\n')
 
 
-            logger.debug(f"Appended message to {self.session_dir.name}")
+            storage_logger.debug(f"Appended message to {self.session_dir.name}")
         except Exception as e:
             logger.error(f"Failed to append message: {e}")
             raise
@@ -249,7 +254,7 @@ class DataStorageManager:
                 # Force another GC to clear the Path objects
                 gc.collect()
 
-            logger.debug(f"Cleaned up storage for {session_name}")
+            storage_logger.debug(f"Cleaned up storage for {session_name}")
         except Exception as e:
             logger.error(f"Failed to cleanup storage: {e}")
             # Still force GC even on error

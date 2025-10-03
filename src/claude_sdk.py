@@ -40,7 +40,11 @@ except ImportError:
     ResultMessage = None
     TextBlock = None
 
-logger = get_logger(__name__)
+# Get specialized loggers for SDK debugging
+sdk_logger = get_logger('sdk_debug', category='SDK')
+perm_logger = get_logger('sdk_debug', category='PERMISSIONS')
+# Keep standard logger for errors
+logger = logging.getLogger(__name__)
 
 
 class SessionState(Enum):
@@ -150,11 +154,11 @@ class ClaudeSDK:
         self.message_callback = message_callback
         self.error_callback = error_callback
         self.permission_callback = permission_callback
-        logger.info(f"DEBUG: ClaudeSDK initialized with permission_callback: {permission_callback is not None}")
+        sdk_logger.debug(f"ClaudeSDK initialized with permission_callback: {permission_callback is not None}")
         if permission_callback:
-            logger.info(f"DEBUG: Permission callback type: {type(permission_callback)}")
+            sdk_logger.debug(f"Permission callback type: {type(permission_callback)}")
         else:
-            logger.warning("DEBUG: No permission callback provided to ClaudeSDK!")
+            logger.warning("No permission callback provided to ClaudeSDK!")
         self.current_permission_mode = permissions
         self.system_prompt = system_prompt
         self.tools = tools if tools is not None else []
@@ -199,7 +203,7 @@ class ClaudeSDK:
         self._sdk_error_handler = None
         self._setup_sdk_error_detection()
 
-        logger.info(f"Initialized enhanced Claude SDK wrapper for session {session_id}")
+        sdk_logger.info(f"Initialized enhanced Claude SDK wrapper for session {session_id}")
 
     def _setup_sdk_error_detection(self):
         """Set up SDK error detection handler to capture immediate CLI failures."""
@@ -216,7 +220,7 @@ class ClaudeSDK:
             # Add our handler to the SDK logger
             sdk_logger.addHandler(self._sdk_error_handler)
 
-            logger.debug(f"SDK error detection handler set up for session {self.session_id}")
+            sdk_logger.debug(f"SDK error detection handler set up for session {self.session_id}")
         except Exception as e:
             logger.error(f"Failed to set up SDK error detection: {e}")
 
@@ -227,7 +231,7 @@ class ClaudeSDK:
                 sdk_logger = logging.getLogger('claude_code_sdk._internal.query')
                 sdk_logger.removeHandler(self._sdk_error_handler)
                 self._sdk_error_handler = None
-                logger.debug(f"SDK error detection handler cleaned up for session {self.session_id}")
+                sdk_logger.debug(f"SDK error detection handler cleaned up for session {self.session_id}")
         except Exception as e:
             logger.error(f"Failed to clean up SDK error detection: {e}")
 
@@ -239,7 +243,7 @@ class ClaudeSDK:
             True if started successfully, False otherwise
         """
         try:
-            logger.info(f"Starting Claude Code SDK session with ClaudeSDKClient in {self.working_directory}")
+            sdk_logger.info(f"Starting Claude Code SDK session with ClaudeSDKClient in {self.working_directory}")
 
             # Reset shutdown event to ensure clean start (fixes resumed session disconnect loops)
             self._shutdown_event.clear()
@@ -259,7 +263,7 @@ class ClaudeSDK:
             if self.resume_session_id is not None and self.session_manager:
                 session_info = await self.session_manager.get_session_info(self.session_id)
                 if session_info and session_info.claude_code_session_id:
-                    logger.info(f"Using stored Claude Code session ID for resume: {session_info.claude_code_session_id}")
+                    sdk_logger.info(f"Using stored Claude Code session ID for resume: {session_info.claude_code_session_id}")
                     # Temporarily override resume_session_id with actual Claude Code ID
                     original_resume_id = self.resume_session_id
                     self.resume_session_id = session_info.claude_code_session_id
@@ -272,14 +276,14 @@ class ClaudeSDK:
             else:
                 # Configure SDK options normally for new sessions
                 self._sdk_options = self._get_sdk_options()
-            logger.info("Claude Code SDK options configured")
+            sdk_logger.info("Claude Code SDK options configured")
 
             # Start message processing task
             self._conversation_task = asyncio.create_task(self._message_processing_loop())
 
             # Keep session in STARTING state until context manager is ready
             # State will be changed to RUNNING in _message_processing_loop when SDK is ready
-            logger.info(f"Claude Code SDK session task started - waiting for context manager initialization")
+            sdk_logger.info(f"Claude Code SDK session task started - waiting for context manager initialization")
             return True
 
         except Exception as e:
@@ -305,7 +309,7 @@ class ClaudeSDK:
             return False
 
         try:
-            logger.debug(f"Queuing message: {message[:100]}...")
+            sdk_logger.debug(f"Queuing message: {message[:100]}...")
 
             # Add to message queue
             await self._message_queue.put({
@@ -314,7 +318,7 @@ class ClaudeSDK:
                 "timestamp": time.time()
             })
 
-            logger.info(f"Message queued successfully")
+            sdk_logger.debug(f"Message queued successfully")
             return True
 
         except Exception as e:
@@ -334,29 +338,29 @@ class ClaudeSDK:
             True if interrupt was sent successfully, False otherwise
         """
         try:
-            logger.info(f"DEBUG: INTERRUPT REQUESTED for session {self.session_id}")
+            sdk_logger.info(f"INTERRUPT REQUESTED for session {self.session_id}")
 
             # Check if we have an active SDK client
             if not self._sdk_client:
-                logger.warning(f"DEBUG: No active SDK client for session {self.session_id} - cannot interrupt")
+                sdk_logger.debug(f"No active SDK client for session {self.session_id} - cannot interrupt")
                 return False
 
             # Check if we're in a state that can be interrupted
             if self.info.state not in [SessionState.RUNNING, SessionState.PROCESSING]:
-                logger.warning(f"DEBUG: Session {self.session_id} not in interruptible state: {self.info.state}")
+                sdk_logger.debug(f"Session {self.session_id} not in interruptible state: {self.info.state}")
                 return False
 
-            logger.info(f"DEBUG: Session {self.session_id} state check passed: {self.info.state}")
-            logger.info(f"DEBUG: SDK client exists: {bool(self._sdk_client)}")
+            sdk_logger.debug(f"Session {self.session_id} state check passed: {self.info.state}")
+            sdk_logger.debug(f"SDK client exists: {bool(self._sdk_client)}")
 
             # Add interrupt request to message queue to be processed by the message loop
-            logger.info(f"DEBUG: Adding interrupt request to message queue for session {self.session_id}")
+            sdk_logger.debug(f"Adding interrupt request to message queue for session {self.session_id}")
             await self._message_queue.put({
                 "type": "interrupt_request",
                 "timestamp": time.time()
             })
 
-            logger.info(f"DEBUG: INTERRUPT REQUEST QUEUED for session {self.session_id}")
+            sdk_logger.info(f"INTERRUPT REQUEST QUEUED for session {self.session_id}")
             return True
 
         except Exception as e:
@@ -376,7 +380,7 @@ class ClaudeSDK:
             True if mode was set successfully, False otherwise
         """
         try:
-            logger.info(f"Setting permission mode to '{mode}' for session {self.session_id}")
+            perm_logger.info(f"Setting permission mode to '{mode}' for session {self.session_id}")
 
             # Validate mode
             valid_modes = ["default", "acceptEdits", "plan", "bypassPermissions"]
@@ -400,7 +404,7 @@ class ClaudeSDK:
             # Update local permissions tracking
             self.current_permission_mode = mode
 
-            logger.info(f"Successfully set permission mode to '{mode}' for session {self.session_id}")
+            perm_logger.info(f"Successfully set permission mode to '{mode}' for session {self.session_id}")
             return True
 
         except Exception as e:
@@ -414,7 +418,7 @@ class ClaudeSDK:
         Main message processing loop using the new ClaudeSDKClient pattern.
         """
         loop_start_time = time.time()
-        logger.info(f"Starting message processing loop for session {self.session_id}")
+        sdk_logger.info(f"Starting message processing loop for session {self.session_id}")
 
         try:
             async with ClaudeSDKClient(self._sdk_options) as client:
@@ -427,7 +431,7 @@ class ClaudeSDK:
 
                 # NOW the SDK is truly ready - change session state to RUNNING
                 self.info.state = SessionState.RUNNING
-                logger.info(f"Session {self.session_id} state changed to RUNNING")
+                sdk_logger.info(f"Session {self.session_id} state changed to RUNNING")
 
                 # Also notify session manager that SDK is ready
                 if self.session_manager:
@@ -445,7 +449,7 @@ class ClaudeSDK:
 
                         if message_type == "user_message" and message_data.get("content"):
                             content = message_data["content"]
-                            logger.info(f"Processing user message: {content[:100]}...")
+                            sdk_logger.debug(f"Processing user message: {content[:100]}...")
 
                             # Store user message if storage available
                             if self.storage_manager:
@@ -484,10 +488,10 @@ class ClaudeSDK:
                                         )
 
                                         if interrupt_check and interrupt_check.get("type") == "interrupt_request":
-                                            logger.info(f"DEBUG: INTERRUPT RECEIVED while processing messages for session {self.session_id}")
-                                            logger.info(f"DEBUG: Calling client.interrupt() for session {self.session_id}")
+                                            sdk_logger.info(f"INTERRUPT RECEIVED while processing messages for session {self.session_id}")
+                                            sdk_logger.debug(f"Calling client.interrupt() for session {self.session_id}")
                                             await client.interrupt()
-                                            logger.info(f"DEBUG: INTERRUPT SENT successfully to SDK for session {self.session_id}")
+                                            sdk_logger.info(f"INTERRUPT SENT successfully to SDK for session {self.session_id}")
 
                                             # Note: Interrupt message storage and notification is now handled by session coordinator
 
@@ -524,15 +528,15 @@ class ClaudeSDK:
 
                         elif message_type == "interrupt_request":
                             # This case should not happen anymore since we handle interrupts during message processing
-                            logger.warning(f"DEBUG: RECEIVED INTERRUPT REQUEST outside of message processing for session {self.session_id}")
-                            logger.warning(f"DEBUG: This should not happen - interrupts should be handled during active message processing")
+                            sdk_logger.debug(f"RECEIVED INTERRUPT REQUEST outside of message processing for session {self.session_id}")
+                            sdk_logger.debug(f"This should not happen - interrupts should be handled during active message processing")
                             # Just mark as done since interrupt should be handled during active message processing
                             pass
 
                         elif message_data and message_data.get("content"):
                             # Fallback for older format (backwards compatibility)
                             content = message_data["content"]
-                            logger.info(f"Processing legacy message format: {content[:100]}...")
+                            sdk_logger.debug(f"Processing legacy message format: {content[:100]}...")
 
                             # Store user message if storage available
                             if self.storage_manager:
@@ -565,7 +569,7 @@ class ClaudeSDK:
                         # No message in queue, continue loop
                         continue
                     except asyncio.CancelledError:
-                        logger.info(f"Message processing loop cancelled")
+                        sdk_logger.info(f"Message processing loop cancelled")
                         break
                     except Exception as e:
                         logger.error(f"Error processing message: {e}")
@@ -578,28 +582,28 @@ class ClaudeSDK:
 
         except Exception as e:
             fatal_error_time = time.time()
-            logger.error(f"[SDK_LIFECYCLE] FATAL ERROR in message processing loop at {fatal_error_time}: {e}")
-            logger.error(f"[SDK_LIFECYCLE] Exception type: {type(e)}")
-            logger.error(f"[SDK_LIFECYCLE] Exception details: {e}")
-            logger.error(f"[SDK_LIFECYCLE] Session state before error: {self.info.state}")
+            logger.error(f"FATAL ERROR in message processing loop at {fatal_error_time}: {e}")
+            logger.error(f"Exception type: {type(e)}")
+            logger.error(f"Exception details: {e}")
+            logger.error(f"Session state before error: {self.info.state}")
 
 
             # Comprehensive fatal error tracking
             import traceback
-            logger.error(f"[ERROR_TRACKING] FATAL ERROR - Full exception traceback:")
+            logger.error(f"FATAL ERROR - Full exception traceback:")
             for line in traceback.format_exception(type(e), e, e.__traceback__):
-                logger.error(f"[ERROR_TRACKING] {line.rstrip()}")
+                logger.error(f"{line.rstrip()}")
 
-            logger.error(f"[ERROR_TRACKING] Fatal error context:")
-            logger.error(f"[ERROR_TRACKING] - Session ID: {self.session_id}")
-            logger.error(f"[ERROR_TRACKING] - Working directory: {self.working_directory}")
-            logger.error(f"[ERROR_TRACKING] - Session state: {self.info.state}")
-            logger.error(f"[ERROR_TRACKING] - Message count: {self.info.message_count}")
-            logger.error(f"[ERROR_TRACKING] - Queue size: {self._message_queue.qsize()}")
-            logger.error(f"[ERROR_TRACKING] - Shutdown event: {self._shutdown_event.is_set()}")
-            logger.error(f"[ERROR_TRACKING] - Context manager was active: {self._session_health_checks.get('context_manager_active', False)}")
-            logger.error(f"[ERROR_TRACKING] - Total queries sent: {self._session_health_checks.get('total_queries_sent', 0)}")
-            logger.error(f"[ERROR_TRACKING] - Total responses received: {self._session_health_checks.get('total_responses_received', 0)}")
+            logger.error(f"Fatal error context:")
+            logger.error(f"- Session ID: {self.session_id}")
+            logger.error(f"- Working directory: {self.working_directory}")
+            logger.error(f"- Session state: {self.info.state}")
+            logger.error(f"- Message count: {self.info.message_count}")
+            logger.error(f"- Queue size: {self._message_queue.qsize()}")
+            logger.error(f"- Shutdown event: {self._shutdown_event.is_set()}")
+            logger.error(f"- Context manager was active: {self._session_health_checks.get('context_manager_active', False)}")
+            logger.error(f"- Total queries sent: {self._session_health_checks.get('total_queries_sent', 0)}")
+            logger.error(f"- Total responses received: {self._session_health_checks.get('total_responses_received', 0)}")
 
             # Update health monitoring
             self._session_health_checks["context_manager_active"] = False
@@ -609,7 +613,7 @@ class ClaudeSDK:
             try:
                 self._log_session_health(None, "fatal_error")
             except Exception as health_check_error:
-                logger.error(f"[ERROR_TRACKING] Health check failed during fatal error handling: {health_check_error}")
+                logger.error(f"Health check failed during fatal error handling: {health_check_error}")
 
             self.info.state = SessionState.FAILED
             self.info.error_message = str(e)
@@ -618,9 +622,9 @@ class ClaudeSDK:
         finally:
             cleanup_time = time.time()
             self._sdk_client = None
-            logger.info(f"[SDK_LIFECYCLE] Message processing loop cleanup at {cleanup_time}")
-            logger.info(f"[SDK_LIFECYCLE] Total loop runtime: {cleanup_time - loop_start_time:.3f}s")
-            logger.info(f"[SDK_LIFECYCLE] Message processing loop ENDED")
+            sdk_logger.info(f"Message processing loop cleanup at {cleanup_time}")
+            sdk_logger.info(f"Total loop runtime: {cleanup_time - loop_start_time:.3f}s")
+            sdk_logger.info(f"Message processing loop ENDED")
 
 
     def _get_sdk_options(self):
@@ -653,27 +657,27 @@ class ClaudeSDK:
         }
 
         # Only add can_use_tool callback if permission callback is provided and SDK classes are available
-        logger.info(f"DEBUG: Callback registration check:")
-        logger.info(f"DEBUG: - permission_callback exists: {self.permission_callback is not None}")
-        logger.info(f"DEBUG: - PermissionResultAllow available: {PermissionResultAllow is not None}")
-        logger.info(f"DEBUG: - PermissionResultDeny available: {PermissionResultDeny is not None}")
+        perm_logger.debug(f"Callback registration check:")
+        perm_logger.debug(f"- permission_callback exists: {self.permission_callback is not None}")
+        perm_logger.debug(f"- PermissionResultAllow available: {PermissionResultAllow is not None}")
+        perm_logger.debug(f"- PermissionResultDeny available: {PermissionResultDeny is not None}")
 
         if self.permission_callback and PermissionResultAllow and PermissionResultDeny:
             options_kwargs["can_use_tool"] = can_use_tool_wrapper
-            logger.info("DEBUG: ✅ Permission callback registered with SDK!")
+            perm_logger.info("Permission callback registered with SDK")
         else:
-            logger.warning("DEBUG: ❌ Permission callback NOT registered - missing requirements")
+            logger.warning("Permission callback NOT registered - missing requirements")
 
         if self.model is not None:
             options_kwargs["model"] = self.model
 
         if self.resume_session_id is not None:
             options_kwargs["resume"] = self.resume_session_id
-            logger.info(f"Setting resume parameter to: {self.resume_session_id}")
+            sdk_logger.debug(f"Setting resume parameter to: {self.resume_session_id}")
 
-        logger.info(f"DEBUG: Final SDK options keys: {list(options_kwargs.keys())}")
-        logger.info(f"DEBUG: can_use_tool included: {'can_use_tool' in options_kwargs}")
-        logger.info(f"ClaudeAgentOptions: {options_kwargs}")
+        sdk_logger.debug(f"Final SDK options keys: {list(options_kwargs.keys())}")
+        sdk_logger.debug(f"can_use_tool included: {'can_use_tool' in options_kwargs}")
+        sdk_logger.debug(f"ClaudeAgentOptions: {options_kwargs}")
         return ClaudeAgentOptions(**options_kwargs)
 
     async def _process_sdk_message(self, sdk_message: Any):
@@ -683,18 +687,18 @@ class ClaudeSDK:
             if hasattr(sdk_message, 'type') and sdk_message.type == 'error':
                 error_content = str(sdk_message.content) if hasattr(sdk_message, 'content') else str(sdk_message)
                 if "Fatal error in message reader" in error_content:
-                    logger.error(f"[FATAL_ERROR_DETECTION] Immediate CLI failure detected: {error_content}")
+                    logger.error(f"Immediate CLI failure detected: {error_content}")
 
                     # Extract the underlying error details
                     fatal_error = error_content
                     if "Command failed with exit code" in error_content:
                         # This is the immediate CLI failure we want to surface
-                        logger.info(f"[FATAL_ERROR_DETECTION] CLI command failure: {error_content}")
+                        logger.error(f"CLI command failure: {error_content}")
                         fatal_error = "Claude Code command failed - see details above"
 
                     # Trigger immediate error callback to update session state
                     if self.error_callback:
-                        logger.info(f"[FATAL_ERROR_DETECTION] Triggering immediate error callback")
+                        sdk_logger.debug(f"Triggering immediate error callback")
                         await self._safe_callback(self.error_callback, "immediate_cli_failure", Exception(fatal_error))
 
                     return  # Don't process this error message further
@@ -706,22 +710,22 @@ class ClaudeSDK:
                     # Only store if this is a different session ID (prevent duplicates)
                     if not hasattr(self, '_claude_code_session_id') or self._claude_code_session_id != session_id:
                         self._claude_code_session_id = session_id
-                        logger.info(f"Captured Claude Code session ID: {session_id} for WebUI session: {self.session_id}")
+                        sdk_logger.info(f"Captured Claude Code session ID: {session_id} for WebUI session: {self.session_id}")
 
                         # Always store the latest Claude Code session ID for cumulative sessions
                         if self.session_manager:
                             await self.session_manager.update_claude_code_session_id(self.session_id, session_id)
                             if self.resume_session_id is None:
-                                logger.info(f"Stored new Claude Code session ID: {session_id}")
+                                sdk_logger.info(f"Stored new Claude Code session ID: {session_id}")
                             else:
-                                logger.info(f"Resume created new cumulative session {session_id} (was attempting to resume {self.resume_session_id})")
-                                logger.info(f"Updated stored session ID to latest: {session_id}")
+                                sdk_logger.info(f"Resume created new cumulative session {session_id} (was attempting to resume {self.resume_session_id})")
+                                sdk_logger.info(f"Updated stored session ID to latest: {session_id}")
 
             converted_message = self._convert_sdk_message(sdk_message)
             self.info.last_activity = time.time()
 
             # Debug log raw SDK response structure
-            logger.debug(f"Raw SDK response: {sdk_message=}")
+            sdk_logger.debug(f"Raw SDK response: {sdk_message=}")
 
             if self.storage_manager:
                 await self._store_sdk_message(converted_message, sdk_message)
@@ -729,7 +733,7 @@ class ClaudeSDK:
             if self.message_callback:
                 await self._safe_callback(self.message_callback, converted_message)
 
-            logger.debug(f"Processed SDK message: {converted_message.get('type', 'unknown')}")
+            sdk_logger.debug(f"Processed SDK message: {converted_message.get('type', 'unknown')}")
 
         except Exception as e:
             logger.error(f"Failed to process SDK message: {e}")
@@ -755,7 +759,7 @@ class ClaudeSDK:
             if converted_message.get("sdk_message"):
                 storage_data["sdk_message_type"] = converted_message.get("sdk_message").__class__.__name__
 
-            logger.debug(f"Storing processed SDK message: {storage_data.get('type', 'unknown')}")
+            sdk_logger.debug(f"Storing processed SDK message: {storage_data.get('type', 'unknown')}")
             await self.storage_manager.append_message(storage_data)
 
         except Exception as e:
@@ -821,15 +825,15 @@ class ClaudeSDK:
         Returns:
             PermissionResultAllow or PermissionResultDeny object
         """
-        logger.info(f"=======================================")
-        logger.info(f"PERMISSION CALLBACK TRIGGERED!")
-        logger.info(f"Tool: {tool_name}")
-        logger.info(f"Input: {input_params}")
-        logger.info(f"Context: {context}")
-        logger.info(f"=======================================")
+        perm_logger.info(f"=======================================")
+        perm_logger.info(f"Permission callback triggered")
+        perm_logger.info(f"Tool: {tool_name}")
+        perm_logger.info(f"Input: {input_params}")
+        perm_logger.info(f"Context: {context}")
+        perm_logger.info(f"=======================================")
 
         if self.permission_callback:
-            logger.info(f"Delegating permission check for tool '{tool_name}' to external callback.")
+            perm_logger.debug(f"Delegating permission check for tool '{tool_name}' to external callback")
             try:
                 # Call the callback - can now await since SDK callback is async
                 if asyncio.iscoroutinefunction(self.permission_callback):
@@ -840,10 +844,10 @@ class ClaudeSDK:
                 # Convert different response formats to new PermissionResult objects
                 if isinstance(decision, bool):
                     if decision:
-                        logger.info(f"   ✅ Tool '{tool_name}' approved by callback")
+                        perm_logger.info(f"Tool '{tool_name}' approved by callback")
                         return PermissionResultAllow(updated_input=input_params)
                     else:
-                        logger.info(f"   ❌ Tool '{tool_name}' denied by callback")
+                        perm_logger.info(f"Tool '{tool_name}' denied by callback")
                         return PermissionResultDeny(message=f"Tool '{tool_name}' denied by permission callback")
                 elif isinstance(decision, dict):
                     # Handle old format dict responses
@@ -865,7 +869,7 @@ class ClaudeSDK:
                 logger.error(f"Error in external permission_callback: {e}")
                 return PermissionResultDeny(message=f"Permission callback error: {str(e)}")
 
-        logger.warning(f"No permission_callback provided. Denying tool use: '{tool_name}'")
+        perm_logger.debug(f"No permission_callback provided. Denying tool use: '{tool_name}'")
         return PermissionResultDeny(message="No permission callback configured")
 
     
@@ -981,7 +985,7 @@ class ClaudeSDK:
         Returns:
             True if terminated successfully, False otherwise
         """
-        logger.info(f"Terminating Claude Code SDK session {self.session_id}")
+        sdk_logger.info(f"Terminating Claude Code SDK session {self.session_id}")
 
         self.info.state = SessionState.TERMINATED
         self._shutdown_event.set()
@@ -995,7 +999,7 @@ class ClaudeSDK:
                 except asyncio.TimeoutError:
                     logger.warning("Message processing task did not terminate within timeout")
                 except asyncio.CancelledError:
-                    logger.debug("Message processing task cancelled successfully")
+                    sdk_logger.debug("Message processing task cancelled successfully")
 
             # SDK client will be cleaned up by context manager in the task
 
@@ -1013,7 +1017,7 @@ class ClaudeSDK:
             # Cleanup SDK error detection handler
             self._cleanup_sdk_error_detection()
 
-            logger.info("Claude Code SDK session terminated successfully")
+            sdk_logger.info("Claude Code SDK session terminated successfully")
             return True
 
         except Exception as e:
@@ -1098,21 +1102,21 @@ class ClaudeSDK:
         """Log detailed session health information."""
         health_status = self._perform_session_health_check(client)
 
-        logger.info(f"[SESSION_HEALTH] Health check #{health_status['check_number']} for session {self.session_id} ({context})")
-        logger.info(f"[SESSION_HEALTH] Overall health: {health_status['overall_health']}")
-        logger.info(f"[SESSION_HEALTH] Session state: {health_status['session_state']}")
-        logger.info(f"[SESSION_HEALTH] Context manager active: {health_status['context_manager_active']}")
-        logger.info(f"[SESSION_HEALTH] Client object valid: {health_status['client_object_valid']}")
-        logger.info(f"[SESSION_HEALTH] SDK client reference valid: {health_status['sdk_client_reference_valid']}")
-        logger.info(f"[SESSION_HEALTH] Shutdown event set: {health_status['shutdown_event_set']}")
-        logger.info(f"[SESSION_HEALTH] Message queue size: {health_status['message_queue_size']}")
-        logger.info(f"[SESSION_HEALTH] Total queries sent: {health_status['total_queries_sent']}")
-        logger.info(f"[SESSION_HEALTH] Total responses received: {health_status['total_responses_received']}")
-        logger.info(f"[SESSION_HEALTH] Session uptime: {health_status['session_uptime']:.3f}s" if health_status['session_uptime'] else "[SESSION_HEALTH] Session uptime: not available")
-        logger.info(f"[SESSION_HEALTH] Time since last activity: {health_status['time_since_last_activity']:.3f}s" if health_status['time_since_last_activity'] else "[SESSION_HEALTH] Time since last activity: not available")
+        sdk_logger.debug(f"Health check #{health_status['check_number']} for session {self.session_id} ({context})")
+        sdk_logger.debug(f"Overall health: {health_status['overall_health']}")
+        sdk_logger.debug(f"Session state: {health_status['session_state']}")
+        sdk_logger.debug(f"Context manager active: {health_status['context_manager_active']}")
+        sdk_logger.debug(f"Client object valid: {health_status['client_object_valid']}")
+        sdk_logger.debug(f"SDK client reference valid: {health_status['sdk_client_reference_valid']}")
+        sdk_logger.debug(f"Shutdown event set: {health_status['shutdown_event_set']}")
+        sdk_logger.debug(f"Message queue size: {health_status['message_queue_size']}")
+        sdk_logger.debug(f"Total queries sent: {health_status['total_queries_sent']}")
+        sdk_logger.debug(f"Total responses received: {health_status['total_responses_received']}")
+        sdk_logger.debug(f"Session uptime: {health_status['session_uptime']:.3f}s" if health_status['session_uptime'] else "Session uptime: not available")
+        sdk_logger.debug(f"Time since last activity: {health_status['time_since_last_activity']:.3f}s" if health_status['time_since_last_activity'] else "Time since last activity: not available")
 
         if health_status['consecutive_failures'] > 0:
-            logger.warning(f"[SESSION_HEALTH] Consecutive health check failures: {health_status['consecutive_failures']}")
+            logger.warning(f"Consecutive health check failures: {health_status['consecutive_failures']}")
 
         return health_status
 

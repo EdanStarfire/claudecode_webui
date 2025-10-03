@@ -1,5 +1,74 @@
 // Claude Code WebUI JavaScript Application
 
+/**
+ * Standardized logging utility for consistent log formatting
+ * Uses browser console's native log levels for filtering
+ */
+const Logger = {
+    /**
+     * Format a log message with timestamp and category
+     * @param {string} category - Log category (e.g., 'TOOL_MANAGER', 'SESSION', 'WS')
+     * @param {string} message - The log message
+     * @param {*} data - Optional structured data to append
+     * @returns {string} Formatted log message
+     */
+    formatMessage(category, message, data = null) {
+        const timestamp = new Date().toISOString();
+        const baseMsg = `${timestamp} - [${category}] ${message}`;
+
+        if (data !== null && data !== undefined) {
+            // For objects/arrays, return base message (data will be passed separately to console)
+            return baseMsg;
+        }
+
+        return baseMsg;
+    },
+
+    /**
+     * Debug level - verbose debugging, filtered by browser settings
+     */
+    debug(category, message, data = null) {
+        if (data !== null && data !== undefined) {
+            console.debug(this.formatMessage(category, message), data);
+        } else {
+            console.debug(this.formatMessage(category, message));
+        }
+    },
+
+    /**
+     * Info level - important events (connections, actions, completions)
+     */
+    info(category, message, data = null) {
+        if (data !== null && data !== undefined) {
+            console.info(this.formatMessage(category, message), data);
+        } else {
+            console.info(this.formatMessage(category, message));
+        }
+    },
+
+    /**
+     * Warning level - warnings (retries, fallbacks, deprecated paths)
+     */
+    warn(category, message, data = null) {
+        if (data !== null && data !== undefined) {
+            console.warn(this.formatMessage(category, message), data);
+        } else {
+            console.warn(this.formatMessage(category, message));
+        }
+    },
+
+    /**
+     * Error level - errors (failures, exceptions)
+     */
+    error(category, message, data = null) {
+        if (data !== null && data !== undefined) {
+            console.error(this.formatMessage(category, message), data);
+        } else {
+            console.error(this.formatMessage(category, message));
+        }
+    }
+};
+
 // Tool Call Manager for handling tool use lifecycle
 class ToolCallManager {
     constructor() {
@@ -12,11 +81,11 @@ class ToolCallManager {
     createToolSignature(toolName, inputParams) {
         // Create unique signature from tool name + params
         if (!toolName) {
-            console.error('createToolSignature called with undefined toolName:', toolName, inputParams);
+            Logger.error('TOOL_MANAGER', 'createToolSignature called with undefined toolName', {toolName, inputParams});
             return 'unknown:{}';
         }
         if (!inputParams || typeof inputParams !== 'object') {
-            console.warn('createToolSignature called with invalid inputParams:', toolName, inputParams);
+            Logger.warn('TOOL_MANAGER', 'createToolSignature called with invalid inputParams', {toolName, inputParams});
             return `${toolName}:{}`;
         }
         const paramsHash = JSON.stringify(inputParams, Object.keys(inputParams).sort());
@@ -24,7 +93,7 @@ class ToolCallManager {
     }
 
     handleToolUse(toolUseBlock) {
-        console.log('ToolCallManager: Handling tool use', toolUseBlock);
+        Logger.debug('TOOL_MANAGER', 'Handling tool use', toolUseBlock);
 
         const signature = this.createToolSignature(toolUseBlock.name, toolUseBlock.input);
         this.toolSignatureToId.set(signature, toolUseBlock.id);
@@ -49,7 +118,7 @@ class ToolCallManager {
     }
 
     handlePermissionRequest(permissionRequest) {
-        console.log('ToolCallManager: Handling permission request', permissionRequest);
+        Logger.debug('TOOL_MANAGER', 'Handling permission request', permissionRequest);
 
         const signature = this.createToolSignature(permissionRequest.tool_name, permissionRequest.input_params);
         const toolUseId = this.toolSignatureToId.get(signature);
@@ -66,7 +135,7 @@ class ToolCallManager {
             }
         } else {
             // Handle historical/unknown tools gracefully
-            console.debug('ToolCallManager: Creating historical tool call for unknown tool', permissionRequest);
+            Logger.debug('TOOL_MANAGER', 'Creating historical tool call for unknown tool', permissionRequest);
 
             // Generate a unique ID for this historical tool call
             const historicalId = `historical_${permissionRequest.request_id}`;
@@ -97,7 +166,7 @@ class ToolCallManager {
     }
 
     handlePermissionResponse(permissionResponse) {
-        console.log('ToolCallManager: Handling permission response', permissionResponse);
+        Logger.debug('TOOL_MANAGER', 'Handling permission response', permissionResponse);
 
         const toolUseId = this.permissionToToolMap.get(permissionResponse.request_id);
         if (toolUseId) {
@@ -121,7 +190,7 @@ class ToolCallManager {
     }
 
     handleToolResult(toolResultBlock) {
-        console.log('ToolCallManager: Handling tool result', toolResultBlock);
+        Logger.debug('TOOL_MANAGER', 'Handling tool result', toolResultBlock);
 
         const toolUseId = toolResultBlock.tool_use_id;
         const toolCall = this.toolCalls.get(toolUseId);
@@ -142,7 +211,7 @@ class ToolCallManager {
     }
 
     handleAssistantExplanation(assistantMessage, relatedToolIds) {
-        console.log('ToolCallManager: Handling assistant explanation', assistantMessage, relatedToolIds);
+        Logger.debug('TOOL_MANAGER', 'Handling assistant explanation', {assistantMessage, relatedToolIds});
 
         // Update explanation for related tools
         relatedToolIds.forEach(toolId => {
@@ -2036,7 +2105,7 @@ class ClaudeWebUI {
 
             return await response.json();
         } catch (error) {
-            console.error('API request failed:', error);
+            Logger.error('API', 'API request failed', error);
             this.showError(`API request failed: ${error.message}`);
             throw error;
         }
@@ -2057,7 +2126,7 @@ class ClaudeWebUI {
 
             this.renderSessions();
         } catch (error) {
-            console.error('Failed to load sessions:', error);
+            Logger.error('SESSION', 'Failed to load sessions', error);
         } finally {
             this.showLoading(false);
         }
@@ -2088,7 +2157,7 @@ class ClaudeWebUI {
 
             return data.session_id;
         } catch (error) {
-            console.error('Failed to create session:', error);
+            Logger.error('SESSION', 'Failed to create session', error);
             throw error;
         } finally {
             this.showLoading(false);
@@ -2098,7 +2167,7 @@ class ClaudeWebUI {
     exitSession() {
         if (!this.currentSessionId) return;
 
-        console.log(`Exiting session ${this.currentSessionId}`);
+        Logger.info('SESSION', `Exiting session ${this.currentSessionId}`);
 
         // Clean disconnect from WebSocket
         this.disconnectSessionWebSocket();
@@ -2166,13 +2235,13 @@ class ClaudeWebUI {
 
             input.value = '';
         } catch (error) {
-            console.error('Failed to send message:', error);
+            Logger.error('MESSAGE', 'Failed to send message', error);
         }
     }
 
     async sendInterrupt() {
         if (!this.currentSessionId || !this.isProcessing) {
-            console.log('DEBUG: sendInterrupt() called but conditions not met:', {
+            Logger.debug('INTERRUPT', 'sendInterrupt() called but conditions not met', {
                 currentSessionId: this.currentSessionId,
                 isProcessing: this.isProcessing
             });
@@ -2180,8 +2249,8 @@ class ClaudeWebUI {
         }
 
         try {
-            console.log('DEBUG: Sending interrupt request for session:', this.currentSessionId);
-            console.log('DEBUG: WebSocket state check:', {
+            Logger.info('INTERRUPT', 'Sending interrupt request for session', this.currentSessionId);
+            Logger.debug('INTERRUPT', 'WebSocket state check', {
                 sessionWebsocket: !!this.sessionWebsocket,
                 readyState: this.sessionWebsocket?.readyState,
                 OPEN: WebSocket.OPEN
@@ -2195,12 +2264,12 @@ class ClaudeWebUI {
                 const interruptMessage = {
                     type: 'interrupt_session'
                 };
-                console.log('DEBUG: Sending interrupt message via WebSocket:', interruptMessage);
+                Logger.debug('INTERRUPT', 'Sending interrupt message via WebSocket', interruptMessage);
                 this.sessionWebsocket.send(JSON.stringify(interruptMessage));
-                console.log('DEBUG: Interrupt message sent successfully');
+                Logger.debug('INTERRUPT', 'Interrupt message sent successfully');
             } else {
-                console.warn('DEBUG: WebSocket not connected, cannot send interrupt');
-                console.log('DEBUG: WebSocket connection details:', {
+                Logger.warn('INTERRUPT', 'WebSocket not connected, cannot send interrupt');
+                Logger.debug('INTERRUPT', 'WebSocket connection details', {
                     sessionWebsocket: !!this.sessionWebsocket,
                     readyState: this.sessionWebsocket?.readyState,
                     expectedState: WebSocket.OPEN
@@ -2210,7 +2279,7 @@ class ClaudeWebUI {
             }
 
         } catch (error) {
-            console.error('DEBUG: Failed to send interrupt:', error);
+            Logger.error('INTERRUPT', 'Failed to send interrupt', error);
             this.hideProcessingIndicator();
         }
     }
@@ -2381,7 +2450,7 @@ class ClaudeWebUI {
      * @param {string} source - Source of message: 'websocket' or 'historical'
      */
     processMessage(message, source = 'websocket') {
-        console.log(`Processing message from ${source}:`, message);
+        Logger.debug('MESSAGE', `Processing message from ${source}`, message);
 
         // Handle progress indicator for init messages (real-time only)
         if (source === 'websocket' && message.type === 'system' && message.subtype === 'init') {
@@ -2394,7 +2463,7 @@ class ClaudeWebUI {
         }
 
         // Check if this is a tool-related message and handle it
-        const toolHandled = this.handleToolRelatedMessage(message);
+        const toolHandled = this.handleToolRelatedMessage(message, source);
 
         // Check if this is a thinking block message and handle it
         const thinkingHandled = this.handleThinkingBlockMessage(message);
@@ -2407,7 +2476,7 @@ class ClaudeWebUI {
 
         // Use the unified filtering logic to determine if message should be displayed
         if (this.shouldDisplayMessage(message)) {
-            console.log(`Adding ${source} message to UI:`, message.type);
+            Logger.debug('MESSAGE', `Adding ${source} message to UI`, message.type);
             this.addMessageToUI(message, source === 'historical');
             return { handled: true, displayed: true };
         }
@@ -2452,12 +2521,12 @@ class ClaudeWebUI {
             }
 
             if (permissionMode && permissionMode !== this.currentPermissionMode) {
-                console.log(`Permission mode changed from ${this.currentPermissionMode} to ${permissionMode}`);
+                Logger.info('PERMISSION', 'Permission mode changed', {from: this.currentPermissionMode, to: permissionMode});
                 this.currentPermissionMode = permissionMode;
                 this.updatePermissionModeUI(permissionMode);
             }
         } catch (error) {
-            console.error('Error extracting permission mode:', error);
+            Logger.error('PERMISSION', 'Error extracting permission mode', error);
         }
     }
 
@@ -2465,7 +2534,7 @@ class ClaudeWebUI {
      * Update UI to reflect current permission mode
      */
     updatePermissionModeUI(mode) {
-        console.log(`Updating UI - Current permission mode: ${mode}`);
+        Logger.debug('PERMISSION', 'Updating UI - Current permission mode', mode);
 
         // Update permission mode text in the status bar
         const permissionModeText = document.getElementById('permission-mode-text');
@@ -2499,7 +2568,7 @@ class ClaudeWebUI {
         }
     }
 
-    handleToolRelatedMessage(message) {
+    handleToolRelatedMessage(message, source = 'websocket') {
         try {
             // Handle assistant messages with tool use blocks
             if (message.type === 'assistant' && message.metadata && message.metadata.tool_uses && Array.isArray(message.metadata.tool_uses)) {
@@ -2568,9 +2637,9 @@ class ClaudeWebUI {
                     if (toolCall) {
                         this.updateToolCall(toolCall);
 
-                        // Check if this is ExitPlanMode completing successfully
-                        if (toolCall.name === 'ExitPlanMode' && toolCall.status === 'completed' && !toolCall.result?.error) {
-                            console.log('ExitPlanMode completed successfully - updating permission mode to default');
+                        // Check if this is ExitPlanMode completing successfully (real-time only, backend handles it)
+                        if (source === 'websocket' && toolCall.name === 'ExitPlanMode' && toolCall.status === 'completed' && !toolCall.result?.error) {
+                            Logger.info('PERMISSION', 'ExitPlanMode completed - updating permission mode to default');
                             this.setPermissionMode('default');
                         }
                     }
@@ -2581,7 +2650,7 @@ class ClaudeWebUI {
 
             return false;
         } catch (error) {
-            console.error('Error handling tool-related message:', error, message);
+            Logger.error('TOOL_MANAGER', 'Error handling tool-related message', {error, message});
             return false;
         }
     }
@@ -2593,7 +2662,7 @@ class ClaudeWebUI {
                 const thinkingBlocks = message.metadata.thinking_blocks;
 
                 if (thinkingBlocks.length > 0) {
-                    console.log('Processing thinking blocks:', thinkingBlocks);
+                    Logger.debug('MESSAGE', 'Processing thinking blocks', thinkingBlocks);
 
                     thinkingBlocks.forEach(thinkingBlock => {
                         // Generate a unique ID for this thinking block
@@ -2615,13 +2684,13 @@ class ClaudeWebUI {
 
             return false; // No thinking blocks found
         } catch (error) {
-            console.error('Error handling thinking block message:', error, message);
+            Logger.error('MESSAGE', 'Error handling thinking block message', {error, message});
             return false;
         }
     }
 
     renderToolCall(toolCall) {
-        console.log('Rendering tool call:', toolCall);
+        Logger.debug('UI', 'Rendering tool call', toolCall);
 
         const messagesArea = document.getElementById('messages-area');
         const toolCallElement = this.createToolCallElement(toolCall);
@@ -2632,7 +2701,7 @@ class ClaudeWebUI {
     }
 
     updateToolCall(toolCall) {
-        console.log('Updating tool call:', toolCall);
+        Logger.debug('UI', 'Updating tool call', toolCall);
 
         const existingElement = document.getElementById(`tool-call-${toolCall.id}`);
         if (existingElement) {
@@ -2820,7 +2889,7 @@ class ClaudeWebUI {
     }
 
     handlePermissionDecision(requestId, decision, approveBtn, denyBtn) {
-        console.log('Permission decision:', requestId, decision);
+        Logger.info('PERMISSION', 'Permission decision', {requestId, decision});
 
         // Send permission response to backend
         if (this.sessionWebsocket && this.sessionWebsocket.readyState === WebSocket.OPEN) {
@@ -2843,7 +2912,7 @@ class ClaudeWebUI {
             }
         } else {
             // Re-enable buttons if WebSocket is not available
-            console.error('Cannot send permission response: WebSocket not connected');
+            Logger.error('PERMISSION', 'Cannot send permission response: WebSocket not connected');
             if (approveBtn) {
                 approveBtn.disabled = false;
                 approveBtn.textContent = '✅ Approve';
@@ -2856,7 +2925,7 @@ class ClaudeWebUI {
     }
 
     renderThinkingBlock(thinkingBlock) {
-        console.log('Rendering thinking block:', thinkingBlock);
+        Logger.debug('UI', 'Rendering thinking block', thinkingBlock);
 
         const messagesArea = document.getElementById('messages-area');
         const thinkingElement = this.createThinkingBlockElement(thinkingBlock);
@@ -2987,13 +3056,13 @@ class ClaudeWebUI {
 
         // Skip if this session is being deleted
         if (this.deletingSessions.has(this.currentSessionId)) {
-            console.log(`Skipping loadSessionInfo for session ${this.currentSessionId} - deletion in progress`);
+            Logger.debug('SESSION', 'Skipping loadSessionInfo - deletion in progress', this.currentSessionId);
             return;
         }
 
         // Skip if session no longer exists in our local map
         if (!this.sessions.has(this.currentSessionId)) {
-            console.log(`Skipping loadSessionInfo for session ${this.currentSessionId} - not in local sessions map`);
+            Logger.debug('SESSION', 'Skipping loadSessionInfo - not in local sessions map', this.currentSessionId);
             return;
         }
 
@@ -3003,22 +3072,22 @@ class ClaudeWebUI {
         } catch (error) {
             // If it's a 404, the session was likely deleted - handle gracefully
             if (error.message.includes('404')) {
-                console.log(`Session ${this.currentSessionId} not found (404) - likely deleted, clearing from UI`);
+                Logger.info('SESSION', 'Session not found (404) - likely deleted, clearing from UI', this.currentSessionId);
                 this.handleSessionDeleted(this.currentSessionId);
             } else {
-                console.error('Failed to load session info:', error);
+                Logger.error('SESSION', 'Failed to load session info', error);
             }
         }
     }
 
     async setPermissionMode(mode) {
         if (!this.currentSessionId) {
-            console.error('Cannot set permission mode: no active session');
+            Logger.error('PERMISSION', 'Cannot set permission mode: no active session');
             return;
         }
 
         try {
-            console.log(`Setting permission mode to: ${mode}`);
+            Logger.info('PERMISSION', 'Setting permission mode', mode);
 
             // Update local state immediately for responsive UI
             this.currentPermissionMode = mode;
@@ -3031,12 +3100,12 @@ class ClaudeWebUI {
             });
 
             if (response.success) {
-                console.log(`Permission mode successfully set to: ${response.mode}`);
+                Logger.info('PERMISSION', 'Permission mode successfully set', response.mode);
             } else {
-                console.error('Failed to set permission mode on backend');
+                Logger.error('PERMISSION', 'Failed to set permission mode on backend');
             }
         } catch (error) {
-            console.error('Error setting permission mode:', error);
+            Logger.error('PERMISSION', 'Error setting permission mode', error);
             // Optionally revert UI if backend call fails
             // this.extractPermissionMode(lastKnownState);
         }
@@ -3046,7 +3115,7 @@ class ClaudeWebUI {
         if (!this.currentSessionId) return;
 
         try {
-            console.log('Loading all messages with pagination...');
+            Logger.debug('MESSAGE', 'Loading all messages with pagination');
             const allMessages = [];
             let offset = 0;
             const pageSize = 50;
@@ -3054,7 +3123,7 @@ class ClaudeWebUI {
 
             // Load all messages using pagination
             while (hasMore) {
-                console.log(`Loading messages page: offset=${offset}, limit=${pageSize}`);
+                Logger.debug('MESSAGE', 'Loading messages page', {offset, limit: pageSize});
                 const response = await this.apiRequest(
                     `/api/sessions/${this.currentSessionId}/messages?limit=${pageSize}&offset=${offset}`
                 );
@@ -3066,31 +3135,31 @@ class ClaudeWebUI {
                 hasMore = response.has_more;
                 offset += pageSize;
 
-                console.log(`Loaded ${response.messages.length} messages, total so far: ${allMessages.length}, has_more: ${hasMore}`);
+                Logger.debug('MESSAGE', 'Loaded messages page', {loaded: response.messages.length, total: allMessages.length, hasMore});
             }
 
-            console.log(`Finished loading all ${allMessages.length} messages`);
+            Logger.debug('MESSAGE', 'Finished loading all messages', {total: allMessages.length});
             this.renderMessages(allMessages);
         } catch (error) {
-            console.error('Failed to load messages:', error);
+            Logger.error('MESSAGE', 'Failed to load messages', error);
         }
     }
 
     // UI WebSocket Management (for session state updates)
     connectUIWebSocket() {
         if (this.uiWebsocket && this.uiWebsocket.readyState === WebSocket.OPEN) {
-            console.log('UI WebSocket already connected');
+            Logger.debug('WS_UI', 'UI WebSocket already connected');
             return;
         }
 
-        console.log('Connecting to UI WebSocket...');
+        Logger.info('WS_UI', 'Connecting to UI WebSocket');
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         const wsUrl = `${protocol}//${window.location.host}/ws/ui`;
 
         this.uiWebsocket = new WebSocket(wsUrl);
 
         this.uiWebsocket.onopen = () => {
-            console.log('UI WebSocket connected successfully');
+            Logger.info('WS_UI', 'UI WebSocket connected successfully');
             this.uiConnectionRetryCount = 0;
         };
 
@@ -3099,35 +3168,35 @@ class ClaudeWebUI {
                 const data = JSON.parse(event.data);
                 this.handleUIWebSocketMessage(data);
             } catch (error) {
-                console.error('Error parsing UI WebSocket message:', error);
+                Logger.error('WS_UI', 'Error parsing UI WebSocket message', error);
             }
         };
 
         this.uiWebsocket.onclose = (event) => {
-            console.log('UI WebSocket disconnected', event.code, event.reason);
+            Logger.info('WS_UI', 'UI WebSocket disconnected', {code: event.code, reason: event.reason});
             this.uiWebsocket = null;
 
             // Auto-reconnect UI WebSocket (it should always stay connected)
             if (this.uiConnectionRetryCount < this.maxUIRetries) {
                 this.uiConnectionRetryCount++;
                 const delay = Math.min(1000 * Math.pow(2, this.uiConnectionRetryCount), 30000);
-                console.log(`Reconnecting UI WebSocket in ${delay}ms (attempt ${this.uiConnectionRetryCount}/${this.maxUIRetries})`);
+                Logger.info('WS_UI', 'Reconnecting UI WebSocket', {delay, attempt: this.uiConnectionRetryCount, max: this.maxUIRetries});
 
                 setTimeout(() => {
                     this.connectUIWebSocket();
                 }, delay);
             } else {
-                console.log('Max UI WebSocket reconnection attempts reached');
+                Logger.warn('WS_UI', 'Max UI WebSocket reconnection attempts reached');
             }
         };
 
         this.uiWebsocket.onerror = (error) => {
-            console.error('UI WebSocket error:', error);
+            Logger.error('WS_UI', 'UI WebSocket error', error);
         };
     }
 
     handleUIWebSocketMessage(data) {
-        console.log('UI WebSocket message received:', data.type);
+        Logger.debug('WS_UI', 'UI WebSocket message received', data.type);
 
         switch (data.type) {
             case 'sessions_list':
@@ -3146,15 +3215,15 @@ class ClaudeWebUI {
                 break;
             case 'pong':
                 // Server responded to our ping
-                console.debug('UI WebSocket pong received');
+                Logger.debug('WS_UI', 'UI WebSocket pong received');
                 break;
             default:
-                console.log('Unknown UI WebSocket message type:', data.type);
+                Logger.warn('WS_UI', 'Unknown UI WebSocket message type', data.type);
         }
     }
 
     updateSessionsList(sessions) {
-        console.log(`Updating sessions list with ${sessions.length} sessions`);
+        Logger.debug('SESSION', 'Updating sessions list', {count: sessions.length});
         this.sessions.clear();
         // Store sessions in order received from backend (which is sorted by order field)
         this.orderedSessions = [];
@@ -3166,7 +3235,7 @@ class ClaudeWebUI {
     }
 
     async refreshSessions() {
-        console.log('Refreshing sessions via API fallback');
+        Logger.debug('SESSION', 'Refreshing sessions via API fallback');
         // Fallback to API call if UI WebSocket is not available
         await this.loadSessions();
     }
@@ -3177,14 +3246,14 @@ class ClaudeWebUI {
 
         // Only disconnect if we have an existing connection to a different session
         if (this.sessionWebsocket && this.sessionWebsocket.readyState === WebSocket.OPEN) {
-            console.log('Closing existing session WebSocket connection before creating new one');
+            Logger.debug('WS_SESSION', 'Closing existing session WebSocket connection before creating new one');
             this.disconnectSessionWebSocket();
         }
 
         // Reset intentional disconnect flag for new connections
         this.intentionalSessionDisconnect = false;
 
-        console.log(`Connecting session WebSocket for session: ${this.currentSessionId}`);
+        Logger.info('WS_SESSION', 'Connecting session WebSocket', this.currentSessionId);
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         const wsUrl = `${protocol}//${window.location.host}/ws/session/${this.currentSessionId}`;
 
@@ -3192,7 +3261,7 @@ class ClaudeWebUI {
             this.sessionWebsocket = new WebSocket(wsUrl);
 
             this.sessionWebsocket.onopen = () => {
-                console.log('WebSocket connected');
+                Logger.info('WS_SESSION', 'WebSocket connected');
                 this.updateConnectionStatus('connected');
                 this.sessionConnectionRetryCount = 0;
             };
@@ -3202,23 +3271,23 @@ class ClaudeWebUI {
                     const data = JSON.parse(event.data);
                     this.handleWebSocketMessage(data);
                 } catch (error) {
-                    console.error('Failed to parse WebSocket message:', error);
+                    Logger.error('WS_SESSION', 'Failed to parse WebSocket message', error);
                 }
             };
 
             this.sessionWebsocket.onclose = (event) => {
-                console.log('WebSocket disconnected', event.code, event.reason);
+                Logger.info('WS_SESSION', 'WebSocket disconnected', {code: event.code, reason: event.reason});
                 this.updateConnectionStatus('disconnected');
 
                 // Don't retry if this was an intentional disconnect
                 if (this.intentionalSessionDisconnect) {
-                    console.log('WebSocket closed intentionally, not retrying');
+                    Logger.debug('WS_SESSION', 'WebSocket closed intentionally, not retrying');
                     return;
                 }
 
                 // Don't retry on specific error codes (session invalid/inactive)
                 if (event.code === 4404 || event.code === 4003 || event.code === 4500) {
-                    console.log(`WebSocket closed with error code ${event.code}, not retrying`);
+                    Logger.info('WS_SESSION', 'WebSocket closed with error code, not retrying', event.code);
                     return;
                 }
 
@@ -3226,12 +3295,12 @@ class ClaudeWebUI {
             };
 
             this.sessionWebsocket.onerror = (error) => {
-                console.error('WebSocket error:', error);
+                Logger.error('WS_SESSION', 'WebSocket error', error);
                 this.updateConnectionStatus('disconnected');
             };
 
         } catch (error) {
-            console.error('Failed to create WebSocket:', error);
+            Logger.error('WS_SESSION', 'Failed to create WebSocket', error);
             this.updateConnectionStatus('disconnected');
         }
     }
@@ -3249,7 +3318,7 @@ class ClaudeWebUI {
     scheduleReconnect() {
         // Don't reconnect if this was an intentional disconnect
         if (this.intentionalSessionDisconnect) {
-            console.log('Reconnect cancelled due to intentional disconnect');
+            Logger.debug('WS_SESSION', 'Reconnect cancelled due to intentional disconnect');
             return;
         }
 
@@ -3257,19 +3326,19 @@ class ClaudeWebUI {
             this.sessionConnectionRetryCount++;
             const delay = Math.min(1000 * Math.pow(2, this.sessionConnectionRetryCount), 30000);
 
-            console.log(`Scheduling WebSocket reconnect in ${delay}ms (attempt ${this.sessionConnectionRetryCount})`);
+            Logger.info('WS_SESSION', 'Scheduling WebSocket reconnect', {delay, attempt: this.sessionConnectionRetryCount});
             setTimeout(() => {
                 if (this.currentSessionId && !this.intentionalSessionDisconnect) {
                     this.connectSessionWebSocket();
                 }
             }, delay);
         } else {
-            console.log('Max reconnection attempts reached');
+            Logger.warn('WS_SESSION', 'Max reconnection attempts reached');
         }
     }
 
     handleWebSocketMessage(data) {
-        console.log('WebSocket message received:', data);
+        Logger.debug('WS_SESSION', 'WebSocket message received', data);
 
         switch (data.type) {
             case 'message':
@@ -3279,7 +3348,7 @@ class ClaudeWebUI {
                 this.handleStateChange(data.data);
                 break;
             case 'connection_established':
-                console.log('WebSocket connection confirmed for session:', data.session_id);
+                Logger.info('WS_SESSION', 'WebSocket connection confirmed for session', data.session_id);
                 break;
             case 'ping':
                 // Respond to server ping to keep connection alive
@@ -3291,19 +3360,19 @@ class ClaudeWebUI {
                 this.handleInterruptResponse(data);
                 break;
             default:
-                console.log('Unknown WebSocket message type:', data.type);
+                Logger.warn('WS_SESSION', 'Unknown WebSocket message type', data.type);
         }
     }
 
     handleInterruptResponse(data) {
-        console.log('Interrupt response received:', data);
+        Logger.info('INTERRUPT', 'Interrupt response received', data);
 
         if (data.success) {
-            console.log('Interrupt successful:', data.message);
+            Logger.info('INTERRUPT', 'Interrupt successful', data.message);
             // Interrupt was successful, hide processing indicators
             this.hideProcessingIndicator();
         } else {
-            console.warn('Interrupt failed:', data.message);
+            Logger.warn('INTERRUPT', 'Interrupt failed', data.message);
             // Interrupt failed, return to processing state (not stopping state)
             this.showProcessingIndicator();
         }
@@ -3313,13 +3382,13 @@ class ClaudeWebUI {
     async selectSession(sessionId) {
         // If already connected to this session, don't reconnect
         if (this.currentSessionId === sessionId && this.sessionWebsocket && this.sessionWebsocket.readyState === WebSocket.OPEN) {
-            console.log(`Already connected to session ${sessionId}`);
+            Logger.debug('SESSION', 'Already connected to session', sessionId);
             return;
         }
 
         // Clean disconnect from previous session
         if (this.currentSessionId && this.currentSessionId !== sessionId) {
-            console.log(`Switching from session ${this.currentSessionId} to ${sessionId}`);
+            Logger.info('SESSION', 'Switching sessions', {from: this.currentSessionId, to: sessionId});
             this.disconnectSessionWebSocket();
             // Wait a moment for the disconnection to complete
             await new Promise(resolve => setTimeout(resolve, 100));
@@ -3351,15 +3420,15 @@ class ClaudeWebUI {
         if (session) {
             if (session.state === 'error') {
                 // Session is in error state, skip WebSocket initialization
-                console.log(`Session ${sessionId} is in error state, skipping WebSocket connection`);
+                Logger.info('SESSION', 'Session is in error state, skipping WebSocket connection', sessionId);
                 // Just load messages without attempting to connect
             } else if (session.state === 'active' || session.state === 'running') {
                 // Session is already active, just connect WebSocket
-                console.log(`Session ${sessionId} is already active, connecting WebSocket`);
+                Logger.info('SESSION', 'Session is already active, connecting WebSocket', sessionId);
                 this.connectSessionWebSocket();
             } else if (session.state === 'starting') {
                 // Session is starting, wait for it to become active
-                console.log(`Session ${sessionId} is starting, waiting for it to become active...`);
+                Logger.info('SESSION', 'Session is starting, waiting for it to become active', sessionId);
                 let attempts = 0;
                 const maxAttempts = 15;
                 const pollInterval = 1000;
@@ -3368,24 +3437,24 @@ class ClaudeWebUI {
                     await this.loadSessionInfo();
                     const updatedSession = this.sessions.get(sessionId);
                     if (updatedSession && updatedSession.state === 'error') {
-                        console.log(`Session ${sessionId} entered error state during startup, stopping wait`);
+                        Logger.info('SESSION', 'Session entered error state during startup, stopping wait', sessionId);
                         break;
                     } else if (updatedSession && (updatedSession.state === 'active' || updatedSession.state === 'running')) {
-                        console.log(`Session ${sessionId} is now active, connecting WebSocket`);
+                        Logger.info('SESSION', 'Session is now active, connecting WebSocket', sessionId);
                         this.connectSessionWebSocket();
                         break;
                     }
                     attempts++;
-                    console.log(`Waiting for session ${sessionId} to become active... (attempt ${attempts}/${maxAttempts})`);
+                    Logger.debug('SESSION', 'Waiting for session to become active', {sessionId, attempt: attempts, max: maxAttempts});
                 }
 
                 if (attempts >= maxAttempts) {
-                    console.warn(`Session ${sessionId} did not become active after ${maxAttempts} attempts (${maxAttempts * pollInterval / 1000} seconds)`);
+                    Logger.warn('SESSION', 'Session did not become active', {sessionId, maxAttempts, seconds: maxAttempts * pollInterval / 1000});
                 }
             } else {
                 // Session needs to be started (both fresh sessions and existing sessions)
                 // The server-side logic will handle whether to create fresh or resume based on claude_code_session_id
-                console.log(`Starting session ${sessionId} (current state: ${session.state})`);
+                Logger.info('SESSION', 'Starting session', {sessionId, currentState: session.state});
                 await this.apiRequest(`/api/sessions/${sessionId}/start`, { method: 'POST' });
 
                 // Wait for session to be fully active before connecting WebSocket
@@ -3397,19 +3466,19 @@ class ClaudeWebUI {
                     await this.loadSessionInfo();
                     const updatedSession = this.sessions.get(sessionId);
                     if (updatedSession && updatedSession.state === 'error') {
-                        console.log(`Session ${sessionId} entered error state during startup, stopping wait`);
+                        Logger.info('SESSION', 'Session entered error state during startup, stopping wait', sessionId);
                         break;
                     } else if (updatedSession && (updatedSession.state === 'active' || updatedSession.state === 'running')) {
-                        console.log(`Session ${sessionId} is now active, connecting WebSocket`);
+                        Logger.info('SESSION', 'Session is now active, connecting WebSocket', sessionId);
                         this.connectSessionWebSocket();
                         break;
                     }
                     attempts++;
-                    console.log(`Waiting for session ${sessionId} to become active... (attempt ${attempts}/${maxAttempts})`);
+                    Logger.debug('SESSION', 'Waiting for session to become active', {sessionId, attempt: attempts, max: maxAttempts});
                 }
 
                 if (attempts >= maxAttempts) {
-                    console.warn(`Session ${sessionId} did not become active after ${maxAttempts} attempts (${maxAttempts * pollInterval / 1000} seconds)`);
+                    Logger.warn('SESSION', 'Session did not become active', {sessionId, maxAttempts, seconds: maxAttempts * pollInterval / 1000});
                 }
             }
         }
@@ -3555,7 +3624,7 @@ class ClaudeWebUI {
                 throw new Error('Failed to update session name');
             }
         } catch (error) {
-            console.error('Failed to save session name:', error);
+            Logger.error('SESSION', 'Failed to save session name', error);
             this.cancelEditingSessionName(nameDisplay, nameInput);
             this.showError('Failed to update session name');
         }
@@ -3602,7 +3671,7 @@ class ClaudeWebUI {
             errorMessageElement.textContent = sessionData.session.error_message;
             errorMessageElement.classList.remove('hidden');
             sessionInfoBar.classList.add('error');
-            console.log('Displaying error message in top bar:', sessionData.session.error_message);
+            Logger.info('UI', 'Displaying error message in top bar', sessionData.session.error_message);
 
             // For error state: clear any processing indicator and disable input controls
             this.updateProcessingState(false);
@@ -3629,6 +3698,9 @@ class ClaudeWebUI {
             existingSession.error_message = sessionData.session.error_message;
             existingSession.is_processing = sessionData.session.is_processing || false;
             existingSession.current_permission_mode = sessionData.session.current_permission_mode || 'acceptEdits';
+
+            // Sync local permission mode state with backend (source of truth)
+            this.currentPermissionMode = existingSession.current_permission_mode;
 
             // Update session data consistently (with automatic re-render)
             this.updateSessionData(this.currentSessionId, existingSession);
@@ -3694,7 +3766,7 @@ class ClaudeWebUI {
 
         const session = this.sessions.get(this.currentSessionId);
         if (!session || session.state !== 'active') {
-            console.log('Cannot cycle permission mode - session not active');
+            Logger.debug('PERMISSION', 'Cannot cycle permission mode - session not active');
             return;
         }
 
@@ -3705,7 +3777,7 @@ class ClaudeWebUI {
         const nextIndex = (currentIndex + 1) % modeOrder.length;
         const nextMode = modeOrder[nextIndex];
 
-        console.log(`Cycling permission mode from ${currentMode} to ${nextMode}`);
+        Logger.info('PERMISSION', 'Cycling permission mode', {from: currentMode, to: nextMode});
 
         try {
             const response = await this.apiRequest(`/api/sessions/${this.currentSessionId}/permission-mode`, {
@@ -3714,13 +3786,13 @@ class ClaudeWebUI {
             });
 
             if (response.success) {
-                console.log(`Successfully changed permission mode to ${nextMode}`);
+                Logger.info('PERMISSION', 'Successfully changed permission mode', nextMode);
                 // Update local session data
                 session.current_permission_mode = nextMode;
                 this.updatePermissionModeDisplay(session);
             }
         } catch (error) {
-            console.error('Failed to cycle permission mode:', error);
+            Logger.error('PERMISSION', 'Failed to cycle permission mode', error);
             this.showError(`Failed to change permission mode: ${error.message}`);
         }
     }
@@ -3733,7 +3805,7 @@ class ClaudeWebUI {
         this.toolCallManager = new ToolCallManager();
 
         // Single-pass processing for historical messages using unified logic
-        console.log(`Processing ${messages.length} historical messages with unified single-pass approach`);
+        Logger.debug('MESSAGE', 'Processing historical messages with unified single-pass approach', {count: messages.length});
 
         let toolUseCount = 0;
         messages.forEach(message => {
@@ -3746,7 +3818,7 @@ class ClaudeWebUI {
             }
         });
 
-        console.log(`Single-pass processing complete: Found ${toolUseCount} tool uses in ${messages.length} messages`);
+        Logger.debug('MESSAGE', 'Single-pass processing complete', {toolUseCount, messageCount: messages.length});
         this.smartScrollToBottom();
     }
 
@@ -3909,7 +3981,7 @@ class ClaudeWebUI {
     }
 
     handleStateChange(stateData) {
-        console.log('Session state changed:', stateData);
+        Logger.debug('SESSION', 'Session state changed', stateData);
 
         // Update specific session in real-time instead of reloading all sessions
         const sessionId = stateData.session_id;
@@ -3917,7 +3989,7 @@ class ClaudeWebUI {
 
         // Skip processing if this session is being deleted
         if (this.deletingSessions.has(sessionId)) {
-            console.log(`Ignoring state change for session ${sessionId} - deletion in progress`);
+            Logger.debug('SESSION', 'Ignoring state change - deletion in progress', sessionId);
             return;
         }
 
@@ -3948,7 +4020,7 @@ class ClaudeWebUI {
 
     handleSessionDeleted(sessionId) {
         // Clean up a session that was deleted externally
-        console.log(`Handling external deletion of session ${sessionId}`);
+        Logger.info('SESSION', 'Handling external deletion of session', sessionId);
 
         // Remove from sessions map
         this.sessions.delete(sessionId);
@@ -4001,7 +4073,7 @@ class ClaudeWebUI {
                 this.hideCreateSessionModal();
             })
             .catch(error => {
-                console.error('Session creation failed:', error);
+                Logger.error('SESSION', 'Session creation failed', error);
             });
     }
 
@@ -4063,7 +4135,7 @@ class ClaudeWebUI {
                 // Refresh the sessions list
                 this.renderSessions();
 
-                console.log(`Session ${sessionIdToDelete} deleted successfully`);
+                Logger.info('SESSION', 'Session deleted successfully', sessionIdToDelete);
             } else {
                 // Restore session to map and orderedSessions if deletion failed
                 const sessionData = await this.apiRequest(`/api/sessions/${sessionIdToDelete}`).catch(() => null);
@@ -4078,7 +4150,7 @@ class ClaudeWebUI {
                 throw new Error('Failed to delete session');
             }
         } catch (error) {
-            console.error('Failed to delete session:', error);
+            Logger.error('SESSION', 'Failed to delete session', error);
             this.showError(`Failed to delete session: ${error.message}`);
 
             // Try to restore session to map and orderedSessions if deletion failed
@@ -4093,7 +4165,7 @@ class ClaudeWebUI {
                     this.renderSessions();
                 }
             } catch (restoreError) {
-                console.log('Could not restore session data after failed deletion');
+                Logger.debug('SESSION', 'Could not restore session data after failed deletion');
             }
         } finally {
             // Always remove from deleting set
@@ -4125,13 +4197,13 @@ class ClaudeWebUI {
             messageInput.disabled = false;
             sendButton.disabled = false;
             messageInput.placeholder = "Type your message to Claude Code...";
-            console.log('Input controls enabled');
+            Logger.debug('UI', 'Input controls enabled');
         } else {
             // Disable input controls for error state
             messageInput.disabled = true;
             sendButton.disabled = true;
             messageInput.placeholder = "Session is in error state - input disabled";
-            console.log('Input controls disabled due to error state');
+            Logger.debug('UI', 'Input controls disabled due to error state');
         }
     }
 
@@ -4239,7 +4311,7 @@ class ClaudeWebUI {
             this.orderedSessions[index] = sessionInfo;
         } else {
             // Session not found in ordered list, add it
-            console.warn(`Session ${sessionId} not found in orderedSessions, adding it`);
+            Logger.warn('SESSION', 'Session not found in orderedSessions, adding it', sessionId);
             this.orderedSessions.push(sessionInfo);
         }
 
@@ -4356,7 +4428,7 @@ class ClaudeWebUI {
             await this.reorderSessions(newOrder);
 
         } catch (error) {
-            console.error('Failed to reorder sessions:', error);
+            Logger.error('SESSION', 'Failed to reorder sessions', error);
             this.showError('Failed to reorder sessions');
         } finally {
             this.removeDragVisualEffects();
@@ -4397,14 +4469,14 @@ class ClaudeWebUI {
             });
 
             if (response.success) {
-                console.log('Sessions reordered successfully');
+                Logger.info('SESSION', 'Sessions reordered successfully');
                 // Explicitly refresh session list to ensure immediate update
                 await this.refreshSessions();
             } else {
                 throw new Error('Reorder request failed');
             }
         } catch (error) {
-            console.error('Failed to reorder sessions via API:', error);
+            Logger.error('SESSION', 'Failed to reorder sessions via API', error);
             throw error;
         }
     }
