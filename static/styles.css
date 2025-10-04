@@ -2567,3 +2567,129 @@ form {
     padding: 0.5rem;
     line-height: 1.6;
 }
+
+/* ========== PROJECT STYLES ========== */
+
+/* Project Item Container */
+.project-item {
+    margin-bottom: 0.75rem;
+    border: 1px solid #dee2e6;
+    border-radius: 6px;
+    background-color: #ffffff;
+    overflow: hidden;
+}
+
+/* Project Header */
+.project-header {
+    display: flex;
+    align-items: center;
+    padding: 0.75rem;
+    cursor: pointer;
+    background-color: #f8f9fa;
+    border-bottom: 1px solid #dee2e6;
+    transition: background-color 0.2s;
+}
+
+.project-header:hover {
+    background-color: #e9ecef;
+}
+
+.project-header:hover .add-session-btn {
+    opacity: 1;
+}
+
+/* Expansion Arrow */
+.expansion-arrow {
+    font-size: 0.75rem;
+    margin-right: 0.5rem;
+    user-select: none;
+    min-width: 12px;
+    text-align: center;
+}
+
+/* Project Info */
+.project-info {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    min-width: 0;
+}
+
+.project-name {
+    font-weight: 600;
+    font-size: 0.95rem;
+    color: #212529;
+}
+
+.project-path {
+    font-size: 0.8rem;
+    color: #6c757d;
+    font-family: 'Courier New', monospace;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* Add Session Button (hover-reveal) */
+.add-session-btn {
+    padding: 0.25rem 0.5rem;
+    font-size: 1.2rem;
+    line-height: 1;
+    border: 1px solid #0d6efd;
+    background-color: #0d6efd;
+    color: white;
+    border-radius: 4px;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.2s, background-color 0.2s;
+    margin-left: 0.5rem;
+}
+
+.add-session-btn:hover {
+    background-color: #0b5ed7;
+}
+
+/* Project Status Line */
+.project-status-line {
+    display: flex;
+    height: 4px;
+    width: 100%;
+    overflow: hidden;
+}
+
+.status-segment {
+    flex: 1;
+    transition: background-color 0.3s;
+}
+
+.status-segment.pulse {
+    animation: statusPulse 1.5s ease-in-out infinite;
+}
+
+@keyframes statusPulse {
+    0%, 100% {
+        opacity: 1;
+    }
+    50% {
+        opacity: 0.5;
+    }
+}
+
+/* Project Sessions Container */
+.project-sessions {
+    padding-left: 1.5rem;
+    background-color: #ffffff;
+}
+
+.project-sessions .session-item {
+    margin: 0.5rem 0;
+}
+
+/* Form Hint Text */
+.form-hint {
+    font-size: 0.85rem;
+    color: #6c757d;
+    margin-top: 0.25rem;
+    font-style: italic;
+}

@@ -23,15 +23,15 @@
                 <div class="sidebar-header">
                     <button id="sidebar-collapse-btn" class="btn btn-small btn-secondary" title="Collapse sidebar">‹</button>
                     <div class="session-controls">
-                        <button id="create-session-btn" class="btn btn-primary btn-icon" title="New Session">✚</button>
-                        <button id="refresh-sessions-btn" class="btn btn-secondary btn-icon" title="Refresh Sessions">↻</button>
+                        <button id="create-project-btn" class="btn btn-primary btn-icon" title="New Project">📁</button>
+                        <button id="refresh-sessions-btn" class="btn btn-secondary btn-icon" title="Refresh">↻</button>
                     </div>
                 </div>
 
                 <div class="session-list">
-                    <h3>Sessions</h3>
+                    <h3>Projects</h3>
                     <div id="sessions-container">
-                        <!-- Sessions will be populated here -->
+                        <!-- Projects and sessions will be populated here -->
                     </div>
                 </div>
                 <div class="sidebar-resize-handle" id="sidebar-resize-handle"></div>
@@ -103,9 +103,9 @@
                     <span id="close-modal" class="close">&times;</span>
                 </div>
                 <form id="create-session-form">
-                    <div class="form-group">
+                    <div class="form-group" id="working-directory-group">
                         <label for="working-directory">Working Directory:</label>
-                        <input type="text" id="working-directory" name="working_directory" required>
+                        <input type="text" id="working-directory" name="working_directory">
                         <button type="button" id="browse-directory" class="btn btn-small">Browse</button>
                     </div>
 
@@ -137,6 +137,34 @@
                     <div class="form-actions">
                         <button type="button" id="cancel-create" class="btn btn-secondary">Cancel</button>
                         <button type="submit" class="btn btn-primary">Create Session</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- Project Creation Modal -->
+        <div id="create-project-modal" class="modal hidden">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h2>Create New Project</h2>
+                    <span id="close-project-modal" class="close">&times;</span>
+                </div>
+                <form id="create-project-form">
+                    <div class="form-group">
+                        <label for="project-name">Project Name:</label>
+                        <input type="text" id="project-name" name="name" required placeholder="My Project">
+                    </div>
+
+                    <div class="form-group">
+                        <label for="project-working-directory">Working Directory:</label>
+                        <input type="text" id="project-working-directory" name="working_directory" required placeholder="/path/to/project">
+                        <button type="button" id="browse-project-directory" class="btn btn-small">Browse</button>
+                        <p class="form-hint">⚠️ Path is immutable after project creation</p>
+                    </div>
+
+                    <div class="form-actions">
+                        <button type="button" id="cancel-create-project" class="btn btn-secondary">Cancel</button>
+                        <button type="submit" class="btn btn-primary">Create Project</button>
                     </div>
                 </form>
             </div>

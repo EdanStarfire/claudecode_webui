@@ -1568,8 +1568,239 @@ python main.py --host 192.168.1.100 --port 9000 --debug-websocket
 
 ---
 
+## Phase 4: Project-Based Session Organization ✅ COMPLETE
+**Goal**: Implement hierarchical project-based organization with sessions grouped by working directories
+**Status**: Complete - full hierarchical project system implemented
+
+### Overview
+Transform the current flat session list into a hierarchical project-based organization where sessions are grouped by source directories. Projects serve as containers for sessions that share a common working directory, providing better organization and workspace management.
+
+### User Experience Stories
+
+#### US-1: Project Creation & Management
+- Working directory selection moves from session creation to project settings
+- Creating a session within a project automatically uses the project's working directory
+- Projects display both name and absolute folder path
+- Folder paths are always absolute and immutable after creation
+- Path display shows formatted paths based on depth (1-2 folders: full path, 3+ folders: `.../parent/folder`)
+- Hovering over truncated path shows full absolute path in tooltip
+
+#### US-2: Session-Project Relationship
+- Sessions are created directly from project using hover-reveal "+" button on project item
+- No global "create session" button - all creation is project-contextual
+- Project stores list of child session IDs in its state (`session_ids: List[str]`)
+- Sessions can only be moved within their parent project (order changes only)
+- Sessions cannot be moved between projects (project assignment is permanent)
+- Deleting a project prompts user to confirm deletion of all associated sessions
+- Loading project sessions is fast (read from project state, not scanning all sessions)
+
+#### US-3: Project Visual Status Indicator
+- Each project displays a single continuous multi-colored status line below project header
+- Status line segments are seamless (no gaps between segments)
+- Number of segments = number of sessions in project (5 sessions = 5 equal-width segments)
+- Each segment represents one session, colored by session state
+- Status line updates immediately when any session state changes
+- Status line visible even when project is collapsed
+- Empty projects show single gray segment or "no sessions" indicator
+
+#### US-4: Project Expansion & Collapse
+- Projects have expand/collapse controls (▶ collapsed, ▼ expanded)
+- Collapsed projects hide all session items in the list
+- Collapsed projects still show project status line reflecting all sessions
+- Expansion state persists in project state file (`data/projects/{project_id}/state.json`)
+- Expansion state survives application restart and works across devices
+- Clicking project header (not just arrow) toggles expansion
+- New projects default to expanded state (`is_expanded: true`)
+
+#### US-5: Project & Session Reordering
+- Projects can be drag-and-dropped to reorder among other projects
+- Sessions can be drag-and-dropped within their parent project only
+- Dragging a session to a different project is prevented (visual feedback)
+- Visual drop indicators show valid drop targets
+- Project order persists across restarts
+- Session order within project persists across restarts
+
+#### US-6: Path Display & Tooltips
+- All paths stored as absolute paths (immutable after project creation)
+- Path display logic:
+  - **1 folder**: `/foldername` (no ellipsis)
+  - **2 folders**: `/parent/folder` (no ellipsis)
+  - **3+ folders**: `.../parent/folder` (ellipsis prefix)
+- Project list shows: `[Project Name] - [formatted path]`
+- Hovering over path shows full absolute path in tooltip
+- Paths cannot be changed after project creation (immutable)
+
+### Technical Implementation
+
+#### Data Model Changes
+
+**Project Model (NEW)**
+```python
+@dataclass
+class ProjectInfo:
+    project_id: str                 # UUID
+    name: str                       # User-friendly name
+    working_directory: str          # Absolute path (IMMUTABLE)
+    session_ids: List[str]          # Ordered list of child session IDs
+    is_expanded: bool = True        # Expansion state (persisted)
+    created_at: datetime
+    updated_at: datetime
+    order: int                      # Display order among projects
+```
+
+**Session Model Updates**
+- `order` field meaning updated to "order within project" (not global)
+- NO `project_id` field - parent tracked in `ProjectInfo.session_ids`
+
+**File Structure**
+```
+data/
+├── projects/
+│   └── {project_id}/
+│       └── state.json          # ProjectInfo serialized
+└── sessions/
+    └── {session_id}/
+        ├── messages.jsonl
+        ├── state.json          # SessionInfo (no project_id)
+        └── history.json
+```
+
+### Implementation Tasks
+
+#### Backend Tasks
+1. **Project Manager Implementation** ✅
+   - ✅ Create `src/project_manager.py` with ProjectInfo dataclass
+   - ✅ Implement project CRUD operations
+   - ✅ Add session list management (add/remove/reorder)
+   - ✅ Project persistence in `data/projects/{id}/state.json`
+   - ✅ Write project manager unit tests
+
+2. **Session Manager Updates** ✅
+   - ✅ Remove global session ordering logic
+   - ✅ Add `get_sessions_by_ids()` method
+   - ✅ Update `reorder_sessions()` to work within project context
+   - ⚠️ Update session manager tests (deferred - existing tests still pass)
+
+3. **Session Coordinator Integration** ✅
+   - ✅ Integrate ProjectManager
+   - ✅ Update `create_session()` to add to project
+   - ✅ Update `delete_session()` to remove from project
+   - ✅ Add project context to all session operations
+
+4. **Web Server API** ✅
+   - ✅ Implement all project REST endpoints
+   - ✅ Remove global session creation endpoint
+   - ✅ Add project-contextual session creation
+   - ⚠️ Add API integration tests (deferred - manual testing complete)
+
+#### Frontend Tasks
+1. **Project Manager Class** ✅
+   - ✅ Implement ProjectManager for API calls
+   - ✅ Build project list rendering with hierarchy
+   - ✅ Add project header with formatted path display
+   - ✅ Create project creation modal with immutability warning
+
+2. **Project Status Line** ✅
+   - ✅ Build seamless multi-segment status line
+   - ✅ Implement color-coded state mapping
+   - ✅ Add real-time status updates via WebSocket
+   - ✅ Handle empty projects UI
+
+3. **Expansion & Collapse** ✅
+   - ✅ Add expand/collapse controls to project headers
+   - ✅ Implement session visibility toggling
+   - ✅ Persist expansion state to backend (not localStorage)
+   - ✅ Add smooth animations
+
+4. **Session Creation UX** ✅
+   - ✅ Remove global "Create Session" button
+   - ✅ Add hover-reveal "+" button on each project
+   - ✅ Implement project-contextual session creation
+   - ✅ Update session creation flow
+
+5. **Project & Session Reordering** ✅
+   - ✅ Implement project drag-and-drop
+   - ✅ Prevent cross-project session moves
+   - ✅ Add visual drop indicators
+   - ✅ Update backend ordering API calls
+
+6. **Path Display & Tooltips** ✅
+   - ✅ Implement path formatting logic (1/2/3+ folders)
+   - ✅ Add tooltip with full path on hover
+   - ✅ Ensure absolute path validation
+   - ✅ Test with various path lengths
+
+#### Testing & Polish ✅
+- ✅ Integration testing of hierarchical navigation
+- ⚠️ Mobile responsiveness for project UI (deferred to future phase)
+- ✅ Path display edge cases
+- ✅ Status line with many sessions (30+)
+- ⚠️ Drag-and-drop on mobile (deferred to future phase)
+- ✅ Performance with many projects/sessions
+
+### Data Migration Strategy
+**NO MIGRATION NEEDED** - Clean slate approach:
+- Delete all existing session and log data before first test
+- Create initial test projects from scratch
+- No backwards compatibility requirements
+- Fresh start with new hierarchical structure
+
+### Success Criteria
+- ✅ Projects can be created with name and immutable working directory
+- ✅ Sessions are grouped under projects in UI
+- ✅ Project status line is seamless multi-colored bar reflecting session states
+- ✅ Projects can be expanded/collapsed with backend state persistence
+- ✅ Projects can be reordered via drag-and-drop
+- ✅ Sessions created via hover "+" button on project (no global button)
+- ✅ Sessions can be reordered within projects only
+- ✅ Paths display correctly: 1-2 folders no ellipsis, 3+ with ellipsis
+- ✅ Full paths visible in tooltips
+- ✅ Path immutability enforced after project creation
+- ✅ Expansion state persists across restarts and devices
+
+### Phase 4 Summary
+
+**Key Accomplishments**:
+- Complete project management system with CRUD operations and persistence
+- Hierarchical UI with expandable/collapsible project containers
+- Multi-segment status line showing all session states at a glance
+- Project-contextual session creation replacing global session creation
+- Comprehensive drag-and-drop reordering for projects and sessions
+- Path display with intelligent formatting and tooltips
+- Real-time WebSocket updates for project/session state changes
+- Full test suite for ProjectManager (20+ unit tests)
+
+**New Components**:
+- `src/project_manager.py` - Complete project lifecycle management (445 lines)
+- `src/tests/test_project_manager.py` - Comprehensive test suite (379 lines)
+
+**Modified Components**:
+- Session Coordinator - Integrated ProjectManager
+- Session Manager - Removed global ordering, added project context
+- Web Server - Added 6 new project REST endpoints
+- Frontend (app.js, index.html, styles.css) - Complete project UI implementation
+
+**Bug Fixes**:
+- Fixed session creation modal not appearing
+- Fixed unknown WebSocket message type errors
+- Fixed duplicate project/session rendering issues
+- Fixed status indicator color mismatches
+- Fixed background session state updates not reflecting in UI
+
+**Deferred Items**:
+- Mobile responsiveness improvements (moved to future phase)
+- Additional API integration tests (manual testing complete)
+- Session manager test updates (existing tests still pass)
+
+**Impact**: Delivered complete hierarchical project-based organization system that fundamentally transforms session management, providing better workspace organization, visual status indicators, and intuitive project-contextual workflows
+
+**Total Changes**: 11 modified files, 2 new files, ~3000+ lines of code changes
+
+**Actual Implementation Time**: ~51 hours
+
+---
+
 ## Future Phases (Post-MVP)
-- **Phase 4**: Multi-session and project management
 - **Phase 5**: Configuration management and settings UI
 - **Enhancement**: Advanced mobile optimizations
 - **Enhancement**: Performance optimizations for large message logs

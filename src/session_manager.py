@@ -141,7 +141,8 @@ class SessionManager:
         system_prompt: Optional[str] = None,
         tools: List[str] = None,
         model: Optional[str] = None,
-        name: Optional[str] = None
+        name: Optional[str] = None,
+        order: Optional[int] = None
     ) -> None:
         """Create a new session with provided ID"""
         now = datetime.now(timezone.utc)
@@ -150,8 +151,9 @@ class SessionManager:
         if name is None:
             name = now.strftime("%Y-%m-%d %H:%M:%S")
 
-        # Set new session order to 0 (top of list) and increment existing sessions
-        await self._shift_existing_sessions_down()
+        # Order is now managed by ProjectManager (sessions ordered within projects)
+        if order is None:
+            order = 0
 
         session_info = SessionInfo(
             session_id=session_id,
@@ -164,7 +166,7 @@ class SessionManager:
             tools=tools if tools is not None else [],
             model=model,
             name=name,
-            order=0  # New sessions go to the top
+            order=order
         )
 
         try:
@@ -327,6 +329,17 @@ class SessionManager:
             return (order, session.created_at)
 
         return sorted(sessions, key=sort_key)
+
+    async def get_sessions_by_ids(self, session_ids: List[str]) -> List[SessionInfo]:
+        """Get sessions by IDs in the order provided"""
+        sessions = []
+        for session_id in session_ids:
+            session = self._active_sessions.get(session_id)
+            if session:
+                sessions.append(session)
+            else:
+                logger.warning(f"Session {session_id} not found in get_sessions_by_ids")
+        return sessions
 
     async def get_session_directory(self, session_id: str) -> Optional[Path]:
         """Get the data directory path for a session"""
@@ -526,18 +539,15 @@ class SessionManager:
                 logger.error(f"Failed to update session {session_id} order: {e}")
                 return False
 
-    async def reorder_sessions(self, session_ids: List[str], project_id: Optional[str] = None) -> bool:
-        """Reorder sessions by assigning sequential order values"""
+    async def reorder_sessions(self, session_ids: List[str]) -> bool:
+        """Reorder sessions by assigning sequential order values (within project context)"""
         try:
-            # Filter sessions to only those that exist and match project_id if specified
+            # Filter sessions to only those that exist
             valid_session_ids = []
             for session_id in session_ids:
                 session = self._active_sessions.get(session_id)
                 if session:
-                    if project_id is None or session.project_id == project_id:
-                        valid_session_ids.append(session_id)
-                    else:
-                        logger.warning(f"Session {session_id} project_id mismatch: expected {project_id}, got {session.project_id}")
+                    valid_session_ids.append(session_id)
                 else:
                     logger.warning(f"Session {session_id} not found during reorder")
 
@@ -564,28 +574,6 @@ class SessionManager:
         except Exception as e:
             logger.error(f"Failed to reorder sessions: {e}")
             return False
-
-    async def _shift_existing_sessions_down(self):
-        """Increment order of all existing sessions by 1 to make room for new session at top"""
-        try:
-            # Get all existing sessions
-            existing_sessions = list(self._active_sessions.values())
-
-            # Update order values for all existing sessions
-            tasks = []
-            for session in existing_sessions:
-                current_order = session.order if session.order is not None else 999999
-                new_order = current_order + 1
-                tasks.append(self.update_session_order(session.session_id, new_order))
-
-            if tasks:
-                results = await asyncio.gather(*tasks, return_exceptions=True)
-                success_count = sum(1 for result in results if result is True)
-                logger.info(f"Shifted {success_count}/{len(tasks)} existing sessions down for new session")
-
-        except Exception as e:
-            logger.error(f"Failed to shift existing sessions down: {e}")
-            # Don't raise - this shouldn't block session creation
 
     def add_state_change_callback(self, callback: Callable):
         """Add callback for session state changes"""

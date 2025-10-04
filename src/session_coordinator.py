@@ -12,6 +12,7 @@ from typing import Dict, Any, List, Optional, Callable, Union
 import logging
 
 from .session_manager import SessionManager, SessionState, SessionInfo
+from .project_manager import ProjectManager, ProjectInfo
 from .data_storage import DataStorageManager
 from .claude_sdk import ClaudeSDK
 from .message_parser import MessageParser, MessageProcessor
@@ -38,6 +39,7 @@ class SessionCoordinator:
     def __init__(self, data_dir: Path = None):
         self.data_dir = data_dir or Path("data")
         self.session_manager = SessionManager(self.data_dir)
+        self.project_manager = ProjectManager(self.data_dir)
         self.message_parser = MessageParser()
         self.message_processor = MessageProcessor(self.message_parser)
 
@@ -57,6 +59,7 @@ class SessionCoordinator:
         """Initialize the session coordinator"""
         try:
             await self.session_manager.initialize()
+            await self.project_manager.initialize()
 
             # Register callback to receive session manager state changes
             self.session_manager.add_state_change_callback(self._on_session_manager_state_change)
@@ -94,7 +97,7 @@ class SessionCoordinator:
     async def create_session(
         self,
         session_id: str,
-        working_directory: str,
+        project_id: str,
         permission_mode: str = "acceptEdits",
         system_prompt: Optional[str] = None,
         tools: List[str] = None,
@@ -102,8 +105,18 @@ class SessionCoordinator:
         name: Optional[str] = None,
         permission_callback: Optional[Callable[[str, Dict[str, Any]], Union[bool, Dict[str, Any]]]] = None,
     ) -> str:
-        """Create a new Claude Code session with integrated components"""
+        """Create a new Claude Code session with integrated components (within a project)"""
         try:
+            # Get project to determine working directory
+            project = await self.project_manager.get_project(project_id)
+            if not project:
+                raise ValueError(f"Project {project_id} not found")
+
+            working_directory = project.working_directory
+
+            # Calculate order based on existing sessions in project
+            order = len(project.session_ids)
+
             # Create session through session manager
             await self.session_manager.create_session(
                 session_id=session_id,
@@ -112,8 +125,12 @@ class SessionCoordinator:
                 system_prompt=system_prompt,
                 tools=tools,
                 model=model,
-                name=name
+                name=name,
+                order=order
             )
+
+            # Add session to project
+            await self.project_manager.add_session_to_project(project_id, session_id)
 
             # Initialize storage manager for this session
             session_dir = await self.session_manager.get_session_directory(session_id)
@@ -141,7 +158,7 @@ class SessionCoordinator:
             self._message_callbacks[session_id] = []
             self._error_callbacks[session_id] = []
 
-            coord_logger.info(f"Session {session_id} created")
+            coord_logger.info(f"Session {session_id} created in project {project_id}")
             await self._notify_state_change(session_id, SessionState.CREATED)
 
             return session_id
@@ -327,7 +344,13 @@ class SessionCoordinator:
     async def delete_session(self, session_id: str) -> bool:
         """Delete a session and cleanup all resources"""
         try:
-            # Step 1: First terminate the SDK if it's running
+            # Step 1: Find and remove session from its project
+            project = await self._find_project_for_session(session_id)
+            if project:
+                await self.project_manager.remove_session_from_project(project.project_id, session_id)
+                coord_logger.info(f"Removed session {session_id} from project {project.project_id}")
+
+            # Step 2: Terminate the SDK if it's running
             sdk = self._active_sdks.get(session_id)
             if sdk:
                 # logger.info(f"Terminating SDK for session {session_id} before deletion")
@@ -336,7 +359,7 @@ class SessionCoordinator:
                 # Give SDK time to fully close
                 await asyncio.sleep(0.2)
 
-            # Step 2: Clean up storage manager and ensure all files are closed
+            # Step 3: Clean up storage manager and ensure all files are closed
             if session_id in self._storage_managers:
                 storage_manager = self._storage_managers[session_id]
                 # logger.info(f"Cleaning up storage manager for session {session_id}")
@@ -345,20 +368,20 @@ class SessionCoordinator:
                 # Give storage manager time to close all file handles
                 await asyncio.sleep(0.2)
 
-            # Step 3: Clean up callbacks
+            # Step 4: Clean up callbacks
             if session_id in self._message_callbacks:
                 del self._message_callbacks[session_id]
             if session_id in self._error_callbacks:
                 del self._error_callbacks[session_id]
 
-            # Step 4: Force multiple garbage collections to ensure all handles are released
+            # Step 5: Force multiple garbage collections to ensure all handles are released
             import gc
             gc.collect()
             await asyncio.sleep(0.1)
             gc.collect()
             await asyncio.sleep(0.1)
 
-            # Step 5: Additional Windows-specific cleanup
+            # Step 6: Additional Windows-specific cleanup
             import os
             if os.name == 'nt':  # Windows
                 # logger.info(f"Performing Windows-specific cleanup for session {session_id}")
@@ -366,7 +389,7 @@ class SessionCoordinator:
                 gc.collect()
                 await asyncio.sleep(0.3)
 
-            # Step 6: Delete through session manager (this removes from active sessions and deletes files)
+            # Step 7: Delete through session manager (this removes from active sessions and deletes files)
             # logger.info(f"Deleting session files for session {session_id}")
             success = await self.session_manager.delete_session(session_id)
 
@@ -380,6 +403,14 @@ class SessionCoordinator:
         except Exception as e:
             logger.error(f"Failed to delete integrated session {session_id}: {e}")
             return False
+
+    async def _find_project_for_session(self, session_id: str) -> Optional[ProjectInfo]:
+        """Find the project that contains a given session"""
+        projects = await self.project_manager.list_projects()
+        for project in projects:
+            if session_id in project.session_ids:
+                return project
+        return None
 
     async def send_message(self, session_id: str, message: str) -> bool:
         """Send a message through the integrated pipeline"""

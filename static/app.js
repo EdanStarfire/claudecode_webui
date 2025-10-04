@@ -1901,11 +1901,226 @@ class ExitPlanModeToolHandler {
     }
 }
 
+// Project Manager for hierarchical organization
+class ProjectManager {
+    constructor(webui) {
+        this.webui = webui;
+        this.projects = new Map(); // project_id -> ProjectData
+        this.orderedProjects = []; // Maintains project order from backend
+    }
+
+    async loadProjects() {
+        try {
+            const response = await fetch('/api/projects');
+            const data = await response.json();
+
+            this.projects.clear();
+            this.orderedProjects = [];
+
+            for (const project of data.projects) {
+                this.projects.set(project.project_id, project);
+                this.orderedProjects.push(project.project_id);
+            }
+
+            Logger.info('PROJECT', `Loaded ${this.projects.size} projects`);
+            return data.projects;
+        } catch (error) {
+            Logger.error('PROJECT', 'Failed to load projects', error);
+            throw error;
+        }
+    }
+
+    async createProject(name, workingDirectory) {
+        try {
+            const response = await fetch('/api/projects', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    name: name,
+                    working_directory: workingDirectory
+                })
+            });
+
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.detail || 'Failed to create project');
+            }
+
+            const data = await response.json();
+            const project = data.project;
+
+            this.projects.set(project.project_id, project);
+            this.orderedProjects.unshift(project.project_id); // Add to top
+
+            Logger.info('PROJECT', `Created project ${project.project_id}`, project);
+            return project;
+        } catch (error) {
+            Logger.error('PROJECT', 'Failed to create project', error);
+            throw error;
+        }
+    }
+
+    async getProjectWithSessions(projectId) {
+        try {
+            const response = await fetch(`/api/projects/${projectId}`);
+            if (!response.ok) {
+                throw new Error('Project not found');
+            }
+
+            const data = await response.json();
+            return data;
+        } catch (error) {
+            Logger.error('PROJECT', `Failed to get project ${projectId}`, error);
+            throw error;
+        }
+    }
+
+    async updateProject(projectId, updates) {
+        try {
+            const response = await fetch(`/api/projects/${projectId}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(updates)
+            });
+
+            if (!response.ok) {
+                throw new Error('Failed to update project');
+            }
+
+            // Update local cache
+            const project = this.projects.get(projectId);
+            if (project) {
+                Object.assign(project, updates);
+            }
+
+            Logger.info('PROJECT', `Updated project ${projectId}`, updates);
+            return true;
+        } catch (error) {
+            Logger.error('PROJECT', `Failed to update project ${projectId}`, error);
+            throw error;
+        }
+    }
+
+    async deleteProject(projectId) {
+        try {
+            const response = await fetch(`/api/projects/${projectId}`, {
+                method: 'DELETE'
+            });
+
+            if (!response.ok) {
+                throw new Error('Failed to delete project');
+            }
+
+            this.projects.delete(projectId);
+            this.orderedProjects = this.orderedProjects.filter(id => id !== projectId);
+
+            Logger.info('PROJECT', `Deleted project ${projectId}`);
+            return true;
+        } catch (error) {
+            Logger.error('PROJECT', `Failed to delete project ${projectId}`, error);
+            throw error;
+        }
+    }
+
+    async toggleExpansion(projectId) {
+        try {
+            const response = await fetch(`/api/projects/${projectId}/toggle-expansion`, {
+                method: 'PUT'
+            });
+
+            if (!response.ok) {
+                throw new Error('Failed to toggle expansion');
+            }
+
+            const data = await response.json();
+
+            // Update local cache
+            const project = this.projects.get(projectId);
+            if (project) {
+                project.is_expanded = data.is_expanded;
+            }
+
+            Logger.info('PROJECT', `Toggled expansion for project ${projectId}`, data.is_expanded);
+            return data.is_expanded;
+        } catch (error) {
+            Logger.error('PROJECT', `Failed to toggle expansion for ${projectId}`, error);
+            throw error;
+        }
+    }
+
+    async reorderProjects(projectIds) {
+        try {
+            const response = await fetch('/api/projects/reorder', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ project_ids: projectIds })
+            });
+
+            if (!response.ok) {
+                throw new Error('Failed to reorder projects');
+            }
+
+            this.orderedProjects = projectIds;
+            Logger.info('PROJECT', 'Reordered projects', projectIds);
+            return true;
+        } catch (error) {
+            Logger.error('PROJECT', 'Failed to reorder projects', error);
+            throw error;
+        }
+    }
+
+    async reorderSessionsInProject(projectId, sessionIds) {
+        try {
+            const response = await fetch(`/api/projects/${projectId}/sessions/reorder`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ session_ids: sessionIds })
+            });
+
+            if (!response.ok) {
+                throw new Error('Failed to reorder sessions');
+            }
+
+            Logger.info('PROJECT', `Reordered sessions in project ${projectId}`, sessionIds);
+            return true;
+        } catch (error) {
+            Logger.error('PROJECT', `Failed to reorder sessions in ${projectId}`, error);
+            throw error;
+        }
+    }
+
+    formatPath(absolutePath) {
+        if (!absolutePath) return '';
+
+        // Split path by forward or backward slashes
+        const parts = absolutePath.split(/[/\\]/).filter(p => p);
+
+        if (parts.length === 0) return '/';
+        if (parts.length === 1) return `/${parts[0]}`;
+        if (parts.length === 2) return `/${parts.join('/')}`;
+
+        // 3+ folders: show ellipsis + last 2
+        return `.../${parts.slice(-2).join('/')}`;
+    }
+
+    getProject(projectId) {
+        return this.projects.get(projectId);
+    }
+
+    getAllProjects() {
+        return this.orderedProjects.map(id => this.projects.get(id)).filter(p => p);
+    }
+}
+
 class ClaudeWebUI {
     constructor() {
         this.currentSessionId = null;
         this.sessions = new Map();
         this.orderedSessions = []; // Maintains session order from backend
+
+        // Project management
+        this.projectManager = new ProjectManager(this);
+        this.currentProjectId = null;
 
         // Session-specific WebSocket for message streaming
         this.sessionWebsocket = null;
@@ -2021,16 +2236,25 @@ class ClaudeWebUI {
         return indicator;
     }
 
-    init() {
+    async init() {
         this.setupEventListeners();
         this.connectUIWebSocket();
         this.updateConnectionStatus('disconnected');
+
+        // Load projects and sessions on startup
+        await this.loadSessions();
     }
 
     setupEventListeners() {
-        // Session controls
-        document.getElementById('create-session-btn').addEventListener('click', () => this.showCreateSessionModal());
+        // Project controls
+        document.getElementById('create-project-btn').addEventListener('click', () => this.showCreateProjectModal());
         document.getElementById('refresh-sessions-btn').addEventListener('click', () => this.refreshSessions());
+
+        // Project modal controls
+        document.getElementById('close-project-modal').addEventListener('click', () => this.hideCreateProjectModal());
+        document.getElementById('cancel-create-project').addEventListener('click', () => this.hideCreateProjectModal());
+        document.getElementById('create-project-form').addEventListener('submit', (e) => this.handleCreateProject(e));
+        document.getElementById('browse-project-directory').addEventListener('click', () => this.browseProjectDirectory());
 
         // Modal controls
         document.getElementById('close-modal').addEventListener('click', () => this.hideCreateSessionModal());
@@ -2115,6 +2339,11 @@ class ClaudeWebUI {
     async loadSessions() {
         try {
             this.showLoading(true);
+
+            // Load projects first
+            await this.projectManager.loadProjects();
+
+            // Load all sessions into cache
             const data = await this.apiRequest('/api/sessions');
             this.sessions.clear();
             this.orderedSessions = [];
@@ -2124,7 +2353,7 @@ class ClaudeWebUI {
                 this.orderedSessions.push(session);
             });
 
-            this.renderSessions();
+            await this.renderSessions();
         } catch (error) {
             Logger.error('SESSION', 'Failed to load sessions', error);
         } finally {
@@ -2139,11 +2368,12 @@ class ClaudeWebUI {
             const tools = formData.tools ? formData.tools.split(',').map(t => t.trim()).filter(t => t) : [];
 
             const payload = {
-                working_directory: formData.working_directory,
+                project_id: this.currentProjectId, // Use current project ID
                 permission_mode: formData.permission_mode,
                 system_prompt: formData.system_prompt || null,
                 tools: tools,
-                model: formData.model || null
+                model: formData.model || null,
+                name: formData.name || null
             };
 
             const data = await this.apiRequest('/api/sessions', {
@@ -2151,8 +2381,14 @@ class ClaudeWebUI {
                 body: JSON.stringify(payload)
             });
 
-            // Refresh session list to get correct order (new session at top, existing sessions shifted down)
-            await this.refreshSessions();
+            // GRANULAR UPDATE: Fetch the new session data and add it to DOM directly
+            // This is faster than waiting for WebSocket and avoids race conditions
+            const sessionData = await this.apiRequest(`/api/sessions/${data.session_id}`);
+
+            // Add session to project in DOM
+            await this.addSessionToProjectDOM(this.currentProjectId, sessionData.session);
+
+            // Select the new session
             await this.selectSession(data.session_id);
 
             return data.session_id;
@@ -3207,6 +3443,14 @@ class ClaudeWebUI {
                 // Real-time session state change
                 this.handleStateChange(data.data);
                 break;
+            case 'project_updated':
+                // Project was updated (name, expansion state, etc.)
+                this.handleProjectUpdated(data.data);
+                break;
+            case 'project_deleted':
+                // Project was deleted
+                this.handleProjectDeleted(data.data);
+                break;
             case 'ping':
                 // Respond to server ping
                 if (this.uiWebsocket && this.uiWebsocket.readyState === WebSocket.OPEN) {
@@ -3231,6 +3475,59 @@ class ClaudeWebUI {
             this.sessions.set(session.session_id, session);
             this.orderedSessions.push(session);
         });
+        this.renderSessions();
+    }
+
+    handleProjectUpdated(data) {
+        Logger.debug('PROJECT', 'Project updated via WebSocket', data);
+        const project = data.project;
+
+        // Update local project cache
+        const existingProject = this.projectManager.projects.get(project.project_id);
+
+        if (existingProject) {
+            // Check if this is a new session being added
+            const hadSessions = existingProject.session_ids ? existingProject.session_ids.length : 0;
+            const hasSessions = project.session_ids ? project.session_ids.length : 0;
+            const isSessionAdded = hasSessions > hadSessions;
+
+            // Update cache
+            this.projectManager.projects.set(project.project_id, project);
+
+            // Update ordered list if needed
+            if (!this.projectManager.orderedProjects.includes(project.project_id)) {
+                this.projectManager.orderedProjects.push(project.project_id);
+            }
+
+            // GRANULAR UPDATE: Only update what changed
+            if (isSessionAdded) {
+                // A session was added - we'll get the session data via state_change
+                // Just update the status line here
+                this.updateProjectStatusLine(project.project_id);
+            } else {
+                // Other metadata changed (name, expansion, etc.)
+                this.updateProjectInDOM(project.project_id, 'metadata-changed');
+            }
+        } else {
+            // New project - need full render
+            this.projectManager.projects.set(project.project_id, project);
+            if (!this.projectManager.orderedProjects.includes(project.project_id)) {
+                this.projectManager.orderedProjects.push(project.project_id);
+            }
+            this.renderSessions();
+        }
+    }
+
+    handleProjectDeleted(data) {
+        Logger.debug('PROJECT', 'Project deleted via WebSocket', data);
+        const projectId = data.project_id;
+
+        // Remove from local cache
+        this.projectManager.projects.delete(projectId);
+        this.projectManager.orderedProjects = this.projectManager.orderedProjects.filter(id => id !== projectId);
+
+        // If any sessions from this project are loaded, clear them
+        // Re-render to remove from UI
         this.renderSessions();
     }
 
@@ -3490,77 +3787,459 @@ class ClaudeWebUI {
         this.loadSessionInfo();
     }
 
-    renderSessions() {
+    async renderSessions() {
         const container = document.getElementById('sessions-container');
         container.innerHTML = '';
 
-        if (this.orderedSessions.length === 0) {
-            container.innerHTML = '<p class="text-muted">No sessions available</p>';
+        const projects = this.projectManager.getAllProjects();
+
+        if (projects.length === 0) {
+            container.innerHTML = '<p class="text-muted">No projects available. Create a project to get started.</p>';
             return;
         }
 
-        this.orderedSessions.forEach((session) => {
-            const sessionId = session.session_id;
-            const sessionElement = document.createElement('div');
-            sessionElement.className = 'session-item';
+        for (const project of projects) {
+            const projectElement = await this.createProjectElement(project);
+            container.appendChild(projectElement);
+        }
+    }
 
-            // Add active class if this is the currently selected session
-            if (sessionId === this.currentSessionId) {
-                sessionElement.classList.add('active');
+    async createProjectElement(project) {
+        const projectElement = document.createElement('div');
+        projectElement.className = 'project-item';
+        projectElement.setAttribute('data-project-id', project.project_id);
+
+        // Project header
+        const projectHeader = document.createElement('div');
+        projectHeader.className = 'project-header';
+
+        // Expansion arrow
+        const expansionArrow = document.createElement('span');
+        expansionArrow.className = 'expansion-arrow';
+        expansionArrow.textContent = project.is_expanded ? '▼' : '▶';
+
+        // Project name and path
+        const projectInfo = document.createElement('div');
+        projectInfo.className = 'project-info';
+        const formattedPath = this.projectManager.formatPath(project.working_directory);
+        projectInfo.innerHTML = `
+            <span class="project-name">${this.escapeHtml(project.name)}</span>
+            <span class="project-path" title="${this.escapeHtml(project.working_directory)}">${this.escapeHtml(formattedPath)}</span>
+        `;
+
+        // Hover-reveal add session button
+        const addSessionBtn = document.createElement('button');
+        addSessionBtn.className = 'add-session-btn';
+        addSessionBtn.textContent = '+';
+        addSessionBtn.title = 'Add session to project';
+        addSessionBtn.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            await this.showCreateSessionModalForProject(project.project_id);
+        });
+
+        projectHeader.appendChild(expansionArrow);
+        projectHeader.appendChild(projectInfo);
+        projectHeader.appendChild(addSessionBtn);
+
+        // Click header to toggle expansion
+        projectHeader.addEventListener('click', async () => {
+            await this.toggleProjectExpansion(project.project_id);
+        });
+
+        projectElement.appendChild(projectHeader);
+
+        // Project status line (seamless multi-segment)
+        const statusLine = await this.createProjectStatusLine(project);
+        projectElement.appendChild(statusLine);
+
+        // Sessions container (collapsed or expanded)
+        if (project.is_expanded && project.session_ids && project.session_ids.length > 0) {
+            const sessionsContainer = document.createElement('div');
+            sessionsContainer.className = 'project-sessions';
+
+            // Use cached session data instead of fetching from API
+            const sessions = project.session_ids
+                .map(sid => this.sessions.get(sid))
+                .filter(s => s); // Filter out any sessions that aren't in cache yet
+
+            for (const session of sessions) {
+                const sessionElement = this.createSessionElement(session, project.project_id);
+                sessionsContainer.appendChild(sessionElement);
             }
 
-            sessionElement.setAttribute('data-session-id', sessionId);
+            projectElement.appendChild(sessionsContainer);
+        }
 
-            // Add drag-and-drop attributes
-            sessionElement.draggable = true;
-            sessionElement.setAttribute('data-order', session.order || 999999);
-            sessionElement.addEventListener('click', (e) => {
-                // Don't select session if clicking on input field or name display during editing
-                if (e.target.tagName === 'INPUT') return;
-                if (e.target.classList.contains('session-name-display') &&
-                    e.target.parentElement.querySelector('.session-name-edit').style.display !== 'none') {
-                    return; // Name is being edited, ignore click
-                }
-                this.selectSession(sessionId);
-            });
+        return projectElement;
+    }
 
-            // Add drag-and-drop event listeners
-            this.addDragDropListeners(sessionElement, sessionId);
+    async createProjectStatusLine(project) {
+        const statusLine = document.createElement('div');
+        statusLine.className = 'project-status-line';
 
-            // Create status indicator - show processing state if is_processing is true
+        if (!project.session_ids || project.session_ids.length === 0) {
+            // Empty project - show single gray segment
+            const emptySegment = document.createElement('div');
+            emptySegment.className = 'status-segment';
+            emptySegment.style.width = '100%';
+            emptySegment.style.backgroundColor = '#9ca3af'; // gray
+            statusLine.appendChild(emptySegment);
+            return statusLine;
+        }
+
+        // Use cached session data instead of fetching from API
+        const sessions = project.session_ids
+            .map(sid => this.sessions.get(sid))
+            .filter(s => s); // Filter out any sessions that aren't in cache yet
+
+        const segmentWidth = `${100 / sessions.length}%`;
+
+        for (const session of sessions) {
+            const segment = document.createElement('div');
+            segment.className = 'status-segment';
+            segment.style.width = segmentWidth;
+
+            // Determine color based on session state
             const isProcessing = session.is_processing || false;
             const displayState = isProcessing ? 'processing' : session.state;
-            const statusIndicator = this.createStatusIndicator(displayState, 'session', session.state);
+            const color = this.getSessionStateColor(displayState);
 
-            // Use session name if available, fallback to session ID
-            const displayName = session.name || sessionId;
+            segment.style.backgroundColor = color;
 
-            sessionElement.innerHTML = `
-                <div class="session-header">
-                    <div class="session-name" title="${sessionId}">
-                        <span class="session-name-display">${this.escapeHtml(displayName)}</span>
-                        <input class="session-name-edit" type="text" value="${this.escapeHtml(displayName)}" style="display: none;">
-                    </div>
-                </div>
-            `;
+            // Add animation for active states
+            if (displayState === 'starting' || displayState === 'processing') {
+                segment.classList.add('pulse');
+            }
 
-            // Insert status indicator at the beginning
-            const sessionHeader = sessionElement.querySelector('.session-header');
-            sessionHeader.insertBefore(statusIndicator, sessionHeader.firstChild);
+            statusLine.appendChild(segment);
+        }
 
-            // Add double-click editing functionality
-            const nameDisplay = sessionElement.querySelector('.session-name-display');
-            const nameInput = sessionElement.querySelector('.session-name-edit');
+        return statusLine;
+    }
 
-            nameDisplay.addEventListener('dblclick', (e) => {
-                e.stopPropagation();
-                this.startEditingSessionName(sessionId, nameDisplay, nameInput);
-            });
+    getSessionStateColor(state) {
+        // Match the colors from session indicator dots for consistency
+        const colorMap = {
+            'created': '#6c757d',      // grey (matches status-dot-grey border)
+            'CREATED': '#6c757d',
+            'starting': '#28a745',     // green (matches status-dot-green border for starting/blinking)
+            'Starting': '#28a745',
+            'running': '#28a745',      // green (matches status-dot-green)
+            'active': '#28a745',       // green (matches status-dot-green for active)
+            'processing': '#6f42c1',   // purple (matches status-dot-purple border for processing/blinking)
+            'paused': '#6c757d',       // grey (matches status-dot-grey)
+            'terminated': '#6c757d',   // grey (matches status-dot-grey)
+            'error': '#dc3545',        // red (matches status-dot-red border)
+            'failed': '#dc3545'        // red (matches status-dot-red)
+        };
+        return colorMap[state] || '#6c757d'; // default grey
+    }
 
-            this.setupSessionNameInput(sessionId, nameDisplay, nameInput);
+    createSessionElement(session, projectId) {
+        const sessionId = session.session_id;
+        const sessionElement = document.createElement('div');
+        sessionElement.className = 'session-item';
 
-            container.appendChild(sessionElement);
+        // Add active class if this is the currently selected session
+        if (sessionId === this.currentSessionId) {
+            sessionElement.classList.add('active');
+        }
+
+        sessionElement.setAttribute('data-session-id', sessionId);
+        sessionElement.setAttribute('data-project-id', projectId);
+
+        // Add drag-and-drop attributes
+        sessionElement.draggable = true;
+        sessionElement.setAttribute('data-order', session.order || 999999);
+        sessionElement.addEventListener('click', (e) => {
+            // Don't select session if clicking on input field or name display during editing
+            if (e.target.tagName === 'INPUT') return;
+            if (e.target.classList.contains('session-name-display') &&
+                e.target.parentElement.querySelector('.session-name-edit').style.display !== 'none') {
+                return; // Name is being edited, ignore click
+            }
+            this.selectSession(sessionId);
         });
+
+        // Add drag-and-drop event listeners (project-aware)
+        this.addDragDropListeners(sessionElement, sessionId, projectId);
+
+        // Create status indicator - show processing state if is_processing is true
+        const isProcessing = session.is_processing || false;
+        const displayState = isProcessing ? 'processing' : session.state;
+        const statusIndicator = this.createStatusIndicator(displayState, 'session', session.state);
+
+        // Use session name if available, fallback to session ID
+        const displayName = session.name || sessionId;
+
+        sessionElement.innerHTML = `
+            <div class="session-header">
+                <div class="session-name" title="${sessionId}">
+                    <span class="session-name-display">${this.escapeHtml(displayName)}</span>
+                    <input class="session-name-edit" type="text" value="${this.escapeHtml(displayName)}" style="display: none;">
+                </div>
+            </div>
+        `;
+
+        // Insert status indicator at the beginning
+        const sessionHeader = sessionElement.querySelector('.session-header');
+        sessionHeader.insertBefore(statusIndicator, sessionHeader.firstChild);
+
+        // Add double-click editing functionality
+        const nameDisplay = sessionElement.querySelector('.session-name-display');
+        const nameInput = sessionElement.querySelector('.session-name-edit');
+
+        nameDisplay.addEventListener('dblclick', (e) => {
+            e.stopPropagation();
+            this.startEditingSessionName(sessionId, nameDisplay, nameInput);
+        });
+
+        this.setupSessionNameInput(sessionId, nameDisplay, nameInput);
+
+        return sessionElement;
+    }
+
+    async toggleProjectExpansion(projectId) {
+        try {
+            await this.projectManager.toggleExpansion(projectId);
+            await this.updateProjectInDOM(projectId, 'expansion-toggled');
+        } catch (error) {
+            Logger.error('PROJECT', `Failed to toggle expansion for ${projectId}`, error);
+        }
+    }
+
+    // ==================== GRANULAR DOM UPDATE METHODS ====================
+
+    _findProjectForSession(sessionId) {
+        /**
+         * Find which project a session belongs to
+         */
+        for (const [projectId, project] of this.projectManager.projects) {
+            if (project.session_ids && project.session_ids.includes(sessionId)) {
+                return projectId;
+            }
+        }
+        return null;
+    }
+
+    async updateProjectInDOM(projectId, updateType) {
+        /**
+         * Update a project element in the DOM without full re-render
+         * @param {string} projectId - The project ID
+         * @param {string} updateType - Type of update: 'session-added', 'session-removed',
+         *                               'session-state-changed', 'expansion-toggled', 'metadata-changed'
+         */
+        const projectElement = document.querySelector(`[data-project-id="${projectId}"]`);
+        if (!projectElement) {
+            Logger.warn('DOM', `Project element not found for ${projectId}`);
+            return;
+        }
+
+        const project = this.projectManager.projects.get(projectId);
+        if (!project) {
+            Logger.warn('DOM', `Project data not found for ${projectId}`);
+            return;
+        }
+
+        switch (updateType) {
+            case 'expansion-toggled':
+                // Update arrow
+                const arrow = projectElement.querySelector('.expansion-arrow');
+                if (arrow) {
+                    arrow.textContent = project.is_expanded ? '▼' : '▶';
+                }
+
+                // Show or hide sessions container
+                let sessionsContainer = projectElement.querySelector('.project-sessions');
+
+                if (project.is_expanded) {
+                    // Need to show sessions - create container if doesn't exist
+                    if (!sessionsContainer && project.session_ids && project.session_ids.length > 0) {
+                        sessionsContainer = document.createElement('div');
+                        sessionsContainer.className = 'project-sessions';
+
+                        // Use cached session data instead of fetching from API
+                        const sessions = project.session_ids
+                            .map(sid => this.sessions.get(sid))
+                            .filter(s => s); // Filter out any sessions that aren't in cache yet
+
+                        for (const session of sessions) {
+                            const sessionElement = this.createSessionElement(session, projectId);
+                            sessionsContainer.appendChild(sessionElement);
+                        }
+
+                        projectElement.appendChild(sessionsContainer);
+                    }
+                } else {
+                    // Collapse - remove sessions container
+                    if (sessionsContainer) {
+                        sessionsContainer.remove();
+                    }
+                }
+                break;
+
+            case 'session-added':
+            case 'session-removed':
+            case 'session-state-changed':
+                // Re-render status line for these changes
+                await this.updateProjectStatusLine(projectId);
+                break;
+
+            case 'metadata-changed':
+                // Update project name and path
+                const projectNameEl = projectElement.querySelector('.project-name');
+                const projectPathEl = projectElement.querySelector('.project-path');
+
+                if (projectNameEl) {
+                    projectNameEl.textContent = project.name;
+                }
+                if (projectPathEl) {
+                    const formattedPath = this.projectManager.formatPath(project.working_directory);
+                    projectPathEl.textContent = formattedPath;
+                    projectPathEl.title = project.working_directory;
+                }
+                break;
+        }
+    }
+
+    updateSessionInDOM(sessionId, sessionData) {
+        /**
+         * Update a session element in the DOM without full re-render
+         * Updates status indicator and name only
+         * ALWAYS updates cache, even if DOM element doesn't exist (collapsed project)
+         */
+        // ALWAYS update cached session data first (even if DOM element doesn't exist)
+        this.sessions.set(sessionId, sessionData);
+        const index = this.orderedSessions.findIndex(s => s.session_id === sessionId);
+        if (index !== -1) {
+            this.orderedSessions[index] = sessionData;
+        }
+
+        // Now update DOM if element exists (project is expanded)
+        const sessionElement = document.querySelector(`[data-session-id="${sessionId}"]`);
+        if (!sessionElement) {
+            Logger.debug('DOM', `Session element not in DOM (project collapsed): ${sessionId} - cache updated`);
+            return;
+        }
+
+        // Update status indicator
+        const sessionHeader = sessionElement.querySelector('.session-header');
+        if (sessionHeader) {
+            // Remove old status indicator
+            const oldIndicator = sessionHeader.querySelector('.status-indicator');
+            if (oldIndicator) {
+                oldIndicator.remove();
+            }
+
+            // Create new status indicator
+            const isProcessing = sessionData.is_processing || false;
+            const displayState = isProcessing ? 'processing' : sessionData.state;
+            const statusIndicator = this.createStatusIndicator(displayState, 'session', sessionData.state);
+
+            // Insert at beginning of header
+            sessionHeader.insertBefore(statusIndicator, sessionHeader.firstChild);
+        }
+
+        // Update session name if changed
+        const nameDisplay = sessionElement.querySelector('.session-name-display');
+        const nameInput = sessionElement.querySelector('.session-name-edit');
+        if (nameDisplay && sessionData.name) {
+            const displayName = sessionData.name || sessionId;
+            if (nameDisplay.textContent !== displayName) {
+                nameDisplay.textContent = displayName;
+                if (nameInput) {
+                    nameInput.value = displayName;
+                }
+            }
+        }
+    }
+
+    async updateProjectStatusLine(projectId) {
+        /**
+         * Update just the project status line (multi-segment bar)
+         * without re-rendering the entire project
+         */
+        const projectElement = document.querySelector(`[data-project-id="${projectId}"]`);
+        if (!projectElement) {
+            Logger.warn('DOM', `Project element not found for status line update: ${projectId}`);
+            return;
+        }
+
+        const project = this.projectManager.projects.get(projectId);
+        if (!project) {
+            Logger.warn('DOM', `Project data not found for status line update: ${projectId}`);
+            return;
+        }
+
+        // Find existing status line
+        const oldStatusLine = projectElement.querySelector('.project-status-line');
+        if (!oldStatusLine) {
+            Logger.warn('DOM', `Status line element not found for ${projectId}`);
+            return;
+        }
+
+        // Create new status line
+        const newStatusLine = await this.createProjectStatusLine(project);
+
+        // Replace old with new
+        oldStatusLine.replaceWith(newStatusLine);
+    }
+
+    async addSessionToProjectDOM(projectId, sessionData) {
+        /**
+         * Add a new session element to a project's sessions container
+         * Updates status line as well
+         */
+        const projectElement = document.querySelector(`[data-project-id="${projectId}"]`);
+        if (!projectElement) {
+            Logger.warn('DOM', `Project element not found for adding session: ${projectId}`);
+            return;
+        }
+
+        const project = this.projectManager.projects.get(projectId);
+        if (!project) {
+            Logger.warn('DOM', `Project data not found for adding session: ${projectId}`);
+            return;
+        }
+
+        // Update cached session data
+        this.sessions.set(sessionData.session_id, sessionData);
+        if (!this.orderedSessions.find(s => s.session_id === sessionData.session_id)) {
+            this.orderedSessions.push(sessionData);
+        }
+
+        // Update project's session_ids if not already present
+        if (!project.session_ids.includes(sessionData.session_id)) {
+            project.session_ids.push(sessionData.session_id);
+        }
+
+        // If project is expanded, add session element to container
+        if (project.is_expanded) {
+            let sessionsContainer = projectElement.querySelector('.project-sessions');
+
+            // Create container if it doesn't exist
+            if (!sessionsContainer) {
+                sessionsContainer = document.createElement('div');
+                sessionsContainer.className = 'project-sessions';
+                projectElement.appendChild(sessionsContainer);
+            }
+
+            // Create and append session element
+            const sessionElement = this.createSessionElement(sessionData, projectId);
+            sessionsContainer.appendChild(sessionElement);
+        }
+
+        // Update status line to reflect new session
+        await this.updateProjectStatusLine(projectId);
+    }
+
+    async showCreateSessionModalForProject(projectId) {
+        this.currentProjectId = projectId;
+        // Show modal without working directory field (project determines this)
+        const modal = document.getElementById('create-session-modal');
+        const workingDirGroup = document.getElementById('working-directory-group');
+        workingDirGroup.style.display = 'none'; // Hide working directory field
+        modal.classList.remove('hidden');
     }
 
     startEditingSessionName(sessionId, nameDisplay, nameInput) {
@@ -3994,8 +4673,14 @@ class ClaudeWebUI {
         }
 
         if (sessionInfo) {
-            // Update session data consistently (with automatic re-render)
-            this.updateSessionData(sessionId, sessionInfo);
+            // GRANULAR UPDATE: Update session in DOM without full re-render
+            this.updateSessionInDOM(sessionId, sessionInfo);
+
+            // Update project status line to reflect state change
+            const projectId = this._findProjectForSession(sessionId);
+            if (projectId) {
+                this.updateProjectStatusLine(projectId);
+            }
 
             // If this is the current session, update the session info display
             if (sessionId === this.currentSessionId) {
@@ -4081,6 +4766,41 @@ class ClaudeWebUI {
         // In a real implementation, this would open a directory picker
         // For now, we'll just suggest using the current directory
         const input = document.getElementById('working-directory');
+        if (!input.value) {
+            input.value = prompt('Enter working directory:', '/') || input.value;
+        }
+    }
+
+    // Project Modal Methods
+    showCreateProjectModal() {
+        document.getElementById('create-project-modal').classList.remove('hidden');
+    }
+
+    hideCreateProjectModal() {
+        document.getElementById('create-project-modal').classList.add('hidden');
+        document.getElementById('create-project-form').reset();
+    }
+
+    async handleCreateProject(event) {
+        event.preventDefault();
+
+        const formData = new FormData(event.target);
+        const data = Object.fromEntries(formData.entries());
+
+        try {
+            const project = await this.projectManager.createProject(data.name, data.working_directory);
+            this.hideCreateProjectModal();
+            await this.refreshSessions(); // Reload to show new project
+            Logger.info('PROJECT', 'Project created successfully', project);
+        } catch (error) {
+            Logger.error('PROJECT', 'Project creation failed', error);
+            this.showError('Failed to create project: ' + error.message);
+        }
+    }
+
+    browseProjectDirectory() {
+        // In a real implementation, this would open a directory picker
+        const input = document.getElementById('project-working-directory');
         if (!input.value) {
             input.value = prompt('Enter working directory:', '/') || input.value;
         }
@@ -4322,12 +5042,13 @@ class ClaudeWebUI {
     }
 
     // Drag and Drop Methods
-    addDragDropListeners(sessionElement, sessionId) {
+    addDragDropListeners(sessionElement, sessionId, projectId) {
         // Store drag state
         if (!this.dragState) {
             this.dragState = {
                 draggedElement: null,
                 draggedSessionId: null,
+                draggedProjectId: null,
                 dropIndicator: null,
                 insertBefore: false
             };
@@ -4336,6 +5057,7 @@ class ClaudeWebUI {
         sessionElement.addEventListener('dragstart', (e) => {
             this.dragState.draggedElement = sessionElement;
             this.dragState.draggedSessionId = sessionId;
+            this.dragState.draggedProjectId = projectId;
             sessionElement.classList.add('dragging');
 
             // Set drag data
@@ -4349,6 +5071,15 @@ class ClaudeWebUI {
         });
 
         sessionElement.addEventListener('dragover', (e) => {
+            // Check if target is in same project
+            const targetProjectId = sessionElement.getAttribute('data-project-id');
+
+            if (this.dragState.draggedProjectId !== targetProjectId) {
+                // Cross-project drag - show not-allowed cursor
+                e.dataTransfer.dropEffect = 'none';
+                return;
+            }
+
             e.preventDefault();
             e.dataTransfer.dropEffect = 'move';
 
@@ -4358,7 +5089,10 @@ class ClaudeWebUI {
         });
 
         sessionElement.addEventListener('dragenter', (e) => {
-            e.preventDefault();
+            const targetProjectId = sessionElement.getAttribute('data-project-id');
+            if (this.dragState.draggedProjectId === targetProjectId) {
+                e.preventDefault();
+            }
         });
 
         sessionElement.addEventListener('dragleave', (e) => {
@@ -4370,7 +5104,16 @@ class ClaudeWebUI {
 
         sessionElement.addEventListener('drop', (e) => {
             e.preventDefault();
-            this.handleSessionDrop(sessionElement, sessionId);
+
+            // Validate same project
+            const targetProjectId = sessionElement.getAttribute('data-project-id');
+            if (this.dragState.draggedProjectId !== targetProjectId) {
+                Logger.warn('SESSION', 'Cannot move session to different project');
+                this.removeDragVisualEffects();
+                return;
+            }
+
+            this.handleSessionDrop(sessionElement, sessionId, projectId);
         });
     }
 
@@ -4412,7 +5155,7 @@ class ClaudeWebUI {
         });
     }
 
-    async handleSessionDrop(targetElement, targetSessionId) {
+    async handleSessionDrop(targetElement, targetSessionId, projectId) {
         if (!this.dragState.draggedSessionId || this.dragState.draggedSessionId === targetSessionId) {
             this.removeDragVisualEffects();
             return;
@@ -4421,11 +5164,17 @@ class ClaudeWebUI {
         const draggedSessionId = this.dragState.draggedSessionId;
 
         try {
-            // Calculate new order based on drop position
-            const newOrder = this.calculateNewOrder(draggedSessionId, targetSessionId);
+            // Get project to find its sessions
+            const project = this.projectManager.getProject(projectId);
+            if (!project) {
+                throw new Error('Project not found');
+            }
 
-            // Call reorder API
-            await this.reorderSessions(newOrder);
+            // Calculate new order based on drop position (within project sessions only)
+            const newOrder = this.calculateNewOrder(draggedSessionId, targetSessionId, project.session_ids);
+
+            // Call project-specific reorder API
+            await this.reorderProjectSessions(projectId, newOrder);
 
         } catch (error) {
             Logger.error('SESSION', 'Failed to reorder sessions', error);
@@ -4435,9 +5184,9 @@ class ClaudeWebUI {
         }
     }
 
-    calculateNewOrder(draggedSessionId, targetSessionId) {
-        // Get current session IDs in order
-        const currentOrder = this.orderedSessions.map(s => s.session_id);
+    calculateNewOrder(draggedSessionId, targetSessionId, projectSessionIds) {
+        // Get current session IDs in order (from project)
+        const currentOrder = [...projectSessionIds];
 
         // Remove dragged session from current position
         const filteredOrder = currentOrder.filter(id => id !== draggedSessionId);
@@ -4455,30 +5204,29 @@ class ClaudeWebUI {
         return filteredOrder;
     }
 
-    async reorderSessions(sessionIds) {
+    async reorderProjectSessions(projectId, sessionIds) {
         try {
-            const response = await this.apiRequest('/api/sessions/reorder', {
-                method: 'PUT',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({
-                    session_ids: sessionIds,
-                    project_id: null // For now, no project grouping
-                })
-            });
+            await this.projectManager.reorderSessionsInProject(projectId, sessionIds);
 
-            if (response.success) {
-                Logger.info('SESSION', 'Sessions reordered successfully');
-                // Explicitly refresh session list to ensure immediate update
-                await this.refreshSessions();
-            } else {
-                throw new Error('Reorder request failed');
+            // Update local project cache
+            const project = this.projectManager.getProject(projectId);
+            if (project) {
+                project.session_ids = sessionIds;
             }
+
+            // Re-render to show new order
+            await this.renderSessions();
+
+            Logger.info('SESSION', `Reordered sessions in project ${projectId}`);
         } catch (error) {
-            Logger.error('SESSION', 'Failed to reorder sessions via API', error);
+            Logger.error('SESSION', 'Failed to reorder sessions in project', error);
             throw error;
         }
+    }
+
+    async reorderSessions(sessionIds) {
+        // Legacy method - no longer used with project-based organization
+        Logger.warn('SESSION', 'reorderSessions called - this method is deprecated in favor of reorderProjectSessions');
     }
 
     // Sidebar Management

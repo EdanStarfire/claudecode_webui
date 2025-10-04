@@ -24,8 +24,22 @@ ws_logger = get_logger('websocket_debug', category='WS_LIFECYCLE')
 logger = logging.getLogger(__name__)
 
 
-class SessionCreateRequest(BaseModel):
+class ProjectCreateRequest(BaseModel):
+    name: str
     working_directory: str
+
+
+class ProjectUpdateRequest(BaseModel):
+    name: Optional[str] = None
+    is_expanded: Optional[bool] = None
+
+
+class ProjectReorderRequest(BaseModel):
+    project_ids: List[str]
+
+
+class SessionCreateRequest(BaseModel):
+    project_id: str
     permission_mode: str = "acceptEdits"
     system_prompt: Optional[str] = None
     tools: List[str] = []
@@ -43,7 +57,6 @@ class SessionNameUpdateRequest(BaseModel):
 
 class SessionReorderRequest(BaseModel):
     session_ids: List[str]
-    project_id: Optional[str] = None
 
 
 class PermissionModeRequest(BaseModel):
@@ -232,9 +245,170 @@ class ClaudeWebUI:
             """Health check endpoint"""
             return {"status": "healthy", "timestamp": datetime.now(timezone.utc).isoformat()}
 
+        # ==================== PROJECT ENDPOINTS ====================
+
+        @self.app.post("/api/projects")
+        async def create_project(request: ProjectCreateRequest):
+            """Create a new project"""
+            try:
+                project = await self.coordinator.project_manager.create_project(
+                    name=request.name,
+                    working_directory=request.working_directory
+                )
+                return {"project": project.to_dict()}
+            except Exception as e:
+                logger.error(f"Failed to create project: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @self.app.get("/api/projects")
+        async def list_projects():
+            """List all projects"""
+            try:
+                projects = await self.coordinator.project_manager.list_projects()
+                return {"projects": [p.to_dict() for p in projects]}
+            except Exception as e:
+                logger.error(f"Failed to list projects: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @self.app.get("/api/projects/{project_id}")
+        async def get_project(project_id: str):
+            """Get project with sessions"""
+            try:
+                project = await self.coordinator.project_manager.get_project(project_id)
+                if not project:
+                    raise HTTPException(status_code=404, detail="Project not found")
+
+                # Get sessions for this project
+                sessions = await self.coordinator.session_manager.get_sessions_by_ids(project.session_ids)
+
+                return {
+                    "project": project.to_dict(),
+                    "sessions": [s.to_dict() for s in sessions]
+                }
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"Failed to get project: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @self.app.put("/api/projects/{project_id}")
+        async def update_project(project_id: str, request: ProjectUpdateRequest):
+            """Update project metadata"""
+            try:
+                success = await self.coordinator.project_manager.update_project(
+                    project_id=project_id,
+                    name=request.name,
+                    is_expanded=request.is_expanded
+                )
+                if not success:
+                    raise HTTPException(status_code=404, detail="Project not found")
+
+                # Broadcast update to UI
+                project = await self.coordinator.project_manager.get_project(project_id)
+                await self.ui_websocket_manager.broadcast_to_all({
+                    "type": "project_updated",
+                    "data": {"project": project.to_dict()}
+                })
+
+                return {"success": True}
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"Failed to update project: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @self.app.delete("/api/projects/{project_id}")
+        async def delete_project(project_id: str):
+            """Delete project and all its sessions"""
+            try:
+                project = await self.coordinator.project_manager.get_project(project_id)
+                if not project:
+                    raise HTTPException(status_code=404, detail="Project not found")
+
+                # Delete all sessions in the project
+                for session_id in project.session_ids:
+                    await self.coordinator.delete_session(session_id)
+
+                # Delete the project
+                success = await self.coordinator.project_manager.delete_project(project_id)
+                if not success:
+                    raise HTTPException(status_code=500, detail="Failed to delete project")
+
+                # Broadcast deletion to UI
+                await self.ui_websocket_manager.broadcast_to_all({
+                    "type": "project_deleted",
+                    "data": {"project_id": project_id}
+                })
+
+                return {"success": True}
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"Failed to delete project: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @self.app.put("/api/projects/reorder")
+        async def reorder_projects(request: ProjectReorderRequest):
+            """Reorder projects"""
+            try:
+                success = await self.coordinator.project_manager.reorder_projects(request.project_ids)
+                if not success:
+                    raise HTTPException(status_code=400, detail="Failed to reorder projects")
+                return {"success": True}
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"Failed to reorder projects: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @self.app.put("/api/projects/{project_id}/toggle-expansion")
+        async def toggle_project_expansion(project_id: str):
+            """Toggle project expansion state"""
+            try:
+                success = await self.coordinator.project_manager.toggle_expansion(project_id)
+                if not success:
+                    raise HTTPException(status_code=404, detail="Project not found")
+
+                # Broadcast update to UI
+                project = await self.coordinator.project_manager.get_project(project_id)
+                await self.ui_websocket_manager.broadcast_to_all({
+                    "type": "project_updated",
+                    "data": {"project": project.to_dict()}
+                })
+
+                return {"success": True, "is_expanded": project.is_expanded}
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"Failed to toggle expansion: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @self.app.put("/api/projects/{project_id}/sessions/reorder")
+        async def reorder_project_sessions(project_id: str, request: SessionReorderRequest):
+            """Reorder sessions within a project"""
+            try:
+                success = await self.coordinator.project_manager.reorder_project_sessions(
+                    project_id=project_id,
+                    session_ids=request.session_ids
+                )
+                if not success:
+                    raise HTTPException(status_code=400, detail="Failed to reorder sessions")
+
+                # Also update session order in session manager
+                await self.coordinator.session_manager.reorder_sessions(request.session_ids)
+
+                return {"success": True}
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"Failed to reorder project sessions: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+        # ==================== SESSION ENDPOINTS ====================
+
         @self.app.post("/api/sessions")
         async def create_session(request: SessionCreateRequest):
-            """Create a new Claude Code session"""
+            """Create a new Claude Code session within a project"""
             try:
                 # Pre-generate session ID so we can pass it to permission callback
                 import uuid
@@ -242,7 +416,7 @@ class ClaudeWebUI:
 
                 session_id = await self.coordinator.create_session(
                     session_id=session_id,
-                    working_directory=request.working_directory,
+                    project_id=request.project_id,
                     permission_mode=request.permission_mode,
                     system_prompt=request.system_prompt,
                     tools=request.tools,
@@ -251,6 +425,14 @@ class ClaudeWebUI:
                     permission_callback=self._create_permission_callback(session_id)
                 )
 
+                # Broadcast project update to all UI clients (session was added to project)
+                project = await self.coordinator.project_manager.get_project(request.project_id)
+                if project:
+                    await self.ui_websocket_manager.broadcast_to_all({
+                        "type": "project_updated",
+                        "data": {"project": project.to_dict()}
+                    })
+                    logger.debug(f"Broadcasted project_updated for project {request.project_id} after session creation")
 
                 return {"session_id": session_id}
 
@@ -380,20 +562,6 @@ class ClaudeWebUI:
                 return result
             except Exception as e:
                 logger.error(f"Failed to get messages: {e}")
-                raise HTTPException(status_code=500, detail=str(e))
-
-        @self.app.put("/api/sessions/reorder")
-        async def reorder_sessions(request: SessionReorderRequest):
-            """Reorder sessions by updating their order values"""
-            try:
-                success = await self.coordinator.session_manager.reorder_sessions(
-                    request.session_ids, request.project_id
-                )
-                if not success:
-                    raise HTTPException(status_code=400, detail="Failed to reorder sessions")
-                return {"success": success}
-            except Exception as e:
-                logger.error(f"Failed to reorder sessions: {e}")
                 raise HTTPException(status_code=500, detail=str(e))
 
         @self.app.post("/api/sessions/{session_id}/permission-mode")
