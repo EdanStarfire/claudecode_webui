@@ -239,6 +239,15 @@ class ToolCallManager {
         return null;
     }
 
+    setToolExpansion(toolUseId, isExpanded) {
+        const toolCall = this.toolCalls.get(toolUseId);
+        if (toolCall) {
+            toolCall.isExpanded = isExpanded;
+            return toolCall;
+        }
+        return null;
+    }
+
     generateCollapsedSummary(toolCall) {
         const statusIcon = {
             'pending': '🔄',
@@ -496,48 +505,52 @@ class EditToolHandler {
     }
 
     generateDiffView(oldString, newString, escapeHtmlFn) {
-        // Split into lines for line-by-line comparison
+        // Check if diff libraries are loaded
+        if (typeof Diff === 'undefined' || typeof Diff2Html === 'undefined') {
+            console.error('Diff libraries not loaded. Using fallback diff view.');
+            return this.generateFallbackDiffView(oldString, newString, escapeHtmlFn);
+        }
+
+        try {
+            // Use diff library to create unified diff format
+            const patch = Diff.createPatch('file', oldString, newString, '', '', { context: 3 });
+
+            // Use diff2html to render the diff
+            const diffHtml = Diff2Html.html(patch, {
+                drawFileList: false,
+                matching: 'lines',
+                outputFormat: 'line-by-line',
+                highlight: false // Disable syntax highlighting for plain text diffs
+            });
+
+            return diffHtml;
+        } catch (error) {
+            console.error('Error generating diff with diff2html:', error);
+            return this.generateFallbackDiffView(oldString, newString, escapeHtmlFn);
+        }
+    }
+
+    generateFallbackDiffView(oldString, newString, escapeHtmlFn) {
+        // Simple fallback diff view
         const oldLines = oldString.split('\n');
         const newLines = newString.split('\n');
-
-        // Simple line-by-line diff (not a full LCS algorithm, but good enough for display)
         const maxLines = Math.max(oldLines.length, newLines.length);
-        let diffHtml = '<div class="diff-view">';
+
+        let diffHtml = '<div class="simple-diff-view" style="font-family: monospace; font-size: 0.85rem; background: #f8f9fa; border-radius: 0.25rem; padding: 0.5rem;">';
 
         for (let i = 0; i < maxLines; i++) {
             const oldLine = i < oldLines.length ? oldLines[i] : null;
             const newLine = i < newLines.length ? newLines[i] : null;
 
-            if (oldLine !== null && newLine !== null) {
-                if (oldLine === newLine) {
-                    // Unchanged line
-                    diffHtml += `<div class="diff-line diff-unchanged">
-                        <span class="diff-marker"> </span>
-                        <span class="diff-content">${escapeHtmlFn(oldLine)}</span>
-                    </div>`;
-                } else {
-                    // Changed line - show both old and new
-                    diffHtml += `<div class="diff-line diff-removed">
-                        <span class="diff-marker">-</span>
-                        <span class="diff-content">${escapeHtmlFn(oldLine)}</span>
-                    </div>`;
-                    diffHtml += `<div class="diff-line diff-added">
-                        <span class="diff-marker">+</span>
-                        <span class="diff-content">${escapeHtmlFn(newLine)}</span>
-                    </div>`;
+            if (oldLine !== null && newLine !== null && oldLine === newLine) {
+                diffHtml += `<div style="padding: 0.125rem 0;"> ${escapeHtmlFn(oldLine)}</div>`;
+            } else {
+                if (oldLine !== null) {
+                    diffHtml += `<div style="background-color: #f8d7da; padding: 0.125rem 0;"><span style="color: #dc3545; font-weight: bold;">-</span> ${escapeHtmlFn(oldLine)}</div>`;
                 }
-            } else if (oldLine !== null) {
-                // Line removed
-                diffHtml += `<div class="diff-line diff-removed">
-                    <span class="diff-marker">-</span>
-                    <span class="diff-content">${escapeHtmlFn(oldLine)}</span>
-                </div>`;
-            } else if (newLine !== null) {
-                // Line added
-                diffHtml += `<div class="diff-line diff-added">
-                    <span class="diff-marker">+</span>
-                    <span class="diff-content">${escapeHtmlFn(newLine)}</span>
-                </div>`;
+                if (newLine !== null) {
+                    diffHtml += `<div style="background-color: #d4edda; padding: 0.125rem 0;"><span style="color: #28a745; font-weight: bold;">+</span> ${escapeHtmlFn(newLine)}</div>`;
+                }
             }
         }
 
@@ -641,47 +654,52 @@ class MultiEditToolHandler {
     }
 
     generateDiffView(oldString, newString, escapeHtmlFn) {
-        // Reuse the same diff generation logic as EditToolHandler
+        // Check if diff libraries are loaded
+        if (typeof Diff === 'undefined' || typeof Diff2Html === 'undefined') {
+            console.error('Diff libraries not loaded. Using fallback diff view.');
+            return this.generateFallbackDiffView(oldString, newString, escapeHtmlFn);
+        }
+
+        try {
+            // Use diff library to create unified diff format
+            const patch = Diff.createPatch('file', oldString, newString, '', '', { context: 3 });
+
+            // Use diff2html to render the diff
+            const diffHtml = Diff2Html.html(patch, {
+                drawFileList: false,
+                matching: 'lines',
+                outputFormat: 'line-by-line',
+                highlight: false // Disable syntax highlighting for plain text diffs
+            });
+
+            return diffHtml;
+        } catch (error) {
+            console.error('Error generating diff with diff2html:', error);
+            return this.generateFallbackDiffView(oldString, newString, escapeHtmlFn);
+        }
+    }
+
+    generateFallbackDiffView(oldString, newString, escapeHtmlFn) {
+        // Simple fallback diff view
         const oldLines = oldString.split('\n');
         const newLines = newString.split('\n');
-
         const maxLines = Math.max(oldLines.length, newLines.length);
-        let diffHtml = '<div class="diff-view">';
+
+        let diffHtml = '<div class="simple-diff-view" style="font-family: monospace; font-size: 0.85rem; background: #f8f9fa; border-radius: 0.25rem; padding: 0.5rem;">';
 
         for (let i = 0; i < maxLines; i++) {
             const oldLine = i < oldLines.length ? oldLines[i] : null;
             const newLine = i < newLines.length ? newLines[i] : null;
 
-            if (oldLine !== null && newLine !== null) {
-                if (oldLine === newLine) {
-                    // Unchanged line
-                    diffHtml += `<div class="diff-line diff-unchanged">
-                        <span class="diff-marker"> </span>
-                        <span class="diff-content">${escapeHtmlFn(oldLine)}</span>
-                    </div>`;
-                } else {
-                    // Changed line - show both old and new
-                    diffHtml += `<div class="diff-line diff-removed">
-                        <span class="diff-marker">-</span>
-                        <span class="diff-content">${escapeHtmlFn(oldLine)}</span>
-                    </div>`;
-                    diffHtml += `<div class="diff-line diff-added">
-                        <span class="diff-marker">+</span>
-                        <span class="diff-content">${escapeHtmlFn(newLine)}</span>
-                    </div>`;
+            if (oldLine !== null && newLine !== null && oldLine === newLine) {
+                diffHtml += `<div style="padding: 0.125rem 0;"> ${escapeHtmlFn(oldLine)}</div>`;
+            } else {
+                if (oldLine !== null) {
+                    diffHtml += `<div style="background-color: #f8d7da; padding: 0.125rem 0;"><span style="color: #dc3545; font-weight: bold;">-</span> ${escapeHtmlFn(oldLine)}</div>`;
                 }
-            } else if (oldLine !== null) {
-                // Line removed
-                diffHtml += `<div class="diff-line diff-removed">
-                    <span class="diff-marker">-</span>
-                    <span class="diff-content">${escapeHtmlFn(oldLine)}</span>
-                </div>`;
-            } else if (newLine !== null) {
-                // Line added
-                diffHtml += `<div class="diff-line diff-added">
-                    <span class="diff-marker">+</span>
-                    <span class="diff-content">${escapeHtmlFn(newLine)}</span>
-                </div>`;
+                if (newLine !== null) {
+                    diffHtml += `<div style="background-color: #d4edda; padding: 0.125rem 0;"><span style="color: #28a745; font-weight: bold;">+</span> ${escapeHtmlFn(newLine)}</div>`;
+                }
             }
         }
 
@@ -2250,15 +2268,11 @@ class ClaudeWebUI {
         document.getElementById('create-project-btn').addEventListener('click', () => this.showCreateProjectModal());
         document.getElementById('refresh-sessions-btn').addEventListener('click', () => this.refreshSessions());
 
-        // Project modal controls
-        document.getElementById('close-project-modal').addEventListener('click', () => this.hideCreateProjectModal());
-        document.getElementById('cancel-create-project').addEventListener('click', () => this.hideCreateProjectModal());
+        // Project modal controls (Bootstrap modals handle close/cancel via data-bs-dismiss)
         document.getElementById('create-project-form').addEventListener('submit', (e) => this.handleCreateProject(e));
         document.getElementById('browse-project-directory').addEventListener('click', () => this.browseProjectDirectory());
 
-        // Modal controls
-        document.getElementById('close-modal').addEventListener('click', () => this.hideCreateSessionModal());
-        document.getElementById('cancel-create').addEventListener('click', () => this.hideCreateSessionModal());
+        // Session modal controls (Bootstrap modals handle close/cancel via data-bs-dismiss)
         document.getElementById('create-session-form').addEventListener('submit', (e) => this.handleCreateSession(e));
 
         // Browse directory button
@@ -2268,9 +2282,7 @@ class ClaudeWebUI {
         document.getElementById('delete-session-btn').addEventListener('click', () => this.showDeleteSessionModal());
         document.getElementById('exit-session-btn').addEventListener('click', () => this.exitSession());
 
-        // Delete modal controls
-        document.getElementById('close-delete-modal').addEventListener('click', () => this.hideDeleteSessionModal());
-        document.getElementById('cancel-delete').addEventListener('click', () => this.hideDeleteSessionModal());
+        // Delete modal controls (Bootstrap modals handle close/cancel via data-bs-dismiss)
         document.getElementById('confirm-delete').addEventListener('click', () => this.confirmDeleteSession());
 
         // Sidebar controls
@@ -2295,18 +2307,7 @@ class ClaudeWebUI {
         // Messages area scroll detection
         document.getElementById('messages-area').addEventListener('scroll', (e) => this.handleScroll(e));
 
-        // Modal click outside to close
-        document.getElementById('create-session-modal').addEventListener('click', (e) => {
-            if (e.target.id === 'create-session-modal') {
-                this.hideCreateSessionModal();
-            }
-        });
-
-        document.getElementById('delete-session-modal').addEventListener('click', (e) => {
-            if (e.target.id === 'delete-session-modal') {
-                this.hideDeleteSessionModal();
-            }
-        });
+        // Bootstrap modals handle backdrop clicks automatically, no custom listeners needed
 
         // Window resize handling for sidebar constraints
         window.addEventListener('resize', () => this.handleWindowResize());
@@ -2412,11 +2413,11 @@ class ClaudeWebUI {
         this.currentSessionId = null;
 
         // Reset UI to no session selected state
-        document.getElementById('no-session-selected').classList.remove('hidden');
-        document.getElementById('chat-container').classList.add('hidden');
+        document.getElementById('no-session-selected').classList.remove('d-none');
+        document.getElementById('chat-container').classList.add('d-none');
 
         // Remove active state from all session items
-        document.querySelectorAll('.session-item').forEach(item => {
+        document.querySelectorAll('.list-group-item').forEach(item => {
             item.classList.remove('active');
         });
 
@@ -2528,7 +2529,7 @@ class ClaudeWebUI {
         const messageInput = document.getElementById('message-input');
 
         if (progressElement) {
-            progressElement.classList.remove('hidden');
+            progressElement.classList.remove('d-none');
         }
         if (sendButton) {
             sendButton.disabled = false; // Keep enabled for Stop functionality
@@ -2549,7 +2550,7 @@ class ClaudeWebUI {
         const sendButton = document.getElementById('send-btn');
 
         if (progressElement) {
-            progressElement.classList.add('hidden');
+            progressElement.classList.add('d-none');
         }
         if (sendButton) {
             sendButton.textContent = 'Send';
@@ -2713,7 +2714,7 @@ class ClaudeWebUI {
         // Use the unified filtering logic to determine if message should be displayed
         if (this.shouldDisplayMessage(message)) {
             Logger.debug('MESSAGE', `Adding ${source} message to UI`, message.type);
-            this.addMessageToUI(message, source === 'historical');
+            this.addMessageToUI(message, source !== 'historical');
             return { handled: true, displayed: true };
         }
 
@@ -2929,22 +2930,46 @@ class ClaudeWebUI {
         Logger.debug('UI', 'Rendering tool call', toolCall);
 
         const messagesArea = document.getElementById('messages-area');
-        const toolCallElement = this.createToolCallElement(toolCall);
+
+        // Wrap tool call in two-column layout
+        const wrapper = document.createElement('div');
+        wrapper.className = 'message-row row py-1 tool-call';
+        wrapper.id = `tool-call-wrapper-${toolCall.id}`;
+
+        const timestamp = new Date().toLocaleTimeString();
+
+        wrapper.innerHTML = `
+            <div class="col-auto message-speaker text-end pe-3" title="${timestamp}">
+                agent
+            </div>
+            <div class="col message-content-column" id="tool-call-content-${toolCall.id}">
+            </div>
+        `;
 
         // Add to DOM
-        messagesArea.appendChild(toolCallElement);
+        messagesArea.appendChild(wrapper);
+
+        // Insert the actual tool call element into the content column
+        const contentColumn = document.getElementById(`tool-call-content-${toolCall.id}`);
+        const toolCallElement = this.createToolCallElement(toolCall);
+        contentColumn.appendChild(toolCallElement);
+
         this.smartScrollToBottom();
     }
 
-    updateToolCall(toolCall) {
+    updateToolCall(toolCall, scroll = true) {
         Logger.debug('UI', 'Updating tool call', toolCall);
 
-        const existingElement = document.getElementById(`tool-call-${toolCall.id}`);
-        if (existingElement) {
+        const existingContentColumn = document.getElementById(`tool-call-content-${toolCall.id}`);
+        if (existingContentColumn) {
+            // Replace the tool call element inside the content column
             const updatedElement = this.createToolCallElement(toolCall);
-            existingElement.replaceWith(updatedElement);
-            // Trigger autoscroll when updating tool calls (e.g., when permission prompts appear)
-            this.smartScrollToBottom();
+            existingContentColumn.innerHTML = '';
+            existingContentColumn.appendChild(updatedElement);
+
+            if (scroll) {
+                this.smartScrollToBottom();
+            }
         } else {
             this.renderToolCall(toolCall);
         }
@@ -2952,22 +2977,19 @@ class ClaudeWebUI {
 
     createToolCallElement(toolCall) {
         const element = document.createElement('div');
-        element.className = 'tool-call-container';
+        element.className = 'accordion';
         element.id = `tool-call-${toolCall.id}`;
 
-        if (toolCall.isExpanded) {
-            element.innerHTML = this.createExpandedToolCallHTML(toolCall);
-        } else {
-            element.innerHTML = this.createCollapsedToolCallHTML(toolCall);
-        }
+        // Use unified accordion template
+        element.innerHTML = this.createToolCallHTML(toolCall);
 
-        // Add event delegation for click handlers
+        // Add event delegation for permission button clicks only
         this.setupToolCallEventListeners(element, toolCall);
 
         return element;
     }
 
-    createExpandedToolCallHTML(toolCall) {
+    createToolCallHTML(toolCall) {
         const statusClass = `tool-status-${toolCall.status}`;
         const statusIcon = {
             'pending': '🔄',
@@ -2980,24 +3002,29 @@ class ClaudeWebUI {
         // Get handler for this tool
         const handler = this.toolHandlerRegistry.getHandler(toolCall.name) || this.defaultToolHandler;
 
-        let content = `
-            <div class="tool-call-card ${statusClass}">
-                <div class="tool-call-header">
-                    <span class="tool-status-icon">${statusIcon}</span>
-                    <span class="tool-name">${this.escapeHtml(toolCall.name)}</span>
-                    <button class="tool-collapse-btn" data-tool-id="${toolCall.id}" title="Collapse">
-                        ▼
-                    </button>
-                </div>
+        // Generate summary for accordion button
+        let summary;
+        if (handler && handler.getCollapsedSummary) {
+            const customSummary = handler.getCollapsedSummary(toolCall);
+            summary = customSummary !== null ? customSummary : this.toolCallManager.generateCollapsedSummary(toolCall);
+        } else {
+            summary = this.toolCallManager.generateCollapsedSummary(toolCall);
+        }
 
-                <div class="tool-call-details">
-                    ${handler.renderParameters(toolCall, this.escapeHtml.bind(this))}
-                </div>
+        // Determine if accordion should be expanded
+        const collapseClass = toolCall.isExpanded ? 'accordion-collapse collapse show' : 'accordion-collapse collapse';
+        const buttonClass = toolCall.isExpanded ? 'accordion-button' : 'accordion-button collapsed';
+
+        // Build accordion body content
+        let bodyContent = `
+            <div class="tool-call-details">
+                ${handler.renderParameters(toolCall, this.escapeHtml.bind(this))}
+            </div>
         `;
 
         // Add permission prompt if needed
         if (toolCall.status === 'permission_required') {
-            content += `
+            bodyContent += `
                 <div class="tool-permission-prompt">
                     <p><strong>🔐 Permission Required</strong></p>
                     <p>Claude Code wants to use the ${toolCall.name} tool. Do you want to allow this?</p>
@@ -3015,12 +3042,12 @@ class ClaudeWebUI {
 
         // Add result if available using handler
         if (toolCall.result) {
-            content += handler.renderResult(toolCall, this.escapeHtml.bind(this));
+            bodyContent += handler.renderResult(toolCall, this.escapeHtml.bind(this));
         }
 
         // Add explanation if available
         if (toolCall.explanation) {
-            content += `
+            bodyContent += `
                 <div class="tool-explanation">
                     <strong>Explanation:</strong>
                     <div class="tool-explanation-content">${this.escapeHtml(toolCall.explanation)}</div>
@@ -3028,55 +3055,35 @@ class ClaudeWebUI {
             `;
         }
 
-        content += '</div>';
-        return content;
-    }
-
-    createCollapsedToolCallHTML(toolCall) {
-        // Get handler for this tool
-        const handler = this.toolHandlerRegistry.getHandler(toolCall.name);
-
-        // Use handler's custom summary if available, otherwise use default
-        let summary;
-        if (handler && handler.getCollapsedSummary) {
-            const customSummary = handler.getCollapsedSummary(toolCall);
-            summary = customSummary !== null ? customSummary : this.toolCallManager.generateCollapsedSummary(toolCall);
-        } else {
-            summary = this.toolCallManager.generateCollapsedSummary(toolCall);
-        }
-
+        // Return Bootstrap accordion structure
         return `
-            <div class="tool-call-collapsed" data-tool-id="${toolCall.id}" title="Click to expand">
-                <span class="tool-collapsed-summary">${this.escapeHtml(summary)}</span>
-                <span class="tool-expand-icon">▶</span>
+            <div class="accordion-item ${statusClass}">
+                <h2 class="accordion-header">
+                    <button class="${buttonClass}" type="button" data-bs-toggle="collapse" data-bs-target="#collapse-${toolCall.id}" aria-expanded="${toolCall.isExpanded}" aria-controls="collapse-${toolCall.id}">
+                        ${this.escapeHtml(summary)}
+                    </button>
+                </h2>
+                <div id="collapse-${toolCall.id}" class="${collapseClass}">
+                    <div class="accordion-body">
+                        ${bodyContent}
+                    </div>
+                </div>
             </div>
         `;
     }
 
     setupToolCallEventListeners(element, toolCall) {
-        // Handle collapse/expand button clicks
-        const collapseBtn = element.querySelector('.tool-collapse-btn');
-        if (collapseBtn) {
-            collapseBtn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                this.toggleToolCallExpansion(toolCall.id);
+        // Listen to Bootstrap collapse events to keep state in sync
+        const collapseElement = element.querySelector(`#collapse-${toolCall.id}`);
+        if (collapseElement) {
+            collapseElement.addEventListener('shown.bs.collapse', () => {
+                // Update internal state when accordion expands
+                this.toolCallManager.setToolExpansion(toolCall.id, true);
             });
-        }
 
-        // Handle expanded card header clicks for collapsing
-        const expandedHeader = element.querySelector('.tool-call-header');
-        if (expandedHeader) {
-            expandedHeader.style.cursor = 'pointer';
-            expandedHeader.addEventListener('click', () => {
-                this.toggleToolCallExpansion(toolCall.id);
-            });
-        }
-
-        // Handle collapsed card clicks for expansion
-        const collapsedCard = element.querySelector('.tool-call-collapsed');
-        if (collapsedCard) {
-            collapsedCard.addEventListener('click', () => {
-                this.toggleToolCallExpansion(toolCall.id);
+            collapseElement.addEventListener('hidden.bs.collapse', () => {
+                // Update internal state when accordion collapses
+                this.toolCallManager.setToolExpansion(toolCall.id, false);
             });
         }
 
@@ -3118,10 +3125,10 @@ class ClaudeWebUI {
     }
 
     toggleToolCallExpansion(toolUseId) {
-        const toolCall = this.toolCallManager.toggleToolExpansion(toolUseId);
-        if (toolCall) {
-            this.updateToolCall(toolCall);
-        }
+        // Bootstrap accordion handles the UI toggle via data-bs-toggle
+        // Just update the internal state
+        this.toolCallManager.toggleToolExpansion(toolUseId);
+        // No need to call updateToolCall - Bootstrap handles the DOM changes
     }
 
     handlePermissionDecision(requestId, decision, approveBtn, denyBtn) {
@@ -3541,10 +3548,10 @@ class ClaudeWebUI {
     connectSessionWebSocket() {
         if (!this.currentSessionId) return;
 
-        // Only disconnect if we have an existing connection to a different session
-        if (this.sessionWebsocket && this.sessionWebsocket.readyState === WebSocket.OPEN) {
-            Logger.debug('WS_SESSION', 'Closing existing session WebSocket connection before creating new one');
-            this.disconnectSessionWebSocket();
+        // If there's already a connection in CONNECTING or OPEN state, don't create another
+        if (this.sessionWebsocket && (this.sessionWebsocket.readyState === WebSocket.CONNECTING || this.sessionWebsocket.readyState === WebSocket.OPEN)) {
+            Logger.debug('WS_SESSION', 'WebSocket already exists in state:', this.sessionWebsocket.readyState);
+            return;
         }
 
         // Reset intentional disconnect flag for new connections
@@ -3683,108 +3690,118 @@ class ClaudeWebUI {
             return;
         }
 
-        // Clean disconnect from previous session
-        if (this.currentSessionId && this.currentSessionId !== sessionId) {
-            Logger.info('SESSION', 'Switching sessions', {from: this.currentSessionId, to: sessionId});
-            this.disconnectSessionWebSocket();
-            // Wait a moment for the disconnection to complete
-            await new Promise(resolve => setTimeout(resolve, 100));
-        }
+        // Show loading screen immediately when switching sessions
+        this.showLoading(true);
 
-        this.currentSessionId = sessionId;
+        try {
+            // Clean disconnect from previous session
+            if (this.currentSessionId && this.currentSessionId !== sessionId) {
+                Logger.info('SESSION', 'Switching sessions', {from: this.currentSessionId, to: sessionId});
+                this.disconnectSessionWebSocket();
+                // Wait a moment for the disconnection to complete
+                await new Promise(resolve => setTimeout(resolve, 100));
+            }
 
-        // Processing state will be set by loadSessionInfo() call below
+            this.currentSessionId = sessionId;
 
-        // Update UI
-        document.querySelectorAll('.session-item').forEach(item => {
-            item.classList.remove('active');
-        });
+            // Processing state will be set by loadSessionInfo() call below
 
-        const sessionElement = document.querySelector(`[data-session-id="${sessionId}"]`);
-        if (sessionElement) {
-            sessionElement.classList.add('active');
-        }
+            // Update UI
+            document.querySelectorAll('.session-item').forEach(item => {
+                item.classList.remove('active');
+            });
 
-        // Show chat container
-        document.getElementById('no-session-selected').classList.add('hidden');
-        document.getElementById('chat-container').classList.remove('hidden');
+            const sessionElement = document.querySelector(`[data-session-id="${sessionId}"]`);
+            if (sessionElement) {
+                sessionElement.classList.add('active');
+            }
 
-        // Load session info first to check state
-        await this.loadSessionInfo();
+            // Show chat container
+            document.getElementById('no-session-selected').classList.add('d-none');
+            document.getElementById('chat-container').classList.remove('d-none');
 
-        // Check if session needs to be started or is ready for use
-        const session = this.sessions.get(sessionId);
-        if (session) {
-            if (session.state === 'error') {
-                // Session is in error state, skip WebSocket initialization
-                Logger.info('SESSION', 'Session is in error state, skipping WebSocket connection', sessionId);
-                // Just load messages without attempting to connect
-            } else if (session.state === 'active' || session.state === 'running') {
-                // Session is already active, just connect WebSocket
-                Logger.info('SESSION', 'Session is already active, connecting WebSocket', sessionId);
-                this.connectSessionWebSocket();
-            } else if (session.state === 'starting') {
-                // Session is starting, wait for it to become active
-                Logger.info('SESSION', 'Session is starting, waiting for it to become active', sessionId);
-                let attempts = 0;
-                const maxAttempts = 15;
-                const pollInterval = 1000;
-                while (attempts < maxAttempts) {
-                    await new Promise(resolve => setTimeout(resolve, pollInterval));
-                    await this.loadSessionInfo();
-                    const updatedSession = this.sessions.get(sessionId);
-                    if (updatedSession && updatedSession.state === 'error') {
-                        Logger.info('SESSION', 'Session entered error state during startup, stopping wait', sessionId);
-                        break;
-                    } else if (updatedSession && (updatedSession.state === 'active' || updatedSession.state === 'running')) {
-                        Logger.info('SESSION', 'Session is now active, connecting WebSocket', sessionId);
-                        this.connectSessionWebSocket();
-                        break;
+            // Load session info first to check state
+            await this.loadSessionInfo();
+
+            // Check if session needs to be started or is ready for use
+            const session = this.sessions.get(sessionId);
+            if (session) {
+                if (session.state === 'error') {
+                    // Session is in error state, skip WebSocket initialization
+                    Logger.info('SESSION', 'Session is in error state, skipping WebSocket connection', sessionId);
+                    // Just load messages without attempting to connect
+                } else if (session.state === 'active' || session.state === 'running') {
+                    // Session is already active, just connect WebSocket
+                    Logger.info('SESSION', 'Session is already active, connecting WebSocket', sessionId);
+                    this.connectSessionWebSocket();
+                } else if (session.state === 'starting') {
+                    // Session is starting, wait for it to become active
+                    Logger.info('SESSION', 'Session is starting, waiting for it to become active', sessionId);
+                    let attempts = 0;
+                    const maxAttempts = 15;
+                    const pollInterval = 1000;
+                    while (attempts < maxAttempts) {
+                        await new Promise(resolve => setTimeout(resolve, pollInterval));
+                        await this.loadSessionInfo();
+                        const updatedSession = this.sessions.get(sessionId);
+                        if (updatedSession && updatedSession.state === 'error') {
+                            Logger.info('SESSION', 'Session entered error state during startup, stopping wait', sessionId);
+                            break;
+                        } else if (updatedSession && (updatedSession.state === 'active' || updatedSession.state === 'running')) {
+                            Logger.info('SESSION', 'Session is now active, connecting WebSocket', sessionId);
+                            this.connectSessionWebSocket();
+                            break;
+                        }
+                        attempts++;
+                        Logger.debug('SESSION', 'Waiting for session to become active', {sessionId, attempt: attempts, max: maxAttempts});
                     }
-                    attempts++;
-                    Logger.debug('SESSION', 'Waiting for session to become active', {sessionId, attempt: attempts, max: maxAttempts});
-                }
 
-                if (attempts >= maxAttempts) {
-                    Logger.warn('SESSION', 'Session did not become active', {sessionId, maxAttempts, seconds: maxAttempts * pollInterval / 1000});
-                }
-            } else {
-                // Session needs to be started (both fresh sessions and existing sessions)
-                // The server-side logic will handle whether to create fresh or resume based on claude_code_session_id
-                Logger.info('SESSION', 'Starting session', {sessionId, currentState: session.state});
-                await this.apiRequest(`/api/sessions/${sessionId}/start`, { method: 'POST' });
-
-                // Wait for session to be fully active before connecting WebSocket
-                let attempts = 0;
-                const maxAttempts = 15; // Increased from 10 to allow for longer SDK initialization
-                const pollInterval = 1000; // Increased from 200ms to 1 second
-                while (attempts < maxAttempts) {
-                    await new Promise(resolve => setTimeout(resolve, pollInterval));
-                    await this.loadSessionInfo();
-                    const updatedSession = this.sessions.get(sessionId);
-                    if (updatedSession && updatedSession.state === 'error') {
-                        Logger.info('SESSION', 'Session entered error state during startup, stopping wait', sessionId);
-                        break;
-                    } else if (updatedSession && (updatedSession.state === 'active' || updatedSession.state === 'running')) {
-                        Logger.info('SESSION', 'Session is now active, connecting WebSocket', sessionId);
-                        this.connectSessionWebSocket();
-                        break;
+                    if (attempts >= maxAttempts) {
+                        Logger.warn('SESSION', 'Session did not become active', {sessionId, maxAttempts, seconds: maxAttempts * pollInterval / 1000});
                     }
-                    attempts++;
-                    Logger.debug('SESSION', 'Waiting for session to become active', {sessionId, attempt: attempts, max: maxAttempts});
-                }
+                } else {
+                    // Session needs to be started (both fresh sessions and existing sessions)
+                    // The server-side logic will handle whether to create fresh or resume based on claude_code_session_id
+                    Logger.info('SESSION', 'Starting session', {sessionId, currentState: session.state});
+                    await this.apiRequest(`/api/sessions/${sessionId}/start`, { method: 'POST' });
 
-                if (attempts >= maxAttempts) {
-                    Logger.warn('SESSION', 'Session did not become active', {sessionId, maxAttempts, seconds: maxAttempts * pollInterval / 1000});
+                    // Wait for session to be fully active before connecting WebSocket
+                    let attempts = 0;
+                    const maxAttempts = 15; // Increased from 10 to allow for longer SDK initialization
+                    const pollInterval = 1000; // Increased from 200ms to 1 second
+                    while (attempts < maxAttempts) {
+                        await new Promise(resolve => setTimeout(resolve, pollInterval));
+                        await this.loadSessionInfo();
+                        const updatedSession = this.sessions.get(sessionId);
+                        if (updatedSession && updatedSession.state === 'error') {
+                            Logger.info('SESSION', 'Session entered error state during startup, stopping wait', sessionId);
+                            break;
+                        } else if (updatedSession && (updatedSession.state === 'active' || updatedSession.state === 'running')) {
+                            Logger.info('SESSION', 'Session is now active, connecting WebSocket', sessionId);
+                            this.connectSessionWebSocket();
+                            break;
+                        }
+                        attempts++;
+                        Logger.debug('SESSION', 'Waiting for session to become active', {sessionId, attempt: attempts, max: maxAttempts});
+                    }
+
+                    if (attempts >= maxAttempts) {
+                        Logger.warn('SESSION', 'Session did not become active', {sessionId, maxAttempts, seconds: maxAttempts * pollInterval / 1000});
+                    }
                 }
             }
+
+            // Load messages after session is ready
+            this.loadMessages();
+
+            // Load session info to get current processing state from backend
+            this.loadSessionInfo();
+        } catch (error) {
+            Logger.error('SESSION', 'Error selecting session', error);
+        } finally {
+            // Hide loading screen when session switch is complete
+            this.showLoading(false);
         }
-
-        // Load messages after session is ready
-        this.loadMessages();
-
-        // Load session info to get current processing state from backend
-        this.loadSessionInfo();
     }
 
     async renderSessions() {
@@ -3806,31 +3823,32 @@ class ClaudeWebUI {
 
     async createProjectElement(project) {
         const projectElement = document.createElement('div');
-        projectElement.className = 'project-item';
+        projectElement.className = 'card mb-2';
         projectElement.setAttribute('data-project-id', project.project_id);
 
-        // Project header
+        // Project header (card header)
         const projectHeader = document.createElement('div');
-        projectHeader.className = 'project-header';
+        projectHeader.className = 'card-header bg-white d-flex align-items-center gap-2 p-2 cursor-pointer';
+        projectHeader.style.cursor = 'pointer';
 
         // Expansion arrow
         const expansionArrow = document.createElement('span');
-        expansionArrow.className = 'expansion-arrow';
+        expansionArrow.className = 'text-muted';
         expansionArrow.textContent = project.is_expanded ? '▼' : '▶';
 
         // Project name and path
         const projectInfo = document.createElement('div');
-        projectInfo.className = 'project-info';
+        projectInfo.className = 'flex-grow-1';
         const formattedPath = this.projectManager.formatPath(project.working_directory);
         projectInfo.innerHTML = `
-            <span class="project-name">${this.escapeHtml(project.name)}</span>
-            <span class="project-path" title="${this.escapeHtml(project.working_directory)}">${this.escapeHtml(formattedPath)}</span>
+            <div class="fw-semibold">${this.escapeHtml(project.name)}</div>
+            <small class="text-muted font-monospace" title="${this.escapeHtml(project.working_directory)}">${this.escapeHtml(formattedPath)}</small>
         `;
 
-        // Hover-reveal add session button
+        // Add session button
         const addSessionBtn = document.createElement('button');
-        addSessionBtn.className = 'add-session-btn';
-        addSessionBtn.textContent = '+';
+        addSessionBtn.className = 'btn btn-sm btn-outline-primary';
+        addSessionBtn.innerHTML = '+';
         addSessionBtn.title = 'Add session to project';
         addSessionBtn.addEventListener('click', async (e) => {
             e.stopPropagation();
@@ -3848,14 +3866,14 @@ class ClaudeWebUI {
 
         projectElement.appendChild(projectHeader);
 
-        // Project status line (seamless multi-segment)
+        // Project status line (progress bar style)
         const statusLine = await this.createProjectStatusLine(project);
         projectElement.appendChild(statusLine);
 
-        // Sessions container (collapsed or expanded)
+        // Sessions container (collapsed or expanded) - use list group
         if (project.is_expanded && project.session_ids && project.session_ids.length > 0) {
             const sessionsContainer = document.createElement('div');
-            sessionsContainer.className = 'project-sessions';
+            sessionsContainer.className = 'list-group list-group-flush';
 
             // Use cached session data instead of fetching from API
             const sessions = project.session_ids
@@ -3875,14 +3893,15 @@ class ClaudeWebUI {
 
     async createProjectStatusLine(project) {
         const statusLine = document.createElement('div');
-        statusLine.className = 'project-status-line';
+        statusLine.className = 'progress' ;
+        statusLine.style.height = '4px';
+        statusLine.style.borderRadius = '0';
 
         if (!project.session_ids || project.session_ids.length === 0) {
             // Empty project - show single gray segment
             const emptySegment = document.createElement('div');
-            emptySegment.className = 'status-segment';
+            emptySegment.className = 'progress-bar bg-secondary';
             emptySegment.style.width = '100%';
-            emptySegment.style.backgroundColor = '#9ca3af'; // gray
             statusLine.appendChild(emptySegment);
             return statusLine;
         }
@@ -3896,25 +3915,43 @@ class ClaudeWebUI {
 
         for (const session of sessions) {
             const segment = document.createElement('div');
-            segment.className = 'status-segment';
+            segment.className = 'progress-bar';
             segment.style.width = segmentWidth;
 
             // Determine color based on session state
             const isProcessing = session.is_processing || false;
             const displayState = isProcessing ? 'processing' : session.state;
-            const color = this.getSessionStateColor(displayState);
+            const bgClass = this.getSessionStateBgClass(displayState);
 
-            segment.style.backgroundColor = color;
+            segment.classList.add(bgClass);
 
             // Add animation for active states
             if (displayState === 'starting' || displayState === 'processing') {
-                segment.classList.add('pulse');
+                segment.classList.add('progress-bar-striped', 'progress-bar-animated');
             }
 
             statusLine.appendChild(segment);
         }
 
         return statusLine;
+    }
+
+    getSessionStateBgClass(state) {
+        // Map states to Bootstrap background classes
+        const bgMap = {
+            'created': 'bg-secondary',
+            'CREATED': 'bg-secondary',
+            'starting': 'bg-success',
+            'Starting': 'bg-success',
+            'running': 'bg-success',
+            'active': 'bg-success',
+            'processing': 'bg-primary',
+            'paused': 'bg-secondary',
+            'terminated': 'bg-secondary',
+            'error': 'bg-danger',
+            'failed': 'bg-danger'
+        };
+        return bgMap[state] || 'bg-secondary';
     }
 
     getSessionStateColor(state) {
@@ -3938,7 +3975,7 @@ class ClaudeWebUI {
     createSessionElement(session, projectId) {
         const sessionId = session.session_id;
         const sessionElement = document.createElement('div');
-        sessionElement.className = 'session-item';
+        sessionElement.className = 'list-group-item list-group-item-action';
 
         // Add active class if this is the currently selected session
         if (sessionId === this.currentSessionId) {
@@ -3973,16 +4010,16 @@ class ClaudeWebUI {
         const displayName = session.name || sessionId;
 
         sessionElement.innerHTML = `
-            <div class="session-header">
-                <div class="session-name" title="${sessionId}">
+            <div class="d-flex align-items-center gap-2">
+                <div class="flex-grow-1" title="${sessionId}">
                     <span class="session-name-display">${this.escapeHtml(displayName)}</span>
-                    <input class="session-name-edit" type="text" value="${this.escapeHtml(displayName)}" style="display: none;">
+                    <input class="form-control form-control-sm session-name-edit" type="text" value="${this.escapeHtml(displayName)}" style="display: none;">
                 </div>
             </div>
         `;
 
         // Insert status indicator at the beginning
-        const sessionHeader = sessionElement.querySelector('.session-header');
+        const sessionHeader = sessionElement.querySelector('.d-flex');
         sessionHeader.insertBefore(statusIndicator, sessionHeader.firstChild);
 
         // Add double-click editing functionality
@@ -4001,7 +4038,16 @@ class ClaudeWebUI {
 
     async toggleProjectExpansion(projectId) {
         try {
-            await this.projectManager.toggleExpansion(projectId);
+            const isExpanded = await this.projectManager.toggleExpansion(projectId);
+
+            // If project was collapsed and current session belongs to this project, exit the session
+            if (!isExpanded && this.currentSessionId) {
+                const sessionProjectId = this._findProjectForSession(this.currentSessionId);
+                if (sessionProjectId === projectId) {
+                    this.exitSession();
+                }
+            }
+
             await this.updateProjectInDOM(projectId, 'expansion-toggled');
         } catch (error) {
             Logger.error('PROJECT', `Failed to toggle expansion for ${projectId}`, error);
@@ -4044,19 +4090,19 @@ class ClaudeWebUI {
         switch (updateType) {
             case 'expansion-toggled':
                 // Update arrow
-                const arrow = projectElement.querySelector('.expansion-arrow');
+                const arrow = projectElement.querySelector('.text-muted');
                 if (arrow) {
                     arrow.textContent = project.is_expanded ? '▼' : '▶';
                 }
 
-                // Show or hide sessions container
-                let sessionsContainer = projectElement.querySelector('.project-sessions');
+                // Show or hide sessions container (using Bootstrap list-group class)
+                let sessionsContainer = projectElement.querySelector('.list-group.list-group-flush');
 
                 if (project.is_expanded) {
                     // Need to show sessions - create container if doesn't exist
                     if (!sessionsContainer && project.session_ids && project.session_ids.length > 0) {
                         sessionsContainer = document.createElement('div');
-                        sessionsContainer.className = 'project-sessions';
+                        sessionsContainer.className = 'list-group list-group-flush';
 
                         // Use cached session data instead of fetching from API
                         const sessions = project.session_ids
@@ -4086,17 +4132,14 @@ class ClaudeWebUI {
                 break;
 
             case 'metadata-changed':
-                // Update project name and path
-                const projectNameEl = projectElement.querySelector('.project-name');
-                const projectPathEl = projectElement.querySelector('.project-path');
-
-                if (projectNameEl) {
-                    projectNameEl.textContent = project.name;
-                }
-                if (projectPathEl) {
+                // Update project name and path in the new Bootstrap structure
+                const projectInfo = projectElement.querySelector('.flex-grow-1');
+                if (projectInfo) {
                     const formattedPath = this.projectManager.formatPath(project.working_directory);
-                    projectPathEl.textContent = formattedPath;
-                    projectPathEl.title = project.working_directory;
+                    projectInfo.innerHTML = `
+                        <div class="fw-semibold">${this.escapeHtml(project.name)}</div>
+                        <small class="text-muted font-monospace" title="${this.escapeHtml(project.working_directory)}">${this.escapeHtml(formattedPath)}</small>
+                    `;
                 }
                 break;
         }
@@ -4215,12 +4258,12 @@ class ClaudeWebUI {
 
         // If project is expanded, add session element to container
         if (project.is_expanded) {
-            let sessionsContainer = projectElement.querySelector('.project-sessions');
+            let sessionsContainer = projectElement.querySelector('.list-group.list-group-flush');
 
             // Create container if it doesn't exist
             if (!sessionsContainer) {
                 sessionsContainer = document.createElement('div');
-                sessionsContainer.className = 'project-sessions';
+                sessionsContainer.className = 'list-group list-group-flush';
                 projectElement.appendChild(sessionsContainer);
             }
 
@@ -4236,10 +4279,11 @@ class ClaudeWebUI {
     async showCreateSessionModalForProject(projectId) {
         this.currentProjectId = projectId;
         // Show modal without working directory field (project determines this)
-        const modal = document.getElementById('create-session-modal');
+        const modalElement = document.getElementById('create-session-modal');
         const workingDirGroup = document.getElementById('working-directory-group');
         workingDirGroup.style.display = 'none'; // Hide working directory field
-        modal.classList.remove('hidden');
+        const modal = new bootstrap.Modal(modalElement);
+        modal.show();
     }
 
     startEditingSessionName(sessionId, nameDisplay, nameInput) {
@@ -4348,7 +4392,7 @@ class ClaudeWebUI {
         if (sessionData.session.state === 'error' && sessionData.session.error_message) {
             // Show error message in top bar
             errorMessageElement.textContent = sessionData.session.error_message;
-            errorMessageElement.classList.remove('hidden');
+            errorMessageElement.classList.remove('d-none');
             sessionInfoBar.classList.add('error');
             Logger.info('UI', 'Displaying error message in top bar', sessionData.session.error_message);
 
@@ -4357,7 +4401,7 @@ class ClaudeWebUI {
             this.setInputControlsEnabled(false);
         } else {
             // Hide error message and remove error styling
-            errorMessageElement.classList.add('hidden');
+            errorMessageElement.classList.add('d-none');
             sessionInfoBar.classList.remove('error');
 
             // Check processing state from backend and update UI accordingly
@@ -4400,9 +4444,9 @@ class ClaudeWebUI {
 
         // Show/hide status bar based on session state
         if (isActive) {
-            statusBar.classList.remove('hidden');
+            statusBar.classList.remove('d-none');
         } else {
-            statusBar.classList.add('hidden');
+            statusBar.classList.add('d-none');
             return;
         }
 
@@ -4435,9 +4479,6 @@ class ClaudeWebUI {
 
         // Set description as tooltip on the clickable area
         permissionModeClickable.title = config.description;
-
-        // Update bar styling with color
-        statusBar.className = `status-bar status-bar-${config.color}`;
     }
 
     async cyclePermissionMode() {
@@ -4507,15 +4548,16 @@ class ClaudeWebUI {
 
         // Use metadata for enhanced styling if available
         const subtype = message.subtype || message.metadata?.subtype;
-        const messageClass = subtype ? `message ${message.type} ${subtype}` : `message ${message.type}`;
+        const messageClass = subtype ? `message-row row py-1 ${message.type} ${subtype}` : `message-row row py-1 ${message.type}`;
         messageElement.className = messageClass;
 
-        // Add tooltip for client_launched messages
-        if (message.type === 'system' && subtype === 'client_launched') {
-            messageElement.title = `Session ID: ${message.session_id || 'Unknown'}`;
-        }
-
         const timestamp = new Date(message.timestamp).toLocaleTimeString();
+
+        // Determine speaker label
+        let speakerLabel = message.type;
+        if (message.type === 'assistant') {
+            speakerLabel = 'agent';
+        }
 
         // Build content using standardized approach
         let contentHtml = '';
@@ -4548,19 +4590,15 @@ class ClaudeWebUI {
             contentHtml = this._formatMessageContent(message, content);
         }
 
-        // Special handling for session state messages (client_launched, interrupt)
-        if (message.type === 'system' && (subtype === 'client_launched' || subtype === 'interrupt')) {
-            // Simple one-liner for session state messages - just the content
-            messageElement.innerHTML = `${contentHtml}`;
-        } else {
-            // Regular message format with header and timestamp
-            const headerText = this._getMessageHeader(message);
-            messageElement.innerHTML = `
-                <div class="message-header">${headerText}</div>
+        // Two-column layout: speaker | content
+        messageElement.innerHTML = `
+            <div class="col-auto message-speaker text-end pe-3" title="${timestamp}">
+                ${speakerLabel}
+            </div>
+            <div class="col message-content-column">
                 ${contentHtml}
-                <div class="message-timestamp">${timestamp}</div>
-            `;
-        }
+            </div>
+        `;
 
         messagesArea.appendChild(messageElement);
 
@@ -4639,11 +4677,8 @@ class ClaudeWebUI {
             return `<div class="message-content message-empty">[Empty message]</div>`;
         }
 
-        // Trim leading/trailing whitespace for assistant messages
-        const displayContent = message.type === 'assistant' ? content.trim() : content;
-
-        // Regular content with proper escaping
-        return `<div class="message-content">${this.escapeHtml(displayContent)}</div>`;
+        // Trim leading/trailing whitespace (internal newlines preserved by CSS white-space: pre-wrap)
+        return `<div class="message-content">${this.escapeHtml(content.trim())}</div>`;
     }
 
     /**
@@ -4739,11 +4774,17 @@ class ClaudeWebUI {
     // Modal Management
     showCreateSessionModal() {
         document.getElementById('working-directory').value = '.';
-        document.getElementById('create-session-modal').classList.remove('hidden');
+        const modalElement = document.getElementById('create-session-modal');
+        const modal = new bootstrap.Modal(modalElement);
+        modal.show();
     }
 
     hideCreateSessionModal() {
-        document.getElementById('create-session-modal').classList.add('hidden');
+        const modalElement = document.getElementById('create-session-modal');
+        const modal = bootstrap.Modal.getInstance(modalElement);
+        if (modal) {
+            modal.hide();
+        }
         document.getElementById('create-session-form').reset();
     }
 
@@ -4773,11 +4814,17 @@ class ClaudeWebUI {
 
     // Project Modal Methods
     showCreateProjectModal() {
-        document.getElementById('create-project-modal').classList.remove('hidden');
+        const modalElement = document.getElementById('create-project-modal');
+        const modal = new bootstrap.Modal(modalElement);
+        modal.show();
     }
 
     hideCreateProjectModal() {
-        document.getElementById('create-project-modal').classList.add('hidden');
+        const modalElement = document.getElementById('create-project-modal');
+        const modal = bootstrap.Modal.getInstance(modalElement);
+        if (modal) {
+            modal.hide();
+        }
         document.getElementById('create-project-form').reset();
     }
 
@@ -4815,11 +4862,17 @@ class ClaudeWebUI {
 
         // Update modal content
         document.getElementById('delete-session-name').textContent = sessionName;
-        document.getElementById('delete-session-modal').classList.remove('hidden');
+        const modalElement = document.getElementById('delete-session-modal');
+        const modal = new bootstrap.Modal(modalElement);
+        modal.show();
     }
 
     hideDeleteSessionModal() {
-        document.getElementById('delete-session-modal').classList.add('hidden');
+        const modalElement = document.getElementById('delete-session-modal');
+        const modal = bootstrap.Modal.getInstance(modalElement);
+        if (modal) {
+            modal.hide();
+        }
     }
 
     async confirmDeleteSession() {
@@ -4898,9 +4951,9 @@ class ClaudeWebUI {
     showLoading(show) {
         const overlay = document.getElementById('loading-overlay');
         if (show) {
-            overlay.classList.remove('hidden');
+            overlay.classList.remove('d-none');
         } else {
-            overlay.classList.add('hidden');
+            overlay.classList.add('d-none');
         }
     }
 
@@ -4934,11 +4987,11 @@ class ClaudeWebUI {
 
         if (this.autoScrollEnabled) {
             button.textContent = '📜 Auto-scroll: ON';
-            button.className = 'btn btn-small btn-secondary auto-scroll-enabled';
+            button.className = 'btn btn-sm btn-outline-secondary';
             this.smartScrollToBottom();
         } else {
             button.textContent = '📜 Auto-scroll: OFF';
-            button.className = 'btn btn-small btn-secondary auto-scroll-disabled';
+            button.className = 'btn btn-sm btn-secondary';
         }
     }
 
@@ -5232,20 +5285,19 @@ class ClaudeWebUI {
     // Sidebar Management
     toggleSidebar() {
         const sidebar = document.getElementById('sidebar');
+        const collapseBtn = document.getElementById('sidebar-collapse-btn');
         this.sidebarCollapsed = !this.sidebarCollapsed;
 
         if (this.sidebarCollapsed) {
-            // Store current width before collapsing
-            this.sidebarWidth = sidebar.offsetWidth;
-            // Force collapse width via inline style to override any previous inline styles
-            sidebar.style.width = '50px';
-            sidebar.classList.add('collapsed');
-            document.getElementById('sidebar-collapse-btn').title = 'Expand sidebar';
+            // Hide sidebar completely using Bootstrap's d-none
+            sidebar.classList.add('d-none');
+            collapseBtn.innerHTML = '›'; // Change arrow direction
+            collapseBtn.title = 'Show sidebar';
         } else {
-            // Restore the previous width
-            sidebar.style.width = `${this.sidebarWidth}px`;
-            sidebar.classList.remove('collapsed');
-            document.getElementById('sidebar-collapse-btn').title = 'Collapse sidebar';
+            // Show sidebar using Bootstrap
+            sidebar.classList.remove('d-none');
+            collapseBtn.innerHTML = '‹'; // Change arrow direction
+            collapseBtn.title = 'Hide sidebar';
         }
     }
 
@@ -5263,7 +5315,8 @@ class ClaudeWebUI {
         if (!this.isResizing) return;
 
         const sidebar = document.getElementById('sidebar');
-        const containerRect = document.querySelector('.main-content').getBoundingClientRect();
+        // Get the main content container (parent of sidebar)
+        const containerRect = sidebar.parentElement.getBoundingClientRect();
         const newWidth = e.clientX - containerRect.left;
 
         // Enforce constraints: min 200px, max 30% of viewport width

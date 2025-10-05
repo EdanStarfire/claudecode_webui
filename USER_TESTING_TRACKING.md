@@ -79,7 +79,6 @@
 [x] bug: delete session modal needs margins or padding
 [x] bug: delete session should remove session from session list on left
 [x] bug: assistant message content should be trimmed to remove leading/trailing newlines
-
 [x] bug: existing projects not loading at startup
 [x] bug: session creation button not causing new session modal to appear.
 [x] bug: project clicks result in Unknown UI WebSocket message type project_updated
@@ -87,15 +86,20 @@
 [x] bug: re-rendering madness - removes all projects, then re-draws all projects with the new session included, then shows only appropriate new sessions in the list, and then shows lots of duplicate project+session (added it several times - maybe 4-6 times) in the sidebar and then removes them all again and re-renders the sidebar with two of the new project/session.
 [x] bug: color of solid green indicator not matching the project status line color (currently solid green = blue)
 [x] bug: sessions not selected (processing in the background) do not reflect their status changes until selected.
-[ ] qol: when collapsing a project, go to the "no session selected pane"
-
+[x] qol: when collapsing a project, go to the "no session selected pane"
+[x] bug: permission results don't seem to get caught until after reselecting the session, causing it to just hang in processing mode (processing bar visible, input box disabled, etc) - it also resulted in the tool not being actually ran.
+[ ] bug: Fix the formatting of the tool handling as it's missing it's borders, backgrounds, and such
+[x] bug: Clean up diff view now that we're on bootstrap
+[x] bug: New websocket disconnect loop occuring
+[x] bug: Newlines should not be trimmed from assistant and user responses.
+[x] bug: Double Tool Type in accordian header
 
 # Polish
-[ ] qol: Better diff viewer (currently just alternates different lines)
-[ ] qol: Loading screen for when switching sessions to hide the previous session's content while loading
+[x] qol: Better diff viewer (currently just alternates different lines)
+[x] qol: Loading screen for when switching sessions to hide the previous session's content while loading
 
 # Cleanup
-[ ] qol: Redirect app.log to the data/session folder for debugging purposes
+[x] qol: Redirect app.log to the data/session folder for debugging purposes
 [ ] qol: Refactor code files for smaller sizes and easier organization
 [x] qol: Remove debug messages for WS_LIFECYCLE and Ping - only leave logs where they throw issues
 
@@ -110,9 +114,10 @@
 [ ] feat: Enable bypassPermissions mode switch with confirmation and warning
 [ ] feat: Support markdown for assistant responses (and user input?)
 [ ] feat: Folder browser for folder selection
+[ ] feat: File browser for file folder exploration and viewingS
 
 # Major Features
 [x] feat: Project support
 [ ] feat: Application Configuration Support
-[ ] qol: Reskinning the entire app to be more aesthetic
+[x] qol: Reskinning the entire app to be more aesthetic (bootstrap)
 [ ] qol: Better mobile layout

@@ -1800,6 +1800,110 @@ data/
 
 ---
 
+## Phase 4.1: Bootstrap UI Migration & UX Polish ✅ COMPLETE
+**Goal**: Migrate UI to Bootstrap 5 framework and polish user experience with professional styling
+**Status**: Complete - full Bootstrap integration with enhanced diff viewing and UI improvements
+
+### Overview
+Complete migration from custom CSS framework to Bootstrap 5, implementing professional diff viewing, improving modal handling, and enhancing overall UI/UX with modern component library.
+
+### Feature Implementation
+
+#### 1. Bootstrap 5 Integration ✅
+- Migrated all modals to Bootstrap 5 data attributes and components
+- Replaced custom modal close handlers with Bootstrap's built-in `data-bs-dismiss`
+- Updated modal structure to use Bootstrap classes and utilities
+- Integrated Bootstrap utility classes throughout the UI
+
+#### 2. Professional Diff Viewing ✅
+- Integrated diff.js and diff2html libraries via CDN
+- Implemented unified diff format with proper syntax highlighting
+- Added fallback simple diff view for cases where libraries fail to load
+- Enhanced Edit and MultiEdit tool handlers with professional diff rendering
+- Replaced custom line-by-line diff with industry-standard diff visualization
+
+#### 3. Tool Call UI Refactor ✅
+- Migrated from custom collapsible cards to Bootstrap accordions
+- Unified tool call expansion/collapse with Bootstrap collapse components
+- Removed manual event listeners in favor of Bootstrap data attributes
+- Enhanced tool call styling with Bootstrap accordion classes
+- Added state synchronization between ToolCallManager and Bootstrap
+
+#### 4. Message Layout Improvements ✅
+- Implemented two-column grid system for messages (speaker + content)
+- Enhanced message rendering with consistent Bootstrap layout
+- Fixed newline preservation in assistant and user responses
+- Improved tool call wrapper structure with proper column layout
+- Added timestamp display with Bootstrap utilities
+
+#### 5. WebSocket Connection Stability ✅
+- Fixed duplicate WebSocket connection bug by checking CONNECTING/OPEN states
+- Prevented connection loop by validating state before creating new connections
+- Enhanced connection state management with proper lifecycle handling
+
+#### 6. CSS Organization ✅
+- Extracted application-specific styles to [static/custom.css](static/custom.css)
+- Reorganized [static/styles.css](static/styles.css) to contain core layout and Bootstrap overrides
+- Removed duplicate/redundant style definitions
+- Added diff2html library styles for professional diff rendering
+- Improved maintainability with clear separation of concerns
+
+### Technical Implementation
+
+**Modified Files**:
+- `static/app.js` - Tool handler diff integration, accordion refactor, message layout improvements
+- `static/index.html` - Bootstrap modal structure, diff library imports, grid layout system
+- `static/styles.css` - Core layout, Bootstrap overrides, diff2html styles
+- `USER_TESTING_TRACKING.md` - Updated completion status for all UX improvements
+
+**New Files**:
+- `static/custom.css` - Application-specific styles (connection status, sidebar, sessions, messages, etc.)
+
+**Backup Files Created** (NOT COMMITTED):
+- `static/styles.css.backup`
+- `static/styles.css.bootstrap_migration_backup`
+- `static/styles.css.old`
+
+### User Experience Impact
+- Professional diff viewing with syntax-highlighted unified diffs
+- Cleaner modal interactions with Bootstrap's built-in handling
+- Consistent UI styling with modern component library
+- Improved tool call expansion/collapse with accordion components
+- Enhanced message readability with preserved formatting
+- Stable WebSocket connections without disconnect loops
+
+### Bug Fixes Completed
+- ✅ Fixed tool formatting with proper borders, backgrounds, and spacing
+- ✅ Fixed diff view with professional library-based rendering
+- ✅ Fixed websocket disconnect loop causing connection instability
+- ✅ Fixed newlines being trimmed from messages (now preserved)
+- ✅ Fixed double tool type display in accordion headers
+- ✅ Fixed permission result handling causing session hangs
+
+### Quality of Life Improvements
+- ✅ Better diff viewer with unified diff format and fallback
+- ✅ Loading screen when switching sessions to hide previous content
+- ✅ Log redirection to data/session folder for debugging
+- ✅ Reskinned entire app with Bootstrap for aesthetic improvement
+- ✅ Project collapse now navigates to "no session selected" pane
+
+### Success Criteria
+- ✅ Bootstrap 5 fully integrated with all components migrated
+- ✅ Professional diff viewing with diff.js and diff2html libraries
+- ✅ Tool calls use Bootstrap accordions with proper state management
+- ✅ Modals use Bootstrap data attributes (no manual close handlers)
+- ✅ WebSocket connections are stable without disconnect loops
+- ✅ Message formatting preserved (newlines, whitespace)
+- ✅ CSS organized into core styles and application-specific custom styles
+- ✅ All backup files excluded from version control
+
+### Impact Summary
+Successfully migrated to Bootstrap 5 framework while significantly improving diff viewing capabilities, enhancing tool call UI with accordion components, fixing critical WebSocket stability issues, and organizing CSS for better maintainability. The application now has a modern, professional appearance with industry-standard UI components and visualization libraries.
+
+**Total Changes**: 4 modified files, 1 new file, ~2000+ lines of code changes
+
+---
+
 ## Future Phases (Post-MVP)
 - **Phase 5**: Configuration management and settings UI
 - **Enhancement**: Advanced mobile optimizations
