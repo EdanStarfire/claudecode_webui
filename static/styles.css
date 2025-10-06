@@ -14,6 +14,22 @@ html {
 
 /* ========== CRITICAL LAYOUT FIXES ========== */
 
+/* Hamburger button styling */
+#sidebar-toggle-btn {
+    min-width: 40px;
+    padding: 0.25rem 0.5rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+#sidebar-toggle-icon {
+    font-size: 1.2rem;
+    line-height: 1;
+    display: flex;
+    align-items: center;
+}
+
 /* Sidebar: Make it resizable with handle */
 #sidebar {
     position: relative;
@@ -367,4 +383,83 @@ html {
 /* Status bar layout fix */
 #status-bar.d-flex {
     display: flex !important; /* Ensure flex layout when not hidden */
+}
+
+/* ========== MOBILE RESPONSIVE LAYOUT ========== */
+
+/* Mobile overlay backdrop */
+#sidebar-backdrop {
+    display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.5);
+    z-index: 1040;
+    opacity: 0;
+    transition: opacity 0.3s ease;
+    pointer-events: none;
+}
+
+#sidebar-backdrop.show {
+    display: block;
+    opacity: 1;
+    pointer-events: auto;
+}
+
+/* Mobile styles (<768px) */
+@media (max-width: 767px) {
+    /* Header uses sticky positioning to work with browser address bar */
+    header {
+        position: sticky;
+        top: 0;
+        z-index: 1050;
+    }
+
+    /* Backdrop positioned below header */
+    #sidebar-backdrop {
+        top: 0;
+        padding-top: 0;
+    }
+
+    /* Sidebar becomes overlay on mobile - positioned below header */
+    #sidebar {
+        position: fixed !important;
+        top: 0;
+        left: 0;
+        bottom: 0;
+        height: 100vh;
+        padding-top: calc(2rem + 2px); /* Header height: py-2 padding + border */
+        width: 85vw !important; /* Use 85% of viewport width */
+        max-width: 350px !important;
+        min-width: unset !important;
+        z-index: 1045;
+        transform: translateX(-100%);
+        transition: transform 0.3s ease;
+        box-shadow: 2px 0 8px rgba(0, 0, 0, 0.15);
+    }
+
+    #sidebar.mobile-open {
+        transform: translateX(0);
+    }
+
+    /* Hide resize handle on mobile */
+    .sidebar-resize-handle {
+        display: none !important;
+    }
+
+    /* Ensure main content takes full width on mobile */
+    main {
+        width: 100% !important;
+    }
+
+    /* Adjust header for mobile */
+    header h1 {
+        font-size: 1rem !important;
+    }
+
+    #sidebar-toggle-btn {
+        padding: 0.2rem 0.4rem;
+    }
 }

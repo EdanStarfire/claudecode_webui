@@ -21,23 +21,26 @@
     <div class="container-fluid vh-100 d-flex flex-column p-0">
         <!-- Header -->
         <header class="bg-white border-bottom shadow-sm d-flex justify-content-between align-items-center px-3 py-2">
-            <h1 class="mb-0 fs-4">Claude Code WebUI</h1>
+            <div class="d-flex align-items-center gap-2">
+                <button id="sidebar-toggle-btn" class="btn btn-sm btn-outline-secondary" title="Toggle sidebar">
+                    <span id="sidebar-toggle-icon">☰</span>
+                </button>
+                <h1 class="mb-0 fs-4">Claude Code WebUI</h1>
+            </div>
             <div class="d-flex align-items-center gap-2">
                 <span id="connection-indicator" class="badge bg-secondary">Disconnected</span>
             </div>
         </header>
 
+        <!-- Mobile backdrop for sidebar overlay -->
+        <div id="sidebar-backdrop"></div>
+
         <!-- Main Content -->
         <div class="d-flex flex-grow-1 overflow-hidden position-relative">
-            <!-- Sidebar Toggle Button (always visible) -->
-            <button id="sidebar-collapse-btn" class="btn btn-sm btn-secondary position-absolute"
-                    style="left: 0; top: 10px; z-index: 1050; border-radius: 0 0.25rem 0.25rem 0;"
-                    title="Hide sidebar">‹</button>
-
             <!-- Sidebar -->
             <aside class="col-auto bg-light border-end d-flex flex-column overflow-auto" id="sidebar" style="width: 300px; min-width: 200px; max-width: 30vw;">
                 <div class="d-flex gap-2 p-3 border-bottom bg-white">
-                    <div class="d-flex gap-2 flex-grow-1" style="margin-left: 40px;">
+                    <div class="d-flex gap-2 flex-grow-1">
                         <button id="create-project-btn" class="btn btn-sm btn-primary" title="New Project">📁 New</button>
                         <button id="refresh-sessions-btn" class="btn btn-sm btn-outline-secondary" title="Refresh">↻</button>
                     </div>

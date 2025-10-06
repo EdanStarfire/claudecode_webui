@@ -95,17 +95,20 @@
 [x] bug: Fix the formatting of the tool handling as it's missing it's borders, backgrounds, and such
 [x] qol: Allow input box to expand upwards when user types multiple lines of text (max 6 lines of height)
 [x] bug: Diff viewer line numbers don't scroll with the message window.
-
-
+[x] bug: When clicking the create session button, it collapses the project header and deselects the current session
+[x] bug: Scrolling can push the title bar off the top of the screen on mobile. Titlebar should always stay visible
 
 # Polish
 [x] qol: Better diff viewer (currently just alternates different lines)
 [x] qol: Loading screen for when switching sessions to hide the previous session's content while loading
+[x] qol: Move sidebar collapse to hamburger button in title bar
 
 # Cleanup
 [x] qol: Redirect app.log to the data/session folder for debugging purposes
 [ ] qol: Refactor code files for smaller sizes and easier organization
 [x] qol: Remove debug messages for WS_LIFECYCLE and Ping - only leave logs where they throw issues
+[x] qol: Creating a session needs to add loading block and hide the modal and sidebar on mobile
+[x] qol: Mobile drag and drop of projects needs to be re-enabled
 
 # Advanced Functionality
 [ ] feat: Handle SlashCommand tool content display
@@ -124,4 +127,4 @@
 [x] feat: Project support
 [ ] feat: Application Configuration Support
 [x] qol: Reskinning the entire app to be more aesthetic (bootstrap)
-[ ] qol: Better mobile layout
+[x] qol: Better mobile layout

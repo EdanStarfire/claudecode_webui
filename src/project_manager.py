@@ -334,13 +334,16 @@ class ProjectManager:
     async def reorder_projects(self, project_ids: List[str]) -> bool:
         """Reorder projects by assigning sequential order values"""
         try:
+            logger.debug(f"Reorder request for projects: {project_ids}")
+            logger.debug(f"Active projects: {list(self._active_projects.keys())}")
+
             # Validate that all project_ids exist
             valid_project_ids = []
             for project_id in project_ids:
                 if project_id in self._active_projects:
                     valid_project_ids.append(project_id)
                 else:
-                    logger.warning(f"Project {project_id} not found during reorder")
+                    logger.warning(f"Project {project_id} not found during reorder (not in _active_projects)")
 
             if not valid_project_ids:
                 logger.error("No valid projects found for reordering")

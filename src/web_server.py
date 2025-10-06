@@ -291,6 +291,20 @@ class ClaudeWebUI:
                 logger.error(f"Failed to get project: {e}")
                 raise HTTPException(status_code=500, detail=str(e))
 
+        @self.app.put("/api/projects/reorder")
+        async def reorder_projects(request: ProjectReorderRequest):
+            """Reorder projects"""
+            try:
+                success = await self.coordinator.project_manager.reorder_projects(request.project_ids)
+                if not success:
+                    raise HTTPException(status_code=400, detail="Failed to reorder projects")
+                return {"success": True}
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"Failed to reorder projects: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
         @self.app.put("/api/projects/{project_id}")
         async def update_project(project_id: str, request: ProjectUpdateRequest):
             """Update project metadata"""
@@ -345,20 +359,6 @@ class ClaudeWebUI:
                 raise
             except Exception as e:
                 logger.error(f"Failed to delete project: {e}")
-                raise HTTPException(status_code=500, detail=str(e))
-
-        @self.app.put("/api/projects/reorder")
-        async def reorder_projects(request: ProjectReorderRequest):
-            """Reorder projects"""
-            try:
-                success = await self.coordinator.project_manager.reorder_projects(request.project_ids)
-                if not success:
-                    raise HTTPException(status_code=400, detail="Failed to reorder projects")
-                return {"success": True}
-            except HTTPException:
-                raise
-            except Exception as e:
-                logger.error(f"Failed to reorder projects: {e}")
                 raise HTTPException(status_code=500, detail=str(e))
 
         @self.app.put("/api/projects/{project_id}/toggle-expansion")

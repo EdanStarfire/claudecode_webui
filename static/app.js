@@ -2110,6 +2110,8 @@ class ProjectManager {
 
     async reorderProjects(projectIds) {
         try {
+            Logger.debug('PROJECT', `Attempting to reorder projects: ${JSON.stringify(projectIds)}`);
+
             const response = await fetch('/api/projects/reorder', {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
@@ -2117,7 +2119,9 @@ class ProjectManager {
             });
 
             if (!response.ok) {
-                throw new Error('Failed to reorder projects');
+                const errorText = await response.text();
+                Logger.error('PROJECT', `Reorder API failed with status ${response.status}: ${errorText}`);
+                throw new Error(`Failed to reorder projects: ${response.status}`);
             }
 
             this.orderedProjects = projectIds;
@@ -2205,7 +2209,8 @@ class ClaudeWebUI {
         this.statusColors = this.initializeStatusColors();
 
         // Sidebar state management
-        this.sidebarCollapsed = false;
+        // On mobile (<768px), sidebar starts collapsed (hidden via CSS transform)
+        this.sidebarCollapsed = window.innerWidth < 768;
         this.sidebarWidth = 300;
         this.isResizing = false;
 
@@ -2328,8 +2333,15 @@ class ClaudeWebUI {
         document.getElementById('confirm-delete').addEventListener('click', () => this.confirmDeleteSession());
 
         // Sidebar controls
-        document.getElementById('sidebar-collapse-btn').addEventListener('click', () => this.toggleSidebar());
+        document.getElementById('sidebar-toggle-btn').addEventListener('click', () => this.toggleSidebar());
         document.getElementById('sidebar-resize-handle').addEventListener('mousedown', (e) => this.startResize(e));
+
+        // Mobile backdrop click to close sidebar
+        document.getElementById('sidebar-backdrop').addEventListener('click', () => {
+            if (!this.sidebarCollapsed && window.innerWidth < 768) {
+                this.toggleSidebar();
+            }
+        });
 
         // Message sending
         document.getElementById('send-btn').addEventListener('click', () => this.handleSendButtonClick());
@@ -3872,6 +3884,7 @@ class ClaudeWebUI {
         const projectElement = document.createElement('div');
         projectElement.className = 'accordion-item border rounded mb-2';
         projectElement.setAttribute('data-project-id', project.project_id);
+        projectElement.draggable = true;
 
         // Create accordion header
         const accordionHeader = document.createElement('h2');
@@ -3896,20 +3909,26 @@ class ClaudeWebUI {
             <small class="text-muted font-monospace" title="${this.escapeHtml(project.working_directory)}">${this.escapeHtml(formattedPath)}</small>
         `;
 
-        // Add session button
+        accordionButton.appendChild(projectInfo);
+        accordionHeader.appendChild(accordionButton);
+
+        // Add session button - positioned next to accordion button, NOT inside it
         const addSessionBtn = document.createElement('button');
-        addSessionBtn.className = 'btn btn-sm btn-outline-primary';
+        addSessionBtn.className = 'btn btn-sm btn-outline-primary position-absolute end-0 top-50 translate-middle-y me-2';
         addSessionBtn.innerHTML = '+';
         addSessionBtn.title = 'Add session to project';
+        addSessionBtn.type = 'button';
+        addSessionBtn.style.zIndex = '10'; // Ensure it's above accordion button
         addSessionBtn.addEventListener('click', async (e) => {
             e.stopPropagation();
+            e.preventDefault();
             await this.showCreateSessionModalForProject(project.project_id);
         });
 
-        accordionButton.appendChild(projectInfo);
-        accordionButton.appendChild(addSessionBtn);
+        // Add button to accordion header (sibling of accordion button, not child)
+        accordionHeader.style.position = 'relative'; // For absolute positioning of button
+        accordionHeader.appendChild(addSessionBtn);
 
-        accordionHeader.appendChild(accordionButton);
         projectElement.appendChild(accordionHeader);
 
         // Project status line (always visible) - placed outside collapse area
@@ -3969,6 +3988,9 @@ class ClaudeWebUI {
         });
 
         projectElement.appendChild(collapseDiv);
+
+        // Add drag-and-drop event listeners for project reordering
+        this.addProjectDragListeners(projectElement, project.project_id);
 
         return projectElement;
     }
@@ -4906,7 +4928,19 @@ class ClaudeWebUI {
         if (modal) {
             modal.hide();
         }
-        document.getElementById('create-session-form').reset();
+
+        // Reset form and buttons
+        const form = document.getElementById('create-session-form');
+        form.reset();
+
+        // Re-enable all buttons in case they were disabled
+        const submitBtn = modalElement.querySelector('button[type="submit"]');
+        const dismissButtons = modalElement.querySelectorAll('[data-bs-dismiss="modal"]');
+        if (submitBtn) {
+            submitBtn.disabled = false;
+            submitBtn.innerHTML = 'Create Session';
+        }
+        dismissButtons.forEach(btn => btn.disabled = false);
     }
 
     handleCreateSession(event) {
@@ -4915,12 +4949,37 @@ class ClaudeWebUI {
         const formData = new FormData(event.target);
         const data = Object.fromEntries(formData.entries());
 
+        // Disable form buttons to prevent double submission
+        const modalElement = document.getElementById('create-session-modal');
+        const submitBtn = modalElement.querySelector('button[type="submit"]');
+        const dismissButtons = modalElement.querySelectorAll('[data-bs-dismiss="modal"]');
+
+        if (!submitBtn) {
+            Logger.error('SESSION', 'Could not find submit button');
+            return;
+        }
+
+        const originalSubmitText = submitBtn.innerHTML;
+
+        submitBtn.disabled = true;
+        dismissButtons.forEach(btn => btn.disabled = true);
+        submitBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Creating...';
+
         this.createSession(data)
             .then(() => {
                 this.hideCreateSessionModal();
+
+                // Close sidebar on mobile after session creation
+                if (window.innerWidth < 768 && !this.sidebarCollapsed) {
+                    this.toggleSidebar();
+                }
             })
             .catch(error => {
                 Logger.error('SESSION', 'Session creation failed', error);
+                // Re-enable buttons on error
+                submitBtn.disabled = false;
+                dismissButtons.forEach(btn => btn.disabled = false);
+                submitBtn.innerHTML = originalSubmitText;
             });
     }
 
@@ -5398,6 +5457,156 @@ class ClaudeWebUI {
         }
     }
 
+    // Project Drag and Drop Methods
+    addProjectDragListeners(projectElement, projectId) {
+        // Initialize project drag state if needed
+        if (!this.projectDragState) {
+            this.projectDragState = {
+                draggedElement: null,
+                draggedProjectId: null,
+                dropIndicator: null,
+                insertBefore: false,
+                isReordering: false
+            };
+        }
+
+        projectElement.addEventListener('dragstart', (e) => {
+            // Only handle if drag started on project element itself (not child sessions)
+            if (e.target !== projectElement && !e.target.closest('.accordion-header')) {
+                return;
+            }
+
+            e.stopPropagation(); // Prevent bubbling to session handlers
+
+            this.projectDragState.draggedElement = projectElement;
+            this.projectDragState.draggedProjectId = projectId;
+            projectElement.classList.add('dragging');
+
+            e.dataTransfer.effectAllowed = 'move';
+            e.dataTransfer.setData('text/plain', projectId);
+        });
+
+        projectElement.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'move';
+
+            if (this.projectDragState.draggedProjectId === projectId) {
+                return;
+            }
+
+            this.showProjectDropIndicator(projectElement, e.clientY);
+        });
+
+        projectElement.addEventListener('dragenter', (e) => {
+            e.preventDefault();
+        });
+
+        projectElement.addEventListener('dragleave', (e) => {
+            if (e.target === projectElement) {
+                this.removeProjectDropIndicator();
+            }
+        });
+
+        projectElement.addEventListener('drop', async (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+
+            const draggedProjectId = this.projectDragState.draggedProjectId;
+
+            // Prevent duplicate drop events and self-drops
+            if (!draggedProjectId || draggedProjectId === projectId || this.projectDragState.isReordering) {
+                this.removeProjectDragEffects();
+                return;
+            }
+
+            this.projectDragState.isReordering = true;
+
+            try {
+                const newOrder = this.calculateNewProjectOrder(draggedProjectId, projectId);
+
+                // Check if order actually changed
+                const currentOrder = this.projectManager.orderedProjects;
+                const orderChanged = JSON.stringify(currentOrder) !== JSON.stringify(newOrder);
+
+                if (!orderChanged) {
+                    Logger.debug('PROJECT', 'Project order unchanged, skipping API call');
+                    this.projectDragState.isReordering = false;
+                    this.removeProjectDragEffects();
+                    return;
+                }
+
+                await this.projectManager.reorderProjects(newOrder);
+                await this.renderSessions();
+
+                Logger.info('PROJECT', `Reordered projects successfully`);
+            } catch (error) {
+                Logger.error('PROJECT', 'Failed to reorder projects', error);
+                this.showError('Failed to reorder projects');
+            } finally {
+                this.projectDragState.isReordering = false;
+                this.removeProjectDragEffects();
+            }
+        });
+
+        projectElement.addEventListener('dragend', () => {
+            this.removeProjectDragEffects();
+        });
+    }
+
+    showProjectDropIndicator(projectElement, clientY) {
+        this.removeProjectDropIndicator();
+
+        const rect = projectElement.getBoundingClientRect();
+        const midpoint = rect.top + rect.height / 2;
+        const insertBefore = clientY < midpoint;
+
+        this.projectDragState.insertBefore = insertBefore;
+
+        const indicator = document.createElement('div');
+        indicator.className = 'drop-indicator';
+        this.projectDragState.dropIndicator = indicator;
+
+        if (insertBefore) {
+            projectElement.parentNode.insertBefore(indicator, projectElement);
+        } else {
+            projectElement.parentNode.insertBefore(indicator, projectElement.nextSibling);
+        }
+    }
+
+    removeProjectDropIndicator() {
+        if (this.projectDragState.dropIndicator) {
+            this.projectDragState.dropIndicator.remove();
+            this.projectDragState.dropIndicator = null;
+        }
+    }
+
+    removeProjectDragEffects() {
+        if (this.projectDragState.draggedElement) {
+            this.projectDragState.draggedElement.classList.remove('dragging');
+        }
+        this.removeProjectDropIndicator();
+        this.projectDragState.draggedElement = null;
+        this.projectDragState.draggedProjectId = null;
+    }
+
+    calculateNewProjectOrder(draggedProjectId, targetProjectId) {
+        const currentOrder = [...this.projectManager.orderedProjects];
+
+        Logger.debug('PROJECT', `Current order: ${JSON.stringify(currentOrder)}`);
+        Logger.debug('PROJECT', `Dragging ${draggedProjectId} to ${targetProjectId}`);
+
+        const filteredOrder = currentOrder.filter(id => id !== draggedProjectId);
+        const targetIndex = filteredOrder.indexOf(targetProjectId);
+
+        const insertBefore = this.projectDragState.insertBefore || false;
+        const newIndex = insertBefore ? targetIndex : targetIndex + 1;
+        filteredOrder.splice(newIndex, 0, draggedProjectId);
+
+        Logger.debug('PROJECT', `New order: ${JSON.stringify(filteredOrder)}`);
+
+        return filteredOrder;
+    }
+
     async reorderSessions(sessionIds) {
         // Legacy method - no longer used with project-based organization
         Logger.warn('SESSION', 'reorderSessions called - this method is deprecated in favor of reorderProjectSessions');
@@ -5406,25 +5615,41 @@ class ClaudeWebUI {
     // Sidebar Management
     toggleSidebar() {
         const sidebar = document.getElementById('sidebar');
-        const collapseBtn = document.getElementById('sidebar-collapse-btn');
+        const backdrop = document.getElementById('sidebar-backdrop');
+        const toggleBtn = document.getElementById('sidebar-toggle-btn');
+        const toggleIcon = document.getElementById('sidebar-toggle-icon');
+        const isMobile = window.innerWidth < 768;
+
         this.sidebarCollapsed = !this.sidebarCollapsed;
 
-        if (this.sidebarCollapsed) {
-            // Hide sidebar completely using Bootstrap's d-none
-            sidebar.classList.add('d-none');
-            collapseBtn.innerHTML = '›'; // Change arrow direction
-            collapseBtn.title = 'Show sidebar';
+        if (isMobile) {
+            // Mobile: Use overlay mode
+            if (this.sidebarCollapsed) {
+                // Close mobile overlay
+                sidebar.classList.remove('mobile-open');
+                backdrop.classList.remove('show');
+                toggleBtn.title = 'Show sidebar';
+            } else {
+                // Open mobile overlay
+                sidebar.classList.add('mobile-open');
+                backdrop.classList.add('show');
+                toggleBtn.title = 'Hide sidebar';
+            }
         } else {
-            // Show sidebar using Bootstrap
-            sidebar.classList.remove('d-none');
-            collapseBtn.innerHTML = '‹'; // Change arrow direction
-            collapseBtn.title = 'Hide sidebar';
+            // Desktop: Use hide/show mode
+            if (this.sidebarCollapsed) {
+                sidebar.classList.add('d-none');
+                toggleBtn.title = 'Show sidebar';
+            } else {
+                sidebar.classList.remove('d-none');
+                toggleBtn.title = 'Hide sidebar';
+            }
         }
     }
 
     startResize(e) {
-        // Don't allow resize when collapsed
-        if (this.sidebarCollapsed) return;
+        // Don't allow resize when collapsed or on mobile
+        if (this.sidebarCollapsed || window.innerWidth < 768) return;
 
         this.isResizing = true;
         document.addEventListener('mousemove', this.handleResize.bind(this));
@@ -5456,8 +5681,24 @@ class ClaudeWebUI {
     }
 
     handleWindowResize() {
-        if (!this.sidebarCollapsed) {
-            const sidebar = document.getElementById('sidebar');
+        const sidebar = document.getElementById('sidebar');
+        const isMobile = window.innerWidth < 768;
+        const wasMobile = this.sidebarCollapsed && sidebar.classList.contains('mobile-open');
+
+        // Sync collapsed state when crossing mobile/desktop breakpoint
+        if (isMobile && !this.sidebarCollapsed) {
+            // Switched to mobile - collapse sidebar
+            this.sidebarCollapsed = true;
+            sidebar.classList.remove('mobile-open');
+            document.getElementById('sidebar-backdrop').classList.remove('show');
+        } else if (!isMobile && this.sidebarCollapsed && !wasMobile) {
+            // Switched to desktop - uncollapse sidebar if it was auto-collapsed for mobile
+            this.sidebarCollapsed = false;
+            sidebar.classList.remove('d-none');
+        }
+
+        // Desktop sidebar width constraint
+        if (!this.sidebarCollapsed && !isMobile) {
             const maxWidth = window.innerWidth * 0.3;
 
             // Ensure sidebar doesn't exceed 30% of new window width
