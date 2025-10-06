@@ -1,6 +1,17 @@
 /* Claude Code WebUI - Minimal Essential Styles (Bootstrap-First Approach) */
 /* This file contains ONLY essential CSS that Bootstrap doesn't provide */
 
+/* ========== GLOBAL OVERRIDES ========== */
+
+/* Reduce default font size */
+:root {
+    --bs-body-font-size: 0.875rem; /* 14px if base is 16px */
+}
+
+html {
+    font-size: 14px; /* Set base font size to 14px instead of 16px */
+}
+
 /* ========== CRITICAL LAYOUT FIXES ========== */
 
 /* Sidebar: Make it resizable with handle */
@@ -53,6 +64,17 @@
     text-overflow: ellipsis;
     white-space: nowrap;
     display: block;
+}
+
+/* ========== INPUT CONTROLS ========== */
+
+/* Auto-expanding textarea with max 6 lines */
+#message-input {
+    resize: none;
+    overflow-y: hidden;
+    min-height: 38px; /* 1 line */
+    max-height: calc(1.5em * 6 + 0.75rem); /* 6 lines + padding */
+    transition: height 0.1s ease;
 }
 
 /* ========== STATUS INDICATORS ========== */
@@ -110,6 +132,7 @@
 .message-row {
     margin-left: 0;
     margin-right: 0;
+    flex-wrap: nowrap !important; /* Prevent content from wrapping below speaker label */
 }
 
 .message-row.user {
@@ -137,10 +160,81 @@
 .message-content-column {
     word-wrap: break-word;
     overflow-wrap: break-word;
+    min-width: 0; /* Allow flex item to shrink below content size */
+    overflow-x: auto; /* Enable horizontal scroll for wide content */
 }
 
 .message-content {
     white-space: pre-wrap;
+}
+
+/* Tool content containers */
+.tool-parameters,
+.tool-edit-params,
+.tool-write-params,
+.tool-read-params {
+    max-width: 100%;
+    overflow: hidden;
+}
+
+.edit-diff-container,
+.write-diff-container,
+.read-diff-container {
+    margin-top: 0.75rem;
+    max-width: 100%;
+    overflow-x: auto;
+    position: relative;
+}
+
+/* Fix diff2html rendering issues */
+.d2h-wrapper {
+    overflow: hidden; /* Prevent line numbers from escaping during collapse */
+}
+
+.d2h-diff-table {
+    table-layout: auto;
+    width: 100%;
+}
+
+.d2h-code-linenumber {
+    display: table-cell !important; /* Ensure proper table cell behavior for height:100% */
+    position: relative !important; /* Override any absolute positioning */
+    vertical-align: top;
+    user-select: none;
+    padding: 0 0.5em !important;
+    height: 100%; /* Fill parent tr height */
+}
+
+/* Fix excessive padding in code line content */
+.d2h-code-line {
+    padding: 0 !important; /* Override CDN's 104pt padding */
+}
+
+/* Remove vertical padding from diff cells to eliminate gaps */
+.d2h-ins,
+.d2h-del,
+.d2h-change,
+.d2h-info {
+    padding-top: 0 !important;
+    padding-bottom: 0 !important;
+}
+
+/* Fix nested line number divs */
+.d2h-code-linenumber .line-num1,
+.d2h-code-linenumber .line-num2 {
+    display: inline;
+    padding: 0;
+    margin: 0;
+}
+
+.d2h-code-linenumber .line-num1:empty,
+.d2h-code-linenumber .line-num2:empty {
+    display: none;
+}
+
+/* Ensure accordion bodies hide overflow during collapse animation */
+.accordion-collapse .accordion-body {
+    overflow: hidden;
 }
 
 /* ========== DRAG AND DROP ========== */
@@ -169,13 +263,13 @@
 /* ========== TOOL CALL HANDLERS (Bootstrap Accordion) ========== */
 
 /* Tool call accordion customization */
-.accordion-button {
+.message-content .accordion-button {
     background-color: transparent;
     padding: 0.5rem 0.75rem;
     font-size: 0.9rem;
 }
 
-.accordion-button:not(.collapsed) {
+.message-content .accordion-button:not(.collapsed) {
     background-color: transparent;
     color: inherit;
 }

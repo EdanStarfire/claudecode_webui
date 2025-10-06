@@ -1879,6 +1879,9 @@ Complete migration from custom CSS framework to Bootstrap 5, implementing profes
 - ✅ Fixed newlines being trimmed from messages (now preserved)
 - ✅ Fixed double tool type display in accordion headers
 - ✅ Fixed permission result handling causing session hangs
+- ✅ Fixed Read/Write tool formatting to match Edit tool diff-style display
+- ✅ Fixed diff viewer line numbers scrolling properly with message content
+- ✅ Fixed accordion collapse overflow during animations
 
 ### Quality of Life Improvements
 - ✅ Better diff viewer with unified diff format and fallback
@@ -1886,6 +1889,11 @@ Complete migration from custom CSS framework to Bootstrap 5, implementing profes
 - ✅ Log redirection to data/session folder for debugging
 - ✅ Reskinned entire app with Bootstrap for aesthetic improvement
 - ✅ Project collapse now navigates to "no session selected" pane
+- ✅ Multi-line input box with auto-expansion (max 6 lines)
+- ✅ Reduced global font size to 14px for better screen real estate
+- ✅ Enhanced Read/Write tools with diff2html integration (100 line preview)
+- ✅ Improved Bootstrap accordion integration with status line fixes
+- ✅ Fixed project expansion state synchronization with Bootstrap events
 
 ### Success Criteria
 - ✅ Bootstrap 5 fully integrated with all components migrated

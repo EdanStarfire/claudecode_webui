@@ -59,7 +59,15 @@
                     <p class="text-secondary">Create a new session or select an existing one to start chatting with Claude Code.</p>
                 </div>
 
-                <div id="chat-container" class="d-none flex-grow-1 d-flex flex-column overflow-hidden">
+                <div id="chat-container" class="d-none flex-grow-1 d-flex flex-column overflow-hidden position-relative">
+                    <!-- Loading Overlay (scoped to chat container) -->
+                    <div id="loading-overlay" class="d-none position-absolute top-0 start-0 w-100 h-100 bg-white bg-opacity-75 d-flex flex-column justify-content-center align-items-center" style="z-index: 1000;">
+                        <div class="spinner-border text-primary mb-3" role="status">
+                            <span class="visually-hidden">Loading...</span>
+                        </div>
+                        <p class="text-secondary">Loading...</p>
+                    </div>
+
                     <!-- Session Info Bar -->
                     <div class="alert alert-info mb-0 rounded-0 d-flex justify-content-between align-items-center" id="session-info-bar">
                         <div class="d-flex align-items-center gap-2">
@@ -215,14 +223,6 @@
                     </div>
                 </div>
             </div>
-        </div>
-
-        <!-- Loading Overlay -->
-        <div id="loading-overlay" class="d-none position-fixed top-0 start-0 w-100 h-100 bg-white bg-opacity-75 d-flex flex-column justify-content-center align-items-center" style="z-index: 9999;">
-            <div class="spinner-border text-primary mb-3" role="status">
-                <span class="visually-hidden">Loading...</span>
-            </div>
-            <p class="text-secondary">Loading...</p>
         </div>
     </div>
 

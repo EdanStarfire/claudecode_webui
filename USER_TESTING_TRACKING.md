@@ -88,11 +88,15 @@
 [x] bug: sessions not selected (processing in the background) do not reflect their status changes until selected.
 [x] qol: when collapsing a project, go to the "no session selected pane"
 [x] bug: permission results don't seem to get caught until after reselecting the session, causing it to just hang in processing mode (processing bar visible, input box disabled, etc) - it also resulted in the tool not being actually ran.
-[ ] bug: Fix the formatting of the tool handling as it's missing it's borders, backgrounds, and such
 [x] bug: Clean up diff view now that we're on bootstrap
 [x] bug: New websocket disconnect loop occuring
 [x] bug: Newlines should not be trimmed from assistant and user responses.
 [x] bug: Double Tool Type in accordian header
+[x] bug: Fix the formatting of the tool handling as it's missing it's borders, backgrounds, and such
+[x] qol: Allow input box to expand upwards when user types multiple lines of text (max 6 lines of height)
+[x] bug: Diff viewer line numbers don't scroll with the message window.
+
+
 
 # Polish
 [x] qol: Better diff viewer (currently just alternates different lines)

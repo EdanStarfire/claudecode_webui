@@ -423,21 +423,43 @@ class ReadToolHandler {
             `;
         }
 
-        // Parse file content and show preview
+        // Parse file content and show preview with diff-style formatting
         const content = toolCall.result.content || '';
         const lines = content.split('\n');
-        const previewLimit = 20;
+        const previewLimit = 100;
         const hasMore = lines.length > previewLimit;
         const previewLines = lines.slice(0, previewLimit);
+        const previewContent = previewLines.join('\n');
+
+        // Generate diff HTML using same approach as Edit tool
+        let diffHtml = '';
+        try {
+            if (typeof Diff !== 'undefined' && typeof Diff2Html !== 'undefined') {
+                // Create a patch showing content as context (unchanged) - from empty to content
+                const patch = Diff.createPatch('file', '', previewContent, '', '', { context: 999999 });
+
+                diffHtml = Diff2Html.html(patch, {
+                    drawFileList: false,
+                    matching: 'lines',
+                    outputFormat: 'line-by-line',
+                    highlight: false
+                });
+            }
+        } catch (e) {
+            // Fallback to plain text if diff fails
+            diffHtml = `<pre class="tool-result-content read-content-preview">${escapeHtmlFn(previewContent)}</pre>`;
+        }
 
         return `
             <div class="tool-result ${resultClass}">
-                <strong>Content Preview:</strong>
                 <div class="read-result-header">
+                    <span class="diff-label">Content Preview:</span>
                     <span class="read-line-count">${lines.length} lines</span>
                     ${hasMore ? `<span class="read-preview-note">(showing first ${previewLimit})</span>` : ''}
                 </div>
-                <pre class="tool-result-content read-content-preview">${escapeHtmlFn(previewLines.join('\n'))}</pre>
+                <div class="read-diff-container">
+                    ${diffHtml}
+                </div>
                 ${hasMore ? '<div class="read-more-indicator">...</div>' : ''}
             </div>
         `;
@@ -771,24 +793,44 @@ class WriteToolHandler {
         const filePath = toolCall.input.file_path || 'Unknown';
         const content = toolCall.input.content || '';
         const lines = content.split('\n');
-        const previewLimit = 20;
+        const previewLimit = 100;
         const hasMore = lines.length > previewLimit;
         const previewLines = lines.slice(0, previewLimit);
+        const previewContent = previewLines.join('\n');
+
+        // Generate diff HTML using same approach as Edit tool
+        let diffHtml = '';
+        try {
+            if (typeof Diff !== 'undefined' && typeof Diff2Html !== 'undefined') {
+                // Create a patch showing content as added (from empty to content)
+                const patch = Diff.createPatch('file', '', previewContent, '', '', { context: 3 });
+
+                diffHtml = Diff2Html.html(patch, {
+                    drawFileList: false,
+                    matching: 'lines',
+                    outputFormat: 'line-by-line',
+                    highlight: false
+                });
+            }
+        } catch (e) {
+            // Fallback to plain text if diff fails
+            diffHtml = `<pre class="write-content-preview">${escapeHtmlFn(previewContent)}</pre>`;
+        }
 
         return `
             <div class="tool-parameters tool-write-params">
                 <div class="write-file-path">
                     <span class="write-icon">📝</span>
-                    <strong>Writing new file:</strong>
+                    <strong>Writing:</strong>
                     <code class="file-path">${escapeHtmlFn(filePath)}</code>
                 </div>
-                <div class="write-content-container">
+                <div class="write-diff-container">
                     <div class="write-content-header">
-                        <span class="write-label">Content:</span>
+                        <span class="diff-label">Content:</span>
                         <span class="write-line-count">${lines.length} lines</span>
                         ${hasMore ? `<span class="write-preview-note">(showing first ${previewLimit})</span>` : ''}
                     </div>
-                    <pre class="write-content-preview">${escapeHtmlFn(previewLines.join('\n'))}</pre>
+                    ${diffHtml}
                     ${hasMore ? '<div class="write-more-indicator">...</div>' : ''}
                 </div>
             </div>
@@ -2291,12 +2333,16 @@ class ClaudeWebUI {
 
         // Message sending
         document.getElementById('send-btn').addEventListener('click', () => this.handleSendButtonClick());
-        document.getElementById('message-input').addEventListener('keydown', (e) => {
+        const messageInput = document.getElementById('message-input');
+        messageInput.addEventListener('keydown', (e) => {
             if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
                 this.handleSendButtonClick();
             }
         });
+
+        // Auto-expand textarea
+        messageInput.addEventListener('input', (e) => this.autoExpandTextarea(e.target));
 
         // Auto-scroll toggle
         document.getElementById('auto-scroll-toggle').addEventListener('click', () => this.toggleAutoScroll());
@@ -2471,6 +2517,7 @@ class ClaudeWebUI {
             });
 
             input.value = '';
+            this.resetTextareaHeight(input);
         } catch (error) {
             Logger.error('MESSAGE', 'Failed to send message', error);
         }
@@ -3823,22 +3870,26 @@ class ClaudeWebUI {
 
     async createProjectElement(project) {
         const projectElement = document.createElement('div');
-        projectElement.className = 'card mb-2';
+        projectElement.className = 'accordion-item border rounded mb-2';
         projectElement.setAttribute('data-project-id', project.project_id);
 
-        // Project header (card header)
-        const projectHeader = document.createElement('div');
-        projectHeader.className = 'card-header bg-white d-flex align-items-center gap-2 p-2 cursor-pointer';
-        projectHeader.style.cursor = 'pointer';
+        // Create accordion header
+        const accordionHeader = document.createElement('h2');
+        accordionHeader.className = 'accordion-header';
+        accordionHeader.id = `heading-${project.project_id}`;
 
-        // Expansion arrow
-        const expansionArrow = document.createElement('span');
-        expansionArrow.className = 'text-muted';
-        expansionArrow.textContent = project.is_expanded ? '▼' : '▶';
+        // Create accordion button
+        const accordionButton = document.createElement('button');
+        accordionButton.className = `accordion-button ${project.is_expanded ? '' : 'collapsed'} bg-white p-2`;
+        accordionButton.type = 'button';
+        accordionButton.setAttribute('data-bs-toggle', 'collapse');
+        accordionButton.setAttribute('data-bs-target', `#collapse-${project.project_id}`);
+        accordionButton.setAttribute('aria-expanded', project.is_expanded);
+        accordionButton.setAttribute('aria-controls', `collapse-${project.project_id}`);
 
-        // Project name and path
+        // Project name and path container
         const projectInfo = document.createElement('div');
-        projectInfo.className = 'flex-grow-1';
+        projectInfo.className = 'flex-grow-1 me-2';
         const formattedPath = this.projectManager.formatPath(project.working_directory);
         projectInfo.innerHTML = `
             <div class="fw-semibold">${this.escapeHtml(project.name)}</div>
@@ -3855,23 +3906,27 @@ class ClaudeWebUI {
             await this.showCreateSessionModalForProject(project.project_id);
         });
 
-        projectHeader.appendChild(expansionArrow);
-        projectHeader.appendChild(projectInfo);
-        projectHeader.appendChild(addSessionBtn);
+        accordionButton.appendChild(projectInfo);
+        accordionButton.appendChild(addSessionBtn);
 
-        // Click header to toggle expansion
-        projectHeader.addEventListener('click', async () => {
-            await this.toggleProjectExpansion(project.project_id);
-        });
+        accordionHeader.appendChild(accordionButton);
+        projectElement.appendChild(accordionHeader);
 
-        projectElement.appendChild(projectHeader);
-
-        // Project status line (progress bar style)
+        // Project status line (always visible) - placed outside collapse area
         const statusLine = await this.createProjectStatusLine(project);
         projectElement.appendChild(statusLine);
 
-        // Sessions container (collapsed or expanded) - use list group
-        if (project.is_expanded && project.session_ids && project.session_ids.length > 0) {
+        // Collapsible sessions area
+        const collapseDiv = document.createElement('div');
+        collapseDiv.id = `collapse-${project.project_id}`;
+        collapseDiv.className = `accordion-collapse collapse ${project.is_expanded ? 'show' : ''}`;
+        collapseDiv.setAttribute('aria-labelledby', `heading-${project.project_id}`);
+
+        const collapseBody = document.createElement('div');
+        collapseBody.className = 'accordion-body p-0';
+
+        // Sessions container - use list group
+        if (project.session_ids && project.session_ids.length > 0) {
             const sessionsContainer = document.createElement('div');
             sessionsContainer.className = 'list-group list-group-flush';
 
@@ -3885,15 +3940,42 @@ class ClaudeWebUI {
                 sessionsContainer.appendChild(sessionElement);
             }
 
-            projectElement.appendChild(sessionsContainer);
+            collapseBody.appendChild(sessionsContainer);
         }
+
+        collapseDiv.appendChild(collapseBody);
+
+        // Listen to Bootstrap collapse events to sync state with backend
+        collapseDiv.addEventListener('shown.bs.collapse', async () => {
+            if (!project.is_expanded) {
+                await this.projectManager.toggleExpansion(project.project_id);
+                project.is_expanded = true;
+            }
+        });
+
+        collapseDiv.addEventListener('hidden.bs.collapse', async () => {
+            if (project.is_expanded) {
+                await this.projectManager.toggleExpansion(project.project_id);
+                project.is_expanded = false;
+
+                // Exit session if current session belongs to this project
+                if (this.currentSessionId) {
+                    const currentSession = this.sessions.get(this.currentSessionId);
+                    if (currentSession && project.session_ids.includes(this.currentSessionId)) {
+                        this.exitSession();
+                    }
+                }
+            }
+        });
+
+        projectElement.appendChild(collapseDiv);
 
         return projectElement;
     }
 
     async createProjectStatusLine(project) {
         const statusLine = document.createElement('div');
-        statusLine.className = 'progress' ;
+        statusLine.className = 'progress project-status-line';
         statusLine.style.height = '4px';
         statusLine.style.borderRadius = '0';
 
@@ -3918,12 +4000,12 @@ class ClaudeWebUI {
             segment.className = 'progress-bar';
             segment.style.width = segmentWidth;
 
-            // Determine color based on session state
+            // Determine color based on session state - match status dot fill colors
             const isProcessing = session.is_processing || false;
             const displayState = isProcessing ? 'processing' : session.state;
-            const bgClass = this.getSessionStateBgClass(displayState);
+            const bgColor = this.getSessionStatusDotFillColor(displayState);
 
-            segment.classList.add(bgClass);
+            segment.style.backgroundColor = bgColor;
 
             // Add animation for active states
             if (displayState === 'starting' || displayState === 'processing') {
@@ -3937,7 +4019,7 @@ class ClaudeWebUI {
     }
 
     getSessionStateBgClass(state) {
-        // Map states to Bootstrap background classes
+        // Map states to Bootstrap background classes (legacy, kept for compatibility)
         const bgMap = {
             'created': 'bg-secondary',
             'CREATED': 'bg-secondary',
@@ -3954,8 +4036,26 @@ class ClaudeWebUI {
         return bgMap[state] || 'bg-secondary';
     }
 
+    getSessionStatusDotFillColor(state) {
+        // Return the fill color that matches status dot background colors
+        const colorMap = {
+            'created': '#d3d3d3',      // grey (status-dot-grey background)
+            'CREATED': '#d3d3d3',
+            'starting': '#90ee90',     // light green (status-dot-green background)
+            'Starting': '#90ee90',
+            'running': '#90ee90',      // light green (status-dot-green background)
+            'active': '#90ee90',       // light green (status-dot-green background)
+            'processing': '#dda0dd',   // light purple (status-dot-purple background)
+            'paused': '#d3d3d3',       // grey (status-dot-grey background)
+            'terminated': '#d3d3d3',   // grey (status-dot-grey background)
+            'error': '#ffb3b3',        // light red (status-dot-red background)
+            'failed': '#ffb3b3'        // light red (status-dot-red background)
+        };
+        return colorMap[state] || '#d3d3d3'; // default grey
+    }
+
     getSessionStateColor(state) {
-        // Match the colors from session indicator dots for consistency
+        // Match the colors from session indicator dots for consistency (border colors)
         const colorMap = {
             'created': '#6c757d',      // grey (matches status-dot-grey border)
             'CREATED': '#6c757d',
@@ -4089,37 +4189,45 @@ class ClaudeWebUI {
 
         switch (updateType) {
             case 'expansion-toggled':
-                // Update arrow
-                const arrow = projectElement.querySelector('.text-muted');
-                if (arrow) {
-                    arrow.textContent = project.is_expanded ? '▼' : '▶';
-                }
+                // Update Bootstrap accordion collapse state
+                const accordionButton = projectElement.querySelector('.accordion-button');
+                const collapseDiv = projectElement.querySelector('.accordion-collapse');
 
-                // Show or hide sessions container (using Bootstrap list-group class)
-                let sessionsContainer = projectElement.querySelector('.list-group.list-group-flush');
+                if (accordionButton && collapseDiv) {
+                    if (project.is_expanded) {
+                        accordionButton.classList.remove('collapsed');
+                        accordionButton.setAttribute('aria-expanded', 'true');
+                        collapseDiv.classList.add('show');
 
-                if (project.is_expanded) {
-                    // Need to show sessions - create container if doesn't exist
-                    if (!sessionsContainer && project.session_ids && project.session_ids.length > 0) {
-                        sessionsContainer = document.createElement('div');
-                        sessionsContainer.className = 'list-group list-group-flush';
+                        // Recreate session elements from cache to ensure fresh state
+                        const accordionBody = collapseDiv.querySelector('.accordion-body');
+                        let sessionsContainer = accordionBody?.querySelector('.list-group.list-group-flush');
 
-                        // Use cached session data instead of fetching from API
-                        const sessions = project.session_ids
-                            .map(sid => this.sessions.get(sid))
-                            .filter(s => s); // Filter out any sessions that aren't in cache yet
+                        if (accordionBody && project.session_ids && project.session_ids.length > 0) {
+                            // Remove existing container if present
+                            if (sessionsContainer) {
+                                sessionsContainer.remove();
+                            }
 
-                        for (const session of sessions) {
-                            const sessionElement = this.createSessionElement(session, projectId);
-                            sessionsContainer.appendChild(sessionElement);
+                            // Create fresh container with updated session data
+                            sessionsContainer = document.createElement('div');
+                            sessionsContainer.className = 'list-group list-group-flush';
+
+                            const sessions = project.session_ids
+                                .map(sid => this.sessions.get(sid))
+                                .filter(s => s);
+
+                            for (const session of sessions) {
+                                const sessionElement = this.createSessionElement(session, projectId);
+                                sessionsContainer.appendChild(sessionElement);
+                            }
+
+                            accordionBody.appendChild(sessionsContainer);
                         }
-
-                        projectElement.appendChild(sessionsContainer);
-                    }
-                } else {
-                    // Collapse - remove sessions container
-                    if (sessionsContainer) {
-                        sessionsContainer.remove();
+                    } else {
+                        accordionButton.classList.add('collapsed');
+                        accordionButton.setAttribute('aria-expanded', 'false');
+                        collapseDiv.classList.remove('show');
                     }
                 }
                 break;
@@ -4161,15 +4269,18 @@ class ClaudeWebUI {
         // Now update DOM if element exists (project is expanded)
         const sessionElement = document.querySelector(`[data-session-id="${sessionId}"]`);
         if (!sessionElement) {
-            Logger.debug('DOM', `Session element not in DOM (project collapsed): ${sessionId} - cache updated`);
+            Logger.debug('DOM', `Session element not in DOM (project collapsed): ${sessionId} - cache updated`, {
+                state: sessionData.state,
+                is_processing: sessionData.is_processing
+            });
             return;
         }
 
         // Update status indicator
-        const sessionHeader = sessionElement.querySelector('.session-header');
+        const sessionHeader = sessionElement.querySelector('.d-flex');
         if (sessionHeader) {
-            // Remove old status indicator
-            const oldIndicator = sessionHeader.querySelector('.status-indicator');
+            // Remove old status indicator (status-dot)
+            const oldIndicator = sessionHeader.querySelector('.status-dot');
             if (oldIndicator) {
                 oldIndicator.remove();
             }
@@ -4181,6 +4292,12 @@ class ClaudeWebUI {
 
             // Insert at beginning of header
             sessionHeader.insertBefore(statusIndicator, sessionHeader.firstChild);
+
+            Logger.debug('DOM', `Updated session indicator in DOM: ${sessionId}`, {
+                state: sessionData.state,
+                is_processing: sessionData.is_processing,
+                displayState
+            });
         }
 
         // Update session name if changed
@@ -4258,18 +4375,22 @@ class ClaudeWebUI {
 
         // If project is expanded, add session element to container
         if (project.is_expanded) {
-            let sessionsContainer = projectElement.querySelector('.list-group.list-group-flush');
+            // Find the accordion body where sessions are listed
+            const accordionBody = projectElement.querySelector('.accordion-body');
+            let sessionsContainer = accordionBody?.querySelector('.list-group.list-group-flush');
 
             // Create container if it doesn't exist
-            if (!sessionsContainer) {
+            if (!sessionsContainer && accordionBody) {
                 sessionsContainer = document.createElement('div');
                 sessionsContainer.className = 'list-group list-group-flush';
-                projectElement.appendChild(sessionsContainer);
+                accordionBody.appendChild(sessionsContainer);
             }
 
             // Create and append session element
-            const sessionElement = this.createSessionElement(sessionData, projectId);
-            sessionsContainer.appendChild(sessionElement);
+            if (sessionsContainer) {
+                const sessionElement = this.createSessionElement(sessionData, projectId);
+                sessionsContainer.appendChild(sessionElement);
+            }
         }
 
         // Update status line to reflect new session
@@ -5345,6 +5466,17 @@ class ClaudeWebUI {
                 sidebar.style.width = `${maxWidth}px`;
             }
         }
+    }
+
+    autoExpandTextarea(textarea) {
+        // Reset height to allow shrinking
+        textarea.style.height = 'auto';
+        // Set to scroll height (content height)
+        textarea.style.height = textarea.scrollHeight + 'px';
+    }
+
+    resetTextareaHeight(textarea) {
+        textarea.style.height = 'auto';
     }
 }
 
