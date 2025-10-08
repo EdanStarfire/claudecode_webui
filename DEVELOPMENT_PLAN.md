@@ -2051,6 +2051,93 @@ Delivered comprehensive mobile UX improvements transforming the application into
 
 ---
 
+## Phase 4.1.3: Folder Browser & SDK Upgrade ✅ COMPLETE
+**Goal**: Implement filesystem browser for directory selection and upgrade Claude Agent SDK
+**Status**: Complete - folder browser modal, SDK 0.1.1 upgrade, UX refinements
+
+### Overview
+Added comprehensive folder browsing functionality for working directory selection, upgraded to Claude Agent SDK 0.1.1, and implemented several UX improvements and bug fixes.
+
+### Feature Implementation
+
+#### 1. Folder Browser System ✅
+- Created filesystem browsing API endpoint (`/api/filesystem/browse`)
+- Bootstrap modal UI for directory navigation
+- Features:
+  - Directory tree navigation with click-to-browse
+  - Manual path entry with Go button (supports Enter key)
+  - Parent directory navigation (up arrow button)
+  - Current path display
+  - Platform-aware path handling (Windows/Unix)
+  - Permission error handling
+- Integrated with both session and project creation modals
+- Replaces previous simple text prompt for directory selection
+
+#### 2. SDK Upgrade ✅
+- Updated `claude-agent-sdk` to `>=0.1.1` in pyproject.toml
+- Updated dependency lock file with latest SDK version
+- Ensures compatibility with latest SDK features and fixes
+
+#### 3. UX Improvements ✅
+- **Project Auto-Expand**: Creating session in collapsed project now auto-expands it and selects new session
+- **Delete Protection**: Disabled delete confirmation buttons after click to prevent double-submission
+- **Session Deletion Bug**: Fixed reorder validation error after deleting session by properly cleaning up project's session_ids array
+
+### Technical Implementation
+
+**Modified Files**:
+- `src/web_server.py` - Added `/api/filesystem/browse` endpoint
+- `static/index.html` - Added folder browser modal UI
+- `static/app.js` - Folder browser logic, session creation auto-expand, delete protection
+- `pyproject.toml` - SDK version requirement updated
+- `uv.lock` - Dependency lock updates
+- `USER_TESTING_TRACKING.md` - Progress tracking updates
+
+**Backend Architecture**:
+- Path resolution and validation
+- Directory listing with sorted results
+- Platform-specific separator handling
+- Hidden directory filtering (Unix-like systems)
+- Permission error graceful handling
+
+**Frontend Architecture**:
+- Modal-based navigation interface
+- Event handlers for navigation, manual entry, selection
+- Target input tracking for multi-use browser
+- Bootstrap modal integration
+
+### User Experience Impact
+- Intuitive visual directory navigation vs manual path typing
+- Prevents path typos and invalid directory selection
+- Better mobile experience with folder browsing
+- Auto-expansion improves session creation workflow
+- Protection against accidental double-deletes
+
+### Bug Fixes Completed
+- ✅ Fixed session reorder error after deletion (cleaned up project session_ids)
+- ✅ Fixed double-delete issue with confirmation button protection
+
+### Quality of Life Improvements
+- ✅ Folder browser replaces manual path entry
+- ✅ Auto-expand project when adding session to collapsed project
+- ✅ Delete session buttons disabled after confirmation
+
+### Success Criteria
+- ✅ Folder browser navigates filesystem correctly
+- ✅ Manual path entry works with keyboard support
+- ✅ Path selection updates correct input field
+- ✅ SDK upgrade maintains compatibility
+- ✅ Project auto-expands on session creation
+- ✅ Delete protection prevents double-clicks
+- ✅ Session deletion cleanup prevents reorder errors
+
+### Impact Summary
+Enhanced directory selection with visual folder browser, upgraded to latest SDK version, improved session creation UX with auto-expand, and fixed critical bugs around session deletion and reordering.
+
+**Total Changes**: 5 modified files, ~200 lines of code changes
+
+---
+
 ## Future Phases (Post-MVP)
 - **Phase 5**: Configuration management and settings UI
 - **Enhancement**: Advanced mobile optimizations

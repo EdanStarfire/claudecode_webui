@@ -221,8 +221,51 @@
                         </div>
                     </div>
                     <div class="modal-footer">
-                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                        <button type="button" class="btn-secondary" data-bs-dismiss="modal">Cancel</button>
                         <button type="button" id="confirm-delete" class="btn btn-danger">Delete Session</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Folder Browser Modal (Bootstrap) -->
+        <div class="modal fade" id="folder-browser-modal" tabindex="-1" aria-labelledby="folder-browser-modal-label" aria-hidden="true">
+            <div class="modal-dialog modal-dialog-centered modal-lg">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title" id="folder-browser-modal-label">Select Folder</h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                    </div>
+                    <div class="modal-body">
+                        <!-- Current Path Display -->
+                        <div class="mb-3">
+                            <label class="form-label fw-bold">Current Path:</label>
+                            <div class="input-group">
+                                <input type="text" class="form-control" id="folder-browser-path" readonly>
+                                <button type="button" id="folder-browser-up" class="btn btn-outline-secondary" title="Go Up">⬆️</button>
+                            </div>
+                        </div>
+
+                        <!-- Manual Path Entry -->
+                        <div class="mb-3">
+                            <label for="folder-browser-manual-path" class="form-label">Or enter path manually:</label>
+                            <div class="input-group">
+                                <input type="text" class="form-control" id="folder-browser-manual-path" placeholder="Enter full path...">
+                                <button type="button" id="folder-browser-go" class="btn btn-outline-primary">Go</button>
+                            </div>
+                        </div>
+
+                        <!-- Folders List -->
+                        <div class="mb-3">
+                            <label class="form-label fw-bold">Folders:</label>
+                            <div id="folder-browser-list" class="list-group" style="max-height: 300px; overflow-y: auto;">
+                                <!-- Folders will be populated here -->
+                            </div>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                        <button type="button" id="folder-browser-select" class="btn btn-primary">Select Current Folder</button>
                     </div>
                 </div>
             </div>

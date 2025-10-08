@@ -97,6 +97,7 @@
 [x] bug: Diff viewer line numbers don't scroll with the message window.
 [x] bug: When clicking the create session button, it collapses the project header and deselects the current session
 [x] bug: Scrolling can push the title bar off the top of the screen on mobile. Titlebar should always stay visible
+[x] qol: When adding a session to a collapsed project, it should re-expand the project and select the new session once created
 
 # Polish
 [x] qol: Better diff viewer (currently just alternates different lines)
@@ -109,6 +110,8 @@
 [x] qol: Remove debug messages for WS_LIFECYCLE and Ping - only leave logs where they throw issues
 [x] qol: Creating a session needs to add loading block and hide the modal and sidebar on mobile
 [x] qol: Mobile drag and drop of projects needs to be re-enabled
+[x] qol: Disable delete session inputs after confirming to prevent double-clicks
+[x] bug: Deleting a session and then attempting to re-order throws an error
 
 # Advanced Functionality
 [ ] feat: Handle SlashCommand tool content display
@@ -120,7 +123,7 @@
     `{"type": "user", "content": "", "timestamp": 1759240122.8231502, "metadata": {"tool_uses": [], "tool_results": [], "has_tool_uses": false, "has_tool_results": false, "has_thinking": false, "has_permission_requests": false, "has_permission_responses": false, "role": null, "session_id": "76fe166f-9515-4acf-97fa-eaad97e54706", "raw_sdk_message": "UserMessage(content='<local-command-stdout>With your Claude Pro subscription, no need to monitor cost — your subscription includes Claude Code usage</local-command-stdout>', parent_tool_use_id=None)", "source": "sdk", "processed_at": 1759240122.8245418}, "session_id": "76fe166f-9515-4acf-97fa-eaad97e54706", "raw_sdk_message": "{\"__class__\": \"UserMessage\", \"__module__\": \"claude_agent_sdk.types\", \"content\": \"<local-command-stdout>With your Claude Pro subscription, no need to monitor cost \\u2014 your subscription includes Claude Code usage</local-command-stdout>\", \"parent_tool_use_id\": null}", "sdk_message_type": "UserMessage"}`
 [ ] feat: Enable bypassPermissions mode switch with confirmation and warning
 [ ] feat: Support markdown for assistant responses (and user input?)
-[ ] feat: Folder browser for folder selection
+[x] feat: Folder browser for folder selection
 [ ] feat: File browser for file folder exploration and viewingS
 
 # Major Features

@@ -2332,6 +2332,32 @@ class ClaudeWebUI {
         // Delete modal controls (Bootstrap modals handle close/cancel via data-bs-dismiss)
         document.getElementById('confirm-delete').addEventListener('click', () => this.confirmDeleteSession());
 
+        // Folder browser modal controls
+        document.getElementById('folder-browser-up').addEventListener('click', () => {
+            const currentPath = document.getElementById('folder-browser-path').value;
+            // Extract parent path by going up one level
+            const pathParts = currentPath.split(/[/\\]/);
+            pathParts.pop();
+            const parentPath = pathParts.join('/') || '/';
+            this.browseFolderPath(parentPath);
+        });
+        document.getElementById('folder-browser-go').addEventListener('click', () => {
+            const manualPath = document.getElementById('folder-browser-manual-path').value;
+            if (manualPath) {
+                this.browseFolderPath(manualPath);
+            }
+        });
+        document.getElementById('folder-browser-manual-path').addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                const manualPath = document.getElementById('folder-browser-manual-path').value;
+                if (manualPath) {
+                    this.browseFolderPath(manualPath);
+                }
+            }
+        });
+        document.getElementById('folder-browser-select').addEventListener('click', () => this.selectCurrentFolder());
+
         // Sidebar controls
         document.getElementById('sidebar-toggle-btn').addEventListener('click', () => this.toggleSidebar());
         document.getElementById('sidebar-resize-handle').addEventListener('mousedown', (e) => this.startResize(e));
@@ -4395,9 +4421,16 @@ class ClaudeWebUI {
             project.session_ids.push(sessionData.session_id);
         }
 
-        // If project is expanded, add session element to container
-        if (project.is_expanded) {
-            // Find the accordion body where sessions are listed
+        // Expand the project if it's collapsed (for better UX when creating a session)
+        if (!project.is_expanded) {
+            // Update backend state - this will trigger the expansion listener which updates the DOM
+            await this.projectManager.toggleExpansion(projectId);
+            project.is_expanded = true;
+
+            // Re-render the project to show the expansion with the new session
+            await this.updateProjectInDOM(projectId, 'session-added');
+        } else {
+            // Project is already expanded, just add session element to container
             const accordionBody = projectElement.querySelector('.accordion-body');
             let sessionsContainer = accordionBody?.querySelector('.list-group.list-group-flush');
 
@@ -4984,12 +5017,7 @@ class ClaudeWebUI {
     }
 
     browseDirectory() {
-        // In a real implementation, this would open a directory picker
-        // For now, we'll just suggest using the current directory
-        const input = document.getElementById('working-directory');
-        if (!input.value) {
-            input.value = prompt('Enter working directory:', '/') || input.value;
-        }
+        this.showFolderBrowser('working-directory');
     }
 
     // Project Modal Methods
@@ -5026,11 +5054,80 @@ class ClaudeWebUI {
     }
 
     browseProjectDirectory() {
-        // In a real implementation, this would open a directory picker
-        const input = document.getElementById('project-working-directory');
-        if (!input.value) {
-            input.value = prompt('Enter working directory:', '/') || input.value;
+        this.showFolderBrowser('project-working-directory');
+    }
+
+    // Folder Browser Methods
+    showFolderBrowser(targetInputId, initialPath = null) {
+        this.folderBrowserTargetInput = targetInputId;
+        const modalElement = document.getElementById('folder-browser-modal');
+        const modal = new bootstrap.Modal(modalElement);
+        modal.show();
+
+        // Load initial path
+        const startPath = initialPath || document.getElementById(targetInputId).value || null;
+        this.browseFolderPath(startPath);
+    }
+
+    async browseFolderPath(path = null) {
+        try {
+            const response = await fetch(`/api/filesystem/browse${path ? `?path=${encodeURIComponent(path)}` : ''}`);
+            if (!response.ok) {
+                throw new Error('Failed to browse filesystem');
+            }
+
+            const data = await response.json();
+
+            // Update current path display
+            document.getElementById('folder-browser-path').value = data.current_path;
+
+            // Enable/disable up button
+            const upBtn = document.getElementById('folder-browser-up');
+            upBtn.disabled = !data.parent_path;
+
+            // Render folders list
+            const listContainer = document.getElementById('folder-browser-list');
+            listContainer.innerHTML = '';
+
+            if (data.directories.length === 0) {
+                const emptyMsg = document.createElement('div');
+                emptyMsg.className = 'list-group-item text-muted';
+                emptyMsg.textContent = 'No subdirectories found';
+                listContainer.appendChild(emptyMsg);
+            } else {
+                data.directories.forEach(dir => {
+                    const item = document.createElement('button');
+                    item.type = 'button';
+                    item.className = 'list-group-item list-group-item-action';
+                    item.textContent = `📁 ${dir.name}`;
+                    item.onclick = () => this.browseFolderPath(dir.path);
+                    listContainer.appendChild(item);
+                });
+            }
+
+            Logger.info('FOLDER_BROWSER', `Browsing: ${data.current_path}`);
+        } catch (error) {
+            Logger.error('FOLDER_BROWSER', 'Failed to browse path', error);
+            this.showError('Failed to browse filesystem: ' + error.message);
         }
+    }
+
+    selectCurrentFolder() {
+        const currentPath = document.getElementById('folder-browser-path').value;
+        if (currentPath && this.folderBrowserTargetInput) {
+            document.getElementById(this.folderBrowserTargetInput).value = currentPath;
+            this.hideFolderBrowser();
+            Logger.info('FOLDER_BROWSER', `Selected folder: ${currentPath}`);
+        }
+    }
+
+    hideFolderBrowser() {
+        const modalElement = document.getElementById('folder-browser-modal');
+        const modal = bootstrap.Modal.getInstance(modalElement);
+        if (modal) {
+            modal.hide();
+        }
+        this.folderBrowserTargetInput = null;
     }
 
     showDeleteSessionModal() {
@@ -5059,8 +5156,14 @@ class ClaudeWebUI {
         if (!this.currentSessionId) return;
 
         const sessionIdToDelete = this.currentSessionId;
+        const confirmBtn = document.getElementById('confirm-delete');
+        const cancelBtn = document.querySelector('#delete-session-modal .btn-secondary');
 
         try {
+            // Disable both buttons to prevent double-clicks
+            confirmBtn.disabled = true;
+            if (cancelBtn) cancelBtn.disabled = true;
+
             this.showLoading(true);
 
             // Mark session as being deleted to prevent race conditions
@@ -5071,6 +5174,15 @@ class ClaudeWebUI {
 
             // Remove from orderedSessions array immediately
             this.orderedSessions = this.orderedSessions.filter(s => s.session_id !== sessionIdToDelete);
+
+            // Remove from project's session_ids array to prevent reorder validation errors
+            for (const project of this.projectManager.projects.values()) {
+                if (project.session_ids && project.session_ids.includes(sessionIdToDelete)) {
+                    project.session_ids = project.session_ids.filter(sid => sid !== sessionIdToDelete);
+                    Logger.debug('SESSION', `Removed session ${sessionIdToDelete} from project ${project.project_id}`);
+                    break;
+                }
+            }
 
             const response = await this.apiRequest(`/api/sessions/${sessionIdToDelete}`, {
                 method: 'DELETE'
