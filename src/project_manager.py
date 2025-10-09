@@ -267,7 +267,7 @@ class ProjectManager:
                     return False
 
                 if session_id not in project.session_ids:
-                    project.session_ids.append(session_id)
+                    project.session_ids.insert(0, session_id)  # Insert at beginning (new sessions at top)
                     project.updated_at = datetime.now(timezone.utc)
                     await self._persist_project_state(project_id)
                     logger.info(f"Added session {session_id} to project {project_id}")

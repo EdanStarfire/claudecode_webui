@@ -106,12 +106,18 @@
 
 # Cleanup
 [x] qol: Redirect app.log to the data/session folder for debugging purposes
-[ ] qol: Refactor code files for smaller sizes and easier organization
+[x] qol: Refactor code files for smaller sizes and easier organization
 [x] qol: Remove debug messages for WS_LIFECYCLE and Ping - only leave logs where they throw issues
 [x] qol: Creating a session needs to add loading block and hide the modal and sidebar on mobile
 [x] qol: Mobile drag and drop of projects needs to be re-enabled
 [x] qol: Disable delete session inputs after confirming to prevent double-clicks
 [x] bug: Deleting a session and then attempting to re-order throws an error
+[x] feat: Need function to delete a project (and all associated session data) - similar to the delete session mechanism
+[x] qol: Rename session and delete button should be done the same way as the project (show edit on hover over, modal allows editing session name, and a delete session option there).
+[x] qol: Remove delete session button.
+[x] bug: When moving sessions to the top of the list in a project, a line occurs above the top of the project too, which implies that it can move out of the project. It doesn't, but that line shouldn't be shown above the project header.
+[x] qol: change the un-editable features (project folder, session_id) in the edit modals to text with hovertext and ellispis overflow.
+[x] qol: New sessions should go to the top of the list in the project
 
 # Advanced Functionality
 [ ] feat: Handle SlashCommand tool content display
@@ -125,6 +131,8 @@
 [ ] feat: Support markdown for assistant responses (and user input?)
 [x] feat: Folder browser for folder selection
 [ ] feat: File browser for file folder exploration and viewingS
+[ ] feat: change exit session button to be something more like "restart session" which actually restarts the underlying SDK session
+[ ] feat: Break up main session class in app.js to be not so monolithic in size
 
 # Major Features
 [x] feat: Project support

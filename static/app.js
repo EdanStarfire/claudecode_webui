@@ -1,2180 +1,14 @@
 // Claude Code WebUI JavaScript Application
 
-/**
- * Standardized logging utility for consistent log formatting
- * Uses browser console's native log levels for filtering
- */
-const Logger = {
-    /**
-     * Format a log message with timestamp and category
-     * @param {string} category - Log category (e.g., 'TOOL_MANAGER', 'SESSION', 'WS')
-     * @param {string} message - The log message
-     * @param {*} data - Optional structured data to append
-     * @returns {string} Formatted log message
-     */
-    formatMessage(category, message, data = null) {
-        const timestamp = new Date().toISOString();
-        const baseMsg = `${timestamp} - [${category}] ${message}`;
 
-        if (data !== null && data !== undefined) {
-            // For objects/arrays, return base message (data will be passed separately to console)
-            return baseMsg;
-        }
-
-        return baseMsg;
-    },
-
-    /**
-     * Debug level - verbose debugging, filtered by browser settings
-     */
-    debug(category, message, data = null) {
-        if (data !== null && data !== undefined) {
-            console.debug(this.formatMessage(category, message), data);
-        } else {
-            console.debug(this.formatMessage(category, message));
-        }
-    },
-
-    /**
-     * Info level - important events (connections, actions, completions)
-     */
-    info(category, message, data = null) {
-        if (data !== null && data !== undefined) {
-            console.info(this.formatMessage(category, message), data);
-        } else {
-            console.info(this.formatMessage(category, message));
-        }
-    },
-
-    /**
-     * Warning level - warnings (retries, fallbacks, deprecated paths)
-     */
-    warn(category, message, data = null) {
-        if (data !== null && data !== undefined) {
-            console.warn(this.formatMessage(category, message), data);
-        } else {
-            console.warn(this.formatMessage(category, message));
-        }
-    },
-
-    /**
-     * Error level - errors (failures, exceptions)
-     */
-    error(category, message, data = null) {
-        if (data !== null && data !== undefined) {
-            console.error(this.formatMessage(category, message), data);
-        } else {
-            console.error(this.formatMessage(category, message));
-        }
-    }
-};
-
-// Tool Call Manager for handling tool use lifecycle
-class ToolCallManager {
-    constructor() {
-        this.toolCalls = new Map(); // tool_use_id -> ToolCallState
-        this.toolSignatureToId = new Map(); // "toolName:hash(params)" -> tool_use_id
-        this.permissionToToolMap = new Map(); // permission_request_id -> tool_use_id
-        this.assistantTurnToolGroups = new Map(); // assistant_message_timestamp -> [tool_use_ids]
-    }
-
-    createToolSignature(toolName, inputParams) {
-        // Create unique signature from tool name + params
-        if (!toolName) {
-            Logger.error('TOOL_MANAGER', 'createToolSignature called with undefined toolName', {toolName, inputParams});
-            return 'unknown:{}';
-        }
-        if (!inputParams || typeof inputParams !== 'object') {
-            Logger.warn('TOOL_MANAGER', 'createToolSignature called with invalid inputParams', {toolName, inputParams});
-            return `${toolName}:{}`;
-        }
-        const paramsHash = JSON.stringify(inputParams, Object.keys(inputParams).sort());
-        return `${toolName}:${paramsHash}`;
-    }
-
-    handleToolUse(toolUseBlock) {
-        Logger.debug('TOOL_MANAGER', 'Handling tool use', toolUseBlock);
-
-        const signature = this.createToolSignature(toolUseBlock.name, toolUseBlock.input);
-        this.toolSignatureToId.set(signature, toolUseBlock.id);
-
-        // Create tool call state
-        const toolCallState = {
-            id: toolUseBlock.id,
-            name: toolUseBlock.name,
-            input: toolUseBlock.input,
-            signature: signature,
-            status: 'pending', // pending, permission_required, executing, completed, error
-            permissionRequestId: null,
-            permissionDecision: null,
-            result: null,
-            explanation: null,
-            timestamp: new Date().toISOString(),
-            isExpanded: true // Start expanded, can be collapsed later
-        };
-
-        this.toolCalls.set(toolUseBlock.id, toolCallState);
-        return toolCallState;
-    }
-
-    handlePermissionRequest(permissionRequest) {
-        Logger.debug('TOOL_MANAGER', 'Handling permission request', permissionRequest);
-
-        const signature = this.createToolSignature(permissionRequest.tool_name, permissionRequest.input_params);
-        const toolUseId = this.toolSignatureToId.get(signature);
-
-        if (toolUseId) {
-            this.permissionToToolMap.set(permissionRequest.request_id, toolUseId);
-
-            // Update tool state
-            const toolCall = this.toolCalls.get(toolUseId);
-            if (toolCall) {
-                toolCall.status = 'permission_required';
-                toolCall.permissionRequestId = permissionRequest.request_id;
-                return toolCall;
-            }
-        } else {
-            // Handle historical/unknown tools gracefully
-            Logger.debug('TOOL_MANAGER', 'Creating historical tool call for unknown tool', permissionRequest);
-
-            // Generate a unique ID for this historical tool call
-            const historicalId = `historical_${permissionRequest.request_id}`;
-
-            // Create a basic tool call record for historical tools
-            const historicalToolCall = {
-                id: historicalId,
-                name: permissionRequest.tool_name,
-                input: permissionRequest.input_params,
-                signature: signature,
-                status: 'permission_required',
-                permissionRequestId: permissionRequest.request_id,
-                permissionDecision: null,
-                result: null,
-                explanation: null,
-                timestamp: new Date().toISOString(),
-                isExpanded: false,
-                isHistorical: true  // Flag to indicate this is a historical tool call
-            };
-
-            // Store the historical tool call
-            this.toolCalls.set(historicalId, historicalToolCall);
-            this.permissionToToolMap.set(permissionRequest.request_id, historicalId);
-
-            return historicalToolCall;
-        }
-        return null;
-    }
-
-    handlePermissionResponse(permissionResponse) {
-        Logger.debug('TOOL_MANAGER', 'Handling permission response', permissionResponse);
-
-        const toolUseId = this.permissionToToolMap.get(permissionResponse.request_id);
-        if (toolUseId) {
-            const toolCall = this.toolCalls.get(toolUseId);
-            if (toolCall) {
-                toolCall.permissionDecision = permissionResponse.decision;
-
-                if (permissionResponse.decision === 'allow') {
-                    toolCall.status = 'executing';
-                } else {
-                    toolCall.status = 'completed';
-                    toolCall.result = { error: true, message: permissionResponse.reasoning || 'Permission denied' };
-                    // Auto-collapse tool call when permission is denied
-                    toolCall.isExpanded = false;
-                }
-
-                return toolCall;
-            }
-        }
-        return null;
-    }
-
-    handleToolResult(toolResultBlock) {
-        Logger.debug('TOOL_MANAGER', 'Handling tool result', toolResultBlock);
-
-        const toolUseId = toolResultBlock.tool_use_id;
-        const toolCall = this.toolCalls.get(toolUseId);
-
-        if (toolCall) {
-            toolCall.status = toolResultBlock.is_error ? 'error' : 'completed';
-            toolCall.result = {
-                error: toolResultBlock.is_error,
-                content: toolResultBlock.content
-            };
-
-            // Auto-collapse tool call when completed
-            toolCall.isExpanded = false;
-
-            return toolCall;
-        }
-        return null;
-    }
-
-    handleAssistantExplanation(assistantMessage, relatedToolIds) {
-        Logger.debug('TOOL_MANAGER', 'Handling assistant explanation', {assistantMessage, relatedToolIds});
-
-        // Update explanation for related tools
-        relatedToolIds.forEach(toolId => {
-            const toolCall = this.toolCalls.get(toolId);
-            if (toolCall) {
-                toolCall.explanation = assistantMessage.content;
-            }
-        });
-    }
-
-    getToolCall(toolUseId) {
-        return this.toolCalls.get(toolUseId);
-    }
-
-    getAllToolCalls() {
-        return Array.from(this.toolCalls.values());
-    }
-
-    toggleToolExpansion(toolUseId) {
-        const toolCall = this.toolCalls.get(toolUseId);
-        if (toolCall) {
-            toolCall.isExpanded = !toolCall.isExpanded;
-            return toolCall;
-        }
-        return null;
-    }
-
-    setToolExpansion(toolUseId, isExpanded) {
-        const toolCall = this.toolCalls.get(toolUseId);
-        if (toolCall) {
-            toolCall.isExpanded = isExpanded;
-            return toolCall;
-        }
-        return null;
-    }
-
-    generateCollapsedSummary(toolCall) {
-        const statusIcon = {
-            'pending': '🔄',
-            'permission_required': '❓',
-            'executing': '⚡',
-            'completed': toolCall.permissionDecision === 'deny' ? '❌' : '✅',
-            'error': '💥'
-        }[toolCall.status] || '🔧';
-
-        const statusText = {
-            'pending': 'Pending',
-            'permission_required': 'Awaiting Permission',
-            'executing': 'Executing',
-            'completed': toolCall.permissionDecision === 'deny' ? 'Denied' : 'Completed',
-            'error': 'Error'
-        }[toolCall.status] || 'Unknown';
-
-        // Create parameter summary
-        const paramSummary = this.createParameterSummary(toolCall.input);
-
-        return `${statusIcon} ${toolCall.name}${paramSummary} - ${statusText}`;
-    }
-
-    createParameterSummary(input) {
-        if (!input || Object.keys(input).length === 0) return '';
-
-        // Show key parameters in a readable format
-        const keys = Object.keys(input);
-        if (keys.length === 1) {
-            const value = input[keys[0]];
-            const truncated = typeof value === 'string' && value.length > 30 ?
-                value.substring(0, 30) + '...' : value;
-            return ` (${keys[0]}="${truncated}")`;
-        } else if (keys.length <= 3) {
-            const pairs = keys.map(key => {
-                const value = input[key];
-                const truncated = typeof value === 'string' && value.length > 15 ?
-                    value.substring(0, 15) + '...' : value;
-                return `${key}="${truncated}"`;
-            });
-            return ` (${pairs.join(', ')})`;
-        } else {
-            return ` (${keys.length} parameters)`;
-        }
-    }
-}
-
-// Tool Handler Registry for custom tool display rendering
-class ToolHandlerRegistry {
-    constructor() {
-        this.handlers = new Map(); // toolName -> handler
-        this.patternHandlers = []; // Array of {pattern: RegExp, handler}
-    }
-
-    /**
-     * Register a handler for a specific tool name
-     * @param {string} toolName - Name of the tool (e.g., "Read", "Edit")
-     * @param {Object} handler - Handler object with render methods
-     */
-    registerHandler(toolName, handler) {
-        this.handlers.set(toolName, handler);
-    }
-
-    /**
-     * Register a handler for tools matching a pattern
-     * @param {RegExp|string} pattern - Pattern to match tool names (e.g., /^mcp__/, "mcp__*")
-     * @param {Object} handler - Handler object with render methods
-     */
-    registerPatternHandler(pattern, handler) {
-        const regex = typeof pattern === 'string'
-            ? new RegExp('^' + pattern.replace(/\*/g, '.*') + '$')
-            : pattern;
-        this.patternHandlers.push({ pattern: regex, handler });
-    }
-
-    /**
-     * Get handler for a specific tool name
-     * @param {string} toolName - Name of the tool
-     * @returns {Object|null} Handler object or null if no handler found
-     */
-    getHandler(toolName) {
-        // Check exact match first
-        if (this.handlers.has(toolName)) {
-            return this.handlers.get(toolName);
-        }
-
-        // Check pattern matches
-        for (const { pattern, handler } of this.patternHandlers) {
-            if (pattern.test(toolName)) {
-                return handler;
-            }
-        }
-
-        return null;
-    }
-
-    /**
-     * Check if a handler exists for a tool
-     * @param {string} toolName - Name of the tool
-     * @returns {boolean}
-     */
-    hasHandler(toolName) {
-        return this.getHandler(toolName) !== null;
-    }
-}
-
-// Default Tool Handler - provides standard rendering
-class DefaultToolHandler {
-    renderParameters(toolCall, escapeHtmlFn) {
-        return `
-            <div class="tool-parameters">
-                <strong>Parameters:</strong>
-                <pre class="tool-params-json">${escapeHtmlFn(JSON.stringify(toolCall.input, null, 2))}</pre>
-            </div>
-        `;
-    }
-
-    renderResult(toolCall, escapeHtmlFn) {
-        if (!toolCall.result) return '';
-
-        const resultClass = toolCall.result.error ? 'tool-result-error' : 'tool-result-success';
-        return `
-            <div class="tool-result ${resultClass}">
-                <strong>Result:</strong>
-                <pre class="tool-result-content">${escapeHtmlFn(toolCall.result.content || toolCall.result.message || 'No content')}</pre>
-            </div>
-        `;
-    }
-
-    getCollapsedSummary(toolCall) {
-        // Return null to use default summary generation
-        return null;
-    }
-}
-
-// Read Tool Handler - custom display for Read tool
-class ReadToolHandler {
-    renderParameters(toolCall, escapeHtmlFn) {
-        const filePath = toolCall.input.file_path || 'Unknown';
-        const offset = toolCall.input.offset;
-        const limit = toolCall.input.limit;
-
-        let rangeInfo = '';
-        if (offset !== undefined || limit !== undefined) {
-            const startLine = offset !== undefined ? offset + 1 : 1;
-            const endLine = limit !== undefined ? (offset || 0) + limit : '∞';
-            rangeInfo = `<span class="read-range">Lines ${startLine}-${endLine}</span>`;
-        }
-
-        return `
-            <div class="tool-parameters tool-read-params">
-                <div class="read-file-path">
-                    <span class="read-icon">📄</span>
-                    <strong>Reading:</strong>
-                    <code class="file-path">${escapeHtmlFn(filePath)}</code>
-                    ${rangeInfo}
-                </div>
-            </div>
-        `;
-    }
-
-    renderResult(toolCall, escapeHtmlFn) {
-        if (!toolCall.result) return '';
-
-        const resultClass = toolCall.result.error ? 'tool-result-error' : 'tool-result-success';
-
-        if (toolCall.result.error) {
-            return `
-                <div class="tool-result ${resultClass}">
-                    <strong>Error:</strong>
-                    <pre class="tool-result-content">${escapeHtmlFn(toolCall.result.content || toolCall.result.message || 'No content')}</pre>
-                </div>
-            `;
-        }
-
-        // Parse file content and show preview with diff-style formatting
-        const content = toolCall.result.content || '';
-        const lines = content.split('\n');
-        const previewLimit = 100;
-        const hasMore = lines.length > previewLimit;
-        const previewLines = lines.slice(0, previewLimit);
-        const previewContent = previewLines.join('\n');
-
-        // Generate diff HTML using same approach as Edit tool
-        let diffHtml = '';
-        try {
-            if (typeof Diff !== 'undefined' && typeof Diff2Html !== 'undefined') {
-                // Create a patch showing content as context (unchanged) - from empty to content
-                const patch = Diff.createPatch('file', '', previewContent, '', '', { context: 999999 });
-
-                diffHtml = Diff2Html.html(patch, {
-                    drawFileList: false,
-                    matching: 'lines',
-                    outputFormat: 'line-by-line',
-                    highlight: false
-                });
-            }
-        } catch (e) {
-            // Fallback to plain text if diff fails
-            diffHtml = `<pre class="tool-result-content read-content-preview">${escapeHtmlFn(previewContent)}</pre>`;
-        }
-
-        return `
-            <div class="tool-result ${resultClass}">
-                <div class="read-result-header">
-                    <span class="diff-label">Content Preview:</span>
-                    <span class="read-line-count">${lines.length} lines</span>
-                    ${hasMore ? `<span class="read-preview-note">(showing first ${previewLimit})</span>` : ''}
-                </div>
-                <div class="read-diff-container">
-                    ${diffHtml}
-                </div>
-                ${hasMore ? '<div class="read-more-indicator">...</div>' : ''}
-            </div>
-        `;
-    }
-
-    getCollapsedSummary(toolCall) {
-        const statusIcon = {
-            'pending': '🔄',
-            'permission_required': '❓',
-            'executing': '⚡',
-            'completed': toolCall.permissionDecision === 'deny' ? '❌' : '✅',
-            'error': '💥'
-        }[toolCall.status] || '🔧';
-
-        const filePath = toolCall.input.file_path || 'Unknown';
-        const fileName = filePath.split(/[/\\]/).pop();
-
-        let statusText = '';
-        if (toolCall.status === 'completed' && !toolCall.result?.error) {
-            const lines = (toolCall.result?.content || '').split('\n').length;
-            statusText = `${lines} lines`;
-        } else if (toolCall.result?.error) {
-            statusText = 'Error';
-        } else {
-            statusText = {
-                'pending': 'Pending',
-                'permission_required': 'Awaiting Permission',
-                'executing': 'Executing',
-                'completed': 'Completed',
-                'error': 'Error'
-            }[toolCall.status] || 'Unknown';
-        }
-
-        return `${statusIcon} Read: ${fileName} - ${statusText}`;
-    }
-}
-
-// Edit Tool Handler - custom display for Edit tool with diff view
-class EditToolHandler {
-    renderParameters(toolCall, escapeHtmlFn) {
-        const filePath = toolCall.input.file_path || 'Unknown';
-        const oldString = toolCall.input.old_string || '';
-        const newString = toolCall.input.new_string || '';
-        const replaceAll = toolCall.input.replace_all || false;
-
-        // Generate diff view
-        const diffHtml = this.generateDiffView(oldString, newString, escapeHtmlFn);
-
-        return `
-            <div class="tool-parameters tool-edit-params">
-                <div class="edit-file-path">
-                    <span class="edit-icon">✏️</span>
-                    <strong>Editing:</strong>
-                    <code class="file-path">${escapeHtmlFn(filePath)}</code>
-                    ${replaceAll ? '<span class="edit-replace-all-badge">Replace All</span>' : ''}
-                </div>
-                <div class="edit-diff-container">
-                    <div class="edit-diff-header">
-                        <span class="diff-label">Changes:</span>
-                    </div>
-                    ${diffHtml}
-                </div>
-            </div>
-        `;
-    }
-
-    generateDiffView(oldString, newString, escapeHtmlFn) {
-        // Check if diff libraries are loaded
-        if (typeof Diff === 'undefined' || typeof Diff2Html === 'undefined') {
-            console.error('Diff libraries not loaded. Using fallback diff view.');
-            return this.generateFallbackDiffView(oldString, newString, escapeHtmlFn);
-        }
-
-        try {
-            // Use diff library to create unified diff format
-            const patch = Diff.createPatch('file', oldString, newString, '', '', { context: 3 });
-
-            // Use diff2html to render the diff
-            const diffHtml = Diff2Html.html(patch, {
-                drawFileList: false,
-                matching: 'lines',
-                outputFormat: 'line-by-line',
-                highlight: false // Disable syntax highlighting for plain text diffs
-            });
-
-            return diffHtml;
-        } catch (error) {
-            console.error('Error generating diff with diff2html:', error);
-            return this.generateFallbackDiffView(oldString, newString, escapeHtmlFn);
-        }
-    }
-
-    generateFallbackDiffView(oldString, newString, escapeHtmlFn) {
-        // Simple fallback diff view
-        const oldLines = oldString.split('\n');
-        const newLines = newString.split('\n');
-        const maxLines = Math.max(oldLines.length, newLines.length);
-
-        let diffHtml = '<div class="simple-diff-view" style="font-family: monospace; font-size: 0.85rem; background: #f8f9fa; border-radius: 0.25rem; padding: 0.5rem;">';
-
-        for (let i = 0; i < maxLines; i++) {
-            const oldLine = i < oldLines.length ? oldLines[i] : null;
-            const newLine = i < newLines.length ? newLines[i] : null;
-
-            if (oldLine !== null && newLine !== null && oldLine === newLine) {
-                diffHtml += `<div style="padding: 0.125rem 0;"> ${escapeHtmlFn(oldLine)}</div>`;
-            } else {
-                if (oldLine !== null) {
-                    diffHtml += `<div style="background-color: #f8d7da; padding: 0.125rem 0;"><span style="color: #dc3545; font-weight: bold;">-</span> ${escapeHtmlFn(oldLine)}</div>`;
-                }
-                if (newLine !== null) {
-                    diffHtml += `<div style="background-color: #d4edda; padding: 0.125rem 0;"><span style="color: #28a745; font-weight: bold;">+</span> ${escapeHtmlFn(newLine)}</div>`;
-                }
-            }
-        }
-
-        diffHtml += '</div>';
-        return diffHtml;
-    }
-
-    renderResult(toolCall, escapeHtmlFn) {
-        if (!toolCall.result) return '';
-
-        const resultClass = toolCall.result.error ? 'tool-result-error' : 'tool-result-success';
-
-        if (toolCall.result.error) {
-            return `
-                <div class="tool-result ${resultClass}">
-                    <strong>Error:</strong>
-                    <pre class="tool-result-content">${escapeHtmlFn(toolCall.result.content || toolCall.result.message || 'No content')}</pre>
-                </div>
-            `;
-        }
-
-        // Success message
-        return `
-            <div class="tool-result ${resultClass}">
-                <div class="edit-success-message">
-                    <span class="success-icon">✅</span>
-                    <strong>File edited successfully</strong>
-                </div>
-            </div>
-        `;
-    }
-
-    getCollapsedSummary(toolCall) {
-        const statusIcon = {
-            'pending': '🔄',
-            'permission_required': '❓',
-            'executing': '⚡',
-            'completed': toolCall.permissionDecision === 'deny' ? '❌' : '✅',
-            'error': '💥'
-        }[toolCall.status] || '🔧';
-
-        const filePath = toolCall.input.file_path || 'Unknown';
-        const fileName = filePath.split(/[/\\]/).pop();
-
-        // Count lines changed
-        const oldLines = (toolCall.input.old_string || '').split('\n').length;
-        const newLines = (toolCall.input.new_string || '').split('\n').length;
-        const linesChanged = Math.max(oldLines, newLines);
-
-        let statusText = '';
-        if (toolCall.status === 'completed' && !toolCall.result?.error) {
-            statusText = `${linesChanged} lines changed`;
-        } else if (toolCall.result?.error) {
-            statusText = 'Error';
-        } else {
-            statusText = {
-                'pending': 'Pending',
-                'permission_required': 'Awaiting Permission',
-                'executing': 'Executing',
-                'completed': 'Completed',
-                'error': 'Error'
-            }[toolCall.status] || 'Unknown';
-        }
-
-        return `${statusIcon} Edit: ${fileName} - ${statusText}`;
-    }
-}
-
-// MultiEdit Tool Handler - custom display for MultiEdit tool with multiple diffs
-class MultiEditToolHandler {
-    renderParameters(toolCall, escapeHtmlFn) {
-        const filePath = toolCall.input.file_path || 'Unknown';
-        const edits = toolCall.input.edits || [];
-
-        // Generate diff view for each edit
-        const editsHtml = edits.map((edit, index) => {
-            const diffHtml = this.generateDiffView(edit.old_string || '', edit.new_string || '', escapeHtmlFn);
-            return `
-                <div class="multiedit-edit-block">
-                    <div class="multiedit-edit-header">
-                        <span class="multiedit-edit-label">Edit ${index + 1} of ${edits.length}</span>
-                    </div>
-                    ${diffHtml}
-                </div>
-            `;
-        }).join('');
-
-        return `
-            <div class="tool-parameters tool-edit-params">
-                <div class="edit-file-path">
-                    <span class="edit-icon">✏️</span>
-                    <strong>Multi-Editing:</strong>
-                    <code class="file-path">${escapeHtmlFn(filePath)}</code>
-                    <span class="multiedit-count-badge">${edits.length} edits</span>
-                </div>
-                <div class="edit-diff-container">
-                    ${editsHtml}
-                </div>
-            </div>
-        `;
-    }
-
-    generateDiffView(oldString, newString, escapeHtmlFn) {
-        // Check if diff libraries are loaded
-        if (typeof Diff === 'undefined' || typeof Diff2Html === 'undefined') {
-            console.error('Diff libraries not loaded. Using fallback diff view.');
-            return this.generateFallbackDiffView(oldString, newString, escapeHtmlFn);
-        }
-
-        try {
-            // Use diff library to create unified diff format
-            const patch = Diff.createPatch('file', oldString, newString, '', '', { context: 3 });
-
-            // Use diff2html to render the diff
-            const diffHtml = Diff2Html.html(patch, {
-                drawFileList: false,
-                matching: 'lines',
-                outputFormat: 'line-by-line',
-                highlight: false // Disable syntax highlighting for plain text diffs
-            });
-
-            return diffHtml;
-        } catch (error) {
-            console.error('Error generating diff with diff2html:', error);
-            return this.generateFallbackDiffView(oldString, newString, escapeHtmlFn);
-        }
-    }
-
-    generateFallbackDiffView(oldString, newString, escapeHtmlFn) {
-        // Simple fallback diff view
-        const oldLines = oldString.split('\n');
-        const newLines = newString.split('\n');
-        const maxLines = Math.max(oldLines.length, newLines.length);
-
-        let diffHtml = '<div class="simple-diff-view" style="font-family: monospace; font-size: 0.85rem; background: #f8f9fa; border-radius: 0.25rem; padding: 0.5rem;">';
-
-        for (let i = 0; i < maxLines; i++) {
-            const oldLine = i < oldLines.length ? oldLines[i] : null;
-            const newLine = i < newLines.length ? newLines[i] : null;
-
-            if (oldLine !== null && newLine !== null && oldLine === newLine) {
-                diffHtml += `<div style="padding: 0.125rem 0;"> ${escapeHtmlFn(oldLine)}</div>`;
-            } else {
-                if (oldLine !== null) {
-                    diffHtml += `<div style="background-color: #f8d7da; padding: 0.125rem 0;"><span style="color: #dc3545; font-weight: bold;">-</span> ${escapeHtmlFn(oldLine)}</div>`;
-                }
-                if (newLine !== null) {
-                    diffHtml += `<div style="background-color: #d4edda; padding: 0.125rem 0;"><span style="color: #28a745; font-weight: bold;">+</span> ${escapeHtmlFn(newLine)}</div>`;
-                }
-            }
-        }
-
-        diffHtml += '</div>';
-        return diffHtml;
-    }
-
-    renderResult(toolCall, escapeHtmlFn) {
-        if (!toolCall.result) return '';
-
-        const resultClass = toolCall.result.error ? 'tool-result-error' : 'tool-result-success';
-
-        if (toolCall.result.error) {
-            return `
-                <div class="tool-result ${resultClass}">
-                    <strong>Error:</strong>
-                    <pre class="tool-result-content">${escapeHtmlFn(toolCall.result.content || toolCall.result.message || 'No content')}</pre>
-                </div>
-            `;
-        }
-
-        // Success message
-        const editCount = (toolCall.input.edits || []).length;
-        return `
-            <div class="tool-result ${resultClass}">
-                <div class="edit-success-message">
-                    <span class="success-icon">✅</span>
-                    <strong>${editCount} edits applied successfully</strong>
-                </div>
-            </div>
-        `;
-    }
-
-    getCollapsedSummary(toolCall) {
-        const statusIcon = {
-            'pending': '🔄',
-            'permission_required': '❓',
-            'executing': '⚡',
-            'completed': toolCall.permissionDecision === 'deny' ? '❌' : '✅',
-            'error': '💥'
-        }[toolCall.status] || '🔧';
-
-        const filePath = toolCall.input.file_path || 'Unknown';
-        const fileName = filePath.split(/[/\\]/).pop();
-        const editCount = (toolCall.input.edits || []).length;
-
-        let statusText = '';
-        if (toolCall.status === 'completed' && !toolCall.result?.error) {
-            statusText = `${editCount} edits`;
-        } else if (toolCall.result?.error) {
-            statusText = 'Error';
-        } else {
-            statusText = {
-                'pending': 'Pending',
-                'permission_required': 'Awaiting Permission',
-                'executing': 'Executing',
-                'completed': 'Completed',
-                'error': 'Error'
-            }[toolCall.status] || 'Unknown';
-        }
-
-        return `${statusIcon} MultiEdit: ${fileName} - ${statusText}`;
-    }
-}
-
-// Write Tool Handler - custom display for Write tool (creating new files)
-class WriteToolHandler {
-    renderParameters(toolCall, escapeHtmlFn) {
-        const filePath = toolCall.input.file_path || 'Unknown';
-        const content = toolCall.input.content || '';
-        const lines = content.split('\n');
-        const previewLimit = 100;
-        const hasMore = lines.length > previewLimit;
-        const previewLines = lines.slice(0, previewLimit);
-        const previewContent = previewLines.join('\n');
-
-        // Generate diff HTML using same approach as Edit tool
-        let diffHtml = '';
-        try {
-            if (typeof Diff !== 'undefined' && typeof Diff2Html !== 'undefined') {
-                // Create a patch showing content as added (from empty to content)
-                const patch = Diff.createPatch('file', '', previewContent, '', '', { context: 3 });
-
-                diffHtml = Diff2Html.html(patch, {
-                    drawFileList: false,
-                    matching: 'lines',
-                    outputFormat: 'line-by-line',
-                    highlight: false
-                });
-            }
-        } catch (e) {
-            // Fallback to plain text if diff fails
-            diffHtml = `<pre class="write-content-preview">${escapeHtmlFn(previewContent)}</pre>`;
-        }
-
-        return `
-            <div class="tool-parameters tool-write-params">
-                <div class="write-file-path">
-                    <span class="write-icon">📝</span>
-                    <strong>Writing:</strong>
-                    <code class="file-path">${escapeHtmlFn(filePath)}</code>
-                </div>
-                <div class="write-diff-container">
-                    <div class="write-content-header">
-                        <span class="diff-label">Content:</span>
-                        <span class="write-line-count">${lines.length} lines</span>
-                        ${hasMore ? `<span class="write-preview-note">(showing first ${previewLimit})</span>` : ''}
-                    </div>
-                    ${diffHtml}
-                    ${hasMore ? '<div class="write-more-indicator">...</div>' : ''}
-                </div>
-            </div>
-        `;
-    }
-
-    renderResult(toolCall, escapeHtmlFn) {
-        if (!toolCall.result) return '';
-
-        const resultClass = toolCall.result.error ? 'tool-result-error' : 'tool-result-success';
-
-        if (toolCall.result.error) {
-            return `
-                <div class="tool-result ${resultClass}">
-                    <strong>Error:</strong>
-                    <pre class="tool-result-content">${escapeHtmlFn(toolCall.result.content || toolCall.result.message || 'No content')}</pre>
-                </div>
-            `;
-        }
-
-        // Success message
-        const lines = (toolCall.input.content || '').split('\n').length;
-        return `
-            <div class="tool-result ${resultClass}">
-                <div class="write-success-message">
-                    <span class="success-icon">✅</span>
-                    <strong>File created successfully (${lines} lines written)</strong>
-                </div>
-            </div>
-        `;
-    }
-
-    getCollapsedSummary(toolCall) {
-        const statusIcon = {
-            'pending': '🔄',
-            'permission_required': '❓',
-            'executing': '⚡',
-            'completed': toolCall.permissionDecision === 'deny' ? '❌' : '✅',
-            'error': '💥'
-        }[toolCall.status] || '🔧';
-
-        const filePath = toolCall.input.file_path || 'Unknown';
-        const fileName = filePath.split(/[/\\]/).pop();
-
-        let statusText = '';
-        if (toolCall.status === 'completed' && !toolCall.result?.error) {
-            const lines = (toolCall.input.content || '').split('\n').length;
-            statusText = `${lines} lines`;
-        } else if (toolCall.result?.error) {
-            statusText = 'Error';
-        } else {
-            statusText = {
-                'pending': 'Pending',
-                'permission_required': 'Awaiting Permission',
-                'executing': 'Executing',
-                'completed': 'Completed',
-                'error': 'Error'
-            }[toolCall.status] || 'Unknown';
-        }
-
-        return `${statusIcon} Write: ${fileName} - ${statusText}`;
-    }
-}
-
-// TodoWrite Tool Handler - custom display for TodoWrite tool (task tracking)
-class TodoWriteToolHandler {
-    renderParameters(toolCall, escapeHtmlFn) {
-        const todos = toolCall.input.todos || [];
-
-        // Count todos by status
-        const pending = todos.filter(t => t.status === 'pending').length;
-        const inProgress = todos.filter(t => t.status === 'in_progress').length;
-        const completed = todos.filter(t => t.status === 'completed').length;
-
-        // Generate checklist
-        const checklistHtml = todos.map((todo, index) => {
-            const checkboxIcon = {
-                'pending': '☐',
-                'in_progress': '◐',
-                'completed': '☑'
-            }[todo.status] || '☐';
-
-            const itemClass = `todo-item todo-${todo.status}`;
-
-            return `
-                <div class="${itemClass}">
-                    <span class="todo-checkbox">${checkboxIcon}</span>
-                    <span class="todo-content">${escapeHtmlFn(todo.content)}</span>
-                </div>
-            `;
-        }).join('');
-
-        return `
-            <div class="tool-parameters tool-todo-params">
-                <div class="todo-header">
-                    <span class="todo-icon">📋</span>
-                    <strong>Task List:</strong>
-                    <div class="todo-summary">
-                        ${completed > 0 ? `<span class="todo-count todo-count-completed">${completed} completed</span>` : ''}
-                        ${inProgress > 0 ? `<span class="todo-count todo-count-in-progress">${inProgress} in progress</span>` : ''}
-                        ${pending > 0 ? `<span class="todo-count todo-count-pending">${pending} pending</span>` : ''}
-                    </div>
-                </div>
-                <div class="todo-checklist">
-                    ${checklistHtml}
-                </div>
-            </div>
-        `;
-    }
-
-    renderResult(toolCall, escapeHtmlFn) {
-        if (!toolCall.result) return '';
-
-        const resultClass = toolCall.result.error ? 'tool-result-error' : 'tool-result-success';
-
-        if (toolCall.result.error) {
-            return `
-                <div class="tool-result ${resultClass}">
-                    <strong>Error:</strong>
-                    <pre class="tool-result-content">${escapeHtmlFn(toolCall.result.content || toolCall.result.message || 'No content')}</pre>
-                </div>
-            `;
-        }
-
-        // Success message
-        const todoCount = (toolCall.input.todos || []).length;
-        return `
-            <div class="tool-result ${resultClass}">
-                <div class="todo-success-message">
-                    <span class="success-icon">✅</span>
-                    <strong>Task list updated (${todoCount} tasks)</strong>
-                </div>
-            </div>
-        `;
-    }
-
-    getCollapsedSummary(toolCall) {
-        const statusIcon = {
-            'pending': '🔄',
-            'permission_required': '❓',
-            'executing': '⚡',
-            'completed': toolCall.permissionDecision === 'deny' ? '❌' : '✅',
-            'error': '💥'
-        }[toolCall.status] || '🔧';
-
-        const todos = toolCall.input.todos || [];
-        const completed = todos.filter(t => t.status === 'completed').length;
-        const pending = todos.filter(t => t.status === 'pending').length;
-        const inProgressTodos = todos.filter(t => t.status === 'in_progress');
-        const total = todos.length;
-
-        let statusText = '';
-        if (toolCall.status === 'completed' && !toolCall.result?.error) {
-            // Build status text with counts
-            const parts = [];
-            if (completed > 0) parts.push(`${completed} completed`);
-            if (pending > 0) parts.push(`${pending} pending`);
-            statusText = parts.join(', ');
-
-            // Add in-progress tasks if any
-            if (inProgressTodos.length > 0) {
-                const inProgressText = inProgressTodos.map(t => `◐ ${t.content}`).join(' | ');
-                statusText = statusText ? `${statusText} | ${inProgressText}` : inProgressText;
-            }
-        } else if (toolCall.result?.error) {
-            statusText = 'Error';
-        } else {
-            statusText = {
-                'pending': 'Pending',
-                'permission_required': 'Awaiting Permission',
-                'executing': 'Executing',
-                'completed': 'Completed',
-                'error': 'Error'
-            }[toolCall.status] || 'Unknown';
-        }
-
-        return `${statusIcon} TodoWrite: ${statusText}`;
-    }
-}
-
-// Grep Tool Handler - custom display for Grep tool
-class GrepToolHandler {
-    renderParameters(toolCall, escapeHtmlFn) {
-        const pattern = toolCall.input.pattern || '';
-        const path = toolCall.input.path || '.';
-        const outputMode = toolCall.input.output_mode || 'files_with_matches';
-        const caseInsensitive = toolCall.input['-i'] || false;
-        const showLineNumbers = toolCall.input['-n'] || false;
-        const contextAfter = toolCall.input['-A'];
-        const contextBefore = toolCall.input['-B'];
-        const contextBoth = toolCall.input['-C'];
-        const glob = toolCall.input.glob || null;
-        const type = toolCall.input.type || null;
-        const headLimit = toolCall.input.head_limit;
-        const multiline = toolCall.input.multiline || false;
-
-        let searchInfo = `<span class="grep-pattern"><code>${escapeHtmlFn(pattern)}</code></span>`;
-
-        // Build flags list
-        const flags = [];
-        if (caseInsensitive) flags.push('case-insensitive');
-        if (showLineNumbers) flags.push('line numbers');
-        if (multiline) flags.push('multiline');
-        if (contextBoth !== undefined) flags.push(`±${contextBoth} lines context`);
-        else {
-            if (contextBefore !== undefined) flags.push(`-${contextBefore} lines before`);
-            if (contextAfter !== undefined) flags.push(`+${contextAfter} lines after`);
-        }
-        if (headLimit !== undefined) flags.push(`limit ${headLimit}`);
-
-        if (flags.length > 0) {
-            searchInfo += ` <span class="grep-flags">(${flags.join(', ')})</span>`;
-        }
-
-        let pathInfo = `<code class="file-path">${escapeHtmlFn(path)}</code>`;
-        if (glob) {
-            pathInfo += ` <span class="grep-glob">matching ${escapeHtmlFn(glob)}</span>`;
-        }
-        if (type) {
-            pathInfo += ` <span class="grep-type">type: ${escapeHtmlFn(type)}</span>`;
-        }
-
-        return `
-            <div class="tool-parameters tool-grep-params">
-                <div class="grep-search-info">
-                    <span class="grep-icon">🔍</span>
-                    <strong>Searching for:</strong> ${searchInfo}
-                </div>
-                <div class="grep-path-info">
-                    <strong>In:</strong> ${pathInfo}
-                </div>
-                <div class="grep-mode-info">
-                    <strong>Mode:</strong> <span class="grep-mode">${escapeHtmlFn(outputMode)}</span>
-                </div>
-            </div>
-        `;
-    }
-
-    renderResult(toolCall, escapeHtmlFn) {
-        if (!toolCall.result) return '';
-
-        const resultClass = toolCall.result.error ? 'tool-result-error' : 'tool-result-success';
-
-        if (toolCall.result.error) {
-            return `
-                <div class="tool-result ${resultClass}">
-                    <strong>Error:</strong>
-                    <pre class="tool-result-content">${escapeHtmlFn(toolCall.result.content || toolCall.result.message || 'No content')}</pre>
-                </div>
-            `;
-        }
-
-        const content = toolCall.result.content || '';
-        const outputMode = toolCall.input.output_mode || 'files_with_matches';
-
-        // Handle files_with_matches mode - just list files
-        if (outputMode === 'files_with_matches') {
-            const lines = content.split('\n').filter(line => line.trim());
-
-            // First line might be a summary like "Found 2 files"
-            const foundMatch = lines[0].match(/^Found (\d+) files?/);
-            const fileCount = foundMatch ? foundMatch[1] : lines.length;
-            const fileList = foundMatch ? lines.slice(1) : lines;
-
-            if (fileList.length === 0) {
-                return `
-                    <div class="tool-result ${resultClass}">
-                        <strong>No matches found</strong>
-                    </div>
-                `;
-            }
-
-            return `
-                <div class="tool-result ${resultClass}">
-                    <div class="grep-result-header">
-                        <strong>Found ${fileCount} file${fileCount !== '1' ? 's' : ''}:</strong>
-                    </div>
-                    <div class="grep-file-list">
-                        ${fileList.map(file => `<div class="grep-file-item"><code>${escapeHtmlFn(file)}</code></div>`).join('')}
-                    </div>
-                </div>
-            `;
-        }
-
-        // Handle content mode - show lines grouped by file
-        if (outputMode === 'content') {
-            const lines = content.split('\n').filter(line => line.trim());
-
-            if (lines.length === 0) {
-                return `
-                    <div class="tool-result ${resultClass}">
-                        <strong>No matches found</strong>
-                    </div>
-                `;
-            }
-
-            // Group lines by file (format: filepath:line_number:content)
-            const fileGroups = new Map();
-            lines.forEach(line => {
-                // Match pattern: filepath:line_number:content
-                const match = line.match(/^([^:]+):(\d+):(.*)$/);
-                if (match) {
-                    const [, filepath, lineNum, lineContent] = match;
-                    if (!fileGroups.has(filepath)) {
-                        fileGroups.set(filepath, []);
-                    }
-                    fileGroups.get(filepath).push({
-                        lineNum: lineNum,
-                        content: lineContent
-                    });
-                }
-            });
-
-            if (fileGroups.size === 0) {
-                // Fallback if format doesn't match
-                return `
-                    <div class="tool-result ${resultClass}">
-                        <strong>Results:</strong>
-                        <pre class="tool-result-content">${escapeHtmlFn(content)}</pre>
-                    </div>
-                `;
-            }
-
-            let resultHtml = `
-                <div class="tool-result ${resultClass}">
-                    <div class="grep-result-header">
-                        <strong>Found matches in ${fileGroups.size} file${fileGroups.size !== 1 ? 's' : ''}:</strong>
-                    </div>
-                    <div class="grep-content-results">
-            `;
-
-            fileGroups.forEach((matches, filepath) => {
-                resultHtml += `
-                    <div class="grep-file-group">
-                        <div class="grep-file-header">
-                            <code class="file-path">${escapeHtmlFn(filepath)}</code>
-                            <span class="grep-match-count">(${matches.length} match${matches.length !== 1 ? 'es' : ''})</span>
-                        </div>
-                        <div class="grep-matches">
-                            ${matches.map(m => `
-                                <div class="grep-match-line">
-                                    <span class="grep-line-num">${m.lineNum}:</span>
-                                    <code class="grep-line-content">${escapeHtmlFn(m.content)}</code>
-                                </div>
-                            `).join('')}
-                        </div>
-                    </div>
-                `;
-            });
-
-            resultHtml += `
-                    </div>
-                </div>
-            `;
-
-            return resultHtml;
-        }
-
-        // Handle count mode or unknown modes
-        return `
-            <div class="tool-result ${resultClass}">
-                <strong>Results:</strong>
-                <pre class="tool-result-content">${escapeHtmlFn(content)}</pre>
-            </div>
-        `;
-    }
-
-    getCollapsedSummary(toolCall) {
-        const statusIcon = {
-            'pending': '🔄',
-            'permission_required': '❓',
-            'executing': '⚡',
-            'completed': toolCall.permissionDecision === 'deny' ? '❌' : '✅',
-            'error': '💥'
-        }[toolCall.status] || '🔧';
-
-        const pattern = toolCall.input.pattern || 'pattern';
-        const outputMode = toolCall.input.output_mode || 'files_with_matches';
-
-        let statusText = '';
-        if (toolCall.status === 'completed' && !toolCall.result?.error) {
-            const content = toolCall.result?.content || '';
-            const lines = content.split('\n').filter(line => line.trim());
-
-            if (outputMode === 'files_with_matches') {
-                const foundMatch = lines[0].match(/^Found (\d+) files?/);
-                const fileCount = foundMatch ? foundMatch[1] : lines.length - 1;
-                statusText = `${fileCount} file${fileCount !== '1' ? 's' : ''}`;
-            } else if (outputMode === 'content') {
-                statusText = `${lines.length} match${lines.length !== 1 ? 'es' : ''}`;
-            } else {
-                statusText = 'Completed';
-            }
-        } else if (toolCall.result?.error) {
-            statusText = 'Error';
-        } else {
-            statusText = {
-                'pending': 'Pending',
-                'permission_required': 'Awaiting Permission',
-                'executing': 'Executing',
-                'completed': 'Completed',
-                'error': 'Error'
-            }[toolCall.status] || 'Unknown';
-        }
-
-        return `${statusIcon} Grep: "${pattern}" - ${statusText}`;
-    }
-}
-
-// Glob Tool Handler - custom display for Glob tool (file name pattern matching)
-class GlobToolHandler {
-    renderParameters(toolCall, escapeHtmlFn) {
-        const pattern = toolCall.input.pattern || '';
-        const path = toolCall.input.path || '.';
-
-        return `
-            <div class="tool-parameters tool-glob-params">
-                <div class="glob-search-info">
-                    <span class="glob-icon">📁</span>
-                    <strong>Finding files matching:</strong>
-                    <span class="glob-pattern"><code>${escapeHtmlFn(pattern)}</code></span>
-                </div>
-                ${path !== '.' ? `
-                    <div class="glob-path-info">
-                        <strong>In directory:</strong>
-                        <code class="file-path">${escapeHtmlFn(path)}</code>
-                    </div>
-                ` : ''}
-            </div>
-        `;
-    }
-
-    renderResult(toolCall, escapeHtmlFn) {
-        if (!toolCall.result) return '';
-
-        const resultClass = toolCall.result.error ? 'tool-result-error' : 'tool-result-success';
-
-        if (toolCall.result.error) {
-            return `
-                <div class="tool-result ${resultClass}">
-                    <strong>Error:</strong>
-                    <pre class="tool-result-content">${escapeHtmlFn(toolCall.result.content || toolCall.result.message || 'No content')}</pre>
-                </div>
-            `;
-        }
-
-        const content = toolCall.result.content || '';
-        const files = content.split('\n').filter(line => line.trim());
-
-        if (files.length === 0) {
-            return `
-                <div class="tool-result ${resultClass}">
-                    <strong>No matching files found</strong>
-                </div>
-            `;
-        }
-
-        return `
-            <div class="tool-result ${resultClass}">
-                <div class="glob-result-header">
-                    <strong>Found ${files.length} file${files.length !== 1 ? 's' : ''}:</strong>
-                </div>
-                <div class="glob-file-list">
-                    ${files.map(file => `<div class="glob-file-item"><code>${escapeHtmlFn(file)}</code></div>`).join('')}
-                </div>
-            </div>
-        `;
-    }
-
-    getCollapsedSummary(toolCall) {
-        const statusIcon = {
-            'pending': '🔄',
-            'permission_required': '❓',
-            'executing': '⚡',
-            'completed': toolCall.permissionDecision === 'deny' ? '❌' : '✅',
-            'error': '💥'
-        }[toolCall.status] || '🔧';
-
-        const pattern = toolCall.input.pattern || 'pattern';
-
-        let statusText = '';
-        if (toolCall.status === 'completed' && !toolCall.result?.error) {
-            const content = toolCall.result?.content || '';
-            const fileCount = content.split('\n').filter(line => line.trim()).length;
-            statusText = `${fileCount} file${fileCount !== 1 ? 's' : ''}`;
-        } else if (toolCall.result?.error) {
-            statusText = 'Error';
-        } else {
-            statusText = {
-                'pending': 'Pending',
-                'permission_required': 'Awaiting Permission',
-                'executing': 'Executing',
-                'completed': 'Completed',
-                'error': 'Error'
-            }[toolCall.status] || 'Unknown';
-        }
-
-        return `${statusIcon} Glob: "${pattern}" - ${statusText}`;
-    }
-}
-
-// WebFetch Tool Handler - custom display for WebFetch tool
-class WebFetchToolHandler {
-    renderParameters(toolCall, escapeHtmlFn) {
-        const url = toolCall.input.url || '';
-        const prompt = toolCall.input.prompt || '';
-
-        return `
-            <div class="tool-parameters tool-webfetch-params">
-                <div class="webfetch-url-info">
-                    <span class="webfetch-icon">🌐</span>
-                    <strong>Fetching:</strong>
-                    <a href="${escapeHtmlFn(url)}" target="_blank" rel="noopener noreferrer" class="webfetch-url">${escapeHtmlFn(url)}</a>
-                </div>
-                ${prompt ? `
-                    <div class="webfetch-prompt-info">
-                        <strong>Task:</strong>
-                        <span class="webfetch-prompt">${escapeHtmlFn(prompt)}</span>
-                    </div>
-                ` : ''}
-            </div>
-        `;
-    }
-
-    renderResult(toolCall, escapeHtmlFn) {
-        if (!toolCall.result) return '';
-
-        const resultClass = toolCall.result.error ? 'tool-result-error' : 'tool-result-success';
-
-        if (toolCall.result.error) {
-            return `
-                <div class="tool-result ${resultClass}">
-                    <strong>Error:</strong>
-                    <pre class="tool-result-content">${escapeHtmlFn(toolCall.result.content || toolCall.result.message || 'No content')}</pre>
-                </div>
-            `;
-        }
-
-        const content = toolCall.result.content || '';
-        const lines = content.split('\n');
-        const previewLimit = 15;
-        const hasMore = lines.length > previewLimit;
-        const previewLines = lines.slice(0, previewLimit);
-
-        return `
-            <div class="tool-result ${resultClass}">
-                <div class="webfetch-result-header">
-                    <strong>Response:</strong>
-                    <span class="webfetch-line-count">${lines.length} lines</span>
-                    ${hasMore ? `<span class="webfetch-preview-note">(showing first ${previewLimit})</span>` : ''}
-                </div>
-                <pre class="tool-result-content webfetch-content-preview">${escapeHtmlFn(previewLines.join('\n'))}</pre>
-                ${hasMore ? '<div class="webfetch-more-indicator">...</div>' : ''}
-            </div>
-        `;
-    }
-
-    getCollapsedSummary(toolCall) {
-        const statusIcon = {
-            'pending': '🔄',
-            'permission_required': '❓',
-            'executing': '⚡',
-            'completed': toolCall.permissionDecision === 'deny' ? '❌' : '✅',
-            'error': '💥'
-        }[toolCall.status] || '🔧';
-
-        const url = toolCall.input.url || '';
-        const domain = url.match(/^https?:\/\/([^\/]+)/)?.[1] || url;
-
-        let statusText = '';
-        if (toolCall.status === 'completed' && !toolCall.result?.error) {
-            statusText = 'Fetched';
-        } else if (toolCall.result?.error) {
-            statusText = 'Error';
-        } else {
-            statusText = {
-                'pending': 'Pending',
-                'permission_required': 'Awaiting Permission',
-                'executing': 'Fetching',
-                'completed': 'Completed',
-                'error': 'Error'
-            }[toolCall.status] || 'Unknown';
-        }
-
-        return `${statusIcon} WebFetch: ${domain} - ${statusText}`;
-    }
-}
-
-// WebSearch Tool Handler - custom display for WebSearch tool
-class WebSearchToolHandler {
-    renderParameters(toolCall, escapeHtmlFn) {
-        const query = toolCall.input.query || '';
-        const allowedDomains = toolCall.input.allowed_domains || [];
-        const blockedDomains = toolCall.input.blocked_domains || [];
-
-        return `
-            <div class="tool-parameters tool-websearch-params">
-                <div class="websearch-query-info">
-                    <span class="websearch-icon">🔎</span>
-                    <strong>Searching for:</strong>
-                    <span class="websearch-query">${escapeHtmlFn(query)}</span>
-                </div>
-                ${allowedDomains.length > 0 ? `
-                    <div class="websearch-filter-info">
-                        <strong>Allowed domains:</strong>
-                        <span class="websearch-domains">${allowedDomains.map(d => escapeHtmlFn(d)).join(', ')}</span>
-                    </div>
-                ` : ''}
-                ${blockedDomains.length > 0 ? `
-                    <div class="websearch-filter-info">
-                        <strong>Blocked domains:</strong>
-                        <span class="websearch-domains">${blockedDomains.map(d => escapeHtmlFn(d)).join(', ')}</span>
-                    </div>
-                ` : ''}
-            </div>
-        `;
-    }
-
-    renderResult(toolCall, escapeHtmlFn) {
-        if (!toolCall.result) return '';
-
-        const resultClass = toolCall.result.error ? 'tool-result-error' : 'tool-result-success';
-
-        if (toolCall.result.error) {
-            return `
-                <div class="tool-result ${resultClass}">
-                    <strong>Error:</strong>
-                    <pre class="tool-result-content">${escapeHtmlFn(toolCall.result.content || toolCall.result.message || 'No content')}</pre>
-                </div>
-            `;
-        }
-
-        const content = toolCall.result.content || '';
-
-        // Try to parse the Links JSON from the content
-        const linksMatch = content.match(/Links: (\[.*?\])/s);
-        let links = [];
-        if (linksMatch) {
-            try {
-                links = JSON.parse(linksMatch[1]);
-            } catch (e) {
-                // Failed to parse, will show raw content
-            }
-        }
-
-        // Extract the summary after the Links section
-        const summaryMatch = content.match(/Links: \[.*?\]\n\n(.*)/s);
-        const summary = summaryMatch ? summaryMatch[1] : content;
-
-        if (links.length > 0) {
-            return `
-                <div class="tool-result ${resultClass}">
-                    <div class="websearch-links-section">
-                        <strong>Found ${links.length} result${links.length !== 1 ? 's' : ''}:</strong>
-                        <div class="websearch-links">
-                            ${links.map(link => `
-                                <div class="websearch-link-item">
-                                    <a href="${escapeHtmlFn(link.url)}" target="_blank" rel="noopener noreferrer" class="websearch-link-title">
-                                        ${escapeHtmlFn(link.title)}
-                                    </a>
-                                    <div class="websearch-link-url">${escapeHtmlFn(link.url)}</div>
-                                </div>
-                            `).join('')}
-                        </div>
-                    </div>
-                    <div class="websearch-summary-section">
-                        <strong>Summary:</strong>
-                        <div class="websearch-summary">${escapeHtmlFn(summary)}</div>
-                    </div>
-                </div>
-            `;
-        }
-
-        // Fallback to simple content display
-        return `
-            <div class="tool-result ${resultClass}">
-                <strong>Results:</strong>
-                <pre class="tool-result-content">${escapeHtmlFn(content)}</pre>
-            </div>
-        `;
-    }
-
-    getCollapsedSummary(toolCall) {
-        const statusIcon = {
-            'pending': '🔄',
-            'permission_required': '❓',
-            'executing': '⚡',
-            'completed': toolCall.permissionDecision === 'deny' ? '❌' : '✅',
-            'error': '💥'
-        }[toolCall.status] || '🔧';
-
-        const query = toolCall.input.query || 'search';
-
-        let statusText = '';
-        if (toolCall.status === 'completed' && !toolCall.result?.error) {
-            // Try to extract result count
-            const content = toolCall.result?.content || '';
-            const linksMatch = content.match(/Links: (\[.*?\])/s);
-            if (linksMatch) {
-                try {
-                    const links = JSON.parse(linksMatch[1]);
-                    statusText = `${links.length} result${links.length !== 1 ? 's' : ''}`;
-                } catch (e) {
-                    statusText = 'Completed';
-                }
-            } else {
-                statusText = 'Completed';
-            }
-        } else if (toolCall.result?.error) {
-            statusText = 'Error';
-        } else {
-            statusText = {
-                'pending': 'Pending',
-                'permission_required': 'Awaiting Permission',
-                'executing': 'Searching',
-                'completed': 'Completed',
-                'error': 'Error'
-            }[toolCall.status] || 'Unknown';
-        }
-
-        return `${statusIcon} WebSearch: "${query}" - ${statusText}`;
-    }
-}
-
-class BashToolHandler {
-    renderParameters(toolCall, escapeHtmlFn) {
-        const command = toolCall.input.command || '';
-        const description = toolCall.input.description || '';
-        const timeout = toolCall.input.timeout;
-        const runInBackground = toolCall.input.run_in_background || false;
-
-        let html = '<div class="tool-bash-params">';
-
-        // Header with bash icon
-        html += '<div class="bash-header">';
-        html += '<span class="bash-icon">💻</span>';
-        html += '<div class="bash-header-content">';
-        if (description) {
-            html += `<div><strong>Description:</strong> ${escapeHtmlFn(description)}</div>`;
-        }
-
-        // Display flags inline
-        const flags = [];
-        if (timeout) {
-            flags.push(`timeout: ${timeout}ms`);
-        }
-        if (runInBackground) {
-            flags.push('background');
-        }
-        if (flags.length > 0) {
-            html += `<div class="bash-flags">${flags.join(', ')}</div>`;
-        }
-
-        html += '</div>';
-        html += '</div>';
-
-        // Command section (displayed as text block for potentially long commands)
-        html += '<div class="bash-command-section">';
-        html += '<div class="bash-command-label"><strong>Command:</strong></div>';
-        html += '<div class="bash-command-content">';
-        html += escapeHtmlFn(command);
-        html += '</div>';
-        html += '</div>';
-
-        html += '</div>';
-        return html;
-    }
-
-    renderResult(toolCall, escapeHtmlFn) {
-        if (!toolCall.result) return '';
-
-        const content = toolCall.result.content || '';
-        const resultClass = toolCall.result.error ? 'tool-result-error' : 'tool-result-success';
-
-        if (!content) {
-            return `<div class="tool-result ${resultClass}"><strong>Output:</strong><div class="bash-result-empty">No output</div></div>`;
-        }
-
-        return `
-            <div class="tool-result ${resultClass}">
-                <strong>Output:</strong>
-                <pre class="bash-result-content">${escapeHtmlFn(content)}</pre>
-            </div>
-        `;
-    }
-
-    getCollapsedSummary(toolCall, escapeHtmlFn) {
-        const description = toolCall.input.description || toolCall.input.command || 'Bash';
-        const runInBackground = toolCall.input.run_in_background || false;
-
-        // Status-based icons
-        const statusIcon = {
-            'pending': '⏳',
-            'running': '▶️',
-            'completed': '✅',
-            'error': '❌'
-        }[toolCall.status] || '💻';
-
-        const bgFlag = runInBackground ? '(background) ' : '';
-        return `${statusIcon} Bash: ${bgFlag}${description}`;
-    }
-}
-
-class BashOutputToolHandler {
-    renderParameters(toolCall, escapeHtmlFn) {
-        const bashId = toolCall.input.bash_id || '';
-        const filter = toolCall.input.filter || '';
-
-        let html = '<div class="tool-bash-params">';
-
-        // Header with bash output icon
-        html += '<div class="bash-header">';
-        html += '<span class="bash-icon">📋</span>';
-        html += '<div class="bash-header-content">';
-        html += `<div><strong>Shell ID:</strong> ${escapeHtmlFn(bashId)}</div>`;
-        if (filter) {
-            html += `<div><strong>Filter:</strong> ${escapeHtmlFn(filter)}</div>`;
-        }
-        html += '</div>';
-        html += '</div>';
-
-        html += '</div>';
-        return html;
-    }
-
-    renderResult(toolCall, escapeHtmlFn) {
-        if (!toolCall.result) return '';
-
-        const content = toolCall.result.content || '';
-        const resultClass = toolCall.result.error ? 'tool-result-error' : 'tool-result-success';
-
-        if (!content) {
-            return `<div class="tool-result ${resultClass}"><strong>Output:</strong><div class="bash-result-empty">No output</div></div>`;
-        }
-
-        // Parse XML tags from content
-        const statusMatch = content.match(/<status>(.*?)<\/status>/);
-        const exitCodeMatch = content.match(/<exit_code>(.*?)<\/exit_code>/);
-        const stdoutMatch = content.match(/<stdout>(.*?)<\/stdout>/s);
-        const timestampMatch = content.match(/<timestamp>(.*?)<\/timestamp>/);
-
-        const status = statusMatch ? statusMatch[1] : '';
-        const exitCode = exitCodeMatch ? exitCodeMatch[1] : '';
-        const stdout = stdoutMatch ? stdoutMatch[1].trim() : '';
-        const timestamp = timestampMatch ? timestampMatch[1] : '';
-
-        // Determine status icon and color based on status and exit code
-        let statusIcon = '❓'; // Unknown/default
-        let statusColor = 'gray';
-
-        if (status === 'running') {
-            statusIcon = '▶️';
-            statusColor = 'yellow';
-        } else if (status === 'completed') {
-            if (exitCode === '0') {
-                statusIcon = '✅';
-                statusColor = 'green';
-            } else {
-                statusIcon = '❌';
-                statusColor = 'red';
-            }
-        } else if (status === 'error' || status === 'killed') {
-            statusIcon = '❌';
-            statusColor = 'red';
-        }
-
-        let html = `<div class="tool-result ${resultClass}"><strong>Output:</strong>`;
-
-        // Display stdout as text block
-        if (stdout) {
-            html += '<pre class="bashoutput-stdout-content">';
-            html += escapeHtmlFn(stdout);
-            html += '</pre>';
-        }
-
-        // Display timestamp and exit code footer with status icon
-        if (timestamp || exitCode) {
-            html += '<div class="bashoutput-footer">';
-            html += `${statusIcon} Checked: `;
-            if (timestamp) {
-                html += escapeHtmlFn(timestamp);
-            }
-            if (exitCode) {
-                html += ` (Exit Code: ${escapeHtmlFn(exitCode)})`;
-            }
-            html += '</div>';
-        }
-
-        html += '</div>';
-        return html;
-    }
-
-    getCollapsedSummary(toolCall, escapeHtmlFn) {
-        const bashId = toolCall.input.bash_id || 'unknown';
-
-        // Parse result content for status and exit code
-        const content = toolCall.result?.content || '';
-        const statusMatch = content.match(/<status>(.*?)<\/status>/);
-        const exitCodeMatch = content.match(/<exit_code>(.*?)<\/exit_code>/);
-
-        const bashStatus = statusMatch ? statusMatch[1] : '';
-        const exitCode = exitCodeMatch ? exitCodeMatch[1] : '';
-
-        // Status-based icons
-        let statusIcon = '📋';
-        if (bashStatus === 'running') {
-            statusIcon = '▶️';
-        } else if (bashStatus === 'completed') {
-            statusIcon = exitCode === '0' ? '✅' : '❌';
-        } else if (bashStatus === 'error' || bashStatus === 'killed') {
-            statusIcon = '❌';
-        } else if (toolCall.status === 'pending') {
-            statusIcon = '⏳';
-        }
-
-        // Build summary
-        let summary = `${statusIcon} BashOutput:`;
-        if (bashStatus) {
-            summary += ` (${bashStatus})`;
-        }
-        summary += ` ${bashId}`;
-        if (exitCode) {
-            summary += ` (Exit Code: ${exitCode})`;
-        }
-
-        return summary;
-    }
-}
-
-class KillShellToolHandler {
-    renderParameters(toolCall, escapeHtmlFn) {
-        const shellId = toolCall.input.shell_id || '';
-
-        let html = '<div class="tool-bash-params">';
-
-        // Header with kill icon
-        html += '<div class="bash-header">';
-        html += '<span class="bash-icon">🛑</span>';
-        html += '<div class="bash-header-content">';
-        html += `<div><strong>Shell ID:</strong> ${escapeHtmlFn(shellId)}</div>`;
-        html += '</div>';
-        html += '</div>';
-
-        html += '</div>';
-        return html;
-    }
-
-    renderResult(toolCall, escapeHtmlFn) {
-        if (!toolCall.result) return '';
-
-        const content = toolCall.result.content || '';
-        const resultClass = toolCall.result.error ? 'tool-result-error' : 'tool-result-success';
-
-        if (!content) {
-            return `<div class="tool-result ${resultClass}"><strong>Result:</strong><div class="bash-result-empty">No result</div></div>`;
-        }
-
-        return `
-            <div class="tool-result ${resultClass}">
-                <strong>Result:</strong>
-                <div class="killshell-result-content">${escapeHtmlFn(content)}</div>
-            </div>
-        `;
-    }
-
-    getCollapsedSummary(toolCall, escapeHtmlFn) {
-        const shellId = toolCall.input.shell_id || 'unknown';
-
-        // Status-based icons
-        const statusIcon = {
-            'pending': '⏳',
-            'running': '▶️',
-            'completed': toolCall.result?.error ? '❌' : '✅',
-            'error': '❌'
-        }[toolCall.status] || '🛑';
-
-        return `${statusIcon} KillShell: ${shellId}`;
-    }
-}
-
-class TaskToolHandler {
-    renderParameters(toolCall, escapeHtmlFn) {
-        const subagentType = toolCall.input.subagent_type || 'general-purpose';
-        const description = toolCall.input.description || '';
-        const prompt = toolCall.input.prompt || '';
-
-        let html = '<div class="tool-task-params">';
-
-        // Header with agent icon
-        html += '<div class="task-header">';
-        html += '<span class="task-icon">🤖</span>';
-        html += '<div class="task-header-content">';
-        html += `<div><strong>Agent Type:</strong> ${escapeHtmlFn(subagentType)}</div>`;
-        if (description) {
-            html += `<div><strong>Task:</strong> ${escapeHtmlFn(description)}</div>`;
-        }
-        html += '</div>';
-        html += '</div>';
-
-        // Prompt section (displayed as text block for potentially large content)
-        if (prompt) {
-            html += '<div class="task-prompt-section">';
-            html += '<div class="task-prompt-label"><strong>Prompt:</strong></div>';
-            html += '<div class="task-prompt-content">';
-            html += escapeHtmlFn(prompt);
-            html += '</div>';
-            html += '</div>';
-        }
-
-        html += '</div>';
-        return html;
-    }
-
-    renderResult(toolCall, escapeHtmlFn) {
-        if (!toolCall.result) return '';
-
-        const content = toolCall.result.content || '';
-        const resultClass = toolCall.result.error ? 'tool-result-error' : 'tool-result-success';
-
-        if (!content) {
-            return `<div class="tool-result ${resultClass}"><strong>Agent Response:</strong><div class="task-result-empty">No result returned</div></div>`;
-        }
-
-        return `
-            <div class="tool-result ${resultClass}">
-                <strong>Agent Response:</strong>
-                <div class="task-result-content">${escapeHtmlFn(content)}</div>
-            </div>
-        `;
-    }
-
-    getCollapsedSummary(toolCall, escapeHtmlFn) {
-        const description = toolCall.input.description || 'Task';
-        const subagentType = toolCall.input.subagent_type || 'general-purpose';
-
-        // Status-based icons
-        const statusIcon = {
-            'pending': '⏳',
-            'running': '▶️',
-            'completed': '✅',
-            'error': '❌'
-        }[toolCall.status] || '🤖';
-
-        return `${statusIcon} Task: (${subagentType}) ${description}`;
-    }
-}
-
-// ExitPlanMode Tool Handler - displays plan and handles mode transition
-class ExitPlanModeToolHandler {
-    renderParameters(toolCall, escapeHtmlFn) {
-        const plan = toolCall.input.plan || '';
-
-        let html = '<div class="tool-exitplan-params">';
-
-        // Header with plan icon
-        html += '<div class="exitplan-header">';
-        html += '<span class="exitplan-icon">📋</span>';
-        html += '<div class="exitplan-header-content">';
-        html += '<div><strong>Plan Submitted for Approval:</strong></div>';
-        html += '</div>';
-        html += '</div>';
-
-        // Plan section
-        if (plan) {
-            html += '<div class="exitplan-plan-section">';
-            html += '<div class="exitplan-plan-content">';
-            html += escapeHtmlFn(plan);
-            html += '</div>';
-            html += '</div>';
-        }
-
-        html += '</div>';
-        return html;
-    }
-
-    renderResult(toolCall, escapeHtmlFn) {
-        if (!toolCall.result) return '';
-
-        const content = toolCall.result.content || '';
-        const resultClass = toolCall.result.error ? 'tool-result-error' : 'tool-result-success';
-
-        if (toolCall.result.error) {
-            return `
-                <div class="tool-result ${resultClass}">
-                    <strong>Plan Rejected:</strong>
-                    <div class="exitplan-result-content">${escapeHtmlFn(content)}</div>
-                </div>
-            `;
-        }
-
-        // Successful plan approval
-        return `
-            <div class="tool-result ${resultClass}">
-                <div class="exitplan-approved">
-                    <strong>✅ Plan Approved</strong>
-                    <div class="exitplan-mode-change">Permission mode changed to: <strong>default</strong></div>
-                </div>
-            </div>
-        `;
-    }
-
-    getCollapsedSummary(toolCall, escapeHtmlFn) {
-        // Status-based icons
-        const statusIcon = {
-            'pending': '⏳',
-            'permission_required': '❓',
-            'executing': '📋',
-            'completed': toolCall.result?.error ? '❌' : '✅',
-            'error': '❌'
-        }[toolCall.status] || '📋';
-
-        let statusText = '';
-        if (toolCall.status === 'completed' && !toolCall.result?.error) {
-            statusText = 'Plan Approved - Mode: default';
-        } else if (toolCall.result?.error) {
-            statusText = 'Plan Rejected';
-        } else {
-            statusText = {
-                'pending': 'Pending',
-                'permission_required': 'Awaiting Approval',
-                'executing': 'Submitting',
-                'completed': 'Completed',
-                'error': 'Error'
-            }[toolCall.status] || 'Unknown';
-        }
-
-        return `${statusIcon} ExitPlanMode: ${statusText}`;
-    }
-}
-
-// Project Manager for hierarchical organization
-class ProjectManager {
-    constructor(webui) {
-        this.webui = webui;
-        this.projects = new Map(); // project_id -> ProjectData
-        this.orderedProjects = []; // Maintains project order from backend
-    }
-
-    async loadProjects() {
-        try {
-            const response = await fetch('/api/projects');
-            const data = await response.json();
-
-            this.projects.clear();
-            this.orderedProjects = [];
-
-            for (const project of data.projects) {
-                this.projects.set(project.project_id, project);
-                this.orderedProjects.push(project.project_id);
-            }
-
-            Logger.info('PROJECT', `Loaded ${this.projects.size} projects`);
-            return data.projects;
-        } catch (error) {
-            Logger.error('PROJECT', 'Failed to load projects', error);
-            throw error;
-        }
-    }
-
-    async createProject(name, workingDirectory) {
-        try {
-            const response = await fetch('/api/projects', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    name: name,
-                    working_directory: workingDirectory
-                })
-            });
-
-            if (!response.ok) {
-                const error = await response.json();
-                throw new Error(error.detail || 'Failed to create project');
-            }
-
-            const data = await response.json();
-            const project = data.project;
-
-            this.projects.set(project.project_id, project);
-            this.orderedProjects.unshift(project.project_id); // Add to top
-
-            Logger.info('PROJECT', `Created project ${project.project_id}`, project);
-            return project;
-        } catch (error) {
-            Logger.error('PROJECT', 'Failed to create project', error);
-            throw error;
-        }
-    }
-
-    async getProjectWithSessions(projectId) {
-        try {
-            const response = await fetch(`/api/projects/${projectId}`);
-            if (!response.ok) {
-                throw new Error('Project not found');
-            }
-
-            const data = await response.json();
-            return data;
-        } catch (error) {
-            Logger.error('PROJECT', `Failed to get project ${projectId}`, error);
-            throw error;
-        }
-    }
-
-    async updateProject(projectId, updates) {
-        try {
-            const response = await fetch(`/api/projects/${projectId}`, {
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(updates)
-            });
-
-            if (!response.ok) {
-                throw new Error('Failed to update project');
-            }
-
-            // Update local cache
-            const project = this.projects.get(projectId);
-            if (project) {
-                Object.assign(project, updates);
-            }
-
-            Logger.info('PROJECT', `Updated project ${projectId}`, updates);
-            return true;
-        } catch (error) {
-            Logger.error('PROJECT', `Failed to update project ${projectId}`, error);
-            throw error;
-        }
-    }
-
-    async deleteProject(projectId) {
-        try {
-            const response = await fetch(`/api/projects/${projectId}`, {
-                method: 'DELETE'
-            });
-
-            if (!response.ok) {
-                throw new Error('Failed to delete project');
-            }
-
-            this.projects.delete(projectId);
-            this.orderedProjects = this.orderedProjects.filter(id => id !== projectId);
-
-            Logger.info('PROJECT', `Deleted project ${projectId}`);
-            return true;
-        } catch (error) {
-            Logger.error('PROJECT', `Failed to delete project ${projectId}`, error);
-            throw error;
-        }
-    }
-
-    async toggleExpansion(projectId) {
-        try {
-            const response = await fetch(`/api/projects/${projectId}/toggle-expansion`, {
-                method: 'PUT'
-            });
-
-            if (!response.ok) {
-                throw new Error('Failed to toggle expansion');
-            }
-
-            const data = await response.json();
-
-            // Update local cache
-            const project = this.projects.get(projectId);
-            if (project) {
-                project.is_expanded = data.is_expanded;
-            }
-
-            Logger.info('PROJECT', `Toggled expansion for project ${projectId}`, data.is_expanded);
-            return data.is_expanded;
-        } catch (error) {
-            Logger.error('PROJECT', `Failed to toggle expansion for ${projectId}`, error);
-            throw error;
-        }
-    }
-
-    async reorderProjects(projectIds) {
-        try {
-            Logger.debug('PROJECT', `Attempting to reorder projects: ${JSON.stringify(projectIds)}`);
-
-            const response = await fetch('/api/projects/reorder', {
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ project_ids: projectIds })
-            });
-
-            if (!response.ok) {
-                const errorText = await response.text();
-                Logger.error('PROJECT', `Reorder API failed with status ${response.status}: ${errorText}`);
-                throw new Error(`Failed to reorder projects: ${response.status}`);
-            }
-
-            this.orderedProjects = projectIds;
-            Logger.info('PROJECT', 'Reordered projects', projectIds);
-            return true;
-        } catch (error) {
-            Logger.error('PROJECT', 'Failed to reorder projects', error);
-            throw error;
-        }
-    }
-
-    async reorderSessionsInProject(projectId, sessionIds) {
-        try {
-            const response = await fetch(`/api/projects/${projectId}/sessions/reorder`, {
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ session_ids: sessionIds })
-            });
-
-            if (!response.ok) {
-                throw new Error('Failed to reorder sessions');
-            }
-
-            Logger.info('PROJECT', `Reordered sessions in project ${projectId}`, sessionIds);
-            return true;
-        } catch (error) {
-            Logger.error('PROJECT', `Failed to reorder sessions in ${projectId}`, error);
-            throw error;
-        }
-    }
-
-    formatPath(absolutePath) {
-        if (!absolutePath) return '';
-
-        // Split path by forward or backward slashes
-        const parts = absolutePath.split(/[/\\]/).filter(p => p);
-
-        if (parts.length === 0) return '/';
-        if (parts.length === 1) return `/${parts[0]}`;
-        if (parts.length === 2) return `/${parts.join('/')}`;
-
-        // 3+ folders: show ellipsis + last 2
-        return `.../${parts.slice(-2).join('/')}`;
-    }
-
-    getProject(projectId) {
-        return this.projects.get(projectId);
-    }
-
-    getAllProjects() {
-        return this.orderedProjects.map(id => this.projects.get(id)).filter(p => p);
-    }
-}
+// External modules are loaded via index.html:
+// - Logger (core/logger.js)
+// - APIClient (core/api-client.js)
+// - Constants (core/constants.js)
+// - ProjectManager (core/project-manager.js)
+// - ToolCallManager (tools/tool-call-manager.js)
+// - ToolHandlerRegistry (tools/tool-handler-registry.js)
+// - All tool handlers (tools/handlers/*.js)
 
 class ClaudeWebUI {
     constructor() {
@@ -2326,11 +160,17 @@ class ClaudeWebUI {
         document.getElementById('browse-directory').addEventListener('click', () => this.browseDirectory());
 
         // Session actions
-        document.getElementById('delete-session-btn').addEventListener('click', () => this.showDeleteSessionModal());
         document.getElementById('exit-session-btn').addEventListener('click', () => this.exitSession());
 
-        // Delete modal controls (Bootstrap modals handle close/cancel via data-bs-dismiss)
-        document.getElementById('confirm-delete').addEventListener('click', () => this.confirmDeleteSession());
+        // Project edit modal controls
+        document.getElementById('save-project-btn').addEventListener('click', () => this.confirmProjectRename());
+        document.getElementById('delete-project-btn').addEventListener('click', () => this.showDeleteProjectConfirmation());
+        document.getElementById('confirm-delete-project').addEventListener('click', () => this.confirmDeleteProject());
+
+        // Session edit modal controls
+        document.getElementById('save-session-btn').addEventListener('click', () => this.confirmSessionRename());
+        document.getElementById('delete-session-from-edit-btn').addEventListener('click', () => this.showDeleteSessionConfirmation());
+        document.getElementById('confirm-delete-session').addEventListener('click', () => this.confirmDeleteSession());
 
         // Folder browser modal controls
         document.getElementById('folder-browser-up').addEventListener('click', () => {
@@ -3938,6 +1778,20 @@ class ClaudeWebUI {
         accordionButton.appendChild(projectInfo);
         accordionHeader.appendChild(accordionButton);
 
+        // Edit project button - appears on hover, positioned to the left of add session button
+        const editProjectBtn = document.createElement('button');
+        editProjectBtn.className = 'btn btn-sm btn-outline-secondary position-absolute end-0 top-50 translate-middle-y me-5 project-edit-btn';
+        editProjectBtn.innerHTML = '✏️';
+        editProjectBtn.title = 'Edit or delete project';
+        editProjectBtn.type = 'button';
+        editProjectBtn.style.zIndex = '10';
+        editProjectBtn.style.opacity = '0'; // Hidden by default
+        editProjectBtn.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            e.preventDefault();
+            await this.showEditProjectModal(project.project_id);
+        });
+
         // Add session button - positioned next to accordion button, NOT inside it
         const addSessionBtn = document.createElement('button');
         addSessionBtn.className = 'btn btn-sm btn-outline-primary position-absolute end-0 top-50 translate-middle-y me-2';
@@ -3951,9 +1805,18 @@ class ClaudeWebUI {
             await this.showCreateSessionModalForProject(project.project_id);
         });
 
-        // Add button to accordion header (sibling of accordion button, not child)
-        accordionHeader.style.position = 'relative'; // For absolute positioning of button
+        // Add buttons to accordion header (siblings of accordion button, not children)
+        accordionHeader.style.position = 'relative'; // For absolute positioning of buttons
+        accordionHeader.appendChild(editProjectBtn);
         accordionHeader.appendChild(addSessionBtn);
+
+        // Show edit button on hover
+        accordionHeader.addEventListener('mouseenter', () => {
+            editProjectBtn.style.opacity = '1';
+        });
+        accordionHeader.addEventListener('mouseleave', () => {
+            editProjectBtn.style.opacity = '0';
+        });
 
         projectElement.appendChild(accordionHeader);
 
@@ -4137,12 +2000,8 @@ class ClaudeWebUI {
         sessionElement.draggable = true;
         sessionElement.setAttribute('data-order', session.order || 999999);
         sessionElement.addEventListener('click', (e) => {
-            // Don't select session if clicking on input field or name display during editing
-            if (e.target.tagName === 'INPUT') return;
-            if (e.target.classList.contains('session-name-display') &&
-                e.target.parentElement.querySelector('.session-name-edit').style.display !== 'none') {
-                return; // Name is being edited, ignore click
-            }
+            // Don't select session if clicking on edit button
+            if (e.target.closest('.session-edit-btn')) return;
             this.selectSession(sessionId);
         });
 
@@ -4158,11 +2017,11 @@ class ClaudeWebUI {
         const displayName = session.name || sessionId;
 
         sessionElement.innerHTML = `
-            <div class="d-flex align-items-center gap-2">
+            <div class="d-flex align-items-center gap-2 position-relative">
                 <div class="flex-grow-1" title="${sessionId}">
                     <span class="session-name-display">${this.escapeHtml(displayName)}</span>
-                    <input class="form-control form-control-sm session-name-edit" type="text" value="${this.escapeHtml(displayName)}" style="display: none;">
                 </div>
+                <button class="btn btn-sm btn-outline-secondary session-edit-btn" title="Edit or delete session" style="opacity: 0;">✏️</button>
             </div>
         `;
 
@@ -4170,16 +2029,21 @@ class ClaudeWebUI {
         const sessionHeader = sessionElement.querySelector('.d-flex');
         sessionHeader.insertBefore(statusIndicator, sessionHeader.firstChild);
 
-        // Add double-click editing functionality
-        const nameDisplay = sessionElement.querySelector('.session-name-display');
-        const nameInput = sessionElement.querySelector('.session-name-edit');
-
-        nameDisplay.addEventListener('dblclick', (e) => {
+        // Add edit button click handler
+        const editBtn = sessionElement.querySelector('.session-edit-btn');
+        editBtn.addEventListener('click', async (e) => {
             e.stopPropagation();
-            this.startEditingSessionName(sessionId, nameDisplay, nameInput);
+            e.preventDefault();
+            await this.showEditSessionModal(sessionId);
         });
 
-        this.setupSessionNameInput(sessionId, nameDisplay, nameInput);
+        // Show/hide edit button on hover
+        sessionElement.addEventListener('mouseenter', () => {
+            editBtn.style.opacity = '1';
+        });
+        sessionElement.addEventListener('mouseleave', () => {
+            editBtn.style.opacity = '0';
+        });
 
         return sessionElement;
     }
@@ -4413,12 +2277,12 @@ class ClaudeWebUI {
         // Update cached session data
         this.sessions.set(sessionData.session_id, sessionData);
         if (!this.orderedSessions.find(s => s.session_id === sessionData.session_id)) {
-            this.orderedSessions.push(sessionData);
+            this.orderedSessions.unshift(sessionData); // Add to beginning of list
         }
 
-        // Update project's session_ids if not already present
+        // Update project's session_ids if not already present (add to top)
         if (!project.session_ids.includes(sessionData.session_id)) {
-            project.session_ids.push(sessionData.session_id);
+            project.session_ids.unshift(sessionData.session_id); // Add to beginning of array
         }
 
         // Expand the project if it's collapsed (for better UX when creating a session)
@@ -4441,10 +2305,10 @@ class ClaudeWebUI {
                 accordionBody.appendChild(sessionsContainer);
             }
 
-            // Create and append session element
+            // Create and prepend session element (new sessions go to the top)
             if (sessionsContainer) {
                 const sessionElement = this.createSessionElement(sessionData, projectId);
-                sessionsContainer.appendChild(sessionElement);
+                sessionsContainer.insertBefore(sessionElement, sessionsContainer.firstChild);
             }
         }
 
@@ -4460,81 +2324,6 @@ class ClaudeWebUI {
         workingDirGroup.style.display = 'none'; // Hide working directory field
         const modal = new bootstrap.Modal(modalElement);
         modal.show();
-    }
-
-    startEditingSessionName(sessionId, nameDisplay, nameInput) {
-        // Hide display, show input
-        nameDisplay.style.display = 'none';
-        nameInput.style.display = 'inline-block';
-        nameInput.focus();
-        nameInput.select();
-    }
-
-    setupSessionNameInput(sessionId, nameDisplay, nameInput) {
-        // Handle Enter key to save
-        nameInput.addEventListener('keydown', (e) => {
-            e.stopPropagation();
-            if (e.key === 'Enter') {
-                this.saveSessionName(sessionId, nameDisplay, nameInput);
-            } else if (e.key === 'Escape') {
-                this.cancelEditingSessionName(nameDisplay, nameInput);
-            }
-        });
-
-        // Handle click outside to cancel
-        nameInput.addEventListener('blur', () => {
-            this.cancelEditingSessionName(nameDisplay, nameInput);
-        });
-    }
-
-    async saveSessionName(sessionId, nameDisplay, nameInput) {
-        const newName = nameInput.value.trim();
-        if (!newName) {
-            this.cancelEditingSessionName(nameDisplay, nameInput);
-            return;
-        }
-
-        try {
-            const response = await this.apiRequest(`/api/sessions/${sessionId}/name`, {
-                method: 'PUT',
-                body: JSON.stringify({ name: newName })
-            });
-
-            if (response.success) {
-                // Update local session data
-                if (this.sessions.has(sessionId)) {
-                    const session = this.sessions.get(sessionId);
-                    session.name = newName;
-
-                    // Update session data consistently (with re-render since we're done editing)
-                    this.updateSessionData(sessionId, session);
-                }
-
-                // Update display
-                nameDisplay.textContent = newName;
-                nameDisplay.style.display = 'inline-block';
-                nameInput.style.display = 'none';
-
-                // Update header if this is the current session
-                if (sessionId === this.currentSessionId) {
-                    this.updateSessionHeaderName(newName);
-                }
-            } else {
-                throw new Error('Failed to update session name');
-            }
-        } catch (error) {
-            Logger.error('SESSION', 'Failed to save session name', error);
-            this.cancelEditingSessionName(nameDisplay, nameInput);
-            this.showError('Failed to update session name');
-        }
-    }
-
-    cancelEditingSessionName(nameDisplay, nameInput) {
-        // Reset input value to original
-        nameInput.value = nameDisplay.textContent;
-        // Show display, hide input
-        nameDisplay.style.display = 'inline-block';
-        nameInput.style.display = 'none';
     }
 
     updateSessionHeaderName(name) {
@@ -5130,14 +2919,247 @@ class ClaudeWebUI {
         this.folderBrowserTargetInput = null;
     }
 
-    showDeleteSessionModal() {
-        if (!this.currentSessionId) return;
+    // Project Edit/Delete Modal Methods
 
-        // Get session info to display the name
-        const session = this.sessions.get(this.currentSessionId);
-        const sessionName = session?.name || this.currentSessionId;
+    async showEditProjectModal(projectId) {
+        const project = this.projectManager.getProject(projectId);
+        if (!project) return;
+
+        // Store the project ID for later use
+        this.editingProjectId = projectId;
 
         // Update modal content
+        document.getElementById('edit-project-name').value = project.name;
+        const directoryElement = document.getElementById('edit-project-directory');
+        directoryElement.textContent = project.working_directory;
+        directoryElement.title = project.working_directory; // Show full path on hover
+
+        const modalElement = document.getElementById('edit-project-modal');
+        const modal = new bootstrap.Modal(modalElement);
+        modal.show();
+    }
+
+    hideEditProjectModal() {
+        const modalElement = document.getElementById('edit-project-modal');
+        const modal = bootstrap.Modal.getInstance(modalElement);
+        if (modal) {
+            modal.hide();
+        }
+    }
+
+    async confirmProjectRename() {
+        if (!this.editingProjectId) return;
+
+        const newName = document.getElementById('edit-project-name').value.trim();
+        if (!newName) {
+            this.showError('Project name cannot be empty');
+            return;
+        }
+
+        const saveBtn = document.getElementById('save-project-btn');
+        const cancelBtn = document.querySelector('#edit-project-modal .btn-secondary');
+        const deleteBtn = document.getElementById('delete-project-btn');
+
+        try {
+            // Disable buttons to prevent double-clicks
+            saveBtn.disabled = true;
+            if (cancelBtn) cancelBtn.disabled = true;
+            if (deleteBtn) deleteBtn.disabled = true;
+
+            this.showLoading(true);
+
+            // Update project via API
+            await this.projectManager.updateProject(this.editingProjectId, { name: newName });
+
+            // Hide modal
+            this.hideEditProjectModal();
+
+            Logger.info('PROJECT', 'Project renamed successfully', this.editingProjectId);
+        } catch (error) {
+            Logger.error('PROJECT', 'Failed to rename project', error);
+            this.showError(`Failed to rename project: ${error.message}`);
+        } finally {
+            // Re-enable buttons
+            saveBtn.disabled = false;
+            if (cancelBtn) cancelBtn.disabled = false;
+            if (deleteBtn) deleteBtn.disabled = false;
+            this.showLoading(false);
+            this.editingProjectId = null;
+        }
+    }
+
+    showDeleteProjectConfirmation() {
+        if (!this.editingProjectId) return;
+
+        const project = this.projectManager.getProject(this.editingProjectId);
+        if (!project) return;
+
+        // Hide edit modal first
+        this.hideEditProjectModal();
+
+        // Show delete confirmation modal
+        document.getElementById('delete-project-name').textContent = project.name;
+        const modalElement = document.getElementById('delete-project-modal');
+        const modal = new bootstrap.Modal(modalElement);
+        modal.show();
+    }
+
+    hideDeleteProjectModal() {
+        const modalElement = document.getElementById('delete-project-modal');
+        const modal = bootstrap.Modal.getInstance(modalElement);
+        if (modal) {
+            modal.hide();
+        }
+    }
+
+    async confirmDeleteProject() {
+        if (!this.editingProjectId) return;
+
+        const projectIdToDelete = this.editingProjectId;
+        const confirmBtn = document.getElementById('confirm-delete-project');
+        const cancelBtn = document.querySelector('#delete-project-modal .btn-secondary');
+
+        try {
+            // Disable both buttons to prevent double-clicks
+            confirmBtn.disabled = true;
+            if (cancelBtn) cancelBtn.disabled = true;
+
+            this.showLoading(true);
+
+            // Check if current session belongs to this project BEFORE deletion
+            let shouldExitSession = false;
+            if (this.currentSessionId) {
+                const project = this.projectManager.getProject(projectIdToDelete);
+                if (project && project.session_ids.includes(this.currentSessionId)) {
+                    shouldExitSession = true;
+                }
+            }
+
+            // Delete project via API (backend handles cascade delete of sessions)
+            await this.projectManager.deleteProject(projectIdToDelete);
+
+            // Hide modal
+            this.hideDeleteProjectModal();
+
+            // Exit session if it belonged to the deleted project
+            if (shouldExitSession) {
+                this.exitSession();
+            }
+
+            Logger.info('PROJECT', 'Project deleted successfully', projectIdToDelete);
+        } catch (error) {
+            Logger.error('PROJECT', 'Failed to delete project', error);
+            this.showError(`Failed to delete project: ${error.message}`);
+        } finally {
+            // Re-enable buttons
+            confirmBtn.disabled = false;
+            if (cancelBtn) cancelBtn.disabled = false;
+            this.showLoading(false);
+            this.editingProjectId = null;
+        }
+    }
+
+    // Session Edit/Delete Modal Methods
+
+    async showEditSessionModal(sessionId) {
+        const session = this.sessions.get(sessionId);
+        if (!session) return;
+
+        // Store the session ID for later use
+        this.editingSessionId = sessionId;
+
+        // Update modal content
+        document.getElementById('edit-session-name').value = session.name || sessionId;
+        const sessionIdElement = document.getElementById('edit-session-id');
+        sessionIdElement.textContent = sessionId;
+        sessionIdElement.title = sessionId; // Show full ID on hover
+
+        const modalElement = document.getElementById('edit-session-modal');
+        const modal = new bootstrap.Modal(modalElement);
+        modal.show();
+    }
+
+    hideEditSessionModal() {
+        const modalElement = document.getElementById('edit-session-modal');
+        const modal = bootstrap.Modal.getInstance(modalElement);
+        if (modal) {
+            modal.hide();
+        }
+    }
+
+    async confirmSessionRename() {
+        if (!this.editingSessionId) return;
+
+        const newName = document.getElementById('edit-session-name').value.trim();
+        if (!newName) {
+            this.showError('Session name cannot be empty');
+            return;
+        }
+
+        const saveBtn = document.getElementById('save-session-btn');
+        const cancelBtn = document.querySelector('#edit-session-modal .btn-secondary');
+        const deleteBtn = document.getElementById('delete-session-from-edit-btn');
+
+        try {
+            // Disable buttons to prevent double-clicks
+            saveBtn.disabled = true;
+            if (cancelBtn) cancelBtn.disabled = true;
+            if (deleteBtn) deleteBtn.disabled = true;
+
+            this.showLoading(true);
+
+            // Update session name via API
+            const response = await this.apiRequest(`/api/sessions/${this.editingSessionId}/name`, {
+                method: 'PUT',
+                body: JSON.stringify({ name: newName })
+            });
+
+            if (response.success) {
+                // Update local session data
+                if (this.sessions.has(this.editingSessionId)) {
+                    const session = this.sessions.get(this.editingSessionId);
+                    session.name = newName;
+
+                    // Update session data consistently
+                    this.updateSessionData(this.editingSessionId, session);
+                }
+
+                // Update header if this is the current session
+                if (this.editingSessionId === this.currentSessionId) {
+                    this.updateSessionHeaderName(newName);
+                }
+
+                // Hide modal
+                this.hideEditSessionModal();
+
+                Logger.info('SESSION', 'Session renamed successfully', this.editingSessionId);
+            } else {
+                throw new Error('Failed to update session name');
+            }
+        } catch (error) {
+            Logger.error('SESSION', 'Failed to rename session', error);
+            this.showError(`Failed to rename session: ${error.message}`);
+        } finally {
+            // Re-enable buttons
+            saveBtn.disabled = false;
+            if (cancelBtn) cancelBtn.disabled = false;
+            if (deleteBtn) deleteBtn.disabled = false;
+            this.showLoading(false);
+            this.editingSessionId = null;
+        }
+    }
+
+    showDeleteSessionConfirmation() {
+        if (!this.editingSessionId) return;
+
+        const session = this.sessions.get(this.editingSessionId);
+        if (!session) return;
+
+        // Hide edit modal first
+        this.hideEditSessionModal();
+
+        // Show delete confirmation modal
+        const sessionName = session.name || this.editingSessionId;
         document.getElementById('delete-session-name').textContent = sessionName;
         const modalElement = document.getElementById('delete-session-modal');
         const modal = new bootstrap.Modal(modalElement);
@@ -5153,10 +3175,10 @@ class ClaudeWebUI {
     }
 
     async confirmDeleteSession() {
-        if (!this.currentSessionId) return;
+        if (!this.editingSessionId) return;
 
-        const sessionIdToDelete = this.currentSessionId;
-        const confirmBtn = document.getElementById('confirm-delete');
+        const sessionIdToDelete = this.editingSessionId;
+        const confirmBtn = document.getElementById('confirm-delete-session');
         const cancelBtn = document.querySelector('#delete-session-modal .btn-secondary');
 
         try {
@@ -5236,6 +3258,7 @@ class ClaudeWebUI {
             // Always remove from deleting set
             this.deletingSessions.delete(sessionIdToDelete);
             this.showLoading(false);
+            this.editingSessionId = null;
         }
     }
 
@@ -5416,6 +3439,11 @@ class ClaudeWebUI {
         });
 
         sessionElement.addEventListener('dragover', (e) => {
+            // Only handle session drags, not project drags
+            if (!this.dragState.draggedSessionId) {
+                return; // Not dragging a session, ignore
+            }
+
             // Check if target is in same project
             const targetProjectId = sessionElement.getAttribute('data-project-id');
 
@@ -5434,6 +3462,10 @@ class ClaudeWebUI {
         });
 
         sessionElement.addEventListener('dragenter', (e) => {
+            // Only handle session drags
+            if (!this.dragState.draggedSessionId) {
+                return;
+            }
             const targetProjectId = sessionElement.getAttribute('data-project-id');
             if (this.dragState.draggedProjectId === targetProjectId) {
                 e.preventDefault();
@@ -5441,6 +3473,10 @@ class ClaudeWebUI {
         });
 
         sessionElement.addEventListener('dragleave', (e) => {
+            // Only handle session drags
+            if (!this.dragState.draggedSessionId) {
+                return;
+            }
             // Only hide indicator if we're actually leaving the element
             if (!sessionElement.contains(e.relatedTarget)) {
                 this.hideDropIndicator();
@@ -5599,6 +3635,11 @@ class ClaudeWebUI {
         });
 
         projectElement.addEventListener('dragover', (e) => {
+            // Only handle project drags, not session drags
+            if (!this.projectDragState.draggedProjectId) {
+                return; // Not dragging a project, ignore
+            }
+
             e.preventDefault();
             e.dataTransfer.dropEffect = 'move';
 
@@ -5610,10 +3651,18 @@ class ClaudeWebUI {
         });
 
         projectElement.addEventListener('dragenter', (e) => {
+            // Only handle project drags
+            if (!this.projectDragState.draggedProjectId) {
+                return;
+            }
             e.preventDefault();
         });
 
         projectElement.addEventListener('dragleave', (e) => {
+            // Only handle project drags
+            if (!this.projectDragState.draggedProjectId) {
+                return;
+            }
             if (e.target === projectElement) {
                 this.removeProjectDropIndicator();
             }

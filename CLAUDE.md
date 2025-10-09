@@ -120,6 +120,154 @@ options = ClaudeAgentOptions(
 3. Handle JSON serialization of SDK objects properly
 4. Always use try/except blocks around SDK calls
 
+# Frontend Architecture - JavaScript Code Organization
+
+## Directory Structure
+```
+static/
+├── core/                      # Core infrastructure modules
+│   ├── logger.js             # Logging utility (Logger object)
+│   ├── constants.js          # Application constants (STATUS_COLORS, WEBSOCKET_CONFIG, SIDEBAR_CONFIG)
+│   ├── api-client.js         # API communication (APIClient class)
+│   └── project-manager.js    # Project operations (ProjectManager class)
+│
+├── tools/                     # Tool call system
+│   ├── tool-call-manager.js  # Tool state management (ToolCallManager class)
+│   ├── tool-handler-registry.js  # Handler lookup (ToolHandlerRegistry class)
+│   │
+│   └── handlers/              # Tool-specific UI renderers
+│       ├── base-handler.js    # DefaultToolHandler (fallback renderer)
+│       ├── read-handler.js    # ReadToolHandler (file reading with preview)
+│       ├── edit-handlers.js   # EditToolHandler, MultiEditToolHandler (diff views)
+│       ├── write-handler.js   # WriteToolHandler (file creation preview)
+│       ├── todo-handler.js    # TodoWriteToolHandler (task checklist)
+│       ├── search-handlers.js # GrepToolHandler, GlobToolHandler (search results)
+│       ├── web-handlers.js    # WebFetchToolHandler, WebSearchToolHandler
+│       ├── bash-handlers.js   # BashToolHandler, BashOutputToolHandler, KillShellToolHandler
+│       └── misc-handlers.js   # TaskToolHandler, ExitPlanModeToolHandler
+│
+├── app.js                     # Main application (ClaudeWebUI class)
+├── index.html                 # HTML template with script load order
+└── styles.css                 # Application styles
+```
+
+## Module Loading Order (CRITICAL)
+Scripts must load in this exact order in `index.html`:
+
+1. **Core Modules** (no dependencies)
+   - `core/logger.js` - Used by all other modules
+   - `core/constants.js` - Used by app.js
+   - `core/api-client.js` - Used by app.js
+   - `core/project-manager.js` - Used by app.js
+
+2. **Tool System** (depends on Logger)
+   - `tools/tool-call-manager.js` - Used by app.js
+   - `tools/tool-handler-registry.js` - Used by app.js
+
+3. **Tool Handlers** (depend on Logger, used by ToolHandlerRegistry)
+   - `tools/handlers/base-handler.js` - Base class for handlers
+   - All other handler files (order doesn't matter)
+
+4. **Main Application** (depends on all above)
+   - `app.js` - ClaudeWebUI orchestrator
+
+## Key Classes and Their Locations
+
+### Core Infrastructure
+- **Logger** (`core/logger.js`)
+  - Methods: `debug()`, `info()`, `warn()`, `error()`
+  - Used everywhere for consistent logging
+
+- **APIClient** (`core/api-client.js`)
+  - Methods: `request()`, `get()`, `post()`, `put()`, `delete()`
+  - Handles all backend communication
+
+- **ProjectManager** (`core/project-manager.js`)
+  - Methods: `loadProjects()`, `createProject()`, `updateProject()`, `deleteProject()`, `toggleExpansion()`, `reorderProjects()`
+  - Manages project CRUD operations
+
+### Tool System
+- **ToolCallManager** (`tools/tool-call-manager.js`)
+  - Tracks tool call lifecycle: pending → permission_required → executing → completed/error
+  - Methods: `handleToolUse()`, `handlePermissionRequest()`, `handlePermissionResponse()`, `handleToolResult()`
+
+- **ToolHandlerRegistry** (`tools/tool-handler-registry.js`)
+  - Maps tool names to custom renderers
+  - Methods: `registerHandler()`, `getHandler()`, `hasHandler()`
+
+### Tool Handlers (all in `tools/handlers/`)
+Each handler provides:
+- `renderParameters(toolCall, escapeHtmlFn)` - Display tool inputs
+- `renderResult(toolCall, escapeHtmlFn)` - Display tool outputs
+- `getCollapsedSummary(toolCall)` - Generate collapsed view text
+
+To add a new tool handler:
+1. Create new file in `tools/handlers/`
+2. Implement handler class with render methods
+3. Add script tag to `index.html` (before `app.js`)
+4. Register in `ClaudeWebUI.initializeToolHandlers()` in `app.js`
+
+### Main Application
+- **ClaudeWebUI** (`app.js`)
+  - Main orchestrator class (3685 lines)
+  - Manages: WebSockets, sessions, messages, UI state, drag-drop, modals, sidebar
+  - Uses all core modules and tool system components
+
+## Finding Functionality
+
+**Tool rendering logic** → `tools/handlers/*.js`
+**Tool call state** → `tools/tool-call-manager.js`
+**API calls** → `core/api-client.js` or direct fetch in `app.js`
+**Project operations** → `core/project-manager.js`
+**WebSocket logic** → `app.js` (ClaudeWebUI methods: `connectUIWebSocket()`, `connectSessionWebSocket()`)
+**Message processing** → `app.js` (ClaudeWebUI methods: `processMessage()`, `handleToolRelatedMessage()`)
+**Session management** → `app.js` (ClaudeWebUI methods: `selectSession()`, `createSession()`, `loadSessions()`)
+**UI rendering** → `app.js` (ClaudeWebUI methods: `renderSessions()`, `createProjectElement()`, `createSessionElement()`)
+**Logging** → `core/logger.js` (use `Logger.debug()`, `Logger.info()`, etc.)
+
+## Common Patterns
+
+### Adding a new tool handler
+```javascript
+// In tools/handlers/my-tool-handler.js
+class MyToolHandler {
+    renderParameters(toolCall, escapeHtmlFn) {
+        return `<div>...</div>`;
+    }
+
+    renderResult(toolCall, escapeHtmlFn) {
+        return `<div>...</div>`;
+    }
+
+    getCollapsedSummary(toolCall) {
+        return `${icon} ${toolCall.name} - ${status}`;
+    }
+}
+```
+
+Then register in `app.js`:
+```javascript
+this.toolHandlerRegistry.registerHandler('MyTool', new MyToolHandler());
+```
+
+### Using Logger
+```javascript
+Logger.debug('CATEGORY', 'Debug message', optionalDataObject);
+Logger.info('CATEGORY', 'Info message');
+Logger.warn('CATEGORY', 'Warning message', errorObject);
+Logger.error('CATEGORY', 'Error message', errorObject);
+```
+
+### Making API calls
+```javascript
+// Using APIClient (preferred in new code)
+this.apiClient.get('/api/sessions');
+this.apiClient.post('/api/sessions', {data});
+
+// Using apiRequest (existing pattern in ClaudeWebUI)
+await this.apiRequest('/api/sessions');
+```
+
 # important-instruction-reminders
 Do what has been asked; nothing more, nothing less.
 NEVER create files unless they're absolutely necessary for achieving your goal.

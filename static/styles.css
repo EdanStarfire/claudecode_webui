@@ -253,6 +253,23 @@ html {
     overflow: hidden;
 }
 
+/* ========== PROJECT/SESSION UI ========== */
+
+/* Project edit button hover effect */
+.project-edit-btn {
+    transition: opacity 0.2s ease;
+}
+
+/* Session edit button hover effect */
+.session-edit-btn {
+    transition: opacity 0.2s ease;
+}
+
+/* Project status line (progress bar) */
+.project-status-line {
+    transition: all 0.3s ease;
+}
+
 /* ========== DRAG AND DROP ========== */
 
 .list-group-item.dragging {
@@ -268,6 +285,7 @@ html {
     margin: 2px 0;
     opacity: 0.8;
     animation: pulse 1s infinite;
+    pointer-events: none; /* Prevent indicator from intercepting drag events */
 }
 
 @keyframes pulse {
