@@ -963,6 +963,7 @@ class PermissionRequestHandler(MessageHandler):
     def _extract_business_data(self, message_data: Dict[str, Any]) -> Dict[str, Any]:
         """Extract business-relevant data from permission request message."""
         tool_name = message_data.get("tool_name", "unknown")
+        suggestions = message_data.get("suggestions", [])
 
         extracted = {
             "type": "permission_request",
@@ -972,6 +973,8 @@ class PermissionRequestHandler(MessageHandler):
                 "input_params": message_data.get("input_params", {}),
                 "request_id": message_data.get("request_id"),
                 "session_id": message_data.get("session_id"),
+                "suggestions": suggestions,
+                "has_suggestions": len(suggestions) > 0,
                 "has_tool_uses": False,
                 "has_tool_results": False,
                 "has_thinking": False,
@@ -1006,6 +1009,10 @@ class PermissionResponseHandler(MessageHandler):
         """Extract business-relevant data from permission response message."""
         decision = message_data.get("decision", "unknown")
         tool_name = message_data.get("tool_name", "unknown")
+        applied_updates = message_data.get("applied_updates", [])
+
+        # Extract update types for quick reference
+        applied_update_types = [u.get('type') for u in applied_updates if u.get('type')]
 
         extracted = {
             "type": "permission_response",
@@ -1017,6 +1024,8 @@ class PermissionResponseHandler(MessageHandler):
                 "tool_name": tool_name,
                 "response_time_ms": message_data.get("response_time_ms"),
                 "session_id": message_data.get("session_id"),
+                "applied_updates": applied_updates,
+                "applied_update_types": applied_update_types,
                 "has_tool_uses": False,
                 "has_tool_results": False,
                 "has_thinking": False,

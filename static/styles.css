@@ -481,3 +481,90 @@ html {
         padding: 0.2rem 0.4rem;
     }
 }
+
+/* Permission Suggestion Styles */
+.permission-suggestion {
+    display: flex;
+    align-items: start;
+    gap: 0.75rem;
+    background: #fffbf0;
+    border: 1px solid #ffd666;
+    border-radius: 6px;
+    padding: 0.75rem;
+    margin: 0.75rem 0;
+}
+
+.suggestion-icon {
+    font-size: 1.5rem;
+    line-height: 1;
+    flex-shrink: 0;
+}
+
+.suggestion-content {
+    flex: 1;
+}
+
+.suggestion-content strong {
+    display: block;
+    margin-bottom: 0.25rem;
+    color: #996600;
+}
+
+.suggestion-content small {
+    color: #666;
+    font-size: 0.875rem;
+}
+
+/* Permission prompt styling */
+.tool-permission-prompt {
+    background: #f8f9fa;
+    border: 1px solid #dee2e6;
+    border-radius: 6px;
+    padding: 1rem;
+    margin-top: 0.75rem;
+}
+
+.tool-permission-prompt p:last-of-type {
+    margin-bottom: 0.5rem;
+}
+
+.permission-buttons {
+    display: flex;
+    gap: 0.5rem;
+    margin-top: 0.75rem;
+    flex-wrap: wrap;
+}
+
+.permission-buttons button.submitted {
+    opacity: 0.7;
+}
+
+/* Applied Permission Updates Display */
+.permission-updates-applied {
+    background: #e6f4ea;
+    border: 1px solid #81c995;
+    border-radius: 6px;
+    padding: 0.75rem;
+    margin-bottom: 0.75rem;
+}
+
+.permission-update-badge {
+    font-weight: 600;
+    color: #1e7e34;
+    margin-bottom: 0.5rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.permission-update-details {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+
+.permission-update-item {
+    font-size: 0.875rem;
+    color: #2d5f3a;
+    padding-left: 1.5rem;
+}

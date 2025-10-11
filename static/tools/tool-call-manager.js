@@ -52,6 +52,10 @@ class ToolCallManager {
     handlePermissionRequest(permissionRequest) {
         Logger.debug('TOOL_MANAGER', 'Handling permission request', permissionRequest);
 
+        // Extract suggestions from metadata (permission requests have suggestions in metadata)
+        const suggestions = permissionRequest.metadata?.suggestions || permissionRequest.suggestions || [];
+        Logger.debug('TOOL_MANAGER', 'Permission request suggestions', suggestions);
+
         const signature = this.createToolSignature(permissionRequest.tool_name, permissionRequest.input_params);
         const toolUseId = this.toolSignatureToId.get(signature);
 
@@ -63,6 +67,7 @@ class ToolCallManager {
             if (toolCall) {
                 toolCall.status = 'permission_required';
                 toolCall.permissionRequestId = permissionRequest.request_id;
+                toolCall.suggestions = suggestions;
                 return toolCall;
             }
         } else {
@@ -80,6 +85,7 @@ class ToolCallManager {
                 signature: signature,
                 status: 'permission_required',
                 permissionRequestId: permissionRequest.request_id,
+                suggestions: suggestions,
                 permissionDecision: null,
                 result: null,
                 explanation: null,
@@ -105,6 +111,7 @@ class ToolCallManager {
             const toolCall = this.toolCalls.get(toolUseId);
             if (toolCall) {
                 toolCall.permissionDecision = permissionResponse.decision;
+                toolCall.appliedUpdates = permissionResponse.applied_updates || [];
 
                 if (permissionResponse.decision === 'allow') {
                     toolCall.status = 'executing';

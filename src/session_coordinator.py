@@ -55,6 +55,9 @@ class SessionCoordinator:
         # Track recent tool uses for ExitPlanMode detection
         self._recent_tool_uses: Dict[str, Dict[str, str]] = {}  # session_id -> {tool_use_id: tool_name}
 
+        # Track applied permission updates for state management
+        self._permission_updates: Dict[str, List[dict]] = {}  # session_id -> list of applied updates
+
     async def initialize(self):
         """Initialize the session coordinator"""
         try:
@@ -774,6 +777,18 @@ class SessionCoordinator:
 
                                 # Clean up tracked tool use
                                 del tool_uses[tool_use_id]
+
+                # Track permission responses with applied updates (for historical/display purposes)
+                # Note: The actual mode change is handled immediately in web_server.py when
+                # the permission response is built, since the SDK applies it internally
+                if parsed_message.type.value == 'permission_response' and parsed_message.metadata:
+                    applied_updates = parsed_message.metadata.get('applied_updates', [])
+                    if applied_updates:
+                        # Track the applied updates for display/history
+                        if session_id not in self._permission_updates:
+                            self._permission_updates[session_id] = []
+                        self._permission_updates[session_id].extend(applied_updates)
+                        coord_logger.debug(f"Tracked {len(applied_updates)} applied permission updates for session {session_id}")
 
                 # Check if this message indicates processing completion
                 if parsed_message.type.value == 'result':

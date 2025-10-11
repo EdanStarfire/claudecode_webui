@@ -835,11 +835,11 @@ class ClaudeSDK:
         if self.permission_callback:
             perm_logger.debug(f"Delegating permission check for tool '{tool_name}' to external callback")
             try:
-                # Call the callback - can now await since SDK callback is async
+                # Call the callback with context - can now await since SDK callback is async
                 if asyncio.iscoroutinefunction(self.permission_callback):
-                    decision = await self.permission_callback(tool_name, input_params)
+                    decision = await self.permission_callback(tool_name, input_params, context)
                 else:
-                    decision = self.permission_callback(tool_name, input_params)
+                    decision = self.permission_callback(tool_name, input_params, context)
 
                 # Convert different response formats to new PermissionResult objects
                 if isinstance(decision, bool):
@@ -850,11 +850,15 @@ class ClaudeSDK:
                         perm_logger.info(f"Tool '{tool_name}' denied by callback")
                         return PermissionResultDeny(message=f"Tool '{tool_name}' denied by permission callback")
                 elif isinstance(decision, dict):
-                    # Handle old format dict responses
+                    # Handle dict responses with optional updated_permissions
                     behavior = decision.get("behavior", "deny")
                     if behavior == "allow":
                         updated_input = decision.get("updated_input", input_params)
-                        return PermissionResultAllow(updated_input=updated_input)
+                        updated_permissions = decision.get("updated_permissions")
+                        return PermissionResultAllow(
+                            updated_input=updated_input,
+                            updated_permissions=updated_permissions
+                        )
                     else:
                         message = decision.get("message", "Tool denied by callback")
                         return PermissionResultDeny(message=message)

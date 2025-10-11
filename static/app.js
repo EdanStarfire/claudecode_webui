@@ -757,7 +757,9 @@ class ClaudeWebUI {
                 const permissionRequest = {
                     request_id: message.request_id || message.metadata?.request_id,
                     tool_name: message.tool_name || message.metadata?.tool_name,
-                    input_params: message.input_params || message.metadata?.input_params
+                    input_params: message.input_params || message.metadata?.input_params,
+                    metadata: message.metadata,  // Pass full metadata including suggestions
+                    suggestions: message.metadata?.suggestions || message.suggestions  // Also pass directly for convenience
                 };
 
                 const toolCall = this.toolCallManager.handlePermissionRequest(permissionRequest);
@@ -949,17 +951,82 @@ class ClaudeWebUI {
 
         // Add permission prompt if needed
         if (toolCall.status === 'permission_required') {
+            const hasSuggestions = toolCall.suggestions && toolCall.suggestions.length > 0;
+            const suggestion = hasSuggestions ? toolCall.suggestions[0] : null;
+
             bodyContent += `
                 <div class="tool-permission-prompt">
                     <p><strong>🔐 Permission Required</strong></p>
-                    <p>Claude Code wants to use the ${toolCall.name} tool. Do you want to allow this?</p>
+                    <p>Claude wants to use the <code>${this.escapeHtml(toolCall.name)}</code> tool.</p>
+            `;
+
+            // Show suggestion if available (currently only handling single setMode suggestion)
+            if (suggestion && suggestion.type === 'setMode') {
+                const modeLabel = this.getPermissionModeLabel(suggestion.mode);
+                bodyContent += `
+                    <div class="permission-suggestion">
+                        <div class="suggestion-icon">💡</div>
+                        <div class="suggestion-content">
+                            <strong>Suggestion:</strong> Switch to "${modeLabel}" mode for this session
+                            <small class="d-block text-muted">Future ${toolCall.name} operations will be auto-approved</small>
+                        </div>
+                    </div>
+                `;
+            }
+
+            bodyContent += `
                     <div class="permission-buttons">
-                        <button class="btn btn-success permission-approve" data-request-id="${toolCall.permissionRequestId}" data-decision="allow">
+            `;
+
+            // Show "Approve & Apply" button if we have suggestions
+            if (hasSuggestions) {
+                bodyContent += `
+                        <button class="btn btn-success permission-approve-with-suggestion" data-request-id="${toolCall.permissionRequestId}">
+                            ✅ Approve & Apply
+                        </button>
+                        <button class="btn btn-outline-success permission-approve" data-request-id="${toolCall.permissionRequestId}">
+                            ✅ Approve Only
+                        </button>
+                `;
+            } else {
+                // No suggestions - standard approve button
+                bodyContent += `
+                        <button class="btn btn-success permission-approve" data-request-id="${toolCall.permissionRequestId}">
                             ✅ Approve
                         </button>
-                        <button class="btn btn-danger permission-deny" data-request-id="${toolCall.permissionRequestId}" data-decision="deny">
+                `;
+            }
+
+            bodyContent += `
+                        <button class="btn btn-danger permission-deny" data-request-id="${toolCall.permissionRequestId}">
                             ❌ Deny
                         </button>
+                    </div>
+                </div>
+            `;
+        }
+
+        // Add applied permission updates if any
+        if (toolCall.appliedUpdates && toolCall.appliedUpdates.length > 0 && toolCall.permissionDecision === 'allow') {
+            bodyContent += `
+                <div class="permission-updates-applied">
+                    <div class="permission-update-badge">
+                        🔒 Permission Updated
+                    </div>
+                    <div class="permission-update-details">
+                        ${toolCall.appliedUpdates.map(update => {
+                            if (update.type === 'setMode') {
+                                const modeLabel = this.getPermissionModeLabel(update.mode);
+                                return `<div class="permission-update-item">Mode: ${this.escapeHtml(modeLabel)} (session)</div>`;
+                            } else if (update.type === 'addRules') {
+                                return `<div class="permission-update-item">Added rule for ${this.escapeHtml(update.behavior || 'allow')}</div>`;
+                            } else if (update.type === 'addDirectories') {
+                                const dirs = update.directories || [];
+                                return `<div class="permission-update-item">Added ${dirs.length} allowed ${dirs.length === 1 ? 'directory' : 'directories'}</div>`;
+                            } else {
+                                return `<div class="permission-update-item">${this.escapeHtml(update.type)}</div>`;
+                            }
+                        }).join('')}
                     </div>
                 </div>
             `;
@@ -1014,37 +1081,51 @@ class ClaudeWebUI {
 
         // Handle permission button clicks
         const approveBtn = element.querySelector('.permission-approve');
+        const approveWithSuggestionBtn = element.querySelector('.permission-approve-with-suggestion');
         const denyBtn = element.querySelector('.permission-deny');
 
         if (approveBtn) {
             approveBtn.addEventListener('click', () => {
-                // Disable both buttons immediately to prevent duplicate clicks
-                if (approveBtn.disabled || denyBtn.disabled) return;
-
-                approveBtn.disabled = true;
-                denyBtn.disabled = true;
+                // Disable all buttons immediately to prevent duplicate clicks
+                const allButtons = element.querySelectorAll('.permission-buttons button');
+                if (Array.from(allButtons).some(btn => btn.disabled)) return;
+                allButtons.forEach(btn => btn.disabled = true);
 
                 // Update button text to show submission
                 approveBtn.textContent = '⏳ Submitting...';
 
                 const requestId = approveBtn.getAttribute('data-request-id');
-                this.handlePermissionDecision(requestId, 'allow', approveBtn, denyBtn);
+                this.handlePermissionDecision(requestId, 'allow', false, allButtons);
+            });
+        }
+
+        if (approveWithSuggestionBtn) {
+            approveWithSuggestionBtn.addEventListener('click', () => {
+                // Disable all buttons immediately to prevent duplicate clicks
+                const allButtons = element.querySelectorAll('.permission-buttons button');
+                if (Array.from(allButtons).some(btn => btn.disabled)) return;
+                allButtons.forEach(btn => btn.disabled = true);
+
+                // Update button text to show submission
+                approveWithSuggestionBtn.textContent = '⏳ Submitting...';
+
+                const requestId = approveWithSuggestionBtn.getAttribute('data-request-id');
+                this.handlePermissionDecision(requestId, 'allow', true, allButtons);
             });
         }
 
         if (denyBtn) {
             denyBtn.addEventListener('click', () => {
-                // Disable both buttons immediately to prevent duplicate clicks
-                if (approveBtn.disabled || denyBtn.disabled) return;
-
-                approveBtn.disabled = true;
-                denyBtn.disabled = true;
+                // Disable all buttons immediately to prevent duplicate clicks
+                const allButtons = element.querySelectorAll('.permission-buttons button');
+                if (Array.from(allButtons).some(btn => btn.disabled)) return;
+                allButtons.forEach(btn => btn.disabled = true);
 
                 // Update button text to show submission
                 denyBtn.textContent = '⏳ Submitting...';
 
                 const requestId = denyBtn.getAttribute('data-request-id');
-                this.handlePermissionDecision(requestId, 'deny', approveBtn, denyBtn);
+                this.handlePermissionDecision(requestId, 'deny', false, allButtons);
             });
         }
     }
@@ -1056,8 +1137,8 @@ class ClaudeWebUI {
         // No need to call updateToolCall - Bootstrap handles the DOM changes
     }
 
-    handlePermissionDecision(requestId, decision, approveBtn, denyBtn) {
-        Logger.info('PERMISSION', 'Permission decision', {requestId, decision});
+    handlePermissionDecision(requestId, decision, applySuggestions, allButtons) {
+        Logger.info('PERMISSION', 'Permission decision', {requestId, decision, applySuggestions});
 
         // Send permission response to backend
         if (this.sessionWebsocket && this.sessionWebsocket.readyState === WebSocket.OPEN) {
@@ -1065,31 +1146,48 @@ class ClaudeWebUI {
                 type: 'permission_response',
                 request_id: requestId,
                 decision: decision,
+                apply_suggestions: applySuggestions,
                 timestamp: new Date().toISOString()
             };
 
             this.sessionWebsocket.send(JSON.stringify(response));
 
             // Update button to show submitted state
-            if (decision === 'allow' && approveBtn) {
-                approveBtn.textContent = '✅ Approved';
-                approveBtn.classList.add('submitted');
-            } else if (decision === 'deny' && denyBtn) {
-                denyBtn.textContent = '❌ Denied';
-                denyBtn.classList.add('submitted');
-            }
+            allButtons.forEach(btn => {
+                if (!btn.disabled) return;
+                if (btn.classList.contains('permission-approve') || btn.classList.contains('permission-approve-with-suggestion')) {
+                    btn.textContent = applySuggestions ? '✅ Approved & Applied' : '✅ Approved';
+                    btn.classList.add('submitted');
+                } else if (btn.classList.contains('permission-deny')) {
+                    btn.textContent = '❌ Denied';
+                    btn.classList.add('submitted');
+                }
+            });
         } else {
             // Re-enable buttons if WebSocket is not available
             Logger.error('PERMISSION', 'Cannot send permission response: WebSocket not connected');
-            if (approveBtn) {
-                approveBtn.disabled = false;
-                approveBtn.textContent = '✅ Approve';
-            }
-            if (denyBtn) {
-                denyBtn.disabled = false;
-                denyBtn.textContent = '❌ Deny';
-            }
+            allButtons.forEach(btn => {
+                btn.disabled = false;
+                // Reset button text
+                if (btn.classList.contains('permission-approve-with-suggestion')) {
+                    btn.textContent = '✅ Approve & Apply';
+                } else if (btn.classList.contains('permission-approve')) {
+                    btn.textContent = btn.classList.contains('btn-outline-success') ? '✅ Approve Only' : '✅ Approve';
+                } else if (btn.classList.contains('permission-deny')) {
+                    btn.textContent = '❌ Deny';
+                }
+            });
         }
+    }
+
+    getPermissionModeLabel(mode) {
+        const labels = {
+            'default': 'Default',
+            'acceptEdits': 'Accept Edits',
+            'plan': 'Plan',
+            'bypassPermissions': 'Bypass Permissions'
+        };
+        return labels[mode] || mode;
     }
 
     renderThinkingBlock(thinkingBlock) {
@@ -2673,6 +2771,17 @@ class ClaudeWebUI {
         }
 
         if (sessionInfo) {
+            // Check for permission mode changes (only for current session)
+            if (sessionId === this.currentSessionId) {
+                const oldSession = this.sessions.get(sessionId);
+                if (oldSession && oldSession.current_permission_mode !== sessionInfo.current_permission_mode) {
+                    const newMode = sessionInfo.current_permission_mode;
+                    const modeLabel = this.getPermissionModeLabel(newMode);
+                    this.showToast(`Permission mode changed to ${modeLabel}`, 'success');
+                    Logger.info('PERMISSION', 'Mode changed', {old: oldSession.current_permission_mode, new: newMode});
+                }
+            }
+
             // GRANULAR UPDATE: Update session in DOM without full re-render
             this.updateSessionInDOM(sessionId, sessionInfo);
 
@@ -3879,6 +3988,49 @@ class ClaudeWebUI {
 
     resetTextareaHeight(textarea) {
         textarea.style.height = 'auto';
+    }
+
+    showToast(message, type = 'info') {
+        // Create toast container if it doesn't exist
+        let toastContainer = document.getElementById('toast-container');
+        if (!toastContainer) {
+            toastContainer = document.createElement('div');
+            toastContainer.id = 'toast-container';
+            toastContainer.className = 'toast-container position-fixed top-0 end-0 p-3';
+            toastContainer.style.zIndex = '9999';
+            document.body.appendChild(toastContainer);
+        }
+
+        // Create toast element
+        const toastEl = document.createElement('div');
+        toastEl.className = `toast align-items-center text-bg-${type} border-0`;
+        toastEl.setAttribute('role', 'alert');
+        toastEl.setAttribute('aria-live', 'assertive');
+        toastEl.setAttribute('aria-atomic', 'true');
+
+        toastEl.innerHTML = `
+            <div class="d-flex">
+                <div class="toast-body">
+                    ${this.escapeHtml(message)}
+                </div>
+                <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast" aria-label="Close"></button>
+            </div>
+        `;
+
+        toastContainer.appendChild(toastEl);
+
+        // Initialize and show toast using Bootstrap
+        const toast = new bootstrap.Toast(toastEl, {
+            autohide: true,
+            delay: 3000
+        });
+
+        toast.show();
+
+        // Remove toast element after it's hidden
+        toastEl.addEventListener('hidden.bs.toast', () => {
+            toastEl.remove();
+        });
     }
 }
 

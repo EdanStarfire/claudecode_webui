@@ -2283,8 +2283,139 @@ Transformed monolithic frontend codebase into maintainable modular architecture.
 
 ---
 
+## Phase 5.1: Permission Suggestion System ✅ COMPLETE
+**Goal**: Implement SDK-driven permission suggestions with UI for applying mode changes
+**Status**: Complete - full permission suggestion workflow implemented
+
+### Overview
+Implemented permission suggestion system that allows Claude Agent SDK to suggest permission mode changes during tool execution. Users can choose to approve tools with or without applying suggested mode changes, with immediate feedback showing applied updates.
+
+### Backend Implementation
+
+**SDK Integration Enhancement** ([src/claude_sdk.py](src/claude_sdk.py)):
+- Updated permission callback signature to accept `context` parameter (3rd argument)
+- Extract `suggestions` from `ToolPermissionContext`
+- Support `updated_permissions` in permission response handling
+- Build `PermissionUpdate` objects from user-approved suggestions
+- Force all updates to `destination='session'` for session-scoped changes only
+
+**Message Parsing** ([src/message_parser.py](src/message_parser.py)):
+- Added `suggestions` and `has_suggestions` to permission request metadata
+- Added `applied_updates` and `applied_update_types` to permission response metadata
+- Track permission updates for display and historical purposes
+
+**Session Management** ([src/session_coordinator.py](src/session_coordinator.py)):
+- Track applied permission updates in coordinator state
+- Store updates for display purposes
+- Debug logging for update tracking
+
+**Permission Callback Enhancement** ([src/web_server.py](src/web_server.py)):
+- Extract suggestions from SDK `ToolPermissionContext`
+- Include suggestions in permission request messages to frontend
+- Handle `apply_suggestions` flag from frontend responses
+- Build `PermissionUpdate` objects when user approves with suggestions
+- Immediately update session state when mode changes are applied
+- Store applied updates in permission response messages
+
+### Frontend Implementation
+
+**Tool Call State** ([static/tools/tool-call-manager.js](static/tools/tool-call-manager.js)):
+- Extract and store suggestions in tool call state
+- Track `appliedUpdates` after permission approval
+
+**Permission Prompt UI** ([static/app.js](static/app.js)):
+- Enhanced permission prompts to display suggestions
+- Three-button permission interface:
+  - **"✅ Approve & Apply"**: Approve tool + apply suggestion
+  - **"✅ Approve Only"**: Approve tool without suggestion
+  - **"❌ Deny"**: Deny tool usage
+- Display suggestion details (currently supports `setMode` type)
+- Show applied updates after approval with detailed breakdown
+- Prevent duplicate clicks across all permission buttons
+- Pass `apply_suggestions` flag based on button clicked
+
+**Visual Design** ([static/styles.css](static/styles.css)):
+- Yellow suggestion box with lightbulb icon (`.permission-suggestion`)
+- Green success box for applied updates (`.permission-updates-applied`)
+- Enhanced permission prompt layout (`.tool-permission-prompt`)
+- Flexbox button layout supporting three options (`.permission-buttons`)
+
+### User Experience Flow
+
+1. **Permission Request**: Claude requests tool permission (e.g., `Edit`)
+2. **Suggestion Display**: SDK provides suggestion (e.g., "Switch to Accept Edits mode")
+3. **User Choice**:
+   - Approve tool + apply mode change → Future similar tools auto-approved
+   - Approve tool only → One-time approval, future tools still prompt
+   - Deny tool → Tool execution blocked
+4. **Applied Feedback**: Green badge shows "🔒 Permission Updated" with details
+5. **Mode Persistence**: Session mode immediately updated for future requests
+
+### Suggestion Types Supported
+
+**Current Implementation**:
+- `setMode`: Change permission mode (e.g., "default" → "acceptEdits")
+
+**UI Framework Ready For**:
+- `addRules`: Add permission rules
+- `addDirectories`: Add allowed directories
+
+### Technical Details
+
+**Session Scoping**:
+- All permission updates forced to `destination='session'`
+- Changes apply only to current session
+- No persistent configuration file modifications
+
+**State Synchronization**:
+- Backend immediately updates `SessionManager` state when mode changes
+- Frontend receives applied updates in permission response
+- Both systems stay synchronized without additional API calls
+
+**Error Handling**:
+- Gracefully handles missing suggestions
+- Falls back to standard two-button UI if no suggestions present
+- Logs mode update failures without blocking approval
+
+### Testing & Validation
+
+**Verified Scenarios**:
+- ✅ Permission request with setMode suggestion displays correctly
+- ✅ "Approve & Apply" updates session mode and approves tool
+- ✅ "Approve Only" approves tool without mode change
+- ✅ Applied updates display in green success box
+- ✅ Future tool requests respect updated mode
+- ✅ Multiple permission updates can be applied sequentially
+- ✅ Missing suggestions don't break UI (standard two-button display)
+
+### Documentation Updates
+
+**User Testing Tracking** ([USER_TESTING_TRACKING.md](USER_TESTING_TRACKING.md)):
+- Marked "ToolPermission prompts support suggestions" as complete ✅
+- Added related feature requests for future enhancements
+
+### Success Criteria
+- ✅ SDK context parameter integration working
+- ✅ Suggestions extracted and passed to frontend
+- ✅ Three-button permission UI displays correctly
+- ✅ "Approve & Apply" applies mode changes
+- ✅ "Approve Only" bypasses suggestions
+- ✅ Applied updates shown in UI
+- ✅ Session state synchronized immediately
+- ✅ No breaking changes to existing permission flow
+- ✅ Graceful fallback for no suggestions
+
+### Impact Summary
+Delivered comprehensive permission suggestion system providing intelligent workflow optimization. Users can now accept SDK-recommended mode changes during permission prompts, reducing future interruptions while maintaining full control. Professional UI clearly presents suggestions and applied updates, with session-scoped changes ensuring safe, predictable behavior.
+
+**Total Changes**: 8 modified files, 375+ lines added, 41 lines removed
+
+---
+
 ## Future Phases (Post-MVP)
 - **Phase 6**: Configuration management and settings UI
+- **Enhancement**: Permission suggestion enhancements (Deny with custom message, interrupt control)
+- **Enhancement**: Support for addRules and addDirectories suggestion types
 - **Enhancement**: Advanced mobile optimizations
 - **Enhancement**: Performance optimizations for large message logs
 - **Enhancement**: Further refactoring of ClaudeWebUI class

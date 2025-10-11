@@ -862,6 +862,10 @@ class ClaudeWebUI:
                                         # Only include updated_input if it was actually provided
                                         if "updated_input" in message_data:
                                             response["updated_input"] = message_data["updated_input"]
+                                        # Include apply_suggestions flag if provided
+                                        if "apply_suggestions" in message_data:
+                                            response["apply_suggestions"] = message_data["apply_suggestions"]
+                                            ws_logger.debug(f"Permission response includes apply_suggestions: {message_data['apply_suggestions']}")
                                     else:
                                         response = {
                                             "behavior": "deny",
@@ -979,7 +983,7 @@ class ClaudeWebUI:
 
     def _create_permission_callback(self, session_id: str):
         """Create permission callback for tool usage"""
-        async def permission_callback(tool_name: str, input_params: dict) -> dict:
+        async def permission_callback(tool_name: str, input_params: dict, context) -> dict:
             import uuid
             import time
 
@@ -990,6 +994,16 @@ class ClaudeWebUI:
             logger.info(f"PERMISSION CALLBACK TRIGGERED: tool={tool_name}, session={session_id}, request_id={request_id}")
             logger.info(f"Permission requested for tool: {tool_name} (request_id: {request_id})")
 
+            # Extract suggestions from context
+            suggestions = []
+            if context and hasattr(context, 'suggestions'):
+                for s in context.suggestions:
+                    if hasattr(s, 'to_dict'):
+                        suggestions.append(s.to_dict())
+                    else:
+                        suggestions.append(s)
+                logger.info(f"Permission context has {len(suggestions)} suggestions")
+
             # Store permission request message
             try:
                 permission_request = {
@@ -999,7 +1013,8 @@ class ClaudeWebUI:
                     "timestamp": request_time,
                     "tool_name": tool_name,
                     "input_params": input_params,
-                    "request_id": request_id
+                    "request_id": request_id,
+                    "suggestions": suggestions
                 }
 
                 # Store using unified MessageProcessor for consistency
@@ -1064,6 +1079,42 @@ class ClaudeWebUI:
                 decision = response.get("behavior")
                 reasoning = f"User {decision}ed permission"
 
+                # Handle permission updates if user chose to apply suggestions
+                if decision == "allow" and response.get("apply_suggestions") and suggestions:
+                    from claude_agent_sdk import PermissionUpdate
+
+                    updated_permissions = []
+                    applied_updates_for_storage = []
+
+                    for suggestion in suggestions:
+                        # Force destination to 'session' as per requirements
+                        suggestion_dict = dict(suggestion)
+                        suggestion_dict['destination'] = 'session'
+
+                        update = PermissionUpdate(
+                            type=suggestion_dict['type'],
+                            mode=suggestion_dict.get('mode'),
+                            rules=suggestion_dict.get('rules'),
+                            behavior=suggestion_dict.get('behavior'),
+                            directories=suggestion_dict.get('directories'),
+                            destination='session'
+                        )
+                        updated_permissions.append(update)
+                        applied_updates_for_storage.append(suggestion_dict)
+
+                        # Immediately update our session state to reflect the SDK's internal mode change
+                        if suggestion_dict['type'] == 'setMode' and suggestion_dict.get('mode'):
+                            new_mode = suggestion_dict['mode']
+                            try:
+                                await self.coordinator.session_manager.update_permission_mode(session_id, new_mode)
+                                logger.info(f"Updated session {session_id} permission mode to {new_mode}")
+                            except Exception as mode_error:
+                                logger.error(f"Failed to update session mode: {mode_error}")
+
+                    response['updated_permissions'] = updated_permissions
+                    response['applied_updates_for_storage'] = applied_updates_for_storage
+                    logger.info(f"Built {len(updated_permissions)} permission updates from suggestions")
+
             except Exception as e:
                 # Handle any errors (e.g., session termination)
                 logger.error(f"PERMISSION CALLBACK: Error waiting for permission decision: {e}")
@@ -1092,6 +1143,11 @@ class ClaudeWebUI:
                     "tool_name": tool_name,
                     "response_time_ms": int((decision_time - request_time) * 1000)
                 }
+
+                # Include applied updates if any were applied (use the dict version we saved)
+                if decision == "allow" and response.get("applied_updates_for_storage"):
+                    permission_response["applied_updates"] = response["applied_updates_for_storage"]
+                    logger.info(f"Permission response includes {len(response['applied_updates_for_storage'])} applied updates")
 
                 # Store using unified MessageProcessor for consistency
                 try:
