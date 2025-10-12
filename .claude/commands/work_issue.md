@@ -1,51 +1,42 @@
 ---
-description: Work on a GitHub issue in a dedicated git worktree
+description: Implement changes for a GitHub issue (run inside worktree)
 argument-hint: <issue_number>
-allowed-tools: [Read, Write, Edit, WebFetch, Grep, Glob, Task]
+allowed-tools: [Read, Write, Edit, Grep, Glob, Bash, Task]
 ---
 
-## Work on GitHub Issue
+## Work on GitHub Issue (Inside Worktree)
 
-This command creates a dedicated git worktree for a GitHub issue, implements the requested changes, and creates a pull request.
+This command implements the changes for a GitHub issue, commits them, and creates a pull request. **This command must be run inside a worktree created by `/prep_issue`**, not in the main repository.
+
+### Prerequisites
+
+This command assumes:
+1. You ran `/prep_issue $1` in the main repository
+2. You opened a new Claude Code instance with working directory set to the worktree
+3. You're ready to implement the changes
 
 ### Workflow
 
-You are working on GitHub issue #$1. Follow these steps carefully:
+You are working on GitHub issue #$1. Follow these steps:
 
-#### 1. Review Issue and Gather Context
-- Use `gh issue view $1` to fetch the full issue details
-- Read all comments on the issue using `gh issue view $1 --comments`
-- Analyze the issue description and any existing implementation plans in comments
-- Review the issue title to understand the category (feat/fix/chore/docs/refactor/etc.)
+#### 0. Verify Worktree Environment
+- Check if running in a worktree: `git rev-parse --git-common-dir` vs `git rev-parse --git-dir`
+- If these are the same, **STOP** - you're in the main repository, not a worktree
+- Inform user: "❌ This command must be run inside a worktree. Please use `/prep_issue $1` in the main repository first, then open a new Claude Code instance in the worktree directory."
+- If different, proceed with implementation
 
-#### 2. Validate Requirements
-- Determine if the issue description and comments provide sufficient clarity on:
-  - What needs to be implemented/fixed
-  - How it should be implemented (if applicable)
-  - What success looks like
-- **If requirements are unclear or ambiguous**: STOP and ask the user for clarification before proceeding
-- **If requirements are clear**: Summarize your understanding and confirm with user before continuing
+#### 1. Review Issue Context
+- Fetch the issue details: `gh issue view $1`
+- Read any implementation plan from comments: `gh issue view $1 --comments`
+- Understand what needs to be implemented
 
-#### 3. Create Git Worktree
-- Ensure you're up to date: `git fetch origin`
-- Determine appropriate branch prefix based on issue type:
-  - `feat/` for new features
-  - `fix/` for bug fixes
-  - `chore/` for maintenance/tooling
-  - `docs/` for documentation
-  - `refactor/` for code refactoring
-  - `test/` for test-related changes
-- Create branch name from issue title (kebab-case, max 50 chars): `<prefix>/description-from-title`
-- Create worktree: `git worktree add ../<branch-name> -b <branch-name> origin/main`
-- Change to worktree directory: `cd ../<branch-name>`
-
-#### 4. Review Existing Code
+#### 2. Review Existing Code
 - Read relevant files mentioned in the issue
 - Use grep/glob to find related code if needed
 - Understand the current implementation and architecture
 - Identify all files that need to be modified
 
-#### 5. Create or Update Implementation Plan
+#### 3. Create or Update Implementation Plan
 - If the issue has an existing plan in comments, review and update it based on current code
 - If no plan exists, create a detailed implementation plan
 - Post/update the plan as a comment on the issue using:
@@ -62,14 +53,14 @@ You are working on GitHub issue #$1. Follow these steps carefully:
   - Testing approach
   - Any risks or considerations
 
-#### 6. Implement Changes
+#### 4. Implement Changes
 - Work through the implementation plan step by step
 - Make only the changes required by the issue - nothing more
 - Ensure code follows existing patterns and conventions in the codebase
 - Test changes as you go
 - **Stay focused**: Each issue addresses one specific thing
 
-#### 7. Commit Changes
+#### 5. Commit Changes
 - Review all changes: `git status` and `git diff`
 - Add all modified files: `git add .`
 - Create a descriptive commit message following this format:
@@ -86,7 +77,7 @@ You are working on GitHub issue #$1. Follow these steps carefully:
   ```
 - Commit: `git commit -m "$(cat <<'EOF' ... EOF)"`
 
-#### 8. Push and Create PR
+#### 6. Push and Create PR
 - Push branch: `git push -u origin HEAD`
 - Create pull request:
   ```bash
@@ -107,22 +98,19 @@ You are working on GitHub issue #$1. Follow these steps carefully:
   )"
   ```
 
-#### 9. Return to Main Repository
-- Change back to main repository: `cd -` or `cd <original-path>`
-- Inform user: "✅ Pull request created for issue #$1. Worktree remains at `../<branch-name>` for further work if needed."
+#### 7. Completion
+- Inform user: "✅ Pull request created for issue #$1. You can continue working in this worktree or switch back to the main repository."
+- **DO NOT change directories** - let the user manage their Claude Code instances
 
 ### Important Notes
-- **Always validate requirements before starting** - unclear issues lead to wasted work
+- **Must run in worktree** - this command verifies it's not in the main repository
 - **Stay focused on the issue** - don't add unrelated changes
 - **Follow existing code patterns** - maintain consistency
 - **Test your changes** - ensure functionality works as expected
-- **Worktrees persist** - you can return to them later with `cd ../<branch-name>`
-- **Clean up worktrees** when done with: `git worktree remove <branch-name>`
+- **User manages directory switching** - don't try to cd back to main repository
 
 ### Error Handling
-- If worktree already exists, ask user if they want to:
-  - Continue working in existing worktree
-  - Remove and recreate worktree
-  - Choose a different branch name
+- If not in a worktree, instruct user to run `/prep_issue $1` first
 - If gh commands fail, check authentication: `gh auth status`
 - If tests fail, fix issues before committing
+- If push fails, check remote branch status
