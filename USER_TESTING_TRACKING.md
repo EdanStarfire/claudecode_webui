@@ -128,7 +128,7 @@
 [ ] feat: Handle MCP tool content display
 [ ] feat: ExitPlanMode supports alternate exit mode
 [x] feat: ToolPermission prompts support suggestions for additional permissions
-[ ] feat: ToolPermission Deny - include alternate input for user-defined messages to the LLM when denying
+[x] feat: ToolPermission Deny - include alternate input for user-defined messages to the LLM when denying
 [ ] feat: ToolPermission Deny - support choosing to interrupt or not
 [ ] feat: Handle NotebookEdit tool content display
 [x] feat: Handle local command parsing: 

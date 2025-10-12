@@ -1036,6 +1036,17 @@ class ClaudeWebUI {
                             ❌ Deny
                         </button>
                     </div>
+                    <div class="permission-clarification-section">
+                        <textarea
+                            class="permission-clarification-input"
+                            id="permission-clarification-${toolCall.permissionRequestId}"
+                            placeholder="Or provide guidance to redirect the agent..."
+                            rows="1"
+                            data-request-id="${toolCall.permissionRequestId}"></textarea>
+                        <button class="btn btn-warning permission-deny-with-clarification" data-request-id="${toolCall.permissionRequestId}" disabled>
+                            💬 Provide Guidance
+                        </button>
+                    </div>
                 </div>
             `;
         }
@@ -1117,49 +1128,106 @@ class ClaudeWebUI {
         const approveBtn = element.querySelector('.permission-approve');
         const approveWithSuggestionBtn = element.querySelector('.permission-approve-with-suggestion');
         const denyBtn = element.querySelector('.permission-deny');
+        const clarificationTextarea = element.querySelector('.permission-clarification-input');
+        const denyWithClarificationBtn = element.querySelector('.permission-deny-with-clarification');
 
         if (approveBtn) {
             approveBtn.addEventListener('click', () => {
+                // Check if this specific button is already disabled (prevents double-click)
+                if (approveBtn.disabled) return;
+
                 // Disable all buttons immediately to prevent duplicate clicks
-                const allButtons = element.querySelectorAll('.permission-buttons button');
-                if (Array.from(allButtons).some(btn => btn.disabled)) return;
+                const allButtons = element.querySelectorAll('.permission-buttons button, .permission-deny-with-clarification');
                 allButtons.forEach(btn => btn.disabled = true);
+                if (clarificationTextarea) clarificationTextarea.disabled = true;
 
                 // Update button text to show submission
                 approveBtn.textContent = '⏳ Submitting...';
 
                 const requestId = approveBtn.getAttribute('data-request-id');
-                this.handlePermissionDecision(requestId, 'allow', false, allButtons);
+                this.handlePermissionDecision(requestId, 'allow', false, null, allButtons);
             });
         }
 
         if (approveWithSuggestionBtn) {
             approveWithSuggestionBtn.addEventListener('click', () => {
+                // Check if this specific button is already disabled (prevents double-click)
+                if (approveWithSuggestionBtn.disabled) return;
+
                 // Disable all buttons immediately to prevent duplicate clicks
-                const allButtons = element.querySelectorAll('.permission-buttons button');
-                if (Array.from(allButtons).some(btn => btn.disabled)) return;
+                const allButtons = element.querySelectorAll('.permission-buttons button, .permission-deny-with-clarification');
                 allButtons.forEach(btn => btn.disabled = true);
+                if (clarificationTextarea) clarificationTextarea.disabled = true;
 
                 // Update button text to show submission
                 approveWithSuggestionBtn.textContent = '⏳ Submitting...';
 
                 const requestId = approveWithSuggestionBtn.getAttribute('data-request-id');
-                this.handlePermissionDecision(requestId, 'allow', true, allButtons);
+                this.handlePermissionDecision(requestId, 'allow', true, null, allButtons);
             });
         }
 
         if (denyBtn) {
             denyBtn.addEventListener('click', () => {
+                // Check if this specific button is already disabled (prevents double-click)
+                if (denyBtn.disabled) return;
+
                 // Disable all buttons immediately to prevent duplicate clicks
-                const allButtons = element.querySelectorAll('.permission-buttons button');
-                if (Array.from(allButtons).some(btn => btn.disabled)) return;
+                const allButtons = element.querySelectorAll('.permission-buttons button, .permission-deny-with-clarification');
                 allButtons.forEach(btn => btn.disabled = true);
+                if (clarificationTextarea) clarificationTextarea.disabled = true;
 
                 // Update button text to show submission
                 denyBtn.textContent = '⏳ Submitting...';
 
                 const requestId = denyBtn.getAttribute('data-request-id');
-                this.handlePermissionDecision(requestId, 'deny', false, allButtons);
+                this.handlePermissionDecision(requestId, 'deny', false, null, allButtons);
+            });
+        }
+
+        // Handle clarification textarea input
+        if (clarificationTextarea && denyWithClarificationBtn) {
+            // Auto-expand textarea as content is added
+            const autoExpand = () => {
+                // Reset height to auto to get the correct scrollHeight
+                clarificationTextarea.style.height = 'auto';
+                // Set height to scrollHeight (content height) but respect max-height from CSS
+                const maxHeight = 144; // 9rem = 144px (approximately)
+                clarificationTextarea.style.height = Math.min(clarificationTextarea.scrollHeight, maxHeight) + 'px';
+            };
+
+            clarificationTextarea.addEventListener('input', () => {
+                const hasContent = clarificationTextarea.value.trim().length > 0;
+                denyWithClarificationBtn.disabled = !hasContent;
+                autoExpand();
+            });
+
+            // Handle Enter key to submit, Shift+Enter for newline
+            clarificationTextarea.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    const hasContent = clarificationTextarea.value.trim().length > 0;
+                    if (hasContent && !denyWithClarificationBtn.disabled) {
+                        denyWithClarificationBtn.click();
+                    }
+                }
+            });
+
+            denyWithClarificationBtn.addEventListener('click', () => {
+                const clarificationMessage = clarificationTextarea.value.trim();
+                if (!clarificationMessage) return;
+
+                // Disable all buttons immediately to prevent duplicate clicks
+                const allButtons = element.querySelectorAll('.permission-buttons button, .permission-deny-with-clarification');
+                if (Array.from(allButtons).some(btn => btn.disabled)) return;
+                allButtons.forEach(btn => btn.disabled = true);
+                clarificationTextarea.disabled = true;
+
+                // Update button text to show submission
+                denyWithClarificationBtn.textContent = '⏳ Submitting...';
+
+                const requestId = denyWithClarificationBtn.getAttribute('data-request-id');
+                this.handlePermissionDecision(requestId, 'deny', false, clarificationMessage, allButtons);
             });
         }
     }
@@ -1171,8 +1239,8 @@ class ClaudeWebUI {
         // No need to call updateToolCall - Bootstrap handles the DOM changes
     }
 
-    handlePermissionDecision(requestId, decision, applySuggestions, allButtons) {
-        Logger.info('PERMISSION', 'Permission decision', {requestId, decision, applySuggestions});
+    handlePermissionDecision(requestId, decision, applySuggestions, clarificationMessage, allButtons) {
+        Logger.info('PERMISSION', 'Permission decision', {requestId, decision, applySuggestions, clarificationMessage});
 
         // Send permission response to backend
         if (this.sessionWebsocket && this.sessionWebsocket.readyState === WebSocket.OPEN) {
@@ -1184,6 +1252,11 @@ class ClaudeWebUI {
                 timestamp: new Date().toISOString()
             };
 
+            // Add clarification message if provided
+            if (clarificationMessage) {
+                response.clarification_message = clarificationMessage;
+            }
+
             this.sessionWebsocket.send(JSON.stringify(response));
 
             // Update button to show submitted state
@@ -1194,6 +1267,9 @@ class ClaudeWebUI {
                     btn.classList.add('submitted');
                 } else if (btn.classList.contains('permission-deny')) {
                     btn.textContent = '❌ Denied';
+                    btn.classList.add('submitted');
+                } else if (btn.classList.contains('permission-deny-with-clarification')) {
+                    btn.textContent = '💬 Guidance Provided';
                     btn.classList.add('submitted');
                 }
             });
@@ -1209,6 +1285,8 @@ class ClaudeWebUI {
                     btn.textContent = btn.classList.contains('btn-outline-success') ? '✅ Approve Only' : '✅ Approve';
                 } else if (btn.classList.contains('permission-deny')) {
                     btn.textContent = '❌ Deny';
+                } else if (btn.classList.contains('permission-deny-with-clarification')) {
+                    btn.textContent = '💬 Provide Guidance';
                 }
             });
         }
