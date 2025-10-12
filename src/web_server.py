@@ -870,10 +870,22 @@ class ClaudeWebUI:
                                             response["apply_suggestions"] = message_data["apply_suggestions"]
                                             ws_logger.debug(f"Permission response includes apply_suggestions: {message_data['apply_suggestions']}")
                                     else:
-                                        response = {
-                                            "behavior": "deny",
-                                            "message": message_data.get("reason", "User denied permission")
-                                        }
+                                        # Check if this is a deny with clarification
+                                        clarification_message = message_data.get("clarification_message")
+                                        if clarification_message:
+                                            # Deny with clarification - let SDK continue with user guidance
+                                            response = {
+                                                "behavior": "deny",
+                                                "message": clarification_message,
+                                                "interrupt": False  # CRITICAL: Allow SDK to continue
+                                            }
+                                            ws_logger.info(f"Permission denied with clarification: {clarification_message[:100]}...")
+                                        else:
+                                            # Standard deny - use default behavior
+                                            response = {
+                                                "behavior": "deny",
+                                                "message": message_data.get("reason", "User denied permission")
+                                            }
 
                                     pending_future.set_result(response)
                                     ws_logger.debug(f"Permission request {request_id} resolved with decision: {decision}")
@@ -1143,6 +1155,9 @@ class ClaudeWebUI:
             # Store permission response message
             decision_time = time.time()
             try:
+                # Extract clarification message if it was provided
+                clarification_msg = response.get("message") if decision == "deny" and not response.get("interrupt", True) else None
+
                 permission_response = {
                     "type": "permission_response",
                     "content": f"Permission {decision} for tool: {tool_name} - {reasoning}",
@@ -1154,6 +1169,12 @@ class ClaudeWebUI:
                     "tool_name": tool_name,
                     "response_time_ms": int((decision_time - request_time) * 1000)
                 }
+
+                # Include clarification message if provided (for deny with clarification)
+                if clarification_msg:
+                    permission_response["clarification_message"] = clarification_msg
+                    permission_response["interrupt"] = False
+                    logger.info(f"Stored permission denial with clarification for session {session_id}")
 
                 # Include applied updates if any were applied (use the dict version we saved)
                 if decision == "allow" and response.get("applied_updates_for_storage"):

@@ -539,6 +539,44 @@ html {
     opacity: 0.7;
 }
 
+/* Permission Clarification Section */
+.permission-clarification-section {
+    margin-top: 0.75rem;
+    border-top: 1px solid #dee2e6;
+    padding-top: 0.75rem;
+}
+
+.permission-clarification-input {
+    width: 100%;
+    min-height: 2.5rem;
+    max-height: 9rem;
+    resize: none;
+    overflow-y: auto;
+    font-family: inherit;
+    font-size: 0.9rem;
+    padding: 0.5rem;
+    border: 1px solid #ced4da;
+    border-radius: 4px;
+    margin-bottom: 0.5rem;
+    transition: border-color 0.15s ease-in-out, box-shadow 0.15s ease-in-out;
+}
+
+.permission-clarification-input:focus {
+    border-color: #ffc107;
+    outline: none;
+    box-shadow: 0 0 0 0.2rem rgba(255, 193, 7, 0.25);
+}
+
+.permission-clarification-input::placeholder {
+    color: #6c757d;
+    opacity: 0.7;
+}
+
+.permission-deny-with-clarification:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+}
+
 /* Applied Permission Updates Display */
 .permission-updates-applied {
     background: #e6f4ea;
