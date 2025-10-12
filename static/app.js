@@ -1489,6 +1489,28 @@ class ClaudeWebUI {
         }
     }
 
+    flashModeButton() {
+        const modeButton = document.getElementById('permission-mode-clickable');
+        if (!modeButton) {
+            Logger.warn('UI', 'Mode button not found for flash animation');
+            return;
+        }
+
+        // Remove existing animation class if present (allows re-triggering)
+        modeButton.classList.remove('mode-change-flash');
+
+        // Force reflow to restart animation
+        void modeButton.offsetWidth;
+
+        // Add animation class
+        modeButton.classList.add('mode-change-flash');
+
+        // Remove class after animation completes
+        setTimeout(() => {
+            modeButton.classList.remove('mode-change-flash');
+        }, 1800); // 3 iterations × 600ms
+    }
+
     async loadMessages() {
         if (!this.currentSessionId) return;
 
@@ -2674,6 +2696,9 @@ class ClaudeWebUI {
 
         Logger.info('PERMISSION', 'Cycling permission mode', {from: currentMode, to: nextMode});
 
+        // Set flag to prevent flash on user-initiated change
+        this._userInitiatedModeChange = true;
+
         try {
             const response = await this.apiRequest(`/api/sessions/${this.currentSessionId}/permission-mode`, {
                 method: 'POST',
@@ -2899,8 +2924,12 @@ class ClaudeWebUI {
                 const oldSession = this.sessions.get(sessionId);
                 if (oldSession && oldSession.current_permission_mode !== sessionInfo.current_permission_mode) {
                     const newMode = sessionInfo.current_permission_mode;
-                    const modeLabel = this.getPermissionModeLabel(newMode);
-                    this.showToast(`Permission mode changed to ${modeLabel}`, 'success');
+                    // Only flash if this was NOT a user-initiated change (e.g., ExitPlanMode, approved suggestion)
+                    if (!this._userInitiatedModeChange) {
+                        this.flashModeButton();
+                    }
+                    // Clear the flag
+                    this._userInitiatedModeChange = false;
                     Logger.info('PERMISSION', 'Mode changed', {old: oldSession.current_permission_mode, new: newMode});
                 }
             }
