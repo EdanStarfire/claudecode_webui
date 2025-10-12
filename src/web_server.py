@@ -1017,6 +1017,24 @@ class ClaudeWebUI:
                         suggestions.append(s)
                 logger.info(f"Permission context has {len(suggestions)} suggestions")
 
+            # INJECT: Add setMode suggestion for ExitPlanMode when in plan mode
+            if tool_name == 'ExitPlanMode':
+                try:
+                    session_info = await self.coordinator.session_manager.get_session_info(session_id)
+                    if session_info and session_info.current_permission_mode == 'plan':
+                        # Create setMode suggestion to allow transition to acceptEdits
+                        setmode_suggestion = {
+                            'type': 'setMode',
+                            'mode': 'acceptEdits',
+                            'destination': 'session'
+                        }
+
+                        # Prepend so it appears first in UI
+                        suggestions.insert(0, setmode_suggestion)
+                        logger.info(f"Injected setMode suggestion for ExitPlanMode in session {session_id}")
+                except Exception as inject_error:
+                    logger.error(f"Failed to inject setMode suggestion for ExitPlanMode: {inject_error}")
+
             # Store permission request message
             try:
                 permission_request = {

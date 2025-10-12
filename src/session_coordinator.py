@@ -768,11 +768,15 @@ class SessionCoordinator:
                             tool_name = tool_uses.get(tool_use_id)
 
                             if tool_name == 'ExitPlanMode':
-                                # ExitPlanMode completed successfully - reset to default mode
+                                # ExitPlanMode completed successfully - conditionally reset mode
                                 session_info = await self.session_manager.get_session_info(session_id)
                                 if session_info and session_info.current_permission_mode == 'plan':
+                                    # Only reset to default if still in plan mode (suggestion wasn't applied)
                                     await self.session_manager.update_permission_mode(session_id, 'default')
                                     coord_logger.info(f"Permission mode reset to default after ExitPlanMode for session {session_id}")
+                                elif session_info:
+                                    # Mode already changed (likely via setMode suggestion) - no reset needed
+                                    coord_logger.info(f"ExitPlanMode completed for session {session_id}, mode already changed to {session_info.current_permission_mode}")
 
                                 # Clean up tracked tool use
                                 del tool_uses[tool_use_id]
