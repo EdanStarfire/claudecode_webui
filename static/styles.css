@@ -606,3 +606,20 @@ html {
     color: #2d5f3a;
     padding-left: 1.5rem;
 }
+
+/* ========== MODE CHANGE FLASH ANIMATION ========== */
+
+@keyframes mode-change-flash {
+    0%, 100% {
+        background-color: transparent;
+        transform: scale(1);
+    }
+    50% {
+        background-color: rgba(13, 110, 253, 0.2); /* Bootstrap primary with transparency */
+        transform: scale(1.05);
+    }
+}
+
+.mode-change-flash {
+    animation: mode-change-flash 0.6s ease-in-out 3;
+}

@@ -1489,6 +1489,28 @@ class ClaudeWebUI {
         }
     }
 
+    flashModeButton() {
+        const modeButton = document.getElementById('permission-mode-clickable');
+        if (!modeButton) {
+            Logger.warn('UI', 'Mode button not found for flash animation');
+            return;
+        }
+
+        // Remove existing animation class if present (allows re-triggering)
+        modeButton.classList.remove('mode-change-flash');
+
+        // Force reflow to restart animation
+        void modeButton.offsetWidth;
+
+        // Add animation class
+        modeButton.classList.add('mode-change-flash');
+
+        // Remove class after animation completes
+        setTimeout(() => {
+            modeButton.classList.remove('mode-change-flash');
+        }, 1800); // 3 iterations × 600ms
+    }
+
     async loadMessages() {
         if (!this.currentSessionId) return;
 
@@ -2899,8 +2921,7 @@ class ClaudeWebUI {
                 const oldSession = this.sessions.get(sessionId);
                 if (oldSession && oldSession.current_permission_mode !== sessionInfo.current_permission_mode) {
                     const newMode = sessionInfo.current_permission_mode;
-                    const modeLabel = this.getPermissionModeLabel(newMode);
-                    this.showToast(`Permission mode changed to ${modeLabel}`, 'success');
+                    this.flashModeButton();
                     Logger.info('PERMISSION', 'Mode changed', {old: oldSession.current_permission_mode, new: newMode});
                 }
             }
