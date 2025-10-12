@@ -576,6 +576,11 @@ class ClaudeWebUI {
                 subtype === 'interrupt') {
                 return false;
             }
+
+            // Keep local command responses visible (they'll be rendered as system messages)
+            if (message.metadata?.is_local_command_response || subtype === 'local_command_response') {
+                return true;
+            }
         }
 
         // === DEFAULT ===
@@ -960,18 +965,47 @@ class ClaudeWebUI {
                     <p>Claude wants to use the <code>${this.escapeHtml(toolCall.name)}</code> tool.</p>
             `;
 
-            // Show suggestion if available (currently only handling single setMode suggestion)
-            if (suggestion && suggestion.type === 'setMode') {
-                const modeLabel = this.getPermissionModeLabel(suggestion.mode);
-                bodyContent += `
-                    <div class="permission-suggestion">
-                        <div class="suggestion-icon">💡</div>
-                        <div class="suggestion-content">
-                            <strong>Suggestion:</strong> Switch to "${modeLabel}" mode for this session
-                            <small class="d-block text-muted">Future ${toolCall.name} operations will be auto-approved</small>
+            // Show suggestion if available
+            if (suggestion) {
+                if (suggestion.type === 'setMode') {
+                    const modeLabel = this.getPermissionModeLabel(suggestion.mode);
+                    bodyContent += `
+                        <div class="permission-suggestion">
+                            <div class="suggestion-icon">💡</div>
+                            <div class="suggestion-content">
+                                <strong>Suggestion:</strong> Switch to "${modeLabel}" mode for this session
+                                <small class="d-block text-muted">Future ${toolCall.name} operations will be auto-approved</small>
+                            </div>
                         </div>
-                    </div>
-                `;
+                    `;
+                } else if (suggestion.type === 'addRules' && suggestion.rules) {
+                    const rulesDisplay = suggestion.rules.map(rule =>
+                        `<code>${this.escapeHtml(rule.toolName || 'unknown')}${rule.ruleContent ? ': ' + this.escapeHtml(rule.ruleContent) : ''}</code>`
+                    ).join(', ');
+                    bodyContent += `
+                        <div class="permission-suggestion">
+                            <div class="suggestion-icon">💡</div>
+                            <div class="suggestion-content">
+                                <strong>Suggestion:</strong> Add permission rule for ${rulesDisplay}
+                                <small class="d-block text-muted">This will allow similar operations in the future</small>
+                            </div>
+                        </div>
+                    `;
+                } else if (suggestion.type === 'addDirectories' && suggestion.directories) {
+                    const dirsCount = suggestion.directories.length;
+                    const dirsDisplay = dirsCount === 1
+                        ? `<code>${this.escapeHtml(suggestion.directories[0])}</code>`
+                        : `${dirsCount} directories`;
+                    bodyContent += `
+                        <div class="permission-suggestion">
+                            <div class="suggestion-icon">💡</div>
+                            <div class="suggestion-content">
+                                <strong>Suggestion:</strong> Add ${dirsDisplay} to allowed directories
+                                <small class="d-block text-muted">This will allow access to files in these directories</small>
+                            </div>
+                        </div>
+                    `;
+                }
             }
 
             bodyContent += `
@@ -2622,6 +2656,11 @@ class ClaudeWebUI {
             speakerLabel = 'agent';
         }
 
+        // Handle local command responses: render as system messages
+        if (message.type === 'user' && (message.metadata?.is_local_command_response || subtype === 'local_command_response')) {
+            speakerLabel = 'system';
+        }
+
         // Build content using standardized approach
         let contentHtml = '';
         const content = message.content || '';
@@ -2738,6 +2777,12 @@ class ClaudeWebUI {
                 return `<div class="message-content message-empty">[Tool results handled by tool call UI]</div>`;
             }
             return `<div class="message-content message-empty">[Empty message]</div>`;
+        }
+
+        // Special formatting for local command responses (monospace, pre-formatted)
+        const subtype = message.subtype || message.metadata?.subtype;
+        if (message.type === 'user' && (message.metadata?.is_local_command_response || subtype === 'local_command_response')) {
+            return `<div class="message-content" style="font-family: monospace; white-space: pre; background-color: #f8f9fa; padding: 8px; border-radius: 4px; font-size: 0.9em;">${this.escapeHtml(content.trim())}</div>`;
         }
 
         // Trim leading/trailing whitespace (internal newlines preserved by CSS white-space: pre-wrap)

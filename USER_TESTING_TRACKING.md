@@ -119,6 +119,9 @@
 [x] qol: change the un-editable features (project folder, session_id) in the edit modals to text with hovertext and ellispis overflow.
 [x] qol: New sessions should go to the top of the list in the project
 [ ] qol: Mode change toast notification should instead just flash the mode change button as it updates a couple times (~2x over 2s)
+[x] bug: Error - toolusage suggestions that are NOT setMode seem to have issues - not displayed even though in websocket messages, and throw errors when trying to apply.
+[x] bug: Move all imports to the front of files and organize them by pythonic standards and best practices.
+
 
 # Advanced Functionality
 [ ] feat: Handle SlashCommand tool content display
@@ -128,10 +131,10 @@
 [ ] feat: ToolPermission Deny - include alternate input for user-defined messages to the LLM when denying
 [ ] feat: ToolPermission Deny - support choosing to interrupt or not
 [ ] feat: Handle NotebookEdit tool content display
-[ ] feat: Handle local command parsing: 
+[x] feat: Handle local command parsing: 
     `{"type": "user", "content": "", "timestamp": 1759240122.8231502, "metadata": {"tool_uses": [], "tool_results": [], "has_tool_uses": false, "has_tool_results": false, "has_thinking": false, "has_permission_requests": false, "has_permission_responses": false, "role": null, "session_id": "76fe166f-9515-4acf-97fa-eaad97e54706", "raw_sdk_message": "UserMessage(content='<local-command-stdout>With your Claude Pro subscription, no need to monitor cost — your subscription includes Claude Code usage</local-command-stdout>', parent_tool_use_id=None)", "source": "sdk", "processed_at": 1759240122.8245418}, "session_id": "76fe166f-9515-4acf-97fa-eaad97e54706", "raw_sdk_message": "{\"__class__\": \"UserMessage\", \"__module__\": \"claude_agent_sdk.types\", \"content\": \"<local-command-stdout>With your Claude Pro subscription, no need to monitor cost \\u2014 your subscription includes Claude Code usage</local-command-stdout>\", \"parent_tool_use_id\": null}", "sdk_message_type": "UserMessage"}`
 [ ] feat: Enable bypassPermissions mode switch with confirmation and warning
-[ ] feat: Support toolpermissioncontext suggestions: `ToolPermissionContext(signal=None, suggestions=[{'type': 'setMode', 'mode': 'acceptEdits', 'destination': 'session'}])`
+[x] feat: Support toolpermissioncontext suggestions: `ToolPermissionContext(signal=None, suggestions=[{'type': 'setMode', 'mode': 'acceptEdits', 'destination': 'session'}])`
 [ ] feat: Support markdown for assistant responses (and user input?)
 [x] feat: Folder browser for folder selection
 [ ] feat: File browser for file folder exploration and viewingS

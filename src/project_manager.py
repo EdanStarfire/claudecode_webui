@@ -6,14 +6,19 @@ of sessions within working directory-based projects.
 """
 
 import asyncio
+import gc
 import json
+import logging
+import os
+import shutil
+import subprocess
+import time
 import uuid
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
-from typing import Dict, Optional, Any, List
-from dataclasses import dataclass, asdict
-import logging
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -203,8 +208,6 @@ class ProjectManager:
                     return False
 
                 # Delete project directory and all contents
-                import shutil
-                import os
                 project_dir = self.projects_dir / project_id
                 if project_dir.exists():
                     try:
@@ -217,9 +220,6 @@ class ProjectManager:
                         if os.name == 'nt':  # Windows
                             try:
                                 logger.info(f"Attempting Windows-specific deletion for {project_dir}")
-                                import subprocess
-                                import time
-                                import gc
                                 gc.collect()
                                 time.sleep(0.5)
 

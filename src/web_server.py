@@ -3,20 +3,28 @@ FastAPI web server for Claude Code WebUI with WebSocket support.
 """
 
 import asyncio
+import gc
 import json
 import logging
-from pathlib import Path
-from typing import Dict, List, Optional, Any
+import os
+import platform
+import time
+import uuid
 from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
-from fastapi.staticfiles import StaticFiles
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from .session_coordinator import SessionCoordinator
-from .message_parser import MessageProcessor, MessageParser
+from claude_agent_sdk import PermissionUpdate
+from claude_agent_sdk.types import PermissionRuleValue
+
 from .logging_config import get_logger
+from .message_parser import MessageParser, MessageProcessor
+from .session_coordinator import SessionCoordinator
 
 # Get specialized logger for WebSocket lifecycle debugging
 ws_logger = get_logger('websocket_debug', category='WS_LIFECYCLE')
@@ -411,7 +419,6 @@ class ClaudeWebUI:
             """Create a new Claude Code session within a project"""
             try:
                 # Pre-generate session ID so we can pass it to permission callback
-                import uuid
                 session_id = str(uuid.uuid4())
 
                 session_id = await self.coordinator.create_session(
@@ -586,9 +593,6 @@ class ClaudeWebUI:
         @self.app.get("/api/filesystem/browse")
         async def browse_filesystem(path: str = None):
             """Browse filesystem directories"""
-            import os
-            import platform
-
             try:
                 # Default to user home directory if no path provided
                 if not path:
@@ -684,7 +688,6 @@ class ClaudeWebUI:
         @self.app.websocket("/ws/session/{session_id}")
         async def websocket_endpoint(websocket: WebSocket, session_id: str):
             """WebSocket endpoint for session-specific messaging"""
-            import time
             ws_connection_start_time = time.time()
             ws_logger.debug(f"WebSocket connection attempt for session {session_id} at {ws_connection_start_time}")
 
@@ -984,8 +987,6 @@ class ClaudeWebUI:
     def _create_permission_callback(self, session_id: str):
         """Create permission callback for tool usage"""
         async def permission_callback(tool_name: str, input_params: dict, context) -> dict:
-            import uuid
-            import time
 
             # Generate unique request ID to correlate request/response
             request_id = str(uuid.uuid4())
@@ -1081,8 +1082,6 @@ class ClaudeWebUI:
 
                 # Handle permission updates if user chose to apply suggestions
                 if decision == "allow" and response.get("apply_suggestions") and suggestions:
-                    from claude_agent_sdk import PermissionUpdate
-
                     updated_permissions = []
                     applied_updates_for_storage = []
 
@@ -1091,10 +1090,22 @@ class ClaudeWebUI:
                         suggestion_dict = dict(suggestion)
                         suggestion_dict['destination'] = 'session'
 
+                        # Convert rules from dicts to PermissionRuleValue objects if present
+                        rules_param = None
+                        if suggestion_dict.get('rules'):
+                            rules_param = []
+                            for rule_dict in suggestion_dict['rules']:
+                                # SDK uses snake_case (tool_name, rule_content) but suggestions come in camelCase
+                                rule_obj = PermissionRuleValue(
+                                    tool_name=rule_dict.get('toolName', ''),
+                                    rule_content=rule_dict.get('ruleContent')
+                                )
+                                rules_param.append(rule_obj)
+
                         update = PermissionUpdate(
                             type=suggestion_dict['type'],
                             mode=suggestion_dict.get('mode'),
-                            rules=suggestion_dict.get('rules'),
+                            rules=rules_param,
                             behavior=suggestion_dict.get('behavior'),
                             directories=suggestion_dict.get('directories'),
                             destination='session'

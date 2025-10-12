@@ -6,14 +6,19 @@ SDK interactions and web interface.
 """
 
 import asyncio
+import gc
 import json
+import logging
+import os
+import shutil
+import subprocess
+import time
 import uuid
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
-from typing import Dict, Optional, Any, List, Callable
-from dataclasses import dataclass, asdict
-import logging
+from typing import Any, Callable, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -458,8 +463,6 @@ class SessionManager:
                     return False
 
                 # First try to delete session directory and all contents
-                import shutil
-                import os
                 session_dir = self.sessions_dir / session_id
                 if session_dir.exists():
                     try:
@@ -474,11 +477,7 @@ class SessionManager:
                                 logger.info(f"Attempting Windows-specific deletion for {session_dir}")
 
                                 # Method 1: Try to remove directory after ensuring we're not in it
-                                import subprocess
-                                import time
-
                                 # Force garbage collection to clear any directory references
-                                import gc
                                 gc.collect()
                                 time.sleep(0.5)
 

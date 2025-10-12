@@ -6,17 +6,20 @@ into a unified system for managing Claude Code sessions.
 """
 
 import asyncio
+import gc
+import logging
+import os
+import re
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Any, List, Optional, Callable, Union
-import logging
+from typing import Any, Callable, Dict, List, Optional, Union
 
-from .session_manager import SessionManager, SessionState, SessionInfo
-from .project_manager import ProjectManager, ProjectInfo
-from .data_storage import DataStorageManager
 from .claude_sdk import ClaudeSDK
-from .message_parser import MessageParser, MessageProcessor
+from .data_storage import DataStorageManager
 from .logging_config import get_logger
+from .message_parser import MessageParser, MessageProcessor
+from .project_manager import ProjectInfo, ProjectManager
+from .session_manager import SessionInfo, SessionManager, SessionState
 
 # Get specialized logger for coordinator actions
 coord_logger = get_logger('coordinator', category='COORDINATOR')
@@ -86,7 +89,6 @@ class SessionCoordinator:
                 session_id = session.session_id
                 if session_id not in self._storage_managers:
                     # Create storage manager for this session
-                    from .data_storage import DataStorageManager
                     session_dir = await self.session_manager.get_session_directory(session_id)
                     storage_manager = DataStorageManager(session_dir)
                     await storage_manager.initialize()
@@ -204,7 +206,6 @@ class SessionCoordinator:
                 return False
 
             # Create storage manager
-            from .data_storage import DataStorageManager
             session_dir = await self.session_manager.get_session_directory(session_id)
             storage_manager = DataStorageManager(session_dir)
             await storage_manager.initialize()
@@ -378,14 +379,12 @@ class SessionCoordinator:
                 del self._error_callbacks[session_id]
 
             # Step 5: Force multiple garbage collections to ensure all handles are released
-            import gc
             gc.collect()
             await asyncio.sleep(0.1)
             gc.collect()
             await asyncio.sleep(0.1)
 
             # Step 6: Additional Windows-specific cleanup
-            import os
             if os.name == 'nt':  # Windows
                 # logger.info(f"Performing Windows-specific cleanup for session {session_id}")
                 # Force close any remaining handles that might be held by the system
@@ -881,8 +880,6 @@ class SessionCoordinator:
     async def _send_client_launched_message(self, session_id: str):
         """Send a system message indicating the Claude SDK client was launched/resumed"""
         try:
-            from datetime import datetime, timezone
-
             # logger.info(f"DEBUG: _send_client_launched_message called for session {session_id}")
 
             # Create system message for client launch
@@ -916,7 +913,6 @@ class SessionCoordinator:
     async def _send_session_failure_message(self, session_id: str, error_message: str):
         """Send a system message indicating the session failed to start"""
         try:
-            from datetime import datetime, timezone
             # Create system message for session failure
             message_data = {
                 "type": "system",
@@ -942,8 +938,6 @@ class SessionCoordinator:
     async def _send_interrupt_message(self, session_id: str):
         """Send interrupt system message via callback system (following client_launched pattern)"""
         try:
-            from datetime import datetime, timezone
-
             # Create interrupt system message
             message_data = {
                 "type": "system",
@@ -987,7 +981,6 @@ class SessionCoordinator:
                     # If it's a UUID error, try to extract the actual UUID from the message
                     if "not a valid UUID" in error_str and "Provided value" in error_str:
                         # Try to extract the invalid UUID value
-                        import re
                         uuid_match = re.search(r'Provided value "([^"]+)"', error_str)
                         if uuid_match:
                             invalid_uuid = uuid_match.group(1)

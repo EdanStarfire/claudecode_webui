@@ -5,11 +5,13 @@ Handles persistent storage of session data including activity logs,
 message history, and state persistence.
 """
 
+import gc
 import json
+import logging
+import os
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Any, List, Optional
-import logging
+from typing import Any, Dict, List, Optional
 
 from .logging_config import get_logger
 
@@ -232,7 +234,6 @@ class DataStorageManager:
         """Cleanup and ensure all file handles and directory references are closed"""
         try:
             # Force garbage collection to close any lingering file handles
-            import gc
             gc.collect()
 
             # Final integrity update
@@ -244,7 +245,6 @@ class DataStorageManager:
             session_name = self.session_dir.name
 
             # On Windows, clear the Path object references to release directory handles
-            import os
             if os.name == 'nt':  # Windows
                 # Clear all path references that might hold directory handles
                 self.session_dir = None
@@ -258,5 +258,4 @@ class DataStorageManager:
         except Exception as e:
             logger.error(f"Failed to cleanup storage: {e}")
             # Still force GC even on error
-            import gc
             gc.collect()

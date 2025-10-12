@@ -1,19 +1,27 @@
 """Extensible message parser for Claude Code SDK streaming messages."""
 
-import time
+import ast
+import json
+import logging
 import re
+import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Dict, Any, List, Optional, Set, Type, Callable, Tuple
 from enum import Enum
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Type
 
 from claude_agent_sdk import (
-    UserMessage, AssistantMessage, SystemMessage, ResultMessage,
-    TextBlock, ThinkingBlock, ToolUseBlock, ToolResultBlock
+    AssistantMessage,
+    ResultMessage,
+    SystemMessage,
+    TextBlock,
+    ThinkingBlock,
+    ToolResultBlock,
+    ToolUseBlock,
+    UserMessage,
 )
 
 from .logging_config import get_logger
-import logging
 
 # Get specialized logger for parser debugging
 parser_logger = get_logger('parser', category='PARSER')
@@ -98,7 +106,6 @@ class MessageHandler(ABC):
             raw_data = message_data["raw_sdk_message"]
             if isinstance(raw_data, str):
                 try:
-                    import json
                     return json.loads(raw_data)
                 except json.JSONDecodeError:
                     return raw_data
@@ -282,9 +289,6 @@ class AssistantMessageHandler(MessageHandler):
 
     def _parse_structured_content_string(self, content_str: str, message_data: Dict[str, Any]) -> List[Tuple[str, Any]]:
         """Parse structured content string into typed blocks without regex."""
-        import ast
-        import json
-
         blocks = []
 
         # Try to parse as Python literal first (most reliable for SDK output)
@@ -329,8 +333,6 @@ class AssistantMessageHandler(MessageHandler):
         blocks = []
 
         # Split on block boundaries more carefully
-        import re
-
         # Find all block patterns
         block_patterns = [
             (r'TextBlock\(text=(.*?)\)', "text"),
@@ -442,9 +444,6 @@ class AssistantMessageHandler(MessageHandler):
     def _extract_tool_use_safely(self, content_str: str) -> Optional[Dict[str, Any]]:
         """Safely extract tool use information without fragile regex."""
         try:
-            import ast
-            import json
-
             start_marker = "ToolUseBlock(id='"
             start_idx = content_str.find(start_marker)
             if start_idx == -1:
@@ -566,14 +565,18 @@ class UserMessageHandler(MessageHandler):
         tool_results = []
         tool_uses = []
 
-        # Handle SDK message object (live messages)
+        # Handle SDK message object (live messages from claude_sdk.py)
         if "sdk_message" in message_data and isinstance(message_data["sdk_message"], UserMessage):
             sdk_msg = message_data["sdk_message"]
-            if hasattr(sdk_msg, 'content'):
+
+            # Use pre-extracted content if available (claude_sdk already handled string vs list extraction)
+            if "content" in message_data and isinstance(message_data.get("content"), str):
+                text_parts.append(message_data["content"])
+
+            # Extract tool results and tool uses from SDK blocks
+            if hasattr(sdk_msg, 'content') and isinstance(sdk_msg.content, list):
                 for block in sdk_msg.content:
-                    if isinstance(block, TextBlock):
-                        text_parts.append(block.text)
-                    elif isinstance(block, ToolResultBlock):
+                    if isinstance(block, ToolResultBlock):
                         # Normalize content to always be a string
                         content = block.content
                         if isinstance(content, list):
@@ -602,10 +605,9 @@ class UserMessageHandler(MessageHandler):
                             "timestamp": message_data.get("timestamp", time.time())
                         })
 
-        # Handle clean dict format (preferred for stored messages)
+        # Handle clean dict format (stored messages without SDK object)
         elif "content" in message_data and isinstance(message_data.get("content"), str):
             self._extract_from_dict_format(message_data, text_parts, tool_results, tool_uses)
-
 
         # Handle other dict-based formats
         else:
@@ -621,7 +623,25 @@ class UserMessageHandler(MessageHandler):
         if tool_results and not content:
             content = f"Tool results: {len(tool_results)} results"
 
-        extracted["content"] = content
+        # Detect and extract local command responses (slash commands like /context, /cost, /todos)
+        if content and '<local-command-stdout>' in content:
+            # Extract content from inside the tags
+            match = re.search(r'<local-command-stdout>(.*?)</local-command-stdout>', content, re.DOTALL)
+            if match:
+                extracted_content = match.group(1).strip()
+                extracted["content"] = extracted_content
+                # Mark as local command response for special frontend handling
+                extracted["metadata"]["is_local_command_response"] = True
+                extracted["metadata"]["subtype"] = "local_command_response"
+                parser_logger.debug(f"Detected local command response, extracted content length: {len(extracted_content)}")
+            else:
+                # Fallback: just set the flag but keep original content
+                extracted["content"] = content
+                extracted["metadata"]["is_local_command_response"] = True
+                extracted["metadata"]["subtype"] = "local_command_response"
+        else:
+            extracted["content"] = content
+
         extracted["metadata"]["tool_results"] = tool_results
         extracted["metadata"]["tool_uses"] = tool_uses
         extracted["metadata"]["has_tool_results"] = len(tool_results) > 0
@@ -1311,7 +1331,6 @@ class MessageProcessor:
                 for key, value in parsed_message.metadata.items():
                     # Test serializability
                     try:
-                        import json
                         json.dumps(value)
                         serializable_metadata[key] = value
                     except (TypeError, ValueError):
@@ -1373,7 +1392,6 @@ class MessageProcessor:
 
                     # Test serializability
                     try:
-                        import json
                         json.dumps(value)
                         serializable_metadata[key] = value
                     except (TypeError, ValueError):
