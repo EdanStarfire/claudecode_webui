@@ -1,29 +1,29 @@
 ---
-description: Implement changes for a GitHub issue (run inside worktree)
+description: Implement changes for a GitHub issue (run after /prep_issue)
 argument-hint: <issue_number>
 allowed-tools: [Read, Write, Edit, Grep, Glob, Bash, Task]
 ---
 
-## Work on GitHub Issue (Inside Worktree)
+## Work on GitHub Issue
 
-This command implements the changes for a GitHub issue, commits them, and creates a pull request. **This command must be run inside a worktree created by `/prep_issue`**, not in the main repository.
+This command implements the changes for a GitHub issue, commits them, and creates a pull request. **This command must be run after `/prep_issue`** to ensure you're on the correct branch.
 
 ### Prerequisites
 
 This command assumes:
-1. You ran `/prep_issue $1` in the main repository
-2. You opened a new Claude Code instance with working directory set to the worktree
-3. You're ready to implement the changes
+1. You ran `/prep_issue $1` to create and checkout the feature branch
+2. You're ready to implement the changes
 
 ### Workflow
 
 You are working on GitHub issue #$1. Follow these steps:
 
-#### 0. Verify Worktree Environment
-- Check if running in a worktree: `git rev-parse --git-common-dir` vs `git rev-parse --git-dir`
-- If these are the same, **STOP** - you're in the main repository, not a worktree
-- Inform user: "❌ This command must be run inside a worktree. Please use `/prep_issue $1` in the main repository first, then open a new Claude Code instance in the worktree directory."
-- If different, proceed with implementation
+#### 0. Verify Branch Environment
+- Check current branch: `git branch --show-current`
+- Verify it's not `main` or `master`:
+  - If on `main`/`master`, **STOP** - you need to run `/prep_issue $1` first
+  - Inform user: "❌ You're on the main branch. Please run `/prep_issue $1` first to create a feature branch."
+- If on a feature branch, proceed with implementation
 
 #### 1. Review Issue Context
 - Fetch the issue details: `gh issue view $1`
@@ -99,18 +99,20 @@ You are working on GitHub issue #$1. Follow these steps:
   ```
 
 #### 7. Completion
-- Inform user: "✅ Pull request created for issue #$1. You can continue working in this worktree or switch back to the main repository."
-- **DO NOT change directories** - let the user manage their Claude Code instances
+- Inform user: "✅ Pull request created for issue #$1. You can:
+  - Continue working on this branch
+  - Switch back to main: `git checkout main`
+  - Work on another issue: run `/prep_issue <number>` (will handle stashing/committing)"
 
 ### Important Notes
-- **Must run in worktree** - this command verifies it's not in the main repository
+- **Must run on feature branch** - this command verifies you're not on main
 - **Stay focused on the issue** - don't add unrelated changes
 - **Follow existing code patterns** - maintain consistency
 - **Test your changes** - ensure functionality works as expected
-- **User manages directory switching** - don't try to cd back to main repository
+- **Simple workflow** - just branch switching, no worktree complexity
 
 ### Error Handling
-- If not in a worktree, instruct user to run `/prep_issue $1` first
+- If on main branch, instruct user to run `/prep_issue $1` first
 - If gh commands fail, check authentication: `gh auth status`
 - If tests fail, fix issues before committing
 - If push fails, check remote branch status

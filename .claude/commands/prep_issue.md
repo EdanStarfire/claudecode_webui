@@ -1,12 +1,12 @@
 ---
-description: Prepare a git worktree for working on a GitHub issue
+description: Prepare a git branch for working on a GitHub issue
 argument-hint: <issue_number>
 allowed-tools: [Read, Bash, WebFetch]
 ---
 
-## Prepare GitHub Issue Worktree
+## Prepare GitHub Issue Branch
 
-This command reviews a GitHub issue, validates requirements, and creates a dedicated git worktree ready for development. This is the first phase - after running this command, you'll open a new Claude Code instance in the worktree directory and run `/work_issue <issue_number>` there.
+This command reviews a GitHub issue, validates requirements, and creates a dedicated git branch ready for development. This is the first phase - after running this command, you'll run `/work_issue <issue_number>` to implement the changes.
 
 ### Workflow
 
@@ -26,8 +26,16 @@ You are preparing to work on GitHub issue #$1. Follow these steps:
 - **If requirements are unclear or ambiguous**: STOP and ask the user for clarification before proceeding
 - **If requirements are clear**: Summarize your understanding and confirm with user before continuing
 
-#### 3. Create Git Worktree
-- Ensure you're up to date: `git fetch origin`
+#### 3. Create Git Branch
+- Check for uncommitted changes: `git status`
+  - If there are uncommitted changes, ask user if they want to:
+    - Stash changes: `git stash`
+    - Commit changes first
+    - Abort branch creation
+- Ensure you're on latest main:
+  - `git checkout main` (switch to main if not already there)
+  - `git fetch origin` (download latest changes)
+  - `git pull origin main` (update local main)
 - Determine appropriate branch prefix based on issue type:
   - `feat/` for new features
   - `fix/` for bug fixes
@@ -36,23 +44,20 @@ You are preparing to work on GitHub issue #$1. Follow these steps:
   - `refactor/` for code refactoring
   - `test/` for test-related changes
 - Create branch name from issue title (kebab-case, max 50 chars): `<prefix>/description-from-title`
-- Create worktree: `git worktree add ../<branch-name> -b <branch-name> origin/main`
-- **DO NOT change to the worktree directory** - that's for the next phase
+- Create and switch to branch: `git checkout -b <branch-name>`
 
 #### 4. Next Steps
-- Inform user: "✅ Worktree created at `../<branch-name>`. Next steps:
-  1. Set working directory to `../<branch-name>`
-  2. Open a new Claude Code instance
-  3. Run `/work_issue $1` in the new instance"
+- Inform user: "✅ Branch `<branch-name>` created and checked out. Next step: Run `/work_issue $1` to implement the changes."
 
 ### Important Notes
-- **Always validate requirements before creating worktree** - unclear issues lead to wasted work
-- **This command stays in the main repository** - don't change directories
-- **The worktree is ready for development** - all setup work is done
+- **Always validate requirements before creating branch** - unclear issues lead to wasted work
+- **Simple single-folder workflow** - no worktrees, just branch switching
+- **Handle uncommitted changes** - don't lose work when switching branches
 
 ### Error Handling
-- If worktree already exists, ask user if they want to:
-  - Use existing worktree (inform them to run `/work_issue $1` there)
-  - Remove and recreate worktree
+- If branch already exists, ask user if they want to:
+  - Switch to existing branch: `git checkout <branch-name>`
+  - Delete and recreate: `git branch -D <branch-name> && git checkout -b <branch-name>`
   - Choose a different branch name
 - If gh commands fail, check authentication: `gh auth status`
+- If there are merge conflicts when pulling, help resolve them first
