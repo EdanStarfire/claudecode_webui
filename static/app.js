@@ -1040,11 +1040,11 @@ class ClaudeWebUI {
                         <textarea
                             class="permission-clarification-input"
                             id="permission-clarification-${toolCall.permissionRequestId}"
-                            placeholder="Or provide clarification message to deny..."
+                            placeholder="Or provide guidance to redirect the agent..."
                             rows="1"
                             data-request-id="${toolCall.permissionRequestId}"></textarea>
                         <button class="btn btn-warning permission-deny-with-clarification" data-request-id="${toolCall.permissionRequestId}" disabled>
-                            ❌ Deny with Clarification
+                            💬 Provide Guidance
                         </button>
                     </div>
                 </div>
@@ -1269,7 +1269,7 @@ class ClaudeWebUI {
                     btn.textContent = '❌ Denied';
                     btn.classList.add('submitted');
                 } else if (btn.classList.contains('permission-deny-with-clarification')) {
-                    btn.textContent = '❌ Denied with Clarification';
+                    btn.textContent = '💬 Guidance Provided';
                     btn.classList.add('submitted');
                 }
             });
@@ -1286,7 +1286,7 @@ class ClaudeWebUI {
                 } else if (btn.classList.contains('permission-deny')) {
                     btn.textContent = '❌ Deny';
                 } else if (btn.classList.contains('permission-deny-with-clarification')) {
-                    btn.textContent = '❌ Deny with Clarification';
+                    btn.textContent = '💬 Provide Guidance';
                 }
             });
         }
