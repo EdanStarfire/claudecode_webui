@@ -109,12 +109,18 @@ class ExitPlanModeToolHandler {
             `;
         }
 
+        // Check if setMode was applied via suggestions
+        const hadSetModeApplied = toolCall.appliedUpdates?.some(update => update.type === 'setMode');
+        const targetMode = hadSetModeApplied
+            ? (toolCall.appliedUpdates.find(u => u.type === 'setMode')?.mode || 'acceptEdits')
+            : 'default';
+
         // Successful plan approval
         return `
             <div class="tool-result ${resultClass}">
                 <div class="exitplan-approved">
                     <strong>✅ Plan Approved</strong>
-                    <div class="exitplan-mode-change">Permission mode changed to: <strong>default</strong></div>
+                    <div class="exitplan-mode-change">Permission mode changed to: <strong>${targetMode}</strong></div>
                 </div>
             </div>
         `;
@@ -132,7 +138,12 @@ class ExitPlanModeToolHandler {
 
         let statusText = '';
         if (toolCall.status === 'completed' && !toolCall.result?.error) {
-            statusText = 'Plan Approved - Mode: default';
+            // Check if setMode was applied via suggestions
+            const hadSetModeApplied = toolCall.appliedUpdates?.some(update => update.type === 'setMode');
+            const targetMode = hadSetModeApplied
+                ? (toolCall.appliedUpdates.find(u => u.type === 'setMode')?.mode || 'acceptEdits')
+                : 'default';
+            statusText = `Plan Approved - Mode: ${targetMode}`;
         } else if (toolCall.result?.error) {
             statusText = 'Plan Rejected';
         } else {
