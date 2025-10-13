@@ -3551,6 +3551,10 @@ class ClaudeWebUI {
                 Logger.debug('SESSION', 'Could not restore session data after failed deletion');
             }
         } finally {
+            // Re-enable buttons
+            confirmBtn.disabled = false;
+            if (cancelBtn) cancelBtn.disabled = false;
+
             // Always remove from deleting set
             this.deletingSessions.delete(sessionIdToDelete);
             this.showLoading(false);
