@@ -127,6 +127,11 @@
                     </div>
                     <div class="modal-body">
                         <form id="create-session-form">
+                    <div class="mb-3">
+                        <label for="session-name" class="form-label">Session Name (optional):</label>
+                        <input type="text" class="form-control" id="session-name" name="name" maxlength="255" placeholder="Leave empty for auto-generated timestamp">
+                    </div>
+
                     <div class="mb-3" id="working-directory-group">
                         <label for="working-directory" class="form-label">Working Directory:</label>
                         <div class="input-group">
