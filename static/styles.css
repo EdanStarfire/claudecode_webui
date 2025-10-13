@@ -87,7 +87,7 @@ html {
 /* Auto-expanding textarea with max 6 lines */
 #message-input {
     resize: none;
-    overflow-y: hidden;
+    overflow-y: auto;
     min-height: 38px; /* 1 line */
     max-height: calc(1.5em * 6 + 0.75rem); /* 6 lines + padding */
     transition: height 0.1s ease;
