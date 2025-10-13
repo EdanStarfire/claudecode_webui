@@ -344,13 +344,18 @@ html {
 }
 
 /* Thinking blocks */
-.thinking-block-card {
-    font-size: 0.9rem;
+.message-row.thinking-block {
+    background-color: #d0e7ff; /* Same as assistant/tool-call */
+}
+
+.thinking-content {
+    font-style: italic; /* Italicize thinking content */
 }
 
 .thinking-text {
     white-space: pre-wrap;
     font-family: system-ui, -apple-system, sans-serif;
+    font-size: 0.9rem;
 }
 
 /* Todo items */
