@@ -808,8 +808,17 @@ class ClaudeWebUI {
 
                         // Check if this is ExitPlanMode completing successfully (real-time only, backend handles it)
                         if (source === 'websocket' && toolCall.name === 'ExitPlanMode' && toolCall.status === 'completed' && !toolCall.result?.error) {
-                            Logger.info('PERMISSION', 'ExitPlanMode completed - updating permission mode to default');
-                            this.setPermissionMode('default');
+                            // Check if a setMode suggestion was applied
+                            const hadSetModeApplied = toolCall.appliedUpdates?.some(update => update.type === 'setMode');
+
+                            if (hadSetModeApplied) {
+                                // Mode already changed via suggestion - don't reset
+                                Logger.info('PERMISSION', 'ExitPlanMode completed with setMode suggestion applied - mode already updated');
+                            } else {
+                                // No setMode applied - reset to default as before
+                                Logger.info('PERMISSION', 'ExitPlanMode completed - updating permission mode to default');
+                                this.setPermissionMode('default');
+                            }
                         }
                     }
                 });
