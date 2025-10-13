@@ -107,9 +107,20 @@ class ToolCallManager {
         Logger.debug('TOOL_MANAGER', 'Handling permission response', permissionResponse);
 
         const toolUseId = this.permissionToToolMap.get(permissionResponse.request_id);
+        Logger.debug('TOOL_MANAGER', 'Permission response toolUseId lookup', {
+            request_id: permissionResponse.request_id,
+            toolUseId: toolUseId,
+            applied_updates: permissionResponse.applied_updates
+        });
+
         if (toolUseId) {
             const toolCall = this.toolCalls.get(toolUseId);
             if (toolCall) {
+                Logger.debug('TOOL_MANAGER', 'Setting appliedUpdates on toolCall', {
+                    toolName: toolCall.name,
+                    appliedUpdates: permissionResponse.applied_updates || []
+                });
+
                 toolCall.permissionDecision = permissionResponse.decision;
                 toolCall.appliedUpdates = permissionResponse.applied_updates || [];
 
@@ -123,7 +134,11 @@ class ToolCallManager {
                 }
 
                 return toolCall;
+            } else {
+                Logger.warn('TOOL_MANAGER', 'ToolCall not found for toolUseId', toolUseId);
             }
+        } else {
+            Logger.warn('TOOL_MANAGER', 'No toolUseId found for permission response', permissionResponse.request_id);
         }
         return null;
     }
@@ -163,6 +178,14 @@ class ToolCallManager {
 
     getToolCall(toolUseId) {
         return this.toolCalls.get(toolUseId);
+    }
+
+    getToolCallByPermissionRequest(requestId) {
+        const toolUseId = this.permissionToToolMap.get(requestId);
+        if (toolUseId) {
+            return this.toolCalls.get(toolUseId);
+        }
+        return null;
     }
 
     getAllToolCalls() {

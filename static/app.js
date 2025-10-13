@@ -779,7 +779,8 @@ class ClaudeWebUI {
                 const permissionResponse = {
                     request_id: message.request_id || message.metadata?.request_id,
                     decision: message.decision || message.metadata?.decision,
-                    reasoning: message.reasoning || message.metadata?.reasoning
+                    reasoning: message.reasoning || message.metadata?.reasoning,
+                    applied_updates: message.applied_updates || message.metadata?.applied_updates || []
                 };
 
                 const toolCall = this.toolCallManager.handlePermissionResponse(permissionResponse);
@@ -808,6 +809,14 @@ class ClaudeWebUI {
 
                         // Check if this is ExitPlanMode completing successfully (real-time only, backend handles it)
                         if (source === 'websocket' && toolCall.name === 'ExitPlanMode' && toolCall.status === 'completed' && !toolCall.result?.error) {
+                            // Debug: Log the full toolCall object to see what data is available
+                            Logger.debug('PERMISSION', 'ExitPlanMode completed - checking for setMode', {
+                                appliedUpdates: toolCall.appliedUpdates,
+                                suggestions: toolCall.suggestions,
+                                permissionDecision: toolCall.permissionDecision,
+                                fullToolCall: toolCall
+                            });
+
                             // Check if a setMode suggestion was applied
                             const hadSetModeApplied = toolCall.appliedUpdates?.some(update => update.type === 'setMode');
 
@@ -1267,6 +1276,23 @@ class ClaudeWebUI {
             }
 
             this.sessionWebsocket.send(JSON.stringify(response));
+
+            // Immediately update the toolCall locally (don't wait for backend response)
+            // Get the toolCall from the permission request
+            const toolCall = this.toolCallManager.getToolCallByPermissionRequest(requestId);
+            if (toolCall) {
+                // Build permission response object to update the toolCall
+                const permissionResponse = {
+                    request_id: requestId,
+                    decision: decision,
+                    reasoning: decision === 'allow' ? 'User allowed permission' : 'User denied permission',
+                    applied_updates: applySuggestions && toolCall.suggestions ? toolCall.suggestions : []
+                };
+
+                // Update the toolCall with the permission decision
+                this.toolCallManager.handlePermissionResponse(permissionResponse);
+                this.updateToolCall(toolCall);
+            }
 
             // Update button to show submitted state
             allButtons.forEach(btn => {
