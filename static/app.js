@@ -62,6 +62,9 @@ class ClaudeWebUI {
         // Permission mode tracking
         this.currentPermissionMode = 'default'; // default, acceptEdits, plan, etc.
 
+        // Session input cache for preserving input box content per session
+        this.sessionInputCache = new Map(); // session_id -> input text
+
         this.init();
     }
 
@@ -313,6 +316,14 @@ class ClaudeWebUI {
             // Add session to project in DOM
             await this.addSessionToProjectDOM(this.currentProjectId, sessionData.session);
 
+            // Cache current session's input before creating new session
+            if (this.currentSessionId) {
+                const messageInput = document.getElementById('message-input');
+                if (messageInput) {
+                    this.sessionInputCache.set(this.currentSessionId, messageInput.value);
+                }
+            }
+
             // Select the new session
             await this.selectSession(data.session_id);
 
@@ -332,6 +343,11 @@ class ClaudeWebUI {
 
         // Clean disconnect from WebSocket
         this.disconnectSessionWebSocket();
+
+        // Clear cached input for exited session
+        if (this.currentSessionId) {
+            this.sessionInputCache.delete(this.currentSessionId);
+        }
 
         // Clear current session
         this.currentSessionId = null;
@@ -396,6 +412,11 @@ class ClaudeWebUI {
 
             input.value = '';
             this.resetTextareaHeight(input);
+
+            // Clear cached input for this session since message was sent
+            if (this.currentSessionId) {
+                this.sessionInputCache.delete(this.currentSessionId);
+            }
         } catch (error) {
             Logger.error('MESSAGE', 'Failed to send message', error);
         }
@@ -1828,6 +1849,11 @@ class ClaudeWebUI {
         try {
             // Clean disconnect from previous session
             if (this.currentSessionId && this.currentSessionId !== sessionId) {
+                // Save current session's input before switching
+                const messageInput = document.getElementById('message-input');
+                if (messageInput) {
+                    this.sessionInputCache.set(this.currentSessionId, messageInput.value);
+                }
                 Logger.info('SESSION', 'Switching sessions', {from: this.currentSessionId, to: sessionId});
                 this.disconnectSessionWebSocket();
                 // Wait a moment for the disconnection to complete
@@ -1928,6 +1954,14 @@ class ClaudeWebUI {
 
             // Load session info to get current processing state from backend
             this.loadSessionInfo();
+
+            // Restore cached input for this session
+            const messageInput = document.getElementById('message-input');
+            if (messageInput) {
+                const cachedInput = this.sessionInputCache.get(sessionId) || '';
+                messageInput.value = cachedInput;
+                this.autoExpandTextarea(messageInput); // Adjust height if needed
+            }
         } catch (error) {
             Logger.error('SESSION', 'Error selecting session', error);
         } finally {
@@ -3484,6 +3518,9 @@ class ClaudeWebUI {
             });
 
             if (response.success) {
+                // Clear cached input for deleted session
+                this.sessionInputCache.delete(sessionIdToDelete);
+
                 // Session successfully deleted
                 this.hideDeleteSessionModal();
 
