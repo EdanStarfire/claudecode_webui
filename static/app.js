@@ -659,8 +659,21 @@ class ClaudeWebUI {
             this.extractPermissionMode(message);
 
             // Store init data for session info modal
-            if (message.data) {
-                this.sessionInitData.set(this.currentSessionId, message.data);
+            // The data field may be at the top level or nested in raw_sdk_message
+            let initData = message.data;
+            if (!initData && message.raw_sdk_message) {
+                try {
+                    const rawData = typeof message.raw_sdk_message === 'string'
+                        ? JSON.parse(message.raw_sdk_message)
+                        : message.raw_sdk_message;
+                    initData = rawData.data;
+                } catch (e) {
+                    Logger.warn('SESSION_INFO', 'Failed to parse raw_sdk_message', e);
+                }
+            }
+
+            if (initData) {
+                this.sessionInitData.set(this.currentSessionId, initData);
                 Logger.debug('SESSION_INFO', 'Stored init data for session', this.currentSessionId);
 
                 // Enable session info button
@@ -1631,11 +1644,26 @@ class ClaudeWebUI {
             Logger.debug('MESSAGE', 'Finished loading all messages', {total: allMessages.length});
 
             // Check for init messages in historical data
-            const initMessage = allMessages.find(m => m.type === 'system' && m.subtype === 'init');
-            if (initMessage && initMessage.data) {
-                this.sessionInitData.set(this.currentSessionId, initMessage.data);
-                Logger.debug('SESSION_INFO', 'Loaded init data from historical messages', this.currentSessionId);
-                this.updateSessionInfoButton();
+            const initMessage = allMessages.find(m => m.type === 'system' && (m.subtype === 'init' || m.metadata?.subtype === 'init'));
+            if (initMessage) {
+                // Extract init data from message (may be at top level or in raw_sdk_message)
+                let initData = initMessage.data;
+                if (!initData && initMessage.raw_sdk_message) {
+                    try {
+                        const rawData = typeof initMessage.raw_sdk_message === 'string'
+                            ? JSON.parse(initMessage.raw_sdk_message)
+                            : initMessage.raw_sdk_message;
+                        initData = rawData.data;
+                    } catch (e) {
+                        Logger.warn('SESSION_INFO', 'Failed to parse historical raw_sdk_message', e);
+                    }
+                }
+
+                if (initData) {
+                    this.sessionInitData.set(this.currentSessionId, initData);
+                    Logger.debug('SESSION_INFO', 'Loaded init data from historical messages', this.currentSessionId);
+                    this.updateSessionInfoButton();
+                }
             }
 
             this.renderMessages(allMessages);
