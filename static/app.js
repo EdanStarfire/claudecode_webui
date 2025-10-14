@@ -662,14 +662,7 @@ class ClaudeWebUI {
             this.extractPermissionMode(message);
 
             // Store init data for session info modal
-            // Look for init_data in metadata (added by backend)
-            let initData = message.metadata?.init_data || message.data;
-
-            Logger.debug('SESSION_INFO', 'Checking for init data', {
-                hasInitDataInMetadata: !!message.metadata?.init_data,
-                hasDataField: !!message.data,
-                hasMetadata: !!message.metadata
-            });
+            const initData = message.metadata?.init_data;
 
             if (initData) {
                 this.sessionInitData.set(this.currentSessionId, initData);
@@ -678,7 +671,7 @@ class ClaudeWebUI {
                 // Enable session info button
                 this.updateSessionInfoButton();
             } else {
-                Logger.warn('SESSION_INFO', 'Init message received but no data found', message);
+                Logger.warn('SESSION_INFO', 'Init message received but no init_data in metadata', message);
             }
         }
 
@@ -1646,15 +1639,10 @@ class ClaudeWebUI {
 
             // Check for init messages in historical data
             const initMessage = allMessages.find(m => m.type === 'system' && (m.subtype === 'init' || m.metadata?.subtype === 'init'));
-            if (initMessage) {
-                // Extract init data from metadata (added by backend)
-                let initData = initMessage.metadata?.init_data || initMessage.data;
-
-                if (initData) {
-                    this.sessionInitData.set(this.currentSessionId, initData);
-                    Logger.debug('SESSION_INFO', 'Loaded init data from historical messages', this.currentSessionId);
-                    this.updateSessionInfoButton();
-                }
+            if (initMessage?.metadata?.init_data) {
+                this.sessionInitData.set(this.currentSessionId, initMessage.metadata.init_data);
+                Logger.debug('SESSION_INFO', 'Loaded init data from historical messages', this.currentSessionId);
+                this.updateSessionInfoButton();
             }
 
             this.renderMessages(allMessages);
