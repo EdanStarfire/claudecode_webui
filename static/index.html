@@ -278,6 +278,39 @@
                             <label for="edit-session-name" class="form-label">Session Name</label>
                             <input type="text" class="form-control" id="edit-session-name" placeholder="Enter session name">
                         </div>
+                        <div class="mb-3">
+                            <label for="edit-session-permission-mode" class="form-label">Permission Mode</label>
+                            <select id="edit-session-permission-mode" class="form-select">
+                                <option value="default">Default (Prompt for non-approved tools)</option>
+                                <option value="acceptEdits">Accept Edits (Auto-approve edits)</option>
+                                <option value="plan">Plan (Planning mode)</option>
+                                <option value="bypassPermissions">Bypass Permissions (No prompts)</option>
+                            </select>
+                        </div>
+
+                        <!-- Warning block (hidden by default, shown when bypassPermissions selected) -->
+                        <div id="bypass-permissions-warning" class="alert alert-danger" style="display: none;">
+                            <div class="d-flex align-items-start">
+                                <span class="me-2" style="font-size: 1.5rem;">⚠️</span>
+                                <div>
+                                    <h6 class="alert-heading mb-2">Bypass Permissions Mode - High Risk</h6>
+                                    <p class="mb-2"><strong>This mode disables ALL permission prompts.</strong> Claude will:</p>
+                                    <ul class="mb-2">
+                                        <li>Read, write, and delete files without asking</li>
+                                        <li>Execute arbitrary bash commands</li>
+                                        <li>Make network requests</li>
+                                        <li>Modify your entire project without confirmation</li>
+                                    </ul>
+                                    <p class="mb-3"><strong>Only use this mode if you fully trust the task and are prepared for any consequences.</strong></p>
+                                    <div class="form-check">
+                                        <input class="form-check-input" type="checkbox" id="bypass-permissions-ack-checkbox">
+                                        <label class="form-check-label" for="bypass-permissions-ack-checkbox">
+                                            <strong>I understand the risks and accept full responsibility for any actions taken in this mode</strong>
+                                        </label>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                     <div class="modal-footer d-flex justify-content-between">
                         <button type="button" id="delete-session-from-edit-btn" class="btn btn-danger">Delete</button>
