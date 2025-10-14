@@ -39,6 +39,7 @@ Debug Flags:
     # Server options
     parser.add_argument('--host', default='0.0.0.0', help='Host to bind to (default: 0.0.0.0)')
     parser.add_argument('--port', type=int, default=8000, help='Port to bind to (default: 8000)')
+    parser.add_argument('--data-dir', default='./data', help='Data directory location (default: ./data)')
 
     # Debug flags
     parser.add_argument('--debug-websocket', action='store_true', help='Enable WebSocket lifecycle debugging')
@@ -51,6 +52,15 @@ Debug Flags:
 
     args = parser.parse_args()
 
+    # Validate and create data directory
+    data_dir_path = Path(args.data_dir).resolve()
+    try:
+        data_dir_path.mkdir(parents=True, exist_ok=True)
+        print(f"Using data directory: {data_dir_path}")
+    except Exception as e:
+        print(f"Failed to create data directory {data_dir_path}: {e}", file=sys.stderr)
+        sys.exit(1)
+
     # Configure logging with debug flags
     configure_logging(
         debug_websocket=args.debug_websocket,
@@ -59,11 +69,12 @@ Debug Flags:
         debug_storage=args.debug_storage,
         debug_parser=args.debug_parser,
         debug_error_handler=args.debug_error_handler,
-        debug_all=args.debug_all
+        debug_all=args.debug_all,
+        log_dir=str(data_dir_path / "logs")
     )
 
     # Create FastAPI app
-    app = create_app()
+    app = create_app(data_dir=data_dir_path)
 
     # Add startup/shutdown events
     app.add_event_handler("startup", startup_event)
