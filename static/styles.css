@@ -348,6 +348,13 @@ html {
     background-color: #d0e7ff; /* Same as assistant/tool-call */
 }
 
+.thinking-accordion-button .thinking-summary-text {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    display: block;
+}
+
 .thinking-content {
     font-style: italic; /* Italicize thinking content */
 }

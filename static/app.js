@@ -1373,9 +1373,7 @@ class ClaudeWebUI {
         element.className = 'accordion';
         element.id = `thinking-block-${thinkingBlock.id}`;
 
-        const firstLine = thinkingBlock.content.split('\n')[0];
-        const truncated = firstLine.length > 80 ? firstLine.substring(0, 80) + '...' : firstLine;
-        const summary = truncated || 'Claude was thinking...';
+        const firstLine = thinkingBlock.content.split('\n')[0] || 'Claude was thinking...';
 
         const collapseClass = thinkingBlock.isExpanded
             ? 'accordion-collapse collapse show'
@@ -1387,10 +1385,10 @@ class ClaudeWebUI {
         element.innerHTML = `
             <div class="accordion-item">
                 <h2 class="accordion-header">
-                    <button class="${buttonClass}" type="button"
+                    <button class="${buttonClass} thinking-accordion-button" type="button"
                             data-bs-toggle="collapse"
                             data-bs-target="#thinking-collapse-${thinkingBlock.id}">
-                        🧠 Thinking: ${this.escapeHtml(summary)}
+                        <span class="thinking-summary-text">🧠 Thinking: ${this.escapeHtml(firstLine)}</span>
                     </button>
                 </h2>
                 <div id="thinking-collapse-${thinkingBlock.id}" class="${collapseClass}">
