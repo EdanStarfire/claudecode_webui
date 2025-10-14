@@ -99,10 +99,15 @@
 
                         <!-- Status Bar -->
                         <div id="status-bar" class="d-none alert m-0 px-2 py-1 d-flex justify-content-between align-items-center">
-                            <button id="permission-mode-clickable" class="btn btn-sm btn-outline-secondary" title="Click to cycle modes • Requires approval for most tools">
-                                <span id="permission-mode-icon">🔒</span>
-                                <span id="permission-mode-text">Mode: default</span>
-                            </button>
+                            <div class="d-flex gap-2 align-items-center">
+                                <button id="permission-mode-clickable" class="btn btn-sm btn-outline-secondary" title="Click to cycle modes • Requires approval for most tools">
+                                    <span id="permission-mode-icon">🔒</span>
+                                    <span id="permission-mode-text">Mode: default</span>
+                                </button>
+                                <button id="session-info-btn" class="btn btn-sm btn-outline-secondary" disabled title="Session configuration not yet available (waiting for init message)">
+                                    ℹ️ Info
+                                </button>
+                            </div>
                             <div id="claude-progress" class="d-none">
                                 <div class="spinner-border spinner-border-sm" role="status">
                                     <span class="visually-hidden">Processing...</span>
@@ -360,6 +365,47 @@
                     <div class="modal-footer">
                         <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
                         <button type="button" id="folder-browser-select" class="btn btn-primary">Select Current Folder</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Session Info Modal (Bootstrap) -->
+        <div class="modal fade" id="session-info-modal" tabindex="-1" aria-labelledby="session-info-modal-label" aria-hidden="true">
+            <div class="modal-dialog modal-dialog-centered modal-lg">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title" id="session-info-modal-label">Session Configuration</h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                    </div>
+                    <div class="modal-body">
+                        <div class="mb-3">
+                            <h6 class="text-muted">Session ID</h6>
+                            <div class="font-monospace small" id="session-info-session-id"></div>
+                        </div>
+
+                        <div class="mb-3">
+                            <h6 class="text-muted">Model</h6>
+                            <div id="session-info-model"></div>
+                        </div>
+
+                        <div class="mb-3">
+                            <h6 class="text-muted">Available Tools</h6>
+                            <div id="session-info-tools"></div>
+                        </div>
+
+                        <div class="mb-3">
+                            <h6 class="text-muted">Commands</h6>
+                            <div id="session-info-commands"></div>
+                        </div>
+
+                        <div class="mb-3">
+                            <h6 class="text-muted">Settings</h6>
+                            <pre id="session-info-settings" class="bg-light p-2 rounded" style="max-height: 300px; overflow-y: auto;"></pre>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
                     </div>
                 </div>
             </div>

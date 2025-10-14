@@ -65,6 +65,9 @@ class ClaudeWebUI {
         // Session input cache for preserving input box content per session
         this.sessionInputCache = new Map(); // session_id -> input text
 
+        // Session init data tracking for session info modal
+        this.sessionInitData = new Map(); // session_id -> init message data
+
         this.init();
     }
 
@@ -231,6 +234,9 @@ class ClaudeWebUI {
         // Permission mode cycling - click on icon/text area to cycle
         document.getElementById('permission-mode-clickable').addEventListener('click', () => this.cyclePermissionMode());
 
+        // Session info modal button
+        document.getElementById('session-info-btn').addEventListener('click', () => this.showSessionInfoModal());
+
         // Messages area scroll detection
         document.getElementById('messages-area').addEventListener('scroll', (e) => this.handleScroll(e));
 
@@ -348,6 +354,9 @@ class ClaudeWebUI {
         if (this.currentSessionId) {
             this.sessionInputCache.delete(this.currentSessionId);
         }
+
+        // Update session info button state before clearing session
+        this.updateSessionInfoButton();
 
         // Clear current session
         this.currentSessionId = null;
@@ -648,6 +657,15 @@ class ClaudeWebUI {
 
             // Extract and store permission mode from init message
             this.extractPermissionMode(message);
+
+            // Store init data for session info modal
+            if (message.data) {
+                this.sessionInitData.set(this.currentSessionId, message.data);
+                Logger.debug('SESSION_INFO', 'Stored init data for session', this.currentSessionId);
+
+                // Enable session info button
+                this.updateSessionInfoButton();
+            }
         }
 
         // Check if this is a tool-related message and handle it
@@ -753,6 +771,82 @@ class ClaudeWebUI {
             const config = modeConfig[mode] || modeConfig['default'];
             permissionModeIcon.textContent = config.icon;
             permissionModeClickable.title = config.title;
+        }
+    }
+
+    updateSessionInfoButton() {
+        const sessionInfoBtn = document.getElementById('session-info-btn');
+        if (!sessionInfoBtn) return;
+
+        if (this.currentSessionId && this.sessionInitData.has(this.currentSessionId)) {
+            sessionInfoBtn.disabled = false;
+            sessionInfoBtn.title = 'View session configuration';
+        } else {
+            sessionInfoBtn.disabled = true;
+            sessionInfoBtn.title = 'Session configuration not yet available (waiting for init message)';
+        }
+    }
+
+    showSessionInfoModal() {
+        if (!this.currentSessionId) return;
+
+        const initData = this.sessionInitData.get(this.currentSessionId);
+        if (!initData) {
+            Logger.warn('SESSION_INFO', 'No init data available for session', this.currentSessionId);
+            return;
+        }
+
+        try {
+            // Populate session ID
+            const sessionIdEl = document.getElementById('session-info-session-id');
+            if (sessionIdEl) {
+                sessionIdEl.textContent = initData.session_id || this.currentSessionId;
+            }
+
+            // Populate model
+            const modelEl = document.getElementById('session-info-model');
+            if (modelEl) {
+                modelEl.textContent = initData.model || 'Default';
+            }
+
+            // Populate tools (render as badges)
+            const toolsEl = document.getElementById('session-info-tools');
+            if (toolsEl && initData.tools) {
+                const toolsHtml = initData.tools.map(tool =>
+                    `<span class="badge bg-primary me-1 mb-1">${this.escapeHtml(tool)}</span>`
+                ).join('');
+                toolsEl.innerHTML = toolsHtml || '<span class="text-muted">No tools configured</span>';
+            }
+
+            // Populate commands (render as list)
+            const commandsEl = document.getElementById('session-info-commands');
+            if (commandsEl && initData.commands) {
+                const commandsHtml = Object.entries(initData.commands).map(([name, desc]) =>
+                    `<div class="mb-1"><code>/${name}</code> - ${this.escapeHtml(desc)}</div>`
+                ).join('');
+                commandsEl.innerHTML = commandsHtml || '<span class="text-muted">No commands configured</span>';
+            }
+
+            // Populate settings (pretty-print JSON)
+            const settingsEl = document.getElementById('session-info-settings');
+            if (settingsEl) {
+                // Filter out tools and commands since they're displayed separately
+                const settingsToDisplay = { ...initData };
+                delete settingsToDisplay.tools;
+                delete settingsToDisplay.commands;
+                delete settingsToDisplay.session_id;
+                delete settingsToDisplay.model;
+
+                settingsEl.textContent = JSON.stringify(settingsToDisplay, null, 2);
+            }
+
+            // Show modal
+            const modal = new bootstrap.Modal(document.getElementById('session-info-modal'));
+            modal.show();
+
+            Logger.info('SESSION_INFO', 'Displayed session info modal');
+        } catch (error) {
+            Logger.error('SESSION_INFO', 'Failed to display session info modal', error);
         }
     }
 
@@ -1535,6 +1629,15 @@ class ClaudeWebUI {
             }
 
             Logger.debug('MESSAGE', 'Finished loading all messages', {total: allMessages.length});
+
+            // Check for init messages in historical data
+            const initMessage = allMessages.find(m => m.type === 'system' && m.subtype === 'init');
+            if (initMessage && initMessage.data) {
+                this.sessionInitData.set(this.currentSessionId, initMessage.data);
+                Logger.debug('SESSION_INFO', 'Loaded init data from historical messages', this.currentSessionId);
+                this.updateSessionInfoButton();
+            }
+
             this.renderMessages(allMessages);
         } catch (error) {
             Logger.error('MESSAGE', 'Failed to load messages', error);
@@ -1962,6 +2065,9 @@ class ClaudeWebUI {
                 messageInput.value = cachedInput;
                 this.autoExpandTextarea(messageInput); // Adjust height if needed
             }
+
+            // Update session info button state based on available data
+            this.updateSessionInfoButton();
         } catch (error) {
             Logger.error('SESSION', 'Error selecting session', error);
         } finally {
