@@ -662,25 +662,14 @@ class ClaudeWebUI {
             this.extractPermissionMode(message);
 
             // Store init data for session info modal
-            // The data field may be at the top level or nested in raw_sdk_message
-            let initData = message.data;
+            // Look for init_data in metadata (added by backend)
+            let initData = message.metadata?.init_data || message.data;
+
             Logger.debug('SESSION_INFO', 'Checking for init data', {
+                hasInitDataInMetadata: !!message.metadata?.init_data,
                 hasDataField: !!message.data,
-                hasRawSdkMessage: !!message.raw_sdk_message,
                 hasMetadata: !!message.metadata
             });
-
-            if (!initData && message.raw_sdk_message) {
-                try {
-                    const rawData = typeof message.raw_sdk_message === 'string'
-                        ? JSON.parse(message.raw_sdk_message)
-                        : message.raw_sdk_message;
-                    initData = rawData.data;
-                    Logger.debug('SESSION_INFO', 'Extracted init data from raw_sdk_message', initData);
-                } catch (e) {
-                    Logger.warn('SESSION_INFO', 'Failed to parse raw_sdk_message', e);
-                }
-            }
 
             if (initData) {
                 this.sessionInitData.set(this.currentSessionId, initData);
@@ -1658,18 +1647,8 @@ class ClaudeWebUI {
             // Check for init messages in historical data
             const initMessage = allMessages.find(m => m.type === 'system' && (m.subtype === 'init' || m.metadata?.subtype === 'init'));
             if (initMessage) {
-                // Extract init data from message (may be at top level or in raw_sdk_message)
-                let initData = initMessage.data;
-                if (!initData && initMessage.raw_sdk_message) {
-                    try {
-                        const rawData = typeof initMessage.raw_sdk_message === 'string'
-                            ? JSON.parse(initMessage.raw_sdk_message)
-                            : initMessage.raw_sdk_message;
-                        initData = rawData.data;
-                    } catch (e) {
-                        Logger.warn('SESSION_INFO', 'Failed to parse historical raw_sdk_message', e);
-                    }
-                }
+                // Extract init data from metadata (added by backend)
+                let initData = initMessage.metadata?.init_data || initMessage.data;
 
                 if (initData) {
                     this.sessionInitData.set(this.currentSessionId, initData);
