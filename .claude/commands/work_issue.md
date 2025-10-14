@@ -57,8 +57,52 @@ You are working on GitHub issue #$1. Follow these steps:
 - Work through the implementation plan step by step
 - Make only the changes required by the issue - nothing more
 - Ensure code follows existing patterns and conventions in the codebase
-- Test changes as you go
+- Test changes as you go (see Testing section below)
 - **Stay focused**: Each issue addresses one specific thing
+
+#### 4.1. Testing Backend Changes
+
+If your changes involve Python backend code (src/*.py files), you should test them using the isolated test environment:
+
+**Test Command:**
+```bash
+uv run python main.py --debug-all --data-dir test_data --port 8001
+```
+
+This runs the application on port 8001 with a dedicated data directory (test_data/) so it doesn't conflict with the user's intentionally running instance on port 8000.
+
+**Testing Approaches:**
+
+**a) Automated API Testing** (preferred when possible):
+- Start the server in the test command above
+- Use curl or Python requests to test API endpoints
+- Verify responses and behavior
+- Stop the server when done (Ctrl+C)
+
+**b) Manual Testing** (when user needs to interact with UI):
+- Launch the server in the background:
+  ```bash
+  uv run python main.py --debug-all --data-dir test_data --port 8001 &
+  ```
+- Inform the user: "Test server running on http://localhost:8001 - please test the changes"
+- Wait for user confirmation that testing is complete
+- Kill the background server:
+  ```bash
+  pkill -f "main.py.*--port 8001"
+  ```
+  Or get the PID and kill it specifically
+
+**When to Use Test Environment:**
+- Changes to API endpoints (web_server.py)
+- Changes to session/project management logic
+- Changes to SDK integration or message processing
+- Any backend business logic changes
+- Bug fixes that need verification
+
+**When NOT Needed:**
+- Pure frontend changes (static/*.js, static/*.css)
+- Documentation updates
+- Configuration file changes that don't affect runtime behavior
 
 #### 5. Commit Changes
 - Review all changes: `git status` and `git diff`
