@@ -81,12 +81,12 @@ class ExitPlanModeToolHandler {
         html += '</div>';
         html += '</div>';
 
-        // Plan section
+        // Plan section (preformatted text)
         if (plan) {
             html += '<div class="exitplan-plan-section">';
-            html += '<div class="exitplan-plan-content">';
+            html += '<pre class="tool-result-content exitplan-plan-content">';
             html += escapeHtmlFn(plan);
-            html += '</div>';
+            html += '</pre>';
             html += '</div>';
         }
 
