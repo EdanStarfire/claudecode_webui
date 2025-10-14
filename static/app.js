@@ -650,7 +650,10 @@ class ClaudeWebUI {
         Logger.debug('MESSAGE', `Processing message from ${source}`, message);
 
         // Handle progress indicator for init messages (real-time only)
-        if (source === 'websocket' && message.type === 'system' && message.subtype === 'init') {
+        const subtype = message.subtype || message.metadata?.subtype;
+        if (source === 'websocket' && message.type === 'system' && subtype === 'init') {
+            Logger.info('SESSION_INFO', 'Init message received', message);
+
             if (!this.isProcessing) {
                 this.showProcessingIndicator();
             }
@@ -661,12 +664,19 @@ class ClaudeWebUI {
             // Store init data for session info modal
             // The data field may be at the top level or nested in raw_sdk_message
             let initData = message.data;
+            Logger.debug('SESSION_INFO', 'Checking for init data', {
+                hasDataField: !!message.data,
+                hasRawSdkMessage: !!message.raw_sdk_message,
+                hasMetadata: !!message.metadata
+            });
+
             if (!initData && message.raw_sdk_message) {
                 try {
                     const rawData = typeof message.raw_sdk_message === 'string'
                         ? JSON.parse(message.raw_sdk_message)
                         : message.raw_sdk_message;
                     initData = rawData.data;
+                    Logger.debug('SESSION_INFO', 'Extracted init data from raw_sdk_message', initData);
                 } catch (e) {
                     Logger.warn('SESSION_INFO', 'Failed to parse raw_sdk_message', e);
                 }
@@ -674,10 +684,12 @@ class ClaudeWebUI {
 
             if (initData) {
                 this.sessionInitData.set(this.currentSessionId, initData);
-                Logger.debug('SESSION_INFO', 'Stored init data for session', this.currentSessionId);
+                Logger.info('SESSION_INFO', 'Stored init data for session', this.currentSessionId);
 
                 // Enable session info button
                 this.updateSessionInfoButton();
+            } else {
+                Logger.warn('SESSION_INFO', 'Init message received but no data found', message);
             }
         }
 
