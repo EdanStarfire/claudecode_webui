@@ -297,13 +297,15 @@ html {
 /* ========== TOOL CALL HANDLERS (Bootstrap Accordion) ========== */
 
 /* Tool call accordion customization */
-.message-content .accordion-button {
+.message-content .accordion-button,
+.message-content-column .accordion-button {
     background-color: transparent;
     padding: 0.5rem 0.75rem;
-    font-size: 0.9rem;
+    font-size: 0.9rem !important; /* Override Bootstrap's 1rem */
 }
 
-.message-content .accordion-button:not(.collapsed) {
+.message-content .accordion-button:not(.collapsed),
+.message-content-column .accordion-button:not(.collapsed) {
     background-color: transparent;
     color: inherit;
 }
