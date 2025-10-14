@@ -637,28 +637,3 @@ html {
 .mode-change-flash {
     animation: mode-change-flash 0.6s ease-in-out 3;
 }
-
-/* ========== BYPASS PERMISSIONS WARNING (Edit Session Modal) ========== */
-
-#bypass-permissions-warning {
-    border-left: 4px solid #dc3545;
-}
-
-#bypass-permissions-warning .alert-heading {
-    color: #721c24;
-    font-weight: 600;
-}
-
-#bypass-permissions-warning ul {
-    padding-left: 1.5rem;
-    margin-bottom: 0.5rem;
-}
-
-#bypass-permissions-warning .form-check-label {
-    color: #721c24;
-    cursor: pointer;
-}
-
-#bypass-permissions-warning .form-check-input:not(:checked) ~ .form-check-label {
-    opacity: 0.8;
-}

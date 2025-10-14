@@ -3314,53 +3314,6 @@ class ClaudeWebUI {
         const permissionModeSelect = document.getElementById('edit-session-permission-mode');
         permissionModeSelect.value = session.current_permission_mode || 'default';
 
-        // Get modal elements
-        const warningBlock = document.getElementById('bypass-permissions-warning');
-        const ackCheckbox = document.getElementById('bypass-permissions-ack-checkbox');
-        const saveButton = document.getElementById('save-session-btn');
-
-        // Function to update save button state
-        const updateSaveButtonState = () => {
-            const isBypassMode = permissionModeSelect.value === 'bypassPermissions';
-            const isAcknowledged = ackCheckbox.checked;
-            // Disable save button if bypassPermissions selected but not acknowledged
-            saveButton.disabled = isBypassMode && !isAcknowledged;
-        };
-
-        // Show/hide warning block based on selection
-        const handlePermissionModeChange = () => {
-            const isBypassMode = permissionModeSelect.value === 'bypassPermissions';
-            warningBlock.style.display = isBypassMode ? 'block' : 'none';
-
-            // Reset checkbox when hiding warning
-            if (!isBypassMode) {
-                ackCheckbox.checked = false;
-            }
-
-            // Update save button state
-            updateSaveButtonState();
-        };
-
-        // Remove any existing listeners to avoid duplicates
-        const newPermissionModeSelect = permissionModeSelect.cloneNode(true);
-        permissionModeSelect.parentNode.replaceChild(newPermissionModeSelect, permissionModeSelect);
-        const newAckCheckbox = ackCheckbox.cloneNode(true);
-        ackCheckbox.parentNode.replaceChild(newAckCheckbox, ackCheckbox);
-
-        // Get the new elements after replacement
-        const finalPermissionModeSelect = document.getElementById('edit-session-permission-mode');
-        const finalAckCheckbox = document.getElementById('bypass-permissions-ack-checkbox');
-
-        // Set value again after cloning
-        finalPermissionModeSelect.value = session.current_permission_mode || 'default';
-
-        // Add event listeners
-        finalPermissionModeSelect.addEventListener('change', handlePermissionModeChange);
-        finalAckCheckbox.addEventListener('change', updateSaveButtonState);
-
-        // Trigger initial state check
-        handlePermissionModeChange();
-
         const modalElement = document.getElementById('edit-session-modal');
         const modal = new bootstrap.Modal(modalElement);
         modal.show();
