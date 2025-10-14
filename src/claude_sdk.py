@@ -413,6 +413,39 @@ class ClaudeSDK:
                 await self._safe_callback(self.error_callback, "set_permission_mode_failed", e)
             return False
 
+    async def disconnect(self) -> bool:
+        """
+        Disconnect from the Claude SDK session gracefully.
+
+        This triggers the context manager's __aexit__ which properly closes
+        the SDK client connection. The session can be resumed later.
+
+        Returns:
+            True if disconnected successfully, False otherwise
+        """
+        try:
+            sdk_logger.info(f"Disconnecting SDK session {self.session_id}")
+
+            # Set shutdown event to exit message processing loop
+            self._shutdown_event.set()
+
+            # Wait for conversation task to complete (which will trigger context manager cleanup)
+            if self._conversation_task and not self._conversation_task.done():
+                try:
+                    await asyncio.wait_for(self._conversation_task, timeout=5.0)
+                    sdk_logger.info(f"Conversation task completed for session {self.session_id}")
+                except asyncio.TimeoutError:
+                    sdk_logger.warning(f"Conversation task did not complete within timeout for {self.session_id}")
+                    self._conversation_task.cancel()
+
+            # Context manager cleanup happens automatically when task exits
+            sdk_logger.info(f"SDK session {self.session_id} disconnected successfully")
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to disconnect SDK session {self.session_id}: {e}")
+            return False
+
     async def _message_processing_loop(self):
         """
         Main message processing loop using the new ClaudeSDKClient pattern.

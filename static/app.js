@@ -166,7 +166,10 @@ class ClaudeWebUI {
         document.getElementById('browse-directory').addEventListener('click', () => this.browseDirectory());
 
         // Session actions
-        document.getElementById('exit-session-btn').addEventListener('click', () => this.exitSession());
+        document.getElementById('manage-session-btn').addEventListener('click', () => this.showManageSessionModal());
+        document.getElementById('restart-session-btn').addEventListener('click', () => this.restartSession());
+        document.getElementById('reset-session-btn').addEventListener('click', () => this.resetSession());
+        document.getElementById('end-session-btn').addEventListener('click', () => this.endSession());
 
         // Project edit modal controls
         document.getElementById('save-project-btn').addEventListener('click', () => this.confirmProjectRename());
@@ -339,6 +342,116 @@ class ClaudeWebUI {
             throw error;
         } finally {
             this.showLoading(false);
+        }
+    }
+
+    showManageSessionModal() {
+        if (!this.currentSessionId) return;
+
+        const modal = new bootstrap.Modal(document.getElementById('manage-session-modal'));
+        modal.show();
+    }
+
+    async restartSession() {
+        if (!this.currentSessionId) return;
+
+        try {
+            // Close modal
+            const modalEl = document.getElementById('manage-session-modal');
+            const modal = bootstrap.Modal.getInstance(modalEl);
+            if (modal) modal.hide();
+
+            Logger.info('SESSION', 'Restarting session', this.currentSessionId);
+            this.showLoading(true);
+
+            // Call restart endpoint
+            const response = await this.apiRequest(`/api/sessions/${this.currentSessionId}/restart`, {
+                method: 'POST'
+            });
+
+            if (response.success) {
+                Logger.info('SESSION', 'Session restarted successfully');
+                // Reload session info
+                await this.loadSessionInfo();
+                // Reload messages
+                await this.loadMessages();
+            } else {
+                Logger.error('SESSION', 'Failed to restart session');
+                alert('Failed to restart session');
+            }
+        } catch (error) {
+            Logger.error('SESSION', 'Error restarting session', error);
+            alert('Error restarting session');
+        } finally {
+            this.showLoading(false);
+        }
+    }
+
+    async resetSession() {
+        if (!this.currentSessionId) return;
+
+        // Confirm action
+        if (!confirm('Are you sure you want to reset this session? This will permanently delete all messages and conversation history.')) {
+            return;
+        }
+
+        try {
+            // Close modal
+            const modalEl = document.getElementById('manage-session-modal');
+            const modal = bootstrap.Modal.getInstance(modalEl);
+            if (modal) modal.hide();
+
+            Logger.info('SESSION', 'Resetting session', this.currentSessionId);
+            this.showLoading(true);
+
+            // Call reset endpoint
+            const response = await this.apiRequest(`/api/sessions/${this.currentSessionId}/reset`, {
+                method: 'POST'
+            });
+
+            if (response.success) {
+                Logger.info('SESSION', 'Session reset successfully');
+                // Clear UI messages
+                document.getElementById('messages-area').innerHTML = '';
+                // Reload session info
+                await this.loadSessionInfo();
+                // Load new messages (should just be client_launched)
+                await this.loadMessages();
+            } else {
+                Logger.error('SESSION', 'Failed to reset session');
+                alert('Failed to reset session');
+            }
+        } catch (error) {
+            Logger.error('SESSION', 'Error resetting session', error);
+            alert('Error resetting session');
+        } finally {
+            this.showLoading(false);
+        }
+    }
+
+    async endSession() {
+        if (!this.currentSessionId) return;
+
+        try {
+            // Close modal first
+            const modalEl = document.getElementById('manage-session-modal');
+            const modal = bootstrap.Modal.getInstance(modalEl);
+            if (modal) modal.hide();
+
+            Logger.info('SESSION', 'Ending session', this.currentSessionId);
+
+            // Call disconnect endpoint
+            await this.apiRequest(`/api/sessions/${this.currentSessionId}/disconnect`, {
+                method: 'POST'
+            });
+
+            // Use existing exitSession logic to clean up UI
+            this.exitSession();
+
+        } catch (error) {
+            Logger.error('SESSION', 'Error ending session', error);
+            // Still exit UI even if disconnect fails
+            this.exitSession();
         }
     }
 
