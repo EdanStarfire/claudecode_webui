@@ -297,13 +297,15 @@ html {
 /* ========== TOOL CALL HANDLERS (Bootstrap Accordion) ========== */
 
 /* Tool call accordion customization */
-.message-content .accordion-button {
+.message-content .accordion-button,
+.message-content-column .accordion-button {
     background-color: transparent;
     padding: 0.5rem 0.75rem;
-    font-size: 0.9rem;
+    font-size: 0.9rem !important; /* Override Bootstrap's 1rem */
 }
 
-.message-content .accordion-button:not(.collapsed) {
+.message-content .accordion-button:not(.collapsed),
+.message-content-column .accordion-button:not(.collapsed) {
     background-color: transparent;
     color: inherit;
 }
@@ -344,13 +346,25 @@ html {
 }
 
 /* Thinking blocks */
-.thinking-block-card {
-    font-size: 0.9rem;
+.message-row.thinking-block {
+    background-color: #d0e7ff; /* Same as assistant/tool-call */
+}
+
+.thinking-accordion-button .thinking-summary-text {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    display: block;
+}
+
+.thinking-content {
+    font-style: italic; /* Italicize thinking content */
 }
 
 .thinking-text {
     white-space: pre-wrap;
     font-family: system-ui, -apple-system, sans-serif;
+    font-size: 0.9rem;
 }
 
 /* Todo items */

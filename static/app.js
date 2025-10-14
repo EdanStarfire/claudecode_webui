@@ -1341,127 +1341,67 @@ class ClaudeWebUI {
         Logger.debug('UI', 'Rendering thinking block', thinkingBlock);
 
         const messagesArea = document.getElementById('messages-area');
-        const thinkingElement = this.createThinkingBlockElement(thinkingBlock);
 
-        // Add to DOM
-        messagesArea.appendChild(thinkingElement);
+        // Wrap thinking block in two-column layout (like tool calls)
+        const wrapper = document.createElement('div');
+        wrapper.className = 'message-row row py-1 thinking-block';
+        wrapper.id = `thinking-block-wrapper-${thinkingBlock.id}`;
+
+        const timestamp = thinkingBlock.timestamp
+            ? new Date(thinkingBlock.timestamp).toLocaleTimeString()
+            : new Date().toLocaleTimeString();
+
+        wrapper.innerHTML = `
+            <div class="col-auto message-speaker text-end pe-3" title="${timestamp}">
+                agent
+            </div>
+            <div class="col message-content-column" id="thinking-block-content-${thinkingBlock.id}">
+            </div>
+        `;
+
+        messagesArea.appendChild(wrapper);
+
+        const contentColumn = document.getElementById(`thinking-block-content-${thinkingBlock.id}`);
+        const thinkingElement = this.createThinkingBlockElement(thinkingBlock);
+        contentColumn.appendChild(thinkingElement);
+
         this.smartScrollToBottom();
     }
 
     createThinkingBlockElement(thinkingBlock) {
         const element = document.createElement('div');
-        element.className = 'thinking-block-container';
+        element.className = 'accordion';
         element.id = `thinking-block-${thinkingBlock.id}`;
 
-        // Store the content as a data attribute on the container for persistence
-        element.setAttribute('data-thinking-content', thinkingBlock.content);
-        element.setAttribute('data-thinking-id', thinkingBlock.id);
+        const firstLine = thinkingBlock.content.split('\n')[0] || 'Claude was thinking...';
 
-        if (thinkingBlock.isExpanded) {
-            element.innerHTML = this.createExpandedThinkingBlockHTML(thinkingBlock);
-        } else {
-            element.innerHTML = this.createCollapsedThinkingBlockHTML(thinkingBlock);
-        }
+        const collapseClass = thinkingBlock.isExpanded
+            ? 'accordion-collapse collapse show'
+            : 'accordion-collapse collapse';
+        const buttonClass = thinkingBlock.isExpanded
+            ? 'accordion-button'
+            : 'accordion-button collapsed';
 
-        // Add event delegation for click handlers
-        this.setupThinkingBlockEventListeners(element, thinkingBlock);
+        element.innerHTML = `
+            <div class="accordion-item">
+                <h2 class="accordion-header">
+                    <button class="${buttonClass} thinking-accordion-button" type="button"
+                            data-bs-toggle="collapse"
+                            data-bs-target="#thinking-collapse-${thinkingBlock.id}">
+                        <span class="thinking-summary-text">🧠 Thinking: ${this.escapeHtml(firstLine)}</span>
+                    </button>
+                </h2>
+                <div id="thinking-collapse-${thinkingBlock.id}" class="${collapseClass}">
+                    <div class="accordion-body">
+                        <div class="thinking-content">
+                            <pre class="thinking-text">${this.escapeHtml(thinkingBlock.content)}</pre>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `;
 
         return element;
-    }
-
-    createExpandedThinkingBlockHTML(thinkingBlock) {
-        return `
-            <div class="thinking-block-card">
-                <div class="thinking-block-header">
-                    <span class="thinking-icon">🧠</span>
-                    <span class="thinking-label">Claude's Thinking</span>
-                    <button class="thinking-collapse-btn" data-thinking-id="${thinkingBlock.id}" title="Collapse">
-                        ▼
-                    </button>
-                </div>
-                <div class="thinking-block-content">
-                    <pre class="thinking-text">${this.escapeHtml(thinkingBlock.content)}</pre>
-                </div>
-            </div>
-        `;
-    }
-
-    createCollapsedThinkingBlockHTML(thinkingBlock) {
-        // Create a truncated preview (first line + ...)
-        const firstLine = thinkingBlock.content.split('\n')[0];
-        const truncated = firstLine.length > 80 ? firstLine.substring(0, 80) + '...' : firstLine;
-        const summary = truncated || 'Claude was thinking...';
-
-        return `
-            <div class="thinking-block-collapsed" data-thinking-id="${thinkingBlock.id}" title="Click to expand">
-                <span class="thinking-collapsed-summary">🧠 Thinking: ${this.escapeHtml(summary)}</span>
-                <span class="thinking-expand-icon">▶</span>
-            </div>
-        `;
-    }
-
-    setupThinkingBlockEventListeners(element, thinkingBlock) {
-        // Handle collapse button clicks
-        const collapseBtn = element.querySelector('.thinking-collapse-btn');
-        if (collapseBtn) {
-            collapseBtn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                this.toggleThinkingBlockExpansion(thinkingBlock.id);
-            });
-        }
-
-        // Handle collapsed card clicks for expansion
-        const collapsedCard = element.querySelector('.thinking-block-collapsed');
-        if (collapsedCard) {
-            collapsedCard.addEventListener('click', () => {
-                this.toggleThinkingBlockExpansion(thinkingBlock.id);
-            });
-        }
-    }
-
-    toggleThinkingBlockExpansion(thinkingId) {
-        // Simple implementation - toggle expanded state and re-render
-        const element = document.getElementById(`thinking-block-${thinkingId}`);
-        if (element) {
-            // Find current state from DOM structure
-            const isCurrentlyExpanded = element.querySelector('.thinking-block-card') !== null;
-
-            // Create updated thinking block data
-            const thinkingBlock = {
-                id: thinkingId,
-                content: this.extractContentFromElement(element),
-                isExpanded: !isCurrentlyExpanded
-            };
-
-            // Re-render with new state
-            const newElement = this.createThinkingBlockElement(thinkingBlock);
-            element.replaceWith(newElement);
-        }
-    }
-
-    extractContentFromElement(element) {
-        // First try to get content from the container's data attribute
-        const containerContent = element.getAttribute('data-thinking-content');
-        if (containerContent) {
-            return containerContent;
-        }
-
-        // Fallback: Extract content from expanded thinking text element
-        const expandedContent = element.querySelector('.thinking-text');
-        if (expandedContent) {
-            return expandedContent.textContent;
-        }
-
-        // Last resort: Try to get from collapsed element's data attribute
-        const collapsedElement = element.querySelector('.thinking-block-collapsed');
-        if (collapsedElement) {
-            const collapsedContent = collapsedElement.getAttribute('data-content');
-            if (collapsedContent) {
-                return collapsedContent;
-            }
-        }
-
-        return 'Content not available';
     }
 
     async loadSessionInfo() {
