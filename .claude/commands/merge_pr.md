@@ -34,7 +34,7 @@ You are merging GitHub pull request #$1. Follow these steps:
 #### 4. Clean Up Local Repository
 - Switch to main: `git checkout main`
 - Pull latest changes: `git pull origin main`
-- Delete local branch if it exists: `git branch -d <pr-branch>` (ignore errors if already deleted)
+- Delete local branch is not needed - the `--delete-branch` above also deletes the local branch.
 - Show final status: `git status`
 
 #### 5. Completion
