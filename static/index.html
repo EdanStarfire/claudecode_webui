@@ -143,10 +143,10 @@
                     <div class="mb-3">
                         <label for="permission-mode" class="form-label">Permission Mode:</label>
                         <select id="permission-mode" name="permission_mode" class="form-select">
-                            <option value="default">default</option>
-                            <option value="plan">plan</option>
-                            <option value="acceptEdits">acceptEdits</option>
-                            <option value="bypassPermissions">bypassPermissions</option>
+                            <option value="default">Default (Prompt for non-approved tools)</option>
+                            <option value="acceptEdits">Accept Edits (Auto-approve edits)</option>
+                            <option value="plan">Plan (Planning mode)</option>
+                            <option value="bypassPermissions">Bypass Permissions (No prompts - cannot be changed later)</option>
                         </select>
                     </div>
 
@@ -277,6 +277,15 @@
                         <div class="mb-3">
                             <label for="edit-session-name" class="form-label">Session Name</label>
                             <input type="text" class="form-control" id="edit-session-name" placeholder="Enter session name">
+                        </div>
+                        <div class="mb-3">
+                            <label for="edit-session-permission-mode" class="form-label">Permission Mode</label>
+                            <select id="edit-session-permission-mode" class="form-select">
+                                <option value="default">Default (Prompt for non-approved tools)</option>
+                                <option value="acceptEdits">Accept Edits (Auto-approve edits)</option>
+                                <option value="plan">Plan (Planning mode)</option>
+                            </select>
+                            <small class="form-text text-muted">Note: bypassPermissions mode can only be set during session creation.</small>
                         </div>
                     </div>
                     <div class="modal-footer d-flex justify-content-between">

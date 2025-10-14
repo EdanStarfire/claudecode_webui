@@ -3310,6 +3310,10 @@ class ClaudeWebUI {
         sessionIdElement.textContent = sessionId;
         sessionIdElement.title = sessionId; // Show full ID on hover
 
+        // Set permission mode dropdown
+        const permissionModeSelect = document.getElementById('edit-session-permission-mode');
+        permissionModeSelect.value = session.current_permission_mode || 'default';
+
         const modalElement = document.getElementById('edit-session-modal');
         const modal = new bootstrap.Modal(modalElement);
         modal.show();
@@ -3332,6 +3336,9 @@ class ClaudeWebUI {
             return;
         }
 
+        const newPermissionMode = document.getElementById('edit-session-permission-mode').value;
+        const session = this.sessions.get(this.editingSessionId);
+
         const saveBtn = document.getElementById('save-session-btn');
         const cancelBtn = document.querySelector('#edit-session-modal .btn-secondary');
         const deleteBtn = document.getElementById('delete-session-from-edit-btn');
@@ -3344,37 +3351,67 @@ class ClaudeWebUI {
 
             this.showLoading(true);
 
-            // Update session name via API
-            const response = await this.apiRequest(`/api/sessions/${this.editingSessionId}/name`, {
-                method: 'PUT',
-                body: JSON.stringify({ name: newName })
-            });
+            // Update session name via API if changed
+            if (newName !== session.name) {
+                const response = await this.apiRequest(`/api/sessions/${this.editingSessionId}/name`, {
+                    method: 'PUT',
+                    body: JSON.stringify({ name: newName })
+                });
 
-            if (response.success) {
-                // Update local session data
-                if (this.sessions.has(this.editingSessionId)) {
-                    const session = this.sessions.get(this.editingSessionId);
-                    session.name = newName;
+                if (response.success) {
+                    // Update local session data
+                    if (this.sessions.has(this.editingSessionId)) {
+                        const session = this.sessions.get(this.editingSessionId);
+                        session.name = newName;
+                        this.updateSessionData(this.editingSessionId, session);
+                    }
 
-                    // Update session data consistently
-                    this.updateSessionData(this.editingSessionId, session);
+                    // Update header if this is the current session
+                    if (this.editingSessionId === this.currentSessionId) {
+                        this.updateSessionHeaderName(newName);
+                    }
+
+                    Logger.info('SESSION', 'Session renamed successfully', this.editingSessionId);
+                } else {
+                    throw new Error('Failed to update session name');
                 }
-
-                // Update header if this is the current session
-                if (this.editingSessionId === this.currentSessionId) {
-                    this.updateSessionHeaderName(newName);
-                }
-
-                // Hide modal
-                this.hideEditSessionModal();
-
-                Logger.info('SESSION', 'Session renamed successfully', this.editingSessionId);
-            } else {
-                throw new Error('Failed to update session name');
             }
+
+            // Update permission mode via API if changed
+            if (newPermissionMode !== session.current_permission_mode) {
+                const response = await this.apiRequest(`/api/sessions/${this.editingSessionId}/permission-mode`, {
+                    method: 'POST',
+                    body: JSON.stringify({ mode: newPermissionMode })
+                });
+
+                if (response.success) {
+                    // Update local session data
+                    if (this.sessions.has(this.editingSessionId)) {
+                        const session = this.sessions.get(this.editingSessionId);
+                        session.current_permission_mode = newPermissionMode;
+                        this.updateSessionData(this.editingSessionId, session);
+                    }
+
+                    // Update permission mode display if this is the current session
+                    if (this.editingSessionId === this.currentSessionId) {
+                        this.updatePermissionMode(newPermissionMode);
+                    }
+
+                    Logger.info('SESSION', 'Permission mode updated successfully', {
+                        sessionId: this.editingSessionId,
+                        newMode: newPermissionMode
+                    });
+                } else {
+                    throw new Error('Failed to update permission mode');
+                }
+            }
+
+            // Hide modal
+            this.hideEditSessionModal();
+
         } catch (error) {
-            Logger.error('SESSION', 'Failed to rename session', error);
-            this.showError(`Failed to rename session: ${error.message}`);
+            Logger.error('SESSION', 'Failed to update session', error);
+            this.showError(`Failed to update session: ${error.message}`);
         } finally {
             // Re-enable buttons
             saveBtn.disabled = false;
