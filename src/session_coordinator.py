@@ -644,17 +644,37 @@ class SessionCoordinator:
                 try:
                     # Check if message is already fully processed (has metadata)
                     if isinstance(raw_message.get("metadata"), dict) and raw_message.get("type") and raw_message.get("content") is not None:
-                        # Message is already processed, just prepare for WebSocket
+                        # Message is already processed, prepare for WebSocket
+                        metadata = raw_message["metadata"].copy()
+
+                        # For init messages: extract init_data from raw_sdk_message string if present
+                        if metadata.get("subtype") == "init" and "raw_sdk_message" in metadata and "init_data" not in metadata:
+                            import re
+                            raw_sdk_str = metadata.get("raw_sdk_message", "")
+                            if isinstance(raw_sdk_str, str) and "data=" in raw_sdk_str:
+                                # Extract the data dict from the string representation
+                                try:
+                                    # Match: data={'key': 'value', ...}
+                                    data_match = re.search(r"data=(\{[^}]+(?:\{[^}]*\}[^}]*)*\})", raw_sdk_str)
+                                    if data_match:
+                                        import ast
+                                        data_str = data_match.group(1)
+                                        init_data = ast.literal_eval(data_str)
+                                        metadata["init_data"] = init_data
+                                        logger.debug(f"Extracted init_data from historical raw_sdk_message")
+                                except Exception as parse_error:
+                                    logger.warning(f"Failed to parse init_data from raw_sdk_message: {parse_error}")
+
                         websocket_data = {
                             "type": raw_message["type"],
                             "content": raw_message["content"],
                             "timestamp": raw_message.get("timestamp"),
-                            "metadata": raw_message["metadata"],
+                            "metadata": metadata,
                             "session_id": raw_message.get("session_id")
                         }
                         # Maintain backward compatibility with subtype at root level
-                        if raw_message.get("metadata") and 'subtype' in raw_message["metadata"]:
-                            websocket_data["subtype"] = raw_message["metadata"]['subtype']
+                        if metadata.get('subtype'):
+                            websocket_data["subtype"] = metadata['subtype']
 
                         parsed_messages.append(websocket_data)
                     else:
