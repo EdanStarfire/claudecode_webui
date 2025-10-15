@@ -590,6 +590,53 @@ class ClaudeWebUI:
                 logger.error(f"Failed to set permission mode: {e}")
                 raise HTTPException(status_code=500, detail=str(e))
 
+        @self.app.post("/api/sessions/{session_id}/restart")
+        async def restart_session(session_id: str):
+            """Restart a session (disconnect and resume)"""
+            try:
+                # Get permission callback for this session
+                permission_callback = self._create_permission_callback(session_id)
+
+                success = await self.coordinator.restart_session(
+                    session_id,
+                    permission_callback=permission_callback
+                )
+                return {"success": success}
+            except Exception as e:
+                logger.error(f"Failed to restart session: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @self.app.post("/api/sessions/{session_id}/reset")
+        async def reset_session(session_id: str):
+            """Reset a session (clear messages and start fresh)"""
+            try:
+                # Get permission callback for this session
+                permission_callback = self._create_permission_callback(session_id)
+
+                success = await self.coordinator.reset_session(
+                    session_id,
+                    permission_callback=permission_callback
+                )
+                return {"success": success}
+            except Exception as e:
+                logger.error(f"Failed to reset session: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @self.app.post("/api/sessions/{session_id}/disconnect")
+        async def disconnect_session(session_id: str):
+            """Disconnect SDK but keep session state (for end session)"""
+            try:
+                sdk = self.coordinator._active_sdks.get(session_id)
+                if sdk:
+                    success = await sdk.disconnect()
+                    if success:
+                        del self.coordinator._active_sdks[session_id]
+                    return {"success": success}
+                return {"success": True}  # Already disconnected
+            except Exception as e:
+                logger.error(f"Failed to disconnect session: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
         @self.app.get("/api/filesystem/browse")
         async def browse_filesystem(path: str = None):
             """Browse filesystem directories"""

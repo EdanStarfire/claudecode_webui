@@ -392,8 +392,8 @@ class SessionManager:
             logger.error(f"Failed to persist session state for {session_id}: {e}")
             raise
 
-    async def update_claude_code_session_id(self, session_id: str, claude_code_session_id: str):
-        """Update the Claude Code session ID for a session"""
+    async def update_claude_code_session_id(self, session_id: str, claude_code_session_id: Optional[str]):
+        """Update the Claude Code session ID for a session (including setting to None for reset)"""
         async with self._get_session_lock(session_id):
             try:
                 session = self._active_sessions.get(session_id)

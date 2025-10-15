@@ -534,6 +534,88 @@ class SessionCoordinator:
             logger.error(f"Failed to set permission mode for session {session_id}: {e}")
             return False
 
+    async def restart_session(self, session_id: str, permission_callback: Optional[Callable] = None) -> bool:
+        """
+        Restart a session by disconnecting SDK and resuming with same session ID.
+
+        This is useful for unsticking the agent without losing conversation history.
+        """
+        try:
+            coord_logger.info(f"Restarting session {session_id}")
+
+            # Get current SDK
+            sdk = self._active_sdks.get(session_id)
+            if not sdk:
+                logger.warning(f"No active SDK for session {session_id}, cannot restart")
+                return False
+
+            # Disconnect SDK gracefully
+            disconnect_result = await sdk.disconnect()
+            if not disconnect_result:
+                logger.warning(f"SDK disconnect returned False for session {session_id}")
+
+            # Wait a moment for cleanup
+            await asyncio.sleep(0.5)
+
+            # Remove old SDK reference
+            del self._active_sdks[session_id]
+
+            # Start session again (will automatically resume using claude_code_session_id)
+            success = await self.start_session(session_id, permission_callback)
+
+            if success:
+                coord_logger.info(f"Session {session_id} restarted successfully")
+            else:
+                logger.error(f"Failed to restart session {session_id}")
+
+            return success
+
+        except Exception as e:
+            logger.error(f"Failed to restart session {session_id}: {e}")
+            return False
+
+    async def reset_session(self, session_id: str, permission_callback: Optional[Callable] = None) -> bool:
+        """
+        Reset a session by clearing all messages and starting fresh.
+
+        Keeps session settings (permission mode, tools, etc.) but clears conversation history.
+        """
+        try:
+            coord_logger.info(f"Resetting session {session_id}")
+
+            # Get current SDK and disconnect
+            sdk = self._active_sdks.get(session_id)
+            if sdk:
+                await sdk.disconnect()
+                await asyncio.sleep(0.5)
+                del self._active_sdks[session_id]
+
+            # Clear Claude Code session ID from state (prevents resume)
+            session_info = await self.session_manager.get_session_info(session_id)
+            if session_info:
+                await self.session_manager.update_claude_code_session_id(session_id, None)
+                coord_logger.info(f"Cleared Claude Code session ID for {session_id}")
+
+            # Clear message history
+            storage = self._storage_managers.get(session_id)
+            if storage:
+                await storage.clear_messages()
+                coord_logger.info(f"Cleared message history for session {session_id}")
+
+            # Start fresh session (will create new Claude Code session)
+            success = await self.start_session(session_id, permission_callback)
+
+            if success:
+                coord_logger.info(f"Session {session_id} reset successfully")
+            else:
+                logger.error(f"Failed to reset session {session_id}")
+
+            return success
+
+        except Exception as e:
+            logger.error(f"Failed to reset session {session_id}: {e}")
+            return False
+
     async def send_message(self, session_id: str, message: str) -> bool:
         """Send a message to a session"""
         try:

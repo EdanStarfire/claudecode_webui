@@ -78,9 +78,6 @@
                             <span id="current-session-id" class="fw-semibold"></span>
                             <div id="session-error-message" class="d-none alert alert-danger mb-0 py-1 px-2"></div>
                         </div>
-                        <div class="d-flex gap-2">
-                            <button id="exit-session-btn" class="btn btn-sm btn-secondary">Exit Session</button>
-                        </div>
                     </div>
 
                     <!-- Messages Area -->
@@ -106,6 +103,9 @@
                                 </button>
                                 <button id="session-info-btn" class="btn btn-sm btn-outline-secondary" disabled title="Session configuration not yet available (waiting for init message)">
                                     ℹ️ Info
+                                </button>
+                                <button id="manage-session-btn" class="btn btn-sm btn-outline-secondary" title="Restart, reset, or end session">
+                                    ⚙️ Manage
                                 </button>
                             </div>
                             <div id="claude-progress" class="d-none">
@@ -406,6 +406,45 @@
                     </div>
                     <div class="modal-footer">
                         <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Manage Session Modal (Bootstrap) -->
+        <div class="modal fade" id="manage-session-modal" tabindex="-1" aria-labelledby="manage-session-modal-label" aria-hidden="true">
+            <div class="modal-dialog modal-dialog-centered">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title" id="manage-session-modal-label">Manage Session</h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                    </div>
+                    <div class="modal-body">
+                        <p class="text-muted">Choose how to manage this session:</p>
+
+                        <div class="d-grid gap-2">
+                            <button id="restart-session-btn" class="btn btn-outline-primary text-start">
+                                <strong>🔄 Restart Agent</strong>
+                                <div class="small text-muted">Disconnect and resume session (keeps all messages)</div>
+                            </button>
+
+                            <button id="reset-session-btn" class="btn btn-outline-warning text-start">
+                                <strong>🗑️ Reset Session</strong>
+                                <div class="small text-muted">Clear all messages and start fresh (keeps settings)</div>
+                            </button>
+
+                            <button id="end-session-btn" class="btn btn-outline-secondary text-start">
+                                <strong>🚪 End Session</strong>
+                                <div class="small text-muted">Close agent and return to session list</div>
+                            </button>
+                        </div>
+
+                        <div class="alert alert-warning mt-3 mb-0">
+                            <small><strong>Note:</strong> Restart is the recommended option for unsticking the agent.</small>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
                     </div>
                 </div>
             </div>

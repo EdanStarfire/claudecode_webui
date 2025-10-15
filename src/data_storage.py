@@ -115,6 +115,27 @@ class DataStorageManager:
             logger.error(f"Failed to count messages: {e}")
             return 0
 
+    async def clear_messages(self) -> bool:
+        """
+        Clear all messages from the session.
+
+        Truncates the messages.jsonl file to remove all message history.
+        Used when resetting a session.
+        """
+        try:
+            # Truncate messages file
+            messages_path = self.messages_file
+            if messages_path.exists():
+                with open(messages_path, 'w') as f:
+                    pass  # Truncate to empty
+                storage_logger.info(f"Cleared all messages for session {self.session_dir.name}")
+
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to clear messages: {e}")
+            return False
+
     async def write_history(self, history_data: List[Dict[str, Any]]):
         """Write command history data"""
         await self._write_history(history_data)
