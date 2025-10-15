@@ -624,15 +624,14 @@ class ClaudeWebUI:
 
         @self.app.post("/api/sessions/{session_id}/disconnect")
         async def disconnect_session(session_id: str):
-            """Disconnect SDK but keep session state (for end session)"""
+            """Disconnect SDK and terminate session (for end session)"""
             try:
-                sdk = self.coordinator._active_sdks.get(session_id)
-                if sdk:
-                    success = await sdk.disconnect()
-                    if success:
-                        del self.coordinator._active_sdks[session_id]
-                    return {"success": success}
-                return {"success": True}  # Already disconnected
+                # Clean up any pending permissions for this session
+                self._cleanup_pending_permissions_for_session(session_id)
+
+                # Use coordinator's terminate_session to properly clean up SDK and update state
+                success = await self.coordinator.terminate_session(session_id)
+                return {"success": success}
             except Exception as e:
                 logger.error(f"Failed to disconnect session: {e}")
                 raise HTTPException(status_code=500, detail=str(e))

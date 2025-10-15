@@ -414,35 +414,6 @@ class SessionCoordinator:
                 return project
         return None
 
-    async def send_message(self, session_id: str, message: str) -> bool:
-        """Send a message through the integrated pipeline"""
-        try:
-            sdk = self._active_sdks.get(session_id)
-            if not sdk:
-                logger.error(f"No SDK found for session {session_id}")
-                return False
-
-            # Mark session as processing before sending message
-            await self.session_manager.update_processing_state(session_id, True)
-
-            # Send message through SDK (will be queued and processed)
-            result = await sdk.send_message(message)
-
-            # If message sending failed, reset processing state
-            if not result:
-                await self.session_manager.update_processing_state(session_id, False)
-
-            return result
-
-        except Exception as e:
-            logger.error(f"Failed to send message to session {session_id}: {e}")
-            # Reset processing state on error
-            try:
-                await self.session_manager.update_processing_state(session_id, False)
-            except Exception:
-                pass  # Don't fail on state update error
-            return False
-
     async def interrupt_session(self, session_id: str) -> bool:
         """Interrupt the current Claude Code SDK session"""
         try:
@@ -560,6 +531,9 @@ class SessionCoordinator:
             # Remove old SDK reference
             del self._active_sdks[session_id]
 
+            # Transition session state to TERMINATED so it can be restarted
+            await self.session_manager.terminate_session(session_id)
+
             # Start session again (will automatically resume using claude_code_session_id)
             success = await self.start_session(session_id, permission_callback)
 
@@ -572,6 +546,8 @@ class SessionCoordinator:
 
         except Exception as e:
             logger.error(f"Failed to restart session {session_id}: {e}")
+            import traceback
+            logger.error(f"Restart traceback: {traceback.format_exc()}")
             return False
 
     async def reset_session(self, session_id: str, permission_callback: Optional[Callable] = None) -> bool:
@@ -602,6 +578,9 @@ class SessionCoordinator:
                 await storage.clear_messages()
                 coord_logger.info(f"Cleared message history for session {session_id}")
 
+            # Transition session state to TERMINATED so it can be restarted
+            await self.session_manager.terminate_session(session_id)
+
             # Start fresh session (will create new Claude Code session)
             success = await self.start_session(session_id, permission_callback)
 
@@ -614,6 +593,8 @@ class SessionCoordinator:
 
         except Exception as e:
             logger.error(f"Failed to reset session {session_id}: {e}")
+            import traceback
+            logger.error(f"Reset traceback: {traceback.format_exc()}")
             return False
 
     async def send_message(self, session_id: str, message: str) -> bool:

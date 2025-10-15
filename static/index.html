@@ -420,27 +420,42 @@
                         <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
                     </div>
                     <div class="modal-body">
-                        <p class="text-muted">Choose how to manage this session:</p>
+                        <!-- Main action buttons -->
+                        <div id="manage-session-actions">
+                            <p class="text-muted">Choose how to manage this session:</p>
 
-                        <div class="d-grid gap-2">
-                            <button id="restart-session-btn" class="btn btn-outline-primary text-start">
-                                <strong>🔄 Restart Agent</strong>
-                                <div class="small text-muted">Disconnect and resume session (keeps all messages)</div>
-                            </button>
+                            <div class="d-grid gap-2">
+                                <button id="restart-session-btn" class="btn btn-outline-primary text-start">
+                                    <strong>🔄 Restart Agent</strong>
+                                    <div class="small text-muted">Disconnect and resume session (keeps all messages)</div>
+                                </button>
 
-                            <button id="reset-session-btn" class="btn btn-outline-warning text-start">
-                                <strong>🗑️ Reset Session</strong>
-                                <div class="small text-muted">Clear all messages and start fresh (keeps settings)</div>
-                            </button>
+                                <button id="reset-session-btn" class="btn btn-outline-warning text-start">
+                                    <strong>🗑️ Reset Session</strong>
+                                    <div class="small text-muted">Clear all messages and start fresh (keeps settings)</div>
+                                </button>
 
-                            <button id="end-session-btn" class="btn btn-outline-secondary text-start">
-                                <strong>🚪 End Session</strong>
-                                <div class="small text-muted">Close agent and return to session list</div>
-                            </button>
+                                <button id="end-session-btn" class="btn btn-outline-secondary text-start">
+                                    <strong>🚪 End Session</strong>
+                                    <div class="small text-muted">Close agent and return to session list</div>
+                                </button>
+                            </div>
+
+                            <div class="alert alert-warning mt-3 mb-0">
+                                <small><strong>Note:</strong> Restart is the recommended option for unsticking the agent.</small>
+                            </div>
                         </div>
 
-                        <div class="alert alert-warning mt-3 mb-0">
-                            <small><strong>Note:</strong> Restart is the recommended option for unsticking the agent.</small>
+                        <!-- Reset confirmation -->
+                        <div id="reset-confirmation" class="d-none">
+                            <div class="alert alert-danger mb-3">
+                                <strong>⚠️ Warning:</strong> This will permanently delete all messages and conversation history. This action cannot be undone.
+                            </div>
+                            <p class="text-muted">Are you sure you want to reset this session?</p>
+                            <div class="d-grid gap-2">
+                                <button id="confirm-reset-btn" class="btn btn-danger">Yes, Reset Session</button>
+                                <button id="cancel-reset-btn" class="btn btn-outline-secondary">Cancel</button>
+                            </div>
                         </div>
                     </div>
                     <div class="modal-footer">

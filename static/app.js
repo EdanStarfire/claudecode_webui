@@ -168,7 +168,9 @@ class ClaudeWebUI {
         // Session actions
         document.getElementById('manage-session-btn').addEventListener('click', () => this.showManageSessionModal());
         document.getElementById('restart-session-btn').addEventListener('click', () => this.restartSession());
-        document.getElementById('reset-session-btn').addEventListener('click', () => this.resetSession());
+        document.getElementById('reset-session-btn').addEventListener('click', () => this.showResetConfirmation());
+        document.getElementById('confirm-reset-btn').addEventListener('click', () => this.resetSession());
+        document.getElementById('cancel-reset-btn').addEventListener('click', () => this.hideResetConfirmation());
         document.getElementById('end-session-btn').addEventListener('click', () => this.endSession());
 
         // Project edit modal controls
@@ -348,8 +350,25 @@ class ClaudeWebUI {
     showManageSessionModal() {
         if (!this.currentSessionId) return;
 
+        // Ensure we show the actions view (not confirmation view)
+        this.hideResetConfirmation();
+
         const modal = new bootstrap.Modal(document.getElementById('manage-session-modal'));
         modal.show();
+    }
+
+    showResetConfirmation() {
+        // Hide the main actions
+        document.getElementById('manage-session-actions').classList.add('d-none');
+        // Show the confirmation view
+        document.getElementById('reset-confirmation').classList.remove('d-none');
+    }
+
+    hideResetConfirmation() {
+        // Show the main actions
+        document.getElementById('manage-session-actions').classList.remove('d-none');
+        // Hide the confirmation view
+        document.getElementById('reset-confirmation').classList.add('d-none');
     }
 
     async restartSession() {
@@ -375,25 +394,22 @@ class ClaudeWebUI {
                 await this.loadSessionInfo();
                 // Reload messages
                 await this.loadMessages();
+                // Keep loading screen visible - it will be hidden when session reaches ACTIVE state
+                // via the state_change WebSocket message and updateSessionInfo()
             } else {
                 Logger.error('SESSION', 'Failed to restart session');
                 alert('Failed to restart session');
+                this.showLoading(false);
             }
         } catch (error) {
             Logger.error('SESSION', 'Error restarting session', error);
             alert('Error restarting session');
-        } finally {
             this.showLoading(false);
         }
     }
 
     async resetSession() {
         if (!this.currentSessionId) return;
-
-        // Confirm action
-        if (!confirm('Are you sure you want to reset this session? This will permanently delete all messages and conversation history.')) {
-            return;
-        }
 
         try {
             // Close modal
@@ -417,14 +433,16 @@ class ClaudeWebUI {
                 await this.loadSessionInfo();
                 // Load new messages (should just be client_launched)
                 await this.loadMessages();
+                // Keep loading screen visible - it will be hidden when session reaches ACTIVE state
+                // via the state_change WebSocket message and updateSessionInfo()
             } else {
                 Logger.error('SESSION', 'Failed to reset session');
                 alert('Failed to reset session');
+                this.showLoading(false);
             }
         } catch (error) {
             Logger.error('SESSION', 'Error resetting session', error);
             alert('Error resetting session');
-        } finally {
             this.showLoading(false);
         }
     }
@@ -658,11 +676,14 @@ class ClaudeWebUI {
         }
 
         const session = this.sessions.get(this.currentSessionId);
-        if (session && session.state === 'error') {
-            // Session is in error state, keep controls disabled
-            this.setInputControlsEnabled(false);
+        if (session && session.state === 'starting') {
+            // Session is in starting state, keep controls disabled with starting message
+            this.setInputControlsEnabled(false, 'starting');
+        } else if (session && session.state === 'error') {
+            // Session is in error state, keep controls disabled with error message
+            this.setInputControlsEnabled(false, 'error');
         } else {
-            // Session is not in error state, enable controls
+            // Session is in active state, enable controls
             this.setInputControlsEnabled(true);
         }
     }
@@ -2840,9 +2861,15 @@ class ClaudeWebUI {
             const backendProcessingState = sessionData.session.is_processing || false;
             this.updateProcessingState(backendProcessingState);
 
-            // For non-error sessions: enable controls if not processing, keep disabled if processing
-            if (!backendProcessingState) {
+            // For non-error sessions: enable controls only if not processing AND state is active
+            // Keep disabled during STARTING state (e.g., after reset) to prevent messages from being rejected
+            if (!backendProcessingState && sessionData.session.state === 'active') {
                 this.setInputControlsEnabled(true);
+                // Hide loading screen when session becomes active (after restart/reset)
+                this.showLoading(false);
+            } else if (sessionData.session.state === 'starting') {
+                // Explicitly disable controls during STARTING state
+                this.setInputControlsEnabled(false, 'starting');
             }
         }
 
@@ -3816,7 +3843,7 @@ class ClaudeWebUI {
         alert(`Error: ${message}`);
     }
 
-    setInputControlsEnabled(enabled) {
+    setInputControlsEnabled(enabled, reason = 'error') {
         const messageInput = document.getElementById('message-input');
         const sendButton = document.getElementById('send-btn');
 
@@ -3827,11 +3854,18 @@ class ClaudeWebUI {
             messageInput.placeholder = "Type your message to Claude Code...";
             Logger.debug('UI', 'Input controls enabled');
         } else {
-            // Disable input controls for error state
+            // Disable input controls
             messageInput.disabled = true;
             sendButton.disabled = true;
-            messageInput.placeholder = "Session is in error state - input disabled";
-            Logger.debug('UI', 'Input controls disabled due to error state');
+
+            // Set appropriate placeholder based on reason
+            if (reason === 'starting') {
+                messageInput.placeholder = "Session is starting up, please wait...";
+                Logger.debug('UI', 'Input controls disabled - session starting');
+            } else {
+                messageInput.placeholder = "Session is in error state - input disabled";
+                Logger.debug('UI', 'Input controls disabled due to error state');
+            }
         }
     }
 
