@@ -530,7 +530,7 @@ class ClaudeSDK:
 
                                             # Notify through callback
                                             if self.message_callback:
-                                                await self._safe_callback(self.message_callback, self.session_id, {
+                                                await self._safe_callback(self.message_callback, {
                                                     "type": "system",
                                                     "content": "Session interrupted successfully",
                                                     "subtype": "interrupt_success",
