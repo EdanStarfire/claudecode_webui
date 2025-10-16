@@ -1040,7 +1040,9 @@ class ClaudeWebUI {
         const permissionModeClickable = document.getElementById('permission-mode-clickable');
 
         if (permissionModeText) {
-            permissionModeText.textContent = `Mode: ${mode}`;
+            // Show only mode name on mobile, full text on desktop
+            const isMobile = window.innerWidth < 768;
+            permissionModeText.textContent = isMobile ? mode : `Mode: ${mode}`;
         }
 
         // Update icon and title based on mode
@@ -3049,6 +3051,14 @@ class ClaudeWebUI {
         // Show/hide status bar based on session state
         if (isActive) {
             statusBar.classList.remove('d-none');
+
+            // Initialize auto-scroll text with correct format for current viewport
+            const autoScrollText = document.getElementById('auto-scroll-text');
+            if (autoScrollText) {
+                const isMobile = window.innerWidth < 768;
+                const statusText = this.autoScrollEnabled ? 'ON' : 'OFF';
+                autoScrollText.textContent = isMobile ? ` ${statusText}` : ` Auto-scroll: ${statusText}`;
+            }
         } else {
             statusBar.classList.add('d-none');
             return;
@@ -3079,7 +3089,10 @@ class ClaudeWebUI {
         const config = modeConfig[currentMode] || modeConfig['acceptEdits'];
 
         permissionModeIcon.textContent = config.icon;
-        permissionModeText.textContent = config.label;
+
+        // Show only mode name on mobile, full text on desktop
+        const isMobile = window.innerWidth < 768;
+        permissionModeText.textContent = isMobile ? currentMode : config.label;
 
         // Set description as tooltip on the clickable area
         permissionModeClickable.title = config.description;
@@ -4030,13 +4043,20 @@ class ClaudeWebUI {
     toggleAutoScroll() {
         this.autoScrollEnabled = !this.autoScrollEnabled;
         const button = document.getElementById('auto-scroll-toggle');
+        const autoScrollText = document.getElementById('auto-scroll-text');
 
         if (this.autoScrollEnabled) {
-            button.textContent = '📜 Auto-scroll: ON';
+            if (autoScrollText) {
+                const isMobile = window.innerWidth < 768;
+                autoScrollText.textContent = isMobile ? ' ON' : ' Auto-scroll: ON';
+            }
             button.className = 'btn btn-sm btn-outline-secondary';
             this.smartScrollToBottom();
         } else {
-            button.textContent = '📜 Auto-scroll: OFF';
+            if (autoScrollText) {
+                const isMobile = window.innerWidth < 768;
+                autoScrollText.textContent = isMobile ? ' OFF' : ' Auto-scroll: OFF';
+            }
             button.className = 'btn btn-sm btn-secondary';
         }
     }

@@ -512,6 +512,16 @@ html {
         max-width: 80px;   /* 80% of 100px */
         font-size: 0.85rem; /* Slightly smaller font for better fit */
     }
+
+    /* Status bar buttons compress text on mobile (except auto-scroll which shows short status) */
+    #session-info-btn .btn-text,
+    #manage-session-btn .btn-text {
+        display: none;
+    }
+
+    #status-bar .btn {
+        min-width: 40px; /* Ensure adequate tap target */
+    }
 }
 
 /* Permission Suggestion Styles */
