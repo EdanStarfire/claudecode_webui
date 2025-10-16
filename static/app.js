@@ -348,84 +348,195 @@ class ClaudeWebUI {
     showManageSessionModal() {
         if (!this.currentSessionId) return;
 
-        const modal = new bootstrap.Modal(document.getElementById('manage-session-modal'));
+        // Store original modal content on first access
+        const modalEl = document.getElementById('manage-session-modal');
+        if (!this.manageSessionModalOriginalContent) {
+            this.manageSessionModalOriginalContent = {
+                title: modalEl.querySelector('.modal-title').innerHTML,
+                body: modalEl.querySelector('.modal-body').innerHTML,
+                footer: modalEl.querySelector('.modal-footer').innerHTML
+            };
+        }
+
+        // Restore original content before showing
+        this.restoreManageSessionModal();
+
+        const modal = new bootstrap.Modal(modalEl);
         modal.show();
+    }
+
+    restoreManageSessionModal() {
+        if (!this.manageSessionModalOriginalContent) return;
+
+        const modalEl = document.getElementById('manage-session-modal');
+        const modalTitle = modalEl.querySelector('.modal-title');
+        const modalBody = modalEl.querySelector('.modal-body');
+        const modalFooter = modalEl.querySelector('.modal-footer');
+
+        modalTitle.innerHTML = this.manageSessionModalOriginalContent.title;
+        modalBody.innerHTML = this.manageSessionModalOriginalContent.body;
+        modalFooter.innerHTML = this.manageSessionModalOriginalContent.footer;
+
+        // Reattach event listeners after restoring content
+        this.attachManageSessionListeners();
+    }
+
+    attachManageSessionListeners() {
+        // Reattach event listeners for manage session modal buttons
+        const restartBtn = document.getElementById('restart-session-btn');
+        const resetBtn = document.getElementById('reset-session-btn');
+        const endBtn = document.getElementById('end-session-btn');
+
+        if (restartBtn) restartBtn.addEventListener('click', () => this.restartSession());
+        if (resetBtn) resetBtn.addEventListener('click', () => this.resetSession());
+        if (endBtn) endBtn.addEventListener('click', () => this.endSession());
     }
 
     async restartSession() {
         if (!this.currentSessionId) return;
 
-        try {
-            // Close modal
-            const modalEl = document.getElementById('manage-session-modal');
-            const modal = bootstrap.Modal.getInstance(modalEl);
-            if (modal) modal.hide();
+        const modalEl = document.getElementById('manage-session-modal');
+        const modalBody = modalEl.querySelector('.modal-body');
+        const modalFooter = modalEl.querySelector('.modal-footer');
 
+        try {
             Logger.info('SESSION', 'Restarting session', this.currentSessionId);
-            this.showLoading(true);
+
+            const sessionId = this.currentSessionId;
+
+            // Show loading state in modal
+            modalBody.innerHTML = `
+                <div class="text-center py-4">
+                    <div class="spinner-border text-primary mb-3" role="status">
+                        <span class="visually-hidden">Loading...</span>
+                    </div>
+                    <p class="text-muted">Restarting session...</p>
+                </div>
+            `;
+            modalFooter.innerHTML = ''; // Remove buttons
 
             // Call restart endpoint
-            const response = await this.apiRequest(`/api/sessions/${this.currentSessionId}/restart`, {
+            const response = await this.apiRequest(`/api/sessions/${sessionId}/restart`, {
                 method: 'POST'
             });
 
             if (response.success) {
-                Logger.info('SESSION', 'Session restarted successfully');
-                // Reload session info
-                await this.loadSessionInfo();
-                // Reload messages
-                await this.loadMessages();
+                Logger.info('SESSION', 'Session restarted successfully, reconnecting');
+                // Disconnect WebSocket before calling selectSession to force reconnection
+                this.disconnectSessionWebSocket();
+                // Use selectSession to handle reconnection and state polling
+                await this.selectSession(sessionId);
+
+                // Close modal after successful restart
+                const modal = bootstrap.Modal.getInstance(modalEl);
+                if (modal) modal.hide();
             } else {
                 Logger.error('SESSION', 'Failed to restart session');
                 alert('Failed to restart session');
+                // Restore modal on error
+                this.restoreManageSessionModal();
             }
         } catch (error) {
             Logger.error('SESSION', 'Error restarting session', error);
             alert('Error restarting session');
-        } finally {
-            this.showLoading(false);
+            // Restore modal on error
+            this.restoreManageSessionModal();
         }
     }
 
     async resetSession() {
         if (!this.currentSessionId) return;
 
-        // Confirm action
-        if (!confirm('Are you sure you want to reset this session? This will permanently delete all messages and conversation history.')) {
-            return;
-        }
+        // Show inline confirmation in modal
+        this.showResetSessionConfirmation();
+    }
+
+    showResetSessionConfirmation() {
+        const modalEl = document.getElementById('manage-session-modal');
+        const modalBody = modalEl.querySelector('.modal-body');
+        const modalTitle = modalEl.querySelector('.modal-title');
+        const modalFooter = modalEl.querySelector('.modal-footer');
+
+        // Update modal title
+        modalTitle.innerHTML = 'Reset Session';
+
+        // Replace modal body with confirmation warning
+        modalBody.innerHTML = `
+            <div class="alert alert-danger mb-3">
+                <strong>⚠️ Warning: This action cannot be undone</strong>
+            </div>
+            <p class="text-muted">This will permanently delete all messages and conversation history for this session.</p>
+            <p class="text-muted">The session settings and configuration will be preserved, but you will start with a completely fresh conversation.</p>
+        `;
+
+        // Replace modal footer with confirm/cancel buttons
+        modalFooter.innerHTML = `
+            <button type="button" class="btn btn-secondary" id="reset-cancel-btn">Cancel</button>
+            <button type="button" class="btn btn-danger" id="reset-confirm-btn">Confirm Reset</button>
+        `;
+
+        // Add event listeners
+        document.getElementById('reset-cancel-btn').addEventListener('click', () => {
+            // Restore original modal content
+            this.restoreManageSessionModal();
+        });
+
+        document.getElementById('reset-confirm-btn').addEventListener('click', async () => {
+            await this.confirmResetSession();
+        });
+    }
+
+    async confirmResetSession() {
+        if (!this.currentSessionId) return;
+
+        const modalEl = document.getElementById('manage-session-modal');
+        const modalBody = modalEl.querySelector('.modal-body');
+        const modalFooter = modalEl.querySelector('.modal-footer');
 
         try {
-            // Close modal
-            const modalEl = document.getElementById('manage-session-modal');
-            const modal = bootstrap.Modal.getInstance(modalEl);
-            if (modal) modal.hide();
-
             Logger.info('SESSION', 'Resetting session', this.currentSessionId);
-            this.showLoading(true);
+
+            const sessionId = this.currentSessionId;
+
+            // Show loading state in modal
+            modalBody.innerHTML = `
+                <div class="text-center py-4">
+                    <div class="spinner-border text-primary mb-3" role="status">
+                        <span class="visually-hidden">Loading...</span>
+                    </div>
+                    <p class="text-muted">Resetting session...</p>
+                </div>
+            `;
+            modalFooter.innerHTML = ''; // Remove buttons
 
             // Call reset endpoint
-            const response = await this.apiRequest(`/api/sessions/${this.currentSessionId}/reset`, {
+            const response = await this.apiRequest(`/api/sessions/${sessionId}/reset`, {
                 method: 'POST'
             });
 
             if (response.success) {
-                Logger.info('SESSION', 'Session reset successfully');
-                // Clear UI messages
+                Logger.info('SESSION', 'Session reset successfully, reconnecting');
+                // Clear UI messages before reconnecting
                 document.getElementById('messages-area').innerHTML = '';
-                // Reload session info
-                await this.loadSessionInfo();
-                // Load new messages (should just be client_launched)
-                await this.loadMessages();
+                // Disconnect WebSocket before calling selectSession to force reconnection
+                this.disconnectSessionWebSocket();
+                // Use selectSession to handle reconnection and state polling
+                await this.selectSession(sessionId);
+
+                // Close modal after successful reset
+                const modal = bootstrap.Modal.getInstance(modalEl);
+                if (modal) modal.hide();
             } else {
                 Logger.error('SESSION', 'Failed to reset session');
                 alert('Failed to reset session');
+                // Restore modal on error
+                this.restoreManageSessionModal();
             }
         } catch (error) {
             Logger.error('SESSION', 'Error resetting session', error);
             alert('Error resetting session');
-        } finally {
-            this.showLoading(false);
+            // Restore modal on error
+            this.restoreManageSessionModal();
         }
     }
 
@@ -440,8 +551,8 @@ class ClaudeWebUI {
 
             Logger.info('SESSION', 'Ending session', this.currentSessionId);
 
-            // Call disconnect endpoint
-            await this.apiRequest(`/api/sessions/${this.currentSessionId}/disconnect`, {
+            // Call terminate endpoint to properly set session state
+            await this.apiRequest(`/api/sessions/${this.currentSessionId}/terminate`, {
                 method: 'POST'
             });
 
@@ -450,7 +561,7 @@ class ClaudeWebUI {
 
         } catch (error) {
             Logger.error('SESSION', 'Error ending session', error);
-            // Still exit UI even if disconnect fails
+            // Still exit UI even if terminate fails
             this.exitSession();
         }
     }

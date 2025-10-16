@@ -554,6 +554,9 @@ class SessionCoordinator:
             if not disconnect_result:
                 logger.warning(f"SDK disconnect returned False for session {session_id}")
 
+            # Update session state to TERMINATED after disconnect
+            await self.session_manager.update_session_state(session_id, SessionState.TERMINATED)
+
             # Wait a moment for cleanup
             await asyncio.sleep(0.5)
 
@@ -587,6 +590,7 @@ class SessionCoordinator:
             sdk = self._active_sdks.get(session_id)
             if sdk:
                 await sdk.disconnect()
+                await self.session_manager.update_session_state(session_id, SessionState.TERMINATED)
                 await asyncio.sleep(0.5)
                 del self._active_sdks[session_id]
 
