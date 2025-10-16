@@ -152,7 +152,7 @@ html {
 }
 
 .message-row.user {
-    background-color: #e7f3ff;
+    background-color: #f3e7ff;  /* Light purple */
 }
 
 .message-row.assistant,
@@ -349,7 +349,7 @@ html {
     font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
     font-size: 0.85rem;
     white-space: pre-wrap;
-    background: rgba(255, 255, 255, 0.4);  /* Subtle white overlay instead of solid */
+    background: #e7f3ff;  /* Light blue (former user message color) */
     padding: 0.5rem;
     border-radius: 0.25rem;
     border: 1px solid rgba(0, 0, 0, 0.05); /* Subtle border for definition */
