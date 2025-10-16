@@ -300,18 +300,28 @@ html {
 .message-content .accordion-button,
 .message-content-column .accordion-button {
     background-color: transparent;
-    padding: 0.5rem 0.75rem;
+    padding: 0.375rem 0.75rem;  /* Reduced from 0.5rem to 0.375rem */
     font-size: 0.9rem !important; /* Override Bootstrap's 1rem */
+    box-shadow: none;            /* Remove focus shadow */
 }
 
 .message-content .accordion-button:not(.collapsed),
 .message-content-column .accordion-button:not(.collapsed) {
     background-color: transparent;
     color: inherit;
+    box-shadow: none;            /* Remove "selected" highlight */
 }
 
-.accordion-body {
-    padding: 0.75rem 0.75rem;
+.message-content .accordion-body,
+.message-content-column .accordion-body {
+    padding: 0.5rem 0.75rem;  /* Reduced top/bottom padding */
+    background: transparent;   /* Inherit message row background */
+}
+
+/* Remove focus highlight to prevent "selected" state appearance */
+.accordion-button:focus {
+    box-shadow: none;
+    border-color: transparent;
 }
 
 .accordion .tool-status-icon {
@@ -339,9 +349,10 @@ html {
     font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
     font-size: 0.85rem;
     white-space: pre-wrap;
-    background: #f8f9fa;
+    background: rgba(255, 255, 255, 0.4);  /* Subtle white overlay instead of solid */
     padding: 0.5rem;
     border-radius: 0.25rem;
+    border: 1px solid rgba(0, 0, 0, 0.05); /* Subtle border for definition */
     overflow-x: auto;
 }
 
