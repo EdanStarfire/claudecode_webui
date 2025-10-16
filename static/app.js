@@ -779,6 +779,7 @@ class ClaudeWebUI {
             sendBtn.textContent = 'Send';
             sendBtn.title = '';
             sendBtn.disabled = false;
+            sendBtn.className = 'btn btn-primary'; // Reset to blue primary button
         }
 
         if (interruptSendBtn) {
