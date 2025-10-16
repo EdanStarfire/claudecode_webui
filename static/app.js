@@ -618,6 +618,9 @@ class ClaudeWebUI {
         if (!message || !this.currentSessionId) return;
 
         try {
+            // Disable input temporarily while submitting
+            input.disabled = true;
+
             // Send via WebSocket if connected
             if (this.websocket && this.sessionWebsocket.readyState === WebSocket.OPEN) {
                 this.sessionWebsocket.send(JSON.stringify({
@@ -642,12 +645,17 @@ class ClaudeWebUI {
             input.value = '';
             this.resetTextareaHeight(input);
 
+            // Re-enable input after message is sent
+            input.disabled = false;
+
             // Clear cached input for this session since message was sent
             if (this.currentSessionId) {
                 this.sessionInputCache.delete(this.currentSessionId);
             }
         } catch (error) {
             Logger.error('MESSAGE', 'Failed to send message', error);
+            // Re-enable input on error
+            input.disabled = false;
         }
     }
 
