@@ -908,6 +908,14 @@ class SessionCoordinator:
                     except Exception as e:
                         logger.error(f"Failed to reset processing state for session {session_id}: {e}")
 
+                # Also reset processing state on interrupt_success
+                if parsed_message.type.value == 'system' and parsed_message.metadata.get('subtype') == 'interrupt_success':
+                    try:
+                        await self.session_manager.update_processing_state(session_id, False)
+                        coord_logger.info(f"Reset processing state for session {session_id} after interrupt")
+                    except Exception as e:
+                        logger.error(f"Failed to reset processing state after interrupt for session {session_id}: {e}")
+
                 # Call registered callbacks with processed message (maintain backward compatibility)
                 callbacks = self._message_callbacks.get(session_id, [])
                 # logger.info(f"Processing message for session {session_id}, found {len(callbacks)} callbacks")

@@ -470,6 +470,25 @@ class ClaudeSDK:
                 if self.session_manager:
                     await self.session_manager.mark_session_active(self.session_id)
 
+                # Start SINGLE global response consumer for ALL queries
+                async def consume_all_responses():
+                    """Consume all responses from all queries for entire session"""
+                    try:
+                        async for response_message in client.receive_messages():
+                            if self._shutdown_event.is_set():
+                                break
+                            await self._process_sdk_message(response_message)
+                            self._session_health_checks["total_responses_received"] += 1
+                            self._session_health_checks["last_successful_response"] = time.time()
+                    except Exception as e:
+                        if not self._shutdown_event.is_set():
+                            logger.error(f"Error in global response consumer: {e}")
+
+                # Start response consumer as background task
+                response_consumer_task = asyncio.create_task(consume_all_responses())
+                sdk_logger.info("Global response consumer started")
+
+                # Main message loop - just send queries, consumer handles all responses
                 while not self._shutdown_event.is_set():
                     try:
                         message_data = await asyncio.wait_for(
@@ -495,105 +514,30 @@ class ClaudeSDK:
                             self.info.message_count += 1
                             self.info.last_activity = time.time()
 
+                            # Just send query - global response consumer handles all responses
                             await client.query(content)
                             self._session_health_checks["total_queries_sent"] += 1
                             self._session_health_checks["last_successful_query"] = time.time()
-
-                            # Process all responses for this query using background task pattern (like GitHub example)
-                            async def consume_messages():
-                                async for response_message in client.receive_response():
-                                    if self._shutdown_event.is_set():
-                                        break
-                                    await self._process_sdk_message(response_message)
-                                    self._session_health_checks["total_responses_received"] += 1
-
-                            # Start message consumption task
-                            consume_task = asyncio.create_task(consume_messages())
-
-                            # Monitor for interrupt requests while consuming messages
-                            try:
-                                while not consume_task.done():
-                                    try:
-                                        # Check for interrupt requests with short timeout
-                                        interrupt_check = await asyncio.wait_for(
-                                            self._message_queue.get(),
-                                            timeout=0.1
-                                        )
-
-                                        if interrupt_check and interrupt_check.get("type") == "interrupt_request":
-                                            sdk_logger.info(f"INTERRUPT RECEIVED while processing messages for session {self.session_id}")
-                                            sdk_logger.debug(f"Calling client.interrupt() for session {self.session_id}")
-                                            await client.interrupt()
-                                            sdk_logger.info(f"INTERRUPT SENT successfully to SDK for session {self.session_id}")
-
-                                            # Note: Interrupt message storage and notification is now handled by session coordinator
-
-                                            # Notify through callback
-                                            if self.message_callback:
-                                                await self._safe_callback(self.message_callback, self.session_id, {
-                                                    "type": "system",
-                                                    "content": "Session interrupted successfully",
-                                                    "subtype": "interrupt_success",
-                                                    "session_id": self.session_id,
-                                                    "timestamp": time.time()
-                                                })
-
-                                            # Mark task as done and break monitoring loop
-                                            self._message_queue.task_done()
-                                            break
-                                        else:
-                                            # Put non-interrupt message back for later processing
-                                            await self._message_queue.put(interrupt_check)
-                                            self._message_queue.task_done()
-
-                                    except asyncio.TimeoutError:
-                                        # No messages in queue, continue monitoring
-                                        continue
-
-                            except Exception as monitor_error:
-                                logger.error(f"Error in interrupt monitoring: {monitor_error}")
-
-                            # Wait for message consumption to complete
-                            with contextlib.suppress(asyncio.CancelledError):
-                                await consume_task
-
-                            self._session_health_checks["last_successful_response"] = time.time()
+                            sdk_logger.debug(f"Query sent to SDK, responses will be handled by global consumer")
 
                         elif message_type == "interrupt_request":
-                            # This case should not happen anymore since we handle interrupts during message processing
-                            sdk_logger.debug(f"RECEIVED INTERRUPT REQUEST outside of message processing for session {self.session_id}")
-                            sdk_logger.debug(f"This should not happen - interrupts should be handled during active message processing")
-                            # Just mark as done since interrupt should be handled during active message processing
-                            pass
+                            # Handle interrupt request directly
+                            sdk_logger.info(f"INTERRUPT RECEIVED for session {self.session_id}")
+                            try:
+                                await client.interrupt()
+                                sdk_logger.info(f"INTERRUPT SENT successfully to SDK for session {self.session_id}")
 
-                        elif message_data and message_data.get("content"):
-                            # Fallback for older format (backwards compatibility)
-                            content = message_data["content"]
-                            sdk_logger.debug(f"Processing legacy message format: {content[:100]}...")
-
-                            # Store user message if storage available
-                            if self.storage_manager:
-                                await self.storage_manager.append_message({
-                                    "type": "user",
-                                    "content": content,
-                                    "session_id": self.session_id
-                                })
-
-                            self.info.message_count += 1
-                            self.info.last_activity = time.time()
-
-                            await client.query(content)
-                            self._session_health_checks["total_queries_sent"] += 1
-                            self._session_health_checks["last_successful_query"] = time.time()
-
-                            # Process all responses for this query (maintains session continuity)
-                            async for response_message in client.receive_response():
-                                if self._shutdown_event.is_set():
-                                    break
-                                await self._process_sdk_message(response_message)
-                                self._session_health_checks["total_responses_received"] += 1
-
-                            self._session_health_checks["last_successful_response"] = time.time()
+                                # Notify through callback
+                                if self.message_callback:
+                                    await self._safe_callback(self.message_callback, {
+                                        "type": "system",
+                                        "content": "Session interrupted successfully",
+                                        "subtype": "interrupt_success",
+                                        "session_id": self.session_id,
+                                        "timestamp": time.time()
+                                    })
+                            except Exception as e:
+                                logger.error(f"Failed to send interrupt: {e}")
 
 
                         self._message_queue.task_done()
@@ -608,6 +552,17 @@ class ClaudeSDK:
                         logger.error(f"Error processing message: {e}")
                         if self.error_callback:
                             await self._safe_callback(self.error_callback, "message_processing_error", e)
+
+                # Cleanup response consumer task
+                sdk_logger.info("Cleaning up global response consumer")
+                response_consumer_task.cancel()
+                try:
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await response_consumer_task
+                    sdk_logger.info("Global response consumer cleaned up successfully")
+                except Exception as e:
+                    logger.error(f"Error during response consumer cleanup: {e}")
+                    sdk_logger.info("Global response consumer cleanup completed with errors")
 
             # Update health monitoring state
             self._session_health_checks["context_manager_active"] = False
