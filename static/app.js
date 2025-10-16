@@ -220,6 +220,7 @@ class ClaudeWebUI {
 
         // Message sending
         document.getElementById('send-btn').addEventListener('click', () => this.handleSendButtonClick());
+        document.getElementById('interrupt-send-btn').addEventListener('click', () => this.handleInterruptSendClick());
         const messageInput = document.getElementById('message-input');
         messageInput.addEventListener('keydown', (e) => {
             if (e.key === 'Enter' && !e.shiftKey) {
@@ -605,21 +606,16 @@ class ClaudeWebUI {
     }
 
     handleSendButtonClick() {
-        if (this.isProcessing && !this.isInterrupting) {
-            // Currently processing, button should act as Stop
-            this.sendInterrupt();
-        } else if (!this.isProcessing && !this.isInterrupting) {
-            // Not processing, button should act as Send
-            this.sendMessage();
-        }
-        // If isInterrupting is true, button is disabled so this shouldn't be called
+        // Always send message (queue if processing, send immediately if not)
+        this.sendMessage();
     }
 
     async sendMessage() {
         const input = document.getElementById('message-input');
         const message = input.value.trim();
 
-        if (!message || !this.currentSessionId || this.isProcessing) return;
+        // Allow sending while processing (for queuing)
+        if (!message || !this.currentSessionId) return;
 
         try {
             // Send via WebSocket if connected
@@ -652,6 +648,39 @@ class ClaudeWebUI {
             }
         } catch (error) {
             Logger.error('MESSAGE', 'Failed to send message', error);
+        }
+    }
+
+    async handleInterruptSendClick() {
+        if (!this.currentSessionId || !this.isProcessing) {
+            Logger.debug('INTERRUPT', 'handleInterruptSendClick() called but conditions not met');
+            return;
+        }
+
+        try {
+            Logger.info('INTERRUPT', 'User clicked Interrupt & Send');
+
+            // Disable interrupt button while processing
+            const interruptSendBtn = document.getElementById('interrupt-send-btn');
+            if (interruptSendBtn) {
+                interruptSendBtn.disabled = true;
+                interruptSendBtn.textContent = 'Interrupting...';
+            }
+
+            // Send interrupt first
+            await this.sendInterrupt();
+
+            // Wait a moment for interrupt to process
+            await new Promise(resolve => setTimeout(resolve, 300));
+
+            // Then send the queued message
+            await this.sendMessage();
+
+            Logger.info('INTERRUPT', 'Interrupt and message sent successfully');
+
+        } catch (error) {
+            Logger.error('INTERRUPT', 'Failed interrupt and send operation', error);
+            this.hideProcessingIndicator();
         }
     }
 
@@ -703,37 +732,60 @@ class ClaudeWebUI {
     showProcessingIndicator() {
         this.isProcessing = true;
         this.isInterrupting = false;
-        const progressElement = document.getElementById('claude-progress');
-        const sendButton = document.getElementById('send-btn');
-        const messageInput = document.getElementById('message-input');
 
+        const sendBtn = document.getElementById('send-btn');
+        const interruptSendBtn = document.getElementById('interrupt-send-btn');
+        const messageInput = document.getElementById('message-input');
+        const progressElement = document.getElementById('claude-progress');
+
+        if (sendBtn) {
+            sendBtn.textContent = 'Queue';
+            sendBtn.title = 'Queue message to send after current operation completes';
+        }
+
+        if (interruptSendBtn) {
+            interruptSendBtn.classList.remove('d-none'); // Show interrupt button
+        }
+
+        if (messageInput) {
+            messageInput.disabled = false; // Keep input enabled
+            messageInput.placeholder = "Queue next message or interrupt...";
+        }
+
+        // Show processing indicator in status bar
         if (progressElement) {
             progressElement.classList.remove('d-none');
-        }
-        if (sendButton) {
-            sendButton.disabled = false; // Keep enabled for Stop functionality
-            sendButton.textContent = 'Stop';
-            sendButton.className = 'btn btn-danger'; // Change to red Stop button
-        }
-        if (messageInput) {
-            messageInput.disabled = true;
-            // Ensure processing state styling, not error state styling
-            messageInput.placeholder = "Processing...";
         }
     }
 
     hideProcessingIndicator() {
         this.isProcessing = false;
         this.isInterrupting = false;
-        const progressElement = document.getElementById('claude-progress');
-        const sendButton = document.getElementById('send-btn');
 
+        const sendBtn = document.getElementById('send-btn');
+        const interruptSendBtn = document.getElementById('interrupt-send-btn');
+        const messageInput = document.getElementById('message-input');
+        const progressElement = document.getElementById('claude-progress');
+
+        if (sendBtn) {
+            sendBtn.textContent = 'Send';
+            sendBtn.title = '';
+            sendBtn.disabled = false;
+        }
+
+        if (interruptSendBtn) {
+            interruptSendBtn.classList.add('d-none'); // Hide interrupt button
+            interruptSendBtn.disabled = false;
+        }
+
+        if (messageInput) {
+            messageInput.disabled = false;
+            messageInput.placeholder = "Type your message to Claude Code...";
+        }
+
+        // Hide processing indicator
         if (progressElement) {
             progressElement.classList.add('d-none');
-        }
-        if (sendButton) {
-            sendButton.textContent = 'Send';
-            sendButton.className = 'btn btn-primary'; // Restore primary button styling
         }
 
         // Re-enable controls only if current session is not in error state
@@ -3929,21 +3981,40 @@ class ClaudeWebUI {
 
     setInputControlsEnabled(enabled) {
         const messageInput = document.getElementById('message-input');
-        const sendButton = document.getElementById('send-btn');
+        const sendBtn = document.getElementById('send-btn');
+        const interruptSendBtn = document.getElementById('interrupt-send-btn');
 
-        if (enabled) {
-            // Enable input controls
+        // Always keep input enabled to allow queuing
+        if (messageInput) {
             messageInput.disabled = false;
-            sendButton.disabled = false;
-            messageInput.placeholder = "Type your message to Claude Code...";
-            Logger.debug('UI', 'Input controls enabled');
-        } else {
-            // Disable input controls for error state
-            messageInput.disabled = true;
-            sendButton.disabled = true;
-            messageInput.placeholder = "Session is in error state - input disabled";
-            Logger.debug('UI', 'Input controls disabled due to error state');
         }
+
+        if (sendBtn) {
+            sendBtn.disabled = !enabled;
+        }
+
+        if (interruptSendBtn) {
+            interruptSendBtn.disabled = !enabled;
+        }
+
+        // Update placeholders based on session state
+        const session = this.sessions.get(this.currentSessionId);
+        if (session && session.state === 'error') {
+            if (messageInput) {
+                messageInput.disabled = true;
+                messageInput.placeholder = "Session is in error state - input disabled";
+            }
+        } else if (this.isProcessing) {
+            if (messageInput) {
+                messageInput.placeholder = "Queue next message or interrupt...";
+            }
+        } else {
+            if (messageInput) {
+                messageInput.placeholder = "Type your message to Claude Code...";
+            }
+        }
+
+        Logger.debug('UI', enabled ? 'Input controls enabled' : 'Input controls disabled');
     }
 
     // Auto-scroll functionality
