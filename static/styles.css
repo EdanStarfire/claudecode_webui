@@ -494,6 +494,13 @@ html {
     #sidebar-toggle-btn {
         padding: 0.2rem 0.4rem;
     }
+
+    /* Shrink speaker column to 80% of desktop size */
+    .message-speaker {
+        min-width: 64px;   /* 80% of 80px */
+        max-width: 80px;   /* 80% of 100px */
+        font-size: 0.85rem; /* Slightly smaller font for better fit */
+    }
 }
 
 /* Permission Suggestion Styles */
