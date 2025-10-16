@@ -474,7 +474,7 @@ class ClaudeSDK:
                 async def consume_all_responses():
                     """Consume all responses from all queries for entire session"""
                     try:
-                        async for response_message in client.receive_response():
+                        async for response_message in client.receive_messages():
                             if self._shutdown_event.is_set():
                                 break
                             await self._process_sdk_message(response_message)
@@ -539,35 +539,6 @@ class ClaudeSDK:
                             except Exception as e:
                                 logger.error(f"Failed to send interrupt: {e}")
 
-                        elif message_data and message_data.get("content"):
-                            # Fallback for older format (backwards compatibility)
-                            content = message_data["content"]
-                            sdk_logger.debug(f"Processing legacy message format: {content[:100]}...")
-
-                            # Store user message if storage available
-                            if self.storage_manager:
-                                await self.storage_manager.append_message({
-                                    "type": "user",
-                                    "content": content,
-                                    "session_id": self.session_id
-                                })
-
-                            self.info.message_count += 1
-                            self.info.last_activity = time.time()
-
-                            await client.query(content)
-                            self._session_health_checks["total_queries_sent"] += 1
-                            self._session_health_checks["last_successful_query"] = time.time()
-
-                            # Process all responses for this query (maintains session continuity)
-                            async for response_message in client.receive_response():
-                                if self._shutdown_event.is_set():
-                                    break
-                                await self._process_sdk_message(response_message)
-                                self._session_health_checks["total_responses_received"] += 1
-
-                            self._session_health_checks["last_successful_response"] = time.time()
-
 
                         self._message_queue.task_done()
 
@@ -585,9 +556,13 @@ class ClaudeSDK:
                 # Cleanup response consumer task
                 sdk_logger.info("Cleaning up global response consumer")
                 response_consumer_task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await response_consumer_task
-                sdk_logger.info("Global response consumer cleaned up")
+                try:
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await response_consumer_task
+                    sdk_logger.info("Global response consumer cleaned up successfully")
+                except Exception as e:
+                    logger.error(f"Error during response consumer cleanup: {e}")
+                    sdk_logger.info("Global response consumer cleanup completed with errors")
 
             # Update health monitoring state
             self._session_health_checks["context_manager_active"] = False
