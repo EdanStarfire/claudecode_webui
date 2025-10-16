@@ -315,7 +315,7 @@ html {
 .message-content .accordion-body,
 .message-content-column .accordion-body {
     padding: 0.5rem 0.75rem;  /* Reduced top/bottom padding */
-    background: transparent;   /* Inherit message row background */
+    background: #d0e7ff;       /* Match agent/assistant background */
 }
 
 /* Remove focus highlight to prevent "selected" state appearance */
