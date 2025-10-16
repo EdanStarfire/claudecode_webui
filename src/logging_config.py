@@ -88,6 +88,7 @@ def configure_logging(
         'debug_storage': debug_storage or debug_all,
         'debug_parser': debug_parser or debug_all,
         'debug_error_handler': debug_error_handler or debug_all,
+        'debug_session_manager': debug_all,
         'log_dir': log_dir
     }
 
@@ -145,6 +146,12 @@ def configure_logging(
             'file': f"{log_dir}/error.log",
             'enabled': _log_config['debug_error_handler'],
             'console': _log_config['debug_error_handler'],
+            'level': logging.DEBUG
+        },
+        'session_manager': {
+            'file': f"{log_dir}/session_manager.log",
+            'enabled': _log_config['debug_session_manager'],
+            'console': _log_config['debug_session_manager'],
             'level': logging.DEBUG
         }
     }

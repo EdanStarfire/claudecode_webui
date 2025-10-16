@@ -20,6 +20,11 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
+from .logging_config import get_logger
+
+# Get specialized logger for session manager actions
+session_logger = get_logger('session_manager', category='SESSION_MANAGER')
+# Keep standard logger for errors
 logger = logging.getLogger(__name__)
 
 
@@ -90,7 +95,7 @@ class SessionManager:
             self.data_dir.mkdir(exist_ok=True)
             self.sessions_dir.mkdir(exist_ok=True)
             await self._load_existing_sessions()
-            logger.info(f"SessionManager initialized with {len(self._active_sessions)} existing sessions")
+            session_logger.info(f"SessionManager initialized with {len(self._active_sessions)} existing sessions")
         except Exception as e:
             logger.error(f"Failed to initialize SessionManager: {e}")
             raise
@@ -117,14 +122,14 @@ class SessionManager:
                                 session_info.state = SessionState.CREATED
                                 session_info.updated_at = datetime.now(timezone.utc)
                                 state_changed = True
-                                logger.info(f"Reset session {session_info.session_id} from {original_state.value} to {session_info.state.value} on startup")
+                                session_logger.info(f"Reset session {session_info.session_id} from {original_state.value} to {session_info.state.value} on startup")
 
                             # Reset processing state since no SDKs are running on startup
                             if session_info.is_processing:
                                 session_info.is_processing = False
                                 session_info.updated_at = datetime.now(timezone.utc)
                                 state_changed = True
-                                logger.info(f"Reset processing state for session {session_info.session_id} from {original_processing} to False on startup")
+                                session_logger.info(f"Reset processing state for session {session_info.session_id} from {original_processing} to False on startup")
 
                             self._active_sessions[session_info.session_id] = session_info
 
@@ -132,7 +137,7 @@ class SessionManager:
                             if state_changed:
                                 await self._persist_session_state(session_info.session_id)
                             self._session_locks[session_info.session_id] = asyncio.Lock()
-                            logger.debug(f"Loaded session {session_info.session_id} with state {session_info.state}")
+                            session_logger.debug(f"Loaded session {session_info.session_id} with state {session_info.state}")
                         except Exception as e:
                             logger.error(f"Failed to load session from {session_dir}: {e}")
         except Exception as e:
@@ -185,7 +190,7 @@ class SessionManager:
 
             await self._persist_session_state(session_id)
 
-            logger.info(f"Created session {session_id}")
+            session_logger.info(f"Created session {session_id}")
 
         except Exception as e:
             logger.error(f"Failed to create session {session_id}: {e}")
@@ -206,14 +211,14 @@ class SessionManager:
                     return False
 
                 if session.state not in [SessionState.CREATED, SessionState.PAUSED, SessionState.TERMINATED]:
-                    logger.warning(f"Cannot start session {session_id} in state {session.state}")
+                    session_logger.warning(f"Cannot start session {session_id} in state {session.state}")
                     return False
 
                 await self._update_session_state(session_id, SessionState.STARTING)
 
                 # Session will remain in STARTING state until SDK is ready
                 # SDK will call mark_session_active() when context manager is initialized
-                logger.info(f"Session {session_id} moved to STARTING state - waiting for SDK initialization")
+                session_logger.info(f"Session {session_id} moved to STARTING state - waiting for SDK initialization")
                 return True
 
             except Exception as e:
@@ -231,11 +236,11 @@ class SessionManager:
                     return False
 
                 if session.state != SessionState.STARTING:
-                    logger.warning(f"Cannot activate session {session_id} in state {session.state}")
+                    session_logger.warning(f"Cannot activate session {session_id} in state {session.state}")
                     return False
 
                 await self._update_session_state(session_id, SessionState.ACTIVE)
-                logger.info(f"Session {session_id} marked as ACTIVE - SDK ready")
+                session_logger.info(f"Session {session_id} marked as ACTIVE - SDK ready")
                 return True
 
         except Exception as e:
@@ -252,11 +257,11 @@ class SessionManager:
                     return False
 
                 if session.state != SessionState.ACTIVE:
-                    logger.warning(f"Cannot pause session {session_id} in state {session.state}")
+                    session_logger.warning(f"Cannot pause session {session_id} in state {session.state}")
                     return False
 
                 await self._update_session_state(session_id, SessionState.PAUSED)
-                logger.info(f"Paused session {session_id}")
+                session_logger.info(f"Paused session {session_id}")
                 return True
 
             except Exception as e:
@@ -269,11 +274,11 @@ class SessionManager:
             try:
                 session = self._active_sessions.get(session_id)
                 if not session:
-                    logger.warning(f"Session {session_id} not found for termination")
+                    session_logger.warning(f"Session {session_id} not found for termination")
                     return False
 
                 if session.state == SessionState.TERMINATED:
-                    logger.info(f"Session {session_id} already terminated")
+                    session_logger.info(f"Session {session_id} already terminated")
                     return True
 
                 await self._update_session_state(session_id, SessionState.TERMINATING)
@@ -282,7 +287,7 @@ class SessionManager:
                 await asyncio.sleep(0.1)  # Placeholder for cleanup logic
 
                 await self._update_session_state(session_id, SessionState.TERMINATED)
-                logger.info(f"Terminated session {session_id}")
+                session_logger.info(f"Terminated session {session_id}")
                 return True
 
             except Exception as e:
@@ -295,7 +300,7 @@ class SessionManager:
         async with self._get_session_lock(session_id):
             try:
                 await self._update_session_state(session_id, new_state, error_message)
-                logger.info(f"Updated session {session_id} state to {new_state.value}")
+                session_logger.info(f"Updated session {session_id} state to {new_state.value}")
                 return True
             except Exception as e:
                 logger.error(f"Failed to update session {session_id} state to {new_state.value}: {e}")
@@ -314,7 +319,7 @@ class SessionManager:
                 session.updated_at = datetime.now(timezone.utc)
                 await self._persist_session_state(session_id)
                 await self._notify_state_change_callbacks(session_id, session.state)
-                logger.info(f"Updated session {session_id} processing state to {is_processing}")
+                session_logger.info(f"Updated session {session_id} processing state to {is_processing}")
                 return True
             except Exception as e:
                 logger.error(f"Failed to update session {session_id} processing state: {e}")
@@ -343,7 +348,7 @@ class SessionManager:
             if session:
                 sessions.append(session)
             else:
-                logger.warning(f"Session {session_id} not found in get_sessions_by_ids")
+                session_logger.warning(f"Session {session_id} not found in get_sessions_by_ids")
         return sessions
 
     async def get_session_directory(self, session_id: str) -> Optional[Path]:
@@ -403,7 +408,7 @@ class SessionManager:
                 session.claude_code_session_id = claude_code_session_id
                 session.updated_at = datetime.now(timezone.utc)
                 await self._persist_session_state(session_id)
-                logger.info(f"Updated Claude Code session ID for {session_id}: {claude_code_session_id}")
+                session_logger.info(f"Updated Claude Code session ID for {session_id}: {claude_code_session_id}")
 
             except Exception as e:
                 logger.error(f"Failed to update Claude Code session ID for {session_id}: {e}")
@@ -422,7 +427,7 @@ class SessionManager:
                 session.updated_at = datetime.now(timezone.utc)
                 await self._persist_session_state(session_id)
                 await self._notify_state_change_callbacks(session_id, session.state)
-                logger.info(f"Updated session {session_id} name to '{name}'")
+                session_logger.info(f"Updated session {session_id} name to '{name}'")
                 return True
             except Exception as e:
                 logger.error(f"Failed to update session {session_id} name: {e}")
@@ -447,7 +452,7 @@ class SessionManager:
                 session.updated_at = datetime.now(timezone.utc)
                 await self._persist_session_state(session_id)
                 await self._notify_state_change_callbacks(session_id, session.state)
-                logger.info(f"Updated session {session_id} permission mode to '{mode}'")
+                session_logger.info(f"Updated session {session_id} permission mode to '{mode}'")
                 return True
             except Exception as e:
                 logger.error(f"Failed to update session {session_id} permission mode: {e}")
@@ -467,14 +472,14 @@ class SessionManager:
                 if session_dir.exists():
                     try:
                         shutil.rmtree(session_dir)
-                        logger.info(f"Deleted session directory: {session_dir}")
+                        session_logger.info(f"Deleted session directory: {session_dir}")
                     except Exception as e:
-                        logger.warning(f"Standard deletion failed for {session_dir}: {e}")
+                        session_logger.warning(f"Standard deletion failed for {session_dir}: {e}")
 
                         # Try Windows-specific fallback deletion
                         if os.name == 'nt':  # Windows
                             try:
-                                logger.info(f"Attempting Windows-specific deletion for {session_dir}")
+                                session_logger.info(f"Attempting Windows-specific deletion for {session_dir}")
 
                                 # Method 1: Try to remove directory after ensuring we're not in it
                                 # Force garbage collection to clear any directory references
@@ -490,7 +495,7 @@ class SessionManager:
                                 )
 
                                 if result.returncode == 0:
-                                    logger.info(f"Successfully deleted directory using Windows rmdir: {session_dir}")
+                                    session_logger.info(f"Successfully deleted directory using Windows rmdir: {session_dir}")
                                 else:
                                     logger.error(f"Windows rmdir failed: {result.stderr}")
                                     # Don't proceed with memory cleanup if file deletion failed
@@ -512,7 +517,7 @@ class SessionManager:
                 if session_id in self._session_locks:
                     del self._session_locks[session_id]
 
-                logger.info(f"Successfully deleted session {session_id}")
+                session_logger.info(f"Successfully deleted session {session_id}")
                 return True
 
             except Exception as e:
@@ -532,7 +537,7 @@ class SessionManager:
                 session.updated_at = datetime.now(timezone.utc)
                 await self._persist_session_state(session_id)
                 await self._notify_state_change_callbacks(session_id, session.state)
-                logger.info(f"Updated session {session_id} order to {order}")
+                session_logger.info(f"Updated session {session_id} order to {order}")
                 return True
             except Exception as e:
                 logger.error(f"Failed to update session {session_id} order: {e}")
@@ -548,7 +553,7 @@ class SessionManager:
                 if session:
                     valid_session_ids.append(session_id)
                 else:
-                    logger.warning(f"Session {session_id} not found during reorder")
+                    session_logger.warning(f"Session {session_id} not found during reorder")
 
             if not valid_session_ids:
                 logger.error("No valid sessions found for reordering")
@@ -564,7 +569,7 @@ class SessionManager:
             # Check if all updates succeeded
             success_count = sum(1 for result in results if result is True)
             if success_count == len(valid_session_ids):
-                logger.info(f"Successfully reordered {success_count} sessions")
+                session_logger.info(f"Successfully reordered {success_count} sessions")
                 return True
             else:
                 logger.error(f"Reorder partially failed: {success_count}/{len(valid_session_ids)} sessions updated")
