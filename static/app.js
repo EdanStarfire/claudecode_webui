@@ -148,9 +148,90 @@ class ClaudeWebUI {
 
         // Load projects and sessions on startup
         await this.loadSessions();
+
+        // Restore session from URL if present
+        const sessionId = this.getSessionIdFromURL();
+        if (sessionId) {
+            if (this.sessions.has(sessionId)) {
+                Logger.info('SESSION', 'Restoring session from URL', sessionId);
+                await this.selectSession(sessionId);
+            } else {
+                Logger.warn('SESSION', 'Session from URL not found', sessionId);
+                this.updateURLWithSession(null);
+                this.showNoSessionSelected();
+            }
+        }
+    }
+
+    /**
+     * Update URL hash with current session ID
+     */
+    updateURLWithSession(sessionId) {
+        if (!sessionId) {
+            // Clear session from URL
+            if (window.location.hash.startsWith('#session/')) {
+                history.pushState(null, '', window.location.pathname);
+            }
+            return;
+        }
+
+        const newHash = `#session/${sessionId}`;
+        if (window.location.hash !== newHash) {
+            history.pushState(null, '', newHash);
+        }
+    }
+
+    /**
+     * Get session ID from URL hash
+     * @returns {string|null} Session ID or null if not present
+     */
+    getSessionIdFromURL() {
+        const hash = window.location.hash;
+        const match = hash.match(/^#session\/([a-f0-9-]+)$/);
+        return match ? match[1] : null;
+    }
+
+    /**
+     * Handle browser back/forward navigation
+     */
+    async handlePopState() {
+        const sessionId = this.getSessionIdFromURL();
+
+        if (sessionId) {
+            // Check if session exists
+            if (this.sessions.has(sessionId)) {
+                await this.selectSession(sessionId);
+            } else {
+                // Session not found - clear URL and show no session selected
+                Logger.warn('SESSION', 'Session from URL not found during navigation', sessionId);
+                this.updateURLWithSession(null);
+                this.showNoSessionSelected();
+            }
+        } else {
+            // No session in URL - show "no session selected" view
+            this.showNoSessionSelected();
+        }
+    }
+
+    /**
+     * Show "no session selected" state
+     */
+    showNoSessionSelected() {
+        this.currentSessionId = null;
+        this.disconnectSessionWebSocket();
+        document.getElementById('chat-container').classList.add('d-none');
+        document.getElementById('no-session-selected').classList.remove('d-none');
+
+        // Clear active state from all sessions in sidebar
+        document.querySelectorAll('.list-group-item[data-session-id]').forEach(item => {
+            item.classList.remove('active');
+        });
     }
 
     setupEventListeners() {
+        // Handle browser back/forward buttons
+        window.addEventListener('popstate', () => this.handlePopState());
+
         // Project controls
         document.getElementById('create-project-btn').addEventListener('click', () => this.showCreateProjectModal());
         document.getElementById('refresh-sessions-btn').addEventListener('click', () => this.refreshSessions());
@@ -585,6 +666,9 @@ class ClaudeWebUI {
 
         // Clear current session
         this.currentSessionId = null;
+
+        // Clear URL
+        this.updateURLWithSession(null);
 
         // Reset UI to no session selected state
         document.getElementById('no-session-selected').classList.remove('d-none');
@@ -2258,6 +2342,9 @@ class ClaudeWebUI {
             }
 
             this.currentSessionId = sessionId;
+
+            // Update URL with current session
+            this.updateURLWithSession(sessionId);
 
             // Processing state will be set by loadSessionInfo() call below
 
