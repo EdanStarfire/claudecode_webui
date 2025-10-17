@@ -146,6 +146,23 @@ class ClaudeWebUI {
         this.connectUIWebSocket();
         this.updateConnectionStatus('disconnected');
 
+        // Configure markdown renderer
+        if (typeof marked !== 'undefined') {
+            marked.setOptions({
+                gfm: true,              // GitHub Flavored Markdown
+                breaks: true,           // Convert \n to <br>
+                headerIds: false,       // Don't add IDs to headers (security)
+                mangle: false,          // Don't mangle email addresses
+                pedantic: false,        // Use modern markdown
+                sanitize: false,        // We'll use DOMPurify instead
+                smartypants: false,     // Don't convert quotes/dashes
+                xhtml: false            // Don't use XHTML tags
+            });
+            Logger.info('MARKDOWN', 'Markdown rendering enabled with marked.js');
+        } else {
+            Logger.warn('MARKDOWN', 'marked.js not loaded - markdown rendering disabled');
+        }
+
         // Load projects and sessions on startup
         await this.loadSessions();
 
@@ -3395,8 +3412,78 @@ class ClaudeWebUI {
             return `<div class="message-content" style="font-family: monospace; white-space: pre; background-color: #f8f9fa; padding: 8px; border-radius: 4px; font-size: 0.9em;">${this.escapeHtml(content.trim())}</div>`;
         }
 
-        // Trim leading/trailing whitespace (internal newlines preserved by CSS white-space: pre-wrap)
+        // Render markdown for assistant messages
+        if (message.type === 'assistant') {
+            const markdownHtml = this.renderMarkdown(content.trim());
+            return `<div class="message-content markdown-content">${markdownHtml}</div>`;
+        }
+
+        // Render markdown for user messages (for clarity and consistency)
+        if (message.type === 'user') {
+            const markdownHtml = this.renderMarkdown(content.trim());
+            return `<div class="message-content markdown-content">${markdownHtml}</div>`;
+        }
+
+        // Default: plain text with HTML escaping
         return `<div class="message-content">${this.escapeHtml(content.trim())}</div>`;
+    }
+
+    /**
+     * Render markdown content to sanitized HTML
+     * @param {string} content - Markdown text
+     * @returns {string} Sanitized HTML
+     */
+    renderMarkdown(content) {
+        if (!content) return '';
+
+        // Check if libraries are available
+        if (typeof marked === 'undefined' || typeof DOMPurify === 'undefined') {
+            Logger.warn('MARKDOWN', 'Markdown libraries not available, falling back to plain text');
+            return this.escapeHtml(content);
+        }
+
+        try {
+            // Render markdown to HTML
+            let rawHtml = marked.parse(content);
+
+            // Remove newlines immediately after closing tags within lists
+            // This fixes the issue where marked.js adds newlines between tags
+            rawHtml = rawHtml.replace(/(<\/(?:ul|ol|p|pre)>)\n/g, '$1');
+
+            // Remove newlines immediately after opening and closing blockquote tags
+            rawHtml = rawHtml.replace(/(<blockquote>)\n/g, '$1');
+            rawHtml = rawHtml.replace(/(<\/blockquote>)\n/g, '$1');
+
+            // Sanitize HTML to prevent XSS
+            const cleanHtml = DOMPurify.sanitize(rawHtml, {
+                ALLOWED_TAGS: [
+                    'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+                    'p', 'br', 'hr',
+                    'ul', 'ol', 'li',
+                    'blockquote', 'pre', 'code',
+                    'a', 'strong', 'em', 'del', 'ins',
+                    'table', 'thead', 'tbody', 'tr', 'th', 'td',
+                    'details', 'summary'
+                ],
+                ALLOWED_ATTR: ['href', 'title', 'class', 'rel', 'target'],
+                ALLOW_DATA_ATTR: false,
+                // Force links to open in new tab
+                HOOKS: {
+                    afterSanitizeAttributes: function(node) {
+                        if (node.tagName === 'A') {
+                            node.setAttribute('target', '_blank');
+                            node.setAttribute('rel', 'noopener noreferrer');
+                        }
+                    }
+                }
+            });
+
+            return cleanHtml;
+        } catch (error) {
+            Logger.error('MARKDOWN', 'Failed to render markdown', error);
+            // Fallback to escaped plain text
+            return this.escapeHtml(content);
+        }
     }
 
     /**

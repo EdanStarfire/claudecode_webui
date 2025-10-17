@@ -665,3 +665,207 @@ html {
 .mode-change-flash {
     animation: mode-change-flash 0.6s ease-in-out 3;
 }
+
+/* ========== MARKDOWN CONTENT STYLES ========== */
+
+.markdown-content {
+    line-height: 1.4 !important;
+    display: inline-grid;
+}
+
+/* Headers */
+.markdown-content h1,
+.markdown-content h2,
+.markdown-content h3,
+.markdown-content h4,
+.markdown-content h5,
+.markdown-content h6 {
+    margin-top: 0;
+    margin-bottom: 0;
+    font-weight: 600;
+}
+
+.markdown-content h1 { font-size: 1.15rem; border-bottom: 1px solid #e1e4e8; padding-bottom: 0.5rem; }
+.markdown-content h2 { font-size: 1.1rem; border-bottom: 1px solid #e1e4e8; padding-bottom: 0.5rem; }
+.markdown-content h3 { font-size: 1.05rem; padding-bottom: 0.5rem; }
+.markdown-content h4 { font-size: 1rem; padding-bottom: 0.5rem; }
+.markdown-content h5 { font-size: 0.95rem; padding-bottom: 0.5rem; }
+.markdown-content h6 { font-size: 0.9rem; color: #6a737d; padding-bottom: 0.5rem; }
+
+.markdown-content h1:first-child,
+.markdown-content h2:first-child,
+.markdown-content h3:first-child {
+    margin-top: 0;
+}
+
+/* Paragraphs */
+.markdown-content p {
+    margin-top: 0;
+    margin-bottom: 0;
+}
+
+.markdown-content p:last-child {
+    margin-bottom: 0;
+}
+
+/* Lists */
+.markdown-content ul,
+.markdown-content ol {
+    margin-top: 0;
+    margin-bottom: 0;
+    padding-left: 1.5rem;
+    display: grid;
+    font-size: 0; /* Collapse whitespace text nodes between tags */
+}
+
+.markdown-content li {
+    margin-top: 0;
+    margin-bottom: 0;
+    font-size: 0.875rem; /* Restore font size for list content */
+}
+
+.markdown-content li > p {
+    line-height: 1;
+    margin: 0;
+}
+
+.markdown-content ul ul,
+.markdown-content ol ol,
+.markdown-content ul ol,
+.markdown-content ol ul {
+    margin-top: 0;
+    margin-bottom: 0;
+}
+
+/* Code blocks */
+.markdown-content pre {
+    background: #f6f8fa;
+    border: 1px solid #e1e4e8;
+    border-radius: 4px;
+    padding: 0.5rem;
+    overflow-x: auto;
+    margin-top: 0;
+    margin-bottom: 0;
+    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+    font-size: 0.875rem;
+}
+
+.markdown-content pre code {
+    background: transparent;
+    border: none;
+    padding: 0;
+    font-size: inherit;
+}
+
+/* Inline code */
+.markdown-content code {
+    background: #f6f8fa;
+    border: 1px solid #e1e4e8;
+    border-radius: 3px;
+    padding: 0.1em 0.3em;
+    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+    font-size: 0.875em;
+}
+
+/* Blockquotes */
+.markdown-content blockquote {
+    border-left: 4px solid #dfe2e5;
+    padding-left: 0.75rem;
+    margin-top: 0;
+    margin-bottom: 0;
+    margin-left: 0;
+    color: #6a737d;
+}
+
+.markdown-content blockquote p {
+    margin-top: 0;
+    margin-bottom: 0;
+}
+
+/* Links */
+.markdown-content a {
+    color: #0366d6;
+    text-decoration: none;
+}
+
+.markdown-content a:hover {
+    text-decoration: underline;
+}
+
+/* Tables */
+.markdown-content table {
+    border-collapse: collapse;
+    width: 100%;
+    margin-top: 0;
+    margin-bottom: 0;
+    font-size: 0.875rem;
+}
+
+.markdown-content th,
+.markdown-content td {
+    border: 1px solid #dfe2e5;
+    padding: 0.35rem 0.5rem;
+    text-align: left;
+}
+
+.markdown-content th {
+    background: #f6f8fa;
+    font-weight: 600;
+}
+
+.markdown-content tr:nth-child(even) {
+    background: #f6f8fa;
+}
+
+/* Horizontal rules */
+.markdown-content hr {
+    border: none;
+    border-top: 1px solid #e1e4e8;
+    margin: 0;
+}
+
+/* Strong and emphasis */
+.markdown-content strong {
+    font-weight: 600;
+}
+
+.markdown-content em {
+    font-style: italic;
+}
+
+/* Strikethrough and insert */
+.markdown-content del {
+    text-decoration: line-through;
+    opacity: 0.7;
+}
+
+.markdown-content ins {
+    text-decoration: underline;
+    background: #ffffcc;
+}
+
+/* Details/Summary (collapsible sections) */
+.markdown-content details {
+    margin-top: 0;
+    margin-bottom: 0;
+    border: 1px solid #e1e4e8;
+    border-radius: 4px;
+    padding: 0.35rem;
+}
+
+.markdown-content summary {
+    cursor: pointer;
+    font-weight: 600;
+    padding: 0.35rem;
+    user-select: none;
+}
+
+.markdown-content summary:hover {
+    background: #f6f8fa;
+    border-radius: 4px;
+}
+
+/* Adjust spacing for nested elements */
+.markdown-content > *:last-child {
+    margin-bottom: 0;
+}
