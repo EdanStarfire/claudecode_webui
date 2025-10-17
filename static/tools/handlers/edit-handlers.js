@@ -81,6 +81,29 @@ class EditToolHandler {
         return diffHtml;
     }
 
+    countChangedLines(oldString, newString) {
+        // Count actual changed lines using diff library
+        if (typeof Diff === 'undefined') {
+            // Fallback: count all lines in both strings (additions + deletions)
+            const oldLines = oldString.split('\n').filter(line => line.length > 0).length;
+            const newLines = newString.split('\n').filter(line => line.length > 0).length;
+            return oldLines + newLines;
+        }
+
+        // Use Diff.diffLines to get actual line-level changes
+        const changes = Diff.diffLines(oldString, newString);
+        let linesChanged = 0;
+
+        changes.forEach(change => {
+            if (change.added || change.removed) {
+                // Count lines that were added or removed
+                linesChanged += change.count || 0;
+            }
+        });
+
+        return linesChanged;
+    }
+
     renderResult(toolCall, escapeHtmlFn) {
         if (!toolCall.result) return '';
 
@@ -118,10 +141,11 @@ class EditToolHandler {
         const filePath = toolCall.input.file_path || 'Unknown';
         const fileName = filePath.split(/[/\\]/).pop();
 
-        // Count lines changed
-        const oldLines = (toolCall.input.old_string || '').split('\n').length;
-        const newLines = (toolCall.input.new_string || '').split('\n').length;
-        const linesChanged = Math.max(oldLines, newLines);
+        // Count actual changed lines (additions + deletions)
+        const linesChanged = this.countChangedLines(
+            toolCall.input.old_string || '',
+            toolCall.input.new_string || ''
+        );
 
         let statusText = '';
         if (toolCall.status === 'completed' && !toolCall.result?.error) {
@@ -230,6 +254,29 @@ class MultiEditToolHandler {
         return diffHtml;
     }
 
+    countChangedLines(oldString, newString) {
+        // Count actual changed lines using diff library
+        if (typeof Diff === 'undefined') {
+            // Fallback: count all lines in both strings (additions + deletions)
+            const oldLines = oldString.split('\n').filter(line => line.length > 0).length;
+            const newLines = newString.split('\n').filter(line => line.length > 0).length;
+            return oldLines + newLines;
+        }
+
+        // Use Diff.diffLines to get actual line-level changes
+        const changes = Diff.diffLines(oldString, newString);
+        let linesChanged = 0;
+
+        changes.forEach(change => {
+            if (change.added || change.removed) {
+                // Count lines that were added or removed
+                linesChanged += change.count || 0;
+            }
+        });
+
+        return linesChanged;
+    }
+
     renderResult(toolCall, escapeHtmlFn) {
         if (!toolCall.result) return '';
 
@@ -271,7 +318,12 @@ class MultiEditToolHandler {
 
         let statusText = '';
         if (toolCall.status === 'completed' && !toolCall.result?.error) {
-            statusText = `${editCount} edits`;
+            // Count total changed lines across all edits
+            const edits = toolCall.input.edits || [];
+            const totalLinesChanged = edits.reduce((sum, edit) => {
+                return sum + this.countChangedLines(edit.old_string || '', edit.new_string || '');
+            }, 0);
+            statusText = `${editCount} edits, ${totalLinesChanged} lines changed`;
         } else if (toolCall.result?.error) {
             statusText = 'Error';
         } else {
