@@ -3231,6 +3231,12 @@ class ClaudeWebUI {
                 label: 'Mode: plan',
                 description: 'Click to cycle modes • Read-only mode',
                 color: 'blue'
+            },
+            'bypassPermissions': {
+                icon: '🚫',
+                label: 'Mode: bypassPermissions',
+                description: 'Click to cycle modes • No permission prompts (most permissive)',
+                color: 'red'
             }
         };
 
@@ -3255,8 +3261,18 @@ class ClaudeWebUI {
             return;
         }
 
-        // Define cycle order (excluding bypassPermissions for safety)
-        const modeOrder = ['default', 'acceptEdits', 'plan'];
+        // Determine available modes based on initial permission mode
+        const initialMode = session.initial_permission_mode || session.current_permission_mode;
+        let modeOrder;
+
+        if (initialMode === 'bypassPermissions') {
+            // Include bypassPermissions in cycle if session started with it
+            modeOrder = ['default', 'acceptEdits', 'plan', 'bypassPermissions'];
+        } else {
+            // Exclude bypassPermissions for safety if session didn't start with it
+            modeOrder = ['default', 'acceptEdits', 'plan'];
+        }
+
         const currentMode = session.current_permission_mode || 'acceptEdits';
         const currentIndex = modeOrder.indexOf(currentMode);
         const nextIndex = (currentIndex + 1) % modeOrder.length;
