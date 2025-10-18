@@ -380,8 +380,7 @@ html {
 
 /* Compaction accordion styling */
 .message-row.compaction {
-    background-color: #fff3cd;
-    border-left: 3px solid #ffc107;
+    background-color: #f0f0f0;  /* Match system message background */
 }
 
 .compaction-accordion .accordion-item {
@@ -390,15 +389,17 @@ html {
 }
 
 .compaction-accordion .accordion-button {
-    background-color: transparent;
+    background-color: #f0f0f0;  /* Match system message background */
     font-weight: 500;
-    color: #856404;
-    padding: 0.5rem 1rem;
+    color: inherit;
+    padding: 0.375rem 0.75rem;  /* Match tool accordion padding */
+    font-size: 0.9rem !important; /* Match tool accordion font size */
+    box-shadow: none;
 }
 
 .compaction-accordion .accordion-button:not(.collapsed) {
-    background-color: transparent;
-    color: #856404;
+    background-color: #f0f0f0;  /* Match system message background */
+    color: inherit;
     box-shadow: none;
 }
 
@@ -408,9 +409,8 @@ html {
 }
 
 .compaction-accordion .accordion-body {
-    padding: 1rem;
-    background-color: #fffbf0;
-    border-radius: 0.25rem;
+    padding: 0.5rem 0.75rem;  /* Match tool accordion body padding */
+    background-color: #f0f0f0;  /* Match system message background */
 }
 
 .compaction-content {
