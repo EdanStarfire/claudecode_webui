@@ -88,8 +88,8 @@ class ClaudeWebUI {
         this.toolHandlerRegistry.registerHandler('Task', new TaskToolHandler());
         this.toolHandlerRegistry.registerHandler('ExitPlanMode', new ExitPlanModeToolHandler());
 
-        // Register pattern handlers for MCP tools (can be customized later)
-        // this.toolHandlerRegistry.registerPatternHandler('mcp__*', new McpToolHandler());
+        // Register pattern handlers for MCP tools
+        this.toolHandlerRegistry.registerPatternHandler('mcp__*', new McpToolHandler());
     }
 
     initializeStatusColors() {
