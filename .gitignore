@@ -209,3 +209,9 @@ __marimo__/
 data/
 tmp*/
 test_data/
+
+# Claude settings
+.claude/settings.local.json
+
+# MCP configuration
+.mcp.json
