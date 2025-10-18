@@ -378,6 +378,46 @@ html {
     font-size: 0.9rem;
 }
 
+/* Compaction accordion styling */
+.message-row.compaction {
+    background-color: #fff3cd;
+    border-left: 3px solid #ffc107;
+}
+
+.compaction-accordion .accordion-item {
+    border: none;
+    background-color: transparent;
+}
+
+.compaction-accordion .accordion-button {
+    background-color: transparent;
+    font-weight: 500;
+    color: #856404;
+    padding: 0.5rem 1rem;
+}
+
+.compaction-accordion .accordion-button:not(.collapsed) {
+    background-color: transparent;
+    color: #856404;
+    box-shadow: none;
+}
+
+.compaction-accordion .accordion-button:focus {
+    box-shadow: none;
+    border-color: transparent;
+}
+
+.compaction-accordion .accordion-body {
+    padding: 1rem;
+    background-color: #fffbf0;
+    border-radius: 0.25rem;
+}
+
+.compaction-content {
+    max-height: 400px;
+    overflow-y: auto;
+}
+
 /* Todo items */
 .todo-item {
     display: flex;

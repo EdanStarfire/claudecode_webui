@@ -59,6 +59,9 @@ class ClaudeWebUI {
         this.defaultToolHandler = new DefaultToolHandler();
         this.initializeToolHandlers();
 
+        // Compaction message pairing
+        this.pendingCompactionBoundary = null;
+
         // Permission mode tracking
         this.currentPermissionMode = 'default'; // default, acceptEdits, plan, etc.
 
@@ -1035,6 +1038,23 @@ class ClaudeWebUI {
     processMessage(message, source = 'websocket') {
         Logger.debug('MESSAGE', `Processing message from ${source}`, message);
 
+        // Check if this user message follows a compaction boundary
+        if (this.pendingCompactionBoundary &&
+            message.type === 'user' &&
+            message.content.startsWith('This session is being continued')) {
+
+            // Combine messages into compaction component
+            this.addCompactionToUI(this.pendingCompactionBoundary, message, source !== 'historical');
+            this.pendingCompactionBoundary = null;
+            return { handled: true, displayed: true };
+        }
+
+        // Clear pending boundary if we get a non-matching message
+        if (this.pendingCompactionBoundary) {
+            Logger.warn('COMPACTION', 'Compaction boundary without matching user message', this.pendingCompactionBoundary);
+            this.pendingCompactionBoundary = null;
+        }
+
         // Handle progress indicator for init messages (real-time only)
         const subtype = message.subtype || message.metadata?.subtype;
         if (source === 'websocket' && message.type === 'system' && subtype === 'init') {
@@ -1059,6 +1079,12 @@ class ClaudeWebUI {
             } else {
                 Logger.warn('SESSION_INFO', 'Init message received but no init_data in metadata', message);
             }
+        }
+
+        // Check if this is a compaction boundary message
+        const compactionHandled = this.handleCompactionMessage(message);
+        if (compactionHandled) {
+            return { handled: true, displayed: false };
         }
 
         // Check if this is a tool-related message and handle it
@@ -1086,6 +1112,24 @@ class ClaudeWebUI {
     handleIncomingMessage(message) {
         // Use unified processing for real-time messages
         this.processMessage(message, 'websocket');
+    }
+
+    /**
+     * Handle compaction boundary messages
+     * @param {Object} message - Message to check
+     * @returns {boolean} True if message was a compaction boundary and handled
+     */
+    handleCompactionMessage(message) {
+        // Only process system messages with compact_boundary subtype
+        const subtype = message.subtype || message.metadata?.subtype;
+        if (message.type !== 'system' || subtype !== 'compact_boundary') {
+            return false;
+        }
+
+        // Store this message for pairing with next user message
+        this.pendingCompactionBoundary = message;
+        Logger.debug('COMPACTION', 'Compaction boundary message detected, waiting for continuation', message);
+        return true; // Message handled, don't display separately
     }
 
     /**
@@ -3245,8 +3289,9 @@ class ClaudeWebUI {
         const messagesArea = document.getElementById('messages-area');
         messagesArea.innerHTML = '';
 
-        // Clear the tool call manager for fresh loading
+        // Clear the tool call manager and compaction state for fresh loading
         this.toolCallManager = new ToolCallManager();
+        this.pendingCompactionBoundary = null;
 
         // Single-pass processing for historical messages using unified logic
         Logger.debug('MESSAGE', 'Processing historical messages with unified single-pass approach', {count: messages.length});
@@ -3264,6 +3309,82 @@ class ClaudeWebUI {
 
         Logger.debug('MESSAGE', 'Single-pass processing complete', {toolUseCount, messageCount: messages.length});
         this.smartScrollToBottom();
+    }
+
+    /**
+     * Add compaction accordion to UI
+     * @param {Object} boundaryMsg - System message with compact_boundary subtype
+     * @param {Object} contentMsg - User message with compaction summary
+     * @param {boolean} scroll - Whether to scroll to bottom
+     */
+    addCompactionToUI(boundaryMsg, contentMsg, scroll = true) {
+        const messagesArea = document.getElementById('messages-area');
+
+        // Extract compaction metadata
+        const compactMetadata = boundaryMsg.metadata?.init_data?.compact_metadata || {};
+        const preTokens = compactMetadata.pre_tokens || 0;
+        const trigger = compactMetadata.trigger || 'auto';
+
+        // Calculate percentage of context limit
+        const contextLimit = 200000; // SDK's context limit
+        const percentage = Math.round((preTokens / contextLimit) * 100);
+
+        // Generate unique ID for accordion
+        const compactionId = `compaction-${boundaryMsg.timestamp || Date.now()}`;
+
+        // Extract content (remove the leading explanation line)
+        const fullContent = contentMsg.content || '';
+        const summaryContent = fullContent.split('\n').slice(1).join('\n').trim();
+
+        // Render summary as markdown
+        const contentHtml = this.renderMarkdown(summaryContent);
+
+        // Create accordion element
+        const compactionElement = document.createElement('div');
+        compactionElement.className = 'message-row row py-1 compaction';
+
+        // Build accordion HTML (using existing Bootstrap accordion pattern)
+        const timestamp = new Date(boundaryMsg.timestamp).toLocaleTimeString();
+        compactionElement.innerHTML = `
+            <div class="col-auto message-speaker text-end pe-3" title="${timestamp}">
+                system
+            </div>
+            <div class="col message-content-column">
+                <div class="accordion compaction-accordion">
+                    <div class="accordion-item">
+                        <h2 class="accordion-header">
+                            <button class="accordion-button collapsed" type="button"
+                                    data-bs-toggle="collapse"
+                                    data-bs-target="#${compactionId}"
+                                    aria-expanded="false"
+                                    aria-controls="${compactionId}">
+                                🗜️ Compacting at ${percentage}% of context limit
+                            </button>
+                        </h2>
+                        <div id="${compactionId}" class="accordion-collapse collapse">
+                            <div class="accordion-body">
+                                <div class="compaction-content markdown-content">
+                                    ${contentHtml}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `;
+
+        messagesArea.appendChild(compactionElement);
+
+        if (scroll) {
+            this.smartScrollToBottom();
+        }
+
+        Logger.debug('COMPACTION', 'Compaction accordion added to UI', {
+            percentage,
+            preTokens,
+            trigger,
+            compactionId
+        });
     }
 
     addMessageToUI(message, scroll = true) {
