@@ -48,6 +48,7 @@ class SessionInfo:
     updated_at: datetime
     working_directory: Optional[str] = None
     current_permission_mode: str = "acceptEdits"
+    initial_permission_mode: Optional[str] = None
     system_prompt: Optional[str] = None
     tools: List[str] = None
     model: Optional[str] = None
@@ -110,6 +111,11 @@ class SessionManager:
                         try:
                             with open(state_file, 'r') as f:
                                 data = json.load(f)
+
+                            # Migration: Add initial_permission_mode if missing
+                            if 'initial_permission_mode' not in data:
+                                data['initial_permission_mode'] = data.get('current_permission_mode', 'acceptEdits')
+
                             session_info = SessionInfo.from_dict(data)
 
                             # Reset active/starting sessions to created state on startup
@@ -172,6 +178,7 @@ class SessionManager:
             updated_at=now,
             working_directory=working_directory,
             current_permission_mode=permission_mode,
+            initial_permission_mode=permission_mode,
             system_prompt=system_prompt,
             tools=tools if tools is not None else [],
             model=model,
