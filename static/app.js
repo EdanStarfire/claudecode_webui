@@ -279,8 +279,6 @@ class ClaudeWebUI {
 
         // Session edit modal controls
         document.getElementById('save-session-btn').addEventListener('click', () => this.confirmSessionRename());
-        document.getElementById('delete-session-from-edit-btn').addEventListener('click', () => this.showDeleteSessionConfirmation());
-        document.getElementById('confirm-delete-session').addEventListener('click', () => this.confirmDeleteSession());
 
         // Folder browser modal controls
         document.getElementById('folder-browser-up').addEventListener('click', () => {
@@ -488,10 +486,12 @@ class ClaudeWebUI {
         const restartBtn = document.getElementById('restart-session-btn');
         const resetBtn = document.getElementById('reset-session-btn');
         const endBtn = document.getElementById('end-session-btn');
+        const deleteBtn = document.getElementById('delete-session-from-manage-btn');
 
         if (restartBtn) restartBtn.addEventListener('click', () => this.restartSession());
         if (resetBtn) resetBtn.addEventListener('click', () => this.resetSession());
         if (endBtn) endBtn.addEventListener('click', () => this.endSession());
+        if (deleteBtn) deleteBtn.addEventListener('click', () => this.showDeleteSessionConfirmationInline());
     }
 
     async restartSession() {
@@ -4162,44 +4162,70 @@ class ClaudeWebUI {
         }
     }
 
-    showDeleteSessionConfirmation() {
-        if (!this.editingSessionId) return;
+    showDeleteSessionConfirmationInline() {
+        if (!this.currentSessionId) return;
 
-        const session = this.sessions.get(this.editingSessionId);
+        const session = this.sessions.get(this.currentSessionId);
         if (!session) return;
 
-        // Hide edit modal first
-        this.hideEditSessionModal();
+        const modalEl = document.getElementById('manage-session-modal');
+        const modalBody = modalEl.querySelector('.modal-body');
+        const modalTitle = modalEl.querySelector('.modal-title');
+        const modalFooter = modalEl.querySelector('.modal-footer');
 
-        // Show delete confirmation modal
-        const sessionName = session.name || this.editingSessionId;
-        document.getElementById('delete-session-name').textContent = sessionName;
-        const modalElement = document.getElementById('delete-session-modal');
-        const modal = new bootstrap.Modal(modalElement);
-        modal.show();
+        const sessionName = session.name || this.currentSessionId;
+
+        // Update modal title
+        modalTitle.innerHTML = 'Delete Session';
+
+        // Replace modal body with confirmation warning
+        modalBody.innerHTML = `
+            <div class="alert alert-danger mb-3">
+                <strong>⚠️ Warning: This action cannot be undone</strong>
+            </div>
+            <p class="text-muted">This will permanently delete session <strong>${this.escapeHtml(sessionName)}</strong>.</p>
+            <p class="text-muted">All messages, conversation history, settings, and configuration will be completely destroyed. This is more destructive than Reset Session.</p>
+        `;
+
+        // Replace modal footer with confirm/cancel buttons
+        modalFooter.innerHTML = `
+            <button type="button" class="btn btn-secondary" id="delete-cancel-btn">Cancel</button>
+            <button type="button" class="btn btn-danger" id="delete-confirm-btn">Delete Session</button>
+        `;
+
+        // Add event listeners
+        document.getElementById('delete-cancel-btn').addEventListener('click', () => {
+            // Restore original modal content
+            this.restoreManageSessionModal();
+        });
+
+        document.getElementById('delete-confirm-btn').addEventListener('click', async () => {
+            await this.confirmDeleteSessionFromManage();
+        });
     }
 
-    hideDeleteSessionModal() {
-        const modalElement = document.getElementById('delete-session-modal');
-        const modal = bootstrap.Modal.getInstance(modalElement);
-        if (modal) {
-            modal.hide();
-        }
-    }
+    async confirmDeleteSessionFromManage() {
+        if (!this.currentSessionId) return;
 
-    async confirmDeleteSession() {
-        if (!this.editingSessionId) return;
-
-        const sessionIdToDelete = this.editingSessionId;
-        const confirmBtn = document.getElementById('confirm-delete-session');
-        const cancelBtn = document.querySelector('#delete-session-modal .btn-secondary');
+        const modalEl = document.getElementById('manage-session-modal');
+        const modalBody = modalEl.querySelector('.modal-body');
+        const modalFooter = modalEl.querySelector('.modal-footer');
 
         try {
-            // Disable both buttons to prevent double-clicks
-            confirmBtn.disabled = true;
-            if (cancelBtn) cancelBtn.disabled = true;
+            Logger.info('SESSION', 'Deleting session', this.currentSessionId);
 
-            this.showLoading(true);
+            const sessionIdToDelete = this.currentSessionId;
+
+            // Show loading state in modal
+            modalBody.innerHTML = `
+                <div class="text-center py-4">
+                    <div class="spinner-border text-primary mb-3" role="status">
+                        <span class="visually-hidden">Loading...</span>
+                    </div>
+                    <p class="text-muted">Deleting session...</p>
+                </div>
+            `;
+            modalFooter.innerHTML = ''; // Remove buttons
 
             // Mark session as being deleted to prevent race conditions
             this.deletingSessions.add(sessionIdToDelete);
@@ -4228,7 +4254,11 @@ class ClaudeWebUI {
                 this.sessionInputCache.delete(sessionIdToDelete);
 
                 // Session successfully deleted
-                this.hideDeleteSessionModal();
+                Logger.info('SESSION', 'Session deleted successfully', sessionIdToDelete);
+
+                // Close modal after successful deletion
+                const modal = bootstrap.Modal.getInstance(modalEl);
+                if (modal) modal.hide();
 
                 // If this was the current session, exit it
                 if (this.currentSessionId === sessionIdToDelete) {
@@ -4237,8 +4267,6 @@ class ClaudeWebUI {
 
                 // Refresh the sessions list
                 this.renderSessions();
-
-                Logger.info('SESSION', 'Session deleted successfully', sessionIdToDelete);
             } else {
                 // Restore session to map and orderedSessions if deletion failed
                 const sessionData = await this.apiRequest(`/api/sessions/${sessionIdToDelete}`).catch(() => null);
@@ -4254,31 +4282,14 @@ class ClaudeWebUI {
             }
         } catch (error) {
             Logger.error('SESSION', 'Failed to delete session', error);
-            this.showError(`Failed to delete session: ${error.message}`);
-
-            // Try to restore session to map and orderedSessions if deletion failed
-            try {
-                const sessionData = await this.apiRequest(`/api/sessions/${sessionIdToDelete}`);
-                if (sessionData && sessionData.session) {
-                    this.sessions.set(sessionIdToDelete, sessionData.session);
-                    // Re-add to orderedSessions if not already present
-                    if (!this.orderedSessions.find(s => s.session_id === sessionIdToDelete)) {
-                        this.orderedSessions.push(sessionData.session);
-                    }
-                    this.renderSessions();
-                }
-            } catch (restoreError) {
-                Logger.debug('SESSION', 'Could not restore session data after failed deletion');
-            }
+            alert('Failed to delete session');
+            // Restore modal on error
+            this.restoreManageSessionModal();
         } finally {
-            // Re-enable buttons
-            confirmBtn.disabled = false;
-            if (cancelBtn) cancelBtn.disabled = false;
-
             // Always remove from deleting set
-            this.deletingSessions.delete(sessionIdToDelete);
-            this.showLoading(false);
-            this.editingSessionId = null;
+            if (this.currentSessionId) {
+                this.deletingSessions.delete(this.currentSessionId);
+            }
         }
     }
 
