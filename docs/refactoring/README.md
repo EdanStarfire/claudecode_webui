@@ -42,6 +42,21 @@ Uses behavior mixins composed via Object.assign() into main class. Creates ~9 be
 - 6-phase migration strategy (4 weeks)
 - Behavior isolation testing examples
 
+### Plan 4: Hybrid Layer-Domain Architecture (RECOMMENDED)
+**File**: [plan4_hybrid_full.md](./plan4_hybrid_full.md)
+
+Combines the architectural rigor of Plan 2 with the developer-friendly organization of Plan 1. Creates ~18 modules with layer boundaries AND domain organization.
+
+**Highlights**:
+- Complete implementation guide with 18 fully-detailed modules
+- Layer 1 (Presentation): 5 modules for pure UI rendering
+- Layer 2 (Business): 8 modules organized by domain (session, messages, projects)
+- Layer 3 (Data): 5 modules for external communication
+- Slim app.js orchestrator (~200 LOC vs current 5016 LOC)
+- 6-week migration strategy with weekly milestones
+- Complete testing strategy (unit, integration, end-to-end)
+- Addresses weaknesses found in all three original plans
+
 ## Summary Plans (Posted to GitHub Issue #13)
 
 Concise summaries of each plan are available in the GitHub issue:
@@ -104,20 +119,28 @@ Three specialized reviewers analyzed all three plans across different dimensions
 
 ## Quick Comparison
 
-| Criterion | Plan 1 | Plan 2 | Plan 3 | Hybrid |
-|-----------|--------|--------|--------|--------|
+| Criterion | Plan 1 | Plan 2 | Plan 3 | Plan 4 (Hybrid) ⭐ |
+|-----------|--------|--------|--------|---------------------|
 | **Module Count** | 15 | 30 | 9 | 18 |
-| **Refactoring Accuracy** | 7.0/10 | 8.5/10 | 4.5/10 | 8.5/10 |
-| **Best Practices** | 7.5/10 | 8.5/10 | 5.0/10 | 8.5/10 |
-| **Code Quality** | 8.5/10 | 7.0/10 | 5.5/10 | 8.5/10 |
+| **Refactoring Accuracy** | 7.0/10 | 8.5/10 | 4.5/10 | **8.5/10** |
+| **Best Practices** | 7.5/10 | 8.5/10 | 5.0/10 | **8.5/10** |
+| **Code Quality** | 8.5/10 | 7.0/10 | 5.5/10 | **8.5/10** |
+| **Total Score** | 23.0/30 | 24.0/30 | 15.0/30 | **25.5/30 (85%)** |
 | **Migration Effort** | 4 weeks | 4 weeks | 4 weeks | 6 weeks |
 | **Code Navigation** | Excellent | Poor | Fair | Excellent |
 | **Testability** | Excellent | Good | Poor | Excellent |
 | **Architectural Rigor** | Good | Excellent | Poor | Excellent |
+| **Avoids God Objects** | ❌ | ✅ | ❌ | ✅ |
+| **Domain Organization** | ✅ | ❌ | ❌ | ✅ |
+| **Layer Boundaries** | ❌ | ✅ | ❌ | ✅ |
 
 ## Next Steps
 
-1. Review all three full plans in this directory
-2. Read the review analyses on GitHub issue #13
-3. Consider the Hybrid recommendation as the optimal approach
-4. Begin implementation with chosen plan's migration strategy
+1. **Review Plan 4 (Hybrid)** - [plan4_hybrid_full.md](./plan4_hybrid_full.md) - The recommended approach
+2. Compare with original plans if interested in the evolution:
+   - [Plan 1: Functional Domain](./plan1_full.md)
+   - [Plan 2: Layer-Based](./plan2_full.md)
+   - [Plan 3: Composition-Based](./plan3_full.md)
+3. Read the [Final Recommendation](./FINAL_RECOMMENDATION.md) for executive summary
+4. Review all analyses on [GitHub issue #13](https://github.com/EdanStarfire/claudecode_webui/issues/13)
+5. Begin implementation with Plan 4's 6-week migration strategy
