@@ -57,16 +57,16 @@
 - [ ] Write unit tests for each model
 
 **1.2 Create LegionSystem Dependency Injection Container**
-- [ ] Create `src/legion_system.py`
+- [x] Create `src/legion_system.py`
   - LegionSystem dataclass with all component references
   - Uses `field(init=False)` for legion components
   - `__post_init__` to wire components in correct order
-- [ ] Document component initialization order
-- [ ] Write unit tests for LegionSystem initialization
-- [ ] Verify no circular import issues
+- [x] Document component initialization order
+- [x] Write unit tests for LegionSystem initialization
+- [x] Verify no circular import issues
 
 **1.3 Create MCP Tools Framework**
-- [ ] Create `src/mcp/legion_mcp_tools.py`
+- [x] Create `src/legion/mcp/legion_mcp_tools.py`
   - LegionMCPTools class skeleton accepting LegionSystem
   - Tool definition structure
   - Tool handler method signatures (implementation in later phases)
@@ -79,18 +79,20 @@
 - [ ] Write unit tests for tool schema validation
 
 **1.4 Create Component Skeletons (Accept LegionSystem)**
-- [ ] Create `src/legion_coordinator.py` skeleton
+- [x] Create `src/legion/legion_coordinator.py` skeleton
   - Constructor accepts `system: LegionSystem`
   - Add `capability_registry: Dict[str, List[str]]` field
   - Add method signatures for all coordinator operations
-- [ ] Create `src/comm_router.py` skeleton
+- [x] Create `src/legion/comm_router.py` skeleton
   - Constructor accepts `system: LegionSystem`
   - Add `_extract_tags()` method for #tag parsing
-- [ ] Create `src/overseer_controller.py` skeleton
+- [x] Create `src/legion/overseer_controller.py` skeleton
   - Constructor accepts `system: LegionSystem`
-- [ ] Create `src/channel_manager.py` skeleton
+- [x] Create `src/legion/channel_manager.py` skeleton
   - Constructor accepts `system: LegionSystem`
-- [ ] Write unit tests verifying component initialization via LegionSystem
+- [x] Create `src/legion/memory_manager.py` skeleton
+  - Constructor accepts `system: LegionSystem`
+- [x] Write unit tests verifying component initialization via LegionSystem
 
 **1.5 Extend Existing Models**
 - [ ] Extend `ProjectInfo` to support `is_multi_agent` flag
