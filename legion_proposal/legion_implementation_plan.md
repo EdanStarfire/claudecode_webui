@@ -70,13 +70,13 @@
   - LegionMCPTools class skeleton accepting LegionSystem
   - Tool definition structure
   - Tool handler method signatures (implementation in later phases)
-- [ ] Define all MCP tool schemas:
+- [x] Define all MCP tool schemas:
   - send_comm, send_comm_to_channel (with #tag syntax in descriptions)
   - spawn_minion, dispose_minion
   - search_capability (central registry), list_minions, get_minion_info
   - join_channel, create_channel, list_channels
-- [ ] Add tool validation helpers
-- [ ] Write unit tests for tool schema validation
+- [x] Add tool validation helpers (async handle_tool_call router)
+- [x] Write unit tests for tool schema validation (10 tests passing)
 
 **1.4 Create Component Skeletons (Accept LegionSystem)**
 - [x] Create `src/legion/legion_coordinator.py` skeleton
