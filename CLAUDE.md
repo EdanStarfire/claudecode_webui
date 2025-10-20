@@ -684,7 +684,66 @@ main.py
 
 # Testing & Development Patterns
 
+## Standard Testing Configuration
+
+**CRITICAL**: Always use port 8001 for testing to avoid conflicts with the production instance running on port 8000.
+
+```bash
+# Standard test run
+uv run python main.py --debug-all --data-dir test_data --port 8001
+
+# Production run (user's intentional instance)
+uv run python main.py --port 8000
+```
+
+**Test Environment Parameters**:
+- `--port 8001` - Dedicated test port (avoids collision with port 8000)
+- `--data-dir test_data` - Isolated data directory (doesn't interfere with production data)
+- `--debug-all` - Enable all debug logging for development
+
+## Process Management - REQUIRED PATTERN
+
+**CRITICAL**: Always kill processes by PID, never by name or command-line pattern.
+
+### Windows Process Management
+```bash
+# Find process on port
+netstat -ano | findstr ":8001"
+
+# Output shows PID in rightmost column, e.g.:
+# TCP    0.0.0.0:8001    0.0.0.0:0    LISTENING    12345
+
+# Kill process by PID
+taskkill /PID 12345 /F
+
+# NEVER USE: taskkill /IM python.exe
+# NEVER USE: taskkill /FI "COMMANDLINE like *main.py*"
+```
+
+### Unix/Linux/macOS Process Management
+```bash
+# Find process on port
+lsof -i :8001
+# or
+netstat -tulpn | grep :8001
+
+# Kill process by PID
+kill 12345
+# or force kill
+kill -9 12345
+
+# NEVER USE: pkill -f "main.py"
+# NEVER USE: killall python
+```
+
+### Why PID-Based Killing is Required
+- Name-based killing can terminate unintended processes
+- Command-line pattern matching is unreliable and dangerous
+- PID is unique and precise
+- Follows industry best practices for process management
+
 ## Running the Server
+
 ```bash
 # Standard run
 uv run python main.py
@@ -695,8 +754,8 @@ uv run python main.py --debug-all
 # Specific debugging
 uv run python main.py --debug-sdk --debug-permissions
 
-# Custom host/port
-uv run python main.py --host 127.0.0.1 --port 8080
+# Custom host/port (for testing)
+uv run python main.py --host 127.0.0.1 --port 8001 --data-dir test_data
 ```
 
 ## Testing Components in Isolation

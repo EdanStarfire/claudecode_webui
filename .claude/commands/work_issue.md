@@ -80,17 +80,44 @@ This runs the application on port 8001 with a dedicated data directory (test_dat
 - Stop the server when done (Ctrl+C)
 
 **b) Manual Testing** (when user needs to interact with UI):
-- Launch the server in the background:
+- Launch the server in the background (platform-specific):
+
+  **Windows:**
+  ```bash
+  start /B uv run python main.py --debug-all --data-dir test_data --port 8001
+  ```
+
+  **Unix/Linux/macOS:**
   ```bash
   uv run python main.py --debug-all --data-dir test_data --port 8001 &
   ```
+
 - Inform the user: "Test server running on http://localhost:8001 - please test the changes"
 - Wait for user confirmation that testing is complete
-- Kill the background server:
+- Kill the background server using PID (REQUIRED):
+
+  **Windows:**
   ```bash
-  pkill -f "main.py.*--port 8001"
+  # Find PID
+  netstat -ano | findstr ":8001"
+  # Kill by PID (replace 12345 with actual PID from above)
+  taskkill /PID 12345 /F
   ```
-  Or get the PID and kill it specifically
+
+  **Unix/Linux/macOS:**
+  ```bash
+  # Find PID
+  lsof -i :8001
+  # or
+  netstat -tulpn | grep :8001
+  # Kill by PID (replace 12345 with actual PID from above)
+  kill 12345
+  ```
+
+**CRITICAL - Process Management:**
+- **ALWAYS** kill processes by PID, never by name or command pattern
+- **NEVER** use `pkill -f`, `taskkill /IM`, or `killall`
+- See CLAUDE.md "Process Management" section for detailed rationale
 
 **When to Use Test Environment:**
 - Changes to API endpoints (web_server.py)
