@@ -40,21 +40,21 @@
 #### Tasks
 
 **1.1 Create Data Model Classes**
-- [ ] Create `src/models/legion_models.py`
+- [x] Create `src/models/legion_models.py`
   - LegionInfo dataclass
   - MinionInfo dataclass
   - Horde dataclass
   - Channel dataclass
   - Comm dataclass with CommType and InterruptPriority enums
   - MinionState enum
-- [ ] Create `src/models/memory_models.py`
+- [x] Create `src/models/memory_models.py`
   - MemoryEntry dataclass
   - MemoryType enum
   - MinionMemory dataclass
   - TaskMilestone dataclass
-- [ ] Add validation methods to each model
-- [ ] Add serialization methods (to_dict, from_dict)
-- [ ] Write unit tests for each model
+- [x] Add validation methods to each model (Comm.validate())
+- [x] Add serialization methods (to_dict, from_dict)
+- [x] Write unit tests for each model (23 tests passing)
 
 **1.2 Create LegionSystem Dependency Injection Container**
 - [x] Create `src/legion_system.py`
