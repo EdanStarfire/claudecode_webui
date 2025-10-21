@@ -20,6 +20,19 @@ class ClaudeWebUI {
         this.projectManager = new ProjectManager(this);
         this.currentProjectId = null;
 
+        // View mode tracking
+        this.viewMode = null; // 'timeline' | 'spy' | 'session'
+
+        // Legion timeline view
+        this.currentLegionId = null;
+        this.legionWebsocket = null;
+        this.legionConnectionRetryCount = 0;
+        this.maxLegionRetries = 5;
+
+        // Spy mode (viewing individual minion within legion)
+        this.spyMinionId = null; // Currently selected minion in spy mode
+        this.spyLegionId = null; // Legion containing the spied minion
+
         // Session-specific WebSocket for message streaming
         this.sessionWebsocket = null;
         this.sessionConnectionRetryCount = 0;
@@ -2389,6 +2402,16 @@ class ClaudeWebUI {
         this.showLoading(true);
 
         try {
+            // Set view mode (regular session or spy - both use same rendering)
+            this.viewMode = 'session';
+
+            // Disconnect legion WebSocket if viewing timeline
+            if (this.legionWebsocket) {
+                this.legionWebsocket.close();
+                this.legionWebsocket = null;
+                this.currentLegionId = null;
+            }
+
             // Clean disconnect from previous session
             if (this.currentSessionId && this.currentSessionId !== sessionId) {
                 // Save current session's input before switching
@@ -2668,9 +2691,16 @@ class ClaudeWebUI {
                 .map(sid => this.sessions.get(sid))
                 .filter(s => s);
 
-            for (const session of sessions) {
-                const sessionElement = this.createSessionElement(session, project.project_id);
-                sessionsContainer.appendChild(sessionElement);
+            if (project.is_multi_agent) {
+                // For legions: Create Spy dropdown instead of listing individual minions
+                const spyElement = this.createSpyElement(project, sessions);
+                sessionsContainer.appendChild(spyElement);
+            } else {
+                // For regular projects: List sessions normally
+                for (const session of sessions) {
+                    const sessionElement = this.createSessionElement(session, project.project_id);
+                    sessionsContainer.appendChild(sessionElement);
+                }
             }
         }
 
@@ -2806,6 +2836,93 @@ class ClaudeWebUI {
             'failed': '#dc3545'        // red (matches status-dot-red)
         };
         return colorMap[state] || '#6c757d'; // default grey
+    }
+
+    createSpyElement(project, sessions) {
+        // Create Spy entry with dropdown for minion selection
+        const spyElement = document.createElement('div');
+        spyElement.className = 'list-group-item list-group-item-action p-2';
+        spyElement.style.cursor = 'pointer';
+        spyElement.setAttribute('data-legion-id', project.project_id);
+
+        // Spy header with icon
+        const spyHeader = document.createElement('div');
+        spyHeader.className = 'd-flex align-items-center mb-2';
+        spyHeader.innerHTML = `
+            <span style="font-size: 1rem; margin-right: 0.5rem;">🔍</span>
+            <span class="fw-semibold">Spy</span>
+            <small class="text-muted ms-2">(Inspect Minion)</small>
+        `;
+
+        // Make header clickable if minion is selected
+        spyHeader.addEventListener('click', (e) => {
+            // If dropdown is open, let it handle the click
+            const dropdown = spyElement.querySelector('select');
+            if (dropdown && dropdown.value && e.target !== dropdown) {
+                this.viewSpy(project.project_id, dropdown.value);
+            }
+        });
+
+        spyElement.appendChild(spyHeader);
+
+        // Dropdown for minion selection
+        const dropdown = document.createElement('select');
+        dropdown.className = 'form-select form-select-sm';
+        dropdown.id = `spy-dropdown-${project.project_id}`;
+
+        // Default option
+        const defaultOption = document.createElement('option');
+        defaultOption.value = '';
+        defaultOption.textContent = '-- Select Minion --';
+        dropdown.appendChild(defaultOption);
+
+        // Add minion options
+        sessions.forEach(session => {
+            const option = document.createElement('option');
+            option.value = session.session_id;
+
+            // Get state indicator
+            const stateIcons = {
+                'created': '○',
+                'starting': '◐',
+                'active': '●',
+                'paused': '⏸',
+                'terminating': '◍',
+                'terminated': '✗',
+                'error': '⚠'
+            };
+            const stateIcon = stateIcons[session.state] || '○';
+
+            // Build option text
+            const minionLabel = session.is_minion && session.role
+                ? `${session.name} (${session.role})`
+                : session.name;
+            option.textContent = `${stateIcon} ${minionLabel}`;
+
+            dropdown.appendChild(option);
+        });
+
+        // Restore previously selected minion if we're in spy mode for this legion
+        if (this.viewMode === 'spy' && this.spyLegionId === project.project_id && this.spyMinionId) {
+            dropdown.value = this.spyMinionId;
+        }
+
+        // Handle dropdown selection change
+        dropdown.addEventListener('change', (e) => {
+            const selectedMinionId = e.target.value;
+            if (selectedMinionId) {
+                this.viewSpy(project.project_id, selectedMinionId);
+            }
+        });
+
+        // Prevent clicks on dropdown from bubbling to header
+        dropdown.addEventListener('click', (e) => {
+            e.stopPropagation();
+        });
+
+        spyElement.appendChild(dropdown);
+
+        return spyElement;
     }
 
     createSessionElement(session, projectId) {
@@ -5049,6 +5166,11 @@ class ClaudeWebUI {
         try {
             Logger.debug('TIMELINE', `Viewing timeline for legion ${legionId}`);
 
+            // Set view mode
+            this.viewMode = 'timeline';
+            this.spyLegionId = null;
+            this.spyMinionId = null;
+
             // Exit current session if any
             if (this.currentSessionId) {
                 this.exitSession();
@@ -5119,6 +5241,9 @@ class ClaudeWebUI {
             // Scroll to bottom
             messagesArea.scrollTop = messagesArea.scrollHeight;
 
+            // Connect to legion WebSocket for real-time updates
+            this.connectLegionWebSocket(legionId);
+
         } catch (error) {
             Logger.error('TIMELINE', `Failed to load timeline: ${error}`);
             const messagesArea = document.getElementById('messages-area');
@@ -5126,6 +5251,174 @@ class ClaudeWebUI {
                 messagesArea.innerHTML = `<div class="p-3 text-center text-danger">Failed to load timeline: ${error.message}</div>`;
             }
         }
+    }
+
+    async viewSpy(legionId, minionId) {
+        // View individual minion in spy mode (like viewing a regular session)
+        try {
+            Logger.info('SPY', `Viewing spy mode for legion ${legionId}, minion ${minionId}`);
+
+            // Disconnect legion WebSocket if viewing timeline
+            if (this.legionWebsocket) {
+                this.legionWebsocket.close();
+                this.legionWebsocket = null;
+                this.currentLegionId = null;
+            }
+
+            // Set spy mode state
+            this.viewMode = 'spy';
+            this.spyLegionId = legionId;
+            this.spyMinionId = minionId;
+
+            // Treat spy mode like viewing a regular session
+            await this.selectSession(minionId);
+
+        } catch (error) {
+            Logger.error('SPY', `Failed to enter spy mode: ${error}`);
+        }
+    }
+
+    connectLegionWebSocket(legionId) {
+        // Disconnect existing legion WebSocket if any
+        if (this.legionWebsocket) {
+            this.legionWebsocket.close();
+            this.legionWebsocket = null;
+        }
+
+        this.currentLegionId = legionId;
+        const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const wsUrl = `${wsProtocol}//${window.location.host}/ws/legion/${legionId}`;
+
+        Logger.info('WS_LEGION', `Connecting to legion WebSocket: ${wsUrl}`);
+        this.legionWebsocket = new WebSocket(wsUrl);
+
+        this.legionWebsocket.onopen = () => {
+            Logger.info('WS_LEGION', `Legion WebSocket connected for legion ${legionId}`);
+            this.legionConnectionRetryCount = 0;
+        };
+
+        this.legionWebsocket.onmessage = (event) => {
+            try {
+                const data = JSON.parse(event.data);
+                Logger.debug('WS_LEGION', `Received message type: ${data.type}`);
+
+                if (data.type === 'comm') {
+                    this.handleLegionCommEvent(data.comm);
+                }
+            } catch (error) {
+                Logger.error('WS_LEGION', `Error processing legion WebSocket message: ${error}`);
+            }
+        };
+
+        this.legionWebsocket.onerror = (error) => {
+            Logger.error('WS_LEGION', `Legion WebSocket error: ${error}`);
+        };
+
+        this.legionWebsocket.onclose = () => {
+            Logger.info('WS_LEGION', `Legion WebSocket closed for legion ${legionId}`);
+            this.legionWebsocket = null;
+        };
+    }
+
+    handleLegionCommEvent(comm) {
+        // Only handle if we're still viewing this legion's timeline
+        if (!this.currentLegionId) return;
+
+        Logger.info('WS_LEGION', `Received new comm: ${comm.comm_id}`);
+
+        // Find the messages table tbody
+        const messagesArea = document.getElementById('messages-area');
+        if (!messagesArea) return;
+
+        const table = messagesArea.querySelector('table tbody');
+        if (!table) {
+            // No table yet - reload timeline
+            this.viewTimeline(this.currentLegionId, this.getProjectNameById(this.currentLegionId));
+            return;
+        }
+
+        // Render the new comm as a table row
+        const newRow = this.renderSingleTimelineMessage(comm);
+        table.insertAdjacentHTML('beforeend', newRow);
+
+        // Scroll to bottom if auto-scroll is enabled
+        if (this.autoScrollEnabled) {
+            messagesArea.scrollTop = messagesArea.scrollHeight;
+        }
+    }
+
+    renderSingleTimelineMessage(comm) {
+        // Get sender name
+        const fromName = comm.from_minion_id === 'LEGION_SYSTEM'
+            ? '🤖 LEGION SYSTEM'
+            : this.getMinionName(comm.from_minion_id) || comm.from_minion_id;
+
+        // Get recipient name
+        const toName = comm.to_minion_id
+            ? (this.getMinionName(comm.to_minion_id) || comm.to_minion_id)
+            : 'Channel';
+
+        // Format timestamp
+        const timestamp = new Date(comm.timestamp).toLocaleString();
+
+        // Comm type icon
+        const typeIcons = {
+            'task': '📋',
+            'question': '❓',
+            'report': '📊',
+            'guide': '💡',
+            'info': '💡'
+        };
+        const typeIcon = typeIcons[comm.comm_type] || '💬';
+
+        // Get clean message content (strip formatting prefix if present)
+        let messageContent = comm.content;
+        const prefixPattern = /^\*\*[^\*]+from [^\*]+:\*\*\n\n/;
+        messageContent = messageContent.replace(prefixPattern, '');
+
+        // Get summary - use summary field if present, otherwise truncate content
+        const summary = comm.summary || (messageContent.length > 50 ? messageContent.substring(0, 50) + '...' : messageContent);
+
+        // Render markdown for full content
+        const renderedContent = this.renderMarkdown(messageContent);
+
+        // Determine if this is a system error
+        const isSystemError = comm.from_minion_id === 'LEGION_SYSTEM';
+        const rowClass = isSystemError ? 'table-danger' : '';
+
+        // Generate unique accordion ID
+        const accordionId = `timeline-comm-${comm.comm_id}`;
+        const collapseId = `collapse-${comm.comm_id}`;
+
+        return `<tr class="${rowClass}">
+<td class="text-center align-middle" style="width: 3%;">
+<span title="${timestamp}" style="cursor: help; font-size: 1.2rem;">
+${typeIcon}
+</span>
+</td>
+<td class="text-center align-top" style="width: 15%;">
+<strong>${this.escapeHtml(fromName)}</strong>
+</td>
+<td class="text-center align-top" style="width: 15%;">
+<strong>${this.escapeHtml(toName)}</strong>
+</td>
+<td class="align-top" style="width: 67%;">
+<div class="accordion" id="${accordionId}">
+<div class="accordion-item border-0">
+<h2 class="accordion-header">
+<button class="accordion-button collapsed p-2" type="button" data-bs-toggle="collapse" data-bs-target="#${collapseId}" aria-expanded="false" aria-controls="${collapseId}">
+<span class="timeline-summary">${this.escapeHtml(summary)}</span>
+</button>
+</h2>
+<div id="${collapseId}" class="accordion-collapse collapse" data-bs-parent="#${accordionId}">
+<div class="accordion-body p-2">
+<div class="timeline-message-content">${renderedContent}</div>
+</div>
+</div>
+</div>
+</div>
+</td>
+</tr>`;
     }
 
     renderTimelineMessages(comms) {

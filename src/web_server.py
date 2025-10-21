@@ -184,6 +184,52 @@ class WebSocketManager:
                 self.disconnect(dead_conn, session_id)
 
 
+class LegionWebSocketManager:
+    """Manages WebSocket connections for legion-specific real-time updates"""
+
+    def __init__(self):
+        self.active_connections: Dict[str, List[WebSocket]] = {}
+
+    async def connect(self, websocket: WebSocket, legion_id: str):
+        await websocket.accept()
+        if legion_id not in self.active_connections:
+            self.active_connections[legion_id] = []
+        self.active_connections[legion_id].append(websocket)
+        logger.info(f"Legion WebSocket connected for legion {legion_id}. Total connections: {len(self.active_connections[legion_id])}")
+
+    def disconnect(self, websocket: WebSocket, legion_id: str):
+        if legion_id in self.active_connections:
+            if websocket in self.active_connections[legion_id]:
+                self.active_connections[legion_id].remove(websocket)
+            if not self.active_connections[legion_id]:
+                del self.active_connections[legion_id]
+        logger.info(f"Legion WebSocket disconnected for legion {legion_id}")
+
+    async def broadcast_to_legion(self, legion_id: str, message: dict):
+        """Broadcast message to all clients watching this legion"""
+        if legion_id not in self.active_connections:
+            logger.debug(f"No Legion WebSocket connections for legion {legion_id}")
+            return
+
+        dead_connections = []
+        for connection in self.active_connections[legion_id][:]:
+            try:
+                if connection.client_state.value != 1:  # 1 = OPEN state
+                    logger.warning(f"Legion WebSocket connection for legion {legion_id} is not open")
+                    dead_connections.append(connection)
+                    continue
+
+                await connection.send_text(json.dumps(message))
+                logger.debug(f"Broadcast message to legion {legion_id} WebSocket")
+            except Exception as e:
+                logger.error(f"Error broadcasting to legion {legion_id} WebSocket: {e}")
+                dead_connections.append(connection)
+
+        # Clean up dead connections
+        for dead_connection in dead_connections:
+            self.disconnect(dead_connection, legion_id)
+
+
 class ClaudeWebUI:
     """Main WebUI application class"""
 
@@ -192,6 +238,7 @@ class ClaudeWebUI:
         self.coordinator = SessionCoordinator(data_dir)
         self.websocket_manager = WebSocketManager()
         self.ui_websocket_manager = UIWebSocketManager()
+        self.legion_websocket_manager = LegionWebSocketManager()
 
         # Initialize MessageProcessor for unified WebSocket message formatting
         self._message_parser = MessageParser()
@@ -203,10 +250,31 @@ class ClaudeWebUI:
         # Setup routes
         self._setup_routes()
 
+        # Setup Legion WebSocket broadcast callback
+        self.coordinator.legion_system.comm_router.set_comm_broadcast_callback(
+            self._broadcast_comm_to_legion_websocket
+        )
+
         # Setup static files
         static_dir = Path(__file__).parent.parent / "static"
         static_dir.mkdir(exist_ok=True)
         self.app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+
+    async def _broadcast_comm_to_legion_websocket(self, legion_id: str, comm):
+        """Broadcast new comm to WebSocket clients watching this legion"""
+        try:
+            # Convert comm to dict for JSON serialization
+            comm_dict = comm.to_dict()
+
+            # Broadcast to all clients watching this legion
+            await self.legion_websocket_manager.broadcast_to_legion(legion_id, {
+                "type": "comm",
+                "comm": comm_dict,
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            })
+            logger.debug(f"Broadcast comm {comm.comm_id} to legion {legion_id} WebSocket clients")
+        except Exception as e:
+            logger.error(f"Error broadcasting comm to legion WebSocket: {e}")
 
     def _cleanup_pending_permissions_for_session(self, session_id: str):
         """Clean up pending permissions for a specific session by auto-denying them"""
@@ -846,6 +914,61 @@ class ClaudeWebUI:
                 logger.error(f"Error in UI WebSocket: {e}")
             finally:
                 self.ui_websocket_manager.disconnect(websocket)
+
+        @self.app.websocket("/ws/legion/{legion_id}")
+        async def legion_websocket_endpoint(websocket: WebSocket, legion_id: str):
+            """WebSocket endpoint for legion-specific real-time updates"""
+            logger.info(f"Legion WebSocket connection request for legion {legion_id}")
+
+            # Validate legion exists
+            try:
+                project = await self.coordinator.project_manager.get_project(legion_id)
+                if not project or not project.is_multi_agent:
+                    logger.warning(f"Legion WebSocket connection rejected for non-legion project: {legion_id}")
+                    await websocket.close(code=4404)
+                    return
+            except Exception as e:
+                logger.error(f"Error validating legion {legion_id}: {e}")
+                await websocket.close(code=4500)
+                return
+
+            await self.legion_websocket_manager.connect(websocket, legion_id)
+
+            # Send initial connection confirmation
+            try:
+                await websocket.send_json({
+                    "type": "connection_established",
+                    "legion_id": legion_id,
+                    "timestamp": datetime.now(timezone.utc).isoformat()
+                })
+            except Exception as e:
+                logger.error(f"Failed to send initial message to legion WebSocket {legion_id}: {e}")
+                self.legion_websocket_manager.disconnect(websocket, legion_id)
+                return
+
+            try:
+                while True:
+                    try:
+                        # Wait for ping messages from client (keepalive)
+                        message = await asyncio.wait_for(websocket.receive_text(), timeout=30.0)
+                        try:
+                            message_data = json.loads(message)
+                            if message_data.get("type") == "ping":
+                                await websocket.send_json({"type": "pong", "timestamp": datetime.now(timezone.utc).isoformat()})
+                        except json.JSONDecodeError:
+                            logger.warning(f"Invalid JSON in legion WebSocket message: {message}")
+                    except asyncio.TimeoutError:
+                        # Send periodic ping to keep connection alive
+                        await websocket.send_json({
+                            "type": "ping",
+                            "timestamp": datetime.now(timezone.utc).isoformat()
+                        })
+            except WebSocketDisconnect:
+                logger.info(f"Legion WebSocket disconnected for legion {legion_id}")
+            except Exception as e:
+                logger.error(f"Error in legion WebSocket for {legion_id}: {e}")
+            finally:
+                self.legion_websocket_manager.disconnect(websocket, legion_id)
 
         @self.app.websocket("/ws/session/{session_id}")
         async def websocket_endpoint(websocket: WebSocket, session_id: str):

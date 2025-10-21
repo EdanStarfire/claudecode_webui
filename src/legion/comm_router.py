@@ -37,6 +37,16 @@ class CommRouter:
             system: LegionSystem instance for accessing other components
         """
         self.system = system
+        self._comm_broadcast_callback = None  # Callback for broadcasting new comms via WebSocket
+
+    def set_comm_broadcast_callback(self, callback):
+        """
+        Set callback for broadcasting new comms to WebSocket clients.
+
+        Args:
+            callback: Async function(legion_id, comm) to broadcast comm events
+        """
+        self._comm_broadcast_callback = callback
 
     async def route_comm(self, comm: Comm) -> bool:
         """
@@ -317,6 +327,13 @@ class CommRouter:
                     f"channels/{comm.to_channel_id}",
                     comm
                 )
+
+        # Broadcast comm to WebSocket clients watching this legion
+        if legion_id and self._comm_broadcast_callback:
+            try:
+                await self._comm_broadcast_callback(legion_id, comm)
+            except Exception as e:
+                legion_logger.error(f"Failed to broadcast comm {comm.comm_id} to WebSocket: {e}")
 
     async def _append_to_comm_log(
         self,
