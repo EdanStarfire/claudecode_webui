@@ -2559,8 +2559,9 @@ class ClaudeWebUI {
         const projectInfo = document.createElement('div');
         projectInfo.className = 'flex-grow-1 me-2';
         const formattedPath = this.projectManager.formatPath(project.working_directory);
+        const legionIcon = project.is_multi_agent ? '<span class="legion-icon" style="font-size: 1rem; margin-right: 0.25rem;">🏛</span>' : '';
         projectInfo.innerHTML = `
-            <div class="fw-semibold">${this.escapeHtml(project.name)}</div>
+            <div class="fw-semibold">${legionIcon}${this.escapeHtml(project.name)}</div>
             <small class="text-muted font-monospace" title="${this.escapeHtml(project.working_directory)}">${this.escapeHtml(formattedPath)}</small>
         `;
 
@@ -3824,10 +3825,24 @@ class ClaudeWebUI {
         const data = Object.fromEntries(formData.entries());
 
         try {
-            const project = await this.projectManager.createProject(data.name, data.working_directory);
+            // Check if multi-agent is enabled
+            const isMultiAgent = data.is_multi_agent === 'on';
+
+            if (isMultiAgent) {
+                // Create legion instead of regular project
+                const response = await this.apiClient.post('/api/legions', {
+                    name: data.name,
+                    working_directory: data.working_directory
+                });
+                Logger.info('LEGION', 'Legion created successfully', response.legion);
+            } else {
+                // Create regular project
+                const project = await this.projectManager.createProject(data.name, data.working_directory);
+                Logger.info('PROJECT', 'Project created successfully', project);
+            }
+
             this.hideCreateProjectModal();
-            await this.refreshSessions(); // Reload to show new project
-            Logger.info('PROJECT', 'Project created successfully', project);
+            await this.refreshSessions(); // Reload to show new project/legion
         } catch (error) {
             Logger.error('PROJECT', 'Project creation failed', error);
             this.showError('Failed to create project: ' + error.message);
