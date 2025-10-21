@@ -339,15 +339,64 @@ class LegionMCPTools:
         }
 
     async def _handle_list_minions(self, args: Dict[str, Any]) -> Dict[str, Any]:
-        """Handle list_minions tool call."""
-        # TODO: Implement in Phase 2
-        return {
-            "content": [{
-                "type": "text",
-                "text": "list_minions not yet implemented"
-            }],
-            "is_error": True
-        }
+        """
+        Handle list_minions tool call.
+
+        Lists all active minions in the legion with their names, roles, and states.
+
+        Returns:
+            Tool result with formatted minion list
+        """
+        try:
+            # Get all sessions from SessionManager
+            session_manager = self.system.session_coordinator.session_manager
+            all_sessions = await session_manager.list_sessions()
+
+            # Filter to only minions
+            minions = [s for s in all_sessions if s.is_minion]
+
+            if not minions:
+                return {
+                    "content": [{
+                        "type": "text",
+                        "text": "No active minions found in the legion."
+                    }],
+                    "is_error": False
+                }
+
+            # Format minion list
+            minion_lines = []
+            for minion in minions:
+                name = minion.name or minion.session_id[:8]
+                role = minion.role or "No role specified"
+                state = minion.state.value if hasattr(minion.state, 'value') else str(minion.state)
+                capabilities = ", ".join(minion.capabilities) if minion.capabilities else "None"
+
+                minion_lines.append(
+                    f"• **{name}** (ID: {minion.session_id})\n"
+                    f"  - Role: {role}\n"
+                    f"  - State: {state}\n"
+                    f"  - Capabilities: {capabilities}"
+                )
+
+            result_text = f"**Active Minions ({len(minions)}):**\n\n" + "\n\n".join(minion_lines)
+
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": result_text
+                }],
+                "is_error": False
+            }
+
+        except Exception as e:
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": f"Error listing minions: {str(e)}"
+                }],
+                "is_error": True
+            }
 
     async def _handle_get_minion_info(self, args: Dict[str, Any]) -> Dict[str, Any]:
         """Handle get_minion_info tool call."""
