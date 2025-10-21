@@ -79,7 +79,7 @@ class CommRouter:
 
     async def _send_to_minion(self, comm: Comm) -> bool:
         """
-        Send Comm to a specific minion.
+        Send Comm to a specific minion by injecting message into SDK session.
 
         Args:
             comm: Comm with to_minion_id set
@@ -87,9 +87,36 @@ class CommRouter:
         Returns:
             bool: True if sent successfully
         """
-        # TODO: Phase 2 - Inject message into minion's SDK session
-        # For now, just persist it
-        return True
+        try:
+            # Get sender name for formatting
+            from_name = "User"
+            if comm.from_minion_id:
+                from_minion = await self.system.legion_coordinator.get_minion_info(comm.from_minion_id)
+                if from_minion and from_minion.name:
+                    from_name = from_minion.name
+
+            # Format message for recipient minion
+            comm_type_prefix = {
+                CommType.TASK: "📋 Task",
+                CommType.QUESTION: "❓ Question",
+                CommType.REPORT: "📊 Report",
+                CommType.GUIDE: "💡 Guide"
+            }.get(comm.comm_type, "💬 Message")
+
+            formatted_message = f"**{comm_type_prefix} from {from_name}:**\n\n{comm.content}"
+
+            # Send message to target minion via SessionCoordinator
+            await self.system.session_coordinator.send_message(
+                session_id=comm.to_minion_id,
+                message=formatted_message
+            )
+
+            legion_logger.info(f"Delivered comm {comm.comm_id} from {from_name} to minion {comm.to_minion_id}")
+            return True
+
+        except Exception as e:
+            legion_logger.error(f"Failed to deliver comm {comm.comm_id} to minion {comm.to_minion_id}: {e}")
+            return False
 
     async def _broadcast_to_channel(self, comm: Comm) -> bool:
         """
