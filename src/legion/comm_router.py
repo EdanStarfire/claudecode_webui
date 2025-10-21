@@ -80,6 +80,7 @@ class CommRouter:
     async def _send_to_minion(self, comm: Comm) -> bool:
         """
         Send Comm to a specific minion by injecting message into SDK session.
+        Auto-starts the minion session if it's not active.
 
         Args:
             comm: Comm with to_minion_id set
@@ -88,6 +89,66 @@ class CommRouter:
             bool: True if sent successfully
         """
         try:
+            # Check target minion state
+            target_minion = await self.system.session_coordinator.session_manager.get_session_info(comm.to_minion_id)
+            if not target_minion:
+                legion_logger.error(f"Target minion {comm.to_minion_id} not found")
+                # Send error comm back to sender
+                if comm.from_minion_id:
+                    await self._send_system_error_comm(
+                        to_minion_id=comm.from_minion_id,
+                        error_message=f"Failed to deliver message: Target minion not found",
+                        original_comm_id=comm.comm_id
+                    )
+                return False
+
+            # Auto-start minion if not active
+            from src.session_manager import SessionState
+            if target_minion.state not in [SessionState.ACTIVE, SessionState.STARTING]:
+                legion_logger.info(f"Target minion {comm.to_minion_id} is in {target_minion.state} state - auto-starting")
+
+                # Start the session
+                success = await self.system.session_coordinator.start_session(
+                    session_id=comm.to_minion_id,
+                    permission_callback=None  # Use default permission callback
+                )
+
+                if not success:
+                    legion_logger.error(f"Failed to auto-start minion {comm.to_minion_id}")
+                    # Send error comm back to sender
+                    if comm.from_minion_id:
+                        await self._send_system_error_comm(
+                            to_minion_id=comm.from_minion_id,
+                            error_message=f"Failed to deliver message: Could not auto-start target minion (state: {target_minion.state})",
+                            original_comm_id=comm.comm_id
+                        )
+                    return False
+
+                # Wait for session to become active (with timeout)
+                import asyncio
+                max_wait = 30  # 30 seconds timeout
+                wait_interval = 0.5
+                elapsed = 0
+
+                while elapsed < max_wait:
+                    session_info = await self.system.session_coordinator.session_manager.get_session_info(comm.to_minion_id)
+                    if session_info and session_info.state == SessionState.ACTIVE:
+                        legion_logger.info(f"Minion {comm.to_minion_id} is now active after {elapsed}s")
+                        break
+
+                    await asyncio.sleep(wait_interval)
+                    elapsed += wait_interval
+                else:
+                    legion_logger.warning(f"Minion {comm.to_minion_id} did not become active within {max_wait}s - sending error to sender")
+                    # Send timeout error comm back to sender
+                    if comm.from_minion_id:
+                        await self._send_system_error_comm(
+                            to_minion_id=comm.from_minion_id,
+                            error_message=f"Failed to deliver message: Target minion did not start within {max_wait} seconds (state: {session_info.state if session_info else 'unknown'})",
+                            original_comm_id=comm.comm_id
+                        )
+                    return False
+
             # Get sender name for formatting
             from_name = "User"
             if comm.from_minion_id:
@@ -116,6 +177,13 @@ class CommRouter:
 
         except Exception as e:
             legion_logger.error(f"Failed to deliver comm {comm.comm_id} to minion {comm.to_minion_id}: {e}")
+            # Send error comm back to sender about delivery failure
+            if comm.from_minion_id:
+                await self._send_system_error_comm(
+                    to_minion_id=comm.from_minion_id,
+                    error_message=f"Failed to deliver message: {str(e)}",
+                    original_comm_id=comm.comm_id
+                )
             return False
 
     async def _broadcast_to_channel(self, comm: Comm) -> bool:
@@ -143,6 +211,59 @@ class CommRouter:
         """
         # TODO: Phase 2 - Broadcast via WebSocket to UI
         return True
+
+    async def _send_system_error_comm(
+        self,
+        to_minion_id: str,
+        error_message: str,
+        original_comm_id: str
+    ) -> None:
+        """
+        Send a system-generated error Comm back to a minion.
+
+        Args:
+            to_minion_id: Target minion to receive error notification
+            error_message: Human-readable error description
+            original_comm_id: ID of the original comm that failed
+        """
+        import uuid
+
+        try:
+            # Create system error comm
+            error_comm = Comm(
+                comm_id=str(uuid.uuid4()),
+                from_minion_id="LEGION_SYSTEM",  # Special system identifier
+                from_user=False,
+                to_minion_id=to_minion_id,
+                to_user=False,
+                content=error_message,
+                comm_type=CommType.REPORT,  # Use REPORT for system messages
+                interrupt_priority=InterruptPriority.ROUTINE,
+                in_reply_to=original_comm_id,  # Reference the failed comm
+                visible_to_user=True
+            )
+
+            # Persist the error comm
+            await self._persist_comm(error_comm)
+
+            # Format system error message
+            formatted_message = f"**🚨 System Error:**\n\n{error_message}\n\n_(Original comm ID: {original_comm_id})_"
+
+            # Send to minion (but don't trigger auto-start to avoid loops)
+            target_minion = await self.system.session_coordinator.session_manager.get_session_info(to_minion_id)
+            from src.session_manager import SessionState
+
+            if target_minion and target_minion.state == SessionState.ACTIVE:
+                await self.system.session_coordinator.send_message(
+                    session_id=to_minion_id,
+                    message=formatted_message
+                )
+                legion_logger.info(f"Sent system error comm to minion {to_minion_id}")
+            else:
+                legion_logger.info(f"System error comm persisted for minion {to_minion_id} (not active, will see on next start)")
+
+        except Exception as e:
+            legion_logger.error(f"Failed to send system error comm to {to_minion_id}: {e}")
 
     async def _persist_comm(self, comm: Comm) -> None:
         """
