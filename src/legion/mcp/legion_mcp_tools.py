@@ -64,10 +64,14 @@ class LegionMCPTools:
             "Use this for direct collaboration, asking questions, delegating tasks, "
             "or sharing information. You can reference other minions in your message "
             "using #minion-name syntax (e.g., 'Check with #DatabaseArchitect about schema'). "
-            "\n\nValid comm_type values: 'task', 'question', 'report', 'info'",
+            "\n\nValid comm_type values: 'task', 'question', 'report', 'info'"
+            "\n\nProvide BOTH summary and content:"
+            "\n- summary: Brief one-line description (~50 chars, shown collapsed in timeline)"
+            "\n- content: Full detailed message (shown when expanded, supports markdown)",
             {
                 "to_minion_name": str,  # Exact name of target minion (case-sensitive)
-                "content": str,          # Message content with optional #tags
+                "summary": str,          # Brief one-line description (~50 chars)
+                "content": str,          # Full detailed message (supports markdown)
                 "comm_type": str         # One of: task, question, report, info
             }
         )
@@ -82,10 +86,14 @@ class LegionMCPTools:
             "Broadcast a message to all members of a channel. All channel members will "
             "receive your message. Use for group coordination, status updates, or questions "
             "to the team. Reference specific minions using #minion-name syntax. "
-            "\n\nValid comm_type values: 'task', 'question', 'report', 'info'",
+            "\n\nValid comm_type values: 'task', 'question', 'report', 'info'"
+            "\n\nProvide BOTH summary and content:"
+            "\n- summary: Brief one-line description (~50 chars, shown collapsed in timeline)"
+            "\n- content: Full detailed message (shown when expanded, supports markdown)",
             {
                 "channel_name": str,  # Name of channel to broadcast to
-                "content": str,       # Message to broadcast with optional #tags
+                "summary": str,       # Brief one-line description (~50 chars)
+                "content": str,       # Full detailed message (supports markdown)
                 "comm_type": str      # One of: task, question, report, info (optional)
             }
         )
@@ -281,6 +289,14 @@ class LegionMCPTools:
                 "is_error": True
             }
 
+        # Extract summary and content with fallback
+        content = args.get("content", "")
+        summary = args.get("summary", "")
+
+        # Fallback: If summary is empty, auto-generate from first 50 chars of content
+        if not summary and content:
+            summary = content[:50] + ("..." if len(content) > 50 else "")
+
         # Create Comm
         comm = Comm(
             comm_id=str(uuid.uuid4()),
@@ -288,7 +304,8 @@ class LegionMCPTools:
             from_user=False,
             to_minion_id=to_minion.session_id,  # session_id IS the minion_id
             to_user=False,
-            content=args.get("content", ""),
+            summary=summary,
+            content=content,
             comm_type=CommType(internal_comm_type),
             interrupt_priority=InterruptPriority.ROUTINE,
             visible_to_user=True

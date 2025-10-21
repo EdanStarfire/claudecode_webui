@@ -147,7 +147,8 @@ class Comm:
     to_user: bool = False
 
     # Content
-    content: str = ""
+    summary: str = ""  # Brief one-line description (~50 chars, shown collapsed)
+    content: str = ""  # Full detailed message (shown expanded, supports markdown)
     comm_type: CommType = CommType.SYSTEM
     interrupt_priority: InterruptPriority = InterruptPriority.ROUTINE
 
@@ -190,6 +191,7 @@ class Comm:
             "to_minion_id": self.to_minion_id,
             "to_channel_id": self.to_channel_id,
             "to_user": self.to_user,
+            "summary": self.summary,
             "content": self.content,
             "comm_type": self.comm_type.value,
             "interrupt_priority": self.interrupt_priority.value,

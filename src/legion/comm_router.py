@@ -164,7 +164,9 @@ class CommRouter:
                 CommType.GUIDE: "💡 Guide"
             }.get(comm.comm_type, "💬 Message")
 
-            formatted_message = f"**{comm_type_prefix} from {from_name}:**\n\n{comm.content}"
+            # Use summary in header if available, otherwise use truncated content
+            header_summary = comm.summary if comm.summary else (comm.content[:50] + "..." if len(comm.content) > 50 else comm.content)
+            formatted_message = f"**{comm_type_prefix} from {from_name}:** {header_summary}\n\n{comm.content}"
 
             # Send message to target minion via SessionCoordinator
             await self.system.session_coordinator.send_message(

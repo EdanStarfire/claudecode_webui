@@ -5166,12 +5166,19 @@ class ClaudeWebUI {
             const prefixPattern = /^\*\*[^\*]+from [^\*]+:\*\*\n\n/;
             messageContent = messageContent.replace(prefixPattern, '');
 
-            // Render markdown
+            // Get summary - use summary field if present, otherwise truncate content
+            const summary = comm.summary || (messageContent.length > 50 ? messageContent.substring(0, 50) + '...' : messageContent);
+
+            // Render markdown for full content
             const renderedContent = this.renderMarkdown(messageContent);
 
             // Determine if this is a system error
             const isSystemError = comm.from_minion_id === 'LEGION_SYSTEM';
             const rowClass = isSystemError ? 'table-danger' : '';
+
+            // Generate unique accordion ID
+            const accordionId = `timeline-comm-${comm.comm_id}`;
+            const collapseId = `collapse-${comm.comm_id}`;
 
             return `<tr class="${rowClass}">
 <td class="text-center align-middle" style="width: 3%;">
@@ -5186,7 +5193,20 @@ ${typeIcon}
 <strong>${this.escapeHtml(toName)}</strong>
 </td>
 <td class="align-top" style="width: 67%;">
+<div class="accordion" id="${accordionId}">
+<div class="accordion-item border-0">
+<h2 class="accordion-header">
+<button class="accordion-button collapsed p-2" type="button" data-bs-toggle="collapse" data-bs-target="#${collapseId}" aria-expanded="false" aria-controls="${collapseId}">
+<span class="timeline-summary">${this.escapeHtml(summary)}</span>
+</button>
+</h2>
+<div id="${collapseId}" class="accordion-collapse collapse" data-bs-parent="#${accordionId}">
+<div class="accordion-body p-2">
 <div class="timeline-message-content">${renderedContent}</div>
+</div>
+</div>
+</div>
+</div>
 </td>
 </tr>`;
         }).join('');
