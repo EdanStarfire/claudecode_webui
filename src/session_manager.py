@@ -189,9 +189,15 @@ class SessionManager:
         tools: List[str] = None,
         model: Optional[str] = None,
         name: Optional[str] = None,
-        order: Optional[int] = None
+        order: Optional[int] = None,
+        project_id: Optional[str] = None,
+        # Minion-specific fields
+        is_minion: bool = False,
+        role: Optional[str] = None,
+        capabilities: List[str] = None,
+        initialization_context: Optional[str] = None
     ) -> None:
-        """Create a new session with provided ID"""
+        """Create a new session with provided ID (or minion if is_minion=True)"""
         now = datetime.now(timezone.utc)
 
         # Generate default name if not provided
@@ -214,7 +220,13 @@ class SessionManager:
             tools=tools if tools is not None else [],
             model=model,
             name=name,
-            order=order
+            order=order,
+            project_id=project_id,
+            # Minion-specific fields
+            is_minion=is_minion,
+            role=role,
+            capabilities=capabilities if capabilities is not None else [],
+            initialization_context=initialization_context
         )
 
         try:

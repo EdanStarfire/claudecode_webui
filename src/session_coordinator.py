@@ -121,7 +121,7 @@ class SessionCoordinator:
     ) -> str:
         """Create a new Claude Code session with integrated components (within a project)"""
         try:
-            # Get project to determine working directory
+            # Get project to determine working directory and multi-agent status
             project = await self.project_manager.get_project(project_id)
             if not project:
                 raise ValueError(f"Project {project_id} not found")
@@ -130,6 +130,9 @@ class SessionCoordinator:
 
             # Calculate order based on existing sessions in project
             order = len(project.session_ids)
+
+            # Detect if this session should be a minion (parent project is a legion)
+            is_minion = project.is_multi_agent
 
             # Create session through session manager
             await self.session_manager.create_session(
@@ -140,7 +143,10 @@ class SessionCoordinator:
                 tools=tools,
                 model=model,
                 name=name,
-                order=order
+                order=order,
+                project_id=project_id,
+                # Minion fields (auto-populated if parent is legion)
+                is_minion=is_minion
             )
 
             # Add session to project
