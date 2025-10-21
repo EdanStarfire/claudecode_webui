@@ -216,14 +216,75 @@ class LegionMCPTools:
         Returns:
             Tool result with content array
         """
-        # TODO: Implement in Phase 2
-        return {
-            "content": [{
-                "type": "text",
-                "text": f"send_comm not yet implemented (would send to {args.get('to_minion_name')})"
-            }],
-            "is_error": True
-        }
+        import uuid
+        from src.models.legion_models import Comm, CommType, InterruptPriority
+
+        # Get current minion context (from session_id in SDK context)
+        # For now, we'll need to pass this through - placeholder
+        from_minion_id = args.get("_from_minion_id")  # Will be injected by SDK wrapper
+
+        if not from_minion_id:
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": "Error: Unable to determine sender minion ID"
+                }],
+                "is_error": True
+            }
+
+        # Look up target minion by name
+        to_minion_name = args.get("to_minion_name")
+        to_minion = await self.system.legion_coordinator.get_minion_by_name(to_minion_name)
+
+        if not to_minion:
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": f"Error: Minion '{to_minion_name}' not found"
+                }],
+                "is_error": True
+            }
+
+        # Create Comm
+        comm = Comm(
+            comm_id=str(uuid.uuid4()),
+            from_minion_id=from_minion_id,
+            from_user=False,
+            to_minion_id=to_minion.minion_id,
+            to_user=False,
+            content=args.get("content", ""),
+            comm_type=CommType(args.get("comm_type", "task")),
+            interrupt_priority=InterruptPriority.ROUTINE,
+            visible_to_user=True
+        )
+
+        # Route the comm
+        try:
+            success = await self.system.comm_router.route_comm(comm)
+            if success:
+                return {
+                    "content": [{
+                        "type": "text",
+                        "text": f"Message sent to {to_minion_name}"
+                    }],
+                    "is_error": False
+                }
+            else:
+                return {
+                    "content": [{
+                        "type": "text",
+                        "text": f"Failed to send message to {to_minion_name}"
+                    }],
+                    "is_error": True
+                }
+        except Exception as e:
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": f"Error sending message: {str(e)}"
+                }],
+                "is_error": True
+            }
 
     async def _handle_send_comm_to_channel(self, args: Dict[str, Any]) -> Dict[str, Any]:
         """
