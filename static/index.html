@@ -101,6 +101,36 @@
                             <button id="send-btn" class="btn btn-primary">Send</button>
                         </div>
 
+                        <!-- Comm Composer (for Legion Timeline) -->
+                        <div id="comm-composer" class="d-none px-2 py-2">
+                            <div class="row g-2 mb-2">
+                                <div class="col-md-6">
+                                    <label for="comm-recipient" class="form-label small mb-1">Recipient:</label>
+                                    <select id="comm-recipient" class="form-select form-select-sm">
+                                        <option value="">-- Select Minion or Channel --</option>
+                                    </select>
+                                </div>
+                                <div class="col-md-6">
+                                    <label for="comm-type" class="form-label small mb-1">Type:</label>
+                                    <select id="comm-type" class="form-select form-select-sm">
+                                        <option value="task">📋 Task</option>
+                                        <option value="question">❓ Question</option>
+                                        <option value="guide">📖 Guide</option>
+                                        <option value="report">📊 Report</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <div class="position-relative">
+                                <textarea id="comm-content" class="form-control" placeholder="Type your message (use # to mention minions or channels)..." rows="2"></textarea>
+                                <div id="tag-autocomplete" class="d-none position-absolute bg-white border rounded shadow-sm" style="max-height: 200px; overflow-y: auto; z-index: 1000;">
+                                    <!-- Autocomplete suggestions will appear here -->
+                                </div>
+                            </div>
+                            <div class="d-flex justify-content-end gap-2 mt-2">
+                                <button id="send-comm-btn" class="btn btn-primary btn-sm">Send Comm</button>
+                            </div>
+                        </div>
+
                         <!-- Status Bar -->
                         <div id="status-bar" class="d-none alert m-0 px-2 py-1 d-flex justify-content-between align-items-center">
                             <div class="d-flex gap-2 align-items-center">

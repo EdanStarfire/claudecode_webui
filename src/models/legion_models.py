@@ -16,6 +16,12 @@ from enum import Enum
 from typing import List, Dict, Optional, Any
 
 
+# Constants
+
+# Reserved minion ID for the user (all zeros UUID)
+USER_MINION_ID = "00000000-0000-0000-0000-000000000000"
+
+
 # Enumerations
 
 

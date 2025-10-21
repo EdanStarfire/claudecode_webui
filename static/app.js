@@ -33,6 +33,10 @@ class ClaudeWebUI {
         this.spyMinionId = null; // Currently selected minion in spy mode
         this.spyLegionId = null; // Legion containing the spied minion
 
+        // Comm composer
+        this.commComposerInitialized = false;
+        this.currentCommLegionId = null;
+
         // Session-specific WebSocket for message streaming
         this.sessionWebsocket = null;
         this.sessionConnectionRetryCount = 0;
@@ -712,9 +716,13 @@ class ClaudeWebUI {
         this.viewMode = null;
         this.spyLegionId = null;
         this.spyMinionId = null;
+        this.currentCommLegionId = null;
 
         // Clear URL
         this.updateURLWithSession(null);
+
+        // Hide comm composer
+        this.hideCommComposer();
 
         // Reset UI to no session selected state
         document.getElementById('no-session-selected').classList.remove('d-none');
@@ -5323,7 +5331,7 @@ class ClaudeWebUI {
                 </div>
             `;
 
-            // Hide send controls (status bar and message input)
+            // Hide send controls (status bar and regular message input)
             const statusBar = document.getElementById('status-bar');
             const messageInputElement = document.getElementById('message-input');
             if (statusBar) {
@@ -5332,6 +5340,9 @@ class ClaudeWebUI {
             if (messageInputElement && messageInputElement.parentElement) {
                 messageInputElement.parentElement.classList.add('d-none');
             }
+
+            // Show comm composer for timeline
+            this.showCommComposer(legionId);
 
             // Load and display timeline
             const messagesArea = document.getElementById('messages-area');
@@ -5456,14 +5467,26 @@ class ClaudeWebUI {
 
     renderSingleTimelineMessage(comm) {
         // Get sender name
-        const fromName = comm.from_minion_id === 'LEGION_SYSTEM'
-            ? '🤖 LEGION SYSTEM'
-            : this.getMinionName(comm.from_minion_id) || comm.from_minion_id;
+        let fromName;
+        if (comm.from_user) {
+            fromName = 'You';
+        } else if (comm.from_minion_id === 'LEGION_SYSTEM') {
+            fromName = '🤖 LEGION SYSTEM';
+        } else if (comm.from_minion_id) {
+            fromName = this.getMinionName(comm.from_minion_id) || comm.from_minion_id;
+        } else {
+            fromName = 'Unknown';
+        }
 
         // Get recipient name
-        const toName = comm.to_minion_id
-            ? (this.getMinionName(comm.to_minion_id) || comm.to_minion_id)
-            : 'Channel';
+        let toName;
+        if (comm.to_user) {
+            toName = 'You';
+        } else if (comm.to_minion_id) {
+            toName = this.getMinionName(comm.to_minion_id) || comm.to_minion_id;
+        } else {
+            toName = 'Channel';
+        }
 
         // Format timestamp
         const timestamp = new Date(comm.timestamp).toLocaleString();
@@ -5538,14 +5561,26 @@ ${typeIcon}
 
         const tableRows = sortedComms.map(comm => {
             // Get sender name
-            const fromName = comm.from_minion_id === 'LEGION_SYSTEM'
-                ? '🤖 LEGION SYSTEM'
-                : this.getMinionName(comm.from_minion_id) || comm.from_minion_id;
+            let fromName;
+            if (comm.from_user) {
+                fromName = 'You';
+            } else if (comm.from_minion_id === 'LEGION_SYSTEM') {
+                fromName = '🤖 LEGION SYSTEM';
+            } else if (comm.from_minion_id) {
+                fromName = this.getMinionName(comm.from_minion_id) || comm.from_minion_id;
+            } else {
+                fromName = 'Unknown';
+            }
 
             // Get recipient name
-            const toName = comm.to_minion_id
-                ? (this.getMinionName(comm.to_minion_id) || comm.to_minion_id)
-                : 'Channel';
+            let toName;
+            if (comm.to_user) {
+                toName = 'You';
+            } else if (comm.to_minion_id) {
+                toName = this.getMinionName(comm.to_minion_id) || comm.to_minion_id;
+            } else {
+                toName = 'Channel';
+            }
 
             // Format timestamp
             const timestamp = new Date(comm.timestamp).toLocaleString();
@@ -5633,6 +5668,309 @@ ${typeIcon}
     getMinionName(minionId) {
         const session = this.sessions.get(minionId);
         return session ? session.name : null;
+    }
+
+    // ==================== COMM COMPOSER ====================
+
+    showCommComposer(legionId) {
+        const commComposer = document.getElementById('comm-composer');
+        if (!commComposer) return;
+
+        // Show comm composer
+        commComposer.classList.remove('d-none');
+
+        // Populate recipient dropdown with minions from this legion
+        this.populateCommRecipients(legionId);
+
+        // Set up event listeners if not already set
+        if (!this.commComposerInitialized) {
+            this.initializeCommComposer(legionId);
+            this.commComposerInitialized = true;
+        }
+
+        // Store current legion ID for sending comms
+        this.currentCommLegionId = legionId;
+    }
+
+    hideCommComposer() {
+        const commComposer = document.getElementById('comm-composer');
+        if (commComposer) {
+            commComposer.classList.add('d-none');
+        }
+    }
+
+    populateCommRecipients(legionId) {
+        const recipientSelect = document.getElementById('comm-recipient');
+        if (!recipientSelect) return;
+
+        // Clear existing options except the first (placeholder)
+        recipientSelect.innerHTML = '<option value="">-- Select Minion or Channel --</option>';
+
+        // Get all sessions (minions) for this legion
+        const project = this.projectManager.projects.get(legionId);
+        if (!project || !project.session_ids) return;
+
+        // Add minion options
+        project.session_ids.forEach(sessionId => {
+            const session = this.sessions.get(sessionId);
+            if (session && session.is_minion) {
+                const option = document.createElement('option');
+                option.value = `minion:${session.session_id}`;
+                const roleLabel = session.role ? ` (${session.role})` : '';
+                option.textContent = `👤 ${session.name}${roleLabel}`;
+                recipientSelect.appendChild(option);
+            }
+        });
+
+        // TODO: Add channel options when channels are implemented
+        // For now, channels are not implemented
+    }
+
+    initializeCommComposer(legionId) {
+        const sendBtn = document.getElementById('send-comm-btn');
+        const contentTextarea = document.getElementById('comm-content');
+
+        // Send button handler
+        if (sendBtn) {
+            sendBtn.addEventListener('click', () => this.sendComm());
+        }
+
+        // Tag autocomplete on # character
+        if (contentTextarea) {
+            contentTextarea.addEventListener('input', (e) => this.handleTagAutocomplete(e));
+            contentTextarea.addEventListener('keydown', (e) => this.handleTagKeydown(e));
+        }
+
+        // Hide autocomplete when clicking outside
+        document.addEventListener('click', (e) => {
+            const autocomplete = document.getElementById('tag-autocomplete');
+            const contentTextarea = document.getElementById('comm-content');
+            if (autocomplete && !autocomplete.contains(e.target) && e.target !== contentTextarea) {
+                autocomplete.classList.add('d-none');
+            }
+        });
+    }
+
+    handleTagAutocomplete(event) {
+        const textarea = event.target;
+        const text = textarea.value;
+        const cursorPos = textarea.selectionStart;
+
+        // Find the last # before cursor
+        const textBeforeCursor = text.substring(0, cursorPos);
+        const lastHashIndex = textBeforeCursor.lastIndexOf('#');
+
+        if (lastHashIndex === -1) {
+            // No # found, hide autocomplete
+            document.getElementById('tag-autocomplete').classList.add('d-none');
+            return;
+        }
+
+        // Get the text after the # (the search query)
+        const searchQuery = textBeforeCursor.substring(lastHashIndex + 1).toLowerCase();
+
+        // Check if there's a space after the # (which means we're not autocompleting anymore)
+        if (searchQuery.includes(' ')) {
+            document.getElementById('tag-autocomplete').classList.add('d-none');
+            return;
+        }
+
+        // Show autocomplete with filtered minions and channels
+        this.showTagAutocomplete(searchQuery, lastHashIndex);
+    }
+
+    showTagAutocomplete(searchQuery, hashIndex) {
+        const autocomplete = document.getElementById('tag-autocomplete');
+        const textarea = document.getElementById('comm-content');
+
+        if (!autocomplete || !this.currentCommLegionId) return;
+
+        // Get minions for this legion
+        const project = this.projectManager.projects.get(this.currentCommLegionId);
+        if (!project || !project.session_ids) return;
+
+        const matches = [];
+
+        // Filter minions by search query
+        project.session_ids.forEach(sessionId => {
+            const session = this.sessions.get(sessionId);
+            if (session && session.is_minion) {
+                const name = session.name.toLowerCase();
+                if (name.includes(searchQuery)) {
+                    matches.push({
+                        type: 'minion',
+                        name: session.name,
+                        role: session.role,
+                        id: session.session_id
+                    });
+                }
+            }
+        });
+
+        // TODO: Add channel filtering when implemented
+
+        if (matches.length === 0) {
+            autocomplete.classList.add('d-none');
+            return;
+        }
+
+        // Render autocomplete options
+        autocomplete.innerHTML = matches.map(match => {
+            const icon = match.type === 'minion' ? '👤' : '#️⃣';
+            const roleLabel = match.role ? ` (${match.role})` : '';
+            return `
+                <div class="autocomplete-item px-2 py-1"
+                     data-tag-name="${this.escapeHtml(match.name)}"
+                     data-hash-index="${hashIndex}"
+                     style="cursor: pointer;">
+                    ${icon} ${this.escapeHtml(match.name)}${this.escapeHtml(roleLabel)}
+                </div>
+            `;
+        }).join('');
+
+        // Add click handlers to autocomplete items
+        autocomplete.querySelectorAll('.autocomplete-item').forEach(item => {
+            item.addEventListener('click', () => this.insertTag(item));
+            item.addEventListener('mouseenter', () => {
+                item.style.backgroundColor = '#f0f0f0';
+            });
+            item.addEventListener('mouseleave', () => {
+                item.style.backgroundColor = '';
+            });
+        });
+
+        // Position autocomplete below the cursor
+        const textareaRect = textarea.getBoundingClientRect();
+        autocomplete.style.top = `${textarea.offsetHeight}px`;
+        autocomplete.style.left = '0';
+        autocomplete.style.width = `${textarea.offsetWidth}px`;
+
+        autocomplete.classList.remove('d-none');
+    }
+
+    handleTagKeydown(event) {
+        const autocomplete = document.getElementById('tag-autocomplete');
+
+        if (autocomplete.classList.contains('d-none')) return;
+
+        // Handle arrow keys and Enter for autocomplete navigation
+        const items = autocomplete.querySelectorAll('.autocomplete-item');
+        if (items.length === 0) return;
+
+        const currentIndex = Array.from(items).findIndex(item =>
+            item.style.backgroundColor === 'rgb(240, 240, 240)'
+        );
+
+        if (event.key === 'ArrowDown') {
+            event.preventDefault();
+            const nextIndex = currentIndex < items.length - 1 ? currentIndex + 1 : 0;
+            items.forEach((item, idx) => {
+                item.style.backgroundColor = idx === nextIndex ? '#f0f0f0' : '';
+            });
+        } else if (event.key === 'ArrowUp') {
+            event.preventDefault();
+            const prevIndex = currentIndex > 0 ? currentIndex - 1 : items.length - 1;
+            items.forEach((item, idx) => {
+                item.style.backgroundColor = idx === prevIndex ? '#f0f0f0' : '';
+            });
+        } else if (event.key === 'Enter') {
+            const selectedItem = Array.from(items).find(item =>
+                item.style.backgroundColor === 'rgb(240, 240, 240)'
+            );
+            if (selectedItem) {
+                event.preventDefault();
+                this.insertTag(selectedItem);
+            }
+        } else if (event.key === 'Escape') {
+            autocomplete.classList.add('d-none');
+        }
+    }
+
+    insertTag(item) {
+        const textarea = document.getElementById('comm-content');
+        const tagName = item.getAttribute('data-tag-name');
+        const hashIndex = parseInt(item.getAttribute('data-hash-index'));
+
+        // Replace from # to cursor with the tag name
+        const text = textarea.value;
+        const cursorPos = textarea.selectionStart;
+        const newText = text.substring(0, hashIndex) + '#' + tagName + text.substring(cursorPos);
+
+        textarea.value = newText;
+
+        // Set cursor after the inserted tag
+        const newCursorPos = hashIndex + tagName.length + 1;
+        textarea.setSelectionRange(newCursorPos, newCursorPos);
+        textarea.focus();
+
+        // Hide autocomplete
+        document.getElementById('tag-autocomplete').classList.add('d-none');
+    }
+
+    async sendComm() {
+        const recipientSelect = document.getElementById('comm-recipient');
+        const typeSelect = document.getElementById('comm-type');
+        const contentTextarea = document.getElementById('comm-content');
+
+        const recipient = recipientSelect.value;
+        const commType = typeSelect.value;
+        const content = contentTextarea.value.trim();
+
+        if (!recipient) {
+            this.showToast('Please select a recipient', 'warning');
+            return;
+        }
+
+        if (!content) {
+            this.showToast('Please enter a message', 'warning');
+            return;
+        }
+
+        if (!this.currentCommLegionId) {
+            this.showToast('No legion selected', 'error');
+            return;
+        }
+
+        try {
+            // Parse recipient (format: "minion:session_id" or "channel:channel_id")
+            const [recipientType, recipientId] = recipient.split(':');
+
+            const payload = {
+                comm_type: commType,
+                content: content
+            };
+
+            // Add recipient based on type
+            if (recipientType === 'minion') {
+                payload.to_minion_id = recipientId;
+            } else if (recipientType === 'channel') {
+                payload.to_channel_id = recipientId;
+            }
+
+            Logger.info('COMM_COMPOSER', `Sending comm to ${recipient}`, payload);
+
+            const response = await this.apiRequest(`/api/legions/${this.currentCommLegionId}/comms`, {
+                method: 'POST',
+                body: JSON.stringify(payload)
+            });
+
+            if (response.success) {
+                Logger.info('COMM_COMPOSER', 'Comm sent successfully');
+                this.showToast('Comm sent successfully', 'success');
+
+                // Clear form
+                contentTextarea.value = '';
+                recipientSelect.selectedIndex = 0;
+                typeSelect.value = 'task';
+
+                // Comm will appear via WebSocket broadcast
+            } else {
+                throw new Error(response.error || 'Failed to send comm');
+            }
+        } catch (error) {
+            Logger.error('COMM_COMPOSER', `Failed to send comm: ${error}`);
+            this.showToast(`Failed to send comm: ${error.message}`, 'error');
+        }
     }
 }
 

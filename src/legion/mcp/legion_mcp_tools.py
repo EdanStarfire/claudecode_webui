@@ -278,16 +278,24 @@ class LegionMCPTools:
 
         # Look up target minion by name
         to_minion_name = args.get("to_minion_name")
-        to_minion = await self.system.legion_coordinator.get_minion_by_name(to_minion_name)
 
-        if not to_minion:
-            return {
-                "content": [{
-                    "type": "text",
-                    "text": f"Error: Minion '{to_minion_name}' not found"
-                }],
-                "is_error": True
-            }
+        # Check if sending to the special "user" minion
+        from src.models.legion_models import USER_MINION_ID
+        sending_to_user = (to_minion_name == "user")
+
+        if sending_to_user:
+            to_minion_id = None  # User doesn't have a minion_id, only use to_user flag
+        else:
+            to_minion = await self.system.legion_coordinator.get_minion_by_name(to_minion_name)
+            if not to_minion:
+                return {
+                    "content": [{
+                        "type": "text",
+                        "text": f"Error: Minion '{to_minion_name}' not found"
+                    }],
+                    "is_error": True
+                }
+            to_minion_id = to_minion.session_id  # session_id IS the minion_id
 
         # Extract summary and content with fallback
         content = args.get("content", "")
@@ -302,8 +310,8 @@ class LegionMCPTools:
             comm_id=str(uuid.uuid4()),
             from_minion_id=from_minion_id,
             from_user=False,
-            to_minion_id=to_minion.session_id,  # session_id IS the minion_id
-            to_user=False,
+            to_minion_id=to_minion_id,
+            to_user=sending_to_user,
             summary=summary,
             content=content,
             comm_type=CommType(internal_comm_type),
@@ -396,11 +404,14 @@ class LegionMCPTools:
         Handle list_minions tool call.
 
         Lists all active minions in the legion with their names, roles, and states.
+        Always includes the special "user" minion for sending comms to the user.
 
         Returns:
             Tool result with formatted minion list
         """
         try:
+            from src.models.legion_models import USER_MINION_ID
+
             # Get all sessions from SessionManager
             session_manager = self.system.session_coordinator.session_manager
             all_sessions = await session_manager.list_sessions()
@@ -408,17 +419,18 @@ class LegionMCPTools:
             # Filter to only minions
             minions = [s for s in all_sessions if s.is_minion]
 
-            if not minions:
-                return {
-                    "content": [{
-                        "type": "text",
-                        "text": "No active minions found in the legion."
-                    }],
-                    "is_error": False
-                }
-
             # Format minion list
             minion_lines = []
+
+            # Always include the special "user" minion first
+            minion_lines.append(
+                f"• **user** (ID: {USER_MINION_ID})\n"
+                f"  - Role: Human operator\n"
+                f"  - State: active\n"
+                f"  - Capabilities: Receives reports and can send tasks"
+            )
+
+            # Add other minions
             for minion in minions:
                 name = minion.name or minion.session_id[:8]
                 role = minion.role or "No role specified"
@@ -432,7 +444,8 @@ class LegionMCPTools:
                     f"  - Capabilities: {capabilities}"
                 )
 
-            result_text = f"**Active Minions ({len(minions)}):**\n\n" + "\n\n".join(minion_lines)
+            total_count = len(minions) + 1  # +1 for user
+            result_text = f"**Active Minions ({total_count}):**\n\n" + "\n\n".join(minion_lines)
 
             return {
                 "content": [{

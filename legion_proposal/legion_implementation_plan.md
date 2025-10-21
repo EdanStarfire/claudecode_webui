@@ -294,16 +294,27 @@
 - [ ] Write frontend tests (card rendering, tag parsing, WebSocket events)
 
 **3.4 Comm Composer (with Tag Autocomplete)**
-- [ ] Add Comm input at bottom of timeline
-- [ ] Dropdown to select recipient minion (by name)
-- [ ] Dropdown to select Comm type (TASK, QUESTION, GUIDE)
-- [ ] Text area for content with tag autocomplete:
+- [x] Add Comm input at bottom of timeline
+- [x] Dropdown to select recipient minion (by name)
+- [x] Dropdown to select Comm type (task, question, guide, report)
+- [x] Text area for content with tag autocomplete:
   - Trigger autocomplete dropdown when user types `#`
   - Show filtered list of minions and channels
   - Filter as user continues typing (e.g., `#Auth` shows `AuthExpert`)
   - Select with Enter key or click
   - Insert full tag name (e.g., `#AuthExpert`)
-- [ ] Send button (POST `/api/legions/{id}/comms`)
+  - Keyboard navigation (Arrow Up/Down, Enter, Escape)
+  - Mouse hover highlighting
+- [x] Send button (POST `/api/legions/{id}/comms`)
+- [x] Form validation and toast notifications
+- [x] Reserved "user" minion for minion-to-user communication
+  - USER_MINION_ID constant (00000000-0000-0000-0000-000000000000)
+  - Always included in list_minions MCP tool
+  - send_comm tool recognizes "user" as valid recipient
+- [x] Comm formatting improvements
+  - "Minion #user" and "Minion #<name>" prefixes in messages
+  - Explicit instruction: "Please respond using the send_comm tool"
+  - UI displays "You" for user (both sender and recipient)
 - [ ] Optimistic UI (show Comm immediately, confirm via WebSocket)
 - [ ] Write frontend tests (send flow, autocomplete behavior)
 
@@ -333,9 +344,12 @@
 - [x] Minions visible in sidebar via Spy UI (scalable dropdown)
 - [x] Timeline displays Comms with accordion structure
 - [x] Real-time updates via WebSocket for timeline
-- [ ] Tag highlighting and clickable tags in timeline
-- [ ] Tag autocomplete in Comm composer
-- [ ] Can send Comm from UI to minion (with tags)
+- [x] Comm composer with recipient and type selection
+- [x] Tag autocomplete in Comm composer
+- [x] Can send Comm from UI to minion
+- [x] Minions can reply to user via send_comm tool
+- [ ] Tag highlighting and clickable tags in timeline content
+- [ ] Optimistic UI for comm sending
 
 #### Acceptance Criteria
 - [x] User can create legion with checkbox
@@ -346,13 +360,15 @@
 - [x] Minion state indicators visible on Spy header and status bar
 - [x] Timeline view clears properly when legion collapsed
 - [x] View mode tracking works (timeline vs spy vs session)
-- [ ] Tags (#minion-name, #channel-name) highlighted and clickable
-- [ ] Autocomplete appears when typing # in composer
-- [ ] Can send Comm, appears in timeline immediately with rendered tags
+- [x] Autocomplete appears when typing # in composer
+- [x] Can send Comm from UI to minion
+- [x] Minion can send Comm back to user via send_comm tool
+- [x] Timeline displays "You" for user (sender and recipient)
+- [ ] Tags (#minion-name, #channel-name) highlighted and clickable in content
 - [ ] All tests passing
 
 **Estimated Effort**: 8-10 days (added tag rendering + autocomplete)
-**Actual Progress**: ~75% complete (UI foundation + WebSocket done, tag features + composer pending)
+**Actual Progress**: ~90% complete (Core functionality done, tag highlighting + tests pending)
 
 ---
 

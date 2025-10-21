@@ -160,11 +160,12 @@ class CommRouter:
                     return False
 
             # Get sender name for formatting
-            from_name = "User"
+            # Use "Minion #user" to signal that replies should use send_comm MCP tool
+            from_name = "Minion #user"
             if comm.from_minion_id:
                 from_minion = await self.system.legion_coordinator.get_minion_info(comm.from_minion_id)
                 if from_minion and from_minion.name:
-                    from_name = from_minion.name
+                    from_name = f"Minion #{from_minion.name}"
 
             # Format message for recipient minion
             comm_type_prefix = {
@@ -176,7 +177,9 @@ class CommRouter:
 
             # Use summary in header if available, otherwise use truncated content
             header_summary = comm.summary if comm.summary else (comm.content[:50] + "..." if len(comm.content) > 50 else comm.content)
-            formatted_message = f"**{comm_type_prefix} from {from_name}:** {header_summary}\n\n{comm.content}"
+
+            # Add explicit instruction to use send_comm for replies
+            formatted_message = f"**{comm_type_prefix} from {from_name}:** {header_summary}\n\n{comm.content}\n\n---\n**Please respond using the `send_comm` tool to send your reply back to {from_name}.**"
 
             # Send message to target minion via SessionCoordinator
             await self.system.session_coordinator.send_message(
