@@ -71,6 +71,20 @@ class PermissionModeRequest(BaseModel):
     mode: str
 
 
+class LegionCreateRequest(BaseModel):
+    name: str
+    working_directory: str
+    max_concurrent_minions: int = 20
+
+
+class CommSendRequest(BaseModel):
+    to_minion_id: Optional[str] = None
+    to_channel_id: Optional[str] = None
+    to_user: bool = False
+    content: str
+    comm_type: str = "task"
+
+
 class UIWebSocketManager:
     """Manages global UI WebSocket connections for session state updates"""
 
@@ -636,6 +650,107 @@ class ClaudeWebUI:
             except Exception as e:
                 logger.error(f"Failed to disconnect session: {e}")
                 raise HTTPException(status_code=500, detail=str(e))
+
+        # ==================== LEGION ENDPOINTS ====================
+
+        @self.app.post("/api/legions")
+        async def create_legion(request: LegionCreateRequest):
+            """Create a new legion"""
+            try:
+                legion = await self.coordinator.legion_system.legion_coordinator.create_legion(
+                    name=request.name,
+                    working_directory=request.working_directory,
+                    max_concurrent_minions=request.max_concurrent_minions
+                )
+                return {"legion": legion.to_dict()}
+            except Exception as e:
+                logger.error(f"Failed to create legion: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @self.app.get("/api/legions/{legion_id}")
+        async def get_legion(legion_id: str):
+            """Get legion with minions"""
+            try:
+                legion = await self.coordinator.legion_system.legion_coordinator.get_legion(legion_id)
+                if not legion:
+                    raise HTTPException(status_code=404, detail="Legion not found")
+
+                # Get all minions for this legion
+                minions = [
+                    m.to_dict()
+                    for m in self.coordinator.legion_system.legion_coordinator.minions.values()
+                    if m.legion_id == legion_id
+                ]
+
+                return {
+                    "legion": legion.to_dict(),
+                    "minions": minions
+                }
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"Failed to get legion: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @self.app.get("/api/legions/{legion_id}/timeline")
+        async def get_legion_timeline(legion_id: str, limit: int = 100, offset: int = 0):
+            """Get Comms for legion timeline"""
+            try:
+                legion = await self.coordinator.legion_system.legion_coordinator.get_legion(legion_id)
+                if not legion:
+                    raise HTTPException(status_code=404, detail="Legion not found")
+
+                # For now, return empty timeline (will implement Comm reading in next commit)
+                # TODO: Read comms from data/legions/{legion_id}/minions/*/comms.jsonl
+                return {
+                    "comms": [],
+                    "total": 0,
+                    "limit": limit,
+                    "offset": offset
+                }
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"Failed to get timeline: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @self.app.post("/api/legions/{legion_id}/comms")
+        async def send_comm_to_legion(legion_id: str, request: CommSendRequest):
+            """Send a Comm in the legion"""
+            try:
+                import uuid
+                from src.models.legion_models import Comm, CommType, InterruptPriority
+
+                legion = await self.coordinator.legion_system.legion_coordinator.get_legion(legion_id)
+                if not legion:
+                    raise HTTPException(status_code=404, detail="Legion not found")
+
+                # Create Comm from user
+                comm = Comm(
+                    comm_id=str(uuid.uuid4()),
+                    from_user=True,
+                    to_minion_id=request.to_minion_id,
+                    to_channel_id=request.to_channel_id,
+                    to_user=request.to_user,
+                    content=request.content,
+                    comm_type=CommType(request.comm_type)
+                )
+
+                # Route the comm
+                success = await self.coordinator.legion_system.comm_router.route_comm(comm)
+
+                if success:
+                    return {"comm": comm.to_dict(), "success": True}
+                else:
+                    raise HTTPException(status_code=500, detail="Failed to route comm")
+
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"Failed to send comm: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+        # ==================== FILESYSTEM ENDPOINTS ====================
 
         @self.app.get("/api/filesystem/browse")
         async def browse_filesystem(path: str = None):
