@@ -655,17 +655,56 @@ class ClaudeWebUI:
 
         @self.app.get("/api/legions/{legion_id}/timeline")
         async def get_legion_timeline(legion_id: str, limit: int = 100, offset: int = 0):
-            """Get Comms for legion timeline"""
+            """Get Comms for legion timeline (all minions in the legion)"""
             try:
-                legion = await self.coordinator.legion_system.legion_coordinator.get_legion(legion_id)
-                if not legion:
-                    raise HTTPException(status_code=404, detail="Legion not found")
+                # Read all comms from all minions in the legion
+                legion_dir = self.coordinator.data_dir / "legions" / legion_id
+                if not legion_dir.exists():
+                    return {
+                        "comms": [],
+                        "total": 0,
+                        "limit": limit,
+                        "offset": offset
+                    }
 
-                # For now, return empty timeline (will implement Comm reading in future phases)
-                # TODO: Read comms from data/legions/{legion_id}/channels/*/comms.jsonl
+                all_comms = []
+                minions_dir = legion_dir / "minions"
+
+                if minions_dir.exists():
+                    # Read comms from each minion's directory
+                    for minion_dir in minions_dir.iterdir():
+                        if minion_dir.is_dir():
+                            comms_file = minion_dir / "comms.jsonl"
+                            if comms_file.exists():
+                                with open(comms_file, 'r', encoding='utf-8') as f:
+                                    for line in f:
+                                        line = line.strip()
+                                        if line:
+                                            try:
+                                                comm_data = json.loads(line)
+                                                all_comms.append(comm_data)
+                                            except json.JSONDecodeError:
+                                                continue
+
+                # Sort by timestamp (newest first) and deduplicate
+                all_comms.sort(key=lambda x: x.get('timestamp', ''), reverse=True)
+
+                # Deduplicate by comm_id (since comms appear in both sender and receiver logs)
+                seen_ids = set()
+                unique_comms = []
+                for comm in all_comms:
+                    comm_id = comm.get('comm_id')
+                    if comm_id and comm_id not in seen_ids:
+                        seen_ids.add(comm_id)
+                        unique_comms.append(comm)
+
+                # Paginate
+                total = len(unique_comms)
+                paginated_comms = unique_comms[offset:offset + limit]
+
                 return {
-                    "comms": [],
-                    "total": 0,
+                    "comms": paginated_comms,
+                    "total": total,
                     "limit": limit,
                     "offset": offset
                 }

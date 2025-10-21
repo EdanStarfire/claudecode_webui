@@ -2403,6 +2403,7 @@ class ClaudeWebUI {
             }
 
             this.currentSessionId = sessionId;
+            this.currentLegionId = null; // Clear timeline view state
 
             // Update URL with current session
             this.updateURLWithSession(sessionId);
@@ -2422,6 +2423,16 @@ class ClaudeWebUI {
             // Show chat container
             document.getElementById('no-session-selected').classList.add('d-none');
             document.getElementById('chat-container').classList.remove('d-none');
+
+            // Restore send controls (in case they were hidden by timeline view)
+            const statusBar = document.getElementById('status-bar');
+            const messageInputElement = document.getElementById('message-input');
+            if (statusBar) {
+                statusBar.classList.remove('d-none');
+            }
+            if (messageInputElement && messageInputElement.parentElement) {
+                messageInputElement.parentElement.classList.remove('d-none');
+            }
 
             // Load session info first to check state
             await this.loadSessionInfo();
@@ -2623,23 +2634,43 @@ class ClaudeWebUI {
         const collapseBody = document.createElement('div');
         collapseBody.className = 'accordion-body p-0';
 
-        // Sessions container - use list group
-        if (project.session_ids && project.session_ids.length > 0) {
-            const sessionsContainer = document.createElement('div');
-            sessionsContainer.className = 'list-group list-group-flush';
+        // Create sessions container
+        const sessionsContainer = document.createElement('div');
+        sessionsContainer.className = 'list-group list-group-flush';
 
-            // Use cached session data instead of fetching from API
+        // For multi-agent projects (legions), add Timeline as first item
+        if (project.is_multi_agent) {
+            const timelineElement = document.createElement('div');
+            timelineElement.className = 'list-group-item list-group-item-action d-flex align-items-center p-2';
+            timelineElement.style.cursor = 'pointer';
+            timelineElement.innerHTML = `
+                <div class="flex-grow-1">
+                    <span style="font-size: 1rem; margin-right: 0.5rem;">📊</span>
+                    <span class="fw-semibold">Timeline</span>
+                    <small class="text-muted ms-2">(Legion Comms)</small>
+                </div>
+            `;
+
+            timelineElement.addEventListener('click', () => {
+                this.viewTimeline(project.project_id, project.name);
+            });
+
+            sessionsContainer.appendChild(timelineElement);
+        }
+
+        // Add sessions
+        if (project.session_ids && project.session_ids.length > 0) {
             const sessions = project.session_ids
                 .map(sid => this.sessions.get(sid))
-                .filter(s => s); // Filter out any sessions that aren't in cache yet
+                .filter(s => s);
 
             for (const session of sessions) {
                 const sessionElement = this.createSessionElement(session, project.project_id);
                 sessionsContainer.appendChild(sessionElement);
             }
-
-            collapseBody.appendChild(sessionsContainer);
         }
+
+        collapseBody.appendChild(sessionsContainer);
 
         collapseDiv.appendChild(collapseBody);
 
@@ -5006,6 +5037,158 @@ class ClaudeWebUI {
         toastEl.addEventListener('hidden.bs.toast', () => {
             toastEl.remove();
         });
+    }
+
+    // ==================== LEGION TIMELINE ====================
+
+    async viewTimeline(legionId, legionName) {
+        try {
+            Logger.debug('TIMELINE', `Viewing timeline for legion ${legionId}`);
+
+            // Exit current session if any
+            if (this.currentSessionId) {
+                this.exitSession();
+            }
+
+            // Mark this as viewing timeline (not a session)
+            this.currentSessionId = null;
+            this.currentLegionId = legionId;
+
+            // Show chat container, hide no-session message
+            const chatContainer = document.getElementById('chat-container');
+            const noSessionSelected = document.getElementById('no-session-selected');
+            chatContainer.classList.remove('d-none');
+            noSessionSelected.classList.add('d-none');
+
+            // Update header
+            const sessionInfoBar = document.getElementById('session-info-bar');
+            sessionInfoBar.innerHTML = `
+                <div class="d-flex justify-content-between align-items-center">
+                    <div>
+                        <h5 class="mb-0">
+                            <span style="font-size: 1.25rem; margin-right: 0.5rem;">📊</span>
+                            ${this.escapeHtml(legionName)} - Timeline
+                        </h5>
+                        <small class="text-muted">Legion Communication Feed</small>
+                    </div>
+                </div>
+            `;
+
+            // Hide send controls (status bar and message input)
+            const statusBar = document.getElementById('status-bar');
+            const messageInputElement = document.getElementById('message-input');
+            if (statusBar) {
+                statusBar.classList.add('d-none');
+            }
+            if (messageInputElement && messageInputElement.parentElement) {
+                messageInputElement.parentElement.classList.add('d-none');
+            }
+
+            // Load and display timeline
+            const messagesArea = document.getElementById('messages-area');
+            messagesArea.innerHTML = '<div class="p-3 text-center text-muted">Loading timeline...</div>';
+
+            const response = await this.apiRequest(`/api/legions/${legionId}/timeline?limit=100&offset=0`);
+
+            if (response.comms && response.comms.length > 0) {
+                messagesArea.innerHTML = this.renderTimelineMessages(response.comms);
+            } else {
+                messagesArea.innerHTML = '<div class="p-3 text-center text-muted">No messages yet. Minions will appear here once they start communicating.</div>';
+            }
+
+            // Scroll to bottom
+            messagesArea.scrollTop = messagesArea.scrollHeight;
+
+        } catch (error) {
+            Logger.error('TIMELINE', `Failed to load timeline: ${error}`);
+            const messagesArea = document.getElementById('messages-area');
+            if (messagesArea) {
+                messagesArea.innerHTML = `<div class="p-3 text-center text-danger">Failed to load timeline: ${error.message}</div>`;
+            }
+        }
+    }
+
+    renderTimelineMessages(comms) {
+        if (!comms || comms.length === 0) {
+            return '<div class="p-3 text-center text-muted">No messages yet</div>';
+        }
+
+        // Sort oldest first for display (reverse of API response)
+        const sortedComms = [...comms].reverse();
+
+        const tableRows = sortedComms.map(comm => {
+            // Get sender name
+            const fromName = comm.from_minion_id === 'LEGION_SYSTEM'
+                ? '🤖 LEGION SYSTEM'
+                : this.getMinionName(comm.from_minion_id) || comm.from_minion_id;
+
+            // Get recipient name
+            const toName = comm.to_minion_id
+                ? (this.getMinionName(comm.to_minion_id) || comm.to_minion_id)
+                : 'Channel';
+
+            // Format timestamp
+            const timestamp = new Date(comm.timestamp).toLocaleString();
+
+            // Comm type icon
+            const typeIcons = {
+                'task': '📋',
+                'question': '❓',
+                'report': '📊',
+                'guide': '💡'
+            };
+            const typeIcon = typeIcons[comm.comm_type] || '💬';
+
+            // Get clean message content (strip formatting prefix if present)
+            let messageContent = comm.content;
+            // Remove "**{icon} {type} from {name}:**\n\n" prefix if it exists
+            const prefixPattern = /^\*\*[^\*]+from [^\*]+:\*\*\n\n/;
+            messageContent = messageContent.replace(prefixPattern, '');
+
+            // Determine if this is a system error
+            const isSystemError = comm.from_minion_id === 'LEGION_SYSTEM';
+            const rowClass = isSystemError ? 'table-danger' : '';
+
+            return `<tr class="${rowClass}">
+<td class="text-center align-middle" style="width: 3%;">
+<span title="${timestamp}" style="cursor: help; font-size: 1.2rem;">
+${typeIcon}
+</span>
+</td>
+<td class="text-center align-top" style="width: 15%;">
+<strong>${this.escapeHtml(fromName)}</strong>
+</td>
+<td class="text-center align-top" style="width: 15%;">
+<strong>${this.escapeHtml(toName)}</strong>
+</td>
+<td class="align-top" style="width: 67%;">
+<div style="white-space: pre-wrap; font-family: monospace; font-size: 0.9rem;">${this.escapeHtml(messageContent)}</div>
+</td>
+</tr>`;
+        }).join('');
+
+        return `
+            <div class="table-responsive">
+                <table class="table table-sm table-hover">
+                    <thead class="table-light sticky-top">
+                        <tr>
+                            <th class="text-center" style="width: 3%;"></th>
+                            <th class="text-center" style="width: 15%;">Speaker</th>
+                            <th class="text-center" style="width: 15%;">Recipient</th>
+                            <th style="width: 67%;">Message</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${tableRows}
+                    </tbody>
+                </table>
+            </div>
+        `;
+    }
+
+    getMinionName(minionId) {
+        const session = this.sessions.get(minionId);
+        return session ? session.name : null;
     }
 }
 
