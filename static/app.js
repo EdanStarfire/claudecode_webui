@@ -2806,10 +2806,14 @@ class ClaudeWebUI {
         // Use session name if available, fallback to session ID
         const displayName = session.name || sessionId;
 
+        // Check if this is a minion (session in a multi-agent legion)
+        const isMinion = session.is_minion || false;
+        const minionBadge = isMinion ? '<span class="badge bg-info ms-1" title="Minion (Multi-Agent Session)">👤</span>' : '';
+
         sessionElement.innerHTML = `
             <div class="d-flex align-items-center gap-2 position-relative">
                 <div class="flex-grow-1" title="${sessionId}">
-                    <span class="session-name-display">${this.escapeHtml(displayName)}</span>
+                    <span class="session-name-display">${this.escapeHtml(displayName)}</span>${minionBadge}
                 </div>
                 <button class="btn btn-sm btn-outline-secondary session-edit-btn" title="Edit or delete session" style="opacity: 0;">✏️</button>
             </div>
