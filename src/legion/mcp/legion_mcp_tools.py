@@ -62,12 +62,13 @@ class LegionMCPTools:
             "send_comm",
             "Send a communication (message) to another minion by name. "
             "Use this for direct collaboration, asking questions, delegating tasks, "
-            "or reporting findings. You can reference other minions in your message "
-            "using #minion-name syntax (e.g., 'Check with #DatabaseArchitect about schema').",
+            "or sharing information. You can reference other minions in your message "
+            "using #minion-name syntax (e.g., 'Check with #DatabaseArchitect about schema'). "
+            "\n\nValid comm_type values: 'task', 'question', 'report', 'info'",
             {
                 "to_minion_name": str,  # Exact name of target minion (case-sensitive)
                 "content": str,          # Message content with optional #tags
-                "comm_type": str         # One of: task, question, report, guide
+                "comm_type": str         # One of: task, question, report, info
             }
         )
         async def send_comm_tool(args: Dict[str, Any]) -> Dict[str, Any]:
@@ -80,11 +81,12 @@ class LegionMCPTools:
             "send_comm_to_channel",
             "Broadcast a message to all members of a channel. All channel members will "
             "receive your message. Use for group coordination, status updates, or questions "
-            "to the team. Reference specific minions using #minion-name syntax.",
+            "to the team. Reference specific minions using #minion-name syntax. "
+            "\n\nValid comm_type values: 'task', 'question', 'report', 'info'",
             {
                 "channel_name": str,  # Name of channel to broadcast to
                 "content": str,       # Message to broadcast with optional #tags
-                "comm_type": str      # One of: task, question, report, guide (optional)
+                "comm_type": str      # One of: task, question, report, info (optional)
             }
         )
         async def send_comm_to_channel_tool(args: Dict[str, Any]) -> Dict[str, Any]:
@@ -242,6 +244,30 @@ class LegionMCPTools:
                 "is_error": True
             }
 
+        # Validate comm_type
+        comm_type_str = args.get("comm_type", "task").lower()
+        valid_comm_types = ["task", "question", "report", "info"]
+
+        # Map 'info' to internal 'guide' enum value for backward compatibility
+        comm_type_mapping = {
+            "task": "task",
+            "question": "question",
+            "report": "report",
+            "info": "guide"  # Map user-facing 'info' to internal 'guide'
+        }
+
+        if comm_type_str not in valid_comm_types:
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": f"Error: Invalid comm_type '{comm_type_str}'. Valid values are: {', '.join(valid_comm_types)}"
+                }],
+                "is_error": True
+            }
+
+        # Get the internal enum value
+        internal_comm_type = comm_type_mapping[comm_type_str]
+
         # Look up target minion by name
         to_minion_name = args.get("to_minion_name")
         to_minion = await self.system.legion_coordinator.get_minion_by_name(to_minion_name)
@@ -263,7 +289,7 @@ class LegionMCPTools:
             to_minion_id=to_minion.session_id,  # session_id IS the minion_id
             to_user=False,
             content=args.get("content", ""),
-            comm_type=CommType(args.get("comm_type", "task")),
+            comm_type=CommType(internal_comm_type),
             interrupt_priority=InterruptPriority.ROUTINE,
             visible_to_user=True
         )

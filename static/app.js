@@ -2410,8 +2410,12 @@ class ClaudeWebUI {
 
             // Processing state will be set by loadSessionInfo() call below
 
-            // Update UI
-            document.querySelectorAll('.session-item').forEach(item => {
+            // Update UI - remove active from all sessions and timeline
+            document.querySelectorAll('.list-group-item[data-session-id]').forEach(item => {
+                item.classList.remove('active');
+            });
+            // Also clear timeline selection if any
+            document.querySelectorAll('.list-group-item.timeline-item').forEach(item => {
                 item.classList.remove('active');
             });
 
@@ -2641,7 +2645,7 @@ class ClaudeWebUI {
         // For multi-agent projects (legions), add Timeline as first item
         if (project.is_multi_agent) {
             const timelineElement = document.createElement('div');
-            timelineElement.className = 'list-group-item list-group-item-action d-flex align-items-center p-2';
+            timelineElement.className = 'list-group-item list-group-item-action timeline-item d-flex align-items-center p-2';
             timelineElement.style.cursor = 'pointer';
             timelineElement.innerHTML = `
                 <div class="flex-grow-1">
@@ -5054,6 +5058,22 @@ class ClaudeWebUI {
             this.currentSessionId = null;
             this.currentLegionId = legionId;
 
+            // Update UI - remove active from all sessions
+            document.querySelectorAll('.list-group-item[data-session-id]').forEach(item => {
+                item.classList.remove('active');
+            });
+            // Mark timeline as active
+            document.querySelectorAll('.list-group-item.timeline-item').forEach(item => {
+                item.classList.remove('active');
+            });
+            // Find and activate the timeline for this legion
+            const timelineElements = document.querySelectorAll('.timeline-item');
+            timelineElements.forEach(el => {
+                if (el.closest(`[data-project-id="${legionId}"]`)) {
+                    el.classList.add('active');
+                }
+            });
+
             // Show chat container, hide no-session message
             const chatContainer = document.getElementById('chat-container');
             const noSessionSelected = document.getElementById('no-session-selected');
@@ -5135,7 +5155,8 @@ class ClaudeWebUI {
                 'task': '📋',
                 'question': '❓',
                 'report': '📊',
-                'guide': '💡'
+                'guide': '💡',  // Internal name (backward compatibility)
+                'info': '💡'     // User-facing name
             };
             const typeIcon = typeIcons[comm.comm_type] || '💬';
 
@@ -5144,6 +5165,9 @@ class ClaudeWebUI {
             // Remove "**{icon} {type} from {name}:**\n\n" prefix if it exists
             const prefixPattern = /^\*\*[^\*]+from [^\*]+:\*\*\n\n/;
             messageContent = messageContent.replace(prefixPattern, '');
+
+            // Render markdown
+            const renderedContent = this.renderMarkdown(messageContent);
 
             // Determine if this is a system error
             const isSystemError = comm.from_minion_id === 'LEGION_SYSTEM';
@@ -5162,7 +5186,7 @@ ${typeIcon}
 <strong>${this.escapeHtml(toName)}</strong>
 </td>
 <td class="align-top" style="width: 67%;">
-<div style="white-space: pre-wrap; font-family: monospace; font-size: 0.9rem;">${this.escapeHtml(messageContent)}</div>
+<div class="timeline-message-content">${renderedContent}</div>
 </td>
 </tr>`;
         }).join('');
