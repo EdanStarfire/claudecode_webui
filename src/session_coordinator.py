@@ -163,8 +163,9 @@ class SessionCoordinator:
             legion_tools = []
             coord_logger.debug(f"MCP attachment check for session {session_id}: is_minion={is_minion}, legion_system={self.legion_system is not None}, mcp_tools={self.legion_system.mcp_tools if self.legion_system else None}")
             if is_minion and self.legion_system and self.legion_system.mcp_tools:
-                mcp_server = self.legion_system.mcp_tools.mcp_server
-                coord_logger.debug(f"MCP server object: {mcp_server}")
+                # Create session-specific MCP server (injects session_id into tool calls)
+                mcp_server = self.legion_system.mcp_tools.create_mcp_server_for_session(session_id)
+                coord_logger.debug(f"Created session-specific MCP server for {session_id}: {mcp_server}")
                 if mcp_server:
                     # SDK expects dict mapping server name to config, not a list
                     mcp_servers = {"legion": mcp_server}
@@ -184,7 +185,7 @@ class SessionCoordinator:
                     ]
                     coord_logger.info(f"Attaching Legion MCP tools to minion session {session_id}: {legion_tools}")
                 else:
-                    coord_logger.warning(f"MCP server is None for minion session {session_id}")
+                    coord_logger.warning(f"MCP server creation failed for minion session {session_id}")
             else:
                 if not is_minion:
                     coord_logger.debug(f"Session {session_id} is not a minion - skipping MCP tools")
@@ -280,7 +281,8 @@ class SessionCoordinator:
             mcp_servers = None
             legion_tools = []
             if session_info.is_minion and self.legion_system and self.legion_system.mcp_tools:
-                mcp_server = self.legion_system.mcp_tools.mcp_server
+                # Create session-specific MCP server (injects session_id into tool calls)
+                mcp_server = self.legion_system.mcp_tools.create_mcp_server_for_session(session_id)
                 if mcp_server:
                     # SDK expects dict mapping server name to config, not a list
                     mcp_servers = {"legion": mcp_server}

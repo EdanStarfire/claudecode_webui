@@ -60,7 +60,7 @@ class LegionCoordinator:
         Returns:
             SessionInfo if found and is_minion=True, None otherwise
         """
-        session = await self.session_manager.get_session(minion_id)
+        session = await self.session_manager.get_session_info(minion_id)
         if session and session.is_minion:
             return session
         return None

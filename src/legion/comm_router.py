@@ -17,9 +17,13 @@ from typing import TYPE_CHECKING, List, Tuple, Optional
 from datetime import datetime
 
 from src.models.legion_models import Comm, CommType, InterruptPriority
+from src.logging_config import get_logger
 
 if TYPE_CHECKING:
     from src.legion_system import LegionSystem
+
+# Legion logger
+legion_logger = get_logger('legion', 'COMM_ROUTER')
 
 
 class CommRouter:
@@ -47,20 +51,30 @@ class CommRouter:
         Raises:
             ValueError: If comm validation fails
         """
+        legion_logger.debug(f"Routing comm {comm.comm_id}: from={comm.from_minion_id}, to_minion={comm.to_minion_id}, to_channel={comm.to_channel_id}, to_user={comm.to_user}")
+
         # Validate comm has proper routing
         comm.validate()
 
         # Persist the comm
         await self._persist_comm(comm)
+        legion_logger.debug(f"Comm {comm.comm_id} persisted successfully")
 
         # Route to destination
         if comm.to_minion_id:
-            return await self._send_to_minion(comm)
+            result = await self._send_to_minion(comm)
+            legion_logger.info(f"Comm {comm.comm_id} routed to minion {comm.to_minion_id}: {'success' if result else 'failed'}")
+            return result
         elif comm.to_channel_id:
-            return await self._broadcast_to_channel(comm)
+            result = await self._broadcast_to_channel(comm)
+            legion_logger.info(f"Comm {comm.comm_id} broadcast to channel {comm.to_channel_id}: {'success' if result else 'failed'}")
+            return result
         elif comm.to_user:
-            return await self._send_to_user(comm)
+            result = await self._send_to_user(comm)
+            legion_logger.info(f"Comm {comm.comm_id} sent to user: {'success' if result else 'failed'}")
+            return result
 
+        legion_logger.warning(f"Comm {comm.comm_id} has no valid destination")
         return False
 
     async def _send_to_minion(self, comm: Comm) -> bool:
@@ -119,10 +133,10 @@ class CommRouter:
         legion_id = None
 
         if comm.from_minion_id:
-            # Get minion info to find legion_id
+            # Get minion info to find legion_id (project_id)
             minion = await self.system.legion_coordinator.get_minion_info(comm.from_minion_id)
             if minion:
-                legion_id = minion.legion_id
+                legion_id = minion.project_id  # project_id IS the legion_id
                 # Persist to source minion's log
                 await self._append_to_comm_log(
                     legion_id,
@@ -131,10 +145,10 @@ class CommRouter:
                 )
 
         if comm.to_minion_id:
-            # Get minion info to find legion_id
+            # Get minion info to find legion_id (project_id)
             minion = await self.system.legion_coordinator.get_minion_info(comm.to_minion_id)
             if minion:
-                legion_id = minion.legion_id
+                legion_id = minion.project_id  # project_id IS the legion_id
                 # Persist to destination minion's log
                 await self._append_to_comm_log(
                     legion_id,
@@ -168,8 +182,11 @@ class CommRouter:
             subpath: Subpath within legion directory (e.g., "minions/{minion_id}")
             comm: Comm to append
         """
-        # Construct path: data/legions/{legion_id}/{subpath}/comms.jsonl
-        log_dir = Path("data") / "legions" / legion_id / subpath
+        # Get data_dir from SessionCoordinator
+        data_dir = self.system.session_coordinator.data_dir
+
+        # Construct path: {data_dir}/legions/{legion_id}/{subpath}/comms.jsonl
+        log_dir = data_dir / "legions" / legion_id / subpath
         log_dir.mkdir(parents=True, exist_ok=True)
 
         log_file = log_dir / "comms.jsonl"
@@ -178,6 +195,8 @@ class CommRouter:
         with open(log_file, "a", encoding="utf-8") as f:
             json.dump(comm.to_dict(), f)
             f.write("\n")
+
+        legion_logger.debug(f"Appended comm {comm.comm_id} to {log_file}")
 
     def _extract_tags(self, content: str) -> Tuple[List[str], List[str]]:
         """

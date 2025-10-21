@@ -41,12 +41,16 @@ class LegionMCPTools:
         """
         self.system = system
 
-        # Create MCP server with all Legion tools
-        self.mcp_server = self._create_mcp_server() if (tool and create_sdk_mcp_server) else None
+        # Note: No longer creating a shared MCP server here
+        # Each minion session gets its own session-specific server
+        # via create_mcp_server_for_session()
 
-    def _create_mcp_server(self):
+    def create_mcp_server_for_session(self, session_id: str):
         """
-        Create MCP server with all Legion tools using SDK patterns.
+        Create session-specific MCP server with all Legion tools.
+
+        Args:
+            session_id: The session ID to inject into tool calls
 
         Returns:
             MCP server instance with all tools registered
@@ -68,6 +72,8 @@ class LegionMCPTools:
         )
         async def send_comm_tool(args: Dict[str, Any]) -> Dict[str, Any]:
             """Send communication to another minion."""
+            # Inject session context
+            args["_from_minion_id"] = session_id
             return await self._handle_send_comm(args)
 
         @tool(
@@ -83,6 +89,8 @@ class LegionMCPTools:
         )
         async def send_comm_to_channel_tool(args: Dict[str, Any]) -> Dict[str, Any]:
             """Broadcast communication to channel."""
+            # Inject session context
+            args["_from_minion_id"] = session_id
             return await self._handle_send_comm_to_channel(args)
 
         @tool(
@@ -99,6 +107,8 @@ class LegionMCPTools:
         )
         async def spawn_minion_tool(args: Dict[str, Any]) -> Dict[str, Any]:
             """Spawn a new child minion."""
+            # Inject session context (parent overseer ID)
+            args["_parent_overseer_id"] = session_id
             return await self._handle_spawn_minion(args)
 
         @tool(
@@ -250,7 +260,7 @@ class LegionMCPTools:
             comm_id=str(uuid.uuid4()),
             from_minion_id=from_minion_id,
             from_user=False,
-            to_minion_id=to_minion.minion_id,
+            to_minion_id=to_minion.session_id,  # session_id IS the minion_id
             to_user=False,
             content=args.get("content", ""),
             comm_type=CommType(args.get("comm_type", "task")),
