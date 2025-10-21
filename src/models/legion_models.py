@@ -112,6 +112,16 @@ class MinionInfo:
     """
     Represents a single minion (SDK session instance).
     Extends SessionInfo concept with multi-agent capabilities.
+
+    Compatibility with SessionInfo:
+    - minion_id maps to session_id
+    - session_id field stores the SDK session identifier
+    - claude_code_session_id used for resumption (same as SessionInfo)
+    - state, is_processing, permission_mode, model, tools are compatible
+    - working_directory inherited from parent Legion
+    - name and order fields exist in both models
+    - Additional Legion-specific fields (parent_overseer_id, capabilities, etc.)
+      are ignored when interfacing with existing session infrastructure
     """
     minion_id: str              # UUID
     name: str                   # Unique within legion, e.g. "AuthExpert"

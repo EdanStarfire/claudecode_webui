@@ -34,6 +34,7 @@ class ProjectInfo:
     created_at: datetime = None
     updated_at: datetime = None
     order: int = 0  # Display order among projects
+    is_multi_agent: bool = False  # True if this is a Legion (multi-agent project)
 
     def __post_init__(self):
         if self.created_at is None:
@@ -57,6 +58,9 @@ class ProjectInfo:
         data['updated_at'] = datetime.fromisoformat(data['updated_at'])
         if 'session_ids' not in data:
             data['session_ids'] = []
+        # Migration: Add is_multi_agent if missing (backward compatibility)
+        if 'is_multi_agent' not in data:
+            data['is_multi_agent'] = False
         return cls(**data)
 
 

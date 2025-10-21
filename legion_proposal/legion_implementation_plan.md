@@ -95,10 +95,10 @@
 - [x] Write unit tests verifying component initialization via LegionSystem
 
 **1.5 Extend Existing Models**
-- [ ] Extend `ProjectInfo` to support `is_multi_agent` flag
-- [ ] Ensure backward compatibility with existing projects
-- [ ] Update `SessionInfo` to be compatible with MinionInfo
-- [ ] Write migration logic (if needed)
+- [x] Extend `ProjectInfo` to support `is_multi_agent` flag
+- [x] Ensure backward compatibility with existing projects (migration in from_dict)
+- [x] Document `SessionInfo` compatibility with MinionInfo
+- [x] Write migration logic and backward compatibility tests (6 tests passing)
 
 **1.6 SDK Integration Test**
 - [ ] Test MCP tool attachment to SDK session (using Claude Agent SDK docs)
