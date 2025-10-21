@@ -682,23 +682,36 @@ class ClaudeWebUI {
     }
 
     exitSession() {
-        if (!this.currentSessionId) return;
+        // Exit both session and timeline views
+        const hasSession = this.currentSessionId !== null;
+        const hasTimeline = this.currentLegionId !== null;
 
-        Logger.info('SESSION', `Exiting session ${this.currentSessionId}`);
+        if (!hasSession && !hasTimeline) return;
 
-        // Clean disconnect from WebSocket
-        this.disconnectSessionWebSocket();
+        Logger.info('SESSION', `Exiting ${hasSession ? 'session ' + this.currentSessionId : 'timeline for legion ' + this.currentLegionId}`);
 
-        // Clear cached input for exited session
-        if (this.currentSessionId) {
+        // Clean disconnect from session WebSocket
+        if (hasSession) {
+            this.disconnectSessionWebSocket();
+            // Clear cached input for exited session
             this.sessionInputCache.delete(this.currentSessionId);
+        }
+
+        // Clean disconnect from legion WebSocket
+        if (hasTimeline && this.legionWebsocket) {
+            this.legionWebsocket.close();
+            this.legionWebsocket = null;
         }
 
         // Update session info button state before clearing session
         this.updateSessionInfoButton();
 
-        // Clear current session
+        // Clear current session/timeline state
         this.currentSessionId = null;
+        this.currentLegionId = null;
+        this.viewMode = null;
+        this.spyLegionId = null;
+        this.spyMinionId = null;
 
         // Clear URL
         this.updateURLWithSession(null);
@@ -1971,6 +1984,20 @@ class ClaudeWebUI {
         return element;
     }
 
+    restoreSessionHeaderStructure() {
+        // Restore the normal session header structure (in case timeline view replaced it)
+        const sessionInfoBar = document.getElementById('session-info-bar');
+        if (sessionInfoBar) {
+            sessionInfoBar.innerHTML = `
+                <div class="d-flex align-items-center gap-2">
+                    <span id="current-session-state" class="badge bg-secondary"></span>
+                    <span id="current-session-id" class="fw-semibold"></span>
+                    <div id="session-error-message" class="d-none alert alert-danger mb-0 py-1 px-2"></div>
+                </div>
+            `;
+        }
+    }
+
     async loadSessionInfo() {
         if (!this.currentSessionId) return;
 
@@ -2461,6 +2488,9 @@ class ClaudeWebUI {
                 messageInputElement.parentElement.classList.remove('d-none');
             }
 
+            // Restore session header structure (in case it was replaced by timeline view)
+            this.restoreSessionHeaderStructure();
+
             // Load session info first to check state
             await this.loadSessionInfo();
 
@@ -2721,12 +2751,36 @@ class ClaudeWebUI {
                 await this.projectManager.toggleExpansion(project.project_id);
                 project.is_expanded = false;
 
-                // Exit session if current session belongs to this project
+                // Exit session/timeline if current view belongs to this project/legion
+                let shouldExit = false;
+
+                console.log('COLLAPSE DEBUG:', {
+                    projectId: project.project_id,
+                    projectName: project.name,
+                    currentSessionId: this.currentSessionId,
+                    currentLegionId: this.currentLegionId,
+                    viewMode: this.viewMode
+                });
+
+                // Check if viewing a session that belongs to this project
                 if (this.currentSessionId) {
                     const currentSession = this.sessions.get(this.currentSessionId);
                     if (currentSession && project.session_ids.includes(this.currentSessionId)) {
-                        this.exitSession();
+                        console.log('COLLAPSE: Found session belonging to this project');
+                        shouldExit = true;
                     }
+                }
+
+                // Check if viewing this legion's timeline
+                if (this.currentLegionId === project.project_id) {
+                    console.log('COLLAPSE: Found timeline for this legion');
+                    shouldExit = true;
+                }
+
+                console.log('COLLAPSE: shouldExit =', shouldExit);
+
+                if (shouldExit) {
+                    this.exitSession();
                 }
             }
         });
@@ -2765,6 +2819,7 @@ class ClaudeWebUI {
             const segment = document.createElement('div');
             segment.className = 'progress-bar';
             segment.style.width = segmentWidth;
+            segment.style.cursor = 'help';
 
             // Determine color based on session state - match status dot fill colors
             const isProcessing = session.is_processing || false;
@@ -2777,6 +2832,12 @@ class ClaudeWebUI {
             if (displayState === 'starting' || displayState === 'processing') {
                 segment.classList.add('progress-bar-striped', 'progress-bar-animated');
             }
+
+            // Add tooltip with minion/session name and state
+            const stateLabel = displayState.charAt(0).toUpperCase() + displayState.slice(1);
+            const nameLabel = session.name || 'Unnamed Session';
+            const roleLabel = session.is_minion && session.role ? ` (${session.role})` : '';
+            segment.title = `${nameLabel}${roleLabel}: ${stateLabel}`;
 
             statusLine.appendChild(segment);
         }
@@ -2845,13 +2906,47 @@ class ClaudeWebUI {
         spyElement.style.cursor = 'pointer';
         spyElement.setAttribute('data-legion-id', project.project_id);
 
-        // Spy header with icon
+        // Determine selected minion for state indicator
+        const selectedMinionId = (this.viewMode === 'spy' && this.spyLegionId === project.project_id && this.spyMinionId) ||
+                                 (this.currentSessionId && sessions.some(s => s.session_id === this.currentSessionId))
+                                 ? (this.spyMinionId || this.currentSessionId)
+                                 : null;
+
+        const selectedMinion = selectedMinionId ? sessions.find(s => s.session_id === selectedMinionId) : null;
+
+        // Build state indicator HTML
+        let stateIndicatorHtml = '';
+        if (selectedMinion) {
+            const isProcessing = selectedMinion.is_processing || false;
+            const displayState = isProcessing ? 'processing' : selectedMinion.state;
+            const bgColor = this.getSessionStatusDotFillColor(displayState);
+            const borderColor = this.getSessionStateColor(displayState);
+
+            // Add animation class for active states
+            const animationClass = (displayState === 'starting' || displayState === 'processing') ? 'status-blinking' : '';
+
+            stateIndicatorHtml = `
+                <span class="minion-state-indicator ${animationClass}"
+                      style="background-color: ${bgColor};
+                             border: 2px solid ${borderColor};
+                             border-radius: 4px;
+                             padding: 2px 4px;
+                             font-size: 0.875rem;">
+                    👤
+                </span>
+            `;
+        }
+
+        // Spy header with icon and state indicator
         const spyHeader = document.createElement('div');
-        spyHeader.className = 'd-flex align-items-center mb-2';
+        spyHeader.className = 'd-flex align-items-center justify-content-between mb-2';
         spyHeader.innerHTML = `
-            <span style="font-size: 1rem; margin-right: 0.5rem;">🔍</span>
-            <span class="fw-semibold">Spy</span>
-            <small class="text-muted ms-2">(Inspect Minion)</small>
+            <div class="d-flex align-items-center">
+                <span style="font-size: 1rem; margin-right: 0.5rem;">🔍</span>
+                <span class="fw-semibold">Spy</span>
+                <small class="text-muted ms-2">(Inspect Minion)</small>
+            </div>
+            ${stateIndicatorHtml}
         `;
 
         // Make header clickable if minion is selected
@@ -2902,9 +2997,17 @@ class ClaudeWebUI {
             dropdown.appendChild(option);
         });
 
-        // Restore previously selected minion if we're in spy mode for this legion
-        if (this.viewMode === 'spy' && this.spyLegionId === project.project_id && this.spyMinionId) {
-            dropdown.value = this.spyMinionId;
+        // Restore previously selected minion for this legion
+        // Check if current session belongs to this legion or if we were in spy mode for this legion
+        const shouldRestoreSelection =
+            (this.viewMode === 'spy' && this.spyLegionId === project.project_id && this.spyMinionId) ||
+            (this.currentSessionId && sessions.some(s => s.session_id === this.currentSessionId));
+
+        if (shouldRestoreSelection) {
+            const minionId = this.spyMinionId || this.currentSessionId;
+            if (minionId && sessions.some(s => s.session_id === minionId)) {
+                dropdown.value = minionId;
+            }
         }
 
         // Handle dropdown selection change
@@ -2912,6 +3015,9 @@ class ClaudeWebUI {
             const selectedMinionId = e.target.value;
             if (selectedMinionId) {
                 this.viewSpy(project.project_id, selectedMinionId);
+            } else {
+                // User selected "-- Select Minion --", show no-session-selected screen
+                this.exitSession();
             }
         });
 
@@ -3102,8 +3208,9 @@ class ClaudeWebUI {
                 const projectInfo = projectElement.querySelector('.flex-grow-1');
                 if (projectInfo) {
                     const formattedPath = this.projectManager.formatPath(project.working_directory);
+                    const legionIcon = project.is_multi_agent ? '<span class="legion-icon" style="font-size: 1rem; margin-right: 0.25rem;">🏛</span>' : '';
                     projectInfo.innerHTML = `
-                        <div class="fw-semibold">${this.escapeHtml(project.name)}</div>
+                        <div class="fw-semibold">${legionIcon}${this.escapeHtml(project.name)}</div>
                         <small class="text-muted font-monospace" title="${this.escapeHtml(project.working_directory)}">${this.escapeHtml(formattedPath)}</small>
                     `;
                 }
