@@ -2,8 +2,8 @@
 LegionCoordinator - Top-level orchestrator for Legion multi-agent system.
 
 Responsibilities:
-- Create/delete legions
-- Track all hordes, channels, minions in legion
+- Delegate legion/minion CRUD to ProjectManager/SessionManager
+- Track hordes and channels (grouping mechanisms)
 - Coordinate emergency halt/resume
 - Provide fleet status
 - Maintain central capability registry (MVP approach)
@@ -16,7 +16,8 @@ from typing import TYPE_CHECKING, Dict, List, Optional
 
 if TYPE_CHECKING:
     from src.legion_system import LegionSystem
-    from src.models.legion_models import MinionInfo, LegionInfo
+    from src.project_manager import ProjectInfo
+    from src.session_manager import SessionInfo
 
 
 class LegionCoordinator:
@@ -31,29 +32,40 @@ class LegionCoordinator:
         """
         self.system = system
 
-        # In-memory state (will be persisted to disk)
-        self.legions: Dict = {}  # Dict[str, LegionInfo]
-        self.minions: Dict = {}  # Dict[str, MinionInfo]
+        # Multi-agent grouping state (hordes and channels are not duplicated elsewhere)
         self.hordes: Dict = {}   # Dict[str, Horde]
         self.channels: Dict = {} # Dict[str, Channel]
 
         # Central capability registry (MVP approach)
-        # Format: {minion_id: [capability1, capability2, ...]}
+        # Format: {session_id: [capability1, capability2, ...]}
         self.capability_registry: Dict[str, List[str]] = {}
 
-    async def get_minion_info(self, minion_id: str) -> Optional['MinionInfo']:
+    @property
+    def project_manager(self):
+        """Access ProjectManager through SessionCoordinator."""
+        return self.system.session_coordinator.project_manager
+
+    @property
+    def session_manager(self):
+        """Access SessionManager through SessionCoordinator."""
+        return self.system.session_coordinator.session_manager
+
+    async def get_minion_info(self, minion_id: str) -> Optional['SessionInfo']:
         """
-        Get minion info by ID.
+        Get minion (session with is_minion=True) by ID.
 
         Args:
-            minion_id: Minion UUID
+            minion_id: Session UUID
 
         Returns:
-            MinionInfo if found, None otherwise
+            SessionInfo if found and is_minion=True, None otherwise
         """
-        return self.minions.get(minion_id)
+        session = await self.session_manager.get_session(minion_id)
+        if session and session.is_minion:
+            return session
+        return None
 
-    async def get_minion_by_name(self, name: str) -> Optional['MinionInfo']:
+    async def get_minion_by_name(self, name: str) -> Optional['SessionInfo']:
         """
         Get minion by name (case-sensitive).
 
@@ -61,106 +73,58 @@ class LegionCoordinator:
             name: Minion name
 
         Returns:
-            MinionInfo if found, None otherwise
+            SessionInfo if found and is_minion=True, None otherwise
         """
-        for minion in self.minions.values():
-            if minion.name == name:
-                return minion
+        sessions = await self.session_manager.list_sessions()
+        for session in sessions:
+            if session.is_minion and session.name == name:
+                return session
         return None
 
-    async def create_legion(
-        self,
-        name: str,
-        working_directory: str,
-        max_concurrent_minions: int = 20
-    ) -> 'LegionInfo':
+    async def get_legion(self, legion_id: str) -> Optional['ProjectInfo']:
         """
-        Create a new legion.
+        Get legion (project with is_multi_agent=True) by ID.
 
         Args:
-            name: Legion name
-            working_directory: Absolute path to working directory
-            max_concurrent_minions: Max number of concurrent minions
+            legion_id: Project UUID
 
         Returns:
-            LegionInfo for created legion
+            ProjectInfo if found and is_multi_agent=True, None otherwise
         """
-        from src.models.legion_models import LegionInfo
+        project = await self.project_manager.get_project(legion_id)
+        if project and project.is_multi_agent:
+            return project
+        return None
 
-        legion_id = str(uuid.uuid4())
-
-        # Create LegionInfo
-        legion = LegionInfo(
-            legion_id=legion_id,
-            name=name,
-            working_directory=working_directory,
-            max_concurrent_minions=max_concurrent_minions
-        )
-
-        # Store in memory
-        self.legions[legion_id] = legion
-
-        # Create directory structure
-        await self._create_legion_directories(legion_id)
-
-        # Persist to disk
-        await self._persist_legion(legion)
-
-        return legion
-
-    async def get_legion(self, legion_id: str) -> Optional['LegionInfo']:
+    async def list_legions(self) -> List['ProjectInfo']:
         """
-        Get legion by ID.
-
-        Args:
-            legion_id: Legion UUID
+        List all legions (projects with is_multi_agent=True).
 
         Returns:
-            LegionInfo if found, None otherwise
+            List of all ProjectInfo objects where is_multi_agent=True
         """
-        return self.legions.get(legion_id)
-
-    async def list_legions(self) -> List['LegionInfo']:
-        """
-        List all legions.
-
-        Returns:
-            List of all LegionInfo objects
-        """
-        return list(self.legions.values())
+        all_projects = await self.project_manager.list_projects()
+        return [p for p in all_projects if p.is_multi_agent]
 
     async def _create_legion_directories(self, legion_id: str) -> None:
         """
-        Create directory structure for legion.
+        Create directory structure for legion-specific data (hordes/channels).
 
         Creates:
         - data/legions/{legion_id}/
-        - data/legions/{legion_id}/minions/
         - data/legions/{legion_id}/channels/
         - data/legions/{legion_id}/hordes/
 
-        Args:
-            legion_id: Legion UUID
-        """
-        base_path = Path("data") / "legions" / legion_id
+        Note: Minion data is stored in data/sessions/{session_id}/ via SessionManager
 
-        # Create subdirectories
-        (base_path / "minions").mkdir(parents=True, exist_ok=True)
+        Args:
+            legion_id: Legion UUID (same as project_id)
+        """
+        base_path = self.system.session_coordinator.data_dir / "legions" / legion_id
+
+        # Create subdirectories for legion-specific grouping data
         (base_path / "channels").mkdir(parents=True, exist_ok=True)
         (base_path / "hordes").mkdir(parents=True, exist_ok=True)
-
-    async def _persist_legion(self, legion: 'LegionInfo') -> None:
-        """
-        Persist legion state to disk.
-
-        Args:
-            legion: LegionInfo to persist
-        """
-        legion_path = Path("data") / "legions" / legion.legion_id
-        state_file = legion_path / "state.json"
-
-        with open(state_file, "w", encoding="utf-8") as f:
-            json.dump(legion.to_dict(), f, indent=2)
 
     # TODO: Implement additional legion management methods in later phases
     # - delete_legion()

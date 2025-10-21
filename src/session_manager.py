@@ -41,7 +41,7 @@ class SessionState(Enum):
 
 @dataclass
 class SessionInfo:
-    """Session metadata and state information"""
+    """Session metadata and state information (also serves as Minion when is_minion=True)"""
     session_id: str
     state: SessionState
     created_at: datetime
@@ -59,9 +59,27 @@ class SessionInfo:
     order: Optional[int] = None
     project_id: Optional[str] = None
 
+    # Minion-specific fields (only used when is_minion=True)
+    is_minion: bool = False  # True if this is a minion in a legion
+    role: Optional[str] = None  # Minion role description
+    is_overseer: bool = False  # True if has spawned children
+    overseer_level: int = 0  # 0=user-created, 1=child, 2=grandchild
+    parent_overseer_id: Optional[str] = None  # None if user-created
+    child_minion_ids: List[str] = None  # Child minion session IDs
+    horde_id: Optional[str] = None  # Which horde this minion belongs to
+    channel_ids: List[str] = None  # Communication channels
+    capabilities: List[str] = None  # Capability tags for discovery
+    initialization_context: Optional[str] = None  # Custom system prompt for minion
+
     def __post_init__(self):
         if self.tools is None:
             self.tools = ["bash", "edit", "read"]
+        if self.child_minion_ids is None:
+            self.child_minion_ids = []
+        if self.channel_ids is None:
+            self.channel_ids = []
+        if self.capabilities is None:
+            self.capabilities = []
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization"""
@@ -77,6 +95,19 @@ class SessionInfo:
         data['state'] = SessionState(data['state'])
         data['created_at'] = datetime.fromisoformat(data['created_at'])
         data['updated_at'] = datetime.fromisoformat(data['updated_at'])
+        # Migration: Add minion fields if missing (backward compatibility)
+        if 'is_minion' not in data:
+            data['is_minion'] = False
+        if 'child_minion_ids' not in data:
+            data['child_minion_ids'] = []
+        if 'channel_ids' not in data:
+            data['channel_ids'] = []
+        if 'capabilities' not in data:
+            data['capabilities'] = []
+        if 'is_overseer' not in data:
+            data['is_overseer'] = False
+        if 'overseer_level' not in data:
+            data['overseer_level'] = 0
         return cls(**data)
 
 

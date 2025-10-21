@@ -3825,21 +3825,16 @@ class ClaudeWebUI {
         const data = Object.fromEntries(formData.entries());
 
         try {
-            // Check if multi-agent is enabled
+            // Create project (or legion if checkbox is checked)
             const isMultiAgent = data.is_multi_agent === 'on';
 
-            if (isMultiAgent) {
-                // Create legion instead of regular project
-                const response = await this.apiClient.post('/api/legions', {
-                    name: data.name,
-                    working_directory: data.working_directory
-                });
-                Logger.info('LEGION', 'Legion created successfully', response.legion);
-            } else {
-                // Create regular project
-                const project = await this.projectManager.createProject(data.name, data.working_directory);
-                Logger.info('PROJECT', 'Project created successfully', project);
-            }
+            const project = await this.projectManager.createProject(
+                data.name,
+                data.working_directory,
+                isMultiAgent
+            );
+
+            Logger.info('PROJECT', `${isMultiAgent ? 'Legion' : 'Project'} created successfully`, project);
 
             this.hideCreateProjectModal();
             await this.refreshSessions(); // Reload to show new project/legion
@@ -4163,10 +4158,7 @@ class ClaudeWebUI {
                         this.updateSessionData(this.editingSessionId, session);
                     }
 
-                    // Update permission mode display if this is the current session
-                    if (this.editingSessionId === this.currentSessionId) {
-                        this.updatePermissionMode(newPermissionMode);
-                    }
+                    // Permission mode display will update via refreshSessions() after modal closes
 
                     Logger.info('SESSION', 'Permission mode updated successfully', {
                         sessionId: this.editingSessionId,

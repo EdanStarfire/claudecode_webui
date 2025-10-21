@@ -41,12 +41,12 @@
 
 **1.1 Create Data Model Classes**
 - [x] Create `src/models/legion_models.py`
-  - LegionInfo dataclass
-  - MinionInfo dataclass
+  - ~~LegionInfo dataclass~~ **CONSOLIDATED** → Extended ProjectInfo (see 1.5)
+  - ~~MinionInfo dataclass~~ **CONSOLIDATED** → Extended SessionInfo (see 1.5)
   - Horde dataclass
   - Channel dataclass
   - Comm dataclass with CommType and InterruptPriority enums
-  - MinionState enum
+  - ~~MinionState enum~~ **CONSOLIDATED** → Use SessionState
 - [x] Create `src/models/memory_models.py`
   - MemoryEntry dataclass
   - MemoryType enum
@@ -55,6 +55,8 @@
 - [x] Add validation methods to each model (Comm.validate())
 - [x] Add serialization methods (to_dict, from_dict)
 - [x] Write unit tests for each model (23 tests passing)
+
+**CONSOLIDATION NOTE**: LegionInfo and MinionInfo were consolidated into ProjectInfo and SessionInfo respectively to eliminate duplication and leverage existing infrastructure. See Task 1.5 for details.
 
 **1.2 Create LegionSystem Dependency Injection Container**
 - [x] Create `src/legion_system.py`
@@ -82,7 +84,8 @@
 - [x] Create `src/legion/legion_coordinator.py` skeleton
   - Constructor accepts `system: LegionSystem`
   - Add `capability_registry: Dict[str, List[str]]` field
-  - Add method signatures for all coordinator operations
+  - ~~Add method signatures for all coordinator operations~~ **UPDATED**: Delegates to ProjectManager/SessionManager
+  - Add `@property` accessors for `project_manager` and `session_manager`
 - [x] Create `src/legion/comm_router.py` skeleton
   - Constructor accepts `system: LegionSystem`
   - Add `_extract_tags()` method for #tag parsing
@@ -94,10 +97,16 @@
   - Constructor accepts `system: LegionSystem`
 - [x] Write unit tests verifying component initialization via LegionSystem
 
-**1.5 Extend Existing Models**
-- [x] Extend `ProjectInfo` to support `is_multi_agent` flag
-- [x] Ensure backward compatibility with existing projects (migration in from_dict)
-- [x] Document `SessionInfo` compatibility with MinionInfo
+**1.5 Extend Existing Models (CONSOLIDATION)**
+- [x] Extend `ProjectInfo` to support `is_multi_agent` flag **+ legion-specific fields**
+  - Added fields: `horde_ids`, `channel_ids`, `minion_ids`, `max_concurrent_minions`, `active_minion_count`
+  - Backward compatibility: `from_dict()` handles missing fields with defaults
+- [x] Extend `SessionInfo` to support `is_minion` flag **+ minion-specific fields**
+  - Added fields: `role`, `is_overseer`, `overseer_level`, `parent_overseer_id`, `child_minion_ids`, `horde_id`, `channel_ids`, `capabilities`, `initialization_context`
+  - Backward compatibility: `from_dict()` handles missing fields with defaults
+- [x] **REMOVED** LegionInfo dataclass (replaced by ProjectInfo with `is_multi_agent=True`)
+- [x] **REMOVED** MinionInfo dataclass (replaced by SessionInfo with `is_minion=True`)
+- [x] Update LegionCoordinator to delegate to ProjectManager/SessionManager (no more `self.legions`/`self.minions` dicts)
 - [x] Write migration logic and backward compatibility tests (6 tests passing)
 
 **1.6 SDK Integration Test**
@@ -244,16 +253,21 @@
 #### Tasks
 
 **3.1 Sidebar - Legion Display**
-- [ ] Extend sidebar to detect legion projects
-- [ ] Show legion icon (🏛) for legion projects
-- [ ] Add "Enable Multi-Agent" checkbox to project creation modal
-- [ ] Create legion on project creation if checkbox enabled
+- [x] Extend sidebar to detect legion projects (check `project.is_multi_agent`)
+- [x] Show legion icon (🏛) for legion projects
+- [x] Add "Enable Multi-Agent" checkbox to project creation modal
+- [x] Create legion on project creation if checkbox enabled (via `POST /api/projects` with `is_multi_agent=true`)
 - [ ] Write frontend tests (modal behavior)
 
 **3.2 Sidebar - Minion List (Simple)**
-- [ ] Display flat list of minions under legion (no hierarchy yet)
-- [ ] Show minion name and state indicator (● ⏸ ✗)
-- [ ] Click minion to select (highlight)
+- [ ] Backend: Auto-detect when session created under legion (SessionCoordinator.create_session)
+  - Check if parent project has `is_multi_agent=True`
+  - Automatically set `session.is_minion=True` and populate minion fields
+- [ ] Frontend: Display sessions with `is_minion=True` as minions
+  - Show minion badge/icon (👤) for sessions with is_minion flag
+  - Display flat list under legion (no hierarchy yet)
+  - Show minion name and state indicator (● ⏸ ✗)
+  - Click minion to select (highlight)
 - [ ] Write frontend tests (list rendering)
 
 **3.3 Timeline View (Minimal)**
@@ -295,12 +309,12 @@
 - [ ] Write integration tests (simulate WebSocket events)
 
 **3.6 Backend API Endpoints (Minimal)**
-- [ ] Implement basic endpoints:
-  - `POST /api/legions` (create legion)
-  - `GET /api/legions/{id}` (get legion with minions)
-  - `GET /api/legions/{id}/timeline` (get Comms with pagination)
-  - `POST /api/legions/{id}/comms` (send Comm)
-- [ ] Wire up to LegionCoordinator (stub for now)
+- [x] ~~Implement basic endpoints~~ **CONSOLIDATED**: Use unified project/session endpoints
+  - ~~`POST /api/legions`~~ → Use `POST /api/projects` with `is_multi_agent=true`
+  - ~~`GET /api/legions/{id}`~~ → Use `GET /api/projects/{id}` (returns legions too)
+  - [x] `GET /api/legions/{id}/timeline` (get Comms with pagination) - **IMPLEMENTED** (stub, returns empty)
+  - [x] `POST /api/legions/{id}/comms` (send Comm) - **IMPLEMENTED**
+- [x] Wire up to LegionCoordinator
 - [ ] Write API tests
 
 #### Deliverables
@@ -331,31 +345,27 @@
 
 #### Tasks
 
-**4.1 LegionCoordinator Core**
-- [ ] Create `src/legion_coordinator.py`
-  - LegionCoordinator class
-  - Initialize with references to SessionCoordinator, CommRouter
-  - Maintain dicts of legions, minions, hordes, channels
-- [ ] Implement `create_legion()`
-  - Generate legion_id
-  - Create LegionInfo
-  - Create directory structure
-  - Persist to storage
-- [ ] Implement `delete_legion()`
-  - Terminate all minions
-  - Archive data
-  - Clean up references
+**4.1 LegionCoordinator Core** (SIMPLIFIED POST-CONSOLIDATION)
+- [x] ~~Create `src/legion_coordinator.py`~~ **COMPLETED** in Phase 1
+  - [x] LegionCoordinator class accepts LegionSystem
+  - [x] ~~Maintain dicts of legions, minions, hordes, channels~~ **CHANGED**: Only maintains hordes, channels (legions/minions delegated)
+  - [x] Delegates to ProjectManager (`self.project_manager` property) for legion CRUD
+  - [x] Delegates to SessionManager (`self.session_manager` property) for minion CRUD
+- [ ] ~~Implement `create_legion()`~~ **N/A**: Use `ProjectManager.create_project(is_multi_agent=True)`
+- [ ] ~~Implement `delete_legion()`~~ **N/A**: Use `ProjectManager.delete_project()`
+- [x] Maintain capability_registry for minion discovery
 - [ ] Write unit tests
 
-**4.2 Manual Minion Creation**
+**4.2 Manual Minion Creation** (SIMPLIFIED POST-CONSOLIDATION)
 - [ ] Implement `create_minion_for_user()` in OverseerController
-  - Validate name uniqueness
-  - Check minion limit
-  - Create MinionInfo
+  - Validate name uniqueness (query SessionManager)
+  - Check minion limit (query parent project's max_concurrent_minions)
+  - ~~Create MinionInfo~~ **CHANGED**: Call `SessionManager.create_session()` with minion fields
+  - Set `is_minion=True`, `role`, `initialization_context`, `capabilities`
   - Create SDK session via SessionCoordinator
   - Start session
   - Create horde (minion as root)
-  - Persist
+  - Register capabilities in LegionCoordinator.capability_registry
 - [ ] Wire up to LegionCoordinator
 - [ ] Write integration tests
 
@@ -368,14 +378,15 @@
 - [ ] Persist horde state
 - [ ] Write tests
 
-**4.4 Backend API - Minion Creation**
-- [ ] Implement `POST /api/legions/{id}/minions`
-  - Accept name, role, initialization_context, channels
-  - Call OverseerController.create_minion_for_user()
-  - Return minion_id and state
-- [ ] Implement `GET /api/minions/{id}`
-  - Return full MinionInfo
-  - Include children (empty for now), recent Comms
+**4.4 Backend API - Minion Creation** (SIMPLIFIED POST-CONSOLIDATION)
+- [ ] ~~Implement `POST /api/legions/{id}/minions`~~ **CHANGED**: Use `POST /api/sessions` with `project_id` (legion ID)
+  - SessionCoordinator detects parent project's `is_multi_agent=True`
+  - Automatically sets `is_minion=True` and populates minion fields
+  - Accept name, role, initialization_context, capabilities via request body
+  - Call OverseerController.create_minion_for_user() for horde creation
+- [ ] ~~Implement `GET /api/minions/{id}`~~ **CHANGED**: Use `GET /api/sessions/{id}`
+  - Returns SessionInfo (includes minion fields when `is_minion=True`)
+  - Include children (child_minion_ids), recent Comms
 - [ ] Write API tests
 
 **4.5 UI - Create Minion Modal**

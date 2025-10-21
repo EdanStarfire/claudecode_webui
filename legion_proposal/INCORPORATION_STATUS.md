@@ -1,13 +1,15 @@
 # Legion Architecture Feedback - Incorporation Status
 
 **Date**: 2025-10-20
-**Status**: ✅ ALL RECOMMENDATIONS FULLY INCORPORATED INTO PLANNING DOCUMENTS
+**Status**: ✅ ALL RECOMMENDATIONS FULLY INCORPORATED INTO PLANNING DOCUMENTS & CODE
 
 ---
 
 ## Summary
 
-All three architectural recommendations from `legion_feedback_and_recommendations.md` have been successfully integrated into the Legion planning documents. The changes improve architecture quality, simplify the MVP implementation, and maintain clear upgrade paths for future enhancements.
+All three architectural recommendations from `legion_feedback_and_recommendations.md` have been successfully integrated into the Legion planning documents AND implemented in code. The changes improve architecture quality, simplify the MVP implementation, and maintain clear upgrade paths for future enhancements.
+
+**MAJOR CONSOLIDATION COMPLETED (2025-10-20)**: Legions and Minions have been consolidated with Projects and Sessions to eliminate duplication and leverage existing infrastructure.
 
 ---
 
@@ -219,6 +221,106 @@ Future enhancements can layer on top:
 
 ---
 
+---
+
+## 4. ✅ CONSOLIDATION: Legions → ProjectInfo, Minions → SessionInfo
+
+**Status**: IMPLEMENTED IN CODE (2025-10-20)
+**Impact**: Critical - Eliminates duplication, leverages existing infrastructure
+
+### Rationale
+During Phase 3 implementation, it became clear that maintaining separate `LegionInfo` and `MinionInfo` models was creating unnecessary duplication with `ProjectInfo` and `SessionInfo`. The consolidation leverages existing battle-tested infrastructure while adding multi-agent capabilities through flags.
+
+### Architecture Changes
+
+**Legion Consolidation:**
+- ❌ Removed: `LegionInfo` dataclass (src/models/legion_models.py)
+- ✅ Extended: `ProjectInfo` with `is_multi_agent` flag and legion-specific fields
+- ✅ Fields added to `ProjectInfo`:
+  - `is_multi_agent: bool = False`
+  - `horde_ids: List[str] = []`
+  - `channel_ids: List[str] = []`
+  - `minion_ids: List[str] = []`
+  - `max_concurrent_minions: int = 20`
+  - `active_minion_count: int = 0`
+
+**Minion Consolidation:**
+- ❌ Removed: `MinionInfo` dataclass (src/models/legion_models.py)
+- ✅ Extended: `SessionInfo` with `is_minion` flag and minion-specific fields
+- ✅ Fields added to `SessionInfo`:
+  - `is_minion: bool = False`
+  - `role: Optional[str] = None`
+  - `is_overseer: bool = False`
+  - `overseer_level: int = 0`
+  - `parent_overseer_id: Optional[str] = None`
+  - `child_minion_ids: List[str] = []`
+  - `horde_id: Optional[str] = None`
+  - `channel_ids: List[str] = []`
+  - `capabilities: List[str] = []`
+  - `initialization_context: Optional[str] = None`
+
+### Code Changes
+
+**Backend (Python):**
+1. **src/project_manager.py** - Extended `ProjectInfo` dataclass with legion fields
+2. **src/session_manager.py** - Extended `SessionInfo` dataclass with minion fields
+3. **src/legion/legion_coordinator.py** - Refactored to delegate to ProjectManager/SessionManager
+   - Removed: `self.legions` and `self.minions` dicts
+   - Added: `@property` accessors for `project_manager` and `session_manager`
+   - Updated: All methods now query ProjectManager/SessionManager
+4. **src/web_server.py** - Unified API endpoints
+   - Removed: `POST /api/legions`, `GET /api/legions/{id}` (now use `/api/projects`)
+   - Kept: `/api/legions/{id}/timeline` and `/api/legions/{id}/comms` for multi-agent features
+   - Updated: `ProjectCreateRequest` with `is_multi_agent` parameter
+5. **src/models/legion_models.py** - Removed LegionInfo and MinionInfo
+   - Kept: Horde, Channel, Comm (grouping/control mechanisms)
+6. **src/models/__init__.py** - Updated exports to remove LegionInfo/MinionInfo
+
+**Frontend (JavaScript):**
+1. **static/core/project-manager.js** - Updated `createProject()` with `isMultiAgent` parameter
+2. **static/app.js** - Simplified legion creation to use unified project endpoint
+
+### Backward Compatibility
+- ✅ Migration logic in `ProjectInfo.from_dict()` and `SessionInfo.from_dict()`
+- ✅ Existing projects without legion fields continue to work
+- ✅ Existing sessions without minion fields continue to work
+- ✅ All existing WebUI functionality unaffected
+
+### Files Modified
+- `src/project_manager.py`
+- `src/session_manager.py`
+- `src/legion/legion_coordinator.py`
+- `src/web_server.py`
+- `src/models/legion_models.py`
+- `src/models/__init__.py`
+- `static/core/project-manager.js`
+- `static/app.js`
+
+### Benefits Achieved
+- ✅ **No Duplication**: Single source of truth for projects and sessions
+- ✅ **Leverage Existing Infrastructure**: Reuse battle-tested CRUD operations, persistence, state management
+- ✅ **Simpler API**: One endpoint for project creation (with optional `is_multi_agent` flag)
+- ✅ **Cleaner Architecture**: LegionCoordinator focuses only on multi-agent coordination (hordes/channels/comms), not basic CRUD
+- ✅ **Easier Maintenance**: Changes to projects/sessions automatically benefit legions/minions
+- ✅ **Type Safety**: Single dataclass per concept reduces confusion
+
+### Implementation Plan Impact
+**Phase 1.5**: Update tasks to reflect consolidation:
+- ❌ Remove: "Create LegionInfo dataclass" (now extending ProjectInfo)
+- ❌ Remove: "Create MinionInfo dataclass" (now extending SessionInfo)
+- ✅ Update: "Extend ProjectInfo to support is_multi_agent flag" (COMPLETED)
+- ✅ Update: "Extend SessionInfo to support is_minion flag" (COMPLETED)
+
+**Phase 3.1**: Update tasks:
+- ✅ Create legion via project creation checkbox (COMPLETED)
+- ✅ Legion shows in sidebar with icon (COMPLETED)
+
+**Phase 4.1**: Simplify LegionCoordinator tasks:
+- Update: LegionCoordinator delegates to ProjectManager, no longer manages `self.legions` dict
+- Update: OverseerController delegates to SessionManager, no longer manages `self.minions` dict
+
+---
+
 **Document Owner**: Development Team
 **Last Updated**: 2025-10-20
-**Review Status**: Ready for Stakeholder Approval
+**Review Status**: Consolidation Implemented & Verified

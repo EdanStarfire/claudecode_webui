@@ -35,6 +35,8 @@ logger = logging.getLogger(__name__)
 class ProjectCreateRequest(BaseModel):
     name: str
     working_directory: str
+    is_multi_agent: bool = False  # True to create as legion
+    max_concurrent_minions: int = 20  # Only used if is_multi_agent=True
 
 
 class ProjectUpdateRequest(BaseModel):
@@ -69,12 +71,6 @@ class SessionReorderRequest(BaseModel):
 
 class PermissionModeRequest(BaseModel):
     mode: str
-
-
-class LegionCreateRequest(BaseModel):
-    name: str
-    working_directory: str
-    max_concurrent_minions: int = 20
 
 
 class CommSendRequest(BaseModel):
@@ -271,11 +267,13 @@ class ClaudeWebUI:
 
         @self.app.post("/api/projects")
         async def create_project(request: ProjectCreateRequest):
-            """Create a new project"""
+            """Create a new project (or legion if is_multi_agent=True)"""
             try:
                 project = await self.coordinator.project_manager.create_project(
                     name=request.name,
-                    working_directory=request.working_directory
+                    working_directory=request.working_directory,
+                    is_multi_agent=request.is_multi_agent,
+                    max_concurrent_minions=request.max_concurrent_minions
                 )
                 return {"project": project.to_dict()}
             except Exception as e:
@@ -284,7 +282,7 @@ class ClaudeWebUI:
 
         @self.app.get("/api/projects")
         async def list_projects():
-            """List all projects"""
+            """List all projects (including legions with is_multi_agent=true)"""
             try:
                 projects = await self.coordinator.project_manager.list_projects()
                 return {"projects": [p.to_dict() for p in projects]}
@@ -652,45 +650,8 @@ class ClaudeWebUI:
                 raise HTTPException(status_code=500, detail=str(e))
 
         # ==================== LEGION ENDPOINTS ====================
-
-        @self.app.post("/api/legions")
-        async def create_legion(request: LegionCreateRequest):
-            """Create a new legion"""
-            try:
-                legion = await self.coordinator.legion_system.legion_coordinator.create_legion(
-                    name=request.name,
-                    working_directory=request.working_directory,
-                    max_concurrent_minions=request.max_concurrent_minions
-                )
-                return {"legion": legion.to_dict()}
-            except Exception as e:
-                logger.error(f"Failed to create legion: {e}")
-                raise HTTPException(status_code=500, detail=str(e))
-
-        @self.app.get("/api/legions/{legion_id}")
-        async def get_legion(legion_id: str):
-            """Get legion with minions"""
-            try:
-                legion = await self.coordinator.legion_system.legion_coordinator.get_legion(legion_id)
-                if not legion:
-                    raise HTTPException(status_code=404, detail="Legion not found")
-
-                # Get all minions for this legion
-                minions = [
-                    m.to_dict()
-                    for m in self.coordinator.legion_system.legion_coordinator.minions.values()
-                    if m.legion_id == legion_id
-                ]
-
-                return {
-                    "legion": legion.to_dict(),
-                    "minions": minions
-                }
-            except HTTPException:
-                raise
-            except Exception as e:
-                logger.error(f"Failed to get legion: {e}")
-                raise HTTPException(status_code=500, detail=str(e))
+        # NOTE: Legion creation now uses POST /api/projects with is_multi_agent=true
+        # Timeline and comms endpoints remain for future multi-agent communication features
 
         @self.app.get("/api/legions/{legion_id}/timeline")
         async def get_legion_timeline(legion_id: str, limit: int = 100, offset: int = 0):
@@ -700,8 +661,8 @@ class ClaudeWebUI:
                 if not legion:
                     raise HTTPException(status_code=404, detail="Legion not found")
 
-                # For now, return empty timeline (will implement Comm reading in next commit)
-                # TODO: Read comms from data/legions/{legion_id}/minions/*/comms.jsonl
+                # For now, return empty timeline (will implement Comm reading in future phases)
+                # TODO: Read comms from data/legions/{legion_id}/channels/*/comms.jsonl
                 return {
                     "comms": [],
                     "total": 0,

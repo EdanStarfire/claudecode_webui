@@ -61,6 +61,15 @@ class SessionCoordinator:
         # Track applied permission updates for state management
         self._permission_updates: Dict[str, List[dict]] = {}  # session_id -> list of applied updates
 
+        # Initialize Legion multi-agent system
+        from src.legion_system import LegionSystem
+        # Create a dummy storage manager for now (legion will create its own per-legion storage)
+        dummy_storage = DataStorageManager(self.data_dir / "legion_temp")
+        self.legion_system = LegionSystem(
+            session_coordinator=self,
+            data_storage_manager=dummy_storage
+        )
+
     async def initialize(self):
         """Initialize the session coordinator"""
         try:
