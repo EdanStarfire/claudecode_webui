@@ -259,32 +259,39 @@
 - [x] Create legion on project creation if checkbox enabled (via `POST /api/projects` with `is_multi_agent=true`)
 - [ ] Write frontend tests (modal behavior)
 
-**3.2 Sidebar - Minion List (Simple)**
-- [ ] Backend: Auto-detect when session created under legion (SessionCoordinator.create_session)
+**3.2 Sidebar - Minion List (Spy UI)**
+- [x] Backend: Auto-detect when session created under legion (SessionCoordinator.create_session)
   - Check if parent project has `is_multi_agent=True`
   - Automatically set `session.is_minion=True` and populate minion fields
-- [ ] Frontend: Display sessions with `is_minion=True` as minions
-  - Show minion badge/icon (👤) for sessions with is_minion flag
-  - Display flat list under legion (no hierarchy yet)
-  - Show minion name and state indicator (● ⏸ ✗)
-  - Click minion to select (highlight)
-- [ ] Write frontend tests (list rendering)
+- [x] Frontend: Display sessions with `is_minion=True` as minions via Spy UI
+  - **ENHANCED**: Implemented Spy UI with dropdown selector (scalable for 10-20+ minions)
+  - Show minion badge/icon (👤) with colored state indicator on Spy header
+  - Dropdown shows minion list with state icons (● ○ ◐ ⏸ ✗ ⚠)
+  - Click Spy header to return to previously selected minion
+  - Dropdown state restoration across navigation
+  - Deselect functionality via "-- Select Minion --" option
+  - Status bar tooltips showing minion name, role, and state on hover
+  - Legion icon (🏛) persists across expand/collapse
+- [ ] Write frontend tests (Spy UI behavior, dropdown state restoration)
 
-**3.3 Timeline View (Minimal)**
-- [ ] Create new "Timeline" tab in main view (parallel to existing messages view)
-- [ ] Fetch recent 100 Comms via GET `/api/legions/{id}/timeline`
-- [ ] Render Comm cards:
-  - Source → Destination
-  - Comm type badge
-  - Content (truncated, with tag highlighting)
-  - Timestamp
-- [ ] Basic styling (color-coded borders by type)
+**3.3 Timeline View (Accordion Messages)**
+- [x] Create "Timeline" view in main area (replaces session messages when viewing timeline)
+- [x] Fetch recent Comms via `GET /api/legions/{id}/timeline`
+- [x] Render Comm messages with Bootstrap accordion structure:
+  - Summary line shows: Source → Destination, Comm type badge, timestamp
+  - Expandable content section with full message text
+  - Color-coded left border by comm type (TASK=blue, QUESTION=orange, GUIDE=purple, etc.)
+  - State-aware styling (blinking animations for processing states)
+- [x] Legion header with 🏛 icon and name displayed above timeline
+- [x] WebSocket integration for real-time timeline updates (`/ws/legion/{legion_id}`)
+- [x] Timeline view properly clears when legion is collapsed
+- [x] View mode tracking (timeline vs spy vs session)
 - [ ] Implement tag rendering:
   - Parse `#minion-name` and `#channel-name` in content
   - Highlight tags with distinct background color (light blue)
   - Make tags clickable (navigate to minion/channel detail)
   - Add hover tooltips showing minion/channel info
-- [ ] Write frontend tests (card rendering, tag parsing)
+- [ ] Write frontend tests (card rendering, tag parsing, WebSocket events)
 
 **3.4 Comm Composer (with Tag Autocomplete)**
 - [ ] Add Comm input at bottom of timeline
@@ -301,11 +308,15 @@
 - [ ] Write frontend tests (send flow, autocomplete behavior)
 
 **3.5 WebSocket Real-Time Updates**
-- [ ] Extend WebSocket manager for legion events
-  - `/ws/legion/{legion_id}` endpoint
-- [ ] Subscribe to legion WebSocket on legion selection
-- [ ] Handle `comm` event → append to timeline
-- [ ] Handle `state_change` event → update sidebar
+- [x] Extend WebSocket manager for legion events
+  - `/ws/legion/{legion_id}` endpoint implemented
+  - LegionWebSocketManager class with broadcast_to_legion()
+- [x] Subscribe to legion WebSocket on timeline view
+- [x] Ping/pong keepalive mechanism (30s timeout)
+- [x] Comm broadcast callback integration with CommRouter
+- [x] Handle `comm` event → append to timeline in real-time
+- [x] Connection lifecycle management (connect/disconnect on view changes)
+- [ ] Handle `state_change` event → update sidebar (pending minion state changes)
 - [ ] Write integration tests (simulate WebSocket events)
 
 **3.6 Backend API Endpoints (Minimal)**
@@ -318,24 +329,30 @@
 - [ ] Write API tests
 
 #### Deliverables
-- [ ] Legion creation via UI working
-- [ ] Minions visible in sidebar
-- [ ] Timeline displays Comms with tag highlighting
+- [x] Legion creation via UI working
+- [x] Minions visible in sidebar via Spy UI (scalable dropdown)
+- [x] Timeline displays Comms with accordion structure
+- [x] Real-time updates via WebSocket for timeline
+- [ ] Tag highlighting and clickable tags in timeline
 - [ ] Tag autocomplete in Comm composer
 - [ ] Can send Comm from UI to minion (with tags)
-- [ ] Real-time updates via WebSocket
 
 #### Acceptance Criteria
-- [ ] User can create legion with checkbox
-- [ ] Legion appears in sidebar with icon
-- [ ] Timeline loads and displays Comms
+- [x] User can create legion with checkbox
+- [x] Legion appears in sidebar with icon (🏛)
+- [x] Timeline loads and displays Comms in accordion format
+- [x] WebSocket updates timeline in real-time
+- [x] Spy UI provides scalable minion selection (dropdown)
+- [x] Minion state indicators visible on Spy header and status bar
+- [x] Timeline view clears properly when legion collapsed
+- [x] View mode tracking works (timeline vs spy vs session)
 - [ ] Tags (#minion-name, #channel-name) highlighted and clickable
 - [ ] Autocomplete appears when typing # in composer
 - [ ] Can send Comm, appears in timeline immediately with rendered tags
-- [ ] WebSocket updates timeline in real-time
 - [ ] All tests passing
 
 **Estimated Effort**: 8-10 days (added tag rendering + autocomplete)
+**Actual Progress**: ~75% complete (UI foundation + WebSocket done, tag features + composer pending)
 
 ---
 
