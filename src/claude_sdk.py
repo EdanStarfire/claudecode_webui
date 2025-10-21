@@ -130,7 +130,8 @@ class ClaudeSDK:
         system_prompt: Optional[str] = None,
         tools: List[str] = None,
         model: Optional[str] = None,
-        resume_session_id: Optional[str] = None
+        resume_session_id: Optional[str] = None,
+        mcp_servers: Optional[List[Any]] = None
     ):
         """
         Initialize enhanced Claude Code SDK wrapper.
@@ -146,6 +147,7 @@ class ClaudeSDK:
             system_prompt: Custom system prompt
             tools: List of allowed tools
             model: Model to use
+            mcp_servers: List of MCP servers to attach (for multi-agent)
         """
         self.session_id = session_id
         self.working_directory = Path(working_directory)
@@ -164,6 +166,7 @@ class ClaudeSDK:
         self.tools = tools if tools is not None else []
         self.model = model
         self.resume_session_id = resume_session_id
+        self.mcp_servers = mcp_servers if mcp_servers is not None else []
 
         self.info = SessionInfo(session_id=session_id, working_directory=str(self.working_directory))
 
@@ -663,8 +666,14 @@ class ClaudeSDK:
             options_kwargs["resume"] = self.resume_session_id
             sdk_logger.debug(f"Setting resume parameter to: {self.resume_session_id}")
 
+        # Add MCP servers for multi-agent sessions (minions)
+        if self.mcp_servers:
+            options_kwargs["mcp_servers"] = self.mcp_servers
+            sdk_logger.info(f"Attaching MCP servers to session {self.session_id}: {list(self.mcp_servers.keys()) if isinstance(self.mcp_servers, dict) else 'unknown format'}")
+
         sdk_logger.debug(f"Final SDK options keys: {list(options_kwargs.keys())}")
         sdk_logger.debug(f"can_use_tool included: {'can_use_tool' in options_kwargs}")
+        sdk_logger.debug(f"mcp_servers included: {'mcp_servers' in options_kwargs}")
         sdk_logger.debug(f"ClaudeAgentOptions: {options_kwargs}")
         return ClaudeAgentOptions(**options_kwargs)
 

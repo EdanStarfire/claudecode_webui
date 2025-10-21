@@ -158,6 +158,45 @@ class SessionCoordinator:
             await storage_manager.initialize()
             self._storage_managers[session_id] = storage_manager
 
+            # Attach MCP tools for minion sessions (multi-agent)
+            mcp_servers = None
+            legion_tools = []
+            coord_logger.debug(f"MCP attachment check for session {session_id}: is_minion={is_minion}, legion_system={self.legion_system is not None}, mcp_tools={self.legion_system.mcp_tools if self.legion_system else None}")
+            if is_minion and self.legion_system and self.legion_system.mcp_tools:
+                mcp_server = self.legion_system.mcp_tools.mcp_server
+                coord_logger.debug(f"MCP server object: {mcp_server}")
+                if mcp_server:
+                    # SDK expects dict mapping server name to config, not a list
+                    mcp_servers = {"legion": mcp_server}
+                    # Add Legion MCP tool names to allowed_tools list
+                    # MCP tools are prefixed with mcp__<server_name>__<tool_name>
+                    legion_tools = [
+                        "mcp__legion__send_comm",
+                        "mcp__legion__send_comm_to_channel",
+                        "mcp__legion__spawn_minion",
+                        "mcp__legion__dispose_minion",
+                        "mcp__legion__search_capability",
+                        "mcp__legion__list_minions",
+                        "mcp__legion__get_minion_info",
+                        "mcp__legion__join_channel",
+                        "mcp__legion__create_channel",
+                        "mcp__legion__list_channels"
+                    ]
+                    coord_logger.info(f"Attaching Legion MCP tools to minion session {session_id}: {legion_tools}")
+                else:
+                    coord_logger.warning(f"MCP server is None for minion session {session_id}")
+            else:
+                if not is_minion:
+                    coord_logger.debug(f"Session {session_id} is not a minion - skipping MCP tools")
+                elif not self.legion_system:
+                    coord_logger.warning(f"Legion system is None for session {session_id}")
+                elif not self.legion_system.mcp_tools:
+                    coord_logger.warning(f"Legion system mcp_tools is None for session {session_id}")
+
+            # Merge Legion tools with any provided tools
+            all_tools = tools if tools else []
+            all_tools = list(set(all_tools + legion_tools))  # Deduplicate
+
             # Create SDK instance
             sdk = ClaudeSDK(
                 session_id=session_id,
@@ -169,8 +208,9 @@ class SessionCoordinator:
                 permission_callback=permission_callback,
                 permissions=permission_mode,
                 system_prompt=system_prompt,
-                tools=tools,
-                model=model
+                tools=all_tools,
+                model=model,
+                mcp_servers=mcp_servers
             )
             self._active_sdks[session_id] = sdk
 
@@ -236,6 +276,34 @@ class SessionCoordinator:
             if session_info.claude_code_session_id:
                 resume_sdk_session = session_id  # Use WebUI session ID as resume identifier
 
+            # Attach MCP tools for minion sessions (multi-agent)
+            mcp_servers = None
+            legion_tools = []
+            if session_info.is_minion and self.legion_system and self.legion_system.mcp_tools:
+                mcp_server = self.legion_system.mcp_tools.mcp_server
+                if mcp_server:
+                    # SDK expects dict mapping server name to config, not a list
+                    mcp_servers = {"legion": mcp_server}
+                    # Add Legion MCP tool names to allowed_tools list
+                    # MCP tools are prefixed with mcp__<server_name>__<tool_name>
+                    legion_tools = [
+                        "mcp__legion__send_comm",
+                        "mcp__legion__send_comm_to_channel",
+                        "mcp__legion__spawn_minion",
+                        "mcp__legion__dispose_minion",
+                        "mcp__legion__search_capability",
+                        "mcp__legion__list_minions",
+                        "mcp__legion__get_minion_info",
+                        "mcp__legion__join_channel",
+                        "mcp__legion__create_channel",
+                        "mcp__legion__list_channels"
+                    ]
+                    coord_logger.info(f"Attaching Legion MCP tools to minion session {session_id} (on start): {legion_tools}")
+
+            # Merge Legion tools with session's stored tools
+            all_tools = session_info.tools if session_info.tools else []
+            all_tools = list(set(all_tools + legion_tools))  # Deduplicate
+
             # Create/recreate SDK instance with session parameters
             sdk = ClaudeSDK(
                 session_id=session_id,
@@ -247,9 +315,10 @@ class SessionCoordinator:
                 permission_callback=permission_callback,  # Use provided permission callback for resumed sessions
                 permissions=session_info.current_permission_mode,
                 system_prompt=session_info.system_prompt,
-                tools=session_info.tools,
+                tools=all_tools,
                 model=session_info.model,
-                resume_session_id=resume_sdk_session  # Only resume if we have a Claude Code session ID
+                resume_session_id=resume_sdk_session,  # Only resume if we have a Claude Code session ID
+                mcp_servers=mcp_servers
             )
             self._active_sdks[session_id] = sdk
 
