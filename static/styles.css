@@ -1009,3 +1009,37 @@ html {
     background: #f8fafc;
     color: #334155;
 }
+
+/* ========== TIMELINE ACCORDION STYLES ========== */
+
+/* Timeline accordion buttons - minimal styling */
+.timeline-summary {
+    font-size: 0.875rem;
+    color: #333;
+}
+
+.accordion-button {
+    background-color: transparent !important;
+    box-shadow: none !important;
+}
+
+.accordion-button:not(.collapsed) {
+    background-color: #f8f9fa !important;
+}
+
+.accordion-button:focus {
+    box-shadow: none !important;
+    border-color: transparent !important;
+}
+
+/* Timeline message content in accordion */
+.timeline-message-content {
+    font-size: 0.875rem;
+    line-height: 1.5;
+}
+
+/* Ensure accordion items don't add extra borders in table */
+.table .accordion-item {
+    background-color: transparent;
+    border: none;
+}

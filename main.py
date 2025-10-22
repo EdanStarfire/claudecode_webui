@@ -32,6 +32,7 @@ Debug Flags:
   --debug-storage        Enable data storage debugging
   --debug-parser         Enable message parser debugging
   --debug-error-handler  Enable error handler debugging
+  --debug-legion         Enable Legion multi-agent system debugging
   --debug-all            Enable all debug logging
         """
     )
@@ -48,6 +49,7 @@ Debug Flags:
     parser.add_argument('--debug-storage', action='store_true', help='Enable data storage debugging')
     parser.add_argument('--debug-parser', action='store_true', help='Enable message parser debugging')
     parser.add_argument('--debug-error-handler', action='store_true', help='Enable error handler debugging')
+    parser.add_argument('--debug-legion', action='store_true', help='Enable Legion multi-agent system debugging')
     parser.add_argument('--debug-all', action='store_true', help='Enable all debug logging')
 
     args = parser.parse_args()
@@ -69,6 +71,7 @@ Debug Flags:
         debug_storage=args.debug_storage,
         debug_parser=args.debug_parser,
         debug_error_handler=args.debug_error_handler,
+        debug_legion=args.debug_legion,
         debug_all=args.debug_all,
         log_dir=str(data_dir_path / "logs")
     )
