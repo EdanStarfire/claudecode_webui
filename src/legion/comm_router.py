@@ -172,7 +172,7 @@ class CommRouter:
                 CommType.TASK: "📋 Task",
                 CommType.QUESTION: "❓ Question",
                 CommType.REPORT: "📊 Report",
-                CommType.GUIDE: "💡 Guide"
+                CommType.INFO: "💡 Info"
             }.get(comm.comm_type, "💬 Message")
 
             # Use summary in header if available, otherwise use truncated content

@@ -12,7 +12,7 @@ Architecture Pattern:
 """
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional, Any
 
 if TYPE_CHECKING:
     from src.session_coordinator import SessionCoordinator
@@ -47,6 +47,7 @@ class LegionSystem:
     # Existing infrastructure (injected at creation)
     session_coordinator: 'SessionCoordinator'
     data_storage_manager: 'DataStorageManager'
+    ui_websocket_manager: Optional[Any] = None  # UIWebSocketManager (optional, for broadcasting project updates)
 
     # Legion components (initialized in __post_init__)
     legion_coordinator: 'LegionCoordinator' = field(init=False)

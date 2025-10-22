@@ -195,7 +195,11 @@ class SessionManager:
         is_minion: bool = False,
         role: Optional[str] = None,
         capabilities: List[str] = None,
-        initialization_context: Optional[str] = None
+        initialization_context: Optional[str] = None,
+        # Hierarchy fields (Phase 5)
+        parent_overseer_id: Optional[str] = None,
+        overseer_level: int = 0,
+        horde_id: Optional[str] = None
     ) -> None:
         """Create a new session with provided ID (or minion if is_minion=True)"""
         now = datetime.now(timezone.utc)
@@ -226,7 +230,11 @@ class SessionManager:
             is_minion=is_minion,
             role=role,
             capabilities=capabilities if capabilities is not None else [],
-            initialization_context=initialization_context
+            initialization_context=initialization_context,
+            # Hierarchy fields (Phase 5)
+            parent_overseer_id=parent_overseer_id,
+            overseer_level=overseer_level,
+            horde_id=horde_id
         )
 
         try:
@@ -591,6 +599,46 @@ class SessionManager:
                 return True
             except Exception as e:
                 logger.error(f"Failed to update session {session_id} order: {e}")
+                return False
+
+    async def update_session(self, session_id: str, **kwargs) -> bool:
+        """
+        Update session fields dynamically (Phase 5 - for hierarchy management).
+
+        Supported fields:
+        - is_overseer (bool)
+        - child_minion_ids (List[str])
+        - horde_id (str)
+        - Any other SessionInfo field
+
+        Example:
+            await session_manager.update_session(
+                session_id,
+                is_overseer=True,
+                child_minion_ids=["child1", "child2"]
+            )
+        """
+        async with self._get_session_lock(session_id):
+            try:
+                session = self._active_sessions.get(session_id)
+                if not session:
+                    logger.error(f"Session {session_id} not found")
+                    return False
+
+                # Update fields
+                for key, value in kwargs.items():
+                    if hasattr(session, key):
+                        setattr(session, key, value)
+                    else:
+                        logger.warning(f"Session field '{key}' does not exist, skipping")
+
+                session.updated_at = datetime.now(timezone.utc)
+                await self._persist_session_state(session_id)
+                await self._notify_state_change_callbacks(session_id, session.state)
+                session_logger.info(f"Updated session {session_id} fields: {list(kwargs.keys())}")
+                return True
+            except Exception as e:
+                logger.error(f"Failed to update session {session_id}: {e}")
                 return False
 
     async def reorder_sessions(self, session_ids: List[str]) -> bool:

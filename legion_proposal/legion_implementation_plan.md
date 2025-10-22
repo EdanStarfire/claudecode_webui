@@ -508,30 +508,34 @@
 #### Tasks
 
 **5.1 MCP Tool Handlers - Lifecycle**
-- [ ] Implement `_handle_spawn_minion()` in LegionMCPTools
+- [x] Implement `_handle_spawn_minion()` in LegionMCPTools
   - Validate parent authority (caller is valid minion)
   - Validate name uniqueness within legion
   - Check minion limit
   - Call OverseerController.spawn_minion()
   - Return success with minion_id OR detailed error
-- [ ] Implement `_handle_dispose_minion()` in LegionMCPTools
+- [x] Implement `_handle_dispose_minion()` in LegionMCPTools
   - Verify parent authority (child belongs to caller)
   - Call OverseerController.dispose_minion()
   - Return success OR error with reason
+  - **FIXED**: Added session_id injection (`args["_parent_overseer_id"] = session_id`)
 - [ ] Write unit tests for both handlers
 
 **5.2 OverseerController - Spawn Logic**
-- [ ] Implement `spawn_minion()` in OverseerController
+- [x] Implement `spawn_minion()` in OverseerController
   - Create child MinionInfo (parent_overseer_id set)
   - Create SDK session with initialization_context + MCP tools
   - Update parent (is_overseer = True, add child_id)
   - Update horde (add to all_minion_ids)
   - Send SPAWN Comm to user (notification)
+- [x] Extended SessionCoordinator.create_session() to accept hierarchy parameters
+- [x] Extended SessionManager.create_session() to accept hierarchy parameters
+- [x] Added SessionManager.update_session() for dynamic field updates
 - [ ] Write unit tests
 
 **5.3 OverseerController - Dispose Logic**
-- [ ] Implement `dispose_minion()` in OverseerController
-  - Recursively dispose children first
+- [x] Implement `dispose_minion()` in OverseerController
+  - Recursively dispose children first (depth-first traversal)
   - Distill memory (stub for now, Phase 7)
   - Transfer knowledge to parent (stub for now, Phase 7)
   - Terminate SDK session
