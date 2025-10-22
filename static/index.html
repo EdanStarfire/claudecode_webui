@@ -504,6 +504,49 @@
                 </div>
             </div>
         </div>
+
+        <!-- Create Minion Modal (Bootstrap) -->
+        <div class="modal fade" id="create-minion-modal" tabindex="-1" aria-labelledby="create-minion-modal-label" aria-hidden="true">
+            <div class="modal-dialog modal-dialog-centered">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title" id="create-minion-modal-label">Create Minion</h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                    </div>
+                    <div class="modal-body">
+                        <form id="create-minion-form">
+                            <div class="mb-3">
+                                <label for="minion-name" class="form-label">Name <span class="text-danger">*</span></label>
+                                <input type="text" class="form-control" id="minion-name" required placeholder="e.g., Code Expert">
+                                <div class="form-text">Unique name for this minion within the legion</div>
+                            </div>
+
+                            <div class="mb-3">
+                                <label for="minion-role" class="form-label">Role</label>
+                                <input type="text" class="form-control" id="minion-role" placeholder="e.g., Code Expert, Testing Specialist">
+                                <div class="form-text">Optional role description for the minion</div>
+                            </div>
+
+                            <div class="mb-3">
+                                <label for="minion-context" class="form-label">Initialization Context</label>
+                                <textarea class="form-control" id="minion-context" rows="4" placeholder="Instructions and context for the minion..."></textarea>
+                                <div class="form-text">Instructions and context to initialize the minion with</div>
+                            </div>
+
+                            <div class="mb-3">
+                                <label for="minion-capabilities" class="form-label">Capabilities</label>
+                                <input type="text" class="form-control" id="minion-capabilities" placeholder="e.g., python, testing, debugging">
+                                <div class="form-text">Comma-separated list of capability keywords (optional)</div>
+                            </div>
+                        </form>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                        <button type="button" class="btn btn-primary" id="create-minion-submit">Create Minion</button>
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
 
     <!-- Bootstrap 5.3.3 JS Bundle (includes Popper) -->

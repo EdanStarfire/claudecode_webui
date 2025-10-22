@@ -106,7 +106,7 @@ class OverseerController:
 
     def _belongs_to_legion(self, session_info, legion_id: str) -> bool:
         """Check if a session belongs to a legion by checking working directory."""
-        project = self.system.session_coordinator.project_manager.projects.get(legion_id)
+        project = self.system.session_coordinator.project_manager._active_projects.get(legion_id)
         if not project:
             return False
         return session_info.working_directory == project.working_directory

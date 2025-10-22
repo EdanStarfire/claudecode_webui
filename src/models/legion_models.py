@@ -146,11 +146,14 @@ class Comm:
     # Source
     from_minion_id: Optional[str] = None  # None if from user
     from_user: bool = False
+    from_minion_name: Optional[str] = None  # Captured name (for historical display)
 
     # Destination
     to_minion_id: Optional[str] = None    # Direct to minion
     to_channel_id: Optional[str] = None   # Broadcast to channel
     to_user: bool = False
+    to_minion_name: Optional[str] = None  # Captured name (for historical display)
+    to_channel_name: Optional[str] = None  # Captured name (for historical display)
 
     # Content
     summary: str = ""  # Brief one-line description (~50 chars, shown collapsed)
@@ -194,9 +197,12 @@ class Comm:
             "comm_id": self.comm_id,
             "from_minion_id": self.from_minion_id,
             "from_user": self.from_user,
+            "from_minion_name": self.from_minion_name,
             "to_minion_id": self.to_minion_id,
             "to_channel_id": self.to_channel_id,
             "to_user": self.to_user,
+            "to_minion_name": self.to_minion_name,
+            "to_channel_name": self.to_channel_name,
             "summary": self.summary,
             "content": self.content,
             "comm_type": self.comm_type.value,

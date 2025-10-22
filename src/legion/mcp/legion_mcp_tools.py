@@ -305,13 +305,28 @@ class LegionMCPTools:
         if not summary and content:
             summary = content[:50] + ("..." if len(content) > 50 else "")
 
+        # Look up sender minion name (for historical display)
+        from_minion_name = None
+        from_minion_session = await self.system.session_coordinator.session_manager.get_session_info(from_minion_id)
+        if from_minion_session:
+            from_minion_name = from_minion_session.name
+
+        # Look up recipient minion name if applicable (for historical display)
+        to_minion_name_captured = None
+        if to_minion_id:
+            to_minion_session = await self.system.session_coordinator.session_manager.get_session_info(to_minion_id)
+            if to_minion_session:
+                to_minion_name_captured = to_minion_session.name
+
         # Create Comm
         comm = Comm(
             comm_id=str(uuid.uuid4()),
             from_minion_id=from_minion_id,
             from_user=False,
+            from_minion_name=from_minion_name,
             to_minion_id=to_minion_id,
             to_user=sending_to_user,
+            to_minion_name=to_minion_name_captured,
             summary=summary,
             content=content,
             comm_type=CommType(internal_comm_type),

@@ -800,6 +800,16 @@ class ClaudeWebUI:
                 if not legion:
                     raise HTTPException(status_code=404, detail="Legion not found")
 
+                # Look up minion name if targeting a minion (for historical display)
+                to_minion_name = None
+                if request.to_minion_id:
+                    minion_session = await self.coordinator.session_manager.get_session_info(request.to_minion_id)
+                    if minion_session:
+                        to_minion_name = minion_session.name
+
+                # TODO: Look up channel name when channels are implemented
+                to_channel_name = None
+
                 # Create Comm from user
                 comm = Comm(
                     comm_id=str(uuid.uuid4()),
@@ -807,6 +817,8 @@ class ClaudeWebUI:
                     to_minion_id=request.to_minion_id,
                     to_channel_id=request.to_channel_id,
                     to_user=request.to_user,
+                    to_minion_name=to_minion_name,
+                    to_channel_name=to_channel_name,
                     content=request.content,
                     comm_type=CommType(request.comm_type)
                 )

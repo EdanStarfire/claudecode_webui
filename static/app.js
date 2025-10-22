@@ -332,6 +332,9 @@ class ClaudeWebUI {
         // Session modal controls (Bootstrap modals handle close/cancel via data-bs-dismiss)
         document.getElementById('create-session-form').addEventListener('submit', (e) => this.handleCreateSession(e));
 
+        // Minion modal controls
+        document.getElementById('create-minion-submit').addEventListener('click', () => this.handleCreateMinion());
+
         // Browse directory button
         document.getElementById('browse-directory').addEventListener('click', () => this.browseDirectory());
 
@@ -2549,6 +2552,9 @@ class ClaudeWebUI {
                 messageInputElement.parentElement.classList.remove('d-none');
             }
 
+            // Hide comm composer (only visible in timeline view)
+            this.hideCommComposer();
+
             // Restore session header structure (in case it was replaced by timeline view)
             this.restoreSessionHeaderStructure();
 
@@ -2662,6 +2668,11 @@ class ClaudeWebUI {
             const projectElement = await this.createProjectElement(project);
             container.appendChild(projectElement);
         }
+
+        // If currently viewing a legion timeline, refresh the comm recipients dropdown
+        if (this.viewMode === 'timeline' && this.currentLegionId) {
+            this.populateCommRecipients(this.currentLegionId);
+        }
     }
 
     async createProjectElement(project) {
@@ -2715,13 +2726,17 @@ class ClaudeWebUI {
         const addSessionBtn = document.createElement('button');
         addSessionBtn.className = 'btn btn-sm btn-outline-primary position-absolute end-0 top-50 translate-middle-y me-2';
         addSessionBtn.innerHTML = '+';
-        addSessionBtn.title = 'Add session to project';
+        addSessionBtn.title = project.is_multi_agent ? 'Create minion' : 'Add session to project';
         addSessionBtn.type = 'button';
         addSessionBtn.style.zIndex = '10'; // Ensure it's above accordion button
         addSessionBtn.addEventListener('click', async (e) => {
             e.stopPropagation();
             e.preventDefault();
-            await this.showCreateSessionModalForProject(project.project_id);
+            if (project.is_multi_agent) {
+                this.showCreateMinionModal(project.project_id);
+            } else {
+                await this.showCreateSessionModalForProject(project.project_id);
+            }
         });
 
         // Add buttons to accordion header (siblings of accordion button, not children)
@@ -3438,6 +3453,97 @@ class ClaudeWebUI {
         workingDirGroup.style.display = 'none'; // Hide working directory field
         const modal = new bootstrap.Modal(modalElement);
         modal.show();
+    }
+
+    showCreateMinionModal(legionId) {
+        this.currentLegionId = legionId;
+
+        const modalElement = document.getElementById('create-minion-modal');
+
+        // Clear form fields
+        document.getElementById('minion-name').value = '';
+        document.getElementById('minion-role').value = '';
+        document.getElementById('minion-context').value = '';
+        document.getElementById('minion-capabilities').value = '';
+
+        // Re-enable buttons (in case they were left disabled from previous creation)
+        const submitBtn = document.getElementById('create-minion-submit');
+        const dismissButtons = modalElement.querySelectorAll('[data-bs-dismiss="modal"]');
+        if (submitBtn) {
+            submitBtn.disabled = false;
+            submitBtn.innerHTML = 'Create Minion';
+        }
+        dismissButtons.forEach(btn => btn.disabled = false);
+
+        // Show modal
+        const modal = new bootstrap.Modal(modalElement);
+        modal.show();
+    }
+
+    async handleCreateMinion() {
+        // Get form values
+        const name = document.getElementById('minion-name').value.trim();
+        const role = document.getElementById('minion-role').value.trim();
+        const initializationContext = document.getElementById('minion-context').value.trim();
+        const capabilitiesStr = document.getElementById('minion-capabilities').value.trim();
+
+        // Validate name
+        if (!name) {
+            this.showError('Minion name is required');
+            return;
+        }
+
+        // Parse capabilities (comma-separated)
+        const capabilities = capabilitiesStr
+            ? capabilitiesStr.split(',').map(c => c.trim()).filter(c => c)
+            : [];
+
+        // Disable submit button to prevent double submission
+        const modalElement = document.getElementById('create-minion-modal');
+        const submitBtn = document.getElementById('create-minion-submit');
+        const dismissButtons = modalElement.querySelectorAll('[data-bs-dismiss="modal"]');
+
+        const originalSubmitText = submitBtn.innerHTML;
+        submitBtn.disabled = true;
+        dismissButtons.forEach(btn => btn.disabled = true);
+        submitBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Creating...';
+
+        try {
+            // Call API to create minion
+            const response = await this.apiRequest(`/api/legions/${this.currentLegionId}/minions`, {
+                method: 'POST',
+                body: JSON.stringify({
+                    name,
+                    role,
+                    initialization_context: initializationContext,
+                    capabilities
+                })
+            });
+
+            Logger.info('MINION', 'Minion created successfully', response);
+
+            // Hide modal
+            const modal = bootstrap.Modal.getInstance(modalElement);
+            if (modal) {
+                modal.hide();
+            }
+
+            // Refresh sessions to show new minion
+            await this.refreshSessions();
+
+            // Close sidebar on mobile after minion creation
+            if (window.innerWidth < 768 && !this.sidebarCollapsed) {
+                this.toggleSidebar();
+            }
+        } catch (error) {
+            Logger.error('MINION', 'Minion creation failed', error);
+            this.showError('Failed to create minion: ' + (error.message || 'Unknown error'));
+
+            // Re-enable buttons on error
+            submitBtn.disabled = false;
+            dismissButtons.forEach(btn => btn.disabled = false);
+            submitBtn.innerHTML = originalSubmitText;
+        }
     }
 
     updateSessionHeaderName(name) {
@@ -5627,26 +5733,31 @@ ${typeIcon}
         const sortedComms = [...comms].reverse();
 
         const tableRows = sortedComms.map(comm => {
-            // Get sender name
+            // Get sender name (prefer captured name for historical accuracy)
             let fromName;
             if (comm.from_user) {
                 fromName = 'You';
             } else if (comm.from_minion_id === 'LEGION_SYSTEM') {
                 fromName = '🤖 LEGION SYSTEM';
             } else if (comm.from_minion_id) {
-                fromName = this.getMinionName(comm.from_minion_id) || comm.from_minion_id;
+                // Prefer captured name, fallback to current name lookup, then ID
+                fromName = comm.from_minion_name || this.getMinionName(comm.from_minion_id) || comm.from_minion_id;
             } else {
                 fromName = 'Unknown';
             }
 
-            // Get recipient name
+            // Get recipient name (prefer captured name for historical accuracy)
             let toName;
             if (comm.to_user) {
                 toName = 'You';
             } else if (comm.to_minion_id) {
-                toName = this.getMinionName(comm.to_minion_id) || comm.to_minion_id;
+                // Prefer captured name, fallback to current name lookup, then ID
+                toName = comm.to_minion_name || this.getMinionName(comm.to_minion_id) || comm.to_minion_id;
+            } else if (comm.to_channel_id) {
+                // Prefer captured name, fallback to "Channel"
+                toName = comm.to_channel_name || 'Channel';
             } else {
-                toName = 'Channel';
+                toName = 'Unknown';
             }
 
             // Format timestamp
@@ -5774,7 +5885,7 @@ ${typeIcon}
         recipientSelect.innerHTML = '<option value="">-- Select Minion or Channel --</option>';
 
         // Get all sessions (minions) for this legion
-        const project = this.projectManager.projects.get(legionId);
+        const project = this.projectManager.getProject(legionId);
         if (!project || !project.session_ids) return;
 
         // Add minion options
@@ -5802,10 +5913,32 @@ ${typeIcon}
             sendBtn.addEventListener('click', () => this.sendComm());
         }
 
-        // Tag autocomplete on # character
+        // Enter key handler for sending (Shift+Enter for new line)
         if (contentTextarea) {
+            contentTextarea.addEventListener('keydown', (e) => {
+                // Tag autocomplete handling - must happen first
+                this.handleTagKeydown(e);
+
+                // If the event was handled by autocomplete (preventDefault called), stop here
+                if (e.defaultPrevented) {
+                    return;
+                }
+
+                if (e.key === 'Enter' && !e.shiftKey) {
+                    // Check if recipient is selected
+                    const recipientSelect = document.getElementById('comm-recipient');
+                    const hasRecipient = recipientSelect && recipientSelect.value;
+
+                    if (hasRecipient) {
+                        e.preventDefault();
+                        this.sendComm();
+                    }
+                    // If no recipient selected, allow default behavior (new line)
+                }
+            });
+
+            // Tag autocomplete on # character
             contentTextarea.addEventListener('input', (e) => this.handleTagAutocomplete(e));
-            contentTextarea.addEventListener('keydown', (e) => this.handleTagKeydown(e));
         }
 
         // Hide autocomplete when clicking outside
