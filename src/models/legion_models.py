@@ -30,7 +30,7 @@ class CommType(Enum):
     TASK = "task"               # Assign work
     QUESTION = "question"       # Request info
     REPORT = "report"           # Provide findings
-    GUIDE = "guide"             # Non-interrupting instruction
+    INFO = "info"               # Non-interrupting information/instruction
     HALT = "halt"               # Stop and wait
     PIVOT = "pivot"             # Stop, clear, redirect
     THOUGHT = "thought"         # Minion self-talk

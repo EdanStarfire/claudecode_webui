@@ -5669,8 +5669,7 @@ class ClaudeWebUI {
             'task': '📋',
             'question': '❓',
             'report': '📊',
-            'guide': '💡',
-            'info': '💡'
+            'info': '📖'
         };
         const typeIcon = typeIcons[comm.comm_type] || '💬';
 
@@ -5768,8 +5767,7 @@ ${typeIcon}
                 'task': '📋',
                 'question': '❓',
                 'report': '📊',
-                'guide': '💡',  // Internal name (backward compatibility)
-                'info': '💡'     // User-facing name
+                'info': '📖'
             };
             const typeIcon = typeIcons[comm.comm_type] || '💬';
 
