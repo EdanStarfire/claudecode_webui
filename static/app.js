@@ -4003,6 +4003,11 @@ class ClaudeWebUI {
             if (sessionId === this.currentSessionId) {
                 this.updateSessionInfo({ session: sessionInfo });
             }
+
+            // If we're viewing a timeline and this is a minion in that legion, update Spy UI
+            if (this.viewMode === 'timeline' && this.currentLegionId === projectId && sessionInfo.is_minion) {
+                this.updateSpyUIForMinionStateChange(sessionId, sessionInfo);
+            }
         }
     }
 
@@ -5519,6 +5524,12 @@ class ClaudeWebUI {
         if (this.autoScrollEnabled) {
             messagesArea.scrollTop = messagesArea.scrollHeight;
         }
+
+        // If this comm is from the user and we're waiting to clear the form, do it now
+        if (this.pendingCommClear && comm.from_user) {
+            Logger.debug('WS_LEGION', 'User comm confirmed via WebSocket, clearing form');
+            this.clearCommForm();
+        }
     }
 
     renderSingleTimelineMessage(comm) {
@@ -5967,6 +5978,7 @@ ${typeIcon}
         const recipientSelect = document.getElementById('comm-recipient');
         const typeSelect = document.getElementById('comm-type');
         const contentTextarea = document.getElementById('comm-content');
+        const sendButton = document.getElementById('send-comm-btn');
 
         const recipient = recipientSelect.value;
         const commType = typeSelect.value;
@@ -5988,6 +6000,13 @@ ${typeIcon}
         }
 
         try {
+            // Disable form controls while sending
+            recipientSelect.disabled = true;
+            typeSelect.disabled = true;
+            contentTextarea.disabled = true;
+            sendButton.disabled = true;
+            sendButton.textContent = 'Sending...';
+
             // Parse recipient (format: "minion:session_id" or "channel:channel_id")
             const [recipientType, recipientId] = recipient.split(':');
 
@@ -6011,21 +6030,109 @@ ${typeIcon}
             });
 
             if (response.success) {
-                Logger.info('COMM_COMPOSER', 'Comm sent successfully');
-                this.showToast('Comm sent successfully', 'success');
+                Logger.info('COMM_COMPOSER', 'Comm sent successfully, waiting for WebSocket confirmation');
 
-                // Clear form
-                contentTextarea.value = '';
-                recipientSelect.selectedIndex = 0;
-                typeSelect.value = 'task';
+                // Mark that we're waiting for this comm to appear via WebSocket
+                this.pendingCommClear = true;
 
-                // Comm will appear via WebSocket broadcast
+                // Comm will appear via WebSocket broadcast, which will trigger form clear
+                // Fallback: Clear after 3 seconds if WebSocket doesn't arrive
+                setTimeout(() => {
+                    if (this.pendingCommClear) {
+                        Logger.warn('COMM_COMPOSER', 'WebSocket confirmation timeout, clearing form anyway');
+                        this.clearCommForm();
+                    }
+                }, 3000);
             } else {
                 throw new Error(response.error || 'Failed to send comm');
             }
         } catch (error) {
             Logger.error('COMM_COMPOSER', `Failed to send comm: ${error}`);
             this.showToast(`Failed to send comm: ${error.message}`, 'error');
+
+            // Re-enable form on error
+            recipientSelect.disabled = false;
+            typeSelect.disabled = false;
+            contentTextarea.disabled = false;
+            sendButton.disabled = false;
+            sendButton.textContent = 'Send Comm';
+        }
+    }
+
+    clearCommForm() {
+        const recipientSelect = document.getElementById('comm-recipient');
+        const typeSelect = document.getElementById('comm-type');
+        const contentTextarea = document.getElementById('comm-content');
+        const sendButton = document.getElementById('send-comm-btn');
+
+        // Clear form
+        contentTextarea.value = '';
+        recipientSelect.selectedIndex = 0;
+        typeSelect.value = 'task';
+
+        // Re-enable controls
+        recipientSelect.disabled = false;
+        typeSelect.disabled = false;
+        contentTextarea.disabled = false;
+        sendButton.disabled = false;
+        sendButton.textContent = 'Send Comm';
+
+        // Clear pending flag
+        this.pendingCommClear = false;
+
+        Logger.debug('COMM_COMPOSER', 'Form cleared and re-enabled');
+    }
+
+    updateSpyUIForMinionStateChange(sessionId, sessionInfo) {
+        /**
+         * Update Spy UI dropdown and status bar when a minion's state changes
+         */
+        Logger.debug('SPY_UI', `Updating Spy UI for minion state change: ${sessionId}`, sessionInfo);
+
+        // Find the legion this minion belongs to
+        const projectId = this._findProjectForSession(sessionId);
+        if (!projectId) {
+            Logger.debug('SPY_UI', 'No project found for session', sessionId);
+            return;
+        }
+
+        // Update dropdown option icon - dropdown ID is spy-dropdown-{legion_id}
+        const minionDropdown = document.getElementById(`spy-dropdown-${projectId}`);
+        if (minionDropdown) {
+            const option = minionDropdown.querySelector(`option[value="${sessionId}"]`);
+            if (option) {
+                const isProcessing = sessionInfo.is_processing || false;
+                const displayState = isProcessing ? 'processing' : sessionInfo.state;
+
+                // Use same state icons as in createSpyElement
+                const stateIcons = {
+                    'created': '○',
+                    'starting': '◐',
+                    'active': '●',
+                    'paused': '⏸',
+                    'terminating': '◍',
+                    'terminated': '✗',
+                    'error': '⚠',
+                    'processing': '◐'  // Add processing state
+                };
+                const stateIcon = stateIcons[displayState] || '○';
+
+                const minionLabel = sessionInfo.role
+                    ? `${sessionInfo.name} (${sessionInfo.role})`
+                    : sessionInfo.name;
+                option.textContent = `${stateIcon} ${minionLabel}`;
+
+                Logger.debug('SPY_UI', `Updated dropdown option for ${sessionId}`, {
+                    displayState,
+                    stateIcon,
+                    label: option.textContent
+                });
+            }
+        }
+
+        // Update status bar if this is the selected spy minion
+        if (this.viewMode === 'spy' && this.spyMinionId === sessionId) {
+            this.updateStatusBar(sessionInfo);
         }
     }
 }
