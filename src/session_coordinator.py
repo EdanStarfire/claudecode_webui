@@ -122,6 +122,10 @@ class SessionCoordinator:
         role: Optional[str] = None,
         capabilities: List[str] = None,
         initialization_context: Optional[str] = None,
+        # Hierarchy fields (Phase 5)
+        parent_overseer_id: Optional[str] = None,
+        overseer_level: int = 0,
+        horde_id: Optional[str] = None,
     ) -> str:
         """Create a new Claude Code session with integrated components (within a project)"""
         try:
@@ -153,7 +157,11 @@ class SessionCoordinator:
                 is_minion=is_minion,
                 role=role,
                 capabilities=capabilities,
-                initialization_context=initialization_context
+                initialization_context=initialization_context,
+                # Hierarchy fields (Phase 5)
+                parent_overseer_id=parent_overseer_id,
+                overseer_level=overseer_level,
+                horde_id=horde_id
             )
 
             # Add session to project

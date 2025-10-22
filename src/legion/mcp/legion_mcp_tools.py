@@ -132,6 +132,8 @@ class LegionMCPTools:
         )
         async def dispose_minion_tool(args: Dict[str, Any]) -> Dict[str, Any]:
             """Dispose of a child minion."""
+            # Inject session context (parent overseer ID)
+            args["_parent_overseer_id"] = session_id
             return await self._handle_dispose_minion(args)
 
         @tool(
@@ -256,12 +258,12 @@ class LegionMCPTools:
         comm_type_str = args.get("comm_type", "task").lower()
         valid_comm_types = ["task", "question", "report", "info"]
 
-        # Map 'info' to internal 'guide' enum value for backward compatibility
+        # Map user-facing types to CommType enum values
         comm_type_mapping = {
             "task": "task",
             "question": "question",
             "report": "report",
-            "info": "guide"  # Map user-facing 'info' to internal 'guide'
+            "info": "info"  # Maps directly to CommType.INFO
         }
 
         if comm_type_str not in valid_comm_types:
@@ -382,26 +384,219 @@ class LegionMCPTools:
         }
 
     async def _handle_spawn_minion(self, args: Dict[str, Any]) -> Dict[str, Any]:
-        """Handle spawn_minion tool call."""
-        # TODO: Implement in Phase 2
-        return {
-            "content": [{
-                "type": "text",
-                "text": f"spawn_minion not yet implemented (would create {args.get('name')})"
-            }],
-            "is_error": True
-        }
+        """
+        Handle spawn_minion tool call from a minion.
+
+        Args:
+            args: {
+                "_parent_overseer_id": str,  # Injected by tool wrapper
+                "name": str,
+                "role": str,
+                "initialization_context": str,
+                "capabilities": List[str],  # Optional
+                "channels": List[str]  # Optional
+            }
+
+        Returns:
+            Tool result with success/error
+        """
+        from src.logging_config import get_logger
+
+        coord_logger = get_logger(__name__, "COORDINATOR")
+
+        parent_overseer_id = args.get("_parent_overseer_id")
+        if not parent_overseer_id:
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": "Error: Unable to determine parent overseer ID"
+                }],
+                "is_error": True
+            }
+
+        # Extract parameters
+        name = args.get("name", "").strip()
+        role = args.get("role", "").strip()
+        initialization_context = args.get("initialization_context", "").strip()
+        capabilities = args.get("capabilities", [])
+        channels = args.get("channels", [])
+
+        # Validate required fields
+        if not name:
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": "Error: 'name' parameter is required and cannot be empty"
+                }],
+                "is_error": True
+            }
+
+        if not role:
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": "Error: 'role' parameter is required and cannot be empty"
+                }],
+                "is_error": True
+            }
+
+        if not initialization_context:
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": "Error: 'initialization_context' parameter is required and cannot be empty. Provide clear instructions for what this minion should do."
+                }],
+                "is_error": True
+            }
+
+        # Attempt to spawn child minion
+        try:
+            child_minion_id = await self.system.overseer_controller.spawn_minion(
+                parent_overseer_id=parent_overseer_id,
+                name=name,
+                role=role,
+                initialization_context=initialization_context,
+                capabilities=capabilities,
+                channels=channels
+            )
+
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": (
+                        f"✅ Successfully spawned minion '{name}' with role '{role}'.\n\n"
+                        f"Minion ID: {child_minion_id}\n"
+                        f"The child minion is now active and ready to receive comms. "
+                        f"You can communicate with them using send_comm(to_minion_name='{name}', ...)."
+                    )
+                }],
+                "is_error": False
+            }
+
+        except ValueError as e:
+            # Handle validation errors (duplicate name, capacity, etc.)
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": f"❌ Cannot spawn minion: {str(e)}"
+                }],
+                "is_error": True
+            }
+
+        except PermissionError as e:
+            # Handle permission errors
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": f"❌ Permission denied: {str(e)}"
+                }],
+                "is_error": True
+            }
+
+        except Exception as e:
+            # Catch-all for unexpected errors
+            coord_logger.error(f"Unexpected error in spawn_minion: {e}", exc_info=True)
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": f"❌ Failed to spawn minion due to unexpected error: {str(e)}"
+                }],
+                "is_error": True
+            }
 
     async def _handle_dispose_minion(self, args: Dict[str, Any]) -> Dict[str, Any]:
-        """Handle dispose_minion tool call."""
-        # TODO: Implement in Phase 2
-        return {
-            "content": [{
-                "type": "text",
-                "text": f"dispose_minion not yet implemented (would dispose {args.get('minion_name')})"
-            }],
-            "is_error": True
-        }
+        """
+        Handle dispose_minion tool call from a minion.
+
+        Args:
+            args: {
+                "_parent_overseer_id": str,  # Injected by tool wrapper (session_id)
+                "minion_name": str
+            }
+
+        Returns:
+            Tool result with success/error
+        """
+        from src.logging_config import get_logger
+
+        coord_logger = get_logger(__name__, "COORDINATOR")
+
+        parent_overseer_id = args.get("_parent_overseer_id")  # This is actually the CALLER's session_id
+        if not parent_overseer_id:
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": "Error: Unable to determine caller ID"
+                }],
+                "is_error": True
+            }
+
+        # Extract parameters
+        minion_name = args.get("minion_name", "").strip()
+
+        # Validate required field
+        if not minion_name:
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": "Error: 'minion_name' parameter is required and cannot be empty"
+                }],
+                "is_error": True
+            }
+
+        # Attempt to dispose child minion
+        try:
+            result = await self.system.overseer_controller.dispose_minion(
+                parent_overseer_id=parent_overseer_id,
+                child_minion_name=minion_name
+            )
+
+            descendants_msg = ""
+            if result["descendants_count"] > 0:
+                descendants_msg = f"\n\n⚠️  Also disposed {result['descendants_count']} descendant minion(s) (children of {minion_name})."
+
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": (
+                        f"✅ Successfully disposed of minion '{minion_name}'."
+                        f"{descendants_msg}\n\n"
+                        f"Their knowledge has been preserved and will be available to you."
+                    )
+                }],
+                "is_error": False
+            }
+
+        except ValueError as e:
+            # Handle not found or validation errors
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": f"❌ Cannot dispose minion: {str(e)}"
+                }],
+                "is_error": True
+            }
+
+        except PermissionError as e:
+            # Handle permission errors (not your child)
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": f"❌ Permission denied: {str(e)}"
+                }],
+                "is_error": True
+            }
+
+        except Exception as e:
+            # Catch-all for unexpected errors
+            coord_logger.error(f"Unexpected error in dispose_minion: {e}", exc_info=True)
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": f"❌ Failed to dispose minion due to unexpected error: {str(e)}"
+                }],
+                "is_error": True
+            }
 
     async def _handle_search_capability(self, args: Dict[str, Any]) -> Dict[str, Any]:
         """Handle search_capability tool call."""
