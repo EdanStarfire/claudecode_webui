@@ -186,8 +186,10 @@ class ClaudeWebUI {
         // Load projects and sessions on startup
         await this.loadSessions();
 
-        // Restore session from URL if present
+        // Restore session or legion timeline from URL if present
         const sessionId = this.getSessionIdFromURL();
+        const legionId = this.getLegionIdFromURL();
+
         if (sessionId) {
             if (this.sessions.has(sessionId)) {
                 Logger.info('SESSION', 'Restoring session from URL', sessionId);
@@ -195,6 +197,16 @@ class ClaudeWebUI {
             } else {
                 Logger.warn('SESSION', 'Session from URL not found', sessionId);
                 this.updateURLWithSession(null);
+                this.showNoSessionSelected();
+            }
+        } else if (legionId) {
+            const legion = this.projectManager.projects.get(legionId);
+            if (legion && legion.is_multi_agent) {
+                Logger.info('TIMELINE', 'Restoring legion timeline from URL', legionId);
+                await this.viewTimeline(legionId, legion.name);
+            } else {
+                Logger.warn('TIMELINE', 'Legion from URL not found', legionId);
+                this.updateURLWithLegion(null);
                 this.showNoSessionSelected();
             }
         }
@@ -219,6 +231,24 @@ class ClaudeWebUI {
     }
 
     /**
+     * Update URL hash with current legion timeline
+     */
+    updateURLWithLegion(legionId) {
+        if (!legionId) {
+            // Clear legion from URL
+            if (window.location.hash.startsWith('#legion/')) {
+                history.pushState(null, '', window.location.pathname);
+            }
+            return;
+        }
+
+        const newHash = `#legion/${legionId}`;
+        if (window.location.hash !== newHash) {
+            history.pushState(null, '', newHash);
+        }
+    }
+
+    /**
      * Get session ID from URL hash
      * @returns {string|null} Session ID or null if not present
      */
@@ -229,10 +259,21 @@ class ClaudeWebUI {
     }
 
     /**
+     * Get legion ID from URL hash
+     * @returns {string|null} Legion ID or null if not present
+     */
+    getLegionIdFromURL() {
+        const hash = window.location.hash;
+        const match = hash.match(/^#legion\/([a-f0-9-]+)$/);
+        return match ? match[1] : null;
+    }
+
+    /**
      * Handle browser back/forward navigation
      */
     async handlePopState() {
         const sessionId = this.getSessionIdFromURL();
+        const legionId = this.getLegionIdFromURL();
 
         if (sessionId) {
             // Check if session exists
@@ -244,8 +285,19 @@ class ClaudeWebUI {
                 this.updateURLWithSession(null);
                 this.showNoSessionSelected();
             }
+        } else if (legionId) {
+            // Check if legion exists
+            const legion = this.projectManager.projects.get(legionId);
+            if (legion && legion.is_multi_agent) {
+                await this.viewTimeline(legionId, legion.name);
+            } else {
+                // Legion not found - clear URL and show no session selected
+                Logger.warn('TIMELINE', 'Legion from URL not found during navigation', legionId);
+                this.updateURLWithLegion(null);
+                this.showNoSessionSelected();
+            }
         } else {
-            // No session in URL - show "no session selected" view
+            // No session or legion in URL - show "no session selected" view
             this.showNoSessionSelected();
         }
     }
@@ -720,6 +772,7 @@ class ClaudeWebUI {
 
         // Clear URL
         this.updateURLWithSession(null);
+        this.updateURLWithLegion(null);
 
         // Hide comm composer
         this.hideCommComposer();
@@ -5358,6 +5411,9 @@ class ClaudeWebUI {
 
             // Scroll to bottom
             messagesArea.scrollTop = messagesArea.scrollHeight;
+
+            // Update URL for deep linking
+            this.updateURLWithLegion(legionId);
 
             // Connect to legion WebSocket for real-time updates
             this.connectLegionWebSocket(legionId);
