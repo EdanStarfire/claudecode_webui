@@ -60,6 +60,7 @@ def configure_logging(
     debug_storage: bool = False,
     debug_parser: bool = False,
     debug_error_handler: bool = False,
+    debug_legion: bool = False,
     debug_all: bool = False,
     log_dir: str = "data/logs"
 ) -> None:
@@ -72,6 +73,7 @@ def configure_logging(
         debug_storage: Enable data storage debugging
         debug_parser: Enable message parser debugging
         debug_error_handler: Enable error handler debugging
+        debug_legion: Enable Legion multi-agent system debugging
         debug_all: Enable all debug logging
         log_dir: Directory for log files
     """
@@ -88,6 +90,7 @@ def configure_logging(
         'debug_storage': debug_storage or debug_all,
         'debug_parser': debug_parser or debug_all,
         'debug_error_handler': debug_error_handler or debug_all,
+        'debug_legion': debug_legion or debug_all,
         'debug_session_manager': debug_all,
         'log_dir': log_dir
     }
@@ -152,6 +155,12 @@ def configure_logging(
             'file': f"{log_dir}/session_manager.log",
             'enabled': _log_config['debug_session_manager'],
             'console': _log_config['debug_session_manager'],
+            'level': logging.DEBUG
+        },
+        'legion': {
+            'file': f"{log_dir}/legion.log",
+            'enabled': _log_config['debug_legion'],
+            'console': _log_config['debug_legion'],
             'level': logging.DEBUG
         }
     }

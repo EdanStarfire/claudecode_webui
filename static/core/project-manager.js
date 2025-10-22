@@ -29,14 +29,15 @@ class ProjectManager {
         }
     }
 
-    async createProject(name, workingDirectory) {
+    async createProject(name, workingDirectory, isMultiAgent = false) {
         try {
             const response = await fetch('/api/projects', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     name: name,
-                    working_directory: workingDirectory
+                    working_directory: workingDirectory,
+                    is_multi_agent: isMultiAgent
                 })
             });
 

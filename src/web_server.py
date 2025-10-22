@@ -35,6 +35,8 @@ logger = logging.getLogger(__name__)
 class ProjectCreateRequest(BaseModel):
     name: str
     working_directory: str
+    is_multi_agent: bool = False  # True to create as legion
+    max_concurrent_minions: int = 20  # Only used if is_multi_agent=True
 
 
 class ProjectUpdateRequest(BaseModel):
@@ -69,6 +71,21 @@ class SessionReorderRequest(BaseModel):
 
 class PermissionModeRequest(BaseModel):
     mode: str
+
+
+class CommSendRequest(BaseModel):
+    to_minion_id: Optional[str] = None
+    to_channel_id: Optional[str] = None
+    to_user: bool = False
+    content: str
+    comm_type: str = "task"
+
+
+class MinionCreateRequest(BaseModel):
+    name: str
+    role: Optional[str] = ""
+    initialization_context: Optional[str] = ""
+    capabilities: List[str] = []
 
 
 class UIWebSocketManager:
@@ -174,6 +191,52 @@ class WebSocketManager:
                 self.disconnect(dead_conn, session_id)
 
 
+class LegionWebSocketManager:
+    """Manages WebSocket connections for legion-specific real-time updates"""
+
+    def __init__(self):
+        self.active_connections: Dict[str, List[WebSocket]] = {}
+
+    async def connect(self, websocket: WebSocket, legion_id: str):
+        await websocket.accept()
+        if legion_id not in self.active_connections:
+            self.active_connections[legion_id] = []
+        self.active_connections[legion_id].append(websocket)
+        logger.info(f"Legion WebSocket connected for legion {legion_id}. Total connections: {len(self.active_connections[legion_id])}")
+
+    def disconnect(self, websocket: WebSocket, legion_id: str):
+        if legion_id in self.active_connections:
+            if websocket in self.active_connections[legion_id]:
+                self.active_connections[legion_id].remove(websocket)
+            if not self.active_connections[legion_id]:
+                del self.active_connections[legion_id]
+        logger.info(f"Legion WebSocket disconnected for legion {legion_id}")
+
+    async def broadcast_to_legion(self, legion_id: str, message: dict):
+        """Broadcast message to all clients watching this legion"""
+        if legion_id not in self.active_connections:
+            logger.debug(f"No Legion WebSocket connections for legion {legion_id}")
+            return
+
+        dead_connections = []
+        for connection in self.active_connections[legion_id][:]:
+            try:
+                if connection.client_state.value != 1:  # 1 = OPEN state
+                    logger.warning(f"Legion WebSocket connection for legion {legion_id} is not open")
+                    dead_connections.append(connection)
+                    continue
+
+                await connection.send_text(json.dumps(message))
+                logger.debug(f"Broadcast message to legion {legion_id} WebSocket")
+            except Exception as e:
+                logger.error(f"Error broadcasting to legion {legion_id} WebSocket: {e}")
+                dead_connections.append(connection)
+
+        # Clean up dead connections
+        for dead_connection in dead_connections:
+            self.disconnect(dead_connection, legion_id)
+
+
 class ClaudeWebUI:
     """Main WebUI application class"""
 
@@ -182,6 +245,10 @@ class ClaudeWebUI:
         self.coordinator = SessionCoordinator(data_dir)
         self.websocket_manager = WebSocketManager()
         self.ui_websocket_manager = UIWebSocketManager()
+        self.legion_websocket_manager = LegionWebSocketManager()
+
+        # Inject UI WebSocket manager into Legion system for project update broadcasts
+        self.coordinator.legion_system.ui_websocket_manager = self.ui_websocket_manager
 
         # Initialize MessageProcessor for unified WebSocket message formatting
         self._message_parser = MessageParser()
@@ -193,10 +260,31 @@ class ClaudeWebUI:
         # Setup routes
         self._setup_routes()
 
+        # Setup Legion WebSocket broadcast callback
+        self.coordinator.legion_system.comm_router.set_comm_broadcast_callback(
+            self._broadcast_comm_to_legion_websocket
+        )
+
         # Setup static files
         static_dir = Path(__file__).parent.parent / "static"
         static_dir.mkdir(exist_ok=True)
         self.app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+
+    async def _broadcast_comm_to_legion_websocket(self, legion_id: str, comm):
+        """Broadcast new comm to WebSocket clients watching this legion"""
+        try:
+            # Convert comm to dict for JSON serialization
+            comm_dict = comm.to_dict()
+
+            # Broadcast to all clients watching this legion
+            await self.legion_websocket_manager.broadcast_to_legion(legion_id, {
+                "type": "comm",
+                "comm": comm_dict,
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            })
+            logger.debug(f"Broadcast comm {comm.comm_id} to legion {legion_id} WebSocket clients")
+        except Exception as e:
+            logger.error(f"Error broadcasting comm to legion WebSocket: {e}")
 
     def _cleanup_pending_permissions_for_session(self, session_id: str):
         """Clean up pending permissions for a specific session by auto-denying them"""
@@ -257,11 +345,13 @@ class ClaudeWebUI:
 
         @self.app.post("/api/projects")
         async def create_project(request: ProjectCreateRequest):
-            """Create a new project"""
+            """Create a new project (or legion if is_multi_agent=True)"""
             try:
                 project = await self.coordinator.project_manager.create_project(
                     name=request.name,
-                    working_directory=request.working_directory
+                    working_directory=request.working_directory,
+                    is_multi_agent=request.is_multi_agent,
+                    max_concurrent_minions=request.max_concurrent_minions
                 )
                 return {"project": project.to_dict()}
             except Exception as e:
@@ -270,7 +360,7 @@ class ClaudeWebUI:
 
         @self.app.get("/api/projects")
         async def list_projects():
-            """List all projects"""
+            """List all projects (including legions with is_multi_agent=true)"""
             try:
                 projects = await self.coordinator.project_manager.list_projects()
                 return {"projects": [p.to_dict() for p in projects]}
@@ -637,6 +727,159 @@ class ClaudeWebUI:
                 logger.error(f"Failed to disconnect session: {e}")
                 raise HTTPException(status_code=500, detail=str(e))
 
+        # ==================== LEGION ENDPOINTS ====================
+        # NOTE: Legion creation now uses POST /api/projects with is_multi_agent=true
+        # Timeline and comms endpoints remain for future multi-agent communication features
+
+        @self.app.get("/api/legions/{legion_id}/timeline")
+        async def get_legion_timeline(legion_id: str, limit: int = 100, offset: int = 0):
+            """Get Comms for legion timeline (all minions in the legion)"""
+            try:
+                # Read all comms from all minions in the legion
+                legion_dir = self.coordinator.data_dir / "legions" / legion_id
+                if not legion_dir.exists():
+                    return {
+                        "comms": [],
+                        "total": 0,
+                        "limit": limit,
+                        "offset": offset
+                    }
+
+                all_comms = []
+                minions_dir = legion_dir / "minions"
+
+                if minions_dir.exists():
+                    # Read comms from each minion's directory
+                    for minion_dir in minions_dir.iterdir():
+                        if minion_dir.is_dir():
+                            comms_file = minion_dir / "comms.jsonl"
+                            if comms_file.exists():
+                                with open(comms_file, 'r', encoding='utf-8') as f:
+                                    for line in f:
+                                        line = line.strip()
+                                        if line:
+                                            try:
+                                                comm_data = json.loads(line)
+                                                all_comms.append(comm_data)
+                                            except json.JSONDecodeError:
+                                                continue
+
+                # Sort by timestamp (newest first) and deduplicate
+                all_comms.sort(key=lambda x: x.get('timestamp', ''), reverse=True)
+
+                # Deduplicate by comm_id (since comms appear in both sender and receiver logs)
+                seen_ids = set()
+                unique_comms = []
+                for comm in all_comms:
+                    comm_id = comm.get('comm_id')
+                    if comm_id and comm_id not in seen_ids:
+                        seen_ids.add(comm_id)
+                        unique_comms.append(comm)
+
+                # Paginate
+                total = len(unique_comms)
+                paginated_comms = unique_comms[offset:offset + limit]
+
+                return {
+                    "comms": paginated_comms,
+                    "total": total,
+                    "limit": limit,
+                    "offset": offset
+                }
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"Failed to get timeline: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @self.app.post("/api/legions/{legion_id}/comms")
+        async def send_comm_to_legion(legion_id: str, request: CommSendRequest):
+            """Send a Comm in the legion"""
+            try:
+                import uuid
+                from src.models.legion_models import Comm, CommType, InterruptPriority
+
+                legion = await self.coordinator.legion_system.legion_coordinator.get_legion(legion_id)
+                if not legion:
+                    raise HTTPException(status_code=404, detail="Legion not found")
+
+                # Look up minion name if targeting a minion (for historical display)
+                to_minion_name = None
+                if request.to_minion_id:
+                    minion_session = await self.coordinator.session_manager.get_session_info(request.to_minion_id)
+                    if minion_session:
+                        to_minion_name = minion_session.name
+
+                # TODO: Look up channel name when channels are implemented
+                to_channel_name = None
+
+                # Create Comm from user
+                comm = Comm(
+                    comm_id=str(uuid.uuid4()),
+                    from_user=True,
+                    to_minion_id=request.to_minion_id,
+                    to_channel_id=request.to_channel_id,
+                    to_user=request.to_user,
+                    to_minion_name=to_minion_name,
+                    to_channel_name=to_channel_name,
+                    content=request.content,
+                    comm_type=CommType(request.comm_type)
+                )
+
+                # Route the comm
+                success = await self.coordinator.legion_system.comm_router.route_comm(comm)
+
+                if success:
+                    return {"comm": comm.to_dict(), "success": True}
+                else:
+                    raise HTTPException(status_code=500, detail="Failed to route comm")
+
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"Failed to send comm: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @self.app.post("/api/legions/{legion_id}/minions")
+        async def create_minion(legion_id: str, request: MinionCreateRequest):
+            """Create a new minion in the legion"""
+            try:
+                # Validate legion exists
+                project = await self.coordinator.project_manager.get_project(legion_id)
+                if not project:
+                    raise HTTPException(status_code=404, detail="Legion not found")
+                if not project.is_multi_agent:
+                    raise HTTPException(status_code=400, detail="Project is not a legion")
+
+                # Create minion via OverseerController
+                minion_id = await self.coordinator.legion_system.overseer_controller.create_minion_for_user(
+                    legion_id=legion_id,
+                    name=request.name,
+                    role=request.role,
+                    initialization_context=request.initialization_context,
+                    capabilities=request.capabilities
+                )
+
+                # Get the created minion info
+                minion_info = await self.coordinator.session_manager.get_session_info(minion_id)
+
+                return {
+                    "success": True,
+                    "minion_id": minion_id,
+                    "minion": minion_info.to_dict() if minion_info else None
+                }
+
+            except ValueError as e:
+                # OverseerController raises ValueError for validation errors
+                raise HTTPException(status_code=400, detail=str(e))
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"Failed to create minion: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+        # ==================== FILESYSTEM ENDPOINTS ====================
+
         @self.app.get("/api/filesystem/browse")
         async def browse_filesystem(path: str = None):
             """Browse filesystem directories"""
@@ -731,6 +974,61 @@ class ClaudeWebUI:
                 logger.error(f"Error in UI WebSocket: {e}")
             finally:
                 self.ui_websocket_manager.disconnect(websocket)
+
+        @self.app.websocket("/ws/legion/{legion_id}")
+        async def legion_websocket_endpoint(websocket: WebSocket, legion_id: str):
+            """WebSocket endpoint for legion-specific real-time updates"""
+            logger.info(f"Legion WebSocket connection request for legion {legion_id}")
+
+            # Validate legion exists
+            try:
+                project = await self.coordinator.project_manager.get_project(legion_id)
+                if not project or not project.is_multi_agent:
+                    logger.warning(f"Legion WebSocket connection rejected for non-legion project: {legion_id}")
+                    await websocket.close(code=4404)
+                    return
+            except Exception as e:
+                logger.error(f"Error validating legion {legion_id}: {e}")
+                await websocket.close(code=4500)
+                return
+
+            await self.legion_websocket_manager.connect(websocket, legion_id)
+
+            # Send initial connection confirmation
+            try:
+                await websocket.send_json({
+                    "type": "connection_established",
+                    "legion_id": legion_id,
+                    "timestamp": datetime.now(timezone.utc).isoformat()
+                })
+            except Exception as e:
+                logger.error(f"Failed to send initial message to legion WebSocket {legion_id}: {e}")
+                self.legion_websocket_manager.disconnect(websocket, legion_id)
+                return
+
+            try:
+                while True:
+                    try:
+                        # Wait for ping messages from client (keepalive)
+                        message = await asyncio.wait_for(websocket.receive_text(), timeout=30.0)
+                        try:
+                            message_data = json.loads(message)
+                            if message_data.get("type") == "ping":
+                                await websocket.send_json({"type": "pong", "timestamp": datetime.now(timezone.utc).isoformat()})
+                        except json.JSONDecodeError:
+                            logger.warning(f"Invalid JSON in legion WebSocket message: {message}")
+                    except asyncio.TimeoutError:
+                        # Send periodic ping to keep connection alive
+                        await websocket.send_json({
+                            "type": "ping",
+                            "timestamp": datetime.now(timezone.utc).isoformat()
+                        })
+            except WebSocketDisconnect:
+                logger.info(f"Legion WebSocket disconnected for legion {legion_id}")
+            except Exception as e:
+                logger.error(f"Error in legion WebSocket for {legion_id}: {e}")
+            finally:
+                self.legion_websocket_manager.disconnect(websocket, legion_id)
 
         @self.app.websocket("/ws/session/{session_id}")
         async def websocket_endpoint(websocket: WebSocket, session_id: str):

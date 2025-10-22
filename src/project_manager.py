@@ -25,15 +25,23 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class ProjectInfo:
-    """Project metadata and state information"""
+    """Project metadata and state information (also serves as Legion when is_multi_agent=True)"""
     project_id: str
     name: str
     working_directory: str  # Absolute path (IMMUTABLE)
-    session_ids: List[str]  # Ordered list of child session IDs
+    session_ids: List[str]  # Ordered list of child session IDs (or minion IDs if is_multi_agent)
     is_expanded: bool = True  # Expansion state (persisted)
     created_at: datetime = None
     updated_at: datetime = None
     order: int = 0  # Display order among projects
+    is_multi_agent: bool = False  # True if this is a Legion (multi-agent project)
+
+    # Legion-specific fields (only used when is_multi_agent=True)
+    horde_ids: List[str] = None  # All hordes in this legion
+    channel_ids: List[str] = None  # All channels in this legion
+    minion_ids: List[str] = None  # All minions (alias for session_ids when is_multi_agent=True)
+    max_concurrent_minions: int = 20  # Max concurrent minions
+    active_minion_count: int = 0  # Currently active minions
 
     def __post_init__(self):
         if self.created_at is None:
@@ -42,6 +50,13 @@ class ProjectInfo:
             self.updated_at = datetime.now(timezone.utc)
         if self.session_ids is None:
             self.session_ids = []
+        # Initialize legion-specific fields
+        if self.horde_ids is None:
+            self.horde_ids = []
+        if self.channel_ids is None:
+            self.channel_ids = []
+        if self.minion_ids is None:
+            self.minion_ids = []
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization"""
@@ -57,6 +72,20 @@ class ProjectInfo:
         data['updated_at'] = datetime.fromisoformat(data['updated_at'])
         if 'session_ids' not in data:
             data['session_ids'] = []
+        # Migration: Add is_multi_agent if missing (backward compatibility)
+        if 'is_multi_agent' not in data:
+            data['is_multi_agent'] = False
+        # Migration: Add legion fields if missing
+        if 'horde_ids' not in data:
+            data['horde_ids'] = []
+        if 'channel_ids' not in data:
+            data['channel_ids'] = []
+        if 'minion_ids' not in data:
+            data['minion_ids'] = []
+        if 'max_concurrent_minions' not in data:
+            data['max_concurrent_minions'] = 20
+        if 'active_minion_count' not in data:
+            data['active_minion_count'] = 0
         return cls(**data)
 
 
@@ -103,9 +132,11 @@ class ProjectManager:
         self,
         name: str,
         working_directory: str,
-        order: Optional[int] = None
+        order: Optional[int] = None,
+        is_multi_agent: bool = False,
+        max_concurrent_minions: int = 20
     ) -> ProjectInfo:
-        """Create a new project with unique ID"""
+        """Create a new project with unique ID (or legion if is_multi_agent=True)"""
         project_id = str(uuid.uuid4())
         now = datetime.now(timezone.utc)
 
@@ -125,7 +156,9 @@ class ProjectManager:
             is_expanded=True,
             created_at=now,
             updated_at=now,
-            order=order
+            order=order,
+            is_multi_agent=is_multi_agent,
+            max_concurrent_minions=max_concurrent_minions if is_multi_agent else 20
         )
 
         try:

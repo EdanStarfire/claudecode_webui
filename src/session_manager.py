@@ -41,7 +41,7 @@ class SessionState(Enum):
 
 @dataclass
 class SessionInfo:
-    """Session metadata and state information"""
+    """Session metadata and state information (also serves as Minion when is_minion=True)"""
     session_id: str
     state: SessionState
     created_at: datetime
@@ -59,9 +59,27 @@ class SessionInfo:
     order: Optional[int] = None
     project_id: Optional[str] = None
 
+    # Minion-specific fields (only used when is_minion=True)
+    is_minion: bool = False  # True if this is a minion in a legion
+    role: Optional[str] = None  # Minion role description
+    is_overseer: bool = False  # True if has spawned children
+    overseer_level: int = 0  # 0=user-created, 1=child, 2=grandchild
+    parent_overseer_id: Optional[str] = None  # None if user-created
+    child_minion_ids: List[str] = None  # Child minion session IDs
+    horde_id: Optional[str] = None  # Which horde this minion belongs to
+    channel_ids: List[str] = None  # Communication channels
+    capabilities: List[str] = None  # Capability tags for discovery
+    initialization_context: Optional[str] = None  # Custom system prompt for minion
+
     def __post_init__(self):
         if self.tools is None:
             self.tools = ["bash", "edit", "read"]
+        if self.child_minion_ids is None:
+            self.child_minion_ids = []
+        if self.channel_ids is None:
+            self.channel_ids = []
+        if self.capabilities is None:
+            self.capabilities = []
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization"""
@@ -77,6 +95,19 @@ class SessionInfo:
         data['state'] = SessionState(data['state'])
         data['created_at'] = datetime.fromisoformat(data['created_at'])
         data['updated_at'] = datetime.fromisoformat(data['updated_at'])
+        # Migration: Add minion fields if missing (backward compatibility)
+        if 'is_minion' not in data:
+            data['is_minion'] = False
+        if 'child_minion_ids' not in data:
+            data['child_minion_ids'] = []
+        if 'channel_ids' not in data:
+            data['channel_ids'] = []
+        if 'capabilities' not in data:
+            data['capabilities'] = []
+        if 'is_overseer' not in data:
+            data['is_overseer'] = False
+        if 'overseer_level' not in data:
+            data['overseer_level'] = 0
         return cls(**data)
 
 
@@ -158,9 +189,19 @@ class SessionManager:
         tools: List[str] = None,
         model: Optional[str] = None,
         name: Optional[str] = None,
-        order: Optional[int] = None
+        order: Optional[int] = None,
+        project_id: Optional[str] = None,
+        # Minion-specific fields
+        is_minion: bool = False,
+        role: Optional[str] = None,
+        capabilities: List[str] = None,
+        initialization_context: Optional[str] = None,
+        # Hierarchy fields (Phase 5)
+        parent_overseer_id: Optional[str] = None,
+        overseer_level: int = 0,
+        horde_id: Optional[str] = None
     ) -> None:
-        """Create a new session with provided ID"""
+        """Create a new session with provided ID (or minion if is_minion=True)"""
         now = datetime.now(timezone.utc)
 
         # Generate default name if not provided
@@ -183,7 +224,17 @@ class SessionManager:
             tools=tools if tools is not None else [],
             model=model,
             name=name,
-            order=order
+            order=order,
+            project_id=project_id,
+            # Minion-specific fields
+            is_minion=is_minion,
+            role=role,
+            capabilities=capabilities if capabilities is not None else [],
+            initialization_context=initialization_context,
+            # Hierarchy fields (Phase 5)
+            parent_overseer_id=parent_overseer_id,
+            overseer_level=overseer_level,
+            horde_id=horde_id
         )
 
         try:
@@ -548,6 +599,46 @@ class SessionManager:
                 return True
             except Exception as e:
                 logger.error(f"Failed to update session {session_id} order: {e}")
+                return False
+
+    async def update_session(self, session_id: str, **kwargs) -> bool:
+        """
+        Update session fields dynamically (Phase 5 - for hierarchy management).
+
+        Supported fields:
+        - is_overseer (bool)
+        - child_minion_ids (List[str])
+        - horde_id (str)
+        - Any other SessionInfo field
+
+        Example:
+            await session_manager.update_session(
+                session_id,
+                is_overseer=True,
+                child_minion_ids=["child1", "child2"]
+            )
+        """
+        async with self._get_session_lock(session_id):
+            try:
+                session = self._active_sessions.get(session_id)
+                if not session:
+                    logger.error(f"Session {session_id} not found")
+                    return False
+
+                # Update fields
+                for key, value in kwargs.items():
+                    if hasattr(session, key):
+                        setattr(session, key, value)
+                    else:
+                        logger.warning(f"Session field '{key}' does not exist, skipping")
+
+                session.updated_at = datetime.now(timezone.utc)
+                await self._persist_session_state(session_id)
+                await self._notify_state_change_callbacks(session_id, session.state)
+                session_logger.info(f"Updated session {session_id} fields: {list(kwargs.keys())}")
+                return True
+            except Exception as e:
+                logger.error(f"Failed to update session {session_id}: {e}")
                 return False
 
     async def reorder_sessions(self, session_ids: List[str]) -> bool:
