@@ -118,6 +118,10 @@ class SessionCoordinator:
         model: Optional[str] = None,
         name: Optional[str] = None,
         permission_callback: Optional[Callable[[str, Dict[str, Any]], Union[bool, Dict[str, Any]]]] = None,
+        # Minion-specific fields
+        role: Optional[str] = None,
+        capabilities: List[str] = None,
+        initialization_context: Optional[str] = None,
     ) -> str:
         """Create a new Claude Code session with integrated components (within a project)"""
         try:
@@ -146,7 +150,10 @@ class SessionCoordinator:
                 order=order,
                 project_id=project_id,
                 # Minion fields (auto-populated if parent is legion)
-                is_minion=is_minion
+                is_minion=is_minion,
+                role=role,
+                capabilities=capabilities,
+                initialization_context=initialization_context
             )
 
             # Add session to project

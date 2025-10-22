@@ -81,6 +81,13 @@ class CommSendRequest(BaseModel):
     comm_type: str = "task"
 
 
+class MinionCreateRequest(BaseModel):
+    name: str
+    role: Optional[str] = ""
+    initialization_context: Optional[str] = ""
+    capabilities: List[str] = []
+
+
 class UIWebSocketManager:
     """Manages global UI WebSocket connections for session state updates"""
 
@@ -816,6 +823,44 @@ class ClaudeWebUI:
                 raise
             except Exception as e:
                 logger.error(f"Failed to send comm: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @self.app.post("/api/legions/{legion_id}/minions")
+        async def create_minion(legion_id: str, request: MinionCreateRequest):
+            """Create a new minion in the legion"""
+            try:
+                # Validate legion exists
+                project = await self.coordinator.project_manager.get_project(legion_id)
+                if not project:
+                    raise HTTPException(status_code=404, detail="Legion not found")
+                if not project.is_multi_agent:
+                    raise HTTPException(status_code=400, detail="Project is not a legion")
+
+                # Create minion via OverseerController
+                minion_id = await self.coordinator.legion_system.overseer_controller.create_minion_for_user(
+                    legion_id=legion_id,
+                    name=request.name,
+                    role=request.role,
+                    initialization_context=request.initialization_context,
+                    capabilities=request.capabilities
+                )
+
+                # Get the created minion info
+                minion_info = await self.coordinator.session_manager.get_session_info(minion_id)
+
+                return {
+                    "success": True,
+                    "minion_id": minion_id,
+                    "minion": minion_info.to_dict() if minion_info else None
+                }
+
+            except ValueError as e:
+                # OverseerController raises ValueError for validation errors
+                raise HTTPException(status_code=400, detail=str(e))
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"Failed to create minion: {e}")
                 raise HTTPException(status_code=500, detail=str(e))
 
         # ==================== FILESYSTEM ENDPOINTS ====================
