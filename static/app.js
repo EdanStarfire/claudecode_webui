@@ -2314,8 +2314,20 @@ class ClaudeWebUI {
             // GRANULAR UPDATE: Only update what changed
             if (isSessionAdded) {
                 // A session was added - we'll get the session data via state_change
-                // Just update the status line here
+                // Update the status line
                 this.updateProjectStatusLine(project.project_id);
+
+                // If this is a multi-agent project, rebuild Spy and Horde dropdowns
+                if (project.is_multi_agent) {
+                    Logger.info('PROJECT', `New session added to legion ${project.project_id}, rebuilding dropdowns`);
+                    this.rebuildSpyDropdown(project.project_id);
+                    this.updateHordeDropdown(project.project_id);
+
+                    // Update comm composer if we're viewing this legion's timeline
+                    if (this.viewMode === 'timeline' && this.currentLegionId === project.project_id) {
+                        this.populateCommRecipients(project.project_id);
+                    }
+                }
             } else {
                 // Other metadata changed (name, expansion, etc.)
                 this.updateProjectInDOM(project.project_id, 'metadata-changed');
@@ -3203,7 +3215,9 @@ class ClaudeWebUI {
         // Handle dropdown selection change
         dropdown.addEventListener('change', (e) => {
             const selectedOverseerId = e.target.value;
+            console.log('Horde dropdown changed:', selectedOverseerId, 'Legion:', project.project_id);
             if (selectedOverseerId) {
+                console.log('Calling viewHorde...');
                 this.viewHorde(project.project_id, selectedOverseerId);
             } else {
                 // User selected "-- Select Overseer --", exit horde view
@@ -5572,15 +5586,15 @@ class ClaudeWebUI {
         try {
             Logger.debug('TIMELINE', `Viewing timeline for legion ${legionId}`);
 
-            // Set view mode
-            this.viewMode = 'timeline';
-            this.spyLegionId = null;
-            this.spyMinionId = null;
-
-            // Exit current session if any
+            // Exit current session if any (this will clear viewMode)
             if (this.currentSessionId) {
                 this.exitSession();
             }
+
+            // Set view mode AFTER exitSession (which resets it to null)
+            this.viewMode = 'timeline';
+            this.spyLegionId = null;
+            this.spyMinionId = null;
 
             // Mark this as viewing timeline (not a session)
             this.currentSessionId = null;
@@ -5729,14 +5743,12 @@ class ClaudeWebUI {
                 commComposerSection.style.display = 'none';
             }
 
-            // Update sidebar selection
-            this.updateSidebarSelection();
-
             // Render horde tree view
             await this.renderHordeTreeView(legionId, overseerId);
 
         } catch (error) {
-            Logger.error('HORDE', `Failed to enter horde mode: ${error}`);
+            Logger.error('HORDE', `Failed to enter horde mode: ${error}`, error);
+            console.error('HORDE viewHorde error:', error);
         }
     }
 
@@ -5759,28 +5771,43 @@ class ClaudeWebUI {
                 return;
             }
 
+            // Get legion name
+            const project = this.projectManager.projects.get(legionId);
+            const legionName = project ? project.name : 'Legion';
+
+            // Update header
+            const sessionInfoBar = document.getElementById('session-info-bar');
+            if (sessionInfoBar) {
+                sessionInfoBar.innerHTML = `
+                    <div class="d-flex justify-content-between align-items-center">
+                        <div>
+                            <h5 class="mb-0">
+                                <span style="font-size: 1.25rem; margin-right: 0.5rem;">🏰</span>
+                                ${this.escapeHtml(legionName)} - ${this.escapeHtml(overseerSession.name)}'s Horde
+                            </h5>
+                            <small class="text-muted">${this.escapeHtml(overseerSession.role || 'Overseer')}</small>
+                        </div>
+                    </div>
+                `;
+            }
+
             // Build tree HTML
             const treeHtml = `
                 <div class="horde-tree-view p-3">
-                    <h4>🏰 ${overseerSession.name}'s Horde</h4>
-                    <p class="text-muted">${overseerSession.role || 'Overseer'}</p>
-                    <hr>
                     ${this.renderMinionTree(overseerId, 0)}
                 </div>
             `;
 
             messagesArea.innerHTML = treeHtml;
 
-            // Update status bar
-            this.updateStatusBar({
-                state: 'active',
-                is_processing: false,
-                name: `Horde: ${overseerSession.name}`,
-                permission_mode: overseerSession.permission_mode || 'default'
-            });
-
         } catch (error) {
-            Logger.error('HORDE', `Failed to render horde tree: ${error}`);
+            Logger.error('HORDE', `Failed to render horde tree: ${error}`, error);
+            console.error('HORDE renderHordeTreeView error:', error);
+            // Show error to user
+            const messagesArea = document.getElementById('messages-area');
+            if (messagesArea) {
+                messagesArea.innerHTML = `<div class="alert alert-danger">Failed to render horde tree: ${error.message}</div>`;
+            }
         }
     }
 
@@ -5828,6 +5855,81 @@ class ClaudeWebUI {
         }
 
         return html;
+    }
+
+    rebuildSpyDropdown(legionId) {
+        // Rebuild the Spy dropdown for a legion (when new minions are added)
+        const project = this.projectManager.projects.get(legionId);
+        if (!project || !project.session_ids) {
+            Logger.warn('SPY_UI', `Cannot rebuild Spy dropdown - project not found: ${legionId}`);
+            return;
+        }
+
+        const sessions = project.session_ids
+            .map(sid => this.sessions.get(sid))
+            .filter(s => s && s.is_minion);
+
+        Logger.debug('SPY_UI', `Rebuilding Spy dropdown for ${legionId}`, {
+            totalSessionIds: project.session_ids.length,
+            minionsFound: sessions.length,
+            sessionIds: project.session_ids
+        });
+
+        const minionDropdown = document.getElementById(`spy-dropdown-${legionId}`);
+        if (!minionDropdown) {
+            Logger.warn('SPY_UI', `Cannot rebuild Spy dropdown - dropdown element not found: spy-dropdown-${legionId}`);
+            return;
+        }
+
+        // Save current selection
+        const currentSelection = minionDropdown.value;
+
+        // Rebuild options (keep default option)
+        const defaultOption = minionDropdown.querySelector('option[value=""]');
+        minionDropdown.innerHTML = '';
+        if (defaultOption) {
+            minionDropdown.appendChild(defaultOption);
+        } else {
+            const newDefault = document.createElement('option');
+            newDefault.value = '';
+            newDefault.textContent = '-- Select Minion --';
+            minionDropdown.appendChild(newDefault);
+        }
+
+        // Add minion options
+        const stateIcons = {
+            'created': '○',
+            'starting': '◐',
+            'active': '●',
+            'paused': '⏸',
+            'terminating': '◍',
+            'terminated': '✗',
+            'error': '⚠',
+            'processing': '◐'
+        };
+
+        sessions.forEach(session => {
+            const option = document.createElement('option');
+            option.value = session.session_id;
+
+            const isProcessing = session.is_processing || false;
+            const displayState = isProcessing ? 'processing' : session.state;
+            const stateIcon = stateIcons[displayState] || '○';
+
+            const minionLabel = session.role
+                ? `${session.name} (${session.role})`
+                : session.name;
+            option.textContent = `${stateIcon} ${minionLabel}`;
+
+            minionDropdown.appendChild(option);
+        });
+
+        // Restore selection if still valid
+        if (currentSelection && sessions.some(s => s.session_id === currentSelection)) {
+            minionDropdown.value = currentSelection;
+        }
+
+        Logger.debug('SPY_UI', `Rebuilt Spy dropdown for legion ${legionId} with ${sessions.length} minions`);
     }
 
     isDescendantOf(minionId, ancestorId) {
@@ -6562,7 +6664,7 @@ ${typeIcon}
 
     updateSpyUIForMinionStateChange(sessionId, sessionInfo) {
         /**
-         * Update Spy UI dropdown and status bar when a minion's state changes
+         * Update Spy UI dropdown and state indicator when a minion's state changes
          */
         Logger.debug('SPY_UI', `Updating Spy UI for minion state change: ${sessionId}`, sessionInfo);
 
@@ -6605,11 +6707,44 @@ ${typeIcon}
                     label: option.textContent
                 });
             }
+
+            // Update the colored state indicator if this minion is selected in the dropdown
+            const selectedMinionId = minionDropdown.value;
+            if (selectedMinionId === sessionId) {
+                const spyElement = minionDropdown.closest('[data-legion-id]');
+                if (spyElement) {
+                    const stateIndicator = spyElement.querySelector('.minion-state-indicator');
+                    if (stateIndicator) {
+                        const isProcessing = sessionInfo.is_processing || false;
+                        const displayState = isProcessing ? 'processing' : sessionInfo.state;
+                        const bgColor = this.getSessionStatusDotFillColor(displayState);
+                        const borderColor = this.getSessionStateColor(displayState);
+
+                        // Update colors
+                        stateIndicator.style.backgroundColor = bgColor;
+                        stateIndicator.style.borderColor = borderColor;
+
+                        // Update animation class
+                        const shouldBlink = (displayState === 'starting' || displayState === 'processing');
+                        if (shouldBlink) {
+                            stateIndicator.classList.add('status-blinking');
+                        } else {
+                            stateIndicator.classList.remove('status-blinking');
+                        }
+
+                        Logger.debug('SPY_UI', `Updated state indicator for ${sessionId}`, {
+                            displayState,
+                            bgColor,
+                            borderColor
+                        });
+                    }
+                }
+            }
         }
 
-        // Update status bar if this is the selected spy minion
+        // Update session info if this is the selected spy minion
         if (this.viewMode === 'spy' && this.spyMinionId === sessionId) {
-            this.updateStatusBar(sessionInfo);
+            this.updateSessionInfo({ session: sessionInfo });
         }
     }
 }

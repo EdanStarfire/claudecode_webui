@@ -247,6 +247,9 @@ class ClaudeWebUI:
         self.ui_websocket_manager = UIWebSocketManager()
         self.legion_websocket_manager = LegionWebSocketManager()
 
+        # Inject UI WebSocket manager into Legion system for project update broadcasts
+        self.coordinator.legion_system.ui_websocket_manager = self.ui_websocket_manager
+
         # Initialize MessageProcessor for unified WebSocket message formatting
         self._message_parser = MessageParser()
         self._message_processor = MessageProcessor(self._message_parser)

@@ -310,6 +310,16 @@ class OverseerController:
         # 14. Start child session (make it active)
         await self.system.session_coordinator.start_session(child_minion_id)
 
+        # 15. Broadcast project update to UI WebSocket (new session added)
+        if self.system.ui_websocket_manager:
+            project = await self.system.session_coordinator.project_manager.get_project(legion_id)
+            if project:
+                await self.system.ui_websocket_manager.broadcast_to_all({
+                    "type": "project_updated",
+                    "data": {"project": project.to_dict()}
+                })
+                coord_logger.debug(f"Broadcasted project_updated for legion {legion_id} after minion spawn")
+
         coord_logger.info(f"Minion {name} spawned by {parent_session.name} (parent={parent_overseer_id}, child={child_minion_id})")
 
         return child_minion_id
@@ -431,6 +441,17 @@ class OverseerController:
             visible_to_user=True
         )
         await self.system.comm_router.route_comm(dispose_comm)
+
+        # 11. Broadcast project update to UI WebSocket (session removed)
+        legion_id = parent_session.project_id
+        if self.system.ui_websocket_manager:
+            project = await self.system.session_coordinator.project_manager.get_project(legion_id)
+            if project:
+                await self.system.ui_websocket_manager.broadcast_to_all({
+                    "type": "project_updated",
+                    "data": {"project": project.to_dict()}
+                })
+                coord_logger.debug(f"Broadcasted project_updated for legion {legion_id} after minion disposal")
 
         coord_logger.info(f"Minion {child_minion_name} disposed by {parent_session.name} (disposed_id={child_minion_id}, descendants={descendants_disposed})")
 
