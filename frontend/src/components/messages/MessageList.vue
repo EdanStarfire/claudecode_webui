@@ -4,41 +4,21 @@
       No messages yet. Start a conversation!
     </div>
 
-    <div v-for="(message, index) in displayableMessages" :key="index" class="mb-3">
-      <!-- TODO: Full message components will be built in Phase 3 -->
-      <div
-        class="card"
-        :class="{
-          'bg-light': message.type === 'user',
-          'bg-white': message.type === 'assistant',
-          'bg-info bg-opacity-10': message.type === 'system'
-        }"
-      >
-        <div class="card-body">
-          <div class="d-flex justify-content-between align-items-start mb-2">
-            <strong>{{ message.type.toUpperCase() }}</strong>
-            <small class="text-muted">{{ formatTimestamp(message.timestamp) }}</small>
-          </div>
-          <div class="message-content">{{ message.content }}</div>
-        </div>
-      </div>
-    </div>
-
-    <!-- Tool calls (placeholder) -->
-    <div v-for="toolCall in currentToolCalls" :key="toolCall.id" class="mb-3">
-      <div class="card border-primary">
-        <div class="card-body">
-          <strong>🔧 {{ toolCall.name }}</strong> - {{ toolCall.status }}
-        </div>
-      </div>
-    </div>
+    <!-- Messages using new component architecture -->
+    <!-- Tool cards are embedded within AssistantMessage components -->
+    <MessageItem
+      v-for="(message, index) in displayableMessages"
+      :key="`msg-${message.timestamp}-${index}`"
+      :message="normalizeMessage(message)"
+    />
   </div>
 </template>
 
 <script setup>
-import { computed, ref, watch, nextTick } from 'vue'
+import { computed, ref, watch, nextTick, onMounted } from 'vue'
 import { useMessageStore } from '@/stores/message'
 import { useUIStore } from '@/stores/ui'
+import MessageItem from './MessageItem.vue'
 
 const messageStore = useMessageStore()
 const uiStore = useUIStore()
@@ -51,30 +31,85 @@ const displayableMessages = computed(() => {
 
 const currentToolCalls = computed(() => messageStore.currentToolCalls)
 
-// Auto-scroll on new messages
-watch(() => messageStore.currentMessages.length, async () => {
+// Auto-scroll function
+async function scrollToBottom() {
   if (uiStore.autoScrollEnabled) {
     await nextTick()
     if (messagesArea.value) {
       messagesArea.value.scrollTop = messagesArea.value.scrollHeight
     }
   }
+}
+
+// Auto-scroll on new messages
+watch(() => messageStore.currentMessages.length, scrollToBottom)
+
+// Auto-scroll on tool call updates (for permission requests, status changes, etc.)
+watch(() => messageStore.currentToolCalls.length, scrollToBottom)
+
+// Watch for tool call status changes (e.g., permission_required)
+watch(
+  () => messageStore.currentToolCalls.map(tc => `${tc.id}-${tc.status}`).join(','),
+  scrollToBottom
+)
+
+// Scroll to bottom on initial mount (for when messages are already loaded)
+onMounted(() => {
+  // Add a small delay to ensure content is fully rendered
+  setTimeout(() => {
+    scrollToBottom()
+  }, 100)
 })
 
 function shouldDisplayMessage(message) {
-  // Basic filtering (full logic will be in Phase 3)
+  // Filter messages that shouldn't be displayed
   const subtype = message.subtype || message.metadata?.subtype
 
+  // Hide system init messages
   if (message.type === 'system' && subtype === 'init') return false
+  if (message.type === 'system' && subtype === 'client_launched') return false
+
+  // Hide result messages (they update session state, don't display)
   if (message.type === 'result') return false
+
+  // Hide permission messages (handled by modal)
   if (message.type === 'permission_request' || message.type === 'permission_response') return false
+
+  // Hide user messages that ONLY contain tool results (no actual user text)
+  // These messages exist to deliver tool results which update tool cards inline
+  if (message.type === 'user' && message.metadata?.has_tool_results) {
+    // Check if this is ONLY tool results (content is just "Tool results: N results")
+    const content = message.content || ''
+    if (content.match(/^Tool results?: \d+ results?$/i) || content.trim() === '') {
+      return false
+    }
+  }
 
   return true
 }
 
-function formatTimestamp(timestamp) {
-  if (!timestamp) return ''
-  return new Date(timestamp).toLocaleTimeString()
+/**
+ * Normalize message structure with safe defaults to prevent crashes
+ * Ensures all messages have required fields even if backend sends malformed data
+ */
+function normalizeMessage(message) {
+  return {
+    type: message.type || 'unknown',
+    content: message.content || '',
+    timestamp: message.timestamp || Date.now() / 1000,
+    metadata: {
+      has_tool_uses: false,
+      has_tool_results: false,
+      has_thinking: false,
+      has_permission_requests: false,
+      has_permission_responses: false,
+      tool_uses: [],
+      tool_results: [],
+      thinking_content: '',
+      thinking_blocks: [],
+      ...message.metadata
+    }
+  }
 }
 </script>
 

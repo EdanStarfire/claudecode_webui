@@ -82,9 +82,16 @@ export const useUIStore = defineStore('ui', () => {
 
   // Handle window resize
   function handleResize() {
+    const previousWidth = windowWidth.value
     windowWidth.value = window.innerWidth
-    if (windowWidth.value < 768) {
+
+    // Collapse sidebar when resizing down to mobile
+    if (windowWidth.value < 768 && previousWidth >= 768) {
       sidebarCollapsed.value = true
+    }
+    // Expand sidebar when resizing up to desktop
+    else if (windowWidth.value >= 768 && previousWidth < 768) {
+      sidebarCollapsed.value = false
     }
   }
 

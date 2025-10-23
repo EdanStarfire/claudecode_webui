@@ -1,16 +1,16 @@
 <template>
-  <div class="flex-grow-1 d-flex flex-column justify-content-center align-items-center text-center p-5">
-    <h2 class="text-muted">🔍 Spy View</h2>
-    <p class="text-secondary">
-      Inspecting minion {{ minionId }} in Legion {{ legionId }}
-    </p>
-    <p class="text-muted small">
-      (Full implementation in Phase 4)
-    </p>
+  <div class="spy-view d-flex flex-column overflow-hidden">
+    <!--
+      Spy mode is just viewing a single minion session.
+      We reuse the SessionView component directly.
+    -->
+    <SessionView :session-id="minionId" :is-spy-mode="true" />
   </div>
 </template>
 
 <script setup>
+import SessionView from '../session/SessionView.vue'
+
 const props = defineProps({
   legionId: {
     type: String,
@@ -21,6 +21,11 @@ const props = defineProps({
     required: true
   }
 })
-
-// TODO: Phase 4 - Implement Spy view functionality
 </script>
+
+<style scoped>
+.spy-view {
+  height: 100%;
+  min-height: 0; /* Critical for flex children to shrink */
+}
+</style>

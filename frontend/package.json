@@ -12,9 +12,9 @@
     "@vueuse/core": "^10.9.0",
     "bootstrap": "^5.3.3",
     "diff": "^5.2.0",
-    "diff2html": "^3.4.47",
-    "dompurify": "^3.0.8",
-    "marked": "^11.1.1",
+    "diff2html": "^3.4.52",
+    "dompurify": "^3.3.0",
+    "marked": "^11.2.0",
     "pinia": "^2.1.7",
     "vue": "^3.4.21",
     "vue-router": "^4.3.0"

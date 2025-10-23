@@ -185,15 +185,27 @@ export const useWebSocketStore = defineStore('websocket', () => {
   /**
    * Send permission response
    */
-  function sendPermissionResponse(requestId, decision, appliedUpdates = []) {
+  function sendPermissionResponse(requestId, decision, applySuggestions = false, clarification = null) {
     if (sessionSocket.value && sessionConnected.value) {
-      sessionSocket.value.send(JSON.stringify({
+      const payload = {
         type: 'permission_response',
         request_id: requestId,
         decision: decision,
-        applied_updates: appliedUpdates
-      }))
-      console.log(`Sent permission ${decision} for request ${requestId}`)
+        timestamp: new Date().toISOString()
+      }
+
+      // Add apply_suggestions flag (backend expects boolean, not the actual suggestions array)
+      if (applySuggestions) {
+        payload.apply_suggestions = true
+      }
+
+      // Add clarification message if provided (backend expects 'clarification_message' field)
+      if (clarification) {
+        payload.clarification_message = clarification
+      }
+
+      sessionSocket.value.send(JSON.stringify(payload))
+      console.log(`Sent permission ${decision} for request ${requestId}`, { applySuggestions, clarification })
     }
   }
 
@@ -282,11 +294,32 @@ export const useWebSocketStore = defineStore('websocket', () => {
           break
         }
 
+        // Handle permission_request messages
+        if (message.type === 'permission_request') {
+          messageStore.handlePermissionRequest(sessionId, message)
+          // Don't add to message history - it's handled by tool call
+          break
+        }
+
+        // Handle permission_response messages
+        if (message.type === 'permission_response') {
+          messageStore.handlePermissionResponse(sessionId, message)
+          // Don't add to message history - it's handled by tool call
+          break
+        }
+
         // Process tool-related messages
         if (message.metadata?.has_tool_uses) {
-          // Extract and create tool call cards
+          // Extract and create tool call cards from assistant messages
           message.metadata.tool_uses.forEach(toolUse => {
             messageStore.handleToolUse(sessionId, toolUse)
+          })
+        }
+
+        if (message.metadata?.has_tool_results) {
+          // Extract and update tool call cards from user messages
+          message.metadata.tool_results.forEach(toolResult => {
+            messageStore.handleToolResult(sessionId, toolResult)
           })
         }
 
@@ -385,9 +418,56 @@ export const useWebSocketStore = defineStore('websocket', () => {
    * Handle Legion WebSocket messages
    */
   function handleLegionMessage(payload, legionId) {
-    // TODO: Implement Legion-specific message handling
-    // Will be completed in Phase 4
-    console.log('Legion message received:', payload)
+    // Import legion store dynamically to avoid circular dependency
+    import('./legion').then(({ useLegionStore }) => {
+      const legionStore = useLegionStore()
+
+      switch (payload.type) {
+        case 'comm':
+          // New communication received
+          // Backend sends: { type: "comm", comm: {...}, timestamp: ... }
+          if (payload.comm) {
+            legionStore.addComm(legionId, payload.comm)
+            console.log('Legion WebSocket: Received new comm', payload.comm)
+          }
+          break
+
+        case 'minion_created':
+          // New minion added to legion - reload all sessions to get updated parent child_minion_ids
+          if (payload.data) {
+            console.log('Legion WebSocket: Minion created, reloading sessions', payload.data)
+            // Import session store to reload session data
+            import('./session').then(({ useSessionStore }) => {
+              const sessionStore = useSessionStore()
+              // Reload all sessions for this project to get updated child_minion_ids
+              sessionStore.loadSessions()
+            })
+          }
+          break
+
+        case 'minion_updated':
+          // Minion state changed - reload all sessions
+          if (payload.data) {
+            console.log('Legion WebSocket: Minion updated, reloading sessions', payload.data)
+            import('./session').then(({ useSessionStore }) => {
+              const sessionStore = useSessionStore()
+              sessionStore.loadSessions()
+            })
+          }
+          break
+
+        case 'connection_established':
+          console.log(`Legion WebSocket: Connection established for ${legionId}`)
+          break
+
+        case 'ping':
+          // Keepalive ping
+          break
+
+        default:
+          console.warn('Unknown Legion WebSocket message type:', payload.type)
+      }
+    })
   }
 
   // ========== RETURN ==========

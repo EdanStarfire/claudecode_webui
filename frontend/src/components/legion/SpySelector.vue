@@ -1,6 +1,10 @@
 <template>
   <div class="list-group-item list-group-item-action p-2">
-    <div class="d-flex align-items-center justify-content-between mb-2">
+    <div
+      class="d-flex align-items-center justify-content-between mb-2"
+      :style="{ cursor: selectedMinionId ? 'pointer' : 'default' }"
+      @click="onHeaderClick"
+    >
       <div class="d-flex align-items-center">
         <span style="font-size: 1rem; margin-right: 0.5rem;">🔍</span>
         <span class="fw-semibold">Spy</span>
@@ -50,6 +54,21 @@ const sessionStore = useSessionStore()
 
 const selectedMinionId = ref('')
 
+// Sync dropdown with current route (only if empty - for deep links)
+watch(
+  () => router.currentRoute.value,
+  (route) => {
+    // Only update if no minion is currently selected (for deep link restoration)
+    if (!selectedMinionId.value && route.name === 'spy' && route.params.minionId) {
+      // Check if this spy route is for our project
+      if (route.params.legionId === props.project.project_id) {
+        selectedMinionId.value = route.params.minionId
+      }
+    }
+  },
+  { immediate: true }
+)
+
 const selectedMinion = computed(() => {
   if (!selectedMinionId.value) return null
   return props.sessions.find(s => s.session_id === selectedMinionId.value)
@@ -81,9 +100,20 @@ function getMinionLabel(session) {
   return session.name
 }
 
-function onMinionSelect() {
+function onHeaderClick() {
+  // If a minion is selected, navigate to spy view
   if (selectedMinionId.value) {
     router.push(`/spy/${props.project.project_id}/${selectedMinionId.value}`)
+  }
+}
+
+function onMinionSelect() {
+  if (selectedMinionId.value) {
+    // Navigate to spy view for selected minion
+    router.push(`/spy/${props.project.project_id}/${selectedMinionId.value}`)
+  } else {
+    // User selected "-- Select Minion --", exit to no-session view
+    router.push('/')
   }
 }
 

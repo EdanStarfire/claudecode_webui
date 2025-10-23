@@ -1,6 +1,10 @@
 <template>
   <div class="list-group-item list-group-item-action p-2">
-    <div class="d-flex align-items-center justify-content-between mb-2">
+    <div
+      class="d-flex align-items-center justify-content-between mb-2"
+      :style="{ cursor: selectedOverseerId ? 'pointer' : 'default' }"
+      @click="onHeaderClick"
+    >
       <div class="d-flex align-items-center">
         <span style="font-size: 1rem; margin-right: 0.5rem;">🌳</span>
         <span class="fw-semibold">Horde</span>
@@ -27,7 +31,7 @@
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { useRouter } from 'vue-router'
 
 const props = defineProps({
@@ -43,6 +47,21 @@ const props = defineProps({
 
 const router = useRouter()
 const selectedOverseerId = ref('')
+
+// Sync dropdown with current route (only if empty - for deep links)
+watch(
+  () => router.currentRoute.value,
+  (route) => {
+    // Only update if no overseer is currently selected (for deep link restoration)
+    if (!selectedOverseerId.value && route.name === 'horde' && route.params.overseerId) {
+      // Check if this horde route is for our project
+      if (route.params.legionId === props.project.project_id) {
+        selectedOverseerId.value = route.params.overseerId
+      }
+    }
+  },
+  { immediate: true }
+)
 
 // Filter for overseers (minions that have spawned children)
 const overseers = computed(() => {
@@ -60,6 +79,13 @@ function getStateIcon(session) {
     'error': '⚠'
   }
   return icons[session.state] || '○'
+}
+
+function onHeaderClick() {
+  // If an overseer is selected, navigate to horde view
+  if (selectedOverseerId.value) {
+    router.push(`/horde/${props.project.project_id}/${selectedOverseerId.value}`)
+  }
 }
 
 function onOverseerSelect() {

@@ -26,7 +26,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, onUnmounted } from 'vue'
+import { computed, onMounted, onUnmounted, watch } from 'vue'
 import { useSessionStore } from '@/stores/session'
 import { useUIStore } from '@/stores/ui'
 import SessionInfoBar from './SessionInfoBar.vue'
@@ -53,6 +53,18 @@ onMounted(async () => {
     uiStore.showLoading('Loading session...')
     try {
       await sessionStore.selectSession(props.sessionId)
+    } finally {
+      uiStore.hideLoading()
+    }
+  }
+})
+
+// Watch for sessionId prop changes (e.g., when switching minions in Spy mode)
+watch(() => props.sessionId, async (newSessionId, oldSessionId) => {
+  if (newSessionId !== oldSessionId && newSessionId !== sessionStore.currentSessionId) {
+    uiStore.showLoading('Loading session...')
+    try {
+      await sessionStore.selectSession(newSessionId)
     } finally {
       uiStore.hideLoading()
     }

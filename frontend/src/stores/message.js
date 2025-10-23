@@ -38,20 +38,51 @@ export const useMessageStore = defineStore('message', () => {
   /**
    * Load messages for a session from backend
    */
-  async function loadMessages(sessionId, limit = 50, offset = 0) {
+  async function loadMessages(sessionId, limit = null, offset = 0) {
     try {
+      // If no limit specified, request all messages
+      // Use a very high limit to get all messages in one request
+      const effectiveLimit = limit || 10000
+
       const data = await api.get(
-        `/api/sessions/${sessionId}/messages?limit=${limit}&offset=${offset}`
+        `/api/sessions/${sessionId}/messages?limit=${effectiveLimit}&offset=${offset}`
       )
 
+      const messages = data.messages || []
+      const totalCount = data.total_count || messages.length
+      const hasMore = data.has_more || false
+
+      console.log(`Loaded ${messages.length} of ${totalCount} messages for session ${sessionId}`)
+
       // Store messages
-      messagesBySession.value.set(sessionId, data.messages || [])
+      messagesBySession.value.set(sessionId, messages)
+
+      // Process messages to extract tool uses and results
+      messages.forEach(message => {
+        // Extract tool uses from assistant messages
+        if (message.metadata?.has_tool_uses && message.metadata.tool_uses) {
+          message.metadata.tool_uses.forEach(toolUse => {
+            handleToolUse(sessionId, toolUse)
+          })
+        }
+
+        // Extract tool results from user messages
+        if (message.metadata?.has_tool_results && message.metadata.tool_results) {
+          message.metadata.tool_results.forEach(toolResult => {
+            handleToolResult(sessionId, toolResult)
+          })
+        }
+      })
 
       // Trigger reactivity
       messagesBySession.value = new Map(messagesBySession.value)
 
-      console.log(`Loaded ${data.messages?.length || 0} messages for session ${sessionId}`)
-      return data.messages || []
+      // Warn if there are more messages we didn't load
+      if (hasMore) {
+        console.warn(`Warning: Only loaded ${messages.length} of ${totalCount} messages. Some messages may be missing.`)
+      }
+
+      return { messages, totalCount, hasMore }
     } catch (error) {
       console.error('Failed to load messages:', error)
       throw error
@@ -134,22 +165,35 @@ export const useMessageStore = defineStore('message', () => {
    * Handle permission request for a tool
    */
   function handlePermissionRequest(sessionId, permissionRequest) {
-    const signature = createToolSignature(
-      permissionRequest.tool_name,
-      permissionRequest.input_params
-    )
+    console.log('handlePermissionRequest received:', permissionRequest)
+
+    // Extract fields from metadata or top level
+    const toolName = permissionRequest.metadata?.tool_name || permissionRequest.tool_name
+    const inputParams = permissionRequest.metadata?.input_params || permissionRequest.input_params
+    const requestId = permissionRequest.metadata?.request_id || permissionRequest.request_id
+    const suggestions = permissionRequest.metadata?.suggestions || permissionRequest.suggestions || []
+
+    console.log('Extracted data:', { toolName, inputParams, requestId, suggestions })
+
+    const signature = createToolSignature(toolName, inputParams)
     const toolUseId = toolSignatureToId.value.get(signature)
 
     if (toolUseId) {
-      permissionToToolMap.value.set(permissionRequest.request_id, toolUseId)
+      permissionToToolMap.value.set(requestId, toolUseId)
 
       updateToolCall(sessionId, toolUseId, {
         status: 'permission_required',
-        permissionRequestId: permissionRequest.request_id,
-        suggestions: permissionRequest.metadata?.suggestions || []
+        permissionRequestId: requestId,
+        suggestions: suggestions
       })
 
-      console.log(`Permission required for tool ${toolUseId}`)
+      console.log(`Permission required for tool ${toolUseId}`, { suggestions })
+    } else {
+      console.warn('No tool use ID found for permission request signature:', signature, {
+        toolName,
+        inputParams,
+        availableSignatures: Array.from(toolSignatureToId.value.keys())
+      })
     }
   }
 
