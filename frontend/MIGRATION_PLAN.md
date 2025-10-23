@@ -279,7 +279,7 @@ VITE_BACKEND_PORT=8001
 
 ### Phase 5: Testing + Polish
 
-**Checklist:**
+**Testing Checklist:**
 - [ ] Test all WebSocket reconnection scenarios
 - [ ] Test all modal workflows
 - [ ] Test drag-and-drop edge cases
@@ -293,6 +293,32 @@ VITE_BACKEND_PORT=8001
 - [ ] Cross-browser testing (Chrome, Firefox, Edge)
 - [ ] Mobile responsiveness
 - [ ] Error handling for all API calls
+
+**Polish Tasks:**
+
+**Status Bar Enhancements:**
+- [ ] Add mode switcher button for sessions to status bar
+- [ ] Add session info button for sessions to status bar
+- [ ] Add manage session button and modal for sessions to status bar
+
+**Timeline/Legion Features:**
+- [ ] Add autoscroll control button to timeline view
+- [ ] Update default names for minions and for initial sessions
+- [ ] Remove "respond using send_comms" message for non-user-sourced Comms
+- [ ] Fix minion-state-indicator's background to reflect currently selected minion state
+- [ ] Standardize Legion Header Bars
+- [ ] Fix add minion button on Legion header - instantiate AddMinion modal
+
+**Session Management:**
+- [ ] Expose session ID in Session Info Modal
+- [ ] Fix ExitPlanMode by forcing a setMode suggestion to acceptEdits
+- [ ] Work with confirmation in the DangerZone inside edit project/session modals
+
+**UI/UX Improvements:**
+- [ ] Re-theme the entire app
+- [ ] Re-layout the message card area
+- [ ] Review all icons and ensure consistency among views, messages, and dropdowns
+- [ ] Review mobile vs Desktop view for all re-themed items and modals
 
 ### Phase 6: Cutover
 
