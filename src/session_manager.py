@@ -666,6 +666,7 @@ class SessionManager:
 
             # Check if all updates succeeded
             success_count = sum(1 for result in results if result is True)
+
             if success_count == len(valid_session_ids):
                 session_logger.info(f"Successfully reordered {success_count} sessions")
                 return True

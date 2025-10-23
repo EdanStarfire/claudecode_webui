@@ -495,6 +495,14 @@ class ClaudeWebUI:
                 # Also update session order in session manager
                 await self.coordinator.session_manager.reorder_sessions(request.session_ids)
 
+                # Broadcast project update to all UI clients
+                project = await self.coordinator.project_manager.get_project(project_id)
+                if project:
+                    await self.ui_websocket_manager.broadcast_to_all({
+                        "type": "project_updated",
+                        "data": {"project": project.to_dict()}
+                    })
+
                 return {"success": True}
             except HTTPException:
                 raise

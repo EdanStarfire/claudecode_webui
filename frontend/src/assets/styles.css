@@ -1,0 +1,1052 @@
+/* Claude Code WebUI - Minimal Essential Styles (Bootstrap-First Approach) */
+/* This file contains ONLY essential CSS that Bootstrap doesn't provide */
+
+/* ========== GLOBAL OVERRIDES ========== */
+
+/* Reduce default font size */
+:root {
+    --bs-body-font-size: 0.875rem; /* 14px if base is 16px */
+}
+
+html {
+    font-size: 14px; /* Set base font size to 14px instead of 16px */
+}
+
+/* ========== CRITICAL LAYOUT FIXES ========== */
+
+/* Hamburger button styling */
+#sidebar-toggle-btn {
+    min-width: 40px;
+    padding: 0.25rem 0.5rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+#sidebar-toggle-icon {
+    font-size: 1.2rem;
+    line-height: 1;
+    display: flex;
+    align-items: center;
+}
+
+/* Sidebar: Make it resizable with handle */
+#sidebar {
+    position: relative;
+    resize: horizontal;
+    transition: transform 0.3s ease, margin-left 0.3s ease;
+}
+
+/* Desktop collapsed state - use negative margin to collapse width */
+#sidebar.desktop-collapsed {
+    margin-left: calc(-1 * var(--sidebar-width, 300px));
+    pointer-events: none;
+}
+
+.sidebar-resize-handle:hover {
+    background: #0d6efd;
+}
+
+/* Messages Area: Critical overflow fix to enable scrolling */
+#messages-area {
+    /* This is the key fix - messages area must have constrained height */
+    max-height: 100%;
+    min-height: 0; /* Required for flexbox children to respect parent constraints */
+}
+
+/* Project cards: Prevent overflow and ensure proper text truncation */
+.card-header {
+    min-width: 0; /* Required for flex children to truncate properly */
+}
+
+.card-header .flex-grow-1 {
+    min-width: 0; /* Allow text truncation */
+    overflow: hidden;
+}
+
+.card-header .fw-semibold,
+.card-header small {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    display: block;
+}
+
+/* Session items: Prevent overflow */
+.list-group-item {
+    min-width: 0;
+}
+
+.list-group-item .flex-grow-1 {
+    min-width: 0; /* Allow the name container to shrink */
+    overflow: hidden;
+}
+
+.session-name-display {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    display: block;
+}
+
+/* ========== INPUT CONTROLS ========== */
+
+/* Auto-expanding textarea with max 6 lines */
+#message-input {
+    resize: none;
+    overflow-y: auto;
+    min-height: 38px; /* 1 line */
+    max-height: calc(1.5em * 6 + 0.75rem); /* 6 lines + padding */
+    transition: height 0.1s ease;
+}
+
+/* ========== STATUS INDICATORS ========== */
+
+/* Status dots for session states */
+.status-dot {
+    width: 0.75em;
+    height: 0.75em;
+    border-radius: 50%;
+    display: inline-block;
+    border: 1px solid;
+    transition: all 0.2s ease;
+    position: relative;
+    vertical-align: middle;
+    flex-shrink: 0;
+}
+
+.status-dot-green {
+    background-color: #90ee90;
+    border-color: #28a745;
+}
+
+.status-dot-red {
+    background-color: #ffb3b3;
+    border-color: #dc3545;
+}
+
+.status-dot-blue {
+    background-color: #add8e6;
+    border-color: #007bff;
+}
+
+.status-dot-grey {
+    background-color: #d3d3d3;
+    border-color: #6c757d;
+}
+
+.status-dot-purple {
+    background-color: #dda0dd;
+    border-color: #6f42c1;
+}
+
+.status-dot-blink {
+    animation: statusBlink 1.5s ease-in-out infinite;
+}
+
+@keyframes statusBlink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+}
+
+/* ========== MESSAGE STYLING ========== */
+
+/* Two-column message layout */
+.message-row {
+    margin-left: 0;
+    margin-right: 0;
+    flex-wrap: nowrap !important; /* Prevent content from wrapping below speaker label */
+}
+
+.message-row.user {
+    background-color: #f3e7ff;  /* Light purple */
+}
+
+.message-row.assistant,
+.message-row.tool-call {
+    background-color: #d0e7ff;
+}
+
+.message-row.system {
+    background-color: #f0f0f0;
+}
+
+.message-speaker {
+    min-width: 80px;
+    max-width: 100px;
+    font-weight: 600;
+    color: #6c757d;
+    cursor: help;
+    user-select: none;
+}
+
+.message-content-column {
+    word-wrap: break-word;
+    overflow-wrap: break-word;
+    min-width: 0; /* Allow flex item to shrink below content size */
+    overflow-x: auto; /* Enable horizontal scroll for wide content */
+}
+
+.message-content {
+    white-space: pre-wrap;
+}
+
+/* Tool content containers */
+.tool-parameters,
+.tool-edit-params,
+.tool-write-params,
+.tool-read-params {
+    max-width: 100%;
+    overflow: hidden;
+}
+
+.edit-diff-container,
+.write-diff-container,
+.read-diff-container {
+    margin-top: 0.75rem;
+    max-width: 100%;
+    overflow-x: auto;
+    position: relative;
+}
+
+/* Fix diff2html rendering issues */
+.d2h-wrapper {
+    overflow: hidden; /* Prevent line numbers from escaping during collapse */
+}
+
+.d2h-diff-table {
+    table-layout: auto;
+    width: 100%;
+}
+
+.d2h-code-linenumber {
+    display: table-cell !important; /* Ensure proper table cell behavior for height:100% */
+    position: relative !important; /* Override any absolute positioning */
+    vertical-align: top;
+    user-select: none;
+    padding: 0 0.5em !important;
+    height: 100%; /* Fill parent tr height */
+}
+
+/* Fix excessive padding in code line content */
+.d2h-code-line {
+    padding: 0 !important; /* Override CDN's 104pt padding */
+}
+
+/* Remove vertical padding from diff cells to eliminate gaps */
+.d2h-ins,
+.d2h-del,
+.d2h-change,
+.d2h-info {
+    padding-top: 0 !important;
+    padding-bottom: 0 !important;
+}
+
+/* Fix nested line number divs */
+.d2h-code-linenumber .line-num1,
+.d2h-code-linenumber .line-num2 {
+    display: inline;
+    padding: 0;
+    margin: 0;
+}
+
+.d2h-code-linenumber .line-num1:empty,
+.d2h-code-linenumber .line-num2:empty {
+    display: none;
+}
+
+/* Ensure accordion bodies hide overflow during collapse animation */
+.accordion-collapse .accordion-body {
+    overflow: hidden;
+}
+
+/* ========== PROJECT/SESSION UI ========== */
+
+/* Project edit button hover effect */
+.project-edit-btn {
+    transition: opacity 0.2s ease;
+}
+
+/* Session edit button hover effect */
+.session-edit-btn {
+    transition: opacity 0.2s ease;
+}
+
+/* Project status line (progress bar) */
+.project-status-line {
+    transition: all 0.3s ease;
+}
+
+/* ========== DRAG AND DROP ========== */
+
+.list-group-item.dragging {
+    opacity: 0.6;
+    transform: rotate(2deg);
+    border: 2px dashed #007bff;
+}
+
+.drop-indicator {
+    height: 3px;
+    background: #007bff;
+    border-radius: 2px;
+    margin: 2px 0;
+    opacity: 0.8;
+    animation: pulse 1s infinite;
+    pointer-events: none; /* Prevent indicator from intercepting drag events */
+}
+
+@keyframes pulse {
+    0% { opacity: 0.6; }
+    50% { opacity: 1; }
+    100% { opacity: 0.6; }
+}
+
+/* ========== TOOL CALL HANDLERS (Bootstrap Accordion) ========== */
+
+/* Tool call accordion customization */
+.message-content .accordion-button,
+.message-content-column .accordion-button {
+    background-color: #d0e7ff;  /* Match assistant/agent background */
+    padding: 0.375rem 0.75rem;  /* Reduced from 0.5rem to 0.375rem */
+    font-size: 0.9rem !important; /* Override Bootstrap's 1rem */
+    box-shadow: none;            /* Remove focus shadow */
+}
+
+.message-content .accordion-button:not(.collapsed),
+.message-content-column .accordion-button:not(.collapsed) {
+    background-color: #d0e7ff;  /* Match assistant/agent background */
+    color: inherit;
+    box-shadow: none;            /* Remove "selected" highlight */
+}
+
+.message-content .accordion-body,
+.message-content-column .accordion-body {
+    padding: 0.5rem 0.75rem;  /* Reduced top/bottom padding */
+    background: #d0e7ff;       /* Match agent/assistant background */
+}
+
+/* Remove focus highlight to prevent "selected" state appearance */
+.accordion-button:focus {
+    box-shadow: none;
+    border-color: transparent;
+}
+
+.accordion .tool-status-icon {
+    margin-right: 0.5rem;
+}
+
+.accordion .tool-name {
+    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+    font-size: 0.9rem;
+    font-weight: 600;
+}
+
+.accordion .tool-summary {
+    font-size: 0.85rem;
+    color: #6c757d;
+    font-weight: normal;
+}
+
+/* Tool result content - monospace for code output */
+.tool-result-content,
+.bash-command-content,
+.bash-result-content,
+.read-content-preview,
+.write-content-preview {
+    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+    font-size: 0.85rem;
+    white-space: pre-wrap;
+    background: #e7f3ff;  /* Light blue (former user message color) */
+    padding: 0.5rem;
+    border-radius: 0.25rem;
+    border: 1px solid rgba(0, 0, 0, 0.05); /* Subtle border for definition */
+    overflow-x: auto;
+}
+
+/* Thinking blocks */
+.message-row.thinking-block {
+    background-color: #d0e7ff; /* Same as assistant/tool-call */
+}
+
+.thinking-accordion-button .thinking-summary-text {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    display: block;
+}
+
+.thinking-content {
+    font-style: italic; /* Italicize thinking content */
+}
+
+.thinking-text {
+    white-space: pre-wrap;
+    font-family: system-ui, -apple-system, sans-serif;
+    font-size: 0.9rem;
+}
+
+/* Compaction accordion styling */
+.message-row.compaction {
+    background-color: #f0f0f0;  /* Match system message background */
+}
+
+.compaction-accordion .accordion-item {
+    border: none;
+    background-color: transparent;
+}
+
+.compaction-accordion .accordion-button {
+    background-color: #f0f0f0;  /* Match system message background */
+    font-weight: 500;
+    color: inherit;
+    padding: 0.375rem 0.75rem;  /* Match tool accordion padding */
+    font-size: 0.9rem !important; /* Match tool accordion font size */
+    box-shadow: none;
+}
+
+.compaction-accordion .accordion-button:not(.collapsed) {
+    background-color: #f0f0f0;  /* Match system message background */
+    color: inherit;
+    box-shadow: none;
+}
+
+.compaction-accordion .accordion-button:focus {
+    box-shadow: none;
+    border-color: transparent;
+}
+
+.compaction-accordion .accordion-body {
+    padding: 0.5rem 0.75rem;  /* Match tool accordion body padding */
+    background-color: #f0f0f0;  /* Match system message background */
+}
+
+.compaction-content {
+    max-height: 400px;
+    overflow-y: auto;
+}
+
+/* Todo items */
+.todo-item {
+    display: flex;
+    align-items: start;
+    gap: 0.5rem;
+    padding: 0.25rem 0;
+}
+
+.todo-checkbox {
+    width: 1.25rem;
+    height: 1.25rem;
+    flex-shrink: 0;
+    margin-top: 0.125rem;
+}
+
+.todo-completed .todo-content {
+    text-decoration: line-through;
+    opacity: 0.6;
+}
+
+/* File paths in tool outputs */
+.file-path {
+    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+    font-size: 0.9rem;
+    color: #0d6efd;
+}
+
+/* ========== UTILITY CLASSES (Bootstrap doesn't provide these) ========== */
+
+/* Connection status badge updates */
+#connection-indicator.connected {
+    /* Bootstrap handles badge colors, but we update text via JS */
+}
+
+/* Permission mode clickable area */
+#permission-mode-clickable {
+    cursor: pointer;
+    user-select: none;
+    flex-shrink: 0; /* Prevent from growing */
+}
+
+#permission-mode-clickable:hover {
+    opacity: 0.8;
+}
+
+/* Status bar layout fix */
+#status-bar.d-flex {
+    display: flex !important; /* Ensure flex layout when not hidden */
+}
+
+/* ========== MOBILE RESPONSIVE LAYOUT ========== */
+
+/* Mobile overlay backdrop */
+#sidebar-backdrop {
+    display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.5);
+    z-index: 1040;
+    opacity: 0;
+    transition: opacity 0.3s ease;
+    pointer-events: none;
+}
+
+#sidebar-backdrop.show {
+    display: block;
+    opacity: 1;
+    pointer-events: auto;
+}
+
+/* Mobile styles (<768px) */
+@media (max-width: 767px) {
+    /* Header uses sticky positioning to work with browser address bar */
+    header {
+        position: sticky;
+        top: 0;
+        z-index: 1050;
+    }
+
+    /* Backdrop positioned below header */
+    #sidebar-backdrop {
+        top: 0;
+        padding-top: 0;
+    }
+
+    /* Sidebar becomes overlay on mobile - positioned below header */
+    #sidebar {
+        position: fixed !important;
+        top: 0;
+        left: 0;
+        bottom: 0;
+        height: 100vh;
+        padding-top: calc(2rem + 2px); /* Header height: py-2 padding + border */
+        width: 85vw !important; /* Use 85% of viewport width */
+        max-width: 350px !important;
+        min-width: unset !important;
+        z-index: 1045;
+        transform: translateX(-100%);
+        transition: transform 0.3s ease;
+        box-shadow: 2px 0 8px rgba(0, 0, 0, 0.15);
+    }
+
+    #sidebar.mobile-open {
+        transform: translateX(0);
+    }
+
+    /* Hide resize handle on mobile */
+    .sidebar-resize-handle {
+        display: none !important;
+    }
+
+    /* Ensure main content takes full width on mobile */
+    main {
+        width: 100% !important;
+    }
+
+    /* Adjust header for mobile */
+    header h1 {
+        font-size: 1rem !important;
+    }
+
+    #sidebar-toggle-btn {
+        padding: 0.2rem 0.4rem;
+    }
+
+    /* Shrink speaker column to 80% of desktop size */
+    .message-speaker {
+        min-width: 64px;   /* 80% of 80px */
+        max-width: 80px;   /* 80% of 100px */
+        font-size: 0.85rem; /* Slightly smaller font for better fit */
+    }
+
+    /* Status bar buttons compress text on mobile (except auto-scroll which shows short status) */
+    #session-info-btn .btn-text,
+    #manage-session-btn .btn-text {
+        display: none;
+    }
+
+    #status-bar .btn {
+        min-width: 40px; /* Ensure adequate tap target */
+    }
+}
+
+/* Permission Suggestion Styles */
+.permission-suggestion {
+    display: flex;
+    align-items: start;
+    gap: 0.75rem;
+    background: #fffbf0;
+    border: 1px solid #ffd666;
+    border-radius: 6px;
+    padding: 0.75rem;
+    margin: 0.75rem 0;
+}
+
+.suggestion-icon {
+    font-size: 1.5rem;
+    line-height: 1;
+    flex-shrink: 0;
+}
+
+.suggestion-content {
+    flex: 1;
+}
+
+.suggestion-content strong {
+    display: block;
+    margin-bottom: 0.25rem;
+    color: #996600;
+}
+
+.suggestion-content small {
+    color: #666;
+    font-size: 0.875rem;
+}
+
+/* Permission prompt styling */
+.tool-permission-prompt {
+    background: #f8f9fa;
+    border: 1px solid #dee2e6;
+    border-radius: 6px;
+    padding: 1rem;
+    margin-top: 0.75rem;
+}
+
+.tool-permission-prompt p:last-of-type {
+    margin-bottom: 0.5rem;
+}
+
+.permission-buttons {
+    display: flex;
+    gap: 0.5rem;
+    margin-top: 0.75rem;
+    flex-wrap: wrap;
+}
+
+.permission-buttons button.submitted {
+    opacity: 0.7;
+}
+
+/* Permission Clarification Section */
+.permission-clarification-section {
+    margin-top: 0.75rem;
+    border-top: 1px solid #dee2e6;
+    padding-top: 0.75rem;
+}
+
+.permission-clarification-input {
+    width: 100%;
+    min-height: 2.5rem;
+    max-height: 9rem;
+    resize: none;
+    overflow-y: auto;
+    font-family: inherit;
+    font-size: 0.9rem;
+    padding: 0.5rem;
+    border: 1px solid #ced4da;
+    border-radius: 4px;
+    margin-bottom: 0.5rem;
+    transition: border-color 0.15s ease-in-out, box-shadow 0.15s ease-in-out;
+}
+
+.permission-clarification-input:focus {
+    border-color: #ffc107;
+    outline: none;
+    box-shadow: 0 0 0 0.2rem rgba(255, 193, 7, 0.25);
+}
+
+.permission-clarification-input::placeholder {
+    color: #6c757d;
+    opacity: 0.7;
+}
+
+.permission-deny-with-clarification:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+}
+
+/* Applied Permission Updates Display */
+.permission-updates-applied {
+    background: #e6f4ea;
+    border: 1px solid #81c995;
+    border-radius: 6px;
+    padding: 0.75rem;
+    margin-bottom: 0.75rem;
+}
+
+.permission-update-badge {
+    font-weight: 600;
+    color: #1e7e34;
+    margin-bottom: 0.5rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.permission-update-details {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+
+.permission-update-item {
+    font-size: 0.875rem;
+    color: #2d5f3a;
+    padding-left: 1.5rem;
+}
+
+/* ========== MODE CHANGE FLASH ANIMATION ========== */
+
+@keyframes mode-change-flash {
+    0%, 100% {
+        background-color: transparent;
+        transform: scale(1);
+    }
+    50% {
+        background-color: rgba(13, 110, 253, 0.2); /* Bootstrap primary with transparency */
+        transform: scale(1.05);
+    }
+}
+
+.mode-change-flash {
+    animation: mode-change-flash 0.6s ease-in-out 3;
+}
+
+/* ========== MARKDOWN CONTENT STYLES ========== */
+
+.markdown-content {
+    line-height: 1.4 !important;
+    display: inline-grid;
+}
+
+/* Headers */
+.markdown-content h1,
+.markdown-content h2,
+.markdown-content h3,
+.markdown-content h4,
+.markdown-content h5,
+.markdown-content h6 {
+    margin-top: 0;
+    margin-bottom: 0;
+    font-weight: 600;
+}
+
+.markdown-content h1 { font-size: 1.15rem; border-bottom: 1px solid #e1e4e8; padding-bottom: 0.5rem; }
+.markdown-content h2 { font-size: 1.1rem; border-bottom: 1px solid #e1e4e8; padding-bottom: 0.5rem; }
+.markdown-content h3 { font-size: 1.05rem; padding-bottom: 0.5rem; }
+.markdown-content h4 { font-size: 1rem; padding-bottom: 0.5rem; }
+.markdown-content h5 { font-size: 0.95rem; padding-bottom: 0.5rem; }
+.markdown-content h6 { font-size: 0.9rem; color: #6a737d; padding-bottom: 0.5rem; }
+
+.markdown-content h1:first-child,
+.markdown-content h2:first-child,
+.markdown-content h3:first-child {
+    margin-top: 0;
+}
+
+/* Paragraphs */
+.markdown-content p {
+    margin-top: 0;
+    margin-bottom: 0;
+}
+
+.markdown-content p:last-child {
+    margin-bottom: 0;
+}
+
+/* Lists */
+.markdown-content ul,
+.markdown-content ol {
+    margin-top: 0;
+    margin-bottom: 0;
+    padding-left: 1.5rem;
+    display: grid;
+    font-size: 0; /* Collapse whitespace text nodes between tags */
+}
+
+.markdown-content li {
+    margin-top: 0;
+    margin-bottom: 0;
+    font-size: 0.875rem; /* Restore font size for list content */
+}
+
+.markdown-content li > p {
+    line-height: 1;
+    margin: 0;
+}
+
+.markdown-content ul ul,
+.markdown-content ol ol,
+.markdown-content ul ol,
+.markdown-content ol ul {
+    margin-top: 0;
+    margin-bottom: 0;
+}
+
+/* Code blocks */
+.markdown-content pre {
+    background: #f6f8fa;
+    border: 1px solid #e1e4e8;
+    border-radius: 4px;
+    padding: 0.5rem;
+    overflow-x: auto;
+    margin-top: 0;
+    margin-bottom: 0;
+    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+    font-size: 0.875rem;
+}
+
+.markdown-content pre code {
+    background: transparent;
+    border: none;
+    padding: 0;
+    font-size: inherit;
+}
+
+/* Inline code */
+.markdown-content code {
+    background: #f6f8fa;
+    border: 1px solid #e1e4e8;
+    border-radius: 3px;
+    padding: 0.1em 0.3em;
+    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+    font-size: 0.875em;
+}
+
+/* Blockquotes */
+.markdown-content blockquote {
+    border-left: 4px solid #dfe2e5;
+    padding-left: 0.75rem;
+    margin-top: 0;
+    margin-bottom: 0;
+    margin-left: 0;
+    color: #6a737d;
+}
+
+.markdown-content blockquote p {
+    margin-top: 0;
+    margin-bottom: 0;
+}
+
+/* Links */
+.markdown-content a {
+    color: #0366d6;
+    text-decoration: none;
+}
+
+.markdown-content a:hover {
+    text-decoration: underline;
+}
+
+/* Tables */
+.markdown-content table {
+    border-collapse: collapse;
+    width: 100%;
+    margin-top: 0;
+    margin-bottom: 0;
+    font-size: 0.875rem;
+}
+
+.markdown-content th,
+.markdown-content td {
+    border: 1px solid #dfe2e5;
+    padding: 0.35rem 0.5rem;
+    text-align: left;
+}
+
+.markdown-content th {
+    background: #f6f8fa;
+    font-weight: 600;
+}
+
+.markdown-content tr:nth-child(even) {
+    background: #f6f8fa;
+}
+
+/* Horizontal rules */
+.markdown-content hr {
+    border: none;
+    border-top: 1px solid #e1e4e8;
+    margin: 0;
+}
+
+/* Strong and emphasis */
+.markdown-content strong {
+    font-weight: 600;
+}
+
+.markdown-content em {
+    font-style: italic;
+}
+
+/* Strikethrough and insert */
+.markdown-content del {
+    text-decoration: line-through;
+    opacity: 0.7;
+}
+
+.markdown-content ins {
+    text-decoration: underline;
+    background: #ffffcc;
+}
+
+/* Details/Summary (collapsible sections) */
+.markdown-content details {
+    margin-top: 0;
+    margin-bottom: 0;
+    border: 1px solid #e1e4e8;
+    border-radius: 4px;
+    padding: 0.35rem;
+}
+
+.markdown-content summary {
+    cursor: pointer;
+    font-weight: 600;
+    padding: 0.35rem;
+    user-select: none;
+}
+
+.markdown-content summary:hover {
+    background: #f6f8fa;
+    border-radius: 4px;
+}
+
+/* Adjust spacing for nested elements */
+.markdown-content > *:last-child {
+    margin-bottom: 0;
+}
+
+/* ========== MCP TOOL STYLES ========== */
+
+.tool-mcp-params {
+    background: #f0f9ff;
+    border-left: 3px solid #0ea5e9;
+    padding: 0.75rem;
+    border-radius: 0.25rem;
+    margin: 0.5rem 0;
+}
+
+.mcp-header {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.5rem;
+    margin-bottom: 0.75rem;
+}
+
+.mcp-icon {
+    font-size: 1.2rem;
+    flex-shrink: 0;
+}
+
+.mcp-header-content {
+    flex: 1;
+}
+
+.mcp-server-row,
+.mcp-tool-row {
+    margin-bottom: 0.25rem;
+}
+
+.mcp-label {
+    color: #64748b;
+    font-size: 0.875rem;
+    font-weight: 500;
+}
+
+.mcp-server-name {
+    background: #e0f2fe;
+    color: #0369a1;
+    padding: 0.125rem 0.375rem;
+    border-radius: 0.25rem;
+    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+    font-size: 0.875rem;
+    font-weight: 600;
+}
+
+.mcp-tool-name {
+    background: #f0f9ff;
+    color: #0284c7;
+    padding: 0.125rem 0.375rem;
+    border-radius: 0.25rem;
+    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+    font-size: 0.875rem;
+    font-weight: 500;
+}
+
+.mcp-params-section {
+    margin-top: 0.5rem;
+}
+
+.mcp-params-label {
+    margin-bottom: 0.25rem;
+    color: #475569;
+    font-size: 0.875rem;
+}
+
+.mcp-params-json {
+    background: #f8fafc;
+    border: 1px solid #cbd5e1;
+    border-radius: 0.25rem;
+    padding: 0.5rem;
+    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+    font-size: 0.8rem;
+    line-height: 1.5;
+    overflow-x: auto;
+    margin: 0;
+    color: #334155;
+}
+
+.mcp-no-params {
+    color: #94a3b8;
+    font-style: italic;
+    font-size: 0.875rem;
+    margin-top: 0.5rem;
+}
+
+.mcp-success-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 0.5rem;
+    color: #059669;
+}
+
+.tool-result-content.json-content {
+    background: #f8fafc;
+    color: #334155;
+}
+
+/* ========== TIMELINE ACCORDION STYLES ========== */
+
+/* Timeline accordion buttons - minimal styling */
+.timeline-summary {
+    font-size: 0.875rem;
+    color: #333;
+}
+
+.accordion-button {
+    background-color: transparent !important;
+    box-shadow: none !important;
+}
+
+.accordion-button:not(.collapsed) {
+    background-color: #f8f9fa !important;
+}
+
+.accordion-button:focus {
+    box-shadow: none !important;
+    border-color: transparent !important;
+}
+
+/* Timeline message content in accordion */
+.timeline-message-content {
+    font-size: 0.875rem;
+    line-height: 1.5;
+}
+
+/* Ensure accordion items don't add extra borders in table */
+.table .accordion-item {
+    background-color: transparent;
+    border: none;
+}

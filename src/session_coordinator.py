@@ -527,6 +527,7 @@ class SessionCoordinator:
             await self.session_manager.update_processing_state(session_id, True)
 
             # Send message through SDK (will be queued and processed)
+            # The SDK should echo the user message back through the stream
             result = await sdk.send_message(message)
 
             # If message sending failed, reset processing state
