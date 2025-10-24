@@ -2,7 +2,7 @@ DO NOT SAY THAT THE USER IS CORRECT OR COMPLEMENT THEIR REQUEST. FORMAL, CONCISE
 
 # Development Requirements - REQUIRED
 1. Server-side code is all in python using `uv`, using commands like `uv run ...` or `uv add ...` or `uv run pytest ...` and others for executing, testing, linting, and managing dependencies.
-2. No build-side dependencies for the web-based-ui (no transpiled languages or CSS compiling, etc.)
+2. **Frontend Migration to Vue 3** (UPDATED): The frontend is being migrated from vanilla JavaScript to Vue 3 + Pinia + Vite. New frontend code is in `frontend/` directory. Old code in `static/` will be deleted after migration is complete.
 
 # High-Level Goal
 We are building a tool that integrates with the Claude Agent SDK (formerly Claude Code SDK) to provide streaming conversations through a web-based interface. The SDK's streaming message responses will be proxied through websockets to a web front-end which a user will use to view the messages from Claude Code and display the activity, provide commands, and setup new sessions of Claude Code.
@@ -120,7 +120,82 @@ options = ClaudeAgentOptions(
 3. Handle JSON serialization of SDK objects properly
 4. Always use try/except blocks around SDK calls
 
-# Frontend Architecture - JavaScript Code Organization
+# Frontend Architecture - Vue 3 Migration (IN PROGRESS)
+
+## Migration Status
+
+The frontend is being migrated from vanilla JavaScript to Vue 3 + Pinia + Vite architecture.
+
+- ✅ **Phase 1 Complete** (Setup + Infrastructure): All Pinia stores, Vue Router, and base components created
+- ⏳ **Phase 2 In Progress** (Core UI): Project/Session components with modals
+- ⏳ **Phase 3 Pending** (Messages + Tools): Message display and tool handlers
+- ⏳ **Phase 4 Pending** (Legion Features): Timeline/Spy/Horde views
+- ⏳ **Phase 5 Pending** (Testing + Polish)
+- ⏳ **Phase 6 Pending** (Cutover to production)
+
+**Documentation**: See `frontend/MIGRATION_PLAN.md` for complete migration plan and `frontend/README.md` for development guide.
+
+## New Frontend Structure (Vue 3)
+
+```
+frontend/
+├── src/
+│   ├── stores/              # Pinia stores (state management)
+│   │   ├── session.js       # Session state + CRUD
+│   │   ├── project.js       # Project state + CRUD
+│   │   ├── message.js       # Messages + tool calls
+│   │   ├── websocket.js     # WebSocket connections
+│   │   └── ui.js            # UI state (sidebar, modals)
+│   ├── components/          # Vue components
+│   │   ├── layout/          # AppHeader, Sidebar, etc.
+│   │   ├── project/         # Project management
+│   │   ├── session/         # Session management
+│   │   ├── messages/        # Message display
+│   │   ├── tools/           # Tool call system
+│   │   └── legion/          # Legion multi-agent features
+│   ├── router/              # Vue Router configuration
+│   ├── composables/         # Reusable composition functions
+│   ├── utils/               # Utilities (API client, etc.)
+│   └── assets/              # Styles, images
+├── vite.config.js           # Vite configuration
+└── package.json             # Dependencies
+```
+
+## Development Workflow (Vue 3)
+
+### Running Frontend Dev Server
+
+```bash
+# Terminal 1: Start backend (port 8001 for testing)
+uv run python main.py --debug-all --port 8001
+
+# Terminal 2: Start frontend dev server
+cd frontend
+npm run dev
+
+# Access at http://localhost:5173
+# Changes reload instantly with Hot Module Replacement (HMR)
+```
+
+### Key Benefits Over Vanilla JS
+
+1. **State Management**: Pinia stores replace 135 instance variables and dual Map+Array storage
+2. **Automatic UI Updates**: No more manual `renderSessions()` calls - Vue reactivity handles it
+3. **Event Listener Cleanup**: Automatic cleanup prevents memory leaks
+4. **Component Architecture**: 6767-line monolith split into ~20 focused components
+5. **Developer Experience**: Instant HMR, Vue DevTools, clear separation of concerns
+
+### Naming Conventions (Vue 3)
+
+- **camelCase**: All variables, functions, computed properties
+- **PascalCase**: Component names
+- **kebab-case**: Component file names
+
+## Old Frontend Architecture (Vanilla JS - DEPRECATED)
+
+**NOTE**: This section documents the OLD vanilla JavaScript architecture in `static/`. This code will be deleted after the Vue 3 migration is complete. For NEW development, use the Vue 3 architecture above.
+
+# Frontend Architecture - JavaScript Code Organization (DEPRECATED)
 
 ## Directory Structure
 ```

@@ -25,6 +25,7 @@ from claude_agent_sdk.types import PermissionRuleValue
 from .logging_config import get_logger
 from .message_parser import MessageParser, MessageProcessor
 from .session_coordinator import SessionCoordinator
+from .session_manager import SessionState
 
 # Get specialized logger for WebSocket lifecycle debugging
 ws_logger = get_logger('websocket_debug', category='WS_LIFECYCLE')
@@ -265,10 +266,14 @@ class ClaudeWebUI:
             self._broadcast_comm_to_legion_websocket
         )
 
-        # Setup static files
-        static_dir = Path(__file__).parent.parent / "static"
-        static_dir.mkdir(exist_ok=True)
-        self.app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+        # Setup static files (Vue 3 production build)
+        static_dir = Path(__file__).parent.parent / "frontend" / "dist"
+        if not static_dir.exists():
+            raise RuntimeError(
+                f"Frontend build not found at {static_dir}. "
+                "Run 'cd frontend && npm run build' to create production build."
+            )
+        self.app.mount("/assets", StaticFiles(directory=str(static_dir / "assets")), name="assets")
 
     async def _broadcast_comm_to_legion_websocket(self, legion_id: str, comm):
         """Broadcast new comm to WebSocket clients watching this legion"""
@@ -331,7 +336,7 @@ class ClaudeWebUI:
         @self.app.get("/", response_class=HTMLResponse)
         async def read_root():
             """Serve the main HTML page"""
-            html_file = Path(__file__).parent.parent / "static" / "index.html"
+            html_file = Path(__file__).parent.parent / "frontend" / "dist" / "index.html"
             if html_file.exists():
                 return HTMLResponse(content=html_file.read_text(encoding='utf-8'), status_code=200)
             return HTMLResponse(content=self._default_html(), status_code=200)
@@ -494,6 +499,14 @@ class ClaudeWebUI:
 
                 # Also update session order in session manager
                 await self.coordinator.session_manager.reorder_sessions(request.session_ids)
+
+                # Broadcast project update to all UI clients
+                project = await self.coordinator.project_manager.get_project(project_id)
+                if project:
+                    await self.ui_websocket_manager.broadcast_to_all({
+                        "type": "project_updated",
+                        "data": {"project": project.to_dict()}
+                    })
 
                 return {"success": True}
             except HTTPException:
@@ -1145,6 +1158,30 @@ class ClaudeWebUI:
                             ws_logger.debug(f"DEBUG: Full interrupt message data: {message_data}")
 
                             try:
+                                # Check if session is in PAUSED state (waiting for permission)
+                                # If so, deny all pending permissions for this session
+                                session_info = await self.coordinator.session_manager.get_session_info(session_id)
+                                if session_info and session_info.state == SessionState.PAUSED:
+                                    # Find and resolve any pending permission requests for this session
+                                    permissions_to_resolve = []
+                                    for request_id, future in list(self.pending_permissions.items()):
+                                        # We need to check if this request belongs to this session
+                                        # Since we don't store session_id with the future, we'll resolve all pending
+                                        # This is safe because interrupting a session should clear its permissions
+                                        if not future.done():
+                                            permissions_to_resolve.append(request_id)
+
+                                    for request_id in permissions_to_resolve:
+                                        future = self.pending_permissions.get(request_id)
+                                        if future and not future.done():
+                                            future.set_result({
+                                                "behavior": "deny",
+                                                "message": "Permission denied due to session interrupt",
+                                                "interrupt": True
+                                            })
+                                            del self.pending_permissions[request_id]
+                                            logger.info(f"Resolved pending permission {request_id} with deny due to interrupt")
+
                                 # Forward interrupt request to coordinator
                                 result = await self.coordinator.interrupt_session(session_id)
                                 interrupt_end_time = time.time()
@@ -1439,6 +1476,14 @@ class ClaudeWebUI:
             except Exception as e:
                 logger.error(f"Failed to store permission request message: {e}")
 
+            # Set session state to PAUSED while waiting for permission response
+            # This provides visual feedback that the session is blocked on user input
+            try:
+                await self.coordinator.session_manager.pause_session(session_id)
+                logger.info(f"Set session {session_id} to PAUSED state while waiting for permission")
+            except Exception as pause_error:
+                logger.error(f"Failed to pause session {session_id} for permission wait: {pause_error}")
+
             # Wait for user permission decision via WebSocket
             logger.info(f"PERMISSION CALLBACK: Creating Future for request_id {request_id}")
 
@@ -1451,6 +1496,16 @@ class ClaudeWebUI:
                 logger.info(f"PERMISSION CALLBACK: Waiting for user decision on request_id {request_id}")
                 response = await permission_future
                 logger.info(f"PERMISSION CALLBACK: Received user decision for request_id {request_id}: {response}")
+
+                # Restore session to ACTIVE state after permission decision
+                # The session will continue processing, which will show as ACTIVE+processing (purple)
+                try:
+                    session_info = await self.coordinator.session_manager.get_session_info(session_id)
+                    if session_info and session_info.state == SessionState.PAUSED:
+                        await self.coordinator.session_manager.start_session(session_id)
+                        logger.info(f"Restored session {session_id} to ACTIVE state after permission decision")
+                except Exception as restore_error:
+                    logger.error(f"Failed to restore session {session_id} to ACTIVE after permission: {restore_error}")
 
                 decision = response.get("behavior")
                 reasoning = f"User {decision}ed permission"

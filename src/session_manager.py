@@ -161,6 +161,14 @@ class SessionManager:
                                 state_changed = True
                                 session_logger.info(f"Reset session {session_info.session_id} from {original_state.value} to {session_info.state.value} on startup")
 
+                            # Reset PAUSED sessions to TERMINATED (orphaned permission requests)
+                            # PAUSED state means session was waiting for permission response
+                            if session_info.state == SessionState.PAUSED:
+                                session_info.state = SessionState.TERMINATED
+                                session_info.updated_at = datetime.now(timezone.utc)
+                                state_changed = True
+                                session_logger.info(f"Reset session {session_info.session_id} from PAUSED to TERMINATED on startup (orphaned permission request)")
+
                             # Reset processing state since no SDKs are running on startup
                             if session_info.is_processing:
                                 session_info.is_processing = False
@@ -666,6 +674,7 @@ class SessionManager:
 
             # Check if all updates succeeded
             success_count = sum(1 for result in results if result is True)
+
             if success_count == len(valid_session_ids):
                 session_logger.info(f"Successfully reordered {success_count} sessions")
                 return True

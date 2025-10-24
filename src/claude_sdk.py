@@ -4,6 +4,7 @@ import asyncio
 import time
 import logging
 import contextlib
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Callable, Any, Union
 from enum import Enum
@@ -506,13 +507,22 @@ class ClaudeSDK:
                             content = message_data["content"]
                             sdk_logger.debug(f"Processing user message: {content[:100]}...")
 
+                            # Create user message for storage and broadcast
+                            user_message = {
+                                "type": "user",
+                                "content": content,
+                                "session_id": self.session_id,
+                                "timestamp": datetime.now(timezone.utc).isoformat()
+                            }
+
                             # Store user message if storage available
                             if self.storage_manager:
-                                await self.storage_manager.append_message({
-                                    "type": "user",
-                                    "content": content,
-                                    "session_id": self.session_id
-                                })
+                                await self.storage_manager.append_message(user_message)
+
+                            # Broadcast user message via callback for real-time display
+                            if self.message_callback:
+                                await self._safe_callback(self.message_callback, user_message)
+                                sdk_logger.debug(f"Broadcasted user message via callback")
 
                             self.info.message_count += 1
                             self.info.last_activity = time.time()
