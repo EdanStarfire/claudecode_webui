@@ -266,10 +266,14 @@ class ClaudeWebUI:
             self._broadcast_comm_to_legion_websocket
         )
 
-        # Setup static files
-        static_dir = Path(__file__).parent.parent / "static"
-        static_dir.mkdir(exist_ok=True)
-        self.app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+        # Setup static files (Vue 3 production build)
+        static_dir = Path(__file__).parent.parent / "frontend" / "dist"
+        if not static_dir.exists():
+            raise RuntimeError(
+                f"Frontend build not found at {static_dir}. "
+                "Run 'cd frontend && npm run build' to create production build."
+            )
+        self.app.mount("/assets", StaticFiles(directory=str(static_dir / "assets")), name="assets")
 
     async def _broadcast_comm_to_legion_websocket(self, legion_id: str, comm):
         """Broadcast new comm to WebSocket clients watching this legion"""
@@ -332,7 +336,7 @@ class ClaudeWebUI:
         @self.app.get("/", response_class=HTMLResponse)
         async def read_root():
             """Serve the main HTML page"""
-            html_file = Path(__file__).parent.parent / "static" / "index.html"
+            html_file = Path(__file__).parent.parent / "frontend" / "dist" / "index.html"
             if html_file.exists():
                 return HTMLResponse(content=html_file.read_text(encoding='utf-8'), status_code=200)
             return HTMLResponse(content=self._default_html(), status_code=200)
