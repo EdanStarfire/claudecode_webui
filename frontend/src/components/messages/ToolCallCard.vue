@@ -303,7 +303,21 @@ async function handlePermissionDecision(decision, applySuggestions, guidance = n
   }
 
   try {
-    // Send apply_suggestions flag (backend will get actual suggestions from stored request)
+    // Immediately update the toolCall locally with permission decision (don't wait for backend)
+    // This matches vanilla JS behavior from static/app.js:1930-1945
+    const sessionId = sessionStore.currentSessionId
+    if (sessionId) {
+      const appliedUpdates = applySuggestions && props.toolCall.suggestions ? props.toolCall.suggestions : []
+
+      messageStore.handlePermissionResponse(sessionId, {
+        request_id: props.toolCall.permissionRequestId,
+        decision: decision,
+        reasoning: decision === 'allow' ? 'User allowed permission' : 'User denied permission',
+        applied_updates: appliedUpdates
+      })
+    }
+
+    // Send apply_suggestions flag to backend
     await wsStore.sendPermissionResponse(
       props.toolCall.permissionRequestId,
       decision,

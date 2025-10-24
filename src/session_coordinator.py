@@ -61,6 +61,9 @@ class SessionCoordinator:
         # Track applied permission updates for state management
         self._permission_updates: Dict[str, List[dict]] = {}  # session_id -> list of applied updates
 
+        # Track ExitPlanMode that had setMode suggestions applied (to prevent auto-reset)
+        self._exitplanmode_with_setmode: Dict[str, bool] = {}  # session_id -> bool
+
         # Initialize Legion multi-agent system
         from src.legion_system import LegionSystem
         # Create a dummy storage manager for now (legion will create its own per-legion storage)
@@ -977,14 +980,23 @@ class SessionCoordinator:
 
                             if tool_name == 'ExitPlanMode':
                                 # ExitPlanMode completed successfully - conditionally reset mode
-                                session_info = await self.session_manager.get_session_info(session_id)
-                                if session_info and session_info.current_permission_mode == 'plan':
-                                    # Only reset to default if still in plan mode (suggestion wasn't applied)
-                                    await self.session_manager.update_permission_mode(session_id, 'default')
-                                    coord_logger.info(f"Permission mode reset to default after ExitPlanMode for session {session_id}")
-                                elif session_info:
-                                    # Mode already changed (likely via setMode suggestion) - no reset needed
-                                    coord_logger.info(f"ExitPlanMode completed for session {session_id}, mode already changed to {session_info.current_permission_mode}")
+                                # Check if setMode was applied for this ExitPlanMode
+                                skip_reset = self._exitplanmode_with_setmode.get(session_id, False)
+
+                                if skip_reset:
+                                    coord_logger.info(f"ExitPlanMode completed for session {session_id} with setMode applied - skipping auto-reset")
+                                    # Clean up the flag
+                                    del self._exitplanmode_with_setmode[session_id]
+                                else:
+                                    # No setMode was applied - reset to default if still in plan mode
+                                    session_info = await self.session_manager.get_session_info(session_id)
+                                    if session_info and session_info.current_permission_mode == 'plan':
+                                        # Only reset to default if still in plan mode (suggestion wasn't applied)
+                                        await self.session_manager.update_permission_mode(session_id, 'default')
+                                        coord_logger.info(f"Permission mode reset to default after ExitPlanMode for session {session_id}")
+                                    elif session_info:
+                                        # Mode already changed (likely via setMode suggestion) - no reset needed
+                                        coord_logger.info(f"ExitPlanMode completed for session {session_id}, mode already changed to {session_info.current_permission_mode}")
 
                                 # Clean up tracked tool use
                                 del tool_uses[tool_use_id]
@@ -994,12 +1006,22 @@ class SessionCoordinator:
                 # the permission response is built, since the SDK applies it internally
                 if parsed_message.type.value == 'permission_response' and parsed_message.metadata:
                     applied_updates = parsed_message.metadata.get('applied_updates', [])
+                    tool_name = parsed_message.metadata.get('tool_name')
+
                     if applied_updates:
                         # Track the applied updates for display/history
                         if session_id not in self._permission_updates:
                             self._permission_updates[session_id] = []
                         self._permission_updates[session_id].extend(applied_updates)
                         coord_logger.debug(f"Tracked {len(applied_updates)} applied permission updates for session {session_id}")
+
+                        # Check if ExitPlanMode had a setMode suggestion applied
+                        if tool_name == 'ExitPlanMode':
+                            has_setmode = any(update.get('type') == 'setMode' for update in applied_updates)
+                            if has_setmode:
+                                # Mark this session to skip mode reset for ExitPlanMode
+                                self._exitplanmode_with_setmode[session_id] = True
+                                coord_logger.info(f"ExitPlanMode for session {session_id} had setMode applied - will skip auto-reset")
 
                 # Check if this message indicates processing completion
                 if parsed_message.type.value == 'result':

@@ -1,5 +1,5 @@
 <template>
-  <div class="list-group-item list-group-item-action p-2">
+  <div class="list-group-item list-group-item-action p-2" :class="{ active: isActive }">
     <div
       class="d-flex align-items-center justify-content-between mb-2"
       :style="{ cursor: selectedMinionId ? 'pointer' : 'default' }"
@@ -74,6 +74,11 @@ const selectedMinion = computed(() => {
   return props.sessions.find(s => s.session_id === selectedMinionId.value)
 })
 
+const isActive = computed(() => {
+  const route = router.currentRoute.value
+  return route.name === 'spy' && route.params.legionId === props.project.project_id
+})
+
 const stateClass = computed(() => {
   if (!selectedMinion.value) return ''
   const state = selectedMinion.value.is_processing ? 'processing' : selectedMinion.value.state
@@ -126,6 +131,15 @@ watch(() => sessionStore.currentSessionId, (newSessionId) => {
 </script>
 
 <style scoped>
+.list-group-item.active {
+  background-color: #0d6efd;
+  color: white;
+}
+
+.list-group-item:hover:not(.active) {
+  background-color: #f8f9fa;
+}
+
 .minion-state-indicator {
   background-color: #f0f0f0;
   border: 2px solid #6c757d;

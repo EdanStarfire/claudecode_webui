@@ -7,183 +7,118 @@
     aria-hidden="true"
     ref="modalElement"
   >
-    <div class="modal-dialog">
+    <div class="modal-dialog modal-dialog-centered">
       <div class="modal-content">
         <div class="modal-header">
           <h5 class="modal-title" id="manageSessionModalLabel">
-            Manage Session: {{ session?.name }}
+            {{ confirmationView ? confirmationTitle : 'Manage Session' }}
           </h5>
           <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
         </div>
         <div class="modal-body">
-          <!-- Session Info -->
-          <div class="mb-3">
-            <h6>Session Information</h6>
-
-            <div class="mb-2">
-              <label class="form-label small text-muted mb-0">State</label>
-              <div>
-                <span class="badge" :class="getStateBadgeClass(session?.state)">
-                  {{ session?.state }}
-                </span>
-              </div>
+          <!-- Loading State -->
+          <div v-if="isPerformingAction" class="text-center py-4">
+            <div class="spinner-border text-primary mb-3" role="status">
+              <span class="visually-hidden">Loading...</span>
             </div>
-
-            <div class="mb-2">
-              <label class="form-label small text-muted mb-0">Working Directory</label>
-              <input
-                type="text"
-                class="form-control form-control-sm"
-                :value="session?.working_directory"
-                disabled
-                readonly
-              />
-            </div>
-
-            <div class="mb-2">
-              <label class="form-label small text-muted mb-0">Permission Mode</label>
-              <input
-                type="text"
-                class="form-control form-control-sm"
-                :value="session?.current_permission_mode"
-                disabled
-                readonly
-              />
-            </div>
-
-            <div class="mb-2">
-              <label class="form-label small text-muted mb-0">Model</label>
-              <input
-                type="text"
-                class="form-control form-control-sm"
-                :value="session?.model"
-                disabled
-                readonly
-              />
-            </div>
+            <p class="text-muted">{{ loadingMessage }}</p>
           </div>
 
-          <!-- Actions -->
-          <div class="mb-3">
-            <h6>Session Actions</h6>
-
-            <!-- Start/Resume -->
-            <button
-              v-if="canStart"
-              class="btn btn-success mb-2 w-100"
-              @click="handleStart"
-              :disabled="isPerformingAction"
-            >
-              <i class="bi bi-play-fill"></i>
-              {{ session?.state === 'CREATED' ? 'Start Session' : 'Resume Session' }}
-            </button>
-
-            <!-- Pause -->
-            <button
-              v-if="canPause"
-              class="btn btn-warning mb-2 w-100"
-              @click="handlePause"
-              :disabled="isPerformingAction"
-            >
-              <i class="bi bi-pause-fill"></i> Pause Session
-            </button>
-
-            <!-- Terminate -->
-            <button
-              v-if="canTerminate"
-              class="btn btn-secondary mb-2 w-100"
-              @click="handleTerminate"
-              :disabled="isPerformingAction"
-            >
-              <i class="bi bi-stop-fill"></i> Terminate Session
-            </button>
-
-            <!-- Restart (Terminate + Start) -->
-            <button
-              v-if="canRestart"
-              class="btn btn-info mb-2 w-100"
-              @click="showRestartConfirmation = true"
-              :disabled="isPerformingAction"
-            >
-              <i class="bi bi-arrow-clockwise"></i> Restart Session
-            </button>
+          <!-- Confirmation Views -->
+          <div v-else-if="confirmationView === 'reset'">
+            <div class="alert alert-danger mb-3">
+              <strong>⚠️ Warning: This action cannot be undone</strong>
+            </div>
+            <p class="text-muted">This will permanently delete all messages and conversation history for this session.</p>
+            <p class="text-muted">The session settings and configuration will be preserved, but you will start with a completely fresh conversation.</p>
           </div>
 
-          <!-- Restart Confirmation -->
-          <div v-if="showRestartConfirmation" class="alert alert-info" role="alert">
-            <strong>Restart Session?</strong>
-            <p class="mb-2">
-              This will terminate the current session and start a new one. The conversation history
-              will be preserved, but the SDK instance will be reset.
-            </p>
-            <div class="d-flex gap-2">
+          <div v-else-if="confirmationView === 'delete'">
+            <div class="alert alert-danger mb-3">
+              <strong>⚠️ Warning: This action cannot be undone</strong>
+            </div>
+            <p class="text-muted">This will permanently delete session <strong>{{ session?.name }}</strong>.</p>
+            <p class="text-muted">All messages, conversation history, settings, and configuration will be completely destroyed. This is more destructive than Reset Session.</p>
+          </div>
+
+          <!-- Main Action List -->
+          <div v-else>
+            <!-- Error Message Display -->
+            <div v-if="errorMessage" class="alert alert-danger alert-dismissible fade show" role="alert">
+              <strong>Error:</strong> {{ errorMessage }}
+              <button type="button" class="btn-close" @click="errorMessage = ''"></button>
+            </div>
+
+            <p class="text-muted">Choose how to manage this session:</p>
+
+            <div class="d-grid gap-2">
+              <!-- Non-destructive actions -->
               <button
-                class="btn btn-info btn-sm"
+                class="btn btn-outline-primary text-start"
                 @click="handleRestart"
                 :disabled="isPerformingAction"
               >
-                <span v-if="isPerformingAction" class="spinner-border spinner-border-sm me-2"></span>
-                {{ isPerformingAction ? 'Restarting...' : 'Yes, Restart' }}
+                <strong>🔄 Restart Agent</strong>
+                <div class="small text-muted">Disconnect and resume session (keeps all messages)</div>
               </button>
+
               <button
-                class="btn btn-secondary btn-sm"
-                @click="showRestartConfirmation = false"
+                class="btn btn-outline-secondary text-start"
+                @click="handleEndSession"
                 :disabled="isPerformingAction"
               >
-                Cancel
+                <strong>🚪 End Session</strong>
+                <div class="small text-muted">Close agent and return to session list</div>
+              </button>
+
+              <!-- Visual separator -->
+              <hr class="my-2">
+
+              <!-- Danger Zone -->
+              <div class="danger-zone-header">
+                <h6 class="text-danger mb-2">⚠️ Danger Zone</h6>
+              </div>
+
+              <!-- Destructive actions -->
+              <button
+                class="btn btn-outline-warning text-start"
+                @click="showResetConfirmation"
+                :disabled="isPerformingAction"
+              >
+                <strong>🗑️ Reset Session</strong>
+                <div class="small text-muted">Clear all messages and start fresh (keeps settings)</div>
+              </button>
+
+              <button
+                class="btn btn-outline-danger text-start"
+                @click="showDeleteConfirmation"
+                :disabled="isPerformingAction"
+              >
+                <strong>❌ Delete Session</strong>
+                <div class="small text-muted">Permanently delete this session and all its data</div>
               </button>
             </div>
-          </div>
 
-          <!-- Danger Zone -->
-          <hr />
-          <div class="danger-zone">
-            <h6 class="text-danger">Danger Zone</h6>
-            <p class="text-muted small">
-              Deleting this session will permanently remove all conversation history and data.
-              This action cannot be undone.
-            </p>
-            <button
-              class="btn btn-outline-danger"
-              @click="showDeleteConfirmation = true"
-              :disabled="isPerformingAction"
-            >
-              <i class="bi bi-trash"></i> Delete Session
-            </button>
-          </div>
-
-          <!-- Delete Confirmation -->
-          <div v-if="showDeleteConfirmation" class="alert alert-warning mt-3" role="alert">
-            <strong>Are you sure?</strong>
-            <p class="mb-2">
-              This will permanently delete "{{ session?.name }}" and all its data.
-            </p>
-            <div class="d-flex gap-2">
-              <button
-                class="btn btn-danger btn-sm"
-                @click="handleDelete"
-                :disabled="isPerformingAction"
-              >
-                <span v-if="isPerformingAction" class="spinner-border spinner-border-sm me-2"></span>
-                {{ isPerformingAction ? 'Deleting...' : 'Yes, Delete Permanently' }}
-              </button>
-              <button
-                class="btn btn-secondary btn-sm"
-                @click="showDeleteConfirmation = false"
-                :disabled="isPerformingAction"
-              >
-                Cancel
-              </button>
+            <div class="alert alert-warning mt-3 mb-0">
+              <small><strong>Note:</strong> Restart is the recommended option for unsticking the agent.</small>
             </div>
-          </div>
-
-          <!-- Error Message -->
-          <div v-if="errorMessage" class="alert alert-danger mt-3" role="alert">
-            {{ errorMessage }}
           </div>
         </div>
         <div class="modal-footer">
-          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+          <!-- Confirmation View Buttons -->
+          <template v-if="confirmationView && !isPerformingAction">
+            <button type="button" class="btn btn-secondary" @click="cancelConfirmation">Cancel</button>
+            <button
+              type="button"
+              class="btn"
+              :class="confirmationView === 'delete' ? 'btn-danger' : 'btn-warning'"
+              @click="executeConfirmation"
+            >
+              {{ confirmationView === 'delete' ? 'Delete Session' : 'Confirm Reset' }}
+            </button>
+          </template>
+          <!-- Default Button -->
+          <button v-else-if="!isPerformingAction" type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
         </div>
       </div>
     </div>
@@ -195,138 +130,196 @@ import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useSessionStore } from '@/stores/session'
 import { useUIStore } from '@/stores/ui'
+import { useWebSocketStore } from '@/stores/websocket'
+import { useMessageStore } from '@/stores/message'
+import { api } from '@/utils/api'
 
 const router = useRouter()
 const sessionStore = useSessionStore()
 const uiStore = useUIStore()
+const wsStore = useWebSocketStore()
+const messageStore = useMessageStore()
 
 // State
 const session = ref(null)
 const isPerformingAction = ref(false)
+const loadingMessage = ref('')
 const errorMessage = ref('')
-const showRestartConfirmation = ref(false)
-const showDeleteConfirmation = ref(false)
+const confirmationView = ref(null) // 'reset', 'delete', or null
 const modalElement = ref(null)
 let modalInstance = null
 
-// Computed - Action availability
-const canStart = computed(() => {
-  const state = session.value?.state
-  return state === 'created' || state === 'paused' || state === 'terminated'
+// Computed
+const confirmationTitle = computed(() => {
+  if (confirmationView.value === 'reset') return 'Reset Session'
+  if (confirmationView.value === 'delete') return 'Delete Session'
+  return 'Manage Session'
 })
 
-const canPause = computed(() => {
-  return session.value?.state === 'active'
-})
-
-const canTerminate = computed(() => {
-  const state = session.value?.state
-  return state === 'active' || state === 'paused' || state === 'starting'
-})
-
-const canRestart = computed(() => {
-  const state = session.value?.state
-  return state === 'active' || state === 'paused'
-})
-
-// Get badge class for session state
-function getStateBadgeClass(state) {
-  const classMap = {
-    'created': 'bg-secondary',
-    'starting': 'bg-info',
-    'active': 'bg-success',
-    'paused': 'bg-warning',
-    'terminating': 'bg-warning',
-    'terminated': 'bg-secondary',
-    'error': 'bg-danger'
-  }
-  return classMap[state] || 'bg-secondary'
+// Show reset confirmation
+function showResetConfirmation() {
+  confirmationView.value = 'reset'
 }
 
-// Handle start/resume
-async function handleStart() {
-  if (!session.value) return
+// Show delete confirmation
+function showDeleteConfirmation() {
+  confirmationView.value = 'delete'
+}
 
-  isPerformingAction.value = true
-  errorMessage.value = ''
+// Cancel confirmation and return to main view
+function cancelConfirmation() {
+  confirmationView.value = null
+}
 
-  try {
-    await sessionStore.startSession(session.value.session_id)
-  } catch (error) {
-    console.error('Failed to start session:', error)
-    errorMessage.value = error.message || 'Failed to start session'
-  } finally {
-    isPerformingAction.value = false
+// Execute the pending confirmation action
+async function executeConfirmation() {
+  if (confirmationView.value === 'reset') {
+    await confirmResetSession()
+  } else if (confirmationView.value === 'delete') {
+    await confirmDeleteSession()
   }
 }
 
-// Handle pause
-async function handlePause() {
-  if (!session.value) return
-
-  isPerformingAction.value = true
-  errorMessage.value = ''
-
-  try {
-    await sessionStore.pauseSession(session.value.session_id)
-  } catch (error) {
-    console.error('Failed to pause session:', error)
-    errorMessage.value = error.message || 'Failed to pause session'
-  } finally {
-    isPerformingAction.value = false
-  }
-}
-
-// Handle terminate
-async function handleTerminate() {
-  if (!session.value) return
-
-  isPerformingAction.value = true
-  errorMessage.value = ''
-
-  try {
-    await sessionStore.terminateSession(session.value.session_id)
-  } catch (error) {
-    console.error('Failed to terminate session:', error)
-    errorMessage.value = error.message || 'Failed to terminate session'
-  } finally {
-    isPerformingAction.value = false
-  }
-}
-
-// Handle restart
+// Handle restart (calls /restart endpoint)
 async function handleRestart() {
   if (!session.value) return
 
   isPerformingAction.value = true
-  errorMessage.value = ''
-  showRestartConfirmation.value = false
+  loadingMessage.value = 'Restarting session...'
 
   try {
-    // Terminate then start
-    await sessionStore.terminateSession(session.value.session_id)
-    await new Promise(resolve => setTimeout(resolve, 500)) // Brief delay
-    await sessionStore.startSession(session.value.session_id)
+    const sessionId = session.value.session_id
+    const response = await api.post(`/api/sessions/${sessionId}/restart`)
+
+    if (response.success) {
+      console.log('Session restarted successfully, reconnecting')
+
+      // Disconnect WebSocket to force reconnection
+      wsStore.disconnectSession()
+
+      // Reconnect to session (will fetch fresh data and reconnect WebSocket)
+      await sessionStore.selectSession(sessionId)
+
+      // Close modal
+      if (modalInstance) {
+        modalInstance.hide()
+      }
+    } else {
+      const errorMsg = response.error || response.detail || 'Failed to restart session'
+      console.error('Failed to restart session:', errorMsg)
+      errorMessage.value = `Failed to restart session: ${errorMsg}`
+    }
   } catch (error) {
-    console.error('Failed to restart session:', error)
-    errorMessage.value = error.message || 'Failed to restart session'
+    console.error('Error restarting session:', error)
+    const errorMsg = error.data?.detail || error.message || 'Unknown error'
+    errorMessage.value = `Error restarting session: ${errorMsg}`
   } finally {
     isPerformingAction.value = false
   }
 }
 
-// Handle delete
-async function handleDelete() {
+// Handle end session (terminates and navigates away)
+async function handleEndSession() {
+  if (!session.value) return
+
+  try {
+    // Close modal first
+    if (modalInstance) {
+      modalInstance.hide()
+    }
+
+    console.log('Ending session', session.value.session_id)
+
+    const sessionId = session.value.session_id
+
+    // Call terminate endpoint
+    await api.post(`/api/sessions/${sessionId}/terminate`)
+
+    // Disconnect WebSocket
+    wsStore.disconnectSession()
+
+    // Deselect the session in the store
+    if (sessionStore.currentSessionId === sessionId) {
+      sessionStore.currentSessionId = null
+    }
+
+    // Navigate to home
+    router.push('/')
+  } catch (error) {
+    console.error('Error ending session:', error)
+    // Still navigate away even if terminate fails
+    wsStore.disconnectSession()
+
+    // Deselect the session
+    if (sessionStore.currentSessionId === session.value?.session_id) {
+      sessionStore.currentSessionId = null
+    }
+
+    router.push('/')
+  }
+}
+
+// Confirm reset session
+async function confirmResetSession() {
   if (!session.value) return
 
   isPerformingAction.value = true
-  errorMessage.value = ''
+  loadingMessage.value = 'Resetting session...'
 
   try {
-    await sessionStore.deleteSession(session.value.session_id)
+    const sessionId = session.value.session_id
+    const response = await api.post(`/api/sessions/${sessionId}/reset`)
+
+    if (response.success) {
+      console.log('Session reset successfully, reconnecting')
+
+      // Disconnect WebSocket first
+      wsStore.disconnectSession()
+
+      // Small delay to ensure backend has written the client_launched message to disk
+      await new Promise(resolve => setTimeout(resolve, 200))
+
+      // Now reload messages from backend (this will replace old messages with fresh ones)
+      await messageStore.loadMessages(sessionId)
+
+      // Reconnect WebSocket to receive new messages
+      wsStore.connectSession(sessionId)
+
+      // Close modal
+      if (modalInstance) {
+        modalInstance.hide()
+      }
+    } else {
+      const errorMsg = response.error || response.detail || 'Failed to reset session'
+      console.error('Failed to reset session:', errorMsg)
+      errorMessage.value = `Failed to reset session: ${errorMsg}`
+      confirmationView.value = null
+    }
+  } catch (error) {
+    console.error('Error resetting session:', error)
+    const errorMsg = error.data?.detail || error.message || 'Unknown error'
+    errorMessage.value = `Error resetting session: ${errorMsg}`
+    confirmationView.value = null
+  } finally {
+    isPerformingAction.value = false
+  }
+}
+
+// Confirm delete session
+async function confirmDeleteSession() {
+  if (!session.value) return
+
+  isPerformingAction.value = true
+  loadingMessage.value = 'Deleting session...'
+
+  try {
+    const sessionIdToDelete = session.value.session_id
+
+    // Delete session via store
+    await sessionStore.deleteSession(sessionIdToDelete)
 
     // Navigate away if we're on the deleted session's page
-    if (router.currentRoute.value.params.sessionId === session.value.session_id) {
+    if (router.currentRoute.value.params.sessionId === sessionIdToDelete) {
       router.push('/')
     }
 
@@ -335,8 +328,10 @@ async function handleDelete() {
       modalInstance.hide()
     }
   } catch (error) {
-    console.error('Failed to delete session:', error)
-    errorMessage.value = error.message || 'Failed to delete session'
+    console.error('Error deleting session:', error)
+    const errorMsg = error.data?.detail || error.message || 'Unknown error'
+    errorMessage.value = `Error deleting session: ${errorMsg}`
+    confirmationView.value = null
   } finally {
     isPerformingAction.value = false
   }
@@ -344,9 +339,10 @@ async function handleDelete() {
 
 // Reset state
 function resetState() {
+  confirmationView.value = null
+  isPerformingAction.value = false
+  loadingMessage.value = ''
   errorMessage.value = ''
-  showRestartConfirmation.value = false
-  showDeleteConfirmation.value = false
 }
 
 // Handle modal hidden event
@@ -363,6 +359,7 @@ watch(
     if (modal?.name === 'manage-session' && modalInstance) {
       const data = modal.data || {}
       session.value = data.session
+      resetState()
       modalInstance.show()
     }
   }
@@ -390,20 +387,11 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
-.danger-zone {
-  padding: 1rem;
-  border: 1px solid #dc3545;
-  border-radius: 0.25rem;
-  background-color: #fff5f5;
+.danger-zone-header {
+  margin-top: 0.5rem;
 }
 
-.spinner-border-sm {
-  width: 1rem;
-  height: 1rem;
-  border-width: 0.15em;
-}
-
-.bi {
-  margin-right: 0.25rem;
+.text-start {
+  text-align: left !important;
 }
 </style>

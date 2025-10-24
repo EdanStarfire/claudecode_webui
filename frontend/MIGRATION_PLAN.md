@@ -297,22 +297,22 @@ VITE_BACKEND_PORT=8001
 **Polish Tasks:**
 
 **Status Bar Enhancements:**
-- [ ] Add mode switcher button for sessions to status bar
-- [ ] Add session info button for sessions to status bar
-- [ ] Add manage session button and modal for sessions to status bar
+- [x] Add mode switcher button for sessions to status bar
+- [x] Add session info button for sessions to status bar
+- [x] Add manage session button and modal for sessions to status bar
 
 **Timeline/Legion Features:**
-- [ ] Add autoscroll control button to timeline view
+- [x] Add autoscroll control button to timeline view
 - [ ] Update default names for minions and for initial sessions
 - [ ] Remove "respond using send_comms" message for non-user-sourced Comms
 - [ ] Fix minion-state-indicator's background to reflect currently selected minion state
-- [ ] Standardize Legion Header Bars
-- [ ] Fix add minion button on Legion header - instantiate AddMinion modal
+- [x] Standardize Legion Header Bars
+- [x] Fix add minion button on Legion header - instantiate AddMinion modal (CreateMinionModal complete, backend pending)
 
 **Session Management:**
-- [ ] Expose session ID in Session Info Modal
+- [x] Expose session ID in Session Info Modal
 - [ ] Fix ExitPlanMode by forcing a setMode suggestion to acceptEdits
-- [ ] Work with confirmation in the DangerZone inside edit project/session modals
+- [x] Work with confirmation in the DangerZone inside edit project/session modals
 
 **UI/UX Improvements:**
 - [ ] Re-theme the entire app

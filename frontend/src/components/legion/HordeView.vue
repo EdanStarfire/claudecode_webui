@@ -1,23 +1,7 @@
 <template>
   <div class="horde-view d-flex flex-column h-100">
-    <!-- Header -->
-    <div class="horde-header p-3 border-bottom">
-      <div class="d-flex justify-content-between align-items-center">
-        <div v-if="overseer">
-          <h5 class="mb-0">
-            <span class="me-2">🏰</span>
-            {{ legionName }} - {{ overseer.name }}'s Horde
-          </h5>
-          <small class="text-muted">{{ overseer.role || 'Overseer' }}</small>
-        </div>
-        <div v-else>
-          <h5 class="mb-0">
-            <span class="me-2">🏰</span>
-            {{ legionName }} - Horde View
-          </h5>
-        </div>
-      </div>
-    </div>
+    <!-- Horde Header (at top) -->
+    <HordeHeader :legion-id="legionId" :overseer-id="overseerId" />
 
     <!-- Tree View -->
     <div class="horde-tree-container flex-grow-1 overflow-auto p-3">
@@ -28,6 +12,9 @@
         <MinionTreeNode :minion-id="overseerId" :level="0" />
       </div>
     </div>
+
+    <!-- Status Bar (at bottom) -->
+    <HordeStatusBar :legion-id="legionId" :overseer-id="overseerId" />
   </div>
 </template>
 
@@ -35,6 +22,8 @@
 import { computed } from 'vue'
 import { useSessionStore } from '../../stores/session'
 import { useProjectStore } from '../../stores/project'
+import HordeHeader from '../header/HordeHeader.vue'
+import HordeStatusBar from '../statusbar/HordeStatusBar.vue'
 import MinionTreeNode from './MinionTreeNode.vue'
 
 const props = defineProps({

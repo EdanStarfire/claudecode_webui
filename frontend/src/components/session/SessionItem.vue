@@ -25,7 +25,7 @@
       title="Manage session"
       @click.stop="showManageModal"
     >
-      ⚙️
+      ✏️
     </button>
   </div>
 </template>

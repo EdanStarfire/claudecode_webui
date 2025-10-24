@@ -1,17 +1,7 @@
 <template>
   <div class="timeline-view d-flex flex-column h-100">
-    <!-- Header -->
-    <div class="timeline-header p-3 border-bottom">
-      <div class="d-flex justify-content-between align-items-center">
-        <div>
-          <h5 class="mb-0">
-            <span class="me-2">📊</span>
-            {{ legionName }} - Timeline
-          </h5>
-          <small class="text-muted">Legion Communication Feed</small>
-        </div>
-      </div>
-    </div>
+    <!-- Timeline Header (at top) -->
+    <TimelineHeader :legion-id="legionId" />
 
     <!-- Timeline Messages -->
     <div ref="messagesArea" class="timeline-messages flex-grow-1 overflow-auto p-3">
@@ -62,6 +52,9 @@
 
     <!-- Comm Composer -->
     <CommComposer :legion-id="legionId" />
+
+    <!-- Status Bar (at bottom) -->
+    <TimelineStatusBar :legion-id="legionId" />
   </div>
 </template>
 
@@ -71,6 +64,9 @@ import { useLegionStore } from '../../stores/legion'
 import { useProjectStore } from '../../stores/project'
 import { useSessionStore } from '../../stores/session'
 import { useWebSocketStore } from '../../stores/websocket'
+import { useUIStore } from '../../stores/ui'
+import TimelineHeader from '../header/TimelineHeader.vue'
+import TimelineStatusBar from '../statusbar/TimelineStatusBar.vue'
 import CommComposer from './CommComposer.vue'
 
 const props = defineProps({
@@ -84,6 +80,7 @@ const legionStore = useLegionStore()
 const projectStore = useProjectStore()
 const sessionStore = useSessionStore()
 const wsStore = useWebSocketStore()
+const uiStore = useUIStore()
 
 const loading = ref(true)
 const error = ref(null)
@@ -152,12 +149,14 @@ function formatTimestamp(timestamp) {
 }
 
 /**
- * Scroll to bottom
+ * Scroll to bottom (respects autoscroll setting)
  */
 async function scrollToBottom() {
-  await nextTick()
-  if (messagesArea.value) {
-    messagesArea.value.scrollTop = messagesArea.value.scrollHeight
+  if (uiStore.autoScrollEnabled) {
+    await nextTick()
+    if (messagesArea.value) {
+      messagesArea.value.scrollTop = messagesArea.value.scrollHeight
+    }
   }
 }
 
@@ -222,6 +221,11 @@ watch(() => comms.value.length, () => {
 onMounted(() => {
   loadTimeline()
   connectWebSocket()
+
+  // Scroll to bottom after initial render
+  setTimeout(() => {
+    scrollToBottom()
+  }, 100)
 })
 
 onUnmounted(() => {

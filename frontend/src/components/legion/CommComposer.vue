@@ -1,17 +1,18 @@
 <template>
   <div class="comm-composer border-top p-3">
-    <div class="row g-2">
+    <!-- Top Row: Recipient and Comm Type -->
+    <div class="d-flex gap-2 mb-2">
       <!-- Recipient Selection -->
-      <div class="col-md-4">
-        <select v-model="recipient" class="form-select form-select-sm">
-          <option value="">-- Select Minion or Channel --</option>
+      <div class="flex-grow-1">
+        <select v-model="recipient" class="form-select form-select-sm" :disabled="sending">
+          <option value="">-- Select Recipient --</option>
           <optgroup label="Minions">
             <option
               v-for="minion in minions"
               :key="minion.session_id"
               :value="`minion:${minion.session_id}`"
             >
-              👤 {{ minion.name }}{{ minion.role ? ` (${minion.role})` : '' }}
+              {{ getStateIcon(minion) }} {{ getMinionLabel(minion) }}
             </option>
           </optgroup>
           <optgroup v-if="channels.length > 0" label="Channels">
@@ -27,23 +28,27 @@
       </div>
 
       <!-- Comm Type -->
-      <div class="col-md-2">
-        <select v-model="commType" class="form-select form-select-sm">
+      <div style="min-width: 150px;">
+        <select v-model="commType" class="form-select form-select-sm" :disabled="sending">
           <option value="task">Task</option>
           <option value="question">Question</option>
           <option value="info">Info</option>
           <option value="report">Report</option>
         </select>
       </div>
+    </div>
 
+    <!-- Bottom Row: Message and Send Button -->
+    <div class="d-flex gap-2 align-items-end position-relative">
       <!-- Message Content with Autocomplete -->
-      <div class="col-md-6 position-relative">
+      <div class="flex-grow-1 position-relative">
         <textarea
           ref="contentTextarea"
           v-model="content"
           class="form-control form-control-sm"
-          rows="2"
-          placeholder="Type message... Use @ to mention minions"
+          rows="1"
+          placeholder="Type message... Use # to mention minions"
+          :disabled="sending"
           @input="handleAutocomplete"
           @keydown="handleKeydown"
         ></textarea>
@@ -51,6 +56,7 @@
         <!-- Autocomplete Dropdown -->
         <div
           v-if="showAutocomplete"
+          ref="autocompleteDropdown"
           class="autocomplete-dropdown position-absolute bg-white border rounded shadow-sm"
         >
           <div
@@ -61,16 +67,14 @@
             @click="insertMention(match)"
             @mouseenter="selectedAutocompleteIndex = index"
           >
-            {{ match.type === 'minion' ? '👤' : '#️⃣' }}
+            {{ match.type === 'minion' ? getStateIcon(match) : '#️⃣' }}
             {{ match.name }}{{ match.role ? ` (${match.role})` : '' }}
           </div>
         </div>
       </div>
-    </div>
 
-    <!-- Send Button -->
-    <div class="row mt-2">
-      <div class="col-12 text-end">
+      <!-- Send Button -->
+      <div>
         <button
           class="btn btn-primary btn-sm"
           :disabled="!canSend || sending"
@@ -115,6 +119,7 @@ const autocompleteMatches = ref([])
 const selectedAutocompleteIndex = ref(0)
 const mentionStartPos = ref(-1)
 const contentTextarea = ref(null)
+const autocompleteDropdown = ref(null)
 
 // Get minions for this legion
 const minions = computed(() => {
@@ -137,26 +142,70 @@ const canSend = computed(() => {
 })
 
 /**
- * Handle autocomplete on @ character
+ * Get state icon for minion (matching SpySelector)
+ */
+function getStateIcon(session) {
+  const icons = {
+    'created': '○',
+    'starting': '◐',
+    'active': '●',
+    'paused': '⏸',
+    'terminating': '◍',
+    'terminated': '✗',
+    'error': '⚠'
+  }
+  return icons[session.state] || '○'
+}
+
+/**
+ * Get minion label with role (matching SpySelector)
+ */
+function getMinionLabel(session) {
+  if (session.is_minion && session.role) {
+    return `${session.name} (${session.role})`
+  }
+  return session.name
+}
+
+/**
+ * Auto-resize textarea based on content
+ */
+function autoResizeTextarea() {
+  const textarea = contentTextarea.value
+  if (!textarea) return
+
+  // Reset height to auto to get the correct scrollHeight
+  textarea.style.height = 'auto'
+
+  // Set height based on scrollHeight, respecting min and max
+  const newHeight = Math.min(textarea.scrollHeight, parseInt(getComputedStyle(textarea).maxHeight))
+  textarea.style.height = newHeight + 'px'
+}
+
+/**
+ * Handle autocomplete on # character
  */
 function handleAutocomplete() {
   const textarea = contentTextarea.value
   if (!textarea) return
 
+  // Auto-resize on input
+  autoResizeTextarea()
+
   const text = content.value
   const cursorPos = textarea.selectionStart
 
-  // Find the last @ before cursor
+  // Find the last # before cursor
   const textBeforeCursor = text.substring(0, cursorPos)
-  const lastAtIndex = textBeforeCursor.lastIndexOf('@')
+  const lastHashIndex = textBeforeCursor.lastIndexOf('#')
 
-  if (lastAtIndex === -1) {
+  if (lastHashIndex === -1) {
     showAutocomplete.value = false
     return
   }
 
-  // Get the search query after @
-  const searchQuery = textBeforeCursor.substring(lastAtIndex + 1).toLowerCase()
+  // Get the search query after #
+  const searchQuery = textBeforeCursor.substring(lastHashIndex + 1).toLowerCase()
 
   // Check if there's a space (means we're not autocompleting anymore)
   if (searchQuery.includes(' ')) {
@@ -171,7 +220,8 @@ function handleAutocomplete() {
       type: 'minion',
       name: minion.name,
       role: minion.role,
-      id: minion.session_id
+      id: minion.session_id,
+      state: minion.state
     }))
 
   if (matches.length === 0) {
@@ -181,8 +231,34 @@ function handleAutocomplete() {
 
   autocompleteMatches.value = matches
   selectedAutocompleteIndex.value = 0
-  mentionStartPos.value = lastAtIndex
+  mentionStartPos.value = lastHashIndex
   showAutocomplete.value = true
+}
+
+/**
+ * Scroll selected autocomplete item into view within the dropdown
+ */
+function scrollAutocompleteItemIntoView() {
+  if (!autocompleteDropdown.value) return
+
+  const dropdown = autocompleteDropdown.value
+  const selectedItem = dropdown.children[selectedAutocompleteIndex.value]
+  if (!selectedItem) return
+
+  // Calculate item position relative to dropdown scroll
+  const itemOffsetTop = selectedItem.offsetTop
+  const itemHeight = selectedItem.offsetHeight
+  const dropdownScrollTop = dropdown.scrollTop
+  const dropdownHeight = dropdown.clientHeight
+
+  // Scroll item into view if it's outside the visible area
+  if (itemOffsetTop < dropdownScrollTop) {
+    // Item is above visible area - scroll up
+    dropdown.scrollTop = itemOffsetTop
+  } else if (itemOffsetTop + itemHeight > dropdownScrollTop + dropdownHeight) {
+    // Item is below visible area - scroll down
+    dropdown.scrollTop = itemOffsetTop + itemHeight - dropdownHeight
+  }
 }
 
 /**
@@ -203,12 +279,14 @@ function handleKeydown(event) {
     event.preventDefault()
     selectedAutocompleteIndex.value =
       (selectedAutocompleteIndex.value + 1) % autocompleteMatches.value.length
+    scrollAutocompleteItemIntoView()
   } else if (event.key === 'ArrowUp') {
     event.preventDefault()
     selectedAutocompleteIndex.value =
       selectedAutocompleteIndex.value === 0
         ? autocompleteMatches.value.length - 1
         : selectedAutocompleteIndex.value - 1
+    scrollAutocompleteItemIntoView()
   } else if (event.key === 'Enter') {
     event.preventDefault()
     const match = autocompleteMatches.value[selectedAutocompleteIndex.value]
@@ -230,10 +308,10 @@ function insertMention(match) {
   const text = content.value
   const cursorPos = textarea.selectionStart
 
-  // Replace from @ to cursor with the mention
+  // Replace from # to cursor with the mention
   const newText =
     text.substring(0, mentionStartPos.value) +
-    '@' +
+    '#' +
     match.name +
     ' ' +
     text.substring(cursorPos)
@@ -279,6 +357,8 @@ async function sendComm() {
 
     // Clear form
     content.value = ''
+    // Reset textarea height
+    autoResizeTextarea()
     // Keep recipient and type selected for convenience
   } catch (error) {
     console.error('Failed to send comm:', error)
@@ -307,14 +387,20 @@ watch(showAutocomplete, (show) => {
   background-color: #fff;
 }
 
+textarea {
+  resize: vertical;
+  min-height: calc(1.5em + 0.5rem + 2px); /* 1 row height */
+  max-height: calc(9em + 0.5rem + 2px); /* 6 rows height */
+}
+
 .autocomplete-dropdown {
-  top: 100%;
+  bottom: 100%;
   left: 0;
   right: 0;
   max-height: 200px;
   overflow-y: auto;
   z-index: 1000;
-  margin-top: 2px;
+  margin-bottom: 2px;
 }
 
 .autocomplete-item {

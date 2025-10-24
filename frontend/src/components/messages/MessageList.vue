@@ -67,7 +67,9 @@ function shouldDisplayMessage(message) {
 
   // Hide system init messages
   if (message.type === 'system' && subtype === 'init') return false
-  if (message.type === 'system' && subtype === 'client_launched') return false
+
+  // Show client_launched, interrupt, and other system messages
+  // (These inform the user about session state changes)
 
   // Hide result messages (they update session state, don't display)
   if (message.type === 'result') return false

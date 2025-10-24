@@ -191,12 +191,8 @@ export const useWebSocketStore = defineStore('websocket', () => {
         type: 'permission_response',
         request_id: requestId,
         decision: decision,
+        apply_suggestions: applySuggestions,  // Always include boolean flag to match vanilla JS behavior
         timestamp: new Date().toISOString()
-      }
-
-      // Add apply_suggestions flag (backend expects boolean, not the actual suggestions array)
-      if (applySuggestions) {
-        payload.apply_suggestions = true
       }
 
       // Add clarification message if provided (backend expects 'clarification_message' field)
@@ -321,6 +317,13 @@ export const useWebSocketStore = defineStore('websocket', () => {
           message.metadata.tool_results.forEach(toolResult => {
             messageStore.handleToolResult(sessionId, toolResult)
           })
+        }
+
+        // Capture init data for session info modal
+        if (message.type === 'system' &&
+            (message.subtype === 'init' || message.metadata?.subtype === 'init') &&
+            message.metadata?.init_data) {
+          sessionStore.storeInitData(sessionId, message.metadata.init_data)
         }
 
         // Add message to history

@@ -1,5 +1,5 @@
 <template>
-  <div class="list-group-item list-group-item-action p-2">
+  <div class="list-group-item list-group-item-action p-2" :class="{ active: isActive }">
     <div
       class="d-flex align-items-center justify-content-between mb-2"
       :style="{ cursor: selectedOverseerId ? 'pointer' : 'default' }"
@@ -68,6 +68,11 @@ const overseers = computed(() => {
   return props.sessions.filter(session => session.is_overseer === true)
 })
 
+const isActive = computed(() => {
+  const route = router.currentRoute.value
+  return route.name === 'horde' && route.params.legionId === props.project.project_id
+})
+
 function getStateIcon(session) {
   const icons = {
     'created': '○',
@@ -94,3 +99,14 @@ function onOverseerSelect() {
   }
 }
 </script>
+
+<style scoped>
+.list-group-item.active {
+  background-color: #0d6efd;
+  color: white;
+}
+
+.list-group-item:hover:not(.active) {
+  background-color: #f8f9fa;
+}
+</style>

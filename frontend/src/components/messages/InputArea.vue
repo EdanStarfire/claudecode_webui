@@ -28,16 +28,6 @@
         Send
       </button>
     </div>
-
-    <!-- Status Bar (placeholder) -->
-    <div class="d-flex justify-content-between align-items-center px-2 py-1 border-top">
-      <div class="d-flex gap-2">
-        <span class="text-muted small">Permission Mode: {{ permissionMode }}</span>
-      </div>
-      <div v-if="isProcessing" class="spinner-border spinner-border-sm" role="status">
-        <span class="visually-hidden">Processing...</span>
-      </div>
-    </div>
   </div>
 </template>
 
@@ -56,7 +46,6 @@ const inputText = computed({
 
 const isProcessing = computed(() => sessionStore.currentSession?.is_processing || false)
 const isConnected = computed(() => wsStore.sessionConnected)
-const permissionMode = computed(() => sessionStore.currentSession?.current_permission_mode || 'default')
 
 function sendMessage() {
   if (!inputText.value.trim()) return

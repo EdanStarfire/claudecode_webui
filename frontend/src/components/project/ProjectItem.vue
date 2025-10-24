@@ -20,41 +20,42 @@
         :aria-expanded="isExpanded"
         :aria-controls="`collapse-${project.project_id}`"
       >
-        <div class="flex-grow-1 me-2">
-          <div class="fw-semibold">
+        <div class="flex-grow-1 me-2 d-flex flex-column" style="min-width: 0;">
+          <!-- Top row: Project name -->
+          <div class="fw-semibold mb-1" style="flex-shrink: 1; min-width: 0;">
             <span v-if="project.is_multi_agent" class="legion-icon" style="font-size: 1rem; margin-right: 0.25rem;">🏛</span>
             {{ project.name }}
           </div>
-          <small class="text-muted font-monospace" :title="project.working_directory">
+
+          <!-- Bottom row: Folder path -->
+          <small class="text-muted font-monospace text-truncate" :title="project.working_directory" style="display: block; min-width: 0;">
             {{ formattedPath }}
           </small>
         </div>
       </button>
 
-      <!-- Edit Project Button (appears on hover) -->
-      <button
-        ref="editBtn"
-        class="btn btn-sm btn-outline-secondary position-absolute end-0 top-50 translate-middle-y me-5 project-edit-btn"
-        title="Edit or delete project"
-        type="button"
-        style="z-index: 10; opacity: 0"
-        @click.stop.prevent="showEditModal"
-        @mouseenter="showEditButton"
-        @mouseleave="hideEditButton"
-      >
-        ✏️
-      </button>
+      <!-- Action Buttons Container (outside accordion button) -->
+      <div class="position-absolute d-flex gap-1" style="right: 0.5rem; top: 50%; transform: translateY(-50%); z-index: 10;">
+        <!-- Edit Project Button -->
+        <button
+          class="btn btn-sm btn-outline-secondary"
+          title="Edit or delete project"
+          type="button"
+          @click.stop.prevent="showEditModal"
+        >
+          ✏️
+        </button>
 
-      <!-- Add Session/Minion Button -->
-      <button
-        class="btn btn-sm btn-outline-primary position-absolute end-0 top-50 translate-middle-y me-2"
-        :title="project.is_multi_agent ? 'Create minion' : 'Add session to project'"
-        type="button"
-        style="z-index: 10"
-        @click.stop.prevent="showCreateSessionModal"
-      >
-        +
-      </button>
+        <!-- Add Session/Minion Button -->
+        <button
+          class="btn btn-sm btn-outline-primary"
+          :title="project.is_multi_agent ? 'Create minion' : 'Add session to project'"
+          type="button"
+          @click.stop.prevent="showCreateSessionModal"
+        >
+          ➕
+        </button>
+      </div>
     </h2>
 
     <!-- Project Status Line (always visible) -->
@@ -75,6 +76,7 @@
           <div
             v-if="project.is_multi_agent"
             class="list-group-item list-group-item-action timeline-item d-flex align-items-center p-2"
+            :class="{ active: isTimelineActive }"
             style="cursor: pointer"
             @click="viewTimeline"
           >
@@ -107,7 +109,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { useProjectStore } from '@/stores/project'
 import { useSessionStore } from '@/stores/session'
@@ -129,7 +131,6 @@ const projectStore = useProjectStore()
 const sessionStore = useSessionStore()
 const uiStore = useUIStore()
 
-const editBtn = ref(null)
 const isExpanded = ref(props.project.is_expanded || false)
 
 // Computed
@@ -147,6 +148,11 @@ const projectSessions = computed(() => {
   return props.project.session_ids
     .map(sessionId => sessionStore.getSession(sessionId))
     .filter(session => session !== null && session !== undefined) // Remove any null/undefined values if session not found
+})
+
+const isTimelineActive = computed(() => {
+  const route = router.currentRoute.value
+  return route.name === 'timeline' && route.params.legionId === props.project.project_id
 })
 
 // Collapse event handlers
@@ -176,19 +182,6 @@ function onCollapse() {
     if (currentProjectId === props.project.project_id) {
       router.push('/')
     }
-  }
-}
-
-// Edit button hover
-function showEditButton() {
-  if (editBtn.value) {
-    editBtn.value.style.opacity = '1'
-  }
-}
-
-function hideEditButton() {
-  if (editBtn.value) {
-    editBtn.value.style.opacity = '0'
   }
 }
 
@@ -278,32 +271,9 @@ function onDrop(event) {
   projectStore.reorderProjects(newProjectIds)
 }
 
-// Add header hover listeners
-let headerElement = null
-
-onMounted(() => {
-  // Find the h2 accordion header element
-  const el = document.getElementById(`heading-${props.project.project_id}`)
-  if (el) {
-    headerElement = el
-    headerElement.addEventListener('mouseenter', showEditButton)
-    headerElement.addEventListener('mouseleave', hideEditButton)
-  }
-})
-
-onUnmounted(() => {
-  if (headerElement) {
-    headerElement.removeEventListener('mouseenter', showEditButton)
-    headerElement.removeEventListener('mouseleave', hideEditButton)
-  }
-})
 </script>
 
 <style scoped>
-.project-edit-btn {
-  transition: opacity 0.2s;
-}
-
 .dragging {
   opacity: 0.5;
 }

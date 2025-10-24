@@ -9,31 +9,19 @@
     }"
     :style="sidebarStyle"
   >
-    <!-- Sidebar Header Buttons -->
-    <div class="d-flex gap-2 p-3 border-bottom bg-white">
-      <div class="d-flex gap-2 flex-grow-1">
+    <!-- Projects List -->
+    <div class="flex-grow-1 overflow-auto p-3">
+      <div class="d-flex justify-content-between align-items-center mb-3">
+        <h6 class="text-muted mb-0">Projects</h6>
         <button
           id="create-project-btn"
-          class="btn btn-sm btn-primary"
+          class="btn btn-sm btn-outline-primary"
           title="New Project"
           @click="showCreateProjectModal"
         >
           📁 New
         </button>
-        <button
-          id="refresh-sessions-btn"
-          class="btn btn-sm btn-outline-secondary"
-          title="Refresh"
-          @click="refreshData"
-        >
-          ↻
-        </button>
       </div>
-    </div>
-
-    <!-- Projects List -->
-    <div class="flex-grow-1 overflow-auto p-3">
-      <h6 class="text-muted mb-3">Projects</h6>
       <div id="sessions-container">
         <ProjectList />
       </div>
@@ -50,13 +38,9 @@
 <script setup>
 import { computed, ref } from 'vue'
 import { useUIStore } from '@/stores/ui'
-import { useSessionStore } from '@/stores/session'
-import { useProjectStore } from '@/stores/project'
 import ProjectList from '../project/ProjectList.vue'
 
 const uiStore = useUIStore()
-const sessionStore = useSessionStore()
-const projectStore = useProjectStore()
 
 const sidebarCollapsed = computed(() => uiStore.sidebarCollapsed)
 const isMobile = computed(() => uiStore.isMobile)
@@ -78,13 +62,6 @@ const sidebarStyle = computed(() => {
 
 function showCreateProjectModal() {
   uiStore.showModal('create-project')
-}
-
-async function refreshData() {
-  await Promise.all([
-    projectStore.fetchProjects(),
-    sessionStore.fetchSessions()
-  ])
 }
 
 // Sidebar resize functionality

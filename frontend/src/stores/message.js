@@ -57,7 +57,7 @@ export const useMessageStore = defineStore('message', () => {
       // Store messages
       messagesBySession.value.set(sessionId, messages)
 
-      // Process messages to extract tool uses and results
+      // Process messages to extract tool uses, results, and init data
       messages.forEach(message => {
         // Extract tool uses from assistant messages
         if (message.metadata?.has_tool_uses && message.metadata.tool_uses) {
@@ -71,6 +71,14 @@ export const useMessageStore = defineStore('message', () => {
           message.metadata.tool_results.forEach(toolResult => {
             handleToolResult(sessionId, toolResult)
           })
+        }
+
+        // Capture init data for session info modal
+        if (message.type === 'system' &&
+            (message.subtype === 'init' || message.metadata?.subtype === 'init') &&
+            message.metadata?.init_data) {
+          const sessionStore = useSessionStore()
+          sessionStore.storeInitData(sessionId, message.metadata.init_data)
         }
       })
 
@@ -241,6 +249,10 @@ export const useMessageStore = defineStore('message', () => {
     })
 
     console.log(`Tool ${toolUseId} ${toolResultBlock.is_error ? 'failed' : 'completed'}`)
+
+    // Note: ExitPlanMode mode reset logic is handled by backend to prevent race conditions
+    // with multiple connected frontends. Backend tracks setMode suggestions and makes the
+    // decision to reset or not.
   }
 
   /**

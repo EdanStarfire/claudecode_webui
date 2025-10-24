@@ -12,8 +12,8 @@
       <p class="text-secondary">{{ loadingMessage }}</p>
     </div>
 
-    <!-- Session Info Bar -->
-    <SessionInfoBar v-if="currentSession" :session="currentSession" />
+    <!-- Session Header (at top) -->
+    <SessionHeader v-if="currentSession" :session-id="props.sessionId" />
 
     <!-- Messages Area -->
     <div class="d-flex flex-column flex-grow-1 overflow-hidden">
@@ -22,6 +22,9 @@
 
     <!-- Input Area -->
     <InputArea />
+
+    <!-- Session Status Bar (at bottom) -->
+    <SessionStatusBar v-if="currentSession" :session-id="props.sessionId" />
   </div>
 </template>
 
@@ -29,7 +32,8 @@
 import { computed, onMounted, onUnmounted, watch } from 'vue'
 import { useSessionStore } from '@/stores/session'
 import { useUIStore } from '@/stores/ui'
-import SessionInfoBar from './SessionInfoBar.vue'
+import SessionHeader from '../header/SessionHeader.vue'
+import SessionStatusBar from '../statusbar/SessionStatusBar.vue'
 import MessageList from '../messages/MessageList.vue'
 import InputArea from '../messages/InputArea.vue'
 

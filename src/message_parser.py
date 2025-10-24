@@ -159,7 +159,14 @@ class SystemMessageHandler(MessageHandler):
         if "sdk_message" in message_data and isinstance(message_data["sdk_message"], SystemMessage):
             sdk_msg = message_data["sdk_message"]
             extracted["content"] = sdk_msg.content if hasattr(sdk_msg, 'content') else "System message"
-            extracted["metadata"]["subtype"] = message_data.get("subtype", "init")
+
+            # Check for subtype in multiple locations (same logic as dictionary path)
+            subtype = (
+                message_data.get("subtype") or
+                (message_data.get("metadata") or {}).get("subtype") or
+                "init"
+            )
+            extracted["metadata"]["subtype"] = subtype
 
             # Extract init data if available (for Session Info feature)
             if hasattr(sdk_msg, 'data') and sdk_msg.data:

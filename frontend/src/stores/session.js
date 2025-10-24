@@ -177,8 +177,7 @@ export const useSessionStore = defineStore('session', () => {
       // If deleted current session, clear selection
       if (currentSessionId.value === sessionId) {
         currentSessionId.value = null
-        const router = useRouter()
-        router.push('/')
+        // Navigation is handled by the component calling this function
       }
 
       console.log(`Deleted session ${sessionId}`)
