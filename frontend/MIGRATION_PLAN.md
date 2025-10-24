@@ -294,25 +294,61 @@ VITE_BACKEND_PORT=8001
 - [ ] Mobile responsiveness
 - [ ] Error handling for all API calls
 
-**Polish Tasks:**
+**Polish Tasks Completed:**
 
 **Status Bar Enhancements:**
-- [x] Add mode switcher button for sessions to status bar
-- [x] Add session info button for sessions to status bar
-- [x] Add manage session button and modal for sessions to status bar
+- ✅ Add mode switcher button for sessions to status bar
+- ✅ Add session info button for sessions to status bar
+- ✅ Add manage session button and modal for sessions to status bar
 
 **Timeline/Legion Features:**
-- [x] Add autoscroll control button to timeline view
-- [ ] Update default names for minions and for initial sessions
-- [ ] Remove "respond using send_comms" message for non-user-sourced Comms
-- [ ] Fix minion-state-indicator's background to reflect currently selected minion state
-- [x] Standardize Legion Header Bars
-- [x] Fix add minion button on Legion header - instantiate AddMinion modal (CreateMinionModal complete, backend pending)
+- ✅ Add autoscroll control button to timeline view
+- ✅ Update default names for minions and for initial sessions (changed to "main")
+- ✅ Remove "respond using send_comms" message for non-user-sourced Comms
+- ✅ Fix minion-state-indicator's background to reflect currently selected minion state
+- ✅ Standardize Legion Header Bars
+- ✅ Fix add minion button on Legion header - instantiate AddMinion modal (CreateMinionModal complete, backend pending)
+- ✅ Minion name validation - enforce single-word names (no spaces) for #nametag matching
 
 **Session Management:**
-- [x] Expose session ID in Session Info Modal
-- [ ] Fix ExitPlanMode by forcing a setMode suggestion to acceptEdits
-- [x] Work with confirmation in the DangerZone inside edit project/session modals
+- ✅ Expose session ID in Session Info Modal
+- ✅ Work with confirmation in the DangerZone inside edit project/session modals
+- ✅ Fix ExitPlanMode by forcing a setMode suggestion to acceptEdits
+
+**Session State & Permission Management:**
+- ✅ PAUSED state for pending permissions - Sessions enter PAUSED state while waiting for permission responses, with yellow blinking indicator across all UI components (SessionItem, ProjectStatusLine, SpySelector)
+- ✅ Orphaned permission cleanup - Automatically clean up orphaned permission requests on server restart, session termination, and session restart by storing synthetic denial messages
+- ✅ Permission mode sync - Keep permission mode synchronized between session state and init data for consistent UI display
+- ✅ Interrupt during PAUSED - Resolve pending permissions with denial when session is interrupted
+- ✅ Startup cleanup - Reset PAUSED sessions to TERMINATED on server startup to handle orphaned permission requests from crashes
+
+**Deeplink & Auto-Start:**
+- ✅ Deeplink auto-start - Sessions accessed via deeplink now auto-fetch if not in store and auto-start if in created/terminated states
+- ✅ Wait for active state - WebSocket connection now waits up to 60 seconds for session to become 'active' (not just 'starting') with progress logs every 5 seconds
+
+**Permission Request Restoration:**
+- ✅ Page refresh restoration - Permission prompts are now restored on page refresh by processing permission_request messages during initial message load
+
+**bypassPermissions Mode Support:**
+- ✅ Creation - Allow bypassPermissions selection in SessionCreateModal
+- ✅ Editing - Conditionally show bypassPermissions in SessionEditModal based on initial_permission_mode
+- ✅ Status bar - Display bypassPermissions icon but cycle to 'default' when clicked (don't include in normal rotation)
+
+**Input Area & UX:**
+- ✅ Disable during startup - Input area (textarea and send button) disabled while session is in 'starting' state with appropriate placeholder text
+- ✅ Naming clarity - Changed 'paused-processing' to 'pending-prompt' for clearer user understanding
+- ✅ Color visibility - Changed pending-prompt from pale yellow to warning yellow (#ffc107) with darker border (#e0a800) for better visibility
+
+**Comm Routing:**
+- ✅ Conditional instructions - Only show "respond using send_comm()" instruction for user messages, not minion-to-minion comms
+
+**MCP Tool Description:**
+- ✅ Proactive usage hint - Added "Proactively use when needing to respond to or ask questions of another #minion" to send_comm tool description
+
+**Known Limitations:**
+- ⚠️ Orphaned permission cleanup creates synthetic permission_response messages but cannot link them to tool_use_id (SDK doesn't expose this). **Future work**: Detect synthetic denials in frontend and collapse associated tool cards.
+
+**Remaining Polish Tasks:**
 
 **UI/UX Improvements:**
 - [ ] Re-theme the entire app
