@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { ref, computed } from 'vue'
+import { ref, computed, readonly, watch } from 'vue'
 import { api } from '../utils/api'
 import { useSessionStore } from './session'
 
@@ -18,6 +18,10 @@ export const useMessageStore = defineStore('message', () => {
   // Tool call manager state (tracking tool lifecycle)
   const toolSignatureToId = ref(new Map())
   const permissionToToolMap = ref(new Map())
+
+  // Orphaned tool tracking (sessionId -> Set<tool_use_id>)
+  const activeToolUses = ref(new Map())
+  const orphanedToolUses = ref(new Map()) // sessionId -> Map<tool_use_id -> {reason, message}>
 
   // ========== COMPUTED ==========
 
@@ -57,8 +61,45 @@ export const useMessageStore = defineStore('message', () => {
       // Store messages
       messagesBySession.value.set(sessionId, messages)
 
+      // Track open tool uses for orphaned tool detection
+      const openTools = new Set()
+
       // Process messages to extract tool uses, results, permission requests, and init data
       messages.forEach(message => {
+        // Track tool uses (for orphaned detection)
+        if (message.type === 'assistant' && message.metadata?.tool_uses) {
+          message.metadata.tool_uses.forEach(toolUse => {
+            openTools.add(toolUse.id)
+          })
+        }
+
+        // Remove tool uses on results (for orphaned detection)
+        if (message.type === 'user' && message.metadata?.tool_results) {
+          message.metadata.tool_results.forEach(result => {
+            openTools.delete(result.tool_use_id)
+            // Also clear from orphaned if it was previously marked
+            const orphaned = orphanedToolUses.value.get(sessionId)
+            if (orphaned) {
+              orphaned.delete(result.tool_use_id)
+            }
+          })
+        }
+
+        // Detect session restart - mark open tools as orphaned
+        if (message.type === 'system' && message.metadata?.subtype === 'client_launched') {
+          openTools.forEach(id => {
+            markToolUseOrphaned(sessionId, id, 'Session was restarted')
+          })
+          openTools.clear()
+        }
+
+        // Detect session interrupt - mark open tools as orphaned
+        if (message.type === 'system' && message.metadata?.subtype === 'interrupt') {
+          openTools.forEach(id => {
+            markToolUseOrphaned(sessionId, id, 'Session was interrupted')
+          })
+          openTools.clear()
+        }
         // Extract tool uses from assistant messages
         if (message.metadata?.has_tool_uses && message.metadata.tool_uses) {
           message.metadata.tool_uses.forEach(toolUse => {
@@ -87,6 +128,19 @@ export const useMessageStore = defineStore('message', () => {
         }
       })
 
+      // Check session state for any remaining open tools
+      const sessionStore = useSessionStore()
+      const session = sessionStore.sessions.get(sessionId)
+      if (session && !['active', 'paused', 'starting'].includes(session.state)) {
+        openTools.forEach(id => {
+          markToolUseOrphaned(sessionId, id, 'Session was terminated')
+        })
+        openTools.clear()
+      }
+
+      // Store active tools for real-time tracking
+      activeToolUses.value.set(sessionId, openTools)
+
       // Trigger reactivity
       messagesBySession.value = new Map(messagesBySession.value)
 
@@ -103,6 +157,50 @@ export const useMessageStore = defineStore('message', () => {
   }
 
   /**
+   * Handle real-time tool use tracking for orphaned detection
+   */
+  function handleRealtimeToolTracking(sessionId, message) {
+    const openTools = activeToolUses.value.get(sessionId) || new Set()
+
+    // Track new tool uses
+    if (message.type === 'assistant' && message.metadata?.tool_uses) {
+      message.metadata.tool_uses.forEach(toolUse => {
+        openTools.add(toolUse.id)
+      })
+    }
+
+    // Close tool uses on results
+    if (message.type === 'user' && message.metadata?.tool_results) {
+      message.metadata.tool_results.forEach(result => {
+        openTools.delete(result.tool_use_id)
+        // Clear from orphaned if previously marked
+        const orphaned = orphanedToolUses.value.get(sessionId)
+        if (orphaned) {
+          orphaned.delete(result.tool_use_id)
+        }
+      })
+    }
+
+    // Detect restart during real-time
+    if (message.type === 'system' && message.metadata?.subtype === 'client_launched') {
+      openTools.forEach(id => {
+        markToolUseOrphaned(sessionId, id, 'Session was restarted')
+      })
+      openTools.clear()
+    }
+
+    // Detect interrupt during real-time
+    if (message.type === 'system' && message.metadata?.subtype === 'interrupt') {
+      openTools.forEach(id => {
+        markToolUseOrphaned(sessionId, id, 'Session was interrupted')
+      })
+      openTools.clear()
+    }
+
+    activeToolUses.value.set(sessionId, openTools)
+  }
+
+  /**
    * Add a message to a session (from WebSocket)
    */
   function addMessage(sessionId, message) {
@@ -112,6 +210,9 @@ export const useMessageStore = defineStore('message', () => {
 
     const messages = messagesBySession.value.get(sessionId)
     messages.push(message)
+
+    // Track tool use lifecycle for orphaned detection
+    handleRealtimeToolTracking(sessionId, message)
 
     // Trigger reactivity
     messagesBySession.value = new Map(messagesBySession.value)
@@ -288,6 +389,56 @@ export const useMessageStore = defineStore('message', () => {
   }
 
   /**
+   * Mark a tool use as orphaned (denied due to session restart/interrupt/termination)
+   */
+  function markToolUseOrphaned(sessionId, toolUseId, message) {
+    const orphaned = orphanedToolUses.value.get(sessionId) || new Map()
+    orphaned.set(toolUseId, {
+      reason: 'denied',
+      message: message
+    })
+    orphanedToolUses.value.set(sessionId, orphaned)
+
+    // Collapse the tool card when marking as orphaned
+    const toolCalls = toolCallsBySession.value.get(sessionId)
+    if (toolCalls) {
+      const toolCall = toolCalls.find(tc => tc.id === toolUseId)
+      if (toolCall && toolCall.isExpanded) {
+        toolCall.isExpanded = false
+        // Trigger reactivity
+        toolCallsBySession.value = new Map(toolCallsBySession.value)
+      }
+    }
+
+    console.log(`Marked tool use ${toolUseId} as orphaned: ${message}`)
+  }
+
+  /**
+   * Check if a tool use is orphaned
+   */
+  function isToolUseOrphaned(sessionId, toolUseId) {
+    return orphanedToolUses.value.get(sessionId)?.has(toolUseId) || false
+  }
+
+  /**
+   * Get orphaned tool information
+   */
+  function getOrphanedInfo(sessionId, toolUseId) {
+    return orphanedToolUses.value.get(sessionId)?.get(toolUseId)
+  }
+
+  /**
+   * Clear orphaned tool uses for a session (mark all open tools as orphaned)
+   */
+  function clearOrphanedToolUses(sessionId, message) {
+    const openTools = activeToolUses.value.get(sessionId)
+    if (openTools && openTools.size > 0) {
+      openTools.forEach(id => markToolUseOrphaned(sessionId, id, message))
+      openTools.clear()
+    }
+  }
+
+  /**
    * Clear messages for a session (for reset)
    */
   function clearMessages(sessionId) {
@@ -299,11 +450,41 @@ export const useMessageStore = defineStore('message', () => {
     toolCallsBySession.value = new Map(toolCallsBySession.value)
   }
 
+  // ========== SESSION STATE WATCHER ==========
+  // Watch for session state changes to detect post-load terminations
+  const sessionStore = useSessionStore()
+  watch(
+    () => {
+      const sessions = Array.from(sessionStore.sessions.values())
+      return sessions.map(s => ({ id: s.session_id, state: s.state }))
+    },
+    (newStates, oldStates) => {
+      if (!oldStates) return
+
+      // Check each session for state transitions
+      newStates.forEach((newState, idx) => {
+        const oldState = oldStates[idx]
+        if (!oldState || oldState.id !== newState.id) return
+
+        // Session transitioned from active/paused/starting to terminated/error
+        const wasActive = ['active', 'paused', 'starting'].includes(oldState.state)
+        const isInactive = !['active', 'paused', 'starting'].includes(newState.state)
+
+        if (wasActive && isInactive) {
+          clearOrphanedToolUses(newState.id, 'Session was terminated')
+        }
+      })
+    },
+    { deep: true }
+  )
+
   // ========== RETURN ==========
   return {
     // State
     messagesBySession,
     toolCallsBySession,
+    activeToolUses: readonly(activeToolUses),
+    orphanedToolUses: readonly(orphanedToolUses),
 
     // Computed
     currentMessages,
@@ -319,6 +500,12 @@ export const useMessageStore = defineStore('message', () => {
     handlePermissionResponse,
     handleToolResult,
     toggleToolExpansion,
-    clearMessages
+    clearMessages,
+
+    // Orphaned tool tracking
+    markToolUseOrphaned,
+    isToolUseOrphaned,
+    getOrphanedInfo,
+    clearOrphanedToolUses
   }
 })

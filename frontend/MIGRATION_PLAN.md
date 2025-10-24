@@ -345,8 +345,14 @@ VITE_BACKEND_PORT=8001
 **MCP Tool Description:**
 - ✅ Proactive usage hint - Added "Proactively use when needing to respond to or ask questions of another #minion" to send_comm tool description
 
-**Known Limitations:**
-- ⚠️ Orphaned permission cleanup creates synthetic permission_response messages but cannot link them to tool_use_id (SDK doesn't expose this). **Future work**: Detect synthetic denials in frontend and collapse associated tool cards.
+**Orphaned Tool Handling:**
+- ✅ Frontend tracks open tool uses via tool_use_id (direct linkage, no heuristics needed)
+- ✅ Detects session restarts (client_launched), interrupts, and terminations
+- ✅ Automatically marks orphaned tools as cancelled with appropriate messaging
+- ✅ Works in both load-time and real-time scenarios
+- ✅ Hides permission prompts for orphaned tools
+- ✅ Shows clear "Tool Execution Cancelled" or "Permission Request Cancelled" banners
+- ✅ No backend synthetic messages needed - keeps logs clean
 
 **Remaining Polish Tasks:**
 

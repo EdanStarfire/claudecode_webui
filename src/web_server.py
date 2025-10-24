@@ -324,28 +324,7 @@ class ClaudeWebUI:
         # Register callbacks
         self.coordinator.add_state_change_callback(self._on_state_change)
 
-        # Clean up orphaned permissions for PAUSED sessions found at startup
-        await self._cleanup_paused_sessions_at_startup()
-
         logger.info("Claude Code WebUI initialized")
-
-    async def _cleanup_paused_sessions_at_startup(self):
-        """Clean up orphaned permissions for all sessions at startup"""
-        try:
-            sessions = await self.coordinator.session_manager.list_sessions()
-
-            if sessions:
-                logger.info(f"Checking {len(sessions)} sessions for orphaned permissions at startup")
-
-                for session in sessions:
-                    await self._cleanup_orphaned_permissions(
-                        session.session_id,
-                        reason="Session was terminated during server restart"
-                    )
-
-                logger.info(f"Completed orphaned permission cleanup scan for {len(sessions)} sessions")
-        except Exception as e:
-            logger.error(f"Error cleaning up orphaned permissions at startup: {e}")
 
     def _setup_routes(self):
         """Setup FastAPI routes"""
@@ -629,9 +608,6 @@ class ClaudeWebUI:
                 # Clean up any pending permissions for this session
                 self._cleanup_pending_permissions_for_session(session_id)
 
-                # Store denial messages for any orphaned permission requests
-                await self._cleanup_orphaned_permissions(session_id, reason="Session was terminated")
-
                 success = await self.coordinator.terminate_session(session_id)
                 return {"success": success}
             except Exception as e:
@@ -717,9 +693,6 @@ class ClaudeWebUI:
         async def restart_session(session_id: str):
             """Restart a session (disconnect and resume)"""
             try:
-                # Store denial messages for any orphaned permission requests before restarting
-                await self._cleanup_orphaned_permissions(session_id, reason="Session was restarted")
-
                 # Get permission callback for this session
                 permission_callback = self._create_permission_callback(session_id)
 
@@ -1656,74 +1629,6 @@ class ClaudeWebUI:
             return response
 
         return permission_callback
-
-    async def _cleanup_orphaned_permissions(self, session_id: str, reason: str = "Session was terminated"):
-        """
-        Clean up orphaned permission requests for a session.
-        Stores fake permission denial messages for any pending permissions.
-        Called when session is terminated, restarted, or found in PAUSED state at startup.
-        """
-        try:
-            # Find all pending permissions (we don't track session_id per permission, so we need to check messages)
-            storage_manager = await self.coordinator.get_session_storage(session_id)
-            if not storage_manager:
-                logger.warning(f"No storage manager found for session {session_id} during permission cleanup")
-                return
-
-            # Read recent messages to find pending permission requests
-            messages = await storage_manager.read_messages(limit=100)
-
-            # Find permission requests that don't have corresponding responses
-            pending_requests = []
-            request_ids_with_responses = set()
-
-            # First pass: collect all permission responses
-            for msg in messages:
-                if msg.get('type') == 'permission_response':
-                    request_id = msg.get('metadata', {}).get('request_id') or msg.get('request_id')
-                    if request_id:
-                        request_ids_with_responses.add(request_id)
-
-            # Second pass: find permission requests without responses
-            for msg in messages:
-                if msg.get('type') == 'permission_request':
-                    request_id = msg.get('metadata', {}).get('request_id') or msg.get('request_id')
-                    if request_id and request_id not in request_ids_with_responses:
-                        pending_requests.append({
-                            'request_id': request_id,
-                            'tool_name': msg.get('metadata', {}).get('tool_name') or msg.get('tool_name', 'unknown'),
-                            'timestamp': msg.get('timestamp', time.time())
-                        })
-
-            # Store fake denial messages for all pending requests
-            for pending in pending_requests:
-                permission_response = {
-                    "type": "permission_response",
-                    "content": f"Permission denied for tool: {pending['tool_name']} - {reason}",
-                    "session_id": session_id,
-                    "timestamp": time.time(),
-                    "request_id": pending['request_id'],
-                    "decision": "deny",
-                    "reasoning": reason,
-                    "tool_name": pending['tool_name'],
-                    "response_time_ms": int((time.time() - pending['timestamp']) * 1000),
-                    "orphaned_cleanup": True  # Mark as cleanup message
-                }
-
-                try:
-                    processed_message = self._message_processor.process_message(permission_response, source="permission")
-                    storage_data = self._message_processor.prepare_for_storage(processed_message)
-                    await storage_manager.append_message(storage_data)
-                    logger.info(f"Stored orphaned permission cleanup for request {pending['request_id']} in session {session_id}")
-                except Exception as storage_error:
-                    logger.error(f"Failed to store orphaned permission cleanup: {storage_error}")
-                    # Fallback to direct storage
-                    await storage_manager.append_message(permission_response)
-
-            if pending_requests:
-                logger.info(f"Cleaned up {len(pending_requests)} orphaned permission requests for session {session_id}")
-        except Exception as e:
-            logger.error(f"Error cleaning up orphaned permissions for session {session_id}: {e}")
 
 # _serialize_message method removed - now using MessageProcessor.prepare_for_websocket() for unified formatting
 

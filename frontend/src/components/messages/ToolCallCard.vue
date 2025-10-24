@@ -21,11 +21,22 @@
 
     <!-- Card Body (collapsible) -->
     <div v-if="toolCall.isExpanded" class="card-body">
+      <!-- Orphaned Tool Banner (if applicable) -->
+      <div v-if="isOrphaned" class="alert alert-warning mb-3">
+        <div class="d-flex align-items-center">
+          <i class="bi bi-x-circle me-2" style="font-size: 1.2rem;"></i>
+          <div>
+            <strong>Tool Execution Cancelled</strong>
+            <p class="mb-0 small">{{ orphanedInfo?.message || 'Session was terminated' }}</p>
+          </div>
+        </div>
+      </div>
+
       <!-- Tool-specific content (using specialized handler component) -->
       <component :is="toolHandlerComponent" :toolCall="toolCall" />
 
-      <!-- Permission Prompt (if applicable) -->
-      <div v-if="toolCall.status === 'permission_required'" class="permission-prompt mt-3">
+      <!-- Permission Prompt (if applicable and not orphaned) -->
+      <div v-if="toolCall.status === 'permission_required' && !isOrphaned" class="permission-prompt mt-3">
         <div class="alert alert-warning mb-3">
           <p class="mb-2"><strong>🔐 Permission Required</strong></p>
           <p class="mb-0">Claude wants to use the <code class="tool-name">{{ toolCall.name }}</code> tool.</p>
@@ -113,6 +124,19 @@
         </div>
       </div>
 
+      <!-- Orphaned Permission Message (when permission was pending but session ended) -->
+      <div v-if="toolCall.status === 'permission_required' && isOrphaned" class="mt-3">
+        <div class="alert alert-warning mb-0">
+          <div class="d-flex align-items-center">
+            <i class="bi bi-shield-x me-2" style="font-size: 1.2rem;"></i>
+            <div>
+              <strong>Permission Request Cancelled</strong>
+              <p class="mb-0 small">{{ orphanedInfo?.message || 'Session was terminated before permission could be granted' }}</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <!-- Permission Decision (if denied) -->
       <div v-if="toolCall.permissionDecision === 'deny'" class="tool-section mt-3">
         <div class="alert alert-danger mb-0">
@@ -160,6 +184,15 @@ const wsStore = useWebSocketStore()
 const isSubmittingPermission = ref(false)
 const permissionAction = ref(null)
 const guidanceMessage = ref('')
+
+// Orphaned tool detection
+const isOrphaned = computed(() => {
+  return messageStore.isToolUseOrphaned(sessionStore.currentSessionId, props.toolCall.id)
+})
+
+const orphanedInfo = computed(() => {
+  return messageStore.getOrphanedInfo(sessionStore.currentSessionId, props.toolCall.id)
+})
 
 // Tool handler component registry
 const toolHandlers = {
