@@ -1,584 +1,1099 @@
-# Tool Handler System - Complete Reference
+# Tool Handler System - Vue 3 Developer Guide
 
 ## Quick Navigation
-- [Overview](#overview) - System purpose and architecture
-- [File Locations](#file-locations) - Where each handler lives
-- [Adding New Handlers](#how-to-add-a-new-tool-handler) - Step-by-step guide
-- [Existing Handlers](#existing-tool-handlers-reference) - Complete handler catalog
-- [Handler API](#handler-methods) - Required and optional methods
-- [Best Practices](#best-practices) - Coding guidelines
+- [Overview](#overview) - System architecture and purpose
+- [Getting Started](#getting-started) - Create your first handler in 5 minutes
+- [Handler API](#handler-api-reference) - Component props, methods, and lifecycle
+- [Existing Handlers](#existing-tool-handlers-reference) - Complete catalog with examples
+- [Best Practices](#best-practices) - Coding standards and patterns
+- [Advanced Topics](#advanced-topics) - Dynamic handlers, shared logic, performance
 - [Debugging](#debugging-tool-handlers) - Common issues and solutions
 
 ## Overview
-The Tool Handler System provides customizable display logic for Claude Agent SDK tools. Each tool (Read, Edit, Write, Bash, etc.) can have a custom handler that controls:
-- **Parameter Display**: How tool inputs are shown before execution
-- **Result Display**: How tool outputs are rendered after execution
-- **Collapsed Summary**: One-line summary when tool card is collapsed
-- **Error Handling**: Custom error message formatting
 
-**Architecture Pattern**: Registry + Strategy Pattern
-1. **ToolHandlerRegistry** ([static/tools/tool-handler-registry.js](./static/tools/tool-handler-registry.js)) - Central registry for tool handlers
-2. **DefaultToolHandler** ([static/tools/handlers/base-handler.js](./static/tools/handlers/base-handler.js)) - Fallback handler for tools without custom implementations
-3. **Tool-specific handlers** ([static/tools/handlers/*.js](./static/tools/handlers/)) - Custom display logic per tool
+The Tool Handler System provides customizable Vue 3 components for displaying Claude Agent SDK tool calls. Each tool (Read, Edit, Write, Bash, etc.) can have a dedicated component that controls:
+
+- **Parameter Display** - How tool inputs are shown before execution
+- **Result Display** - How tool outputs are rendered after execution
+- **Status Indication** - Visual feedback for tool lifecycle states
+- **Error Handling** - Custom error message formatting
+
+**Architecture**: Component-based with dynamic registration in `MessageItem.vue`
+
+```
+MessageItem.vue (Router Component)
+    ↓
+Checks tool name → looks up handler component
+    ↓
+<component :is="handlerComponent" :tool-call="toolCall" />
+    ↓
+ReadToolHandler.vue / EditToolHandler.vue / etc.
+```
 
 ## File Locations
 
 ### Core System Files
-- **Registry**: [static/tools/tool-handler-registry.js](./static/tools/tool-handler-registry.js) - Manages handler lookup and registration
-- **Base Handler**: [static/tools/handlers/base-handler.js](./static/tools/handlers/base-handler.js) - `DefaultToolHandler` class
-- **Registration Point**: [static/app.js](./static/app.js) - `ClaudeWebUI.initializeToolHandlers()` method (around line 550)
+```
+frontend/src/
+├── components/
+│   └── messages/
+│       ├── MessageItem.vue          # Router: selects handler based on tool name
+│       ├── ToolCallCard.vue         # Container: lifecycle, expand/collapse, status
+│       └── tools/                   # Tool handler components
+│           ├── BaseToolHandler.vue           # Fallback for unknown tools
+│           ├── ReadToolHandler.vue           # File reading
+│           ├── EditToolHandler.vue           # File editing (diff view)
+│           ├── WriteToolHandler.vue          # File creation
+│           ├── BashToolHandler.vue           # Shell commands
+│           ├── SearchToolHandler.vue         # Grep/Glob results
+│           ├── WebToolHandler.vue            # WebFetch/WebSearch
+│           ├── TodoToolHandler.vue           # Task checklists
+│           ├── TaskToolHandler.vue           # Agent task delegation
+│           ├── NotebookEditToolHandler.vue   # Jupyter notebooks
+│           ├── ExitPlanModeToolHandler.vue   # Plan mode transitions
+│           ├── ShellToolHandler.vue          # Generic shell operations
+│           └── CommandToolHandler.vue        # Generic command display
+└── stores/
+    └── message.js                   # Tool call state management (Pinia)
+```
 
-### Handler Implementation Files
-All handlers in [static/tools/handlers/](./static/tools/handlers/):
-- [base-handler.js](./static/tools/handlers/base-handler.js) - `DefaultToolHandler` (fallback)
-- [read-handler.js](./static/tools/handlers/read-handler.js) - `ReadToolHandler` (file reading with preview)
-- [edit-handlers.js](./static/tools/handlers/edit-handlers.js) - `EditToolHandler`, `MultiEditToolHandler` (diff views)
-- [write-handler.js](./static/tools/handlers/write-handler.js) - `WriteToolHandler` (file creation preview)
-- [todo-handler.js](./static/tools/handlers/todo-handler.js) - `TodoWriteToolHandler` (task checklist)
-- [search-handlers.js](./static/tools/handlers/search-handlers.js) - `GrepToolHandler`, `GlobToolHandler` (search results)
-- [web-handlers.js](./static/tools/handlers/web-handlers.js) - `WebFetchToolHandler`, `WebSearchToolHandler`
-- [bash-handlers.js](./static/tools/handlers/bash-handlers.js) - `BashToolHandler`, `BashOutputToolHandler`, `KillShellToolHandler`
-- [misc-handlers.js](./static/tools/handlers/misc-handlers.js) - `TaskToolHandler`, `ExitPlanModeToolHandler`
+### Styling
+```
+frontend/src/assets/
+└── styles.css                       # Tool handler styles, diff views, status indicators
+```
 
-### CSS Styling
-- **Shared Styles**: [static/styles.css](./static/styles.css) - Tool card styling, diff views, status indicators
-- **Custom Overrides**: [static/custom.css](./static/custom.css) - User customizations (optional)
+## Getting Started
 
-### Loading Order (CRITICAL)
-Defined in [static/index.html](./static/index.html):
-```html
-<!-- Core infrastructure (no dependencies) -->
-<script src="/static/core/logger.js"></script>
-<script src="/static/core/constants.js"></script>
-<script src="/static/core/api-client.js"></script>
-<script src="/static/core/project-manager.js"></script>
+### Create Your First Tool Handler (5-Minute Quickstart)
 
-<!-- Tool system -->
-<script src="/static/tools/tool-call-manager.js"></script>
-<script src="/static/tools/tool-handler-registry.js"></script>
+**Step 1: Create component file** (`frontend/src/components/messages/tools/MyToolHandler.vue`)
 
-<!-- Tool handlers (must load before app.js) -->
-<script src="/static/tools/handlers/base-handler.js"></script>
-<script src="/static/tools/handlers/read-handler.js"></script>
-<script src="/static/tools/handlers/edit-handlers.js"></script>
-<script src="/static/tools/handlers/write-handler.js"></script>
-<script src="/static/tools/handlers/todo-handler.js"></script>
-<script src="/static/tools/handlers/search-handlers.js"></script>
-<script src="/static/tools/handlers/web-handlers.js"></script>
-<script src="/static/tools/handlers/bash-handlers.js"></script>
-<script src="/static/tools/handlers/misc-handlers.js"></script>
+```vue
+<template>
+  <div class="tool-handler-mytool">
+    <!-- Parameters Section -->
+    <div class="tool-parameters">
+      <div class="param-row">
+        <strong>My Parameter:</strong>
+        <span>{{ toolCall.input.my_parameter }}</span>
+      </div>
+    </div>
 
-<!-- Main application (depends on all above) -->
-<script src="/static/app.js"></script>
+    <!-- Result Section (only if result exists) -->
+    <div v-if="toolCall.result" class="tool-result" :class="resultClass">
+      <strong>Result:</strong>
+      <pre>{{ toolCall.result.content || toolCall.result.message }}</pre>
+    </div>
+  </div>
+</template>
+
+<script setup>
+import { computed } from 'vue'
+
+const props = defineProps({
+  toolCall: {
+    type: Object,
+    required: true
+  }
+})
+
+const resultClass = computed(() => {
+  return toolCall.result?.error ? 'tool-result-error' : 'tool-result-success'
+})
+</script>
+
+<style scoped>
+.tool-handler-mytool {
+  padding: 0.75rem;
+}
+
+.tool-parameters {
+  background: #f0f8ff;
+  border: 1px solid #d0e8ff;
+  border-radius: 6px;
+  padding: 1rem;
+  margin-bottom: 0.75rem;
+}
+
+.param-row {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.param-row:last-child {
+  margin-bottom: 0;
+}
+
+.tool-result {
+  border-radius: 6px;
+  padding: 1rem;
+  margin-top: 0.75rem;
+}
+
+.tool-result-success {
+  background: #f0fff0;
+  border: 1px solid #d0ffd0;
+}
+
+.tool-result-error {
+  background: #fff0f0;
+  border: 1px solid #ffd0d0;
+}
+
+.tool-result pre {
+  margin: 0.5rem 0 0;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  font-family: 'Courier New', monospace;
+  font-size: 0.9rem;
+}
+</style>
+```
+
+**Step 2: Register in `MessageItem.vue`**
+
+Open `frontend/src/components/messages/MessageItem.vue` and add your handler to the component import map:
+
+```vue
+<script setup>
+// ... existing imports ...
+import MyToolHandler from './tools/MyToolHandler.vue'
+
+// Add to the toolHandlerMap
+const toolHandlerMap = {
+  // ... existing handlers ...
+  'MyTool': MyToolHandler,
+  'MyOtherTool': MyToolHandler, // Can reuse for similar tools
+}
+</script>
+```
+
+**Step 3: Test your handler**
+
+1. Start dev server: `npm run dev`
+2. Trigger your tool in a Claude session
+3. Observe rendering in browser
+4. Adjust styling/layout as needed
+
+**That's it!** Your handler is now live with hot module replacement.
+
+## Handler API Reference
+
+### Component Props
+
+Every tool handler component receives:
+
+```typescript
+props: {
+  toolCall: {
+    type: Object,
+    required: true,
+    // Structure:
+    {
+      id: string,                    // Unique tool use ID (e.g., "tool_use_123")
+      name: string,                  // Tool name (e.g., "Read", "Edit")
+      input: Object,                 // Tool parameters (varies by tool)
+      status: string,                // Lifecycle state (see below)
+      result: Object | null,         // Tool result (null until completed)
+      permissionRequestId: string,   // Permission request ID (if applicable)
+      permissionDecision: string,    // User decision: "allow" | "deny" (if applicable)
+      explanation: string,           // Assistant's explanation for tool use
+      isOrphaned: boolean,           // True if tool cancelled due to session event
+    }
+  }
+}
+```
+
+### Tool Call Status Values
+
+```typescript
+type Status =
+  | 'pending'              // Tool use message received, waiting to execute
+  | 'permission_required'  // Awaiting user approval
+  | 'executing'            // Currently running
+  | 'completed'            // Finished successfully
+  | 'error'                // Failed with error
+```
+
+### Tool Result Structure
+
+```typescript
+interface ToolResult {
+  content?: string         // Main result content
+  message?: string         // Alternative to content
+  error?: boolean          // True if tool failed
+  metadata?: Object        // Additional result data (varies by tool)
+}
+```
+
+### Common Input Patterns
+
+Different tools have different input structures:
+
+```typescript
+// File operations
+{ file_path: string, offset?: number, limit?: number }
+
+// Edit operations
+{ file_path: string, old_string: string, new_string: string, replace_all?: boolean }
+
+// Multi-edit
+{ file_path: string, edits: Array<{ old_string, new_string }> }
+
+// Search operations
+{ pattern: string, path?: string, glob?: string, output_mode?: string }
+
+// Bash commands
+{ command: string, timeout?: number, run_in_background?: boolean }
+
+// Web operations
+{ url: string, prompt?: string, query?: string }
+```
+
+### Computed Properties Pattern
+
+Use Vue computed properties for derived state:
+
+```vue
+<script setup>
+import { computed } from 'vue'
+
+const props = defineProps({ toolCall: Object })
+
+// Compute result class based on error state
+const resultClass = computed(() => {
+  if (!props.toolCall.result) return ''
+  return props.toolCall.result.error ? 'tool-result-error' : 'tool-result-success'
+})
+
+// Extract filename from path
+const fileName = computed(() => {
+  const path = props.toolCall.input.file_path || ''
+  return path.split('/').pop() || path.split('\\').pop() || path
+})
+
+// Count lines in content
+const lineCount = computed(() => {
+  const content = props.toolCall.result?.content || ''
+  return content.split('\n').length
+})
+</script>
+```
+
+### Conditional Rendering
+
+Always check for data existence before rendering:
+
+```vue
+<template>
+  <div class="tool-handler">
+    <!-- Parameters always shown -->
+    <div class="tool-parameters">
+      <!-- Use optional chaining and fallbacks -->
+      <span>{{ toolCall.input?.file_path || 'Unknown file' }}</span>
+    </div>
+
+    <!-- Result only if exists -->
+    <div v-if="toolCall.result" class="tool-result">
+      <!-- Error state -->
+      <div v-if="toolCall.result.error" class="error-message">
+        {{ toolCall.result.message || 'Unknown error' }}
+      </div>
+
+      <!-- Success state -->
+      <div v-else class="success-message">
+        {{ toolCall.result.content }}
+      </div>
+    </div>
+
+    <!-- Orphaned state -->
+    <div v-if="toolCall.isOrphaned" class="orphaned-banner">
+      ⚠️ Tool execution cancelled due to session event
+    </div>
+  </div>
+</template>
 ```
 
 ## Existing Tool Handlers Reference
 
 ### File Operations
-| Handler | File | Tool Names | Key Features |
-|---------|------|------------|--------------|
-| `ReadToolHandler` | [read-handler.js](./static/tools/handlers/read-handler.js) | `Read` | File preview (first 20 lines), line count display, scrollable content |
-| `EditToolHandler` | [edit-handlers.js](./static/tools/handlers/edit-handlers.js) | `Edit` | Diff view with +/- line highlighting, "Replace All" badge |
-| `MultiEditToolHandler` | [edit-handlers.js](./static/tools/handlers/edit-handlers.js) | `MultiEdit` | Multiple diffs with numbered sections, edit count badge |
-| `WriteToolHandler` | [write-handler.js](./static/tools/handlers/write-handler.js) | `Write` | Content preview (first 20 lines), line count, green theme |
 
-### Task & Project Management
-| Handler | File | Tool Names | Key Features |
-|---------|------|------------|--------------|
-| `TodoWriteToolHandler` | [todo-handler.js](./static/tools/handlers/todo-handler.js) | `TodoWrite` | Checklist with ☐/◐/☑ indicators, status badges (completed/in-progress/pending) |
-| `TaskToolHandler` | [misc-handlers.js](./static/tools/handlers/misc-handlers.js) | `Task` | Agent task display, delegation icon |
-| `ExitPlanModeToolHandler` | [misc-handlers.js](./static/tools/handlers/misc-handlers.js) | `ExitPlanMode` | Plan summary display, mode transition indicator |
+#### ReadToolHandler.vue
+**Tool Name**: `Read`
 
-### Search & Discovery
-| Handler | File | Tool Names | Key Features |
-|---------|------|------------|--------------|
-| `GrepToolHandler` | [search-handlers.js](./static/tools/handlers/search-handlers.js) | `Grep` | Pattern display, match count, result preview (10 lines) |
-| `GlobToolHandler` | [search-handlers.js](./static/tools/handlers/search-handlers.js) | `Glob` | File pattern display, match count, file list preview (10 files) |
+**Features**:
+- File path display with 📄 icon
+- Line range indication (offset/limit)
+- Content preview (first 20 lines) with line numbers
+- Scrollable container with "..." indicator if truncated
+- Line count display in result
 
-### Shell Operations
-| Handler | File | Tool Names | Key Features |
-|---------|------|------------|--------------|
-| `BashToolHandler` | [bash-handlers.js](./static/tools/handlers/bash-handlers.js) | `Bash` | Command display with icon, output preview (20 lines), exit code indicator |
-| `BashOutputToolHandler` | [bash-handlers.js](./static/tools/handlers/bash-handlers.js) | `BashOutput` | Shell ID display, output streaming preview |
-| `KillShellToolHandler` | [bash-handlers.js](./static/tools/handlers/bash-handlers.js) | `KillShell` | Shell termination indicator, process ID |
-
-### Web Operations
-| Handler | File | Tool Names | Key Features |
-|---------|------|------------|--------------|
-| `WebFetchToolHandler` | [web-handlers.js](./static/tools/handlers/web-handlers.js) | `WebFetch` | URL display with icon, prompt display, content preview (20 lines) |
-| `WebSearchToolHandler` | [web-handlers.js](./static/tools/handlers/web-handlers.js) | `WebSearch` | Search query display, domain filters, result count |
-
-### Fallback
-| Handler | File | Tool Names | Key Features |
-|---------|------|------------|--------------|
-| `DefaultToolHandler` | [base-handler.js](./static/tools/handlers/base-handler.js) | *(any unregistered tool)* | Generic JSON parameter display, plain text result |
-
-## How to Add a New Tool Handler
-
-### Method 1: Create Standalone Handler File (Recommended for New Tools)
-
-#### Step 1: Create new file in `static/tools/handlers/`
-```bash
-# Example: static/tools/handlers/my-tool-handler.js
-```
-
+**Example Input**:
 ```javascript
-class MyToolHandler {
-    /**
-     * Render tool parameters (required)
-     * @param {Object} toolCall - Tool call state object
-     * @param {Function} escapeHtmlFn - HTML escaping function
-     * @returns {string} HTML string for parameters display
-     */
-    renderParameters(toolCall, escapeHtmlFn) {
-        // Access parameters from toolCall.input
-        const myParam = toolCall.input.my_parameter;
-
-        return `
-            <div class="tool-parameters tool-mytool-params">
-                <strong>My Parameter:</strong>
-                <span>${escapeHtmlFn(myParam)}</span>
-            </div>
-        `;
-    }
-
-    /**
-     * Render tool result (required)
-     * @param {Object} toolCall - Tool call state object
-     * @param {Function} escapeHtmlFn - HTML escaping function
-     * @returns {string} HTML string for result display
-     */
-    renderResult(toolCall, escapeHtmlFn) {
-        if (!toolCall.result) return '';
-
-        const resultClass = toolCall.result.error ? 'tool-result-error' : 'tool-result-success';
-        const content = toolCall.result.content || toolCall.result.message;
-
-        return `
-            <div class="tool-result ${resultClass}">
-                <strong>Result:</strong>
-                <pre>${escapeHtmlFn(content)}</pre>
-            </div>
-        `;
-    }
-
-    /**
-     * Generate custom collapsed summary (optional)
-     * @param {Object} toolCall - Tool call state object
-     * @returns {string|null} Custom summary string, or null to use default
-     */
-    getCollapsedSummary(toolCall) {
-        const statusIcon = {
-            'completed': '✅',
-            'error': '💥'
-        }[toolCall.status] || '🔧';
-
-        return `${statusIcon} MyTool - Custom Summary`;
-    }
-}
+{ file_path: "/path/to/file.txt", offset: 0, limit: 50 }
 ```
 
-#### Step 2: Add script tag to `index.html`
-Add before `<script src="/static/app.js"></script>`:
-```html
-<script src="/static/tools/handlers/my-tool-handler.js"></script>
-```
+**Styling**: Blue theme, syntax-highlighted monospace font
 
-#### Step 3: Register handler in `app.js`
-In `ClaudeWebUI.initializeToolHandlers()` method (around line 550):
-```javascript
-initializeToolHandlers() {
-    // ... existing handlers ...
-    this.toolHandlerRegistry.registerHandler('MyTool', new MyToolHandler());
+---
 
-    // For pattern matching (e.g., all MCP tools)
-    this.toolHandlerRegistry.registerPatternHandler('mcp__*', new MyToolHandler());
-}
-```
+#### EditToolHandler.vue
+**Tool Name**: `Edit`
 
-#### Step 4: Add CSS styling in `styles.css`
+**Features**:
+- File path with ✏️ icon
+- "Replace All" badge if applicable
+- Diff view with line-by-line changes:
+  - Red background + `-` for removed lines
+  - Green background + `+` for added lines
+  - Gray background + ` ` for context lines
+- Success/error result display
 
-```css
-/* MyTool Handler Styles */
-.tool-mytool-params {
-    background: #f0fff0;
-    border: 1px solid #d0ffd0;
-    border-radius: 6px;
-    padding: 1rem;
-}
-
-/* Add more custom styles as needed */
-```
-
-## Example: Read Tool Handler
-
-The `ReadToolHandler` demonstrates custom rendering:
-
-### Parameters Display
-- Shows file path prominently with icon 📄
-- Displays line range if offset/limit specified
-- Uses blue background to distinguish from other tools
-
-### Result Display
-- Shows line count at top
-- Previews first 20 lines with scrollable container
-- Indicates if more content exists with "..." indicator
-- Syntax-highlighted monospace font
-
-### Collapsed Summary
-- Shows filename (extracted from path)
-- Shows line count when completed successfully
-- Format: `✅ Read filename.txt - 150 lines`
-
-## Pattern Matching
-
-Use `registerPatternHandler()` for tools matching a pattern:
-
-```javascript
-// Match all MCP tools (mcp__*)
-this.toolHandlerRegistry.registerPatternHandler('mcp__*', new McpToolHandler());
-
-// Use regex for complex patterns
-this.toolHandlerRegistry.registerPatternHandler(/^custom_/, new CustomToolHandler());
-```
-
-## Handler Methods
-
-### Required Methods
-- `renderParameters(toolCall, escapeHtmlFn)` - Display tool parameters
-- `renderResult(toolCall, escapeHtmlFn)` - Display tool result
-
-### Optional Methods
-- `getCollapsedSummary(toolCall)` - Custom collapsed view
-  - Return `null` to use default summary
-  - Return string for custom summary
-
-## Accessing Tool Data
-
-### toolCall Object Structure
+**Example Input**:
 ```javascript
 {
-    id: "tool_use_123",
-    name: "Read",
-    input: { file_path: "/path/to/file.txt", ... },
-    status: "completed", // pending, permission_required, executing, completed, error
-    result: {
-        error: false,
-        content: "file contents..."
-    },
-    permissionRequestId: "req_123",
-    permissionDecision: "allow", // or "deny"
-    explanation: "Assistant's explanation text"
+  file_path: "/path/to/file.txt",
+  old_string: "const foo = 'bar'",
+  new_string: "const foo = 'baz'",
+  replace_all: false
 }
 ```
+
+**Styling**: Diff colors (red/green), monospace font
+
+---
+
+#### WriteToolHandler.vue
+**Tool Name**: `Write`
+
+**Features**:
+- File path with 📝 icon
+- "Writing new file" label
+- Content preview (first 20 lines)
+- Line count header
+- Scrollable monospace container
+- Green theme for new file creation
+
+**Example Input**:
+```javascript
+{ file_path: "/path/to/new-file.txt", content: "file contents..." }
+```
+
+**Styling**: Green theme, success-oriented
+
+---
+
+### Search Operations
+
+#### SearchToolHandler.vue
+**Tool Names**: `Grep`, `Glob`
+
+**Features**:
+- Search pattern display with 🔍 icon
+- Match count badge
+- File/path filters display
+- Result preview (first 10 lines/files)
+- Scrollable result container
+- "..." indicator if truncated
+
+**Example Input (Grep)**:
+```javascript
+{ pattern: "function\\s+\\w+", path: "/src", glob: "*.js", output_mode: "content" }
+```
+
+**Example Input (Glob)**:
+```javascript
+{ pattern: "**/*.vue", path: "/frontend/src" }
+```
+
+**Styling**: Purple theme, code formatting for results
+
+---
+
+### Shell Operations
+
+#### BashToolHandler.vue
+**Tool Names**: `Bash`, `BashOutput`, `KillShell`
+
+**Features**:
+- Command display with 💻 icon
+- Timeout and background execution indicators
+- Output preview (first 20 lines) with STDOUT/STDERR separation
+- Exit code display (success: green, error: red)
+- Scrollable output with monospace font
+
+**Example Input**:
+```javascript
+{ command: "npm run build", timeout: 60000, run_in_background: false }
+```
+
+**Styling**: Dark terminal theme, monospace font
+
+---
+
+### Web Operations
+
+#### WebToolHandler.vue
+**Tool Names**: `WebFetch`, `WebSearch`
+
+**Features**:
+- URL/query display with 🌐 icon
+- Search query and domain filter badges
+- Prompt display (for WebFetch)
+- Content preview (first 20 lines)
+- Result count badge
+- Scrollable result container
+
+**Example Input (WebFetch)**:
+```javascript
+{ url: "https://example.com", prompt: "Extract pricing information" }
+```
+
+**Example Input (WebSearch)**:
+```javascript
+{ query: "Vue 3 composition API", allowed_domains: ["vuejs.org"] }
+```
+
+**Styling**: Blue web theme
+
+---
+
+### Task Management
+
+#### TodoToolHandler.vue
+**Tool Name**: `TodoWrite`
+
+**Features**:
+- Clipboard icon 📋 with "Task List" header
+- Summary badges (completed/in-progress/pending counts)
+- Checklist view with status indicators:
+  - ☐ Empty checkbox for `pending` (gray)
+  - ◐ Half-filled for `in_progress` (orange border, bold)
+  - ☑ Checked for `completed` (green border, strikethrough)
+- Hover effects on todo items
+- Orange/amber theme
+
+**Example Input**:
+```javascript
+{
+  todos: [
+    { content: "Write tests", status: "completed", activeForm: "Writing tests" },
+    { content: "Deploy to prod", status: "in_progress", activeForm: "Deploying to prod" },
+    { content: "Update docs", status: "pending", activeForm: "Updating docs" }
+  ]
+}
+```
+
+**Styling**: Amber theme, interactive checkboxes
+
+---
+
+#### TaskToolHandler.vue
+**Tool Name**: `Task`
+
+**Features**:
+- Delegation icon 🤖
+- Agent task description display
+- Subagent type badge
+- Prompt display with formatting
+
+**Styling**: Agent-themed styling
+
+---
+
+#### ExitPlanModeToolHandler.vue
+**Tool Name**: `ExitPlanMode`
+
+**Features**:
+- Mode transition indicator
+- Plan summary display
+- Automatic permission mode reset notification
+
+**Styling**: Planning mode theme
+
+---
+
+### Jupyter Notebooks
+
+#### NotebookEditToolHandler.vue
+**Tool Name**: `NotebookEdit`
+
+**Features**:
+- Notebook path with 📓 icon
+- Cell number display
+- Cell type badge (code/markdown)
+- Edit mode indicator (replace/insert/delete)
+- Source code diff view (for replace mode)
+- New source preview
+
+**Example Input**:
+```javascript
+{
+  notebook_path: "/path/to/notebook.ipynb",
+  cell_id: "abc123",
+  cell_type: "code",
+  edit_mode: "replace",
+  new_source: "print('hello world')"
+}
+```
+
+**Styling**: Jupyter orange theme
+
+---
+
+### Fallback Handler
+
+#### BaseToolHandler.vue
+**Tool Names**: *(any unregistered tool)*
+
+**Features**:
+- Generic parameter display (JSON formatted)
+- Plain text result display
+- Handles unknown tools gracefully
+- Supports all standard statuses
+
+**Styling**: Neutral gray theme
+
+---
 
 ## Best Practices
 
-1. **Always escape HTML** - Use the provided `escapeHtmlFn` for user-controlled content
-2. **Handle missing data** - Check for undefined/null values in toolCall.input and toolCall.result
-3. **Error states** - Provide clear error displays when toolCall.result.error is true
-4. **Consistent styling** - Use existing CSS classes where possible
-5. **Performance** - Keep rendering logic lightweight for smooth UI updates
-6. **Accessibility** - Include appropriate ARIA labels and semantic HTML
+### 1. Always Use Scoped Styles
 
-## Example: Edit Tool Handler
-
-The `EditToolHandler` demonstrates diff-style rendering:
-
-### Parameters Display
-- Shows file path with edit icon ✏️
-- Displays "Replace All" badge if applicable
-- **Diff view** showing line-by-line changes:
-  - Red background with `-` for removed lines
-  - Green background with `+` for added lines
-  - White background with space for unchanged lines
-- Monospace font for code readability
-
-### Result Display
-- Success: Shows checkmark with "File edited successfully"
-- Error: Displays error message in red-tinted box
-
-### Collapsed Summary
-- Shows filename (extracted from path)
-- Shows line count changed
-- Format: `✅ Edit filename.txt - 4 lines changed`
-
-## Example: MultiEdit Tool Handler
-
-The `MultiEditToolHandler` demonstrates multiple diff rendering:
-
-### Parameters Display
-- Shows file path with edit icon ✏️
-- Displays purple badge showing total edit count
-- **Multiple diff sections** - each edit shown separately:
-  - Purple header: "Edit 1 of 3", "Edit 2 of 3", etc.
-  - Each section uses same diff view as Edit tool
-  - Red/green highlighting for removed/added lines
-- **Reuses diff CSS classes** - all diff styling (`.diff-view`, `.diff-line`, `.diff-marker`, etc.) is shared between Edit and MultiEdit for consistency
-
-### Result Display
-- Success: Shows checkmark with count "3 edits applied successfully"
-- Error: Displays error message in red-tinted box
-
-### Collapsed Summary
-- Shows filename (extracted from path)
-- Shows edit count
-- Format: `✅ MultiEdit filename.txt - 3 edits`
-
-## Example: Write Tool Handler
-
-The `WriteToolHandler` demonstrates new file creation display:
-
-### Parameters Display
-- Shows file path with write icon 📝
-- Displays "Writing new file:" label
-- **Content preview** showing file content:
-  - Line count displayed in header
-  - Preview of first 20 lines
-  - Scrollable monospace view
-  - "..." indicator if more content exists
-- Green background to indicate new file creation
-
-### Result Display
-- Success: Shows checkmark with "File created successfully (X lines written)"
-- Error: Displays error message in red-tinted box
-
-### Collapsed Summary
-- Shows filename (extracted from path)
-- Shows line count written
-- Format: `✅ Write filename.txt - 25 lines`
-
-## Example: TodoWrite Tool Handler
-
-The `TodoWriteToolHandler` demonstrates task tracking display:
-
-### Parameters Display
-- Shows clipboard icon 📋 with "Task List:" header
-- **Summary badges** showing completed/in-progress/pending counts (right-aligned)
-- **Checklist view** with visual status indicators:
-  - ☐ Empty checkbox for `pending` tasks (gray text)
-  - ◐ Half-filled checkbox for `in_progress` tasks (orange left border, bold text)
-  - ☑ Checked checkbox for `completed` tasks (green left border, strikethrough)
-- Orange/amber background theme
-- Hover effects on todo items
-
-### Result Display
-- Success: Shows checkmark with "Task list updated (X tasks)"
-- Error: Displays error message in red-tinted box
-
-### Collapsed Summary
-- Shows completed/pending counts and full text of in-progress tasks
-- Format: `✅ TodoWrite - 2 completed, 1 pending | ◐ Task description here`
-- Multiple in-progress tasks separated by ` | `
-- Allows seeing current work without expanding the tool card
-
-### Method 2: Add to Existing Handler File (For Related Tools)
-If your tool is similar to existing tools, add to the appropriate file:
-- File operations → [edit-handlers.js](./static/tools/handlers/edit-handlers.js) or [write-handler.js](./static/tools/handlers/write-handler.js)
-- Search tools → [search-handlers.js](./static/tools/handlers/search-handlers.js)
-- Shell tools → [bash-handlers.js](./static/tools/handlers/bash-handlers.js)
-- Web tools → [web-handlers.js](./static/tools/handlers/web-handlers.js)
-
-Then register in `app.js` as shown above.
-
-## Debugging Tool Handlers
-
-### Common Issues
-
-**Problem**: Handler not being used (falls back to DefaultToolHandler)
-→ **Solution**: Check handler is registered in `app.js` `initializeToolHandlers()` with exact tool name (case-sensitive!)
-
-**Problem**: "Handler class not defined" error in browser console
-→ **Solution**: Verify script tag is in `index.html` and loads BEFORE `app.js`
-
-**Problem**: Tool card not rendering correctly
-→ **Solution**: Check browser console for JavaScript errors, ensure `renderParameters()` and `renderResult()` return valid HTML strings
-
-**Problem**: Collapsed summary not updating
-→ **Solution**: Return string from `getCollapsedSummary()`, not `null` (null uses default)
-
-**Problem**: CSS styles not applying
-→ **Solution**: Check CSS selectors match rendered HTML class names, verify styles are in `styles.css` or `custom.css`
-
-### Debug Workflow
-1. Open browser DevTools (F12) → Console tab
-2. Check for JavaScript errors when tool card renders
-3. Use `Logger.debug('TOOL_HANDLER', 'message', data)` for logging
-4. Inspect HTML elements to verify class names match CSS
-5. Test with simple tool first (e.g., Read) before complex tools
-
-### Testing New Handlers
-```javascript
-// In browser console:
-const handler = new MyToolHandler();
-const mockToolCall = {
-    id: 'test_123',
-    name: 'MyTool',
-    input: { my_param: 'test value' },
-    status: 'completed',
-    result: { content: 'test result' }
-};
-console.log(handler.renderParameters(mockToolCall, (s) => s));
-console.log(handler.renderResult(mockToolCall, (s) => s));
+```vue
+<style scoped>
+/* Scoped styles prevent global namespace pollution */
+.tool-parameters {
+  /* Styles only apply to this component */
+}
+</style>
 ```
 
-## Handler Data Flow
+### 2. Handle Missing Data Gracefully
 
-### 1. Tool Use Message Arrives
-```
-SDK message (AssistantMessage with ToolUseBlock)
-    ↓
-ToolCallManager.handleToolUse() extracts tool data
-    ↓
-Creates toolCall object: { id, name, input, status: 'pending', ... }
-    ↓
-Stores in ToolCallManager._toolCalls map
-    ↓
-Triggers UI update
-```
+```vue
+<template>
+  <!-- Use optional chaining -->
+  <div>{{ toolCall.input?.file_path || 'Unknown' }}</div>
 
-### 2. Tool Card Rendering
-```
-ClaudeWebUI.renderToolUseMessage() called
-    ↓
-Looks up handler: toolHandlerRegistry.getHandler(toolName)
-    ↓
-Calls handler.renderParameters(toolCall, escapeHtml)
-    ↓
-Returns HTML string
-    ↓
-Inserts into tool-use-content div
-```
-
-### 3. Tool Result Arrives
-```
-SDK message (UserMessage with ToolResultBlock)
-    ↓
-ToolCallManager.handleToolResult() updates toolCall
-    ↓
-Updates: toolCall.result = { content, error }
-         toolCall.status = 'completed' or 'error'
-    ↓
-Triggers UI update
-    ↓
-Calls handler.renderResult(toolCall, escapeHtml)
-    ↓
-Updates tool-result-content div
-```
-
-### 4. Card Collapse/Expand
-```
-User clicks tool card header
-    ↓
-Toggles 'collapsed' class on tool-use-item
-    ↓
-If collapsed: shows getCollapsedSummary() text
-    ↓
-If expanded: shows full renderParameters() + renderResult()
-```
-
-## Performance Considerations
-
-### Keep Rendering Fast
-- **Limit previews**: Don't render entire files (use first N lines)
-- **Avoid heavy computation**: No syntax highlighting on 10,000-line files
-- **Use CSS for effects**: Prefer CSS transitions over JS animations
-- **Debounce updates**: If tool streams data, throttle re-renders
-
-### Memory Management
-- **Don't store large data**: Keep only references to data, not copies
-- **Clean up on unmount**: No global state that persists after tool card removed
-- **Use WeakMap for metadata**: Garbage collection friendly
-
-## CSS Class Reference
-
-### Tool Card Structure
-```html
-<div class="tool-use-item" data-tool-id="tool_123" data-tool-name="Read">
-  <div class="tool-use-header">
-    <span class="tool-use-icon">📄</span>
-    <span class="tool-use-name">Read</span>
-    <span class="tool-use-status-badge">completed</span>
+  <!-- Use v-if for conditional sections -->
+  <div v-if="toolCall.result">
+    {{ toolCall.result.content }}
   </div>
-  <div class="tool-use-content">
-    <!-- renderParameters() output here -->
-  </div>
-  <div class="tool-result-content">
-    <!-- renderResult() output here -->
-  </div>
-</div>
+</template>
 ```
 
-### Common CSS Classes
-| Class | Purpose | Defined In |
-|-------|---------|------------|
-| `.tool-use-item` | Tool card container | styles.css |
-| `.tool-use-item.collapsed` | Collapsed state | styles.css |
-| `.tool-use-header` | Card header (icon + name + status) | styles.css |
-| `.tool-use-content` | Parameters section | styles.css |
-| `.tool-result-content` | Results section | styles.css |
-| `.tool-parameters` | Generic parameter display | styles.css |
-| `.tool-result-success` | Success result styling | styles.css |
-| `.tool-result-error` | Error result styling | styles.css |
-| `.diff-view` | Diff container (Edit/MultiEdit) | styles.css |
-| `.diff-line` | Single line in diff | styles.css |
-| `.diff-line-removed` | Removed line (red) | styles.css |
-| `.diff-line-added` | Added line (green) | styles.css |
-| `.todo-list` | Todo checklist container | styles.css |
-| `.todo-item` | Single todo item | styles.css |
-| `.todo-item-pending` | Pending task styling | styles.css |
-| `.todo-item-in-progress` | In-progress task styling | styles.css |
-| `.todo-item-completed` | Completed task styling | styles.css |
+### 3. Use Computed Properties for Derived State
 
-## Advanced Patterns
+```vue
+<script setup>
+import { computed } from 'vue'
 
-### Pattern Handlers (for Tool Families)
-```javascript
-// Register handler for all tools matching pattern
-this.toolHandlerRegistry.registerPatternHandler('mcp__*', new McpToolHandler());
+const props = defineProps({ toolCall: Object })
 
-// In ToolHandlerRegistry.getHandler():
-// 1. Check exact match first
-// 2. Fall back to pattern match
-// 3. Fall back to DefaultToolHandler
+// Good: Computed property (reactive, cached)
+const lineCount = computed(() => {
+  return (props.toolCall.result?.content || '').split('\n').length
+})
+
+// Bad: Direct computation in template (not cached)
+// {{ toolCall.result?.content.split('\n').length }}
+</script>
 ```
 
-### Shared Rendering Logic
-```javascript
-// Reusable helper function
-function renderFilePath(filePath) {
-    const fileName = filePath.split('/').pop();
-    return `<strong>File:</strong> <code>${escapeHtml(filePath)}</code>`;
+### 4. Limit Preview Sizes
+
+```vue
+<script setup>
+const MAX_PREVIEW_LINES = 20
+
+const previewContent = computed(() => {
+  const content = props.toolCall.result?.content || ''
+  const lines = content.split('\n')
+
+  if (lines.length > MAX_PREVIEW_LINES) {
+    return lines.slice(0, MAX_PREVIEW_LINES).join('\n') + '\n...'
+  }
+
+  return content
+})
+
+const hasMoreContent = computed(() => {
+  const lines = (props.toolCall.result?.content || '').split('\n')
+  return lines.length > MAX_PREVIEW_LINES
+})
+</script>
+
+<template>
+  <pre>{{ previewContent }}</pre>
+  <div v-if="hasMoreContent" class="truncation-indicator">
+    ... ({{ lineCount - MAX_PREVIEW_LINES }} more lines)
+  </div>
+</template>
+```
+
+### 5. Use Semantic HTML
+
+```vue
+<template>
+  <!-- Good: Semantic structure -->
+  <article class="tool-handler">
+    <header class="tool-parameters">
+      <h3>Parameters</h3>
+      <dl>
+        <dt>File Path:</dt>
+        <dd>{{ toolCall.input.file_path }}</dd>
+      </dl>
+    </header>
+
+    <section v-if="toolCall.result" class="tool-result">
+      <h3>Result</h3>
+      <pre><code>{{ toolCall.result.content }}</code></pre>
+    </section>
+  </article>
+</template>
+```
+
+### 6. Consistent Status Indication
+
+```vue
+<script setup>
+const statusConfig = {
+  pending: { icon: '⏳', label: 'Pending', class: 'status-pending' },
+  permission_required: { icon: '🔒', label: 'Awaiting Permission', class: 'status-permission' },
+  executing: { icon: '⚙️', label: 'Executing', class: 'status-executing' },
+  completed: { icon: '✅', label: 'Completed', class: 'status-completed' },
+  error: { icon: '💥', label: 'Error', class: 'status-error' }
 }
 
-// Use in multiple handlers
-class ReadToolHandler {
-    renderParameters(toolCall, escapeHtml) {
-        return `<div>${renderFilePath(toolCall.input.file_path)}</div>`;
+const currentStatus = computed(() => {
+  return statusConfig[props.toolCall.status] || statusConfig.pending
+})
+</script>
+
+<template>
+  <div :class="['status-indicator', currentStatus.class]">
+    <span class="status-icon">{{ currentStatus.icon }}</span>
+    <span class="status-label">{{ currentStatus.label }}</span>
+  </div>
+</template>
+```
+
+### 7. Escape HTML When Rendering User Content
+
+Vue automatically escapes text content in `{{ }}`, but be careful with `v-html`:
+
+```vue
+<template>
+  <!-- Safe: Automatic escaping -->
+  <div>{{ toolCall.result.content }}</div>
+
+  <!-- UNSAFE: Don't use v-html with untrusted content -->
+  <!-- <div v-html="toolCall.result.content"></div> -->
+
+  <!-- If you must render HTML, sanitize first -->
+  <div v-html="sanitizedContent"></div>
+</template>
+
+<script setup>
+import DOMPurify from 'dompurify'
+
+const sanitizedContent = computed(() => {
+  return DOMPurify.sanitize(props.toolCall.result?.content || '')
+})
+</script>
+```
+
+### 8. Performance: Avoid Heavy Computations
+
+```vue
+<script setup>
+// Bad: Heavy computation on every render
+const processedContent = computed(() => {
+  // Avoid syntax highlighting 10,000 lines
+  const lines = props.toolCall.result?.content.split('\n') || []
+  return lines.map(line => highlightSyntax(line)) // Too slow!
+})
+
+// Good: Limit processing scope
+const processedContent = computed(() => {
+  const content = props.toolCall.result?.content || ''
+  const lines = content.split('\n')
+
+  // Only process first N lines
+  const previewLines = lines.slice(0, 20)
+  return previewLines.map(line => highlightSyntax(line))
+})
+</script>
+```
+
+## Advanced Topics
+
+### Pattern-Based Handler Registration
+
+Register one handler for multiple similar tools:
+
+```vue
+<!-- frontend/src/components/messages/MessageItem.vue -->
+<script setup>
+import McpToolHandler from './tools/McpToolHandler.vue'
+
+const toolHandlerMap = {
+  // Exact matches
+  'Read': ReadToolHandler,
+  'Edit': EditToolHandler,
+
+  // Multiple tools → same handler
+  'Grep': SearchToolHandler,
+  'Glob': SearchToolHandler,
+
+  // MCP tools (all start with mcp__)
+  'mcp__legion__send_comm': McpToolHandler,
+  'mcp__legion__spawn_minion': McpToolHandler,
+  'mcp__custom__my_tool': McpToolHandler,
+}
+
+// Dynamic lookup with fallback
+const getHandler = (toolName) => {
+  // 1. Exact match
+  if (toolHandlerMap[toolName]) {
+    return toolHandlerMap[toolName]
+  }
+
+  // 2. Pattern match (e.g., all mcp__ tools)
+  if (toolName.startsWith('mcp__')) {
+    return McpToolHandler
+  }
+
+  // 3. Fallback
+  return BaseToolHandler
+}
+</script>
+```
+
+### Shared Utility Functions
+
+Create composables for reusable logic:
+
+```javascript
+// frontend/src/composables/useToolFormatting.js
+import { computed } from 'vue'
+
+export function useToolFormatting(toolCall) {
+  const fileName = computed(() => {
+    const path = toolCall.value.input?.file_path || ''
+    return path.split('/').pop() || path.split('\\').pop() || path
+  })
+
+  const lineCount = computed(() => {
+    const content = toolCall.value.result?.content || ''
+    return content.split('\n').length
+  })
+
+  const previewContent = computed(() => {
+    const content = toolCall.value.result?.content || ''
+    const lines = content.split('\n')
+
+    if (lines.length > 20) {
+      return lines.slice(0, 20).join('\n') + '\n...'
     }
+
+    return content
+  })
+
+  return {
+    fileName,
+    lineCount,
+    previewContent
+  }
 }
 ```
 
-### Dynamic Status Indicators
-```javascript
-getCollapsedSummary(toolCall) {
-    const icons = {
-        'pending': '⏳',
-        'permission_required': '🔒',
-        'executing': '⚙️',
-        'completed': '✅',
-        'error': '💥'
-    };
-    const icon = icons[toolCall.status] || '🔧';
-    return `${icon} ${toolCall.name} - ${this.getStatusText(toolCall)}`;
+Use in components:
+
+```vue
+<script setup>
+import { useToolFormatting } from '@/composables/useToolFormatting'
+
+const props = defineProps({ toolCall: Object })
+
+const { fileName, lineCount, previewContent } = useToolFormatting(toRef(props, 'toolCall'))
+</script>
+
+<template>
+  <div>
+    <strong>File:</strong> {{ fileName }}
+    <pre>{{ previewContent }}</pre>
+    <div>{{ lineCount }} lines</div>
+  </div>
+</template>
+```
+
+### Dynamic Status Indicators with Transitions
+
+```vue
+<template>
+  <transition name="fade">
+    <div :key="toolCall.status" class="status-badge" :class="statusClass">
+      {{ statusText }}
+    </div>
+  </transition>
+</template>
+
+<script setup>
+import { computed } from 'vue'
+
+const props = defineProps({ toolCall: Object })
+
+const statusClass = computed(() => {
+  return `status-${props.toolCall.status}`
+})
+
+const statusText = computed(() => {
+  const labels = {
+    pending: 'Pending',
+    permission_required: 'Awaiting Permission',
+    executing: 'Running...',
+    completed: 'Done',
+    error: 'Failed'
+  }
+  return labels[props.toolCall.status] || 'Unknown'
+})
+</script>
+
+<style scoped>
+.fade-enter-active, .fade-leave-active {
+  transition: opacity 0.3s ease;
 }
+
+.fade-enter-from, .fade-leave-to {
+  opacity: 0;
+}
+
+.status-badge {
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.status-pending { background: #ffc107; color: #000; }
+.status-executing { background: #17a2b8; color: #fff; }
+.status-completed { background: #28a745; color: #fff; }
+.status-error { background: #dc3545; color: #fff; }
+.status-permission_required { background: #6c757d; color: #fff; }
+</style>
+```
+
+### Diff View Component (Reusable)
+
+Create a reusable diff component:
+
+```vue
+<!-- frontend/src/components/common/DiffView.vue -->
+<template>
+  <div class="diff-view">
+    <div
+      v-for="(line, index) in diffLines"
+      :key="index"
+      class="diff-line"
+      :class="`diff-line-${line.type}`"
+    >
+      <span class="diff-marker">{{ line.marker }}</span>
+      <span class="diff-content">{{ line.content }}</span>
+    </div>
+  </div>
+</template>
+
+<script setup>
+import { computed } from 'vue'
+
+const props = defineProps({
+  oldContent: String,
+  newContent: String
+})
+
+const diffLines = computed(() => {
+  const oldLines = props.oldContent.split('\n')
+  const newLines = props.newContent.split('\n')
+
+  const lines = []
+
+  // Simple diff (for complex diff, use a library like 'diff')
+  oldLines.forEach(line => {
+    lines.push({ type: 'removed', marker: '-', content: line })
+  })
+
+  newLines.forEach(line => {
+    lines.push({ type: 'added', marker: '+', content: line })
+  })
+
+  return lines
+})
+</script>
+
+<style scoped>
+.diff-view {
+  font-family: 'Courier New', monospace;
+  font-size: 0.9rem;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  overflow: auto;
+  max-height: 400px;
+}
+
+.diff-line {
+  display: flex;
+  padding: 0.25rem 0.5rem;
+}
+
+.diff-line-removed {
+  background: #ffecec;
+  color: #d73a49;
+}
+
+.diff-line-added {
+  background: #e6ffec;
+  color: #22863a;
+}
+
+.diff-line-context {
+  background: #f6f8fa;
+  color: #586069;
+}
+
+.diff-marker {
+  width: 1.5rem;
+  flex-shrink: 0;
+  font-weight: bold;
+}
+
+.diff-content {
+  flex: 1;
+  white-space: pre;
+}
+</style>
+```
+
+Use in EditToolHandler:
+
+```vue
+<template>
+  <div class="edit-tool-handler">
+    <div class="tool-parameters">
+      <strong>📝 Editing:</strong> {{ fileName }}
+      <DiffView
+        :old-content="toolCall.input.old_string"
+        :new-content="toolCall.input.new_string"
+      />
+    </div>
+  </div>
+</template>
+
+<script setup>
+import DiffView from '@/components/common/DiffView.vue'
+// ... rest of component
+</script>
+```
+
+## Performance Optimization
+
+### 1. Virtualized Rendering for Large Results
+
+For extremely large tool results (e.g., 10,000 lines), use virtual scrolling:
+
+```vue
+<template>
+  <virtual-scroller
+    :items="resultLines"
+    :item-height="20"
+    :height="400"
+  >
+    <template #default="{ item }">
+      <div class="result-line">{{ item }}</div>
+    </template>
+  </virtual-scroller>
+</template>
+
+<script setup>
+import { computed } from 'vue'
+
+const resultLines = computed(() => {
+  const content = props.toolCall.result?.content || ''
+  return content.split('\n')
+})
+</script>
+```
+
+### 2. Lazy Loading Heavy Components
+
+```vue
+<script setup>
+import { defineAsyncComponent } from 'vue'
+
+// Lazy load syntax highlighter only when needed
+const SyntaxHighlighter = defineAsyncComponent(() =>
+  import('./SyntaxHighlighter.vue')
+)
+</script>
+
+<template>
+  <Suspense>
+    <template #default>
+      <SyntaxHighlighter :code="toolCall.result.content" />
+    </template>
+    <template #fallback>
+      <div>Loading syntax highlighter...</div>
+    </template>
+  </Suspense>
+</template>
+```
+
+### 3. Debounce Expensive Operations
+
+```vue
+<script setup>
+import { ref, watch } from 'vue'
+import { useDebounceFn } from '@vueuse/core'
+
+const processedContent = ref('')
+
+const processContent = useDebounceFn((content) => {
+  // Expensive operation (syntax highlighting, etc.)
+  processedContent.value = expensiveProcessing(content)
+}, 300)
+
+watch(() => props.toolCall.result?.content, (newContent) => {
+  if (newContent) {
+    processContent(newContent)
+  }
+})
+</script>
 ```
 
 ## Future Enhancements
 
-Ideas for additional handlers:
-- **Syntax Highlighting** - Use Prism.js or Highlight.js for code display
-- **Image Preview** - Show thumbnails for image file operations
-- **JSON Viewer** - Collapsible JSON tree for structured data
-- **Table Rendering** - Tabular display for CSV/structured data
-- **MCP Generic Handler** - Detect and display MCP server metadata
+Ideas for additional handlers and features:
+
+- **Syntax highlighting** - Use `highlight.js` or `Prism` for code display
+- **Image previews** - Show thumbnails for image file operations
+- **JSON viewer** - Collapsible tree for structured data (use `vue-json-viewer`)
+- **Table rendering** - Display CSV/structured data in tables
+- **Code execution visualization** - Step-through debugger view
+- **Performance metrics** - Show execution time, memory usage for tools
+- **Collaborative editing** - Real-time diff view for multi-user scenarios
+- **Export functionality** - Download tool results as files
+- **Search within results** - Filter/search large tool outputs
+- **Comparison view** - Side-by-side comparison for multiple tool executions
+
+## Reference Links
+
+- **Vue 3 Documentation**: https://vuejs.org/guide/introduction.html
+- **Composition API**: https://vuejs.org/api/composition-api-setup.html
+- **Pinia Store**: https://pinia.vuejs.org/
+- **Vue DevTools**: https://devtools.vuejs.org/
+- **VueUse Utilities**: https://vueuse.org/
+
+---

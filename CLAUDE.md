@@ -1,11 +1,15 @@
 DO NOT SAY THAT THE USER IS CORRECT OR COMPLEMENT THEIR REQUEST. FORMAL, CONCISE COMMUNICATION SHOULD BE THE ONLY COMMENTARY PROVIDED.
 
 # Development Requirements - REQUIRED
-1. Server-side code is all in python using `uv`, using commands like `uv run ...` or `uv add ...` or `uv run pytest ...` and others for executing, testing, linting, and managing dependencies.
-2. **Frontend Migration to Vue 3** (UPDATED): The frontend is being migrated from vanilla JavaScript to Vue 3 + Pinia + Vite. New frontend code is in `frontend/` directory. Old code in `static/` will be deleted after migration is complete.
+1. Server-side code is all in Python using `uv`, using commands like `uv run ...` or `uv add ...` or `uv run pytest ...` for executing, testing, linting, and managing dependencies.
+2. **Frontend is Vue 3 + Pinia + Vite** (PRODUCTION): Frontend code is in `frontend/` directory. The `static/` directory has been sunset and should not be referenced for new development.
 
 # High-Level Goal
-We are building a tool that integrates with the Claude Agent SDK (formerly Claude Code SDK) to provide streaming conversations through a web-based interface. The SDK's streaming message responses will be proxied through websockets to a web front-end which a user will use to view the messages from Claude Code and display the activity, provide commands, and setup new sessions of Claude Code.
+We are building a web-based interface for Claude Agent SDK that provides:
+1. **Single-Agent Mode**: Real-time streaming conversations with rich tool visualization
+2. **Multi-Agent Mode (Legion)**: Teams of AI agents (minions) collaborating on complex tasks through structured communication
+
+The SDK's streaming message responses are proxied through WebSockets to a Vue 3 frontend which displays messages, tool executions, permissions, and multi-agent activity.
 
 # Claude Agent SDK Integration - CRITICAL TECHNICAL KNOWLEDGE
 
@@ -28,12 +32,6 @@ async for message in query(prompt="Build the project", options=options):
     process_message(message)
 ```
 
-## Session Management
-- SDK handles session management internally
-- Use `ClaudeAgentOptions` to configure per-session settings
-- Sessions are maintained through the async iterator lifecycle
-- Generate unique identifiers for WebUI session tracking
-
 ## SDK Configuration (CRITICAL)
 ```python
 from claude_agent_sdk import ClaudeAgentOptions
@@ -47,7 +45,7 @@ options = ClaudeAgentOptions(
     },
     allowed_tools=["bash", "edit", "read"],  # Tool allowlist (NOT tools)
     setting_sources=["user", "project", "local"],  # Settings sources to load
-    model="claude-3-sonnet-20241022"     # Model selection
+    model="claude-3-5-sonnet-20241022"   # Model selection
 )
 ```
 
@@ -58,41 +56,6 @@ options = ClaudeAgentOptions(
 - Use `prompt=message` NOT positional argument in query()
 - Always import from `claude_agent_sdk` NOT `claude_code_sdk`
 - Use `ClaudeAgentOptions` NOT `ClaudeCodeOptions`
-
-## System Prompt Configuration (CRITICAL - NEW in v0.1.0)
-- SDK no longer uses Claude Code system prompt by default
-- Must explicitly specify preset to get Claude Code behavior:
-  ```python
-  system_prompt={
-      "type": "preset",
-      "preset": "claude_code"
-  }
-  ```
-- For custom prompts, pass string directly: `system_prompt="Custom prompt"`
-
-## Settings Sources Configuration (CRITICAL - NEW in v0.1.0)
-- SDK no longer loads settings from filesystem by default
-- Must explicitly specify sources to restore previous behavior:
-  ```python
-  setting_sources=["user", "project", "local"]
-  ```
-- Available sources:
-  - `"user"`: Load from `~/.claude/settings.json`
-  - `"project"`: Load from `.claude/settings.json`
-  - `"local"`: Load from `.claude/settings.local.json`
-
-## Message Stream Format
-- SDK returns streaming messages through async iterator
-- Message types include conversation and tool execution messages
-- Each message is a structured object (not JSON-LINES)
-- Stream continues until conversation completion
-
-## Error Handling
-- SDK raises exceptions for errors and failures
-- Tool errors appear in message content with error indicators
-- Network and API errors are handled as Python exceptions
-- Unknown message types should be gracefully handled
-- Use try/except blocks around SDK calls
 
 ## Permission Mode Behavior (CRITICAL)
 - `permission_mode="default"` means "prompt for everything NOT pre-approved"
@@ -120,476 +83,561 @@ options = ClaudeAgentOptions(
 3. Handle JSON serialization of SDK objects properly
 4. Always use try/except blocks around SDK calls
 
-# Frontend Architecture - Vue 3 Migration (IN PROGRESS)
+# Frontend Architecture - Vue 3 + Pinia + Vite (PRODUCTION)
 
-## Migration Status
+## Current Status
 
-The frontend is being migrated from vanilla JavaScript to Vue 3 + Pinia + Vite architecture.
+The frontend migration to Vue 3 is **substantially complete** and in production use:
 
-- ✅ **Phase 1 Complete** (Setup + Infrastructure): All Pinia stores, Vue Router, and base components created
-- ⏳ **Phase 2 In Progress** (Core UI): Project/Session components with modals
-- ⏳ **Phase 3 Pending** (Messages + Tools): Message display and tool handlers
-- ⏳ **Phase 4 Pending** (Legion Features): Timeline/Spy/Horde views
-- ⏳ **Phase 5 Pending** (Testing + Polish)
-- ⏳ **Phase 6 Pending** (Cutover to production)
+- ✅ **Phase 1 Complete**: All Pinia stores, Vue Router, base components
+- ✅ **Phase 2 Complete**: Project/Session components with full CRUD operations
+- ✅ **Phase 3 Complete**: Message display, tool handlers (13+ custom handlers), tool lifecycle tracking
+- ✅ **Phase 4 Complete**: Legion Timeline/Spy/Horde views, minion management, comm system
+- ⏳ **Phase 5 In Progress**: Polish, orphaned tool detection, permission system refinements
+- ⏳ **Phase 6 Pending**: Production build optimization, cutover from dev server
 
-**Documentation**: See `frontend/MIGRATION_PLAN.md` for complete migration plan and `frontend/README.md` for development guide.
+**Documentation**: See `frontend/README.md` for development guide and `frontend/MIGRATION_PLAN.md` for detailed migration status.
 
-## New Frontend Structure (Vue 3)
+## Frontend Structure
 
 ```
 frontend/
 ├── src/
-│   ├── stores/              # Pinia stores (state management)
-│   │   ├── session.js       # Session state + CRUD
-│   │   ├── project.js       # Project state + CRUD
-│   │   ├── message.js       # Messages + tool calls
-│   │   ├── websocket.js     # WebSocket connections
-│   │   └── ui.js            # UI state (sidebar, modals)
-│   ├── components/          # Vue components
-│   │   ├── layout/          # AppHeader, Sidebar, etc.
-│   │   ├── project/         # Project management
-│   │   ├── session/         # Session management
-│   │   ├── messages/        # Message display
-│   │   ├── tools/           # Tool call system
-│   │   └── legion/          # Legion multi-agent features
-│   ├── router/              # Vue Router configuration
-│   ├── composables/         # Reusable composition functions
-│   ├── utils/               # Utilities (API client, etc.)
-│   └── assets/              # Styles, images
-├── vite.config.js           # Vite configuration
-└── package.json             # Dependencies
+│   ├── stores/                    # Pinia stores (state management)
+│   │   ├── session.js             # Session CRUD, selection, deep linking
+│   │   ├── project.js             # Project hierarchy, ordering
+│   │   ├── message.js             # Messages, tool calls, orphaned detection
+│   │   ├── websocket.js           # 3 WebSocket connections (UI, session, legion)
+│   │   ├── legion.js              # Multi-agent: comms, minions, hordes, channels
+│   │   └── ui.js                  # Sidebar, modals, loading, responsive
+│   │
+│   ├── components/
+│   │   ├── layout/                # AppHeader, Sidebar, ConnectionIndicator
+│   │   ├── project/               # ProjectList, ProjectItem, ProjectCreateModal, etc.
+│   │   ├── session/               # SessionView, SessionItem, SessionCreateModal, etc.
+│   │   ├── messages/              # MessageList, MessageItem, UserMessage, AssistantMessage, etc.
+│   │   ├── messages/tools/        # 13+ tool handlers (ReadToolHandler, EditToolHandler, etc.)
+│   │   ├── legion/                # TimelineView, SpyView, HordeView, CommComposer, etc.
+│   │   └── common/                # FolderBrowserModal, InputArea, etc.
+│   │
+│   ├── router/                    # Vue Router: /, /session/:id, /timeline/:id, /spy/:id, /horde/:id
+│   ├── composables/               # Reusable composition functions
+│   ├── utils/                     # API client, helpers
+│   └── assets/                    # CSS, images
+│
+├── vite.config.js                 # Vite dev server + build config
+├── index.html                     # Entry point
+└── package.json                   # Dependencies (Vue 3.4, Pinia 2.1, Vite 5.2, Bootstrap 5.3)
 ```
 
-## Development Workflow (Vue 3)
+## Development Workflow
 
 ### Running Frontend Dev Server
 
 ```bash
-# Terminal 1: Start backend (port 8001 for testing)
+# Terminal 1: Backend (use port 8001 to avoid conflicts with production on 8000)
 uv run python main.py --debug-all --port 8001
 
-# Terminal 2: Start frontend dev server
+# Terminal 2: Frontend dev server with HMR
 cd frontend
-npm run dev
+npm install  # first time only
+npm run dev  # starts on http://localhost:5173
 
-# Access at http://localhost:5173
-# Changes reload instantly with Hot Module Replacement (HMR)
+# Access dev server at http://localhost:5173
+# Changes reload instantly with Hot Module Replacement
 ```
 
-### Key Benefits Over Vanilla JS
+### Production Build
 
-1. **State Management**: Pinia stores replace 135 instance variables and dual Map+Array storage
-2. **Automatic UI Updates**: No more manual `renderSessions()` calls - Vue reactivity handles it
-3. **Event Listener Cleanup**: Automatic cleanup prevents memory leaks
-4. **Component Architecture**: 6767-line monolith split into ~20 focused components
-5. **Developer Experience**: Instant HMR, Vue DevTools, clear separation of concerns
+```bash
+cd frontend
+npm run build  # Output: frontend/dist/
 
-### Naming Conventions (Vue 3)
+# Update FastAPI to serve frontend/dist/ instead of static/
+# Delete static/ directory after stability verified
+```
 
-- **camelCase**: All variables, functions, computed properties
+## Key Benefits Over Vanilla JS
+
+1. **State Management**: 6 Pinia stores replace 135+ instance variables and dual Map+Array storage
+2. **Automatic Reactivity**: No manual `renderSessions()` calls - Vue reactivity handles all UI updates
+3. **Component Architecture**: 6767-line monolith split into 53 focused, reusable components
+4. **Event Listener Cleanup**: Automatic cleanup prevents memory leaks
+5. **Developer Experience**: Instant HMR, Vue DevTools, TypeScript support, clear separation of concerns
+
+## Pinia Stores (State Management)
+
+### 1. Session Store (`stores/session.js`)
+**Responsibility**: Session lifecycle, CRUD operations, selection
+
+**State**:
+- `sessions` (Map): All sessions by ID
+- `currentSessionId` (ref): Currently selected session
+- `inputCache` (Map): Preserved unsent text per session
+- `initData` (Map): Session initialization config
+- `deletingSessions` (Set): Track deletions in progress
+
+**Key Actions**:
+- `fetchSessions()`, `createSession()`, `selectSession()`, `deleteSession()`
+- `startSession()`, `pauseSession()`, `terminateSession()`, `restartSession()`, `resetSession()`
+- `updateSessionName()`, `setPermissionMode()`
+- Deep linking with auto-start for created/terminated sessions
+
+### 2. Project Store (`stores/project.js`)
+**Responsibility**: Project hierarchy, organization
+
+**State**:
+- `projects` (Map): All projects by ID
+- `currentProjectId` (ref): Currently selected project (for Legion views)
+
+**Key Actions**:
+- `fetchProjects()`, `createProject()`, `deleteProject()`, `updateProject()`
+- `toggleExpansion()`, `reorderProjects()`, `reorderSessionsInProject()`
+- `isMultiAgent(projectId)`: Check if project is Legion
+
+### 3. Message Store (`stores/message.js`)
+**Responsibility**: Messages, tool call lifecycle, orphaned tool detection
+
+**State**:
+- `messagesBySession` (Map): Messages per session
+- `toolCallsBySession` (Map): Tool calls with full lifecycle tracking
+- `toolSignatureToId` (Map): Tool identification for permission matching
+- `permissionToToolMap` (Map): Permission request to tool mapping
+- `orphanedToolUses` (Map): Tools marked as orphaned
+
+**Key Actions**:
+- `loadMessages()`: Paginated loading with orphaned detection
+- `addMessage()`, `addToolCall()`, `updateToolCall()`
+- `handleToolUse()`, `handlePermissionRequest()`, `handlePermissionResponse()`, `handleToolResult()`
+- `toggleToolExpansion()`: Collapse/expand tool cards
+- Orphaned tool detection: session restart, interrupt, termination
+
+### 4. WebSocket Store (`stores/websocket.js`)
+**Responsibility**: 3 WebSocket connections, message routing
+
+**State**:
+- `uiSocket`, `uiConnected`, `uiRetryCount`: Global UI updates
+- `sessionSocket`, `sessionConnected`, `sessionRetryCount`: Session messages
+- `legionSocket`, `legionConnected`, `legionRetryCount`: Legion comms
+
+**Key Actions**:
+- `connectUI()`, `connectSession()`, `connectLegion()`: Establish connections
+- `sendMessage()`, `sendPermissionResponse()`, `interruptSession()`
+- `handleUIMessage()`, `handleSessionMessage()`, `handleLegionMessage()`: Route incoming messages
+- Automatic reconnection with exponential backoff (max 10 UI retries, 5 session/legion)
+
+### 5. Legion Store (`stores/legion.js`)
+**Responsibility**: Multi-agent data (comms, minions, hordes, channels)
+
+**State**:
+- `commsByLegion` (Map): Timeline communications per legion
+- `minionsByLegion` (Map): Minions per legion
+- `hordesByLegion` (Map): Hierarchical groups
+- `channelsByLegion` (Map): Communication groups
+
+**Key Actions**:
+- `loadTimeline()`: Paginated comm loading (100/page)
+- `addComm()`: Real-time comm from WebSocket
+- `sendComm()`: User sends comm to minion/channel
+- `createMinion()`, `loadHordes()`, `loadChannels()`
+
+### 6. UI Store (`stores/ui.js`)
+**Responsibility**: UI state (sidebar, modals, scroll, responsive)
+
+**State**:
+- `sidebarCollapsed`, `sidebarWidth`: Mobile-first sidebar
+- `windowWidth`, `isMobile`: Responsive breakpoints
+- `autoScrollEnabled`: Toggle message auto-scroll
+- `activeModal`, `modalData`: Current modal
+
+**Key Actions**:
+- `toggleSidebar()`, `setSidebarWidth()`, `setAutoScroll()`
+- `showModal()`, `hideModal()`, `showLoading()`, `hideLoading()`
+
+## Vue Components (53 files)
+
+### Layout (3)
+- `AppHeader.vue`: Top navigation
+- `Sidebar.vue`: Project/Session/Legion hierarchy
+- `ConnectionIndicator.vue`: WebSocket status
+
+### Session Management (9)
+- `SessionView.vue`: Main chat interface
+- `SessionItem.vue`: Sidebar session entry
+- `SessionCreateModal.vue`, `SessionEditModal.vue`, `SessionManageModal.vue`, `SessionInfoModal.vue`
+- `SessionInfoBar.vue`, `SessionStatusBar.vue`, `NoSessionSelected.vue`
+
+### Project Management (5)
+- `ProjectList.vue`, `ProjectItem.vue`, `ProjectStatusLine.vue`
+- `ProjectCreateModal.vue`, `ProjectEditModal.vue`
+
+### Message Display (7)
+- `MessageList.vue`: Auto-scrolling container
+- `MessageItem.vue`: Router to specific message types
+- `UserMessage.vue`, `AssistantMessage.vue`, `SystemMessage.vue`
+- `ThinkingBlock.vue`, `ToolCallCard.vue`
+
+### Tool Handlers (13)
+**See TOOL_HANDLERS.md for detailed documentation**
+
+- `BaseToolHandler.vue`: Fallback for unknown tools
+- `ReadToolHandler.vue`, `EditToolHandler.vue`, `WriteToolHandler.vue`
+- `BashToolHandler.vue`, `ShellToolHandler.vue`, `CommandToolHandler.vue`
+- `SearchToolHandler.vue`, `WebToolHandler.vue`
+- `TodoToolHandler.vue`, `TaskToolHandler.vue`, `ExitPlanModeToolHandler.vue`
+- `NotebookEditToolHandler.vue`
+
+### Legion Features (11)
+- `TimelineView.vue`, `TimelineHeader.vue`, `TimelineStatusBar.vue`
+- `SpyView.vue`, `SpySelector.vue`
+- `HordeView.vue`, `HordeHeader.vue`, `HordeStatusBar.vue`, `HordeSelector.vue`
+- `MinionTreeNode.vue`, `CommComposer.vue`, `CreateMinionModal.vue`
+
+### Common (3)
+- `FolderBrowserModal.vue`: Directory selection
+- `InputArea.vue`: Message textarea
+- Status bars: `SessionStatusBar.vue`, `TimelineStatusBar.vue`, `HordeStatusBar.vue`
+
+## Naming Conventions
+
+- **camelCase**: Variables, functions, computed properties
 - **PascalCase**: Component names
 - **kebab-case**: Component file names
 
-## Old Frontend Architecture (Vanilla JS - DEPRECATED)
-
-**NOTE**: This section documents the OLD vanilla JavaScript architecture in `static/`. This code will be deleted after the Vue 3 migration is complete. For NEW development, use the Vue 3 architecture above.
-
-# Frontend Architecture - JavaScript Code Organization (DEPRECATED)
-
-## Directory Structure
-```
-static/
-├── core/                      # Core infrastructure modules
-│   ├── logger.js             # Logging utility (Logger object)
-│   ├── constants.js          # Application constants (STATUS_COLORS, WEBSOCKET_CONFIG, SIDEBAR_CONFIG)
-│   ├── api-client.js         # API communication (APIClient class)
-│   └── project-manager.js    # Project operations (ProjectManager class)
-│
-├── tools/                     # Tool call system
-│   ├── tool-call-manager.js  # Tool state management (ToolCallManager class)
-│   ├── tool-handler-registry.js  # Handler lookup (ToolHandlerRegistry class)
-│   │
-│   └── handlers/              # Tool-specific UI renderers
-│       ├── base-handler.js    # DefaultToolHandler (fallback renderer)
-│       ├── read-handler.js    # ReadToolHandler (file reading with preview)
-│       ├── edit-handlers.js   # EditToolHandler, MultiEditToolHandler (diff views)
-│       ├── write-handler.js   # WriteToolHandler (file creation preview)
-│       ├── todo-handler.js    # TodoWriteToolHandler (task checklist)
-│       ├── search-handlers.js # GrepToolHandler, GlobToolHandler (search results)
-│       ├── web-handlers.js    # WebFetchToolHandler, WebSearchToolHandler
-│       ├── bash-handlers.js   # BashToolHandler, BashOutputToolHandler, KillShellToolHandler
-│       └── misc-handlers.js   # TaskToolHandler, ExitPlanModeToolHandler
-│
-├── app.js                     # Main application (ClaudeWebUI class)
-├── index.html                 # HTML template with script load order
-└── styles.css                 # Application styles
-```
-
-## Module Loading Order (CRITICAL)
-Scripts must load in this exact order in `index.html`:
-
-1. **Core Modules** (no dependencies)
-   - `core/logger.js` - Used by all other modules
-   - `core/constants.js` - Used by app.js
-   - `core/api-client.js` - Used by app.js
-   - `core/project-manager.js` - Used by app.js
-
-2. **Tool System** (depends on Logger)
-   - `tools/tool-call-manager.js` - Used by app.js
-   - `tools/tool-handler-registry.js` - Used by app.js
-
-3. **Tool Handlers** (depend on Logger, used by ToolHandlerRegistry)
-   - `tools/handlers/base-handler.js` - Base class for handlers
-   - All other handler files (order doesn't matter)
-
-4. **Main Application** (depends on all above)
-   - `app.js` - ClaudeWebUI orchestrator
-
-## Key Classes and Their Locations
-
-### Core Infrastructure
-- **Logger** (`core/logger.js`)
-  - Methods: `debug()`, `info()`, `warn()`, `error()`
-  - Used everywhere for consistent logging
-
-- **APIClient** (`core/api-client.js`)
-  - Methods: `request()`, `get()`, `post()`, `put()`, `delete()`
-  - Handles all backend communication
-
-- **ProjectManager** (`core/project-manager.js`)
-  - Methods: `loadProjects()`, `createProject()`, `updateProject()`, `deleteProject()`, `toggleExpansion()`, `reorderProjects()`
-  - Manages project CRUD operations
-
-### Tool System
-- **ToolCallManager** (`tools/tool-call-manager.js`)
-  - Tracks tool call lifecycle: pending → permission_required → executing → completed/error
-  - Methods: `handleToolUse()`, `handlePermissionRequest()`, `handlePermissionResponse()`, `handleToolResult()`
-
-- **ToolHandlerRegistry** (`tools/tool-handler-registry.js`)
-  - Maps tool names to custom renderers
-  - Methods: `registerHandler()`, `getHandler()`, `hasHandler()`
-
-### Tool Handlers (all in `tools/handlers/`)
-Each handler provides:
-- `renderParameters(toolCall, escapeHtmlFn)` - Display tool inputs
-- `renderResult(toolCall, escapeHtmlFn)` - Display tool outputs
-- `getCollapsedSummary(toolCall)` - Generate collapsed view text
-
-To add a new tool handler:
-1. Create new file in `tools/handlers/`
-2. Implement handler class with render methods
-3. Add script tag to `index.html` (before `app.js`)
-4. Register in `ClaudeWebUI.initializeToolHandlers()` in `app.js`
-
-### Main Application
-- **ClaudeWebUI** (`app.js`)
-  - Main orchestrator class (3685 lines)
-  - Manages: WebSockets, sessions, messages, UI state, drag-drop, modals, sidebar
-  - Uses all core modules and tool system components
-
-## Finding Functionality
-
-**Tool rendering logic** → `tools/handlers/*.js`
-**Tool call state** → `tools/tool-call-manager.js`
-**API calls** → `core/api-client.js` or direct fetch in `app.js`
-**Project operations** → `core/project-manager.js`
-**WebSocket logic** → `app.js` (ClaudeWebUI methods: `connectUIWebSocket()`, `connectSessionWebSocket()`)
-**Message processing** → `app.js` (ClaudeWebUI methods: `processMessage()`, `handleToolRelatedMessage()`)
-**Session management** → `app.js` (ClaudeWebUI methods: `selectSession()`, `createSession()`, `loadSessions()`)
-**UI rendering** → `app.js` (ClaudeWebUI methods: `renderSessions()`, `createProjectElement()`, `createSessionElement()`)
-**Logging** → `core/logger.js` (use `Logger.debug()`, `Logger.info()`, etc.)
-
-## Common Patterns
-
-### Adding a new tool handler
-```javascript
-// In tools/handlers/my-tool-handler.js
-class MyToolHandler {
-    renderParameters(toolCall, escapeHtmlFn) {
-        return `<div>...</div>`;
-    }
-
-    renderResult(toolCall, escapeHtmlFn) {
-        return `<div>...</div>`;
-    }
-
-    getCollapsedSummary(toolCall) {
-        return `${icon} ${toolCall.name} - ${status}`;
-    }
-}
-```
-
-Then register in `app.js`:
-```javascript
-this.toolHandlerRegistry.registerHandler('MyTool', new MyToolHandler());
-```
-
-### Using Logger
-```javascript
-Logger.debug('CATEGORY', 'Debug message', optionalDataObject);
-Logger.info('CATEGORY', 'Info message');
-Logger.warn('CATEGORY', 'Warning message', errorObject);
-Logger.error('CATEGORY', 'Error message', errorObject);
-```
-
-### Making API calls
-```javascript
-// Using APIClient (preferred in new code)
-this.apiClient.get('/api/sessions');
-this.apiClient.post('/api/sessions', {data});
-
-// Using apiRequest (existing pattern in ClaudeWebUI)
-await this.apiRequest('/api/sessions');
-```
-
-# Backend Architecture - Python Server Organization
+# Backend Architecture - Python FastAPI Server
 
 ## System Architecture Overview
+
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│                         Web Browser (Frontend)                       │
-│  static/app.js + tools/ + core/ modules (see Frontend Architecture) │
-└────────────────┬────────────────────────────────────────────────────┘
-                 │ WebSocket + REST API
-┌────────────────▼────────────────────────────────────────────────────┐
-│                    FastAPI Server (src/web_server.py)                │
-│  • REST endpoints for CRUD operations                                │
-│  • WebSocket managers (UI + Session-specific)                        │
-│  • Permission callback coordination                                  │
-└────────┬───────────────────────────────────────┬────────────────────┘
-         │                                       │
-┌────────▼────────────────────────┐   ┌─────────▼──────────────────────┐
-│  SessionCoordinator             │   │  MessageProcessor              │
-│  (src/session_coordinator.py)   │   │  (src/message_parser.py)       │
-│  • Orchestrates all components  │   │  • Parses SDK messages         │
-│  • Manages SDK lifecycle         │   │  • Formats for storage/WS      │
-│  • Routes callbacks              │   │  • Handles all message types   │
-└────┬──────────┬──────────┬──────┘   └────────────────────────────────┘
-     │          │          │
-┌────▼─────┐ ┌─▼─────────┐ ┌▼──────────────┐
-│SessionMgr│ │ProjectMgr │ │ClaudeSDK      │
-│(session_ │ │(project_  │ │(claude_sdk.py)│
-│manager.py)│ │manager.py)│ │• SDK wrapper  │
-│• State   │ │• Projects │ │• Queue msgs   │
-│• Persist │ │• Hierarchy│ │• Stream proc  │
-└──────────┘ └───────────┘ └───────────────┘
-                              │
-                    ┌─────────▼──────────────────┐
-                    │  Claude Agent SDK          │
-                    │  (claude_agent_sdk)        │
-                    │  • External package        │
-                    │  • Streams Claude responses│
-                    └────────────────────────────┘
+│                       Browser (Vue 3 Frontend)                       │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐             │
+│  │ Pinia Stores │  │ Components   │  │ Vue Router   │             │
+│  │  (6 stores)  │  │  (53 files)  │  │  (routing)   │             │
+│  └──────────────┘  └──────────────┘  └──────────────┘             │
+└────────┬────────────────────┬────────────────────┬──────────────────┘
+         │                    │                    │
+         │ WebSocket (3 connections) + REST API    │
+         │                    │                    │
+┌────────▼────────────────────▼────────────────────▼──────────────────┐
+│                   FastAPI Server (src/web_server.py)                 │
+│  ┌────────────────────────────────────────────────────────────────┐ │
+│  │                    SessionCoordinator                           │ │
+│  │  ┌────────────┐  ┌────────────┐  ┌───────────────────────┐   │ │
+│  │  │SessionMgr  │  │ProjectMgr  │  │  ClaudeSDK            │   │ │
+│  │  │(state)     │  │(hierarchy) │  │  (SDK wrapper)        │   │ │
+│  │  └────────────┘  └────────────┘  └───────────────────────┘   │ │
+│  └────────────────────────────────────────────────────────────────┘ │
+│  ┌────────────────────────────────────────────────────────────────┐ │
+│  │                    LegionSystem (Multi-Agent)                   │ │
+│  │  ┌─────────────┐  ┌──────────┐  ┌────────────────────────┐   │ │
+│  │  │ Legion      │  │Overseer  │  │  CommRouter            │   │ │
+│  │  │ Coordinator │  │Control   │  │  (minion comms)        │   │ │
+│  │  └─────────────┘  └──────────┘  └────────────────────────┘   │ │
+│  │  ┌─────────────┐  ┌──────────────────────────────────────┐   │ │
+│  │  │ Channel     │  │  MemoryManager                        │   │ │
+│  │  │ Manager     │  │  (distillation, reinforcement)        │   │ │
+│  │  └─────────────┘  └──────────────────────────────────────┘   │ │
+│  └────────────────────────────────────────────────────────────────┘ │
+└────────┬─────────────────────────────────────────────────────────────┘
+         │ query() API
+┌────────▼─────────────────────────────────────────────────────────────┐
+│                   Claude Agent SDK (External Package)                 │
+│              Streaming conversations, tool execution                  │
+└───────────────────────────────────────────────────────────────────────┘
 ```
 
-## Backend File Organization & Responsibilities
+## Backend File Organization
 
 ### Entry Point
-- **[main.py](./main.py)**: Application entry point
-  - Parses CLI arguments (--host, --port, --debug-* flags)
-  - Configures logging system
-  - Creates FastAPI app and starts uvicorn server
-  - Debug flags: `--debug-websocket`, `--debug-sdk`, `--debug-permissions`, `--debug-storage`, `--debug-parser`, `--debug-error-handler`, `--debug-all`
+- **`main.py`**: Application entry, arg parsing, logging config, uvicorn server start
 
-### Core Backend Modules (src/)
+### Core Backend Modules (`src/`)
 
-#### [src/web_server.py](./src/web_server.py) (1230 lines) - **HTTP + WebSocket Server**
+#### `src/web_server.py` (1230 lines) - **HTTP + WebSocket Server**
 **Main Class**: `ClaudeWebUI`
-- **REST API Endpoints** (see API Reference section below)
-- **WebSocket Managers**:
-  - `UIWebSocketManager`: Broadcasts project/session state changes to all connected clients
-  - `WebSocketManager`: Handles session-specific message streaming
-- **Key Methods**:
-  - `_create_permission_callback()`: Creates async callback for tool permissions (lines 984-1185)
-  - `_create_message_callback()`: Wraps messages for WebSocket broadcast (lines 931-960)
-  - `_on_state_change()`: Broadcasts session state changes to UI (lines 962-982)
-- **Permission Flow**: User decision via WebSocket → Future.set_result() → SDK receives response
 
-#### [src/session_coordinator.py](./src/session_coordinator.py) (1050 lines) - **Central Orchestrator**
+**Responsibilities**:
+- REST API endpoints (projects, sessions, legion, utility)
+- 3 WebSocket managers: `UIWebSocketManager`, `WebSocketManager`, `LegionWebSocketManager`
+- Permission callback creation with asyncio.Future for async approval
+- Session state change broadcasting
+
+**Key Methods**:
+- `_create_permission_callback()`: Async permission prompts (lines 984-1185)
+- `_create_message_callback()`: Message wrapping for WebSocket broadcast (lines 931-960)
+- `_on_state_change()`: Broadcast session state changes (lines 962-982)
+
+#### `src/session_coordinator.py` (1050 lines) - **Central Orchestrator**
 **Main Class**: `SessionCoordinator`
-- **Purpose**: Ties together SessionManager, ProjectManager, ClaudeSDK, DataStorage, and MessageProcessor
-- **Manages**:
-  - Active SDK instances per session (`_active_sdks` dict)
-  - Storage managers per session (`_storage_managers` dict)
-  - Message and error callbacks
-  - ExitPlanMode detection and auto-reset to default mode
-  - Permission update tracking
-- **Key Methods**:
-  - `create_session()`: Creates session, initializes storage, creates SDK instance (lines 100-171)
-  - `start_session()`: Starts/resumes SDK, sends client_launched message (lines 177-289)
-  - `send_message()`: Queues message to SDK, updates processing state (lines 538-572)
-  - `interrupt_session()`: Stops active SDK processing (lines 447-492)
-  - `set_permission_mode()`: Changes runtime permission mode (lines 494-536)
-  - `_create_message_callback()`: Processes SDK messages, detects completion, manages state (lines 741-818)
-  - `_send_client_launched_message()`: System message for SDK startup (lines 881-914)
-- **Message Flow**: SDK → callback → MessageProcessor → storage + WebSocket
 
-#### [src/session_manager.py](./src/session_manager.py) - **Session Lifecycle & State**
+**Responsibilities**:
+- Ties together SessionManager, ProjectManager, ClaudeSDK, DataStorage, MessageProcessor
+- Manages active SDK instances per session
+- Handles ExitPlanMode detection and auto-reset
+- Permission update tracking
+- Tool use tracking for orphaned detection
+
+**Key Methods**:
+- `create_session()`: Session + storage + SDK initialization (lines 100-171)
+- `start_session()`: Start/resume SDK, send client_launched message (lines 177-289)
+- `send_message()`: Queue message to SDK, update processing state (lines 538-572)
+- `interrupt_session()`: Stop active SDK processing (lines 447-492)
+- `set_permission_mode()`: Runtime permission mode changes (lines 494-536)
+- `_create_message_callback()`: Process SDK messages, detect completion (lines 741-818)
+
+#### `src/session_manager.py` - **Session Lifecycle & State**
 **Main Classes**: `SessionState` (enum), `SessionInfo` (dataclass), `SessionManager`
-- **SessionState Values**: `CREATED`, `STARTING`, `ACTIVE`, `PAUSED`, `TERMINATING`, `TERMINATED`, `ERROR`
-- **SessionInfo Fields**:
-  - `session_id`, `state`, `working_directory`, `current_permission_mode`
-  - `system_prompt`, `tools`, `model`, `is_processing`, `name`, `order`
-  - `claude_code_session_id`: SDK's internal session ID for resume
-  - `error_message`: User-friendly error text when state=ERROR
-- **Key Methods**:
-  - `create_session()`: Creates session directory, persists state.json
-  - `start_session()`, `pause_session()`, `terminate_session()`: State transitions
-  - `update_processing_state()`: Tracks if session is actively processing user input
-  - `update_permission_mode()`: Updates current permission mode
-  - `_persist_session_state()`: Saves state.json to disk
-- **Persistence**: Each session has `data/sessions/{uuid}/state.json`
 
-#### [src/project_manager.py](./src/project_manager.py) - **Project Hierarchy & Organization**
+**SessionState Values**:
+- `CREATED`, `STARTING`, `ACTIVE`, `PAUSED`, `TERMINATING`, `TERMINATED`, `ERROR`
+
+**SessionInfo Fields** (Extended for Legion):
+- Standard: `session_id`, `state`, `working_directory`, `current_permission_mode`, `tools`, `model`, `name`, `order`
+- Legion: `is_minion`, `role`, `is_overseer`, `parent_overseer_id`, `child_minion_ids`, `horde_id`, `channel_ids`, `capabilities`, `initialization_context`
+
+**Key Methods**:
+- `create_session()`: Create directory, persist state.json
+- `start_session()`, `pause_session()`, `terminate_session()`: State transitions
+- `update_processing_state()`: Track active processing
+- `update_permission_mode()`: Runtime mode changes
+
+#### `src/project_manager.py` - **Project Hierarchy & Organization**
 **Main Classes**: `ProjectInfo` (dataclass), `ProjectManager`
-- **ProjectInfo Fields**:
-  - `project_id`, `name`, `working_directory` (IMMUTABLE after creation)
-  - `session_ids`: Ordered list of child sessions
-  - `is_expanded`: UI expansion state (persisted)
-  - `order`: Display order among projects
-- **Key Methods**:
-  - `create_project()`: Creates project, shifts existing projects down in order
-  - `add_session_to_project()`: Adds session ID to project's session_ids list
-  - `remove_session_from_project()`: Removes session from project
-  - `reorder_projects()`: Changes project display order
-  - `reorder_project_sessions()`: Changes session order within a project
-- **Persistence**: Each project has `data/projects/{uuid}/state.json`
 
-#### [src/claude_sdk.py](./src/claude_sdk.py) - **SDK Wrapper & Message Queue**
+**ProjectInfo Fields** (Extended for Legion):
+- Standard: `project_id`, `name`, `working_directory`, `session_ids`, `is_expanded`, `order`
+- Legion: `is_multi_agent`, `horde_ids`, `channel_ids`, `minion_ids`, `max_concurrent_minions`, `active_minion_count`
+
+**Key Methods**:
+- `create_project()`: Create with order shifting
+- `add_session_to_project()`, `remove_session_from_project()`
+- `reorder_projects()`, `reorder_project_sessions()`
+
+#### `src/claude_sdk.py` - **SDK Wrapper & Message Queue**
 **Main Class**: `ClaudeSDK`
-- **Purpose**: Wraps Claude Agent SDK, manages conversation queue, handles streaming
-- **Key Components**:
-  - `_message_queue`: Async queue for user messages
-  - `_conversation_task`: Background task processing queue
-  - `_sdk_client`: ClaudeSDKClient instance (context manager)
-  - `_sdk_options`: ClaudeAgentOptions configuration
-- **Key Methods**:
-  - `start()`: Initializes SDK client, starts conversation loop
-  - `send_message()`: Enqueues message for processing
-  - `interrupt_session()`: Sets interrupt flag, stops current processing
-  - `set_permission_mode()`: Sends permission mode change to SDK
-  - `_conversation_loop()`: Processes queue, streams SDK responses (main async loop)
-- **Message Processing**: Extracts SDK objects, passes to MessageProcessor, stores and broadcasts
 
-#### [src/message_parser.py](./src/message_parser.py) - **Message Normalization**
-**Main Classes**: `MessageType` (enum), `ParsedMessage` (dataclass), `MessageHandler` (ABC), `MessageProcessor`
-- **Purpose**: Converts between SDK objects, storage format, and WebSocket format
-- **Handlers**: `SystemMessageHandler`, `AssistantMessageHandler`, `UserMessageHandler`, `ResultMessageHandler`, `PermissionRequestHandler`, `PermissionResponseHandler`
-- **MessageProcessor Methods**:
-  - `process_message()`: Takes raw SDK message, returns ParsedMessage
-  - `prepare_for_storage()`: Converts ParsedMessage to JSON-serializable dict
-  - `prepare_for_websocket()`: Formats for frontend consumption
-- **Flow**: SDK object → parse() → ParsedMessage → prepare_for_storage/websocket() → dict
+**Responsibilities**:
+- Wraps Claude Agent SDK with async queue
+- Manages conversation loop
+- Handles streaming responses
+- MCP server integration for Legion tools
 
-#### [src/data_storage.py](./src/data_storage.py) - **Persistent Storage**
+**Key Components**:
+- `_message_queue`: Async queue for user messages
+- `_conversation_task`: Background processing loop
+- `_sdk_client`: ClaudeSDKClient instance
+- `_mcp_server`: Optional MCP server for Legion tools
+
+**Key Methods**:
+- `start()`: Initialize SDK client, start conversation loop
+- `send_message()`: Enqueue message
+- `interrupt_session()`: Set interrupt flag
+- `set_permission_mode()`: Send mode change to SDK
+- `_conversation_loop()`: Process queue, stream responses
+
+#### `src/message_parser.py` - **Message Normalization**
+**Main Classes**: `MessageType` (enum), `ParsedMessage` (dataclass), `MessageProcessor`
+
+**Responsibilities**:
+- Convert between SDK objects, storage format, WebSocket format
+- Unified processing for consistency
+
+**Handlers**: `SystemMessageHandler`, `AssistantMessageHandler`, `UserMessageHandler`, `ResultMessageHandler`, `PermissionRequestHandler`, `PermissionResponseHandler`
+
+**MessageProcessor Methods**:
+- `process_message()`: Raw SDK message → ParsedMessage
+- `prepare_for_storage()`: ParsedMessage → JSON-serializable dict
+- `prepare_for_websocket()`: Format for frontend
+
+#### `src/data_storage.py` - **Persistent Storage**
 **Main Class**: `DataStorageManager`
-- **Files Managed**:
-  - `messages.jsonl`: One JSON object per line (append-only log)
-  - `history.json`: Command history (array of objects)
-  - `state.json`: Session metadata (managed by SessionManager)
-- **Key Methods**:
-  - `append_message()`: Adds message to JSONL file
-  - `read_messages()`: Paginated message retrieval (limit/offset)
-  - `get_message_count()`: Total message count
-  - `cleanup()`: Closes file handles, releases resources
-- **Note**: Corruption detection disabled to prevent startup issues
 
-#### [src/error_handler.py](./src/error_handler.py) - **Error Processing**
-- Categorizes and formats error messages for user display
-- Extracts meaningful errors from SDK failures
+**Files Managed**:
+- `messages.jsonl`: Append-only message log
+- `history.json`: Command history
+- `state.json`: Session metadata (managed by SessionManager)
 
-#### [src/logging_config.py](./src/logging_config.py) - **Structured Logging**
-- Configures per-category loggers (SDK, PERMISSIONS, STORAGE, WS_LIFECYCLE, PARSER, COORDINATOR)
-- Outputs to `data/logs/{category}.log` files
-- `get_logger(name, category)`: Returns specialized logger instance
+**Key Methods**:
+- `append_message()`, `read_messages()`, `get_message_count()`, `cleanup()`
 
-### Supporting Modules
+## Legion Multi-Agent System
 
-#### [src/sdk_discovery_tool.py](./src/sdk_discovery_tool.py) - **SDK API Inspector**
-- Introspects claude_agent_sdk module structure
-- Generates reports of available classes, functions, and signatures
-- Used for SDK version compatibility testing
+### Legion Components (`src/legion/`)
 
-## Data Folder Structure
+#### `src/legion/legion_coordinator.py` - **Legion Lifecycle Management**
+**Main Class**: `LegionCoordinator`
+
+**Responsibilities**:
+- Legion creation and deletion
+- Fleet control (halt all, resume all, emergency halt)
+- Central capability registry (MVP: keyword search)
+- Horde and channel tracking
+
+#### `src/legion/overseer_controller.py` - **Minion Management**
+**Main Class**: `OverseerController`
+
+**Responsibilities**:
+- Minion lifecycle: create_minion_for_user(), spawn_minion(), dispose_minion()
+- Enforce parent authority (only parent can dispose children)
+- Horde creation and updates
+- Memory transfer on disposal
+- Capability registration
+
+#### `src/legion/comm_router.py` - **Inter-Agent Communication**
+**Main Class**: `CommRouter`
+
+**Responsibilities**:
+- Convert between Comms and SDK Messages
+- Route Comms to minions, channels, or user
+- Handle interrupt priorities (HALT, PIVOT)
+- Persist to timeline, channel logs, minion logs
+- Parse and validate #tag references
+
+#### `src/legion/channel_manager.py` - **Channel Management**
+**Main Class**: `ChannelManager`
+
+**Responsibilities**:
+- Create channels with purpose and metadata
+- Add/remove members
+- Broadcast to members
+- Persist channel state
+
+#### `src/legion/memory_manager.py` - **Memory & Learning** (Planned)
+**Main Class**: `MemoryManager`
+
+**Responsibilities** (Future):
+- Distill task completions into structured memories
+- Reinforce memories based on outcome feedback
+- Promote high-quality memories to long-term
+- Transfer knowledge between minions
+- Support minion forking with memory copy
+
+#### `src/legion/legion_mcp_tools.py` - **MCP Tools for Minions**
+**Main Class**: `LegionMCPTools`
+
+**Tools Provided**:
+- **Communication**: `send_comm`, `send_comm_to_channel`
+- **Lifecycle** (Future): `spawn_minion`, `dispose_minion`
+- **Discovery**: `list_minions`, `get_minion_info`, `search_capability`
+- **Channels**: `create_channel`, `join_channel`, `list_channels`
+
+**Integration**: Single instance per legion, attached to all minion SDK sessions
+
+### Legion Data Models (`src/legion/models.py`)
+
+**Core Entities**:
+- `Horde`: Tree structure with root overseer + members
+- `Channel`: Purpose-driven group with membership
+- `Comm`: High-level message with routing info
+- `CommType` enum: TASK, QUESTION, REPORT, INFO, HALT, PIVOT, THOUGHT, SPAWN, DISPOSE, SYSTEM
+- `MemoryEntry`, `MinionMemory`: Knowledge management (future)
+
+## Data Directory Structure
 
 ```
 data/
-├── logs/                           # Structured debug logs (one per category)
-│   ├── coordinator.log            # SessionCoordinator actions
-│   ├── error.log                  # All errors
-│   ├── parser.log                 # Message parsing details
-│   ├── sdk_debug.log              # SDK integration debugging
-│   ├── storage.log                # File operations
-│   └── websocket_debug.log        # WebSocket lifecycle events
+├── logs/                           # Per-category debug logs
+│   ├── coordinator.log             # SessionCoordinator actions
+│   ├── error.log                   # All errors
+│   ├── parser.log                  # Message parsing
+│   ├── sdk_debug.log               # SDK integration
+│   ├── storage.log                 # File operations
+│   └── websocket_debug.log         # WebSocket lifecycle
 │
 ├── projects/{uuid}/                # One folder per project
-│   └── state.json                 # ProjectInfo serialized
-│       Fields: project_id, name, working_directory, session_ids[],
-│               is_expanded, created_at, updated_at, order
+│   └── state.json                  # ProjectInfo serialized
 │
 ├── sessions/{uuid}/                # One folder per session
-│   ├── state.json                 # SessionInfo serialized
-│   │   Fields: session_id, state, working_directory, current_permission_mode,
-│   │           system_prompt, tools[], model, is_processing, name, order,
-│   │           claude_code_session_id, error_message
-│   ├── messages.jsonl             # Append-only message log (one JSON per line)
-│   │   Each line: {type, content, timestamp, metadata:{...}, session_id}
-│   └── history.json               # Command history array
+│   ├── state.json                  # SessionInfo serialized
+│   ├── messages.jsonl              # Append-only message log
+│   └── history.json                # Command history
 │
-└── sdk_discovery/                  # SDK introspection reports
-    ├── sdk_discovery_summary_{timestamp}.json
-    └── sdk_discovery_detailed_{timestamp}.json
+└── legions/{uuid}/                 # One folder per legion (multi-agent project)
+    ├── timeline.jsonl              # Unified comm log
+    ├── hordes/{horde_id}/
+    │   └── horde_state.json
+    ├── channels/{channel_id}/
+    │   ├── channel_state.json
+    │   └── comms.jsonl
+    └── minions/{minion_id}/
+        ├── minion_state.json
+        ├── session_messages.jsonl  # SDK messages
+        ├── comms.jsonl             # Minion-specific comm log
+        ├── short_term_memory.json  # (Future)
+        └── long_term_memory.json   # (Future)
 ```
-
-**Key Points**:
-- UUIDs in folder names are variable data (don't document specific UUIDs)
-- `state.json` files are authoritative source of truth for entity state
-- `messages.jsonl` is append-only (never modified, only appended)
-- Projects contain reference to sessions (via `session_ids` list)
-- Sessions reference their parent working_directory (from project)
 
 ## API Endpoint Reference
 
 ### Project Endpoints
-- `POST /api/projects` - Create new project (body: {name, working_directory})
-- `GET /api/projects` - List all projects with sessions
-- `GET /api/projects/{id}` - Get specific project with its sessions
-- `PUT /api/projects/{id}` - Update project name/expansion state (body: {name?, is_expanded?})
-- `DELETE /api/projects/{id}` - Delete project and all its sessions
-- `PUT /api/projects/{id}/toggle-expansion` - Toggle project expansion state
-- `PUT /api/projects/reorder` - Reorder projects (body: {project_ids: [...]})
-- `PUT /api/projects/{id}/sessions/reorder` - Reorder sessions in project (body: {session_ids: [...]})
+
+```
+POST   /api/projects                      # Create project (with is_multi_agent, max_concurrent_minions)
+GET    /api/projects                      # List all projects with sessions
+GET    /api/projects/{id}                 # Get specific project
+PUT    /api/projects/{id}                 # Update name/expansion state
+DELETE /api/projects/{id}                 # Delete project and all sessions
+PUT    /api/projects/{id}/toggle-expansion
+PUT    /api/projects/reorder              # Reorder projects
+PUT    /api/projects/{id}/sessions/reorder
+```
 
 ### Session Endpoints
-- `POST /api/sessions` - Create new session in project (body: {project_id, permission_mode, system_prompt?, tools[], model?, name?})
-- `GET /api/sessions` - List all sessions with state
-- `GET /api/sessions/{id}` - Get session info (includes session, sdk, storage metadata)
-- `POST /api/sessions/{id}/start` - Start/resume session (creates SDK instance)
-- `POST /api/sessions/{id}/pause` - Pause session
-- `POST /api/sessions/{id}/terminate` - Stop session (cleanup SDK)
-- `DELETE /api/sessions/{id}` - Delete session and all data
-- `POST /api/sessions/{id}/messages` - Send message to session (body: {message})
-- `GET /api/sessions/{id}/messages?limit=50&offset=0` - Get messages with pagination
-- `POST /api/sessions/{id}/permission-mode` - Set permission mode (body: {mode})
-- `PUT /api/sessions/{id}/name` - Update session name (body: {name})
+
+```
+POST   /api/sessions                      # Create session (with project_id, permission_mode, tools, model, name)
+GET    /api/sessions                      # List all sessions
+GET    /api/sessions/{id}                 # Get session info
+POST   /api/sessions/{id}/start           # Start/resume session
+POST   /api/sessions/{id}/pause           # Pause session
+POST   /api/sessions/{id}/terminate       # Stop session
+POST   /api/sessions/{id}/restart         # Restart session (keep history)
+POST   /api/sessions/{id}/reset           # Clear messages, fresh start
+DELETE /api/sessions/{id}                 # Delete session
+POST   /api/sessions/{id}/messages        # Send message
+GET    /api/sessions/{id}/messages?limit=50&offset=0  # Get messages (paginated)
+POST   /api/sessions/{id}/permission-mode # Set permission mode
+PUT    /api/sessions/{id}/name            # Update session name
+POST   /api/sessions/{id}/disconnect      # End SDK session, keep state
+```
+
+### Legion Endpoints (Multi-Agent)
+
+```
+GET    /api/legions/{id}/timeline?limit=100&offset=0  # Get comm timeline (paginated)
+POST   /api/legions/{id}/comms            # Send comm (user to minion/channel)
+POST   /api/legions/{id}/minions          # Create minion
+GET    /api/legions/{id}/hordes           # Load hordes
+GET    /api/legions/{id}/channels         # Load channels
+```
 
 ### Utility Endpoints
-- `GET /` - Serve index.html
-- `GET /health` - Health check endpoint
-- `GET /api/filesystem/browse?path=/foo/bar` - Browse directories for project creation
+
+```
+GET    /                                  # Serve index.html
+GET    /health                            # Health check
+GET    /api/filesystem/browse?path=/foo  # Browse directories
+```
 
 ### WebSocket Endpoints
-- `WS /ws/ui` - Global UI WebSocket (receives project/session state broadcasts)
-  - Receives: `sessions_list`, `state_change`, `project_updated`, `project_deleted`
-  - Sends: `ping` (keepalive)
-- `WS /ws/session/{id}` - Session-specific WebSocket (receives messages for one session)
-  - Receives: `message` (SDK messages), `connection_established`, `ping`
-  - Sends: `send_message`, `interrupt_session`, `permission_response`
+
+**UI WebSocket** (`/ws/ui`): Global UI state updates
+- Receives: `sessions_list`, `state_change`, `project_updated`, `project_deleted`
+- Sends: `ping`
+
+**Session WebSocket** (`/ws/session/{id}`): Session-specific message streaming
+- Receives: `message`, `permission_request`, `permission_response`, `tool_result`, `state_change`, `connection_established`
+- Sends: `send_message`, `interrupt_session`, `permission_response`
+
+**Legion WebSocket** (`/ws/legion/{id}`): Multi-agent communications
+- Receives: `comm`, `minion_created`, `ping`
+- Sends: `ping`
 
 ## Message Flow Architecture
 
 ### SDK Message → Storage → WebSocket Flow
+
 ```
 1. ClaudeSDK receives message from claude_agent_sdk
    ↓
@@ -601,16 +649,17 @@ data/
    ↓
 5. SessionCoordinator stores via DataStorageManager.append_message()
    ├─ MessageProcessor.prepare_for_storage() converts to dict
-   └─ Writes to messages.jsonl (one line per message)
+   └─ Writes to messages.jsonl
    ↓
 6. SessionCoordinator broadcasts to WebSocket
    ├─ MessageProcessor.prepare_for_websocket() formats for frontend
    └─ WebSocketManager.send_message() pushes to connected clients
    ↓
-7. Frontend (app.js) receives and renders
+7. Frontend (Vue stores) receives and updates state reactively
 ```
 
 ### User Message → SDK Flow
+
 ```
 1. User types in frontend, clicks Send
    ↓
@@ -628,12 +677,13 @@ data/
    ↓
 8. Sends to claude_agent_sdk via query(prompt=message)
    ↓
-9. SDK streams back responses (loop back to SDK Message flow above)
+9. SDK streams back responses (loop back to SDK Message flow)
    ↓
 10. On ResultMessage, SessionCoordinator sets is_processing = False
 ```
 
 ### Permission Flow
+
 ```
 1. SDK needs permission for tool (e.g., Edit, Write)
    ↓
@@ -656,60 +706,56 @@ data/
 10. SDK receives response and continues/aborts tool execution
 ```
 
-## Common Debugging Scenarios
+## Common Development Scenarios
 
 ### Finding Where Functionality Lives
 
 **Problem**: Need to change how Edit tool is displayed
-→ **Solution**: [static/tools/handlers/edit-handlers.js](./static/tools/handlers/edit-handlers.js) (`EditToolHandler` class)
+→ **Solution**: `frontend/src/components/messages/tools/EditToolHandler.vue`
 
 **Problem**: Session not starting, need to debug SDK initialization
-→ **Solution**: [src/session_coordinator.py:177-289](./src/session_coordinator.py) (`start_session()` method) + enable `--debug-sdk` flag
+→ **Solution**: `src/session_coordinator.py:177-289` (start_session()) + enable `--debug-sdk`
 
 **Problem**: WebSocket not connecting
-→ **Solution**: [src/web_server.py:684-930](./src/web_server.py) (websocket_endpoint function) + enable `--debug-websocket` flag
+→ **Solution**: `src/web_server.py:684-930` (websocket_endpoint) + enable `--debug-websocket`
 
-**Problem**: Messages not persisting to disk
-→ **Solution**: [src/data_storage.py:51-67](./src/data_storage.py) (`append_message()` method) + enable `--debug-storage` flag
+**Problem**: Messages not persisting
+→ **Solution**: `src/data_storage.py:51-67` (append_message()) + enable `--debug-storage`
 
 **Problem**: Permission callback not triggering
-→ **Solution**: [src/web_server.py:984-1185](./src/web_server.py) (`_create_permission_callback()`) + enable `--debug-permissions` flag
+→ **Solution**: `src/web_server.py:984-1185` (_create_permission_callback()) + enable `--debug-permissions`
 
-**Problem**: Need to add new REST endpoint
-→ **Solution**: Add route in [src/web_server.py:232-635](./src/web_server.py) (`_setup_routes()` method)
+**Problem**: Add new REST endpoint
+→ **Solution**: Add route in `src/web_server.py:232-635` (_setup_routes())
 
-**Problem**: Change session state machine behavior
-→ **Solution**: [src/session_manager.py](./src/session_manager.py) (SessionState enum and transition methods)
+**Problem**: Add new Vue component
+→ **Solution**: Create `.vue` file, register in parent component or router
 
-**Problem**: Modify project-session relationship logic
-→ **Solution**: [src/project_manager.py](./src/project_manager.py) (add_session_to_project, remove_session_from_project)
-
-**Problem**: Change how SDK messages are parsed
-→ **Solution**: [src/message_parser.py](./src/message_parser.py) (MessageHandler subclasses)
+**Problem**: Add new tool handler
+→ **Solution**: See TOOL_HANDLERS.md for Vue 3 component creation guide
 
 ### Understanding State Management
 
 **Session States** (`SessionState` enum):
 - `CREATED`: Session exists but SDK not started
-- `STARTING`: Transitioning to active (not commonly seen)
+- `STARTING`: Transitioning to active
 - `ACTIVE`: SDK running, can send/receive messages
-- `PAUSED`: Not currently used
+- `PAUSED`: Awaiting user input (permissions)
 - `TERMINATED`: SDK stopped cleanly
-- `ERROR`: SDK startup or runtime failure (check `error_message` field)
+- `ERROR`: Startup or runtime failure (check `error_message` field)
 
 **Processing State** (`is_processing` boolean):
-- `True`: Session is actively processing user input (disable send button)
-- `False`: Session idle and ready for new input
-- Set by `SessionManager.update_processing_state()`
+- `True`: Session actively processing user input (disable send button)
+- `False`: Session idle, ready for new input
 - Automatically reset on `ResultMessage` or errors
 
 **Permission Modes**:
 - `default`: Prompt for everything not pre-approved in .claude/settings
-- `acceptEdits`: Auto-approve Edit/Write/etc (most permissive)
+- `acceptEdits`: Auto-approve Edit/Write/etc (permissive)
 - `plan`: Planning mode (auto-resets to default after ExitPlanMode)
 - `bypassPermissions`: No prompts at all
 
-### Component Dependencies (What Imports What)
+## Component Dependencies
 
 ```
 main.py
@@ -723,9 +769,76 @@ main.py
       │   │   └─ logging_config.py
       │   ├─ data_storage.py
       │   ├─ message_parser.py
+      │   ├─ legion/legion_coordinator.py (if multi-agent)
+      │   │   ├─ legion/overseer_controller.py
+      │   │   ├─ legion/comm_router.py
+      │   │   ├─ legion/channel_manager.py
+      │   │   ├─ legion/memory_manager.py
+      │   │   └─ legion/legion_mcp_tools.py
       │   └─ logging_config.py
       ├─ message_parser.py
       └─ logging_config.py
+```
+
+## Testing & Development Patterns
+
+### Standard Testing Configuration
+
+**CRITICAL**: Always use port 8001 for testing to avoid conflicts with production on port 8000.
+
+```bash
+# Test run
+uv run python main.py --debug-all --data-dir test_data --port 8001
+
+# Production run
+uv run python main.py --port 8000
+```
+
+### Process Management - REQUIRED PATTERN
+
+**CRITICAL**: Always kill processes by PID, never by name.
+
+**Windows**:
+```bash
+# Find process
+netstat -ano | findstr ":8001"
+
+# Kill by PID
+taskkill /PID <PID> /F
+```
+
+**Unix/Linux/macOS**:
+```bash
+# Find process
+lsof -i :8001
+
+# Kill by PID
+kill <PID>
+# or: kill -9 <PID>
+```
+
+### Running Tests
+
+```bash
+# All tests
+uv run pytest src/tests/ -v
+
+# Specific test file
+uv run pytest src/tests/test_session_manager.py -v
+
+# With coverage
+uv run pytest src/tests/ --cov=src --cov-report=html
+```
+
+### Frontend Development
+
+```bash
+# Terminal 1: Backend
+uv run python main.py --port 8001 --debug-all
+
+# Terminal 2: Frontend dev server
+cd frontend
+npm run dev  # http://localhost:5173
 ```
 
 ## Key Architectural Decisions
@@ -736,15 +849,14 @@ main.py
 - Coordinates state across multiple managers
 
 **Why MessageProcessor?**
-- SDK message format differs from storage format differs from WebSocket format
+- SDK message format ≠ storage format ≠ WebSocket format
 - Unified processing ensures consistency
 - Handles backward compatibility as SDK evolves
 
 **Why Separate Project and Session Managers?**
-- Projects are lightweight grouping mechanism (working_directory + sessions)
-- Sessions are heavy (SDK instances, message history, state)
-- Allows deleting projects without losing session data references
-- Enables future multi-project session support
+- Projects = lightweight grouping (working_directory + sessions)
+- Sessions = heavy (SDK instances, message history, state)
+- Enables multi-project session support (future)
 
 **Why JSONL for messages?**
 - Append-only is safe for concurrent access
@@ -755,105 +867,91 @@ main.py
 **Why asyncio.Future for permissions?**
 - SDK permission callback is synchronous from its perspective
 - WebSocket communication is asynchronous
-- Future bridges sync SDK callback ↔ async WebSocket response
+- Future bridges sync callback ↔ async WebSocket response
 
-# Testing & Development Patterns
+**Why Vue 3 + Pinia?**
+- Reactive state management eliminates manual UI updates
+- Component architecture improves maintainability
+- Vue DevTools provides powerful debugging
+- TypeScript support improves code quality
+- Hot Module Replacement accelerates development
 
-## Standard Testing Configuration
+**Why MCP Tools for Legion?**
+- Explicit intent (no ambiguity in minion actions)
+- Structured parameters (type-safe, validated)
+- Clear error feedback (minions can act on specific errors)
+- Debuggable (tool calls visible in session messages)
+- Self-documenting (tool descriptions teach minions usage)
 
-**CRITICAL**: Always use port 8001 for testing to avoid conflicts with the production instance running on port 8000.
+## Future Enhancements
 
-```bash
-# Standard test run
-uv run python main.py --debug-all --data-dir test_data --port 8001
+**Frontend**:
+- Syntax highlighting for code blocks (highlight.js/Prism)
+- Virtual scrolling for large message lists
+- Advanced filtering and search
+- Multi-user authentication
+- Theme customization
 
-# Production run (user's intentional instance)
-uv run python main.py --port 8000
-```
+**Backend**:
+- PostgreSQL for multi-instance deployments
+- Redis for session state caching
+- Prometheus metrics exporter
+- Rate limiting and abuse prevention
+- Multi-user authorization
 
-**Test Environment Parameters**:
-- `--port 8001` - Dedicated test port (avoids collision with port 8000)
-- `--data-dir test_data` - Isolated data directory (doesn't interfere with production data)
-- `--debug-all` - Enable all debug logging for development
+**Legion**:
+- Autonomous minion spawning (system prompts teaching when/how)
+- Channel collaboration (cross-horde groups)
+- Memory distillation and reinforcement
+- Knowledge transfer on disposal
+- Minion forking for A/B testing
+- Gossip-based capability discovery
 
-## Process Management - REQUIRED PATTERN
+## Additional Resources
 
-**CRITICAL**: Always kill processes by PID, never by name or command-line pattern.
+- **User Guide**: [run_guide.md](./run_guide.md) - Setup, usage, troubleshooting
+- **Tool Handlers**: [TOOL_HANDLERS.md](./TOOL_HANDLERS.md) - Vue 3 tool handler development
+- **Frontend Docs**: [frontend/README.md](./frontend/README.md) - Vue 3 architecture details
+- **Migration Plan**: [frontend/MIGRATION_PLAN.md](./frontend/MIGRATION_PLAN.md) - Vue 3 migration status
+- **Legion Proposal**: [legion_proposal/LEGION_PROPOSAL.md](./legion_proposal/LEGION_PROPOSAL.md) - Multi-agent design
+- **MCP Tools**: [legion_proposal/MCP_TOOLS_ARCHITECTURE.md](./legion_proposal/MCP_TOOLS_ARCHITECTURE.md) - Inter-agent communication
+- **Development Plan**: [DEVELOPMENT_PLAN.md](./DEVELOPMENT_PLAN.md) - Project roadmap
+- **Claude Agent SDK**: https://github.com/anthropics/claude-agent-sdk
 
-### Windows Process Management
-```bash
-# Find process on port
-netstat -ano | findstr ":8001"
+## Summary
 
-# Output shows PID in rightmost column, e.g.:
-# TCP    0.0.0.0:8001    0.0.0.0:0    LISTENING    12345
+Claude WebUI is a **production-ready web interface** for Claude Agent SDK with:
 
-# Kill process by PID
-taskkill /PID 12345 /F
+**Single-Agent Features**:
+- Real-time streaming conversations with rich tool visualization
+- Project/session hierarchy with drag-and-drop reordering
+- Four permission modes with smart suggestions
+- Orphaned tool detection and cleanup
+- Persistent message storage (JSONL + JSON)
+- Vue 3 + Pinia reactive UI
+- Mobile-responsive design
 
-# NEVER USE: taskkill /IM python.exe
-# NEVER USE: taskkill /FI "COMMANDLINE like *main.py*"
-```
+**Multi-Agent Features (Legion)**:
+- Minion creation and management
+- Inter-agent communication (structured Comms)
+- Timeline, Spy, Horde views for observability
+- MCP tools for explicit minion actions
+- Hierarchical organization (hordes)
+- Purpose-driven channels (future)
+- Memory & learning system (future)
 
-### Unix/Linux/macOS Process Management
-```bash
-# Find process on port
-lsof -i :8001
-# or
-netstat -tulpn | grep :8001
+**Developer Experience**:
+- Comprehensive debugging tools (per-category logs)
+- Complete REST + WebSocket API
+- Extensible architecture (13+ tool handlers, easy to add more)
+- Hot Module Replacement for instant feedback
+- Vue DevTools integration
+- Well-documented codebase
 
-# Kill process by PID
-kill 12345
-# or force kill
-kill -9 12345
+---
 
-# NEVER USE: pkill -f "main.py"
-# NEVER USE: killall python
-```
+**important-instruction-reminders**
 
-### Why PID-Based Killing is Required
-- Name-based killing can terminate unintended processes
-- Command-line pattern matching is unreliable and dangerous
-- PID is unique and precise
-- Follows industry best practices for process management
-
-## Running the Server
-
-```bash
-# Standard run
-uv run python main.py
-
-# With debugging
-uv run python main.py --debug-all
-
-# Specific debugging
-uv run python main.py --debug-sdk --debug-permissions
-
-# Custom host/port (for testing)
-uv run python main.py --host 127.0.0.1 --port 8001 --data-dir test_data
-```
-
-## Testing Components in Isolation
-```python
-# Test SessionManager
-from src.session_manager import SessionManager
-sm = SessionManager()
-await sm.initialize()
-await sm.create_session("test-id", working_directory="/tmp")
-
-# Test MessageProcessor
-from src.message_parser import MessageProcessor, MessageParser
-mp = MessageProcessor(MessageParser())
-parsed = mp.process_message({"type": "system", "content": "test"}, source="test")
-websocket_format = mp.prepare_for_websocket(parsed)
-```
-
-## Common Import Issues
-- Always import from `claude_agent_sdk` not `claude_code_sdk`
-- MessageProcessor requires SDK types: `from claude_agent_sdk import UserMessage, AssistantMessage, ...`
-- Circular import? You probably need to import in SessionCoordinator not the other way around
-
-# important-instruction-reminders
 Do what has been asked; nothing more, nothing less.
 NEVER create files unless they're absolutely necessary for achieving your goal.
 ALWAYS prefer editing an existing file to creating a new one.
