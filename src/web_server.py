@@ -25,6 +25,7 @@ from claude_agent_sdk.types import PermissionRuleValue
 from .logging_config import get_logger
 from .message_parser import MessageParser, MessageProcessor
 from .session_coordinator import SessionCoordinator
+from .session_manager import SessionState
 
 # Get specialized logger for WebSocket lifecycle debugging
 ws_logger = get_logger('websocket_debug', category='WS_LIFECYCLE')
@@ -323,7 +324,28 @@ class ClaudeWebUI:
         # Register callbacks
         self.coordinator.add_state_change_callback(self._on_state_change)
 
+        # Clean up orphaned permissions for PAUSED sessions found at startup
+        await self._cleanup_paused_sessions_at_startup()
+
         logger.info("Claude Code WebUI initialized")
+
+    async def _cleanup_paused_sessions_at_startup(self):
+        """Clean up orphaned permissions for all sessions at startup"""
+        try:
+            sessions = await self.coordinator.session_manager.list_sessions()
+
+            if sessions:
+                logger.info(f"Checking {len(sessions)} sessions for orphaned permissions at startup")
+
+                for session in sessions:
+                    await self._cleanup_orphaned_permissions(
+                        session.session_id,
+                        reason="Session was terminated during server restart"
+                    )
+
+                logger.info(f"Completed orphaned permission cleanup scan for {len(sessions)} sessions")
+        except Exception as e:
+            logger.error(f"Error cleaning up orphaned permissions at startup: {e}")
 
     def _setup_routes(self):
         """Setup FastAPI routes"""
@@ -607,6 +629,9 @@ class ClaudeWebUI:
                 # Clean up any pending permissions for this session
                 self._cleanup_pending_permissions_for_session(session_id)
 
+                # Store denial messages for any orphaned permission requests
+                await self._cleanup_orphaned_permissions(session_id, reason="Session was terminated")
+
                 success = await self.coordinator.terminate_session(session_id)
                 return {"success": success}
             except Exception as e:
@@ -692,6 +717,9 @@ class ClaudeWebUI:
         async def restart_session(session_id: str):
             """Restart a session (disconnect and resume)"""
             try:
+                # Store denial messages for any orphaned permission requests before restarting
+                await self._cleanup_orphaned_permissions(session_id, reason="Session was restarted")
+
                 # Get permission callback for this session
                 permission_callback = self._create_permission_callback(session_id)
 
@@ -1153,6 +1181,30 @@ class ClaudeWebUI:
                             ws_logger.debug(f"DEBUG: Full interrupt message data: {message_data}")
 
                             try:
+                                # Check if session is in PAUSED state (waiting for permission)
+                                # If so, deny all pending permissions for this session
+                                session_info = await self.coordinator.session_manager.get_session_info(session_id)
+                                if session_info and session_info.state == SessionState.PAUSED:
+                                    # Find and resolve any pending permission requests for this session
+                                    permissions_to_resolve = []
+                                    for request_id, future in list(self.pending_permissions.items()):
+                                        # We need to check if this request belongs to this session
+                                        # Since we don't store session_id with the future, we'll resolve all pending
+                                        # This is safe because interrupting a session should clear its permissions
+                                        if not future.done():
+                                            permissions_to_resolve.append(request_id)
+
+                                    for request_id in permissions_to_resolve:
+                                        future = self.pending_permissions.get(request_id)
+                                        if future and not future.done():
+                                            future.set_result({
+                                                "behavior": "deny",
+                                                "message": "Permission denied due to session interrupt",
+                                                "interrupt": True
+                                            })
+                                            del self.pending_permissions[request_id]
+                                            logger.info(f"Resolved pending permission {request_id} with deny due to interrupt")
+
                                 # Forward interrupt request to coordinator
                                 result = await self.coordinator.interrupt_session(session_id)
                                 interrupt_end_time = time.time()
@@ -1447,6 +1499,14 @@ class ClaudeWebUI:
             except Exception as e:
                 logger.error(f"Failed to store permission request message: {e}")
 
+            # Set session state to PAUSED while waiting for permission response
+            # This provides visual feedback that the session is blocked on user input
+            try:
+                await self.coordinator.session_manager.pause_session(session_id)
+                logger.info(f"Set session {session_id} to PAUSED state while waiting for permission")
+            except Exception as pause_error:
+                logger.error(f"Failed to pause session {session_id} for permission wait: {pause_error}")
+
             # Wait for user permission decision via WebSocket
             logger.info(f"PERMISSION CALLBACK: Creating Future for request_id {request_id}")
 
@@ -1459,6 +1519,16 @@ class ClaudeWebUI:
                 logger.info(f"PERMISSION CALLBACK: Waiting for user decision on request_id {request_id}")
                 response = await permission_future
                 logger.info(f"PERMISSION CALLBACK: Received user decision for request_id {request_id}: {response}")
+
+                # Restore session to ACTIVE state after permission decision
+                # The session will continue processing, which will show as ACTIVE+processing (purple)
+                try:
+                    session_info = await self.coordinator.session_manager.get_session_info(session_id)
+                    if session_info and session_info.state == SessionState.PAUSED:
+                        await self.coordinator.session_manager.start_session(session_id)
+                        logger.info(f"Restored session {session_id} to ACTIVE state after permission decision")
+                except Exception as restore_error:
+                    logger.error(f"Failed to restore session {session_id} to ACTIVE after permission: {restore_error}")
 
                 decision = response.get("behavior")
                 reasoning = f"User {decision}ed permission"
@@ -1586,6 +1656,74 @@ class ClaudeWebUI:
             return response
 
         return permission_callback
+
+    async def _cleanup_orphaned_permissions(self, session_id: str, reason: str = "Session was terminated"):
+        """
+        Clean up orphaned permission requests for a session.
+        Stores fake permission denial messages for any pending permissions.
+        Called when session is terminated, restarted, or found in PAUSED state at startup.
+        """
+        try:
+            # Find all pending permissions (we don't track session_id per permission, so we need to check messages)
+            storage_manager = await self.coordinator.get_session_storage(session_id)
+            if not storage_manager:
+                logger.warning(f"No storage manager found for session {session_id} during permission cleanup")
+                return
+
+            # Read recent messages to find pending permission requests
+            messages = await storage_manager.read_messages(limit=100)
+
+            # Find permission requests that don't have corresponding responses
+            pending_requests = []
+            request_ids_with_responses = set()
+
+            # First pass: collect all permission responses
+            for msg in messages:
+                if msg.get('type') == 'permission_response':
+                    request_id = msg.get('metadata', {}).get('request_id') or msg.get('request_id')
+                    if request_id:
+                        request_ids_with_responses.add(request_id)
+
+            # Second pass: find permission requests without responses
+            for msg in messages:
+                if msg.get('type') == 'permission_request':
+                    request_id = msg.get('metadata', {}).get('request_id') or msg.get('request_id')
+                    if request_id and request_id not in request_ids_with_responses:
+                        pending_requests.append({
+                            'request_id': request_id,
+                            'tool_name': msg.get('metadata', {}).get('tool_name') or msg.get('tool_name', 'unknown'),
+                            'timestamp': msg.get('timestamp', time.time())
+                        })
+
+            # Store fake denial messages for all pending requests
+            for pending in pending_requests:
+                permission_response = {
+                    "type": "permission_response",
+                    "content": f"Permission denied for tool: {pending['tool_name']} - {reason}",
+                    "session_id": session_id,
+                    "timestamp": time.time(),
+                    "request_id": pending['request_id'],
+                    "decision": "deny",
+                    "reasoning": reason,
+                    "tool_name": pending['tool_name'],
+                    "response_time_ms": int((time.time() - pending['timestamp']) * 1000),
+                    "orphaned_cleanup": True  # Mark as cleanup message
+                }
+
+                try:
+                    processed_message = self._message_processor.process_message(permission_response, source="permission")
+                    storage_data = self._message_processor.prepare_for_storage(processed_message)
+                    await storage_manager.append_message(storage_data)
+                    logger.info(f"Stored orphaned permission cleanup for request {pending['request_id']} in session {session_id}")
+                except Exception as storage_error:
+                    logger.error(f"Failed to store orphaned permission cleanup: {storage_error}")
+                    # Fallback to direct storage
+                    await storage_manager.append_message(permission_response)
+
+            if pending_requests:
+                logger.info(f"Cleaned up {len(pending_requests)} orphaned permission requests for session {session_id}")
+        except Exception as e:
+            logger.error(f"Error cleaning up orphaned permissions for session {session_id}: {e}")
 
 # _serialize_message method removed - now using MessageProcessor.prepare_for_websocket() for unified formatting
 

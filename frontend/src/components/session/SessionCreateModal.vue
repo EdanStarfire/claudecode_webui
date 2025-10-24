@@ -27,7 +27,7 @@
                 id="sessionName"
                 v-model="formData.name"
                 :class="{ 'is-invalid': errors.name }"
-                placeholder="Main Session"
+                placeholder="main"
                 required
               />
               <div class="invalid-feedback" v-if="errors.name">{{ errors.name }}</div>
@@ -44,6 +44,7 @@
                 <option value="default">Default (Prompt for tools not in settings)</option>
                 <option value="acceptEdits">Accept Edits (Auto-approve Edit/Write)</option>
                 <option value="plan">Plan Mode (Auto-resets after ExitPlanMode)</option>
+                <option value="bypassPermissions">⚠️ Bypass Permissions (No prompts - use with caution)</option>
               </select>
               <div class="form-text">
                 Controls which tool actions require permission prompts

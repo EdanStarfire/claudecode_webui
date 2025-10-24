@@ -61,6 +61,7 @@ class LegionMCPTools:
         @tool(
             "send_comm",
             "Send a communication (message) to another minion by name. "
+            "Proactively use when needing to respond to or ask questions of another #minion. "
             "Use this for direct collaboration, asking questions, delegating tasks, "
             "or sharing information. You can reference other minions in your message "
             "using #minion-name syntax (e.g., 'Check with #DatabaseArchitect about schema'). "

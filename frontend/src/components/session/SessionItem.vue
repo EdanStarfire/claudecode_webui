@@ -61,9 +61,14 @@ const isDeleting = computed(() =>
   sessionStore.deletingSessions.has(props.session.session_id)
 )
 
-const displayState = computed(() =>
-  props.session.is_processing ? 'processing' : props.session.state
-)
+const displayState = computed(() => {
+  // Special case: PAUSED + processing = waiting for permission response (yellow blinking)
+  if (props.session.state === 'paused' && props.session.is_processing) {
+    return 'pending-prompt'
+  }
+  // Normal case: processing overrides state
+  return props.session.is_processing ? 'processing' : props.session.state
+})
 
 const statusDotClass = computed(() => {
   const state = displayState.value
@@ -74,6 +79,7 @@ const statusDotClass = computed(() => {
     'running': 'status-dot-green',
     'processing': 'status-dot-purple status-blinking',
     'paused': 'status-dot-grey',
+    'pending-prompt': 'status-dot-yellow status-blinking',
     'terminated': 'status-dot-grey',
     'error': 'status-dot-red',
     'failed': 'status-dot-red'
@@ -90,6 +96,7 @@ const statusDotStyle = computed(() => {
     'running': '#90ee90',
     'processing': '#dda0dd',
     'paused': '#d3d3d3',
+    'pending-prompt': '#ffc107',  // warning yellow (was light yellow)
     'terminated': '#d3d3d3',
     'error': '#ffb3b3',
     'failed': '#ffb3b3'
@@ -102,6 +109,7 @@ const statusDotStyle = computed(() => {
     'running': '#28a745',
     'processing': '#6f42c1',
     'paused': '#6c757d',
+    'pending-prompt': '#e0a800',  // darker warning yellow
     'terminated': '#6c757d',
     'error': '#dc3545',
     'failed': '#dc3545'
@@ -258,6 +266,11 @@ function onDrop(event) {
 .status-dot-red {
   background-color: #ffb3b3;
   border-color: #dc3545;
+}
+
+.status-dot-yellow {
+  background-color: #ffc107;
+  border-color: #e0a800;
 }
 
 .status-blinking {

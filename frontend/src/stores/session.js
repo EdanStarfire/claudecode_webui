@@ -120,13 +120,65 @@ export const useSessionStore = defineStore('session', () => {
     currentSessionId.value = sessionId
 
     // Get the session to check its state
-    const session = sessions.value.get(sessionId)
+    let session = sessions.value.get(sessionId)
+
+    // If session not in store (e.g., deeplink), fetch it first
+    if (!session) {
+      try {
+        const data = await api.get(`/api/sessions/${sessionId}`)
+        session = data.session
+        sessions.value.set(sessionId, session)
+        // Trigger reactivity
+        sessions.value = new Map(sessions.value)
+        console.log(`Fetched session ${sessionId} for deeplink`)
+      } catch (error) {
+        console.error(`Failed to fetch session ${sessionId}:`, error)
+        // Can't proceed without session data
+        return
+      }
+    }
 
     // Auto-start sessions in created or terminated states
     if (session && (session.state === 'created' || session.state === 'terminated')) {
       try {
         await startSession(sessionId)
         console.log(`Auto-started session ${sessionId} (was in ${session.state} state)`)
+
+        // Wait for session to start before connecting WebSocket
+        // Poll for state change with timeout to avoid race condition
+        // SDK can take 20-30 seconds to start, so wait up to 60 seconds
+        const maxWaitMs = 60000
+        const pollIntervalMs = 200
+        const logIntervalMs = 5000
+        let elapsedMs = 0
+        let lastLogMs = 0
+
+        while (elapsedMs < maxWaitMs) {
+          const currentSession = sessions.value.get(sessionId)
+          // Only proceed when session is fully active (not just 'starting')
+          // The 'starting' state means backend accepted the request, but SDK/WebSocket not ready yet
+          if (currentSession && currentSession.state === 'active') {
+            console.log(`Session ${sessionId} is now active after ${elapsedMs}ms`)
+            break
+          }
+
+          // Log progress every 5 seconds
+          if (elapsedMs - lastLogMs >= logIntervalMs) {
+            const currentState = sessions.value.get(sessionId)?.state || 'unknown'
+            console.log(`Waiting for session ${sessionId} to become active (current: ${currentState}, ${elapsedMs / 1000}s elapsed)`)
+            lastLogMs = elapsedMs
+          }
+
+          await new Promise(resolve => setTimeout(resolve, pollIntervalMs))
+          elapsedMs += pollIntervalMs
+        }
+
+        // If still not active after timeout, log warning but continue
+        // (WebSocket retry logic will handle eventual connection)
+        const finalSession = sessions.value.get(sessionId)
+        if (finalSession && finalSession.state !== 'active') {
+          console.warn(`Session ${sessionId} did not become active within ${maxWaitMs / 1000}s (state: ${finalSession.state}), continuing anyway`)
+        }
       } catch (error) {
         console.error(`Failed to auto-start session ${sessionId}:`, error)
         // Continue with selection even if start fails
@@ -205,11 +257,20 @@ export const useSessionStore = defineStore('session', () => {
 
   /**
    * Set permission mode for session
+   * Also syncs to initData for UI consistency
    */
   async function setPermissionMode(sessionId, mode) {
     try {
       await api.post(`/api/sessions/${sessionId}/permission-mode`, { mode })
       updateSession(sessionId, { current_permission_mode: mode })
+
+      // Sync to initData so SessionInfoModal shows updated mode
+      const storedInitData = initData.value.get(sessionId)
+      if (storedInitData) {
+        storedInitData.permissionMode = mode
+        initData.value.set(sessionId, storedInitData)
+      }
+
       console.log(`Set permission mode for session ${sessionId} to ${mode}`)
     } catch (error) {
       console.error('Failed to set permission mode:', error)
@@ -265,9 +326,15 @@ export const useSessionStore = defineStore('session', () => {
 
   /**
    * Store session init data (from init message)
+   * Also syncs permission mode to session state for UI consistency
    */
   function storeInitData(sessionId, data) {
     initData.value.set(sessionId, data)
+
+    // Sync permission mode from init data to session state
+    if (data.permissionMode) {
+      updateSession(sessionId, { current_permission_mode: data.permissionMode })
+    }
   }
 
   // ========== RETURN ==========

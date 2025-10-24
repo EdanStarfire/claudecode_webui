@@ -93,7 +93,7 @@
                 class="form-control"
                 id="sessionName"
                 v-model="formData.sessionName"
-                placeholder="Main Session"
+                placeholder="main"
               />
             </div>
 
@@ -135,7 +135,7 @@ const formData = ref({
   workingDirectory: '',
   isMultiAgent: false,
   createSession: true,
-  sessionName: 'Main Session'
+  sessionName: 'main'
 })
 
 // Validation errors
@@ -199,7 +199,7 @@ async function handleSubmit() {
     // Create initial session/minion if requested
     if (formData.value.createSession) {
       await sessionStore.createSession(project.project_id, {
-        name: formData.value.sessionName || (formData.value.isMultiAgent ? 'Main Minion' : 'Main Session'),
+        name: formData.value.sessionName || 'main',
         permission_mode: 'default',
         tools: [],
         model: 'claude-sonnet-4-5-20250929'
@@ -228,7 +228,7 @@ function resetForm() {
     workingDirectory: '',
     isMultiAgent: false,
     createSession: true,
-    sessionName: 'Main Session'
+    sessionName: 'main'
   }
   errors.value = {}
   errorMessage.value = ''

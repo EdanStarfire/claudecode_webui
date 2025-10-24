@@ -10,7 +10,7 @@
         <span class="fw-semibold">Spy</span>
         <small class="text-muted ms-2">(Inspect Minion)</small>
       </div>
-      <span v-if="selectedMinion" class="minion-state-indicator" :class="stateClass">
+      <span v-if="selectedMinion" class="minion-state-indicator" :class="stateClass" :style="stateStyle">
         👤
       </span>
     </div>
@@ -81,8 +81,45 @@ const isActive = computed(() => {
 
 const stateClass = computed(() => {
   if (!selectedMinion.value) return ''
+
+  // Special case: PAUSED + processing = pending prompt (yellow blinking)
+  if (selectedMinion.value.state === 'paused' && selectedMinion.value.is_processing) {
+    return 'status-blinking'
+  }
+
   const state = selectedMinion.value.is_processing ? 'processing' : selectedMinion.value.state
-  return state === 'starting' || state === 'processing' ? 'status-blinking' : ''
+
+  // Blink for starting and processing states
+  return (state === 'starting' || state === 'processing') ? 'status-blinking' : ''
+})
+
+const stateStyle = computed(() => {
+  if (!selectedMinion.value) return {}
+
+  // Special case: PAUSED + processing = pending prompt (warning yellow)
+  if (selectedMinion.value.state === 'paused' && selectedMinion.value.is_processing) {
+    return {
+      backgroundColor: '#ffc107'  // warning yellow
+    }
+  }
+
+  const state = selectedMinion.value.is_processing ? 'processing' : selectedMinion.value.state
+
+  // Match the light colors from SessionItem status dots
+  const bgColorMap = {
+    'created': '#d3d3d3',      // light grey
+    'starting': '#90ee90',     // light green
+    'active': '#90ee90',       // light green
+    'processing': '#dda0dd',   // light purple/plum
+    'paused': '#d3d3d3',       // light grey
+    'terminating': '#ffcccb',  // light red
+    'terminated': '#d3d3d3',   // light grey
+    'error': '#ffcccb'         // light red
+  }
+
+  return {
+    backgroundColor: bgColorMap[state] || '#d3d3d3'
+  }
 })
 
 function getStateIcon(session) {
@@ -141,11 +178,10 @@ watch(() => sessionStore.currentSessionId, (newSessionId) => {
 }
 
 .minion-state-indicator {
-  background-color: #f0f0f0;
-  border: 2px solid #6c757d;
   border-radius: 4px;
   padding: 2px 4px;
   font-size: 0.875rem;
+  border: 1px solid rgba(0, 0, 0, 0.15);
 }
 
 .status-blinking {

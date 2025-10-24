@@ -66,6 +66,7 @@
                 <option value="default">Default (Prompt for tools not in settings)</option>
                 <option value="acceptEdits">Accept Edits (Auto-approve Edit/Write)</option>
                 <option value="plan">Plan Mode (Auto-resets after ExitPlanMode)</option>
+                <option v-if="canUseBypassPermissions" value="bypassPermissions">⚠️ Bypass Permissions (No prompts)</option>
               </select>
               <div class="form-text">
                 <span v-if="!isSessionActive" class="text-warning">
@@ -124,6 +125,12 @@ let modalInstance = null
 // Computed
 const isSessionActive = computed(() => {
   return session.value?.state === 'active' || session.value?.state === 'starting'
+})
+
+// Only allow bypassPermissions if session was initially started with it
+// (SDK bug prevents switching to bypassPermissions after initial start)
+const canUseBypassPermissions = computed(() => {
+  return session.value?.initial_permission_mode === 'bypassPermissions'
 })
 
 // Get badge class for session state

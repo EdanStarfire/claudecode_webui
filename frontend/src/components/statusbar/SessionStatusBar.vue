@@ -70,11 +70,24 @@ const modeIcon = computed(() => modeIcons[currentMode.value] || '🔒')
 const modeName = computed(() => currentMode.value)
 
 // Mode cycling order (default → acceptEdits → plan → default)
+// Note: bypassPermissions is NOT in the cycle, but will display if session is in that mode
 const modeOrder = ['default', 'acceptEdits', 'plan']
 
 const cycleMode = async () => {
   if (!session.value) return
 
+  // If currently in bypassPermissions, cycle to default
+  // (bypassPermissions is not part of the normal cycle)
+  if (currentMode.value === 'bypassPermissions') {
+    try {
+      await sessionStore.setPermissionMode(props.sessionId, 'default')
+    } catch (error) {
+      console.error('Failed to cycle permission mode:', error)
+    }
+    return
+  }
+
+  // Normal cycling through default → acceptEdits → plan → default
   const currentIndex = modeOrder.indexOf(currentMode.value)
   const nextIndex = (currentIndex + 1) % modeOrder.length
   const nextMode = modeOrder[nextIndex]

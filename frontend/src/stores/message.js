@@ -57,7 +57,7 @@ export const useMessageStore = defineStore('message', () => {
       // Store messages
       messagesBySession.value.set(sessionId, messages)
 
-      // Process messages to extract tool uses, results, and init data
+      // Process messages to extract tool uses, results, permission requests, and init data
       messages.forEach(message => {
         // Extract tool uses from assistant messages
         if (message.metadata?.has_tool_uses && message.metadata.tool_uses) {
@@ -71,6 +71,11 @@ export const useMessageStore = defineStore('message', () => {
           message.metadata.tool_results.forEach(toolResult => {
             handleToolResult(sessionId, toolResult)
           })
+        }
+
+        // Extract permission requests (for restoring permission prompts on page refresh)
+        if (message.type === 'permission_request' || message.metadata?.has_permission_requests) {
+          handlePermissionRequest(sessionId, message)
         }
 
         // Capture init data for session info modal

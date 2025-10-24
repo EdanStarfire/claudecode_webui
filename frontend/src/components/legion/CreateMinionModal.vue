@@ -24,9 +24,11 @@
                 type="text"
                 class="form-control"
                 required
-                placeholder="e.g., Code Expert"
+                placeholder="main"
+                pattern="[^\s]+"
+                title="Minion name must be a single word with no spaces"
               />
-              <div class="form-text">Unique name for this minion within the legion</div>
+              <div class="form-text">Must be a single word (no spaces) for #nametag matching</div>
             </div>
 
             <div class="mb-3">
@@ -145,6 +147,12 @@ function onModalHidden() {
 async function createMinion() {
   if (!formData.value.name.trim()) {
     errorMessage.value = 'Minion name is required'
+    return
+  }
+
+  // Validate that name has no spaces
+  if (formData.value.name.includes(' ')) {
+    errorMessage.value = 'Minion name must be a single word with no spaces (for #nametag matching)'
     return
   }
 

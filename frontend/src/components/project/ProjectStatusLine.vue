@@ -42,6 +42,11 @@ const segmentWidth = computed(() => {
 })
 
 function getDisplayState(session) {
+  // Special case: PAUSED + processing = waiting for permission response (yellow blinking)
+  if (session.state === 'paused' && session.is_processing) {
+    return 'pending-prompt'
+  }
+  // Normal case: processing overrides state
   return session.is_processing ? 'processing' : session.state
 }
 
@@ -54,6 +59,7 @@ function getColor(session) {
     'running': '#90ee90',      // light green
     'processing': '#dda0dd',   // light purple
     'paused': '#d3d3d3',       // grey
+    'pending-prompt': '#ffc107',  // warning yellow (permission waiting)
     'terminated': '#d3d3d3',   // grey
     'error': '#ffb3b3',        // light red
     'failed': '#ffb3b3'        // light red
@@ -63,7 +69,7 @@ function getColor(session) {
 
 function isAnimated(session) {
   const state = getDisplayState(session)
-  return state === 'starting' || state === 'processing'
+  return state === 'starting' || state === 'processing' || state === 'pending-prompt'
 }
 
 function getTooltip(session) {
