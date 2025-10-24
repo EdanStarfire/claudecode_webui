@@ -4,11 +4,13 @@
 
 ### 1.1 Implementation Strategy
 
-**Phased Approach**: 8 phases over approximately 9 weeks
+**Phased Approach**: 9 phases over approximately 10 weeks
 - Each phase builds on previous work
 - Each phase has clear deliverables and acceptance criteria
 - Testing integrated throughout, not just at end
 - Documentation updated continuously
+- **Phase 7 (New)**: Vue 3 Testing & Polish - Complete migration before production cutover
+- **Phase 9 (Moved)**: Memory & Learning - Moved after Observability due to research complexity
 
 **Risk Mitigation**:
 - Start with smallest useful increment (Phase 1)
@@ -164,36 +166,36 @@
 
 ---
 
-### Phase 2: MCP Tool Implementation & Communication (Week 2-3)
+### Phase 2: MCP Tool Implementation & Communication (Week 2-3) ✅ **COMPLETE**
 
 **Goal**: Implement MCP tool handlers and basic Comm routing.
 
 #### Tasks
 
 **2.1 MCP Tool Handlers - Communication**
-- [ ] Implement `_handle_send_comm()` in LegionMCPTools
+- [x] Implement `_handle_send_comm()` in LegionMCPTools
   - Validate target minion exists (by name)
   - Create Comm object
   - Route via CommRouter
   - Return success/error to SDK
-- [ ] Implement `_handle_send_comm_to_channel()`
+- [x] Implement `_handle_send_comm_to_channel()`
   - Validate channel exists
   - Create broadcast Comm
   - Route to ChannelManager
   - Return success/error
-- [ ] Write unit tests for tool handlers
+- [x] Write unit tests for tool handlers
 
 **2.2 CommRouter Core**
-- [ ] Implement `src/comm_router.py`
+- [x] Implement `src/comm_router.py`
   - `route_comm()` method (dispatch logic)
   - `_send_to_minion()` (inject Comm as Message to SDK)
   - `_format_comm_as_message()` (format for SDK injection)
   - `_send_to_user()` (send via WebSocket)
-- [ ] Implement Comm validation (exactly one source, one destination)
-- [ ] Implement basic routing logic (direct to minion or user)
-- [ ] Write unit tests (mock SessionCoordinator, WebSocket)
+- [x] Implement Comm validation (exactly one source, one destination)
+- [x] Implement basic routing logic (direct to minion or user)
+- [x] Write unit tests (mock SessionCoordinator, WebSocket)
 
-**2.3 Tag Parsing Implementation**
+**2.3 Tag Parsing Implementation** (DEFERRED - Low ROI)
 - [ ] Implement `_extract_tags()` in CommRouter
   - Regex pattern for `#([a-zA-Z0-9_-]+)`
   - Validate tags against actual minion/channel names
@@ -203,46 +205,48 @@
   - `_is_valid_channel_name()`
 - [ ] Store extracted tags in Comm metadata
 - [ ] Write unit tests for tag extraction
+- **Note**: Tag parsing and linking in comms is being skipped - low value for current use cases
 
 **2.4 Comm Persistence**
-- [ ] Implement `_persist_to_timeline()` (legion-wide log)
-- [ ] Implement `_persist_to_minion_log()` (per-minion log)
-- [ ] Handle duplicate prevention (idempotency)
-- [ ] Write integration tests (create Comm, verify persisted correctly)
+- [x] Implement `_persist_to_timeline()` (legion-wide log)
+- [x] Implement `_persist_to_minion_log()` (per-minion log)
+- [x] Handle duplicate prevention (idempotency)
+- [x] Write integration tests (create Comm, verify persisted correctly)
 
 **2.5 Integration with SessionCoordinator**
-- [ ] Modify SessionCoordinator to attach MCP tools to minion sessions
+- [x] Modify SessionCoordinator to attach MCP tools to minion sessions
   - Pass LegionMCPTools instance to create_session()
   - Attach tools via ClaudeAgentOptions
-- [ ] Ensure non-legion sessions continue to work unchanged (no MCP tools)
-- [ ] Write integration tests (MCP tool call through SDK)
+- [x] Ensure non-legion sessions continue to work unchanged (no MCP tools)
+- [x] Write integration tests (MCP tool call through SDK)
 
 **2.6 Interrupt Handling (Basic)**
-- [ ] Implement interrupt detection (HALT, PIVOT)
-- [ ] Call `SessionCoordinator.interrupt_session()` for HALT
-- [ ] Implement queue clearing for PIVOT (stub for now)
-- [ ] Write tests for interrupt flow
+- [x] Implement interrupt detection (HALT, PIVOT)
+- [x] Call `SessionCoordinator.interrupt_session()` for HALT
+- [x] Implement queue clearing for PIVOT (stub for now)
+- [x] Write tests for interrupt flow
 
 #### Deliverables
-- [ ] MCP tool handlers for send_comm and send_comm_to_channel implemented
-- [ ] CommRouter class fully implemented with tag parsing
-- [ ] Tag extraction and validation working
-- [ ] Comms persisted to storage (with tag metadata)
-- [ ] MCP tools attached to SDK sessions
-- [ ] Integration with SessionCoordinator complete
+- [x] MCP tool handlers for send_comm and send_comm_to_channel implemented
+- [x] CommRouter class fully implemented
+- [ ] Tag extraction and validation working (DEFERRED)
+- [x] Comms persisted to storage
+- [x] MCP tools attached to SDK sessions
+- [x] Integration with SessionCoordinator complete
 
 #### Acceptance Criteria
-- [ ] Minion can use send_comm MCP tool successfully
-- [ ] Tool call creates Comm, routes to target minion
-- [ ] Target minion receives Comm as injected Message
-- [ ] Tags (#minion-name, #channel-name) extracted and validated
-- [ ] Comm persisted to timeline and minion logs
-- [ ] HALT and PIVOT trigger interrupts
-- [ ] Tool errors return clear messages to calling minion
-- [ ] All tests passing
-- [ ] Existing WebUI sessions unaffected
+- [x] Minion can use send_comm MCP tool successfully
+- [x] Tool call creates Comm, routes to target minion
+- [x] Target minion receives Comm as injected Message
+- [ ] Tags (#minion-name, #channel-name) extracted and validated (DEFERRED - not implemented)
+- [x] Comm persisted to timeline and minion logs
+- [x] HALT and PIVOT trigger interrupts
+- [x] Tool errors return clear messages to calling minion
+- [x] All tests passing
+- [x] Existing WebUI sessions unaffected
 
 **Estimated Effort**: 5-7 days (added tag parsing)
+**Actual Progress**: ✅ **COMPLETE** (Core MCP tools and comm routing working; tag parsing deferred)
 
 ---
 
@@ -553,11 +557,11 @@
 - [ ] Test with real SDK (validate minions understand tools)
 
 **5.6 UI - Horde Hierarchy View**
-- [ ] Update sidebar to show hierarchy (not flat list)
+- [x] Update sidebar to show hierarchy (not flat list)
   - Indent children under parents
   - Show overseer icon (👑) for minions with children
   - Collapse/expand horde trees
-- [ ] Show SPAWN/DISPOSE Comms in timeline with special styling
+- [x] Show SPAWN/DISPOSE Comms in timeline with special styling
 - [ ] Write frontend tests
 
 **5.7 Integration Testing**
@@ -691,19 +695,202 @@
 
 ---
 
-### Phase 7: Memory & Learning (Week 7-8)
+### Phase 7: Vue 3 Testing & Polish (Week 7)
+
+**Goal**: Complete comprehensive testing and UI/UX polish for Vue 3 migration before production cutover.
+
+#### Tasks
+
+**7.1 Testing Checklist**
+- [ ] Test all WebSocket reconnection scenarios
+- [ ] Test all modal workflows
+- [ ] Test drag-and-drop edge cases
+- [ ] Test permission flow end-to-end
+- [ ] Test session creation/deletion
+- [ ] Test project creation/deletion
+- [ ] Test message display (all types)
+- [ ] Test tool call lifecycle
+- [ ] Test Legion views (timeline, spy, horde)
+- [ ] Performance testing (20+ concurrent minions)
+- [ ] Cross-browser testing (Chrome, Firefox, Edge)
+- [ ] Mobile responsiveness
+- [ ] Error handling for all API calls
+
+**7.2 UI/UX Improvements**
+- [ ] Re-theme the entire app
+- [ ] Re-layout the message card area
+- [ ] Review all icons and ensure consistency among views, messages, and dropdowns
+- [ ] Review mobile vs Desktop view for all re-themed items and modals
+
+**7.3 Production Cutover Preparation**
+- [ ] Run `npm run build` in `frontend/`
+- [ ] Update `src/web_server.py` to serve `frontend/dist/`
+- [ ] Test production build
+- [ ] Deploy to production
+- [ ] Monitor logs for issues
+- [ ] After stability, delete `static/` directory
+
+#### Deliverables
+- [ ] All tests passing (>90% coverage)
+- [ ] Comprehensive theming applied
+- [ ] Production build verified
+- [ ] Migration to Vue 3 complete
+
+#### Acceptance Criteria
+- [ ] All test scenarios passing
+- [ ] Consistent visual design across all views
+- [ ] Mobile responsiveness verified
+- [ ] Production build stable for 48+ hours
+- [ ] Legacy `static/` directory removed
+
+**Estimated Effort**: 5-7 days
+
+---
+
+### Phase 8: Observability & Control (Week 8)
+
+**Goal**: Complete observability features and fleet controls.
+
+#### Tasks
+
+**8.1 Fleet Controls UI**
+- [ ] Build fleet controls panel (as per UX design)
+  - Fleet status summary
+  - Active/paused/error minion breakdown
+  - Emergency halt button
+  - Resume all button
+- [ ] Wire up to API endpoints
+- [ ] Write frontend tests
+
+**8.2 Emergency Halt**
+- [ ] Implement `emergency_halt_all()` in LegionCoordinator
+  - Halt all active minions in legion
+  - Update state to PAUSED
+  - Do NOT terminate sessions
+- [ ] Implement `resume_all()`
+  - Resume all paused minions
+  - Update state to ACTIVE
+- [ ] Add confirmation modal for emergency halt
+- [ ] Write tests
+
+**8.3 Individual Minion Controls**
+- [ ] Implement `halt_minion()` in LegionCoordinator
+  - Call SessionCoordinator.interrupt_session()
+  - Update state to PAUSED
+- [ ] Implement `resume_minion()`
+  - Update state to ACTIVE
+  - Session remains active, continues processing queue
+- [ ] Add UI buttons (in minion detail modal, fleet controls)
+- [ ] Write tests
+
+**8.4 Pivot Modal**
+- [ ] Build "Pivot Minion" modal (as per UX design)
+  - Show current task
+  - Text area for new instructions
+  - Warning about queue clearing
+- [ ] Implement pivot logic
+  - Halt minion
+  - Clear message queue (implement in SessionCoordinator)
+  - Send PIVOT Comm with new instructions
+- [ ] Write frontend tests
+
+**8.5 Minion Detail Enhancements**
+- [ ] Complete minion detail modal
+  - All tabs (Overview, Memory, History, Session Messages)
+  - Recent activity timeline
+  - Capability display with evidence
+  - Hierarchy (parent, children)
+- [ ] Add "View Full History" link (full-screen view)
+- [ ] Write frontend tests
+
+**8.6 Timeline Enhancements**
+- [ ] Add advanced filtering
+  - Multiple Comm types
+  - Multiple minions
+  - Date range
+  - Search across content
+- [ ] Add "Load More" pagination
+- [ ] Add export functionality (optional)
+- [ ] Write frontend tests
+
+**8.7 Error Handling & Empty States**
+- [ ] Implement all error states from UX design
+  - Minion creation failed
+  - Comm delivery failed
+  - SDK session crash
+- [ ] Implement all empty states
+  - No minions in legion
+  - No Comms in timeline
+  - No channels
+- [ ] Add error recovery flows
+- [ ] Write tests for error scenarios
+
+**8.8 Performance Optimization**
+- [ ] Implement virtualized timeline (React Virtualized or similar)
+- [ ] Optimize sidebar rendering (lazy load children)
+- [ ] Batch WebSocket updates
+- [ ] Add loading skeletons
+- [ ] Profile and optimize slow queries
+
+**8.9 Documentation**
+- [ ] Write user documentation
+  - How to create legion
+  - How to create/spawn minions
+  - How to use channels
+  - How to interpret timeline
+  - Common workflows
+- [ ] Write developer documentation
+  - Architecture overview
+  - Adding new Comm types
+  - Extending memory system
+  - API reference
+- [ ] Update README
+
+**8.10 End-to-End Validation**
+- [ ] Test all three use cases:
+  - SaaS refactor scenario (5+ service experts, channels, spawning)
+  - D&D campaign scenario (characters, NPCs, scenes)
+  - Research scenario (lead + specialists, synthesis)
+- [ ] Performance test with 20 concurrent minions
+- [ ] Stress test (rapid spawning/disposing)
+- [ ] Load test (1000+ Comms in timeline)
+
+#### Deliverables
+- [ ] Fleet controls fully functional
+- [ ] All observability features complete
+- [ ] Error handling comprehensive
+- [ ] Performance optimized
+- [ ] Documentation complete
+
+#### Acceptance Criteria
+- [ ] User can emergency halt entire fleet
+- [ ] User can halt/resume individual minions
+- [ ] User can pivot minion with new instructions
+- [ ] Minion detail modal shows complete information
+- [ ] Timeline filtering and search working
+- [ ] All error states handled gracefully
+- [ ] All three use cases validated end-to-end
+- [ ] System supports 20 concurrent minions
+- [ ] All tests passing
+- [ ] Documentation complete and accurate
+
+**Estimated Effort**: 8-10 days
+
+---
+
+### Phase 9: Memory & Learning (Week 9-10)
 
 **Goal**: Implement memory distillation, reinforcement, and forking.
 
 #### Tasks
 
-**7.1 MemoryManager Core**
+**9.1 MemoryManager Core**
 - [ ] Create `src/memory_manager.py`
   - MemoryManager class
   - Initialize with SessionCoordinator reference
 - [ ] Write skeleton for all methods (implementations below)
 
-**7.2 Memory Distillation**
+**9.2 Memory Distillation**
 - [ ] Implement `distill_completion()`
   - Get messages since last distillation
   - Use Claude SDK to summarize (separate distillation session)
@@ -715,7 +902,7 @@
   - Trigger distillation automatically
 - [ ] Write tests (mock SDK responses)
 
-**7.3 Memory Reinforcement**
+**9.3 Memory Reinforcement**
 - [ ] Implement `reinforce_memory()`
   - Trace which memories were used in task
   - Adjust quality_score based on success/failure
@@ -727,7 +914,7 @@
   - Trigger reinforcement with outcome
 - [ ] Write tests
 
-**7.4 Long-Term Memory Promotion**
+**9.4 Long-Term Memory Promotion**
 - [ ] Implement `promote_to_long_term()`
   - Identify high-quality memories (score >= 0.8)
   - Move from short_term to long_term
@@ -735,7 +922,7 @@
 - [ ] Add periodic promotion (after N tasks or time)
 - [ ] Write tests
 
-**7.5 Knowledge Transfer**
+**9.5 Knowledge Transfer**
 - [ ] Implement `transfer_knowledge()`
   - Load source minion's memories
   - Filter high-quality memories (score >= 0.6)
@@ -744,7 +931,7 @@
 - [ ] Call automatically on minion disposal
 - [ ] Write tests
 
-**7.6 Minion Forking**
+**9.6 Minion Forking**
 - [ ] Implement `fork_minion()`
   - Create new minion with same initialization_context
   - Copy all memory files (short_term, long_term, capability_evidence)
@@ -752,20 +939,20 @@
   - Return new minion_id
 - [ ] Write tests
 
-**7.7 Backend API - Memory & Forking**
+**9.7 Backend API - Memory & Forking**
 - [ ] Implement endpoints:
   - `GET /api/minions/{id}/memory` (view memories)
   - `POST /api/minions/{id}/fork` (fork minion)
 - [ ] Write API tests
 
-**7.8 UI - Memory Viewer**
+**9.8 UI - Memory Viewer**
 - [ ] Add "Memory" tab to minion detail modal
   - Display short-term memories with quality scores
   - Display long-term memories
   - Color-code by quality (green=high, yellow=medium, red=low)
 - [ ] Write frontend tests
 
-**7.9 UI - Fork Modal**
+**9.9 UI - Fork Modal**
 - [ ] Build "Fork Minion" modal (as per UX design)
   - Show source minion stats
   - New name, role fields
@@ -774,7 +961,7 @@
 - [ ] Wire up to API endpoint
 - [ ] Write frontend tests
 
-**7.10 Integration Testing**
+**9.10 Integration Testing**
 - [ ] Test: Minion completes task → Memory distilled automatically
 - [ ] Test: User corrects minion → Memory reinforced (score adjusted)
 - [ ] Test: Child disposed → Knowledge transferred to parent
@@ -1047,13 +1234,14 @@
 - Descope if behind schedule
 - Add resources if available
 
-### Pre-Launch Review (After Phase 8)
+### Pre-Launch Review (After Phase 9)
 
 **Validation**:
 - All use cases working?
 - Performance acceptable?
 - Documentation complete?
 - Known bugs acceptable?
+- Vue 3 migration to production complete?
 
 **Launch Decision**:
 - Ready for production use?
