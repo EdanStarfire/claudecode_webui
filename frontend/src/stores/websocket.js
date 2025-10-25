@@ -155,14 +155,31 @@ export const useWebSocketStore = defineStore('websocket', () => {
 
   /**
    * Disconnect Session WebSocket
+   * Returns a promise that resolves when the socket is fully closed
    */
   function disconnectSession() {
-    if (sessionSocket.value) {
-      sessionSocket.value.close()
-      sessionSocket.value = null
-      sessionConnected.value = false
-      currentSessionId.value = null
-    }
+    return new Promise((resolve) => {
+      if (sessionSocket.value) {
+        const cleanup = () => {
+          sessionSocket.value = null
+          sessionConnected.value = false
+          currentSessionId.value = null
+          resolve()
+        }
+
+        // If already closed, cleanup immediately
+        if (sessionSocket.value.readyState === WebSocket.CLOSED) {
+          cleanup()
+        } else {
+          // Wait for close event to fire
+          sessionSocket.value.addEventListener('close', cleanup, { once: true })
+          sessionSocket.value.close()
+        }
+      } else {
+        // No socket to disconnect
+        resolve()
+      }
+    })
   }
 
   /**
@@ -262,7 +279,13 @@ export const useWebSocketStore = defineStore('websocket', () => {
         break
 
       case 'ping':
-        // Keepalive ping
+        // Respond to keepalive ping with pong
+        if (uiSocket.value?.readyState === WebSocket.OPEN) {
+          uiSocket.value.send(JSON.stringify({
+            type: 'pong',
+            timestamp: new Date().toISOString()
+          }))
+        }
         break
 
       default:
@@ -355,7 +378,13 @@ export const useWebSocketStore = defineStore('websocket', () => {
         break
 
       case 'ping':
-        // Keepalive ping
+        // Respond to keepalive ping with pong
+        if (sessionSocket.value?.readyState === WebSocket.OPEN) {
+          sessionSocket.value.send(JSON.stringify({
+            type: 'pong',
+            timestamp: new Date().toISOString()
+          }))
+        }
         break
 
       default:
@@ -464,7 +493,13 @@ export const useWebSocketStore = defineStore('websocket', () => {
           break
 
         case 'ping':
-          // Keepalive ping
+          // Respond to keepalive ping with pong
+          if (legionSocket.value?.readyState === WebSocket.OPEN) {
+            legionSocket.value.send(JSON.stringify({
+              type: 'pong',
+              timestamp: new Date().toISOString()
+            }))
+          }
           break
 
         default:

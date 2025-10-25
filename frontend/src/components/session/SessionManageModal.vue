@@ -194,8 +194,8 @@ async function handleRestart() {
     if (response.success) {
       console.log('Session restarted successfully, reconnecting')
 
-      // Disconnect WebSocket to force reconnection
-      wsStore.disconnectSession()
+      // Disconnect WebSocket to force reconnection (await to ensure old socket is fully closed)
+      await wsStore.disconnectSession()
 
       // Reconnect to session (will fetch fresh data and reconnect WebSocket)
       await sessionStore.selectSession(sessionId)
@@ -235,8 +235,8 @@ async function handleEndSession() {
     // Call terminate endpoint
     await api.post(`/api/sessions/${sessionId}/terminate`)
 
-    // Disconnect WebSocket
-    wsStore.disconnectSession()
+    // Disconnect WebSocket (await to ensure proper cleanup)
+    await wsStore.disconnectSession()
 
     // Deselect the session in the store
     if (sessionStore.currentSessionId === sessionId) {
@@ -248,7 +248,7 @@ async function handleEndSession() {
   } catch (error) {
     console.error('Error ending session:', error)
     // Still navigate away even if terminate fails
-    wsStore.disconnectSession()
+    await wsStore.disconnectSession()
 
     // Deselect the session
     if (sessionStore.currentSessionId === session.value?.session_id) {
@@ -273,8 +273,8 @@ async function confirmResetSession() {
     if (response.success) {
       console.log('Session reset successfully, reconnecting')
 
-      // Disconnect WebSocket first
-      wsStore.disconnectSession()
+      // Disconnect WebSocket first (await to ensure old socket is fully closed)
+      await wsStore.disconnectSession()
 
       // Small delay to ensure backend has written the client_launched message to disk
       await new Promise(resolve => setTimeout(resolve, 200))

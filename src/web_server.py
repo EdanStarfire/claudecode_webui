@@ -1064,10 +1064,11 @@ class ClaudeWebUI:
                 session_state = session_info.get('session', {}).get('state')
                 ws_logger.debug(f"Session {session_id} state: {session_state}")
 
-                if session_state not in ['active', 'error']:
+                # Allow connections to active, error, and paused (waiting for permission) states
+                if session_state not in ['active', 'error', 'paused']:
                     rejection_time = time.time()
                     ws_logger.debug(f"WebSocket connection REJECTED for session: {session_id} (state: {session_state}) at {rejection_time}")
-                    ws_logger.debug(f"WebSocket will only connect to sessions in 'active' or 'error' state")
+                    ws_logger.debug(f"WebSocket will only connect to sessions in 'active', 'error', or 'paused' state")
                     await websocket.close(code=4003)
                     return
 
@@ -1502,7 +1503,8 @@ class ClaudeWebUI:
                 try:
                     session_info = await self.coordinator.session_manager.get_session_info(session_id)
                     if session_info and session_info.state == SessionState.PAUSED:
-                        await self.coordinator.session_manager.start_session(session_id)
+                        # Use update_session_state instead of start_session to avoid re-initializing SDK
+                        await self.coordinator.session_manager.update_session_state(session_id, SessionState.ACTIVE)
                         logger.info(f"Restored session {session_id} to ACTIVE state after permission decision")
                 except Exception as restore_error:
                     logger.error(f"Failed to restore session {session_id} to ACTIVE after permission: {restore_error}")

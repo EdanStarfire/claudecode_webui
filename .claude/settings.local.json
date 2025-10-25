@@ -20,7 +20,8 @@
       "Bash(gh issue:*)",
       "Bash(gh pr:*)",
       "Bash(git fetch:*)",
-      "Bash(git worktree add:*)"
+      "Bash(git worktree add:*)",
+      "Read(//c/Users/Peter/OneDrive/Documents/ai_research/claude_webui/data/logs/**)"
     ],
     "deny": [],
     "ask": []
