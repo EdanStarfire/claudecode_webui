@@ -112,57 +112,58 @@
 - [x] Write migration logic and backward compatibility tests (6 tests passing)
 
 **1.6 SDK Integration Test**
-- [ ] Test MCP tool attachment to SDK session (using Claude Agent SDK docs)
-- [ ] Verify tool definitions visible to SDK
-- [ ] Test simple tool call with mock handler
-- [ ] Validate tool result format
-- [ ] Write integration test for SDK + MCP tools
+- [x] Test MCP tool attachment to SDK session (using Claude Agent SDK docs)
+- [x] Verify tool definitions visible to SDK
+- [x] Test simple tool call with mock handler
+- [x] Validate tool result format
+- [x] Write integration test for SDK + MCP tools
 
 **1.7 File System Structure**
-- [ ] Create directory structure generator
+- [x] Create directory structure generator
   - `data/legions/{legion_id}/`
   - Subdirectories for hordes, channels, minions
-- [ ] Implement path helpers (get_minion_path, get_channel_path, etc.)
-- [ ] Write file existence checks and validation
-- [ ] Write unit tests for path resolution
+- [x] Implement path helpers (get_minion_path, get_channel_path, etc.)
+- [x] Write file existence checks and validation
+- [x] Write unit tests for path resolution
 
 **1.8 Storage Layer Extension**
-- [ ] Extend `DataStorageManager` with new methods:
+- [x] Extend `DataStorageManager` with new methods:
   - `append_comm()` - Write Comm to JSONL
   - `read_comms()` - Read Comms with pagination
   - `get_comm_count()` - Count total Comms
-- [ ] Add Comm storage in multiple locations (per-minion, per-channel, timeline)
-- [ ] Ensure atomic writes (prevent corruption)
-- [ ] Write unit tests for storage operations
+- [x] Add Comm storage in multiple locations (per-minion, per-channel, timeline)
+- [x] Ensure atomic writes (prevent corruption)
+- [x] Write unit tests for storage operations
 
 **1.9 Configuration & Setup**
-- [ ] Add legion-specific configuration to settings
+- [x] Add legion-specific configuration to settings
   - Default max_concurrent_minions
   - Default permission modes
-- [ ] Update logging configuration for new components
-- [ ] Create debug flags: `--debug-legion`, `--debug-comms`
+- [x] Update logging configuration for new components
+- [x] Create debug flags: `--debug-legion`, `--debug-comms`
 
 #### Deliverables
-- [ ] All data model classes with tests (>90% coverage)
-- [ ] LegionSystem dependency injection container
-- [ ] All component skeletons accepting LegionSystem
-- [ ] MCP tool framework with all tool schemas defined (including #tag syntax)
-- [ ] SDK integration test validating MCP tool attachment
-- [ ] Extended storage layer with tests
-- [ ] File system structure working
-- [ ] No breaking changes to existing WebUI functionality
+- [x] All data model classes with tests (>90% coverage)
+- [x] LegionSystem dependency injection container
+- [x] All component skeletons accepting LegionSystem
+- [x] MCP tool framework with all tool schemas defined (including #tag syntax)
+- [x] SDK integration test validating MCP tool attachment
+- [x] Extended storage layer with tests
+- [x] File system structure working
+- [x] No breaking changes to existing WebUI functionality
 
 #### Acceptance Criteria
-- [ ] Can instantiate all data models
-- [ ] Can serialize/deserialize all models to JSON
-- [ ] LegionSystem can initialize all components without circular dependencies
-- [ ] MCP tools can be attached to SDK session
-- [ ] Simple tool call works end-to-end (mock handler)
-- [ ] Can create legion directory structure
-- [ ] Can write and read Comms from storage
-- [ ] All tests passing
+- [x] Can instantiate all data models
+- [x] Can serialize/deserialize all models to JSON
+- [x] LegionSystem can initialize all components without circular dependencies
+- [x] MCP tools can be attached to SDK session
+- [x] Simple tool call works end-to-end (mock handler)
+- [x] Can create legion directory structure
+- [x] Can write and read Comms from storage
+- [x] All tests passing
 
 **Estimated Effort**: 7-9 days (added LegionSystem + component skeletons)
+**Actual Progress**: ✅ **COMPLETE**
 
 ---
 
