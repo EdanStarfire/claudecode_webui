@@ -15,9 +15,6 @@
     <!-- Session Header (at top) -->
     <SessionHeader v-if="currentSession" :session-id="props.sessionId" />
 
-    <!-- Session State Status Line -->
-    <SessionStateStatusLine v-if="currentSession" :session-id="props.sessionId" />
-
     <!-- Messages Area -->
     <div class="d-flex flex-column flex-grow-1 overflow-hidden">
       <MessageList />
@@ -25,6 +22,9 @@
 
     <!-- Input Area -->
     <InputArea />
+
+    <!-- Session State Status Line (above status bar) -->
+    <SessionStateStatusLine v-if="currentSession" :session-id="props.sessionId" />
 
     <!-- Session Status Bar (at bottom) -->
     <SessionStatusBar v-if="currentSession" :session-id="props.sessionId" />
