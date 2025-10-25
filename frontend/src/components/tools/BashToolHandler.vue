@@ -175,7 +175,8 @@ const resultContent = computed(() => {
   font-size: 0.9rem;
   white-space: pre;
   overflow-x: auto;
-  color: #00ff00;
+  background: #212529;  /* Override global light blue - use dark terminal background */
+  color: #f8f9fa;  /* White/light gray text for readability */
 }
 
 .tool-result {
