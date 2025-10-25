@@ -25,6 +25,10 @@ export const useWebSocketStore = defineStore('websocket', () => {
   const currentSessionId = ref(null)
   let sessionReconnectTimer = null // Track reconnect timer to cancel it
 
+  // Connection generation tracking (prevents stale connections)
+  const connectionGeneration = ref(0)
+  const currentConnectionGeneration = ref(null)
+
   // Legion WebSocket (for timeline/spy/horde views)
   const legionSocket = ref(null)
   const legionConnected = ref(false)
@@ -111,31 +115,58 @@ export const useWebSocketStore = defineStore('websocket', () => {
 
   /**
    * Connect to Session WebSocket (message streaming)
+   * Now with generation tracking to prevent stale connections
    */
-  function connectSession(sessionId) {
+  async function connectSession(sessionId) {
+    // Increment generation to invalidate any pending operations
+    connectionGeneration.value++
+    const generation = connectionGeneration.value
+
+    console.log(`[Gen ${generation}] Starting connection to session ${sessionId}`)
+
     // Cancel any pending reconnect timer
     if (sessionReconnectTimer) {
       clearTimeout(sessionReconnectTimer)
       sessionReconnectTimer = null
     }
 
-    // Disconnect previous session
-    disconnectSession()
+    // CRITICAL: Await disconnect to prevent race conditions
+    await disconnectSession()
+
+    // Double-check we're still on the same generation after await
+    if (connectionGeneration.value !== generation) {
+      console.log(`[Gen ${generation}] Connection cancelled (current generation: ${connectionGeneration.value})`)
+      return
+    }
 
     currentSessionId.value = sessionId
+    currentConnectionGeneration.value = generation
 
     const wsUrl = getWebSocketUrl(`/ws/session/${sessionId}`)
-    console.log(`Connecting to Session WebSocket: ${wsUrl}`)
+    console.log(`[Gen ${generation}] Connecting to Session WebSocket: ${wsUrl}`)
 
     sessionSocket.value = new WebSocket(wsUrl)
 
     sessionSocket.value.onopen = () => {
+      // Validate generation before processing
+      if (currentConnectionGeneration.value !== generation) {
+        console.log(`[Gen ${generation}] Ignoring onopen (stale connection, current: ${currentConnectionGeneration.value})`)
+        sessionSocket.value.close()
+        return
+      }
+
       sessionConnected.value = true
       sessionRetryCount.value = 0
-      console.log(`Session WebSocket connected for ${sessionId}`)
+      console.log(`[Gen ${generation}] Session WebSocket connected for ${sessionId}`)
     }
 
     sessionSocket.value.onmessage = (event) => {
+      // Validate generation before processing messages
+      if (currentConnectionGeneration.value !== generation) {
+        console.log(`[Gen ${generation}] Ignoring message (stale connection, current: ${currentConnectionGeneration.value})`)
+        return
+      }
+
       const data = JSON.parse(event.data)
       handleSessionMessage(data, sessionId)
     }
@@ -143,29 +174,42 @@ export const useWebSocketStore = defineStore('websocket', () => {
     sessionSocket.value.onclose = () => {
       sessionConnected.value = false
       sessionSocket.value = null
-      console.log(`Session WebSocket closed for ${sessionId}`)
+      console.log(`[Gen ${generation}] Session WebSocket closed for ${sessionId}`)
 
-      // Only reconnect if still viewing this session
+      // Only reconnect if:
+      // 1. Still viewing this session
+      // 2. Generation still matches (not superseded)
+      // 3. Haven't exceeded retry limit
       const sessionStore = useSessionStore()
-      if (sessionStore.currentSessionId === sessionId && sessionRetryCount.value < maxSessionRetries) {
+      if (sessionStore.currentSessionId === sessionId &&
+          currentConnectionGeneration.value === generation &&
+          sessionRetryCount.value < maxSessionRetries) {
         sessionRetryCount.value++
         const delay = Math.min(2000 * sessionRetryCount.value, 30000)
-        console.log(`Reconnecting Session WebSocket in ${delay}ms (attempt ${sessionRetryCount.value})`)
+        console.log(`[Gen ${generation}] Reconnecting Session WebSocket in ${delay}ms (attempt ${sessionRetryCount.value})`)
+
         sessionReconnectTimer = setTimeout(() => {
-          sessionReconnectTimer = null
-          connectSession(sessionId)
+          // Re-validate generation inside setTimeout (TOCTOU fix)
+          if (currentConnectionGeneration.value === generation &&
+              sessionStore.currentSessionId === sessionId) {
+            sessionReconnectTimer = null
+            connectSession(sessionId)
+          } else {
+            console.log(`[Gen ${generation}] Skipping reconnect (generation or session changed)`)
+          }
         }, delay)
       }
     }
 
     sessionSocket.value.onerror = (error) => {
-      console.error('Session WebSocket error:', error)
+      console.error(`[Gen ${generation}] Session WebSocket error:`, error)
     }
   }
 
   /**
    * Disconnect Session WebSocket
    * Returns a promise that resolves when the socket is fully closed
+   * Now with timeout fallback to prevent hanging
    */
   function disconnectSession() {
     return new Promise((resolve) => {
@@ -181,6 +225,7 @@ export const useWebSocketStore = defineStore('websocket', () => {
           sessionSocket.value = null
           sessionConnected.value = false
           currentSessionId.value = null
+          currentConnectionGeneration.value = null  // Clear generation
           sessionRetryCount.value = 0  // Reset retry count on explicit disconnect
           resolve()
         }
@@ -189,12 +234,23 @@ export const useWebSocketStore = defineStore('websocket', () => {
         if (sessionSocket.value.readyState === WebSocket.CLOSED) {
           cleanup()
         } else {
-          // Wait for close event to fire
-          sessionSocket.value.addEventListener('close', cleanup, { once: true })
+          // Wait for close event to fire, with timeout fallback
+          const timeoutId = setTimeout(() => {
+            console.warn('Session WebSocket close timeout - forcing cleanup')
+            cleanup()
+          }, 2000)  // 2 second timeout
+
+          sessionSocket.value.addEventListener('close', () => {
+            clearTimeout(timeoutId)
+            cleanup()
+          }, { once: true })
+
           sessionSocket.value.close()
         }
       } else {
-        // No socket to disconnect
+        // No socket to disconnect - still clear state
+        currentSessionId.value = null
+        currentConnectionGeneration.value = null
         resolve()
       }
     })
@@ -313,10 +369,18 @@ export const useWebSocketStore = defineStore('websocket', () => {
 
   /**
    * Handle Session WebSocket messages (message streaming)
+   * Now with generation validation to prevent processing stale messages
    */
   function handleSessionMessage(payload, sessionId) {
-    const messageStore = useMessageStore()
+    // Validate this message is for the currently selected session
+    // This is an extra safety check on top of onmessage validation
     const sessionStore = useSessionStore()
+    if (sessionStore.currentSessionId !== sessionId) {
+      console.warn(`Ignoring message for session ${sessionId} (current: ${sessionStore.currentSessionId})`)
+      return
+    }
+
+    const messageStore = useMessageStore()
 
     switch (payload.type) {
       case 'message':

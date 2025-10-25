@@ -25,6 +25,10 @@ export const useSessionStore = defineStore('session', () => {
   // Deleting sessions tracking
   const deletingSessions = ref(new Set())
 
+  // Session selection state (prevents concurrent selectSession calls)
+  const selectingSession = ref(false)
+  let pendingSelectAbort = null  // AbortController for current selection
+
   // ========== COMPUTED ==========
 
   const currentSession = computed(() =>
@@ -109,91 +113,155 @@ export const useSessionStore = defineStore('session', () => {
 
   /**
    * Select a session (navigate to it)
+   * Now with abort mechanism to prevent concurrent selections
    */
   async function selectSession(sessionId) {
-    // Don't re-select if already current
-    if (currentSessionId.value === sessionId) {
+    // Don't re-select if already current AND not currently selecting another
+    if (currentSessionId.value === sessionId && !selectingSession.value) {
       return
     }
 
-    // Update current session
-    currentSessionId.value = sessionId
+    // Abort any pending selection
+    if (pendingSelectAbort) {
+      console.log(`Aborting pending selection to switch to ${sessionId}`)
+      pendingSelectAbort.abort()
+      pendingSelectAbort = null
+    }
 
-    // Get the session to check its state
-    let session = sessions.value.get(sessionId)
+    // Create new abort controller for this selection
+    const abortController = new AbortController()
+    pendingSelectAbort = abortController
 
-    // If session not in store (e.g., deeplink), fetch it first
-    if (!session) {
-      try {
-        const data = await api.get(`/api/sessions/${sessionId}`)
-        session = data.session
-        sessions.value.set(sessionId, session)
-        // Trigger reactivity
-        sessions.value = new Map(sessions.value)
-        console.log(`Fetched session ${sessionId} for deeplink`)
-      } catch (error) {
-        console.error(`Failed to fetch session ${sessionId}:`, error)
-        // Can't proceed without session data
+    // Set mutex flag
+    selectingSession.value = true
+
+    try {
+      // Update current session immediately to prevent UI confusion
+      currentSessionId.value = sessionId
+
+      // Check if aborted before continuing
+      if (abortController.signal.aborted) {
+        console.log(`Selection of ${sessionId} aborted early`)
         return
       }
-    }
 
-    // Auto-start sessions in created or terminated states
-    if (session && (session.state === 'created' || session.state === 'terminated')) {
-      try {
-        await startSession(sessionId)
-        console.log(`Auto-started session ${sessionId} (was in ${session.state} state)`)
+      // Get the session to check its state
+      let session = sessions.value.get(sessionId)
 
-        // Wait for session to start before connecting WebSocket
-        // Poll for state change with timeout to avoid race condition
-        // SDK can take 20-30 seconds to start, so wait up to 60 seconds
-        const maxWaitMs = 60000
-        const pollIntervalMs = 200
-        const logIntervalMs = 5000
-        let elapsedMs = 0
-        let lastLogMs = 0
+      // If session not in store (e.g., deeplink), fetch it first
+      if (!session) {
+        try {
+          const data = await api.get(`/api/sessions/${sessionId}`)
 
-        while (elapsedMs < maxWaitMs) {
-          const currentSession = sessions.value.get(sessionId)
-          // Only proceed when session is fully active (not just 'starting')
-          // The 'starting' state means backend accepted the request, but SDK/WebSocket not ready yet
-          if (currentSession && currentSession.state === 'active') {
-            console.log(`Session ${sessionId} is now active after ${elapsedMs}ms`)
-            break
+          // Check abort after await
+          if (abortController.signal.aborted) {
+            console.log(`Selection of ${sessionId} aborted after fetch`)
+            return
           }
 
-          // Log progress every 5 seconds
-          if (elapsedMs - lastLogMs >= logIntervalMs) {
-            const currentState = sessions.value.get(sessionId)?.state || 'unknown'
-            console.log(`Waiting for session ${sessionId} to become active (current: ${currentState}, ${elapsedMs / 1000}s elapsed)`)
-            lastLogMs = elapsedMs
-          }
-
-          await new Promise(resolve => setTimeout(resolve, pollIntervalMs))
-          elapsedMs += pollIntervalMs
+          session = data.session
+          sessions.value.set(sessionId, session)
+          // Trigger reactivity
+          sessions.value = new Map(sessions.value)
+          console.log(`Fetched session ${sessionId} for deeplink`)
+        } catch (error) {
+          console.error(`Failed to fetch session ${sessionId}:`, error)
+          // Can't proceed without session data
+          return
         }
-
-        // If still not active after timeout, log warning but continue
-        // (WebSocket retry logic will handle eventual connection)
-        const finalSession = sessions.value.get(sessionId)
-        if (finalSession && finalSession.state !== 'active') {
-          console.warn(`Session ${sessionId} did not become active within ${maxWaitMs / 1000}s (state: ${finalSession.state}), continuing anyway`)
-        }
-      } catch (error) {
-        console.error(`Failed to auto-start session ${sessionId}:`, error)
-        // Continue with selection even if start fails
       }
+
+      // Auto-start sessions in created or terminated states
+      if (session && (session.state === 'created' || session.state === 'terminated')) {
+        try {
+          await startSession(sessionId)
+
+          // Check abort after start
+          if (abortController.signal.aborted) {
+            console.log(`Selection of ${sessionId} aborted after start`)
+            return
+          }
+
+          console.log(`Auto-started session ${sessionId} (was in ${session.state} state)`)
+
+          // Wait for session to start before connecting WebSocket
+          // Poll for state change with timeout to avoid race condition
+          // SDK can take 20-30 seconds to start, so wait up to 60 seconds
+          const maxWaitMs = 60000
+          const pollIntervalMs = 200
+          const logIntervalMs = 5000
+          let elapsedMs = 0
+          let lastLogMs = 0
+
+          while (elapsedMs < maxWaitMs) {
+            // Check abort in polling loop
+            if (abortController.signal.aborted) {
+              console.log(`Selection of ${sessionId} aborted during state wait`)
+              return
+            }
+
+            const currentSession = sessions.value.get(sessionId)
+            // Only proceed when session is fully active (not just 'starting')
+            // The 'starting' state means backend accepted the request, but SDK/WebSocket not ready yet
+            if (currentSession && currentSession.state === 'active') {
+              console.log(`Session ${sessionId} is now active after ${elapsedMs}ms`)
+              break
+            }
+
+            // Log progress every 5 seconds
+            if (elapsedMs - lastLogMs >= logIntervalMs) {
+              const currentState = sessions.value.get(sessionId)?.state || 'unknown'
+              console.log(`Waiting for session ${sessionId} to become active (current: ${currentState}, ${elapsedMs / 1000}s elapsed)`)
+              lastLogMs = elapsedMs
+            }
+
+            await new Promise(resolve => setTimeout(resolve, pollIntervalMs))
+            elapsedMs += pollIntervalMs
+          }
+
+          // If still not active after timeout, log warning but continue
+          // (WebSocket retry logic will handle eventual connection)
+          const finalSession = sessions.value.get(sessionId)
+          if (finalSession && finalSession.state !== 'active') {
+            console.warn(`Session ${sessionId} did not become active within ${maxWaitMs / 1000}s (state: ${finalSession.state}), continuing anyway`)
+          }
+        } catch (error) {
+          console.error(`Failed to auto-start session ${sessionId}:`, error)
+          // Continue with selection even if start fails
+        }
+      }
+
+      // Final abort check before expensive operations
+      if (abortController.signal.aborted) {
+        console.log(`Selection of ${sessionId} aborted before message load`)
+        return
+      }
+
+      // Load messages for this session
+      const messageStore = await import('./message')
+      await messageStore.useMessageStore().loadMessages(sessionId)
+
+      // Check abort after message load
+      if (abortController.signal.aborted) {
+        console.log(`Selection of ${sessionId} aborted after message load`)
+        return
+      }
+
+      // CRITICAL: Await websocket connection to prevent race conditions
+      const wsStore = await import('./websocket')
+      await wsStore.useWebSocketStore().connectSession(sessionId)
+
+      // Final check - only log success if not aborted
+      if (!abortController.signal.aborted) {
+        console.log(`Selected session ${sessionId}`)
+      }
+    } finally {
+      // Clear mutex and pending abort if this is still the current operation
+      if (pendingSelectAbort === abortController) {
+        pendingSelectAbort = null
+      }
+      selectingSession.value = false
     }
-
-    // Load messages for this session
-    const messageStore = await import('./message')
-    await messageStore.useMessageStore().loadMessages(sessionId)
-
-    // Connect session websocket
-    const wsStore = await import('./websocket')
-    wsStore.useWebSocketStore().connectSession(sessionId)
-
-    console.log(`Selected session ${sessionId}`)
   }
 
   /**

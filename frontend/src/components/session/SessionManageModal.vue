@@ -197,6 +197,10 @@ async function handleRestart() {
       // Disconnect WebSocket to force reconnection (await to ensure old socket is fully closed)
       await wsStore.disconnectSession()
 
+      // Clear current session to force selectSession to re-run (bypass early return)
+      // This is CRITICAL - without it, selectSession() returns early and doesn't reconnect
+      sessionStore.currentSessionId = null
+
       // Reconnect to session (will fetch fresh data and reconnect WebSocket)
       await sessionStore.selectSession(sessionId)
 
