@@ -15,6 +15,9 @@
     <!-- Session Header (at top) -->
     <SessionHeader v-if="currentSession" :session-id="props.sessionId" />
 
+    <!-- Session State Status Line -->
+    <SessionStateStatusLine v-if="currentSession" :session-id="props.sessionId" />
+
     <!-- Messages Area -->
     <div class="d-flex flex-column flex-grow-1 overflow-hidden">
       <MessageList />
@@ -33,6 +36,7 @@ import { computed, onMounted, onUnmounted, watch } from 'vue'
 import { useSessionStore } from '@/stores/session'
 import { useUIStore } from '@/stores/ui'
 import SessionHeader from '../header/SessionHeader.vue'
+import SessionStateStatusLine from './SessionStateStatusLine.vue'
 import SessionStatusBar from '../statusbar/SessionStatusBar.vue'
 import MessageList from '../messages/MessageList.vue'
 import InputArea from '../messages/InputArea.vue'
