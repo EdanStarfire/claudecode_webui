@@ -145,12 +145,20 @@ class SessionCoordinator:
             # Detect if this session should be a minion (parent project is a legion)
             is_minion = project.is_multi_agent
 
+            # Build minion system prompt if this is a minion with initialization context
+            if is_minion and initialization_context:
+                from src.legion.minion_system_prompts import build_minion_system_prompt
+                minion_system_prompt = build_minion_system_prompt(initialization_context)
+                coord_logger.debug(f"Built minion system prompt for {session_id}: {minion_system_prompt}")
+            else:
+                minion_system_prompt = system_prompt
+
             # Create session through session manager
             await self.session_manager.create_session(
                 session_id=session_id,
                 working_directory=working_directory,
                 permission_mode=permission_mode,
-                system_prompt=system_prompt,
+                system_prompt=minion_system_prompt,
                 tools=tools,
                 model=model,
                 name=name,
@@ -324,6 +332,14 @@ class SessionCoordinator:
             all_tools = session_info.tools if session_info.tools else []
             all_tools = list(set(all_tools + legion_tools))  # Deduplicate
 
+            # Build minion system prompt if this is a minion with initialization context
+            if session_info.is_minion and session_info.initialization_context:
+                from src.legion.minion_system_prompts import build_minion_system_prompt
+                minion_system_prompt = build_minion_system_prompt(session_info.initialization_context)
+                coord_logger.debug(f"Built minion system prompt for {session_id} on start: {minion_system_prompt}")
+            else:
+                minion_system_prompt = session_info.system_prompt
+
             # Create/recreate SDK instance with session parameters
             sdk = ClaudeSDK(
                 session_id=session_id,
@@ -334,7 +350,7 @@ class SessionCoordinator:
                 error_callback=self._create_error_callback(session_id),
                 permission_callback=permission_callback,  # Use provided permission callback for resumed sessions
                 permissions=session_info.current_permission_mode,
-                system_prompt=session_info.system_prompt,
+                system_prompt=minion_system_prompt,
                 tools=all_tools,
                 model=session_info.model,
                 resume_session_id=resume_sdk_session,  # Only resume if we have a Claude Code session ID
