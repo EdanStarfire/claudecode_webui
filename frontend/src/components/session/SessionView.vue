@@ -23,6 +23,9 @@
     <!-- Input Area -->
     <InputArea />
 
+    <!-- Session State Status Line (above status bar) -->
+    <SessionStateStatusLine v-if="currentSession" :session-id="props.sessionId" />
+
     <!-- Session Status Bar (at bottom) -->
     <SessionStatusBar v-if="currentSession" :session-id="props.sessionId" />
   </div>
@@ -33,6 +36,7 @@ import { computed, onMounted, onUnmounted, watch } from 'vue'
 import { useSessionStore } from '@/stores/session'
 import { useUIStore } from '@/stores/ui'
 import SessionHeader from '../header/SessionHeader.vue'
+import SessionStateStatusLine from './SessionStateStatusLine.vue'
 import SessionStatusBar from '../statusbar/SessionStatusBar.vue'
 import MessageList from '../messages/MessageList.vue'
 import InputArea from '../messages/InputArea.vue'

@@ -12,6 +12,16 @@ html {
     font-size: 14px; /* Set base font size to 14px instead of 16px */
 }
 
+/* Remove distracting blue focus highlights from all form controls */
+.form-control:focus,
+.form-select:focus,
+textarea:focus,
+input:focus,
+button:focus {
+    box-shadow: none !important;
+    outline: none !important;
+}
+
 /* ========== CRITICAL LAYOUT FIXES ========== */
 
 /* Hamburger button styling */
