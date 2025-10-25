@@ -7,7 +7,7 @@
         v-model="inputText"
         class="form-control"
         :placeholder="inputPlaceholder"
-        :disabled="isStarting"
+        :disabled="isStarting || !isConnected"
         rows="1"
         @input="autoResizeTextarea"
         @keydown.enter.exact.prevent="sendMessage"

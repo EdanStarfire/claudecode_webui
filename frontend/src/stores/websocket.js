@@ -23,6 +23,7 @@ export const useWebSocketStore = defineStore('websocket', () => {
   const sessionRetryCount = ref(0)
   const maxSessionRetries = 5
   const currentSessionId = ref(null)
+  let sessionReconnectTimer = null // Track reconnect timer to cancel it
 
   // Legion WebSocket (for timeline/spy/horde views)
   const legionSocket = ref(null)
@@ -112,6 +113,12 @@ export const useWebSocketStore = defineStore('websocket', () => {
    * Connect to Session WebSocket (message streaming)
    */
   function connectSession(sessionId) {
+    // Cancel any pending reconnect timer
+    if (sessionReconnectTimer) {
+      clearTimeout(sessionReconnectTimer)
+      sessionReconnectTimer = null
+    }
+
     // Disconnect previous session
     disconnectSession()
 
@@ -144,7 +151,10 @@ export const useWebSocketStore = defineStore('websocket', () => {
         sessionRetryCount.value++
         const delay = Math.min(2000 * sessionRetryCount.value, 30000)
         console.log(`Reconnecting Session WebSocket in ${delay}ms (attempt ${sessionRetryCount.value})`)
-        setTimeout(() => connectSession(sessionId), delay)
+        sessionReconnectTimer = setTimeout(() => {
+          sessionReconnectTimer = null
+          connectSession(sessionId)
+        }, delay)
       }
     }
 
@@ -159,11 +169,19 @@ export const useWebSocketStore = defineStore('websocket', () => {
    */
   function disconnectSession() {
     return new Promise((resolve) => {
+      // Cancel any pending reconnect timer
+      if (sessionReconnectTimer) {
+        clearTimeout(sessionReconnectTimer)
+        sessionReconnectTimer = null
+        console.log('Cancelled pending session reconnect timer')
+      }
+
       if (sessionSocket.value) {
         const cleanup = () => {
           sessionSocket.value = null
           sessionConnected.value = false
           currentSessionId.value = null
+          sessionRetryCount.value = 0  // Reset retry count on explicit disconnect
           resolve()
         }
 

@@ -273,17 +273,15 @@ async function confirmResetSession() {
     if (response.success) {
       console.log('Session reset successfully, reconnecting')
 
-      // Disconnect WebSocket first (await to ensure old socket is fully closed)
+      // Disconnect WebSocket to force reconnection (await to ensure old socket is fully closed)
       await wsStore.disconnectSession()
 
-      // Small delay to ensure backend has written the client_launched message to disk
-      await new Promise(resolve => setTimeout(resolve, 200))
+      // Clear current session to force selectSession to re-run (bypass early return)
+      sessionStore.currentSessionId = null
 
-      // Now reload messages from backend (this will replace old messages with fresh ones)
-      await messageStore.loadMessages(sessionId)
-
-      // Reconnect WebSocket to receive new messages
-      wsStore.connectSession(sessionId)
+      // Reconnect to session (will fetch fresh data and reconnect WebSocket)
+      // Use selectSession to match restart behavior - this properly handles reconnection
+      await sessionStore.selectSession(sessionId)
 
       // Close modal
       if (modalInstance) {
