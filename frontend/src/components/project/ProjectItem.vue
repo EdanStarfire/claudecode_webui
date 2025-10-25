@@ -9,7 +9,7 @@
     @drop="onDrop"
   >
     <!-- Accordion Header -->
-    <h2 class="accordion-header" :id="`heading-${project.project_id}`" style="position: relative">
+    <h2 class="accordion-header" :id="`heading-${project.project_id}`">
       <!-- Accordion Button -->
       <button
         class="accordion-button bg-white p-2"
@@ -20,42 +20,48 @@
         :aria-expanded="isExpanded"
         :aria-controls="`collapse-${project.project_id}`"
       >
-        <div class="flex-grow-1 me-2 d-flex flex-column" style="min-width: 0;">
-          <!-- Top row: Project name -->
-          <div class="fw-semibold mb-1" style="flex-shrink: 1; min-width: 0;">
-            <span v-if="project.is_multi_agent" class="legion-icon" style="font-size: 1rem; margin-right: 0.25rem;">🏛</span>
-            {{ project.name }}
+        <div class="flex-grow-1 d-flex flex-column" style="min-width: 0;">
+          <!-- Top row: Project name AND action buttons -->
+          <div class="d-flex align-items-center mb-1" style="gap: 0.5rem;">
+            <div class="fw-semibold" style="flex-shrink: 0;">
+              <span v-if="project.is_multi_agent" class="legion-icon" style="font-size: 1rem; margin-right: 0.25rem;">🏛</span>
+              {{ project.name }}
+            </div>
+
+            <!-- Action Buttons Container -->
+            <div class="d-flex gap-1 ms-auto" style="flex-shrink: 0;">
+              <!-- Edit Project Button -->
+              <button
+                class="btn btn-sm btn-outline-secondary"
+                title="Edit or delete project"
+                type="button"
+                @click.stop.prevent="showEditModal"
+              >
+                ✏️
+              </button>
+
+              <!-- Add Session/Minion Button -->
+              <button
+                class="btn btn-sm btn-outline-primary"
+                :title="project.is_multi_agent ? 'Create minion' : 'Add session to project'"
+                type="button"
+                @click.stop.prevent="showCreateSessionModal"
+              >
+                ➕
+              </button>
+            </div>
           </div>
 
-          <!-- Bottom row: Folder path -->
-          <small class="text-muted font-monospace text-truncate" :title="project.working_directory" style="display: block; min-width: 0;">
+          <!-- Bottom row: Folder path (with ellipsis overflow) -->
+          <small
+            class="text-muted font-monospace"
+            :title="project.working_directory"
+            style="display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0;"
+          >
             {{ formattedPath }}
           </small>
         </div>
       </button>
-
-      <!-- Action Buttons Container (outside accordion button) -->
-      <div class="position-absolute d-flex gap-1" style="right: 0.5rem; top: 50%; transform: translateY(-50%); z-index: 10;">
-        <!-- Edit Project Button -->
-        <button
-          class="btn btn-sm btn-outline-secondary"
-          title="Edit or delete project"
-          type="button"
-          @click.stop.prevent="showEditModal"
-        >
-          ✏️
-        </button>
-
-        <!-- Add Session/Minion Button -->
-        <button
-          class="btn btn-sm btn-outline-primary"
-          :title="project.is_multi_agent ? 'Create minion' : 'Add session to project'"
-          type="button"
-          @click.stop.prevent="showCreateSessionModal"
-        >
-          ➕
-        </button>
-      </div>
     </h2>
 
     <!-- Project Status Line (always visible) -->

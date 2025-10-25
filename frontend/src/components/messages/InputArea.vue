@@ -3,11 +3,13 @@
     <div class="d-flex gap-2 align-items-end px-2 py-1">
       <textarea
         id="message-input"
+        ref="messageTextarea"
         v-model="inputText"
         class="form-control"
         :placeholder="inputPlaceholder"
         :disabled="isStarting"
         rows="1"
+        @input="autoResizeTextarea"
         @keydown.enter.exact.prevent="sendMessage"
       ></textarea>
 
@@ -33,12 +35,14 @@
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { ref, computed } from 'vue'
 import { useSessionStore } from '@/stores/session'
 import { useWebSocketStore } from '@/stores/websocket'
 
 const sessionStore = useSessionStore()
 const wsStore = useWebSocketStore()
+
+const messageTextarea = ref(null)
 
 const inputText = computed({
   get: () => sessionStore.currentInput,
@@ -59,11 +63,31 @@ const inputPlaceholder = computed(() => {
   return 'Type your message to Claude Code...'
 })
 
+/**
+ * Auto-resize textarea based on content (matching CommComposer behavior)
+ */
+function autoResizeTextarea() {
+  const textarea = messageTextarea.value
+  if (!textarea) return
+
+  // Reset height to auto to get the correct scrollHeight
+  textarea.style.height = 'auto'
+
+  // Set height based on scrollHeight, respecting min and max
+  const newHeight = Math.min(textarea.scrollHeight, parseInt(getComputedStyle(textarea).maxHeight))
+  textarea.style.height = newHeight + 'px'
+}
+
 function sendMessage() {
   if (!inputText.value.trim()) return
 
   wsStore.sendMessage(inputText.value)
   inputText.value = ''
+
+  // Reset textarea height after sending
+  if (messageTextarea.value) {
+    messageTextarea.value.style.height = 'auto'
+  }
 }
 
 function interruptSession() {
@@ -74,7 +98,7 @@ function interruptSession() {
 <style scoped>
 textarea {
   resize: vertical;
-  min-height: 40px;
-  max-height: 200px;
+  min-height: calc(1.5em + 0.5rem + 2px); /* 1 row height */
+  max-height: calc(9em + 0.5rem + 2px); /* 6 rows height */
 }
 </style>
