@@ -49,10 +49,20 @@
                 id="minion-context"
                 v-model="formData.initialization_context"
                 class="form-control"
+                :class="{ 'is-invalid': initContextExceedsLimit }"
                 rows="4"
+                :maxlength="2000"
                 placeholder="Instructions and context for the minion..."
               ></textarea>
-              <div class="form-text">Instructions and context to initialize the minion with</div>
+              <div class="form-text d-flex justify-content-between">
+                <span>Instructions and context to initialize the minion with</span>
+                <span :class="{ 'text-danger': initContextExceedsLimit, 'text-warning': initContextNearLimit }">
+                  {{ initContextCharCount }} / 2000 chars
+                </span>
+              </div>
+              <div class="invalid-feedback" v-if="initContextExceedsLimit">
+                Initialization context exceeds 2000 character limit (Windows command-line constraint)
+              </div>
             </div>
 
             <div class="mb-3">
@@ -126,6 +136,19 @@ const capabilities = computed(() => {
     .filter(c => c.length > 0)
 })
 
+// Computed - Initialization context character limits
+const initContextCharCount = computed(() => {
+  return formData.value.initialization_context.length
+})
+
+const initContextExceedsLimit = computed(() => {
+  return initContextCharCount.value > 2000
+})
+
+const initContextNearLimit = computed(() => {
+  return initContextCharCount.value > 1800 && initContextCharCount.value <= 2000
+})
+
 // Methods
 function resetForm() {
   formData.value = {
@@ -153,6 +176,12 @@ async function createMinion() {
   // Validate that name has no spaces
   if (formData.value.name.includes(' ')) {
     errorMessage.value = 'Minion name must be a single word with no spaces (for #nametag matching)'
+    return
+  }
+
+  // Validate initialization context length
+  if (initContextExceedsLimit.value) {
+    errorMessage.value = 'Initialization context exceeds 2000 character limit'
     return
   }
 

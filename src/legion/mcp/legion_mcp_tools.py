@@ -452,11 +452,12 @@ class LegionMCPTools:
 
         # Attempt to spawn child minion
         try:
+            # Map initialization_context to system_prompt (initialization_context is semantic UI term)
             child_minion_id = await self.system.overseer_controller.spawn_minion(
                 parent_overseer_id=parent_overseer_id,
                 name=name,
                 role=role,
-                initialization_context=initialization_context,
+                system_prompt=initialization_context,
                 capabilities=capabilities,
                 channels=channels
             )

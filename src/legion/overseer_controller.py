@@ -40,7 +40,7 @@ class OverseerController:
         legion_id: str,
         name: str,
         role: str = "",
-        initialization_context: str = "",
+        system_prompt: str = "",
         capabilities: Optional[List[str]] = None
     ) -> str:
         """
@@ -50,7 +50,7 @@ class OverseerController:
             legion_id: ID of the legion (project) this minion belongs to
             name: Minion name (must be unique within legion)
             role: Optional role description (e.g., "Code Expert")
-            initialization_context: Instructions/context for the minion
+            system_prompt: Instructions/context for the minion (appended to Claude Code preset)
             capabilities: List of capability keywords for discovery
 
         Returns:
@@ -86,9 +86,9 @@ class OverseerController:
             project_id=legion_id,
             name=name,
             permission_mode="default",  # Default permission mode for minions
+            system_prompt=system_prompt,
             # Minion-specific fields
             role=role,
-            initialization_context=initialization_context,
             capabilities=capabilities or []
         )
 
@@ -170,7 +170,7 @@ class OverseerController:
         parent_overseer_id: str,
         name: str,
         role: str,
-        initialization_context: str,
+        system_prompt: str,
         capabilities: Optional[List[str]] = None,
         channels: Optional[List[str]] = None
     ) -> str:
@@ -183,7 +183,7 @@ class OverseerController:
             parent_overseer_id: Session ID of parent minion
             name: Unique name for child (provided by LLM)
             role: Role description for child
-            initialization_context: System prompt/instructions for child
+            system_prompt: System prompt/instructions for child (appended to Claude Code preset)
             capabilities: Capability keywords for discovery
             channels: Channel IDs to join immediately
 
@@ -244,9 +244,9 @@ class OverseerController:
             project_id=legion_id,
             name=name,
             permission_mode="default",
+            system_prompt=system_prompt,
             # Minion-specific fields
             role=role,
-            initialization_context=initialization_context,
             capabilities=capabilities or [],
             # Hierarchy fields
             parent_overseer_id=parent_overseer_id,

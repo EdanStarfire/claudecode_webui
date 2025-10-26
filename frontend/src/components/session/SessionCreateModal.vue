@@ -72,11 +72,19 @@
                 class="form-control"
                 id="systemPrompt"
                 v-model="formData.system_prompt"
+                :class="{ 'is-invalid': systemPromptExceedsLimit }"
                 rows="3"
+                :maxlength="6000"
                 placeholder="Additional instructions to append to the system prompt..."
               ></textarea>
-              <div class="form-text">
-                These instructions will be appended to Claude Code's default system prompt
+              <div class="form-text d-flex justify-content-between">
+                <span>These instructions will be appended to Claude Code's default system prompt</span>
+                <span :class="{ 'text-danger': systemPromptExceedsLimit, 'text-warning': systemPromptNearLimit }">
+                  {{ systemPromptCharCount }} / 6000 chars
+                </span>
+              </div>
+              <div class="invalid-feedback" v-if="systemPromptExceedsLimit">
+                System prompt exceeds 6000 character limit (Windows command-line constraint)
               </div>
             </div>
 
@@ -160,6 +168,19 @@ const errorMessage = ref('')
 const modalElement = ref(null)
 let modalInstance = null
 
+// Computed - System prompt character limits
+const systemPromptCharCount = computed(() => {
+  return formData.value.system_prompt.length
+})
+
+const systemPromptExceedsLimit = computed(() => {
+  return systemPromptCharCount.value > 6000
+})
+
+const systemPromptNearLimit = computed(() => {
+  return systemPromptCharCount.value > 5500 && systemPromptCharCount.value <= 6000
+})
+
 // Validate form
 function validate() {
   errors.value = {}
@@ -167,6 +188,10 @@ function validate() {
 
   if (!formData.value.name.trim()) {
     errors.value.name = 'Session name is required'
+    isValid = false
+  }
+
+  if (systemPromptExceedsLimit.value) {
     isValid = false
   }
 

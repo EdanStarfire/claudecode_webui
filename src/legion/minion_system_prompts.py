@@ -16,13 +16,23 @@ from typing import Dict, Any, Optional
 # Path to the Legion MCP Tools Guide markdown file
 GUIDE_PATH = Path(__file__).parent / "legion_mcp_tools_guide.md"
 
+# Size limits - Windows command-line subprocess limits
+# Guide: 4000 chars, Initialization context: 2000 chars
+# Total: ~6000 chars + CLI overhead stays under ~7000 char Windows limit
+MAX_LEGION_GUIDE_SIZE = 4000  # characters
+MAX_INITIALIZATION_CONTEXT_SIZE = 2000  # characters
+
 
 def _load_legion_guide() -> str:
     """
-    Load the Legion MCP Tools Guide from the markdown file.
+    Load the Legion MCP Tools Guide from the markdown file with size limit.
+
+    Due to Windows command-line length limitations in the Claude Agent SDK
+    (https://github.com/anthropics/claude-agent-sdk-python/issues/267),
+    the guide is truncated to MAX_LEGION_GUIDE_SIZE characters.
 
     Returns:
-        str: The content of the guide
+        str: The content of the guide (truncated if necessary)
 
     Raises:
         FileNotFoundError: If the guide file doesn't exist
@@ -35,54 +45,20 @@ def _load_legion_guide() -> str:
         )
 
     try:
-        return GUIDE_PATH.read_text(encoding='utf-8')
+        content = GUIDE_PATH.read_text(encoding='utf-8')
+
+        # Truncate if exceeds size limit
+        if len(content) > MAX_LEGION_GUIDE_SIZE:
+            content = content[:MAX_LEGION_GUIDE_SIZE]
+            # Try to truncate at last complete line to avoid breaking markdown
+            last_newline = content.rfind('\n')
+            if last_newline > MAX_LEGION_GUIDE_SIZE * 0.9:  # Only if we're not losing too much
+                content = content[:last_newline]
+            content += f"\n\n[Guide truncated at {MAX_LEGION_GUIDE_SIZE} chars due to SDK limitations]"
+
+        return content
     except Exception as e:
         raise IOError(f"Failed to read Legion MCP Tools Guide: {e}")
-
-
-def build_minion_system_prompt(initialization_context: str = "") -> Dict[str, Any]:
-    """
-    Build a complete system prompt for a minion by appending Legion MCP guide
-    and initialization context to the Claude Code preset.
-
-    The guide is loaded from legion_mcp_tools_guide.md, allowing for easy
-    iteration and refinement without modifying code.
-
-    Args:
-        initialization_context: Minion-specific instructions and context
-
-    Returns:
-        System prompt configuration dict compatible with ClaudeAgentOptions
-
-    Raises:
-        FileNotFoundError: If the guide markdown file doesn't exist
-        IOError: If the guide file cannot be read
-
-    Example:
-        >>> prompt = build_minion_system_prompt("You are a database expert...")
-        >>> # Returns: {"type": "preset", "preset": "claude_code", "append": "..."}
-    """
-    # Load Legion MCP guide from markdown file
-    legion_guide = _load_legion_guide()
-
-    # Combine Legion MCP guide with initialization context
-    append_content_parts = [legion_guide]
-
-    if initialization_context:
-        # Add separator and minion-specific context
-        append_content_parts.append("\n\n---\n\n# Your Specific Role and Task\n\n")
-        append_content_parts.append(initialization_context)
-
-    append_content = "".join(append_content_parts)
-
-    # Return system prompt config that appends to Claude Code preset
-    # Format per SDK docs: https://docs.claude.com/en/api/agent-sdk/modifying-system-prompts
-    return {
-        "type": "preset",
-        "preset": "claude_code",
-        "append": append_content
-    }
-
 
 def get_legion_guide_only() -> str:
     """
