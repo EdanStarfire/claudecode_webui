@@ -640,13 +640,13 @@ class ClaudeSDK:
             return await self._can_use_tool_callback(tool_name, input_params, context)
 
         # Configure system prompt: use Claude Code preset if no custom prompt provided
-        system_prompt_config = self.system_prompt
-        if system_prompt_config is None:
-            # Use Claude Code preset system prompt by default
-            system_prompt_config = {
-                "type": "preset",
-                "preset": "claude_code"
-            }
+        # Use Claude Code preset system prompt by default
+        system_prompt_config = {
+            "type": "preset",
+            "preset": "claude_code"
+        }
+        if self.system_prompt:
+            system_prompt_config["append"] = self.system_prompt
 
         options_kwargs = {
             "cwd": str(self.working_directory),
@@ -681,9 +681,17 @@ class ClaudeSDK:
             options_kwargs["mcp_servers"] = self.mcp_servers
             sdk_logger.info(f"Attaching MCP servers to session {self.session_id}: {list(self.mcp_servers.keys()) if isinstance(self.mcp_servers, dict) else 'unknown format'}")
 
+        # Add stderr callback to capture SDK CLI errors
+        def stderr_handler(output: str) -> None:
+            """Capture and log stderr output from Claude Code CLI."""
+            logger.error(f"[SDK_STDERR] {self.session_id}: {output}")
+
+        options_kwargs["stderr"] = stderr_handler
+
         sdk_logger.debug(f"Final SDK options keys: {list(options_kwargs.keys())}")
         sdk_logger.debug(f"can_use_tool included: {'can_use_tool' in options_kwargs}")
         sdk_logger.debug(f"mcp_servers included: {'mcp_servers' in options_kwargs}")
+        sdk_logger.debug(f"stderr callback included: {'stderr' in options_kwargs}")
         sdk_logger.debug(f"ClaudeAgentOptions: {options_kwargs}")
         return ClaudeAgentOptions(**options_kwargs)
 

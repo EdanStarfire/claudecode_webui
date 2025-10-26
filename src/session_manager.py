@@ -69,7 +69,6 @@ class SessionInfo:
     horde_id: Optional[str] = None  # Which horde this minion belongs to
     channel_ids: List[str] = None  # Communication channels
     capabilities: List[str] = None  # Capability tags for discovery
-    initialization_context: Optional[str] = None  # Custom system prompt for minion
 
     def __post_init__(self):
         if self.tools is None:
@@ -203,7 +202,6 @@ class SessionManager:
         is_minion: bool = False,
         role: Optional[str] = None,
         capabilities: List[str] = None,
-        initialization_context: Optional[str] = None,
         # Hierarchy fields (Phase 5)
         parent_overseer_id: Optional[str] = None,
         overseer_level: int = 0,
@@ -238,7 +236,6 @@ class SessionManager:
             is_minion=is_minion,
             role=role,
             capabilities=capabilities if capabilities is not None else [],
-            initialization_context=initialization_context,
             # Hierarchy fields (Phase 5)
             parent_overseer_id=parent_overseer_id,
             overseer_level=overseer_level,

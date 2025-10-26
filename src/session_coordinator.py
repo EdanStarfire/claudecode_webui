@@ -20,6 +20,7 @@ from .logging_config import get_logger
 from .message_parser import MessageParser, MessageProcessor
 from .project_manager import ProjectInfo, ProjectManager
 from .session_manager import SessionInfo, SessionManager, SessionState
+from src.legion.minion_system_prompts import get_legion_guide_only
 
 # Get specialized logger for coordinator actions
 coord_logger = get_logger('coordinator', category='COORDINATOR')
@@ -124,7 +125,6 @@ class SessionCoordinator:
         # Minion-specific fields
         role: Optional[str] = None,
         capabilities: List[str] = None,
-        initialization_context: Optional[str] = None,
         # Hierarchy fields (Phase 5)
         parent_overseer_id: Optional[str] = None,
         overseer_level: int = 0,
@@ -146,6 +146,7 @@ class SessionCoordinator:
             is_minion = project.is_multi_agent
 
             # Create session through session manager
+            # Store raw system_prompt (guide will be prepended later in start_session)
             await self.session_manager.create_session(
                 session_id=session_id,
                 working_directory=working_directory,
@@ -160,7 +161,6 @@ class SessionCoordinator:
                 is_minion=is_minion,
                 role=role,
                 capabilities=capabilities,
-                initialization_context=initialization_context,
                 # Hierarchy fields (Phase 5)
                 parent_overseer_id=parent_overseer_id,
                 overseer_level=overseer_level,
@@ -187,20 +187,8 @@ class SessionCoordinator:
                 if mcp_server:
                     # SDK expects dict mapping server name to config, not a list
                     mcp_servers = {"legion": mcp_server}
-                    # Add Legion MCP tool names to allowed_tools list
-                    # MCP tools are prefixed with mcp__<server_name>__<tool_name>
-                    legion_tools = [
-                        "mcp__legion__send_comm",
-                        "mcp__legion__send_comm_to_channel",
-                        "mcp__legion__spawn_minion",
-                        "mcp__legion__dispose_minion",
-                        "mcp__legion__search_capability",
-                        "mcp__legion__list_minions",
-                        "mcp__legion__get_minion_info",
-                        "mcp__legion__join_channel",
-                        "mcp__legion__create_channel",
-                        "mcp__legion__list_channels"
-                    ]
+                    # Allow all legion MCP tools (reduces command-line length)
+                    legion_tools = ["mcp__legion"]
                     coord_logger.info(f"Attaching Legion MCP tools to minion session {session_id}: {legion_tools}")
                 else:
                     coord_logger.warning(f"MCP server creation failed for minion session {session_id}")
@@ -216,6 +204,16 @@ class SessionCoordinator:
             all_tools = tools if tools else []
             all_tools = list(set(all_tools + legion_tools))  # Deduplicate
 
+            # Escape special characters in system_prompt for subprocess command-line safety
+            # CRITICAL: Newlines break subprocess argument parsing on Windows
+            escaped_system_prompt = system_prompt
+            if system_prompt:
+                # Replace literal newlines with escaped newlines for command-line
+                escaped_system_prompt = system_prompt.replace('\n', '\\n').replace('\r', '\\r')
+                # Also escape other problematic characters
+                escaped_system_prompt = escaped_system_prompt.replace('"', '\\"').replace('$', '\\$')
+                coord_logger.info(f"Escaped system prompt in create: {len(escaped_system_prompt)} chars (original: {len(system_prompt)})")
+
             # Create SDK instance
             sdk = ClaudeSDK(
                 session_id=session_id,
@@ -226,7 +224,7 @@ class SessionCoordinator:
                 error_callback=self._create_error_callback(session_id),
                 permission_callback=permission_callback,
                 permissions=permission_mode,
-                system_prompt=system_prompt,
+                system_prompt=escaped_system_prompt,
                 tools=all_tools,
                 model=model,
                 mcp_servers=mcp_servers
@@ -304,27 +302,37 @@ class SessionCoordinator:
                 if mcp_server:
                     # SDK expects dict mapping server name to config, not a list
                     mcp_servers = {"legion": mcp_server}
-                    # Add Legion MCP tool names to allowed_tools list
-                    # MCP tools are prefixed with mcp__<server_name>__<tool_name>
-                    legion_tools = [
-                        "mcp__legion__send_comm",
-                        "mcp__legion__send_comm_to_channel",
-                        "mcp__legion__spawn_minion",
-                        "mcp__legion__dispose_minion",
-                        "mcp__legion__search_capability",
-                        "mcp__legion__list_minions",
-                        "mcp__legion__get_minion_info",
-                        "mcp__legion__join_channel",
-                        "mcp__legion__create_channel",
-                        "mcp__legion__list_channels"
-                    ]
+                    # Allow all legion MCP tools (reduces command-line length)
+                    legion_tools = ["mcp__legion"]
                     coord_logger.info(f"Attaching Legion MCP tools to minion session {session_id} (on start): {legion_tools}")
 
             # Merge Legion tools with session's stored tools
             all_tools = session_info.tools if session_info.tools else []
             all_tools = list(set(all_tools + legion_tools))  # Deduplicate
 
+            # Build minion system prompt by prepending legion guide to stored system_prompt
+            if session_info.is_minion:
+                legion_guide = get_legion_guide_only()
+                if session_info.system_prompt:
+                    minion_system_prompt = f"{legion_guide}\n\n---\n\n{session_info.system_prompt}"
+                else:
+                    minion_system_prompt = legion_guide
+                coord_logger.info(f"Built minion system prompt for start (guide + context): {len(minion_system_prompt)} chars")
+            else:
+                minion_system_prompt = session_info.system_prompt
+
+            # Escape special characters in system_prompt for subprocess command-line safety
+            # CRITICAL: Newlines break subprocess argument parsing on Windows
+            if minion_system_prompt:
+                # Replace literal newlines with escaped newlines for command-line
+                escaped_prompt = minion_system_prompt.replace('\n', '\\n').replace('\r', '\\r')
+                # Also escape other problematic characters
+                escaped_prompt = escaped_prompt.replace('"', '\\"').replace('$', '\\$')
+                coord_logger.info(f"Escaped system prompt: {len(escaped_prompt)} chars (original: {len(minion_system_prompt)})")
+                minion_system_prompt = escaped_prompt
+
             # Create/recreate SDK instance with session parameters
+            # system_prompt is used for both regular sessions and minions (SDK appends to Claude Code preset)
             sdk = ClaudeSDK(
                 session_id=session_id,
                 working_directory=session_info.working_directory,
@@ -334,7 +342,7 @@ class SessionCoordinator:
                 error_callback=self._create_error_callback(session_id),
                 permission_callback=permission_callback,  # Use provided permission callback for resumed sessions
                 permissions=session_info.current_permission_mode,
-                system_prompt=session_info.system_prompt,
+                system_prompt=minion_system_prompt,
                 tools=all_tools,
                 model=session_info.model,
                 resume_session_id=resume_sdk_session,  # Only resume if we have a Claude Code session ID

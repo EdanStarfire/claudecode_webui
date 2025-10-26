@@ -865,11 +865,12 @@ class ClaudeWebUI:
                     raise HTTPException(status_code=400, detail="Project is not a legion")
 
                 # Create minion via OverseerController
+                # Map initialization_context to system_prompt (initialization_context is just UI semantics)
                 minion_id = await self.coordinator.legion_system.overseer_controller.create_minion_for_user(
                     legion_id=legion_id,
                     name=request.name,
                     role=request.role,
-                    initialization_context=request.initialization_context,
+                    system_prompt=request.initialization_context,
                     capabilities=request.capabilities
                 )
 
@@ -884,6 +885,7 @@ class ClaudeWebUI:
 
             except ValueError as e:
                 # OverseerController raises ValueError for validation errors
+                logger.error(f"Validation error creating minion: {e}")
                 raise HTTPException(status_code=400, detail=str(e))
             except HTTPException:
                 raise
