@@ -17,7 +17,7 @@
           @click.stop="showMinionInfo"
           title="View minion details"
         >
-          <i class="bi bi-eye"></i>
+          👁️
         </button>
         <span v-if="selectedMinion" class="minion-state-indicator" :class="stateClass" :style="stateStyle">
           👤
