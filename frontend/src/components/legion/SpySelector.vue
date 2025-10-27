@@ -161,7 +161,12 @@ function onMinionSelect() {
 
 // Watch for current session changes to restore selection
 watch(() => sessionStore.currentSessionId, (newSessionId) => {
-  if (newSessionId && props.sessions.some(s => s.session_id === newSessionId)) {
+  // If session cleared (e.g., deleted), clear dropdown selection
+  if (!newSessionId) {
+    selectedMinionId.value = ''
+  }
+  // If session selected and it's in our minion list, sync it
+  else if (props.sessions.some(s => s.session_id === newSessionId)) {
     selectedMinionId.value = newSessionId
   }
 })
