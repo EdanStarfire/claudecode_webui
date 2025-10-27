@@ -41,6 +41,7 @@ class OverseerController:
         name: str,
         role: str = "",
         system_prompt: str = "",
+        override_system_prompt: bool = False,
         capabilities: Optional[List[str]] = None
     ) -> str:
         """
@@ -50,7 +51,8 @@ class OverseerController:
             legion_id: ID of the legion (project) this minion belongs to
             name: Minion name (must be unique within legion)
             role: Optional role description (e.g., "Code Expert")
-            system_prompt: Instructions/context for the minion (appended to Claude Code preset)
+            system_prompt: Instructions/context for the minion (appended to Claude Code preset unless override is True)
+            override_system_prompt: If True, use only custom prompt (no Claude Code preset or legion guide)
             capabilities: List of capability keywords for discovery
 
         Returns:
@@ -87,6 +89,7 @@ class OverseerController:
             name=name,
             permission_mode="default",  # Default permission mode for minions
             system_prompt=system_prompt,
+            override_system_prompt=override_system_prompt,
             # Minion-specific fields
             role=role,
             capabilities=capabilities or []

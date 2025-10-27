@@ -55,13 +55,29 @@
                 placeholder="Instructions and context for the minion..."
               ></textarea>
               <div class="form-text d-flex justify-content-between">
-                <span>Instructions and context to initialize the minion with</span>
+                <span>{{ formData.override_system_prompt ? 'This context will replace Claude Code\'s preset and legion guide' : 'This context will be appended to legion guide and Claude Code\'s preset' }}</span>
                 <span :class="{ 'text-danger': initContextExceedsLimit, 'text-warning': initContextNearLimit }">
                   {{ initContextCharCount }} / 2000 chars
                 </span>
               </div>
               <div class="invalid-feedback" v-if="initContextExceedsLimit">
                 Initialization context exceeds 2000 character limit (Windows command-line constraint)
+              </div>
+            </div>
+
+            <!-- Override System Prompt -->
+            <div class="mb-3 form-check">
+              <input
+                type="checkbox"
+                class="form-check-input"
+                id="overrideSystemPrompt"
+                v-model="formData.override_system_prompt"
+              />
+              <label class="form-check-label" for="overrideSystemPrompt">
+                Override Claude Code preset (use custom context only)
+              </label>
+              <div class="form-text text-warning" v-if="formData.override_system_prompt">
+                <small>⚠️ Override mode may cause unexpected behaviors. Only custom context will be used (no legion guide or Claude Code preset).</small>
               </div>
             </div>
 
@@ -121,6 +137,7 @@ const formData = ref({
   name: '',
   role: '',
   initialization_context: '',
+  override_system_prompt: false,
   capabilities: []
 })
 const capabilitiesInput = ref('')
@@ -155,6 +172,7 @@ function resetForm() {
     name: '',
     role: '',
     initialization_context: '',
+    override_system_prompt: false,
     capabilities: []
   }
   capabilitiesInput.value = ''
@@ -198,6 +216,7 @@ async function createMinion() {
       name: formData.value.name.trim(),
       role: formData.value.role.trim(),
       initialization_context: formData.value.initialization_context.trim(),
+      override_system_prompt: formData.value.override_system_prompt,
       capabilities: capabilities.value
     }
 
