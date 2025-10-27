@@ -50,6 +50,7 @@ class SessionInfo:
     current_permission_mode: str = "acceptEdits"
     initial_permission_mode: Optional[str] = None
     system_prompt: Optional[str] = None
+    override_system_prompt: bool = False  # If True, use custom prompt only (no Claude Code preset)
     tools: List[str] = None
     model: Optional[str] = None
     error_message: Optional[str] = None
@@ -107,6 +108,9 @@ class SessionInfo:
             data['is_overseer'] = False
         if 'overseer_level' not in data:
             data['overseer_level'] = 0
+        # Migration: Add override_system_prompt if missing (backward compatibility)
+        if 'override_system_prompt' not in data:
+            data['override_system_prompt'] = False
         return cls(**data)
 
 
@@ -193,6 +197,7 @@ class SessionManager:
         working_directory: Optional[str] = None,
         permission_mode: str = "acceptEdits",
         system_prompt: Optional[str] = None,
+        override_system_prompt: bool = False,
         tools: List[str] = None,
         model: Optional[str] = None,
         name: Optional[str] = None,
@@ -227,6 +232,7 @@ class SessionManager:
             current_permission_mode=permission_mode,
             initial_permission_mode=permission_mode,
             system_prompt=system_prompt,
+            override_system_prompt=override_system_prompt,
             tools=tools if tools is not None else [],
             model=model,
             name=name,

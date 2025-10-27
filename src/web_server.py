@@ -53,6 +53,7 @@ class SessionCreateRequest(BaseModel):
     project_id: str
     permission_mode: str = "acceptEdits"
     system_prompt: Optional[str] = None
+    override_system_prompt: bool = False
     tools: List[str] = []
     model: Optional[str] = None
     name: Optional[str] = None
@@ -86,6 +87,7 @@ class MinionCreateRequest(BaseModel):
     name: str
     role: Optional[str] = ""
     initialization_context: Optional[str] = ""
+    override_system_prompt: bool = False
     capabilities: List[str] = []
 
 
@@ -529,6 +531,7 @@ class ClaudeWebUI:
                     project_id=request.project_id,
                     permission_mode=request.permission_mode,
                     system_prompt=request.system_prompt,
+                    override_system_prompt=request.override_system_prompt,
                     tools=request.tools,
                     model=request.model,
                     name=request.name,
@@ -871,6 +874,7 @@ class ClaudeWebUI:
                     name=request.name,
                     role=request.role,
                     system_prompt=request.initialization_context,
+                    override_system_prompt=request.override_system_prompt,
                     capabilities=request.capabilities
                 )
 

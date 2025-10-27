@@ -78,13 +78,29 @@
                 placeholder="Additional instructions to append to the system prompt..."
               ></textarea>
               <div class="form-text d-flex justify-content-between">
-                <span>These instructions will be appended to Claude Code's default system prompt</span>
+                <span>{{ formData.override_system_prompt ? 'These instructions will replace Claude Code\'s default system prompt' : 'These instructions will be appended to Claude Code\'s default system prompt' }}</span>
                 <span :class="{ 'text-danger': systemPromptExceedsLimit, 'text-warning': systemPromptNearLimit }">
                   {{ systemPromptCharCount }} / 6000 chars
                 </span>
               </div>
               <div class="invalid-feedback" v-if="systemPromptExceedsLimit">
                 System prompt exceeds 6000 character limit (Windows command-line constraint)
+              </div>
+            </div>
+
+            <!-- Override System Prompt -->
+            <div class="mb-3 form-check">
+              <input
+                type="checkbox"
+                class="form-check-input"
+                id="overrideSystemPrompt"
+                v-model="formData.override_system_prompt"
+              />
+              <label class="form-check-label" for="overrideSystemPrompt">
+                Override Claude Code preset (use custom prompt only)
+              </label>
+              <div class="form-text text-warning" v-if="formData.override_system_prompt">
+                <small>⚠️ Override mode may cause unexpected behaviors. Only custom instructions will be used (no Claude Code preset).</small>
               </div>
             </div>
 
@@ -157,6 +173,7 @@ const formData = ref({
   permission_mode: 'default',
   model: 'claude-sonnet-4-5-20250929',
   system_prompt: '',
+  override_system_prompt: false,
   tools: '',
   startImmediately: true
 })
@@ -219,6 +236,7 @@ async function handleSubmit() {
       permission_mode: formData.value.permission_mode,
       model: formData.value.model,
       system_prompt: formData.value.system_prompt.trim() || null,
+      override_system_prompt: formData.value.override_system_prompt,
       tools: toolsList
     }
 
@@ -254,6 +272,7 @@ function resetForm() {
     permission_mode: 'default',
     model: 'claude-sonnet-4-5-20250929',
     system_prompt: '',
+    override_system_prompt: false,
     tools: '',
     startImmediately: true
   }

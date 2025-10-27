@@ -129,6 +129,7 @@ class ClaudeSDK:
         permission_callback: Optional[Callable[[str, Dict[str, Any]], Union[bool, Dict[str, Any]]]] = None,
         permissions: str = "acceptEdits",
         system_prompt: Optional[str] = None,
+        override_system_prompt: bool = False,
         tools: List[str] = None,
         model: Optional[str] = None,
         resume_session_id: Optional[str] = None,
@@ -146,6 +147,7 @@ class ClaudeSDK:
             permission_callback: Called to check for tool permissions
             permissions: SDK permission mode
             system_prompt: Custom system prompt
+            override_system_prompt: If True, use only custom prompt (no Claude Code preset)
             tools: List of allowed tools
             model: Model to use
             mcp_servers: List of MCP servers to attach (for multi-agent)
@@ -164,6 +166,7 @@ class ClaudeSDK:
             logger.warning("No permission callback provided to ClaudeSDK!")
         self.current_permission_mode = permissions
         self.system_prompt = system_prompt
+        self.override_system_prompt = override_system_prompt
         self.tools = tools if tools is not None else []
         self.model = model
         self.resume_session_id = resume_session_id
@@ -639,14 +642,25 @@ class ClaudeSDK:
         ) -> Union[PermissionResultAllow, PermissionResultDeny]:
             return await self._can_use_tool_callback(tool_name, input_params, context)
 
-        # Configure system prompt: use Claude Code preset if no custom prompt provided
-        # Use Claude Code preset system prompt by default
-        system_prompt_config = {
-            "type": "preset",
-            "preset": "claude_code"
-        }
-        if self.system_prompt:
-            system_prompt_config["append"] = self.system_prompt
+        # Configure system prompt based on override flag
+        if self.override_system_prompt and self.system_prompt:
+            # Override mode: use custom prompt only (no Claude Code preset)
+            system_prompt_config = {
+                "type": "custom",
+                "custom": self.system_prompt
+            }
+            sdk_logger.info(f"Using OVERRIDE mode - custom system prompt only (no Claude Code preset)")
+        else:
+            # Append mode (default): use Claude Code preset with optional custom append
+            system_prompt_config = {
+                "type": "preset",
+                "preset": "claude_code"
+            }
+            if self.system_prompt:
+                system_prompt_config["append"] = self.system_prompt
+                sdk_logger.info(f"Using APPEND mode - Claude Code preset + custom append")
+            else:
+                sdk_logger.info(f"Using DEFAULT mode - Claude Code preset only")
 
         options_kwargs = {
             "cwd": str(self.working_directory),

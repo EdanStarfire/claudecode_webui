@@ -78,6 +78,31 @@
               </div>
             </div>
 
+            <!-- Custom System Prompt Configuration (Read-only) -->
+            <div v-if="session?.system_prompt || session?.override_system_prompt" class="mb-3">
+              <label class="form-label">System Prompt Configuration</label>
+              <div class="card">
+                <div class="card-body">
+                  <div v-if="session?.override_system_prompt" class="mb-2">
+                    <span class="badge bg-warning text-dark">Override Mode</span>
+                    <div class="form-text text-warning mt-1">
+                      Using custom prompt only (no Claude Code preset)
+                    </div>
+                  </div>
+                  <div v-else class="mb-2">
+                    <span class="badge bg-info">Append Mode</span>
+                    <div class="form-text mt-1">
+                      Custom instructions appended to Claude Code preset
+                    </div>
+                  </div>
+                  <div v-if="session?.system_prompt" class="mt-2">
+                    <strong class="small">Custom Instructions:</strong>
+                    <div class="form-control" style="height: auto; min-height: 60px; white-space: pre-wrap;" readonly>{{ session.system_prompt }}</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
             <div v-if="errorMessage" class="alert alert-danger" role="alert">
               {{ errorMessage }}
             </div>

@@ -118,6 +118,7 @@ class SessionCoordinator:
         project_id: str,
         permission_mode: str = "acceptEdits",
         system_prompt: Optional[str] = None,
+        override_system_prompt: bool = False,
         tools: List[str] = None,
         model: Optional[str] = None,
         name: Optional[str] = None,
@@ -152,6 +153,7 @@ class SessionCoordinator:
                 working_directory=working_directory,
                 permission_mode=permission_mode,
                 system_prompt=system_prompt,
+                override_system_prompt=override_system_prompt,
                 tools=tools,
                 model=model,
                 name=name,
@@ -225,6 +227,7 @@ class SessionCoordinator:
                 permission_callback=permission_callback,
                 permissions=permission_mode,
                 system_prompt=escaped_system_prompt,
+                override_system_prompt=override_system_prompt,
                 tools=all_tools,
                 model=model,
                 mcp_servers=mcp_servers
@@ -332,7 +335,7 @@ class SessionCoordinator:
                 minion_system_prompt = escaped_prompt
 
             # Create/recreate SDK instance with session parameters
-            # system_prompt is used for both regular sessions and minions (SDK appends to Claude Code preset)
+            # system_prompt is used for both regular sessions and minions (SDK appends to Claude Code preset unless override is set)
             sdk = ClaudeSDK(
                 session_id=session_id,
                 working_directory=session_info.working_directory,
@@ -343,6 +346,7 @@ class SessionCoordinator:
                 permission_callback=permission_callback,  # Use provided permission callback for resumed sessions
                 permissions=session_info.current_permission_mode,
                 system_prompt=minion_system_prompt,
+                override_system_prompt=session_info.override_system_prompt,
                 tools=all_tools,
                 model=session_info.model,
                 resume_session_id=resume_sdk_session,  # Only resume if we have a Claude Code session ID
