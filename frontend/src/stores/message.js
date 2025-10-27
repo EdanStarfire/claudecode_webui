@@ -23,6 +23,9 @@ export const useMessageStore = defineStore('message', () => {
   const activeToolUses = ref(new Map())
   const orphanedToolUses = ref(new Map()) // sessionId -> Map<tool_use_id -> {reason, message}>
 
+  // Message sequence tracking for reconnection sync (sessionId -> ISO timestamp)
+  const lastReceivedTimestamp = ref(new Map())
+
   // ========== COMPUTED ==========
 
   // Current session's messages
@@ -60,6 +63,15 @@ export const useMessageStore = defineStore('message', () => {
 
       // Store messages
       messagesBySession.value.set(sessionId, messages)
+
+      // Track last received timestamp from loaded messages
+      if (messages.length > 0) {
+        const lastMessage = messages[messages.length - 1]
+        if (lastMessage.timestamp) {
+          lastReceivedTimestamp.value.set(sessionId, lastMessage.timestamp)
+          console.log(`Tracked last received timestamp for session ${sessionId}: ${lastMessage.timestamp}`)
+        }
+      }
 
       // Track open tool uses for orphaned tool detection
       const openTools = new Set()
@@ -210,6 +222,11 @@ export const useMessageStore = defineStore('message', () => {
 
     const messages = messagesBySession.value.get(sessionId)
     messages.push(message)
+
+    // Track last received timestamp for reconnection sync
+    if (message.timestamp) {
+      lastReceivedTimestamp.value.set(sessionId, message.timestamp)
+    }
 
     // Track tool use lifecycle for orphaned detection
     handleRealtimeToolTracking(sessionId, message)
@@ -450,6 +467,124 @@ export const useMessageStore = defineStore('message', () => {
     toolCallsBySession.value = new Map(toolCallsBySession.value)
   }
 
+  /**
+   * Get last received message timestamp for a session
+   */
+  function getLastReceivedTimestamp(sessionId) {
+    return lastReceivedTimestamp.value.get(sessionId)
+  }
+
+  /**
+   * Sync missed messages since last received (for reconnection recovery)
+   * Returns: {syncedCount, hasMore, error}
+   */
+  async function syncMessages(sessionId) {
+    const lastTimestamp = lastReceivedTimestamp.value.get(sessionId)
+
+    // No sync needed if no previous messages
+    if (!lastTimestamp) {
+      console.log(`No sync needed for session ${sessionId} (no previous messages)`)
+      return { syncedCount: 0, hasMore: false }
+    }
+
+    try {
+      console.log(`Syncing messages for session ${sessionId} since ${lastTimestamp}`)
+
+      // Fetch all messages and filter client-side by timestamp
+      // Backend doesn't have 'since' parameter yet, so we load recent messages and filter
+      const data = await api.get(
+        `/api/sessions/${sessionId}/messages?limit=1000&offset=0`
+      )
+
+      const allMessages = data.messages || []
+      const hasMore = data.has_more || false
+
+      // Filter messages newer than last received timestamp
+      const lastTimestampMs = new Date(lastTimestamp).getTime()
+      const newMessages = allMessages.filter(m => {
+        if (!m.timestamp) return false
+        const msgTimestampMs = new Date(m.timestamp).getTime()
+        return msgTimestampMs > lastTimestampMs
+      })
+
+      if (newMessages.length === 0) {
+        console.log(`No missed messages for session ${sessionId}`)
+        return { syncedCount: 0, hasMore: false }
+      }
+
+      console.log(`Synced ${newMessages.length} missed messages for session ${sessionId}`)
+
+      // Get existing messages
+      const existingMessages = messagesBySession.value.get(sessionId) || []
+
+      // Deduplicate by message ID (in case of overlap)
+      const existingIds = new Set(existingMessages.map(m => m.id).filter(Boolean))
+      const uniqueNewMessages = newMessages.filter(m => !m.id || !existingIds.has(m.id))
+
+      console.log(`After deduplication: ${uniqueNewMessages.length} unique new messages`)
+
+      // Merge new messages and sort by timestamp
+      const mergedMessages = [...existingMessages, ...uniqueNewMessages].sort((a, b) => {
+        const timeA = new Date(a.timestamp || 0).getTime()
+        const timeB = new Date(b.timestamp || 0).getTime()
+        return timeA - timeB
+      })
+
+      // Update messages
+      messagesBySession.value.set(sessionId, mergedMessages)
+
+      // Process new messages for tool uses, results, etc.
+      uniqueNewMessages.forEach(message => {
+        // Track tool use lifecycle
+        handleRealtimeToolTracking(sessionId, message)
+
+        // Extract tool uses
+        if (message.metadata?.has_tool_uses && message.metadata.tool_uses) {
+          message.metadata.tool_uses.forEach(toolUse => {
+            handleToolUse(sessionId, toolUse)
+          })
+        }
+
+        // Extract tool results
+        if (message.metadata?.has_tool_results && message.metadata.tool_results) {
+          message.metadata.tool_results.forEach(toolResult => {
+            handleToolResult(sessionId, toolResult)
+          })
+        }
+
+        // Extract permission requests
+        if (message.type === 'permission_request' || message.metadata?.has_permission_requests) {
+          handlePermissionRequest(sessionId, message)
+        }
+
+        // Capture init data
+        if (message.type === 'system' &&
+            (message.subtype === 'init' || message.metadata?.subtype === 'init') &&
+            message.metadata?.init_data) {
+          const sessionStore = useSessionStore()
+          sessionStore.storeInitData(sessionId, message.metadata.init_data)
+        }
+      })
+
+      // Update last received timestamp
+      if (mergedMessages.length > 0) {
+        const lastMessage = mergedMessages[mergedMessages.length - 1]
+        if (lastMessage.timestamp) {
+          lastReceivedTimestamp.value.set(sessionId, lastMessage.timestamp)
+        }
+      }
+
+      // Trigger reactivity
+      messagesBySession.value = new Map(messagesBySession.value)
+
+      return { syncedCount: uniqueNewMessages.length, hasMore }
+    } catch (error) {
+      console.error(`Failed to sync messages for session ${sessionId}:`, error)
+      // Don't throw - reconnection should succeed even if sync fails
+      return { syncedCount: 0, hasMore: false, error: error.message }
+    }
+  }
+
   // ========== SESSION STATE WATCHER ==========
   // Watch for session state changes to detect post-load terminations
   const sessionStore = useSessionStore()
@@ -506,6 +641,10 @@ export const useMessageStore = defineStore('message', () => {
     markToolUseOrphaned,
     isToolUseOrphaned,
     getOrphanedInfo,
-    clearOrphanedToolUses
+    clearOrphanedToolUses,
+
+    // Reconnection sync
+    getLastReceivedTimestamp,
+    syncMessages
   }
 })

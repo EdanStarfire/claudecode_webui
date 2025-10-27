@@ -29,6 +29,9 @@ export const useWebSocketStore = defineStore('websocket', () => {
   const connectionGeneration = ref(0)
   const currentConnectionGeneration = ref(null)
 
+  // Reconnection tracking (detect if this is initial connection or reconnection)
+  const sessionHadInitialConnection = ref(new Map()) // sessionId -> boolean
+
   // Legion WebSocket (for timeline/spy/horde views)
   const legionSocket = ref(null)
   const legionConnected = ref(false)
@@ -147,7 +150,7 @@ export const useWebSocketStore = defineStore('websocket', () => {
 
     sessionSocket.value = new WebSocket(wsUrl)
 
-    sessionSocket.value.onopen = () => {
+    sessionSocket.value.onopen = async () => {
       // Validate generation before processing
       if (currentConnectionGeneration.value !== generation) {
         console.log(`[Gen ${generation}] Ignoring onopen (stale connection, current: ${currentConnectionGeneration.value})`)
@@ -158,6 +161,36 @@ export const useWebSocketStore = defineStore('websocket', () => {
       sessionConnected.value = true
       sessionRetryCount.value = 0
       console.log(`[Gen ${generation}] Session WebSocket connected for ${sessionId}`)
+
+      // Check if this is a reconnection (not initial connection)
+      const isReconnection = sessionHadInitialConnection.value.get(sessionId)
+      sessionHadInitialConnection.value.set(sessionId, true)
+
+      // Sync missed messages on reconnection
+      if (isReconnection) {
+        console.log(`[Gen ${generation}] Reconnection detected, syncing missed messages...`)
+        try {
+          const messageStore = useMessageStore()
+          const result = await messageStore.syncMessages(sessionId)
+
+          if (result.syncedCount > 0) {
+            console.log(`[Gen ${generation}] ✅ Synced ${result.syncedCount} missed messages`)
+          } else if (result.error) {
+            console.warn(`[Gen ${generation}] ⚠️ Message sync failed: ${result.error}`)
+          } else {
+            console.log(`[Gen ${generation}] No missed messages to sync`)
+          }
+
+          if (result.hasMore) {
+            console.warn(`[Gen ${generation}] ⚠️ More than 1000 missed messages, showing recent 1000 only`)
+          }
+        } catch (error) {
+          console.error(`[Gen ${generation}] Error during message sync:`, error)
+          // Don't fail the connection if sync fails
+        }
+      } else {
+        console.log(`[Gen ${generation}] Initial connection, no sync needed`)
+      }
     }
 
     sessionSocket.value.onmessage = (event) => {
@@ -227,6 +260,7 @@ export const useWebSocketStore = defineStore('websocket', () => {
           currentSessionId.value = null
           currentConnectionGeneration.value = null  // Clear generation
           sessionRetryCount.value = 0  // Reset retry count on explicit disconnect
+          sessionHadInitialConnection.value.delete(sessionId)  // Clear reconnection flag
           resolve()
         }
 
