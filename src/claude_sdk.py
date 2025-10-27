@@ -645,10 +645,8 @@ class ClaudeSDK:
         # Configure system prompt based on override flag
         if self.override_system_prompt and self.system_prompt:
             # Override mode: use custom prompt only (no Claude Code preset)
-            system_prompt_config = {
-                "type": "custom",
-                "custom": self.system_prompt
-            }
+            # SDK accepts plain string for custom-only system prompts
+            system_prompt_config = self.system_prompt
             sdk_logger.info(f"Using OVERRIDE mode - custom system prompt only (no Claude Code preset)")
         else:
             # Append mode (default): use Claude Code preset with optional custom append
