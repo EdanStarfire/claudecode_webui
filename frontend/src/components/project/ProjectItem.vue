@@ -10,15 +10,17 @@
   >
     <!-- Accordion Header -->
     <h2 class="accordion-header" :id="`heading-${project.project_id}`">
-      <!-- Accordion Button -->
-      <button
+      <!-- Accordion Button (changed to div to allow nested buttons) -->
+      <div
         class="accordion-button bg-white p-2"
         :class="{ collapsed: !isExpanded }"
-        type="button"
-        data-bs-toggle="collapse"
-        :data-bs-target="`#collapse-${project.project_id}`"
+        role="button"
+        tabindex="0"
         :aria-expanded="isExpanded"
         :aria-controls="`collapse-${project.project_id}`"
+        @click="onAccordionClick"
+        @keydown.enter.prevent="onAccordionClick"
+        @keydown.space.prevent="onAccordionClick"
       >
         <div class="flex-grow-1 d-flex flex-column" style="min-width: 0;">
           <!-- Top row: Project name AND action buttons -->
@@ -35,7 +37,7 @@
                 class="btn btn-sm btn-outline-secondary"
                 title="Edit or delete project"
                 type="button"
-                @click.stop.prevent="showEditModal"
+                @click.stop="showEditModal"
               >
                 ✏️
               </button>
@@ -45,7 +47,7 @@
                 class="btn btn-sm btn-outline-primary"
                 :title="project.is_multi_agent ? 'Create minion' : 'Add session to project'"
                 type="button"
-                @click.stop.prevent="showCreateSessionModal"
+                @click.stop="showCreateSessionModal"
               >
                 ➕
               </button>
@@ -61,7 +63,7 @@
             {{ formattedPath }}
           </small>
         </div>
-      </button>
+      </div>
     </h2>
 
     <!-- Project Status Line (always visible) -->
@@ -160,6 +162,20 @@ const isTimelineActive = computed(() => {
   const route = router.currentRoute.value
   return route.name === 'timeline' && route.params.legionId === props.project.project_id
 })
+
+// Accordion click handler (manually toggle since we changed button to div)
+function onAccordionClick(event) {
+  // Only toggle if clicking the accordion itself, not nested buttons
+  // The @click.stop on nested buttons will prevent this from being called
+  const bootstrap = window.bootstrap
+  if (!bootstrap) return
+
+  const collapseElement = document.getElementById(`collapse-${props.project.project_id}`)
+  if (!collapseElement) return
+
+  const bsCollapse = bootstrap.Collapse.getOrCreateInstance(collapseElement)
+  bsCollapse.toggle()
+}
 
 // Collapse event handlers
 function onExpand() {
