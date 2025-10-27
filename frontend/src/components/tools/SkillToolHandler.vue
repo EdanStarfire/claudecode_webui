@@ -49,6 +49,8 @@
 
 <script setup>
 import { ref, computed } from 'vue'
+import { useMessageStore } from '@/stores/message'
+import { useSessionStore } from '@/stores/session'
 
 const props = defineProps({
   toolCall: {
@@ -56,6 +58,9 @@ const props = defineProps({
     required: true
   }
 })
+
+const messageStore = useMessageStore()
+const sessionStore = useSessionStore()
 
 // Collapsible content state
 const isContentExpanded = ref(false)
@@ -105,35 +110,54 @@ const statusBadgeClass = computed(() => {
   }
 })
 
-// Parse result content for base directory and skill content
-const resultContent = computed(() => {
-  if (!props.toolCall.result) return ''
+// Find skill-related messages by looking for messages that come after the tool result
+const skillMessages = computed(() => {
+  const sessionId = sessionStore.currentSessionId
+  if (!sessionId) return { running: null, content: null }
 
-  const result = props.toolCall.result
+  const allMessages = messageStore.messagesBySession.get(sessionId) || []
 
-  // Handle result with content property
-  if (result.content !== undefined) {
-    return typeof result.content === 'string'
-      ? result.content
-      : JSON.stringify(result.content, null, 2)
+  // Find the tool result message for this skill invocation
+  const toolResultIndex = allMessages.findIndex(msg =>
+    msg.type === 'user' &&
+    msg.metadata?.has_tool_results &&
+    msg.metadata?.tool_results?.some(r => r.tool_use_id === props.toolCall.id)
+  )
+
+  if (toolResultIndex === -1) {
+    return { running: null, content: null }
   }
 
-  // Handle result with message property
-  if (result.message) {
-    return result.message
+  // Look for the two user messages that follow the tool result
+  let runningMessage = null
+  let contentMessage = null
+
+  for (let i = toolResultIndex + 1; i < Math.min(toolResultIndex + 3, allMessages.length); i++) {
+    const msg = allMessages[i]
+    if (msg.type !== 'user') continue
+
+    const content = msg.content || ''
+
+    // First skill message: contains <command-message> tag
+    if (content.includes('<command-message>') && content.includes('skill is running')) {
+      runningMessage = msg
+    }
+    // Second skill message: contains skill content
+    else if (content.startsWith('Base directory for this skill:')) {
+      contentMessage = msg
+    }
   }
 
-  // Fallback: stringify entire result
-  return JSON.stringify(result, null, 2)
+  return { running: runningMessage, content: contentMessage }
 })
 
-// Extract base directory from result content
-// Format: "Base directory: /path/to/skill" or "Base directory for this skill: /path"
+// Extract base directory from skill content message
 const baseDirectory = computed(() => {
-  const content = resultContent.value
-  if (!content) return null
+  const contentMsg = skillMessages.value.content
+  if (!contentMsg) return null
 
-  // Match "Base directory: <path>" or "Base directory for this skill: <path>"
+  const content = contentMsg.content || ''
+  // Match "Base directory for this skill: <path>"
   const match = content.match(/Base directory(?:\s+for\s+this\s+skill)?:\s*(.+?)(?:\n|$)/i)
   if (match && match[1]) {
     return match[1].trim()
@@ -142,20 +166,17 @@ const baseDirectory = computed(() => {
   return null
 })
 
-// Extract skill content (markdown after base directory line)
+// Extract skill markdown content (everything after base directory line)
 const skillContent = computed(() => {
-  const content = resultContent.value
-  if (!content) return ''
+  const contentMsg = skillMessages.value.content
+  if (!contentMsg) return ''
 
-  // If there's a base directory line, get content after it
-  if (baseDirectory.value) {
-    const baseDirLinePattern = /Base directory(?:\s+for\s+this\s+skill)?:.*?\n/i
-    const afterBaseDir = content.replace(baseDirLinePattern, '')
-    return afterBaseDir.trim()
-  }
+  const content = contentMsg.content || ''
 
-  // Otherwise, return full content
-  return content.trim()
+  // Find the base directory line and get everything after it
+  const baseDirLinePattern = /Base directory(?:\s+for\s+this\s+skill)?:.*?\n/i
+  const afterBaseDir = content.replace(baseDirLinePattern, '')
+  return afterBaseDir.trim()
 })
 
 const hasSkillContent = computed(() => {
