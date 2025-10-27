@@ -87,6 +87,20 @@ function shouldDisplayMessage(message) {
     }
   }
 
+  // Hide skill-related user messages (skill running notification and skill content)
+  // These are displayed within the SkillToolHandler component instead
+  if (message.type === 'user') {
+    const content = message.content || ''
+    // Hide message with <command-message> tag (skill running notification)
+    if (content.includes('<command-message>') && content.includes('skill is running')) {
+      return false
+    }
+    // Hide message with skill content (starts with "Base directory for this skill:")
+    if (content.startsWith('Base directory for this skill:')) {
+      return false
+    }
+  }
+
   return true
 }
 
