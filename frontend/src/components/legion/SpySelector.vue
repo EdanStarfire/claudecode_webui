@@ -10,9 +10,19 @@
         <span class="fw-semibold">Spy</span>
         <small class="text-muted ms-2">(Inspect Minion)</small>
       </div>
-      <span v-if="selectedMinion" class="minion-state-indicator" :class="stateClass" :style="stateStyle">
-        👤
-      </span>
+      <div class="d-flex align-items-center gap-2">
+        <button
+          v-if="selectedMinion"
+          class="btn btn-sm btn-outline-secondary"
+          @click.stop="showMinionInfo"
+          title="View minion details"
+        >
+          👁️
+        </button>
+        <span v-if="selectedMinion" class="minion-state-indicator" :class="stateClass" :style="stateStyle">
+          👤
+        </span>
+      </div>
     </div>
 
     <!-- Minion Dropdown -->
@@ -37,6 +47,7 @@
 import { ref, computed, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useSessionStore } from '@/stores/session'
+import { useUIStore } from '@/stores/ui'
 
 const props = defineProps({
   project: {
@@ -51,6 +62,7 @@ const props = defineProps({
 
 const router = useRouter()
 const sessionStore = useSessionStore()
+const uiStore = useUIStore()
 
 const selectedMinionId = ref('')
 
@@ -156,6 +168,14 @@ function onMinionSelect() {
   } else {
     // User selected "-- Select Minion --", exit to no-session view
     router.push('/')
+  }
+}
+
+function showMinionInfo() {
+  if (selectedMinion.value) {
+    uiStore.showModal('minion-view', {
+      session: selectedMinion.value
+    })
   }
 }
 
