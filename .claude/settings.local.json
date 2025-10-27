@@ -20,7 +20,8 @@
       "Bash(gh issue:*)",
       "Bash(gh pr:*)",
       "Bash(git fetch:*)",
-      "Bash(git worktree add:*)"
+      "Bash(git worktree add:*)",
+      "Skills"
     ],
     "deny": [],
     "ask": []
