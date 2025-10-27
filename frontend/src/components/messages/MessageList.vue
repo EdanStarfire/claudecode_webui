@@ -101,6 +101,23 @@ function shouldDisplayMessage(message) {
     }
   }
 
+  // Hide slash command-related user messages (command running notification and command content)
+  // These are displayed within the SlashCommandToolHandler component instead
+  if (message.type === 'user') {
+    const content = message.content || ''
+    // Hide message with <command-message>, <command-name>, and <command-args> tags (slash command running notification)
+    if (content.includes('<command-message>') &&
+        content.includes('<command-name>') &&
+        content.includes('<command-args>')) {
+      return false
+    }
+    // Hide message with slash command content (contains "ARGUMENTS:" trailer)
+    if (content.includes('ARGUMENTS:') &&
+        (content.includes('<command-name>') || content.match(/\nARGUMENTS:/))) {
+      return false
+    }
+  }
+
   return true
 }
 

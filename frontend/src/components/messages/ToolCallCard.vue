@@ -168,6 +168,7 @@ import NotebookEditToolHandler from '@/components/tools/NotebookEditToolHandler.
 import ShellToolHandler from '@/components/tools/ShellToolHandler.vue'
 import CommandToolHandler from '@/components/tools/CommandToolHandler.vue'
 import SkillToolHandler from '@/components/tools/SkillToolHandler.vue'
+import SlashCommandToolHandler from '@/components/tools/SlashCommandToolHandler.vue'
 import ExitPlanModeToolHandler from '@/components/tools/ExitPlanModeToolHandler.vue'
 
 const props = defineProps({
@@ -210,7 +211,7 @@ const toolHandlers = {
   'NotebookEdit': NotebookEditToolHandler,
   'BashOutput': ShellToolHandler,
   'KillShell': ShellToolHandler,
-  'SlashCommand': CommandToolHandler,
+  'SlashCommand': SlashCommandToolHandler,
   'Skill': SkillToolHandler,
   'ExitPlanMode': ExitPlanModeToolHandler,
 }
