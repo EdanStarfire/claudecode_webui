@@ -254,13 +254,18 @@ export const useWebSocketStore = defineStore('websocket', () => {
       }
 
       if (sessionSocket.value) {
+        // Capture sessionId before cleanup (fixes ReferenceError)
+        const sessionId = currentSessionId.value
+
         const cleanup = () => {
           sessionSocket.value = null
           sessionConnected.value = false
           currentSessionId.value = null
           currentConnectionGeneration.value = null  // Clear generation
           sessionRetryCount.value = 0  // Reset retry count on explicit disconnect
-          sessionHadInitialConnection.value.delete(sessionId)  // Clear reconnection flag
+          if (sessionId) {
+            sessionHadInitialConnection.value.delete(sessionId)  // Clear reconnection flag
+          }
           resolve()
         }
 
