@@ -335,14 +335,21 @@ const toolSummary = computed(() => {
   switch (toolName) {
     case 'Bash':
     case 'Shell':
-    case 'Command':
-    case 'SlashCommand': {
+    case 'Command': {
       const cmd = truncateBashCommand(input.command, 200)
       if (status === 'completed' && result) {
         const exitCode = getExitCode(result)
         return `Bash: ${cmd} (exit ${exitCode})`
       }
       return `Bash: ${cmd}`
+    }
+
+    case 'SlashCommand': {
+      const cmd = truncateBashCommand(input.command, 200)
+      if (status === 'completed' && result) {
+        return `SlashCommand: ${cmd}`
+      }
+      return `SlashCommand: ${cmd}`
     }
 
     case 'Edit': {
