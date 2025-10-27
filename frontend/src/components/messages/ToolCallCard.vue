@@ -8,9 +8,9 @@
       class="card-header d-flex align-items-center justify-content-between cursor-pointer"
       @click="toggleExpansion"
     >
-      <div class="d-flex align-items-center gap-2 flex-grow-1">
+      <div class="d-flex align-items-center gap-2 flex-grow-1 min-width-0">
         <span class="tool-status-icon">{{ statusIcon }}</span>
-        <strong class="tool-name">{{ toolCall.name }}</strong>
+        <strong class="tool-name" :title="toolSummaryTooltip">{{ toolSummary }}</strong>
         <span class="text-muted small">{{ statusText }}</span>
       </div>
       <div class="d-flex align-items-center gap-2">
@@ -307,6 +307,205 @@ const hasSuggestions = computed(() => {
   return props.toolCall.suggestions && props.toolCall.suggestions.length > 0
 })
 
+// ========== Tool Summary Generators ==========
+
+// Helper: Extract basename from file path
+function getBasename(path) {
+  if (!path) return ''
+  // Handle both forward and backslashes
+  const parts = path.replace(/\\/g, '/').split('/')
+  return parts[parts.length - 1]
+}
+
+// Helper: Truncate bash command to max length
+function truncateBashCommand(cmd, maxLen = 200) {
+  if (!cmd) return ''
+  if (cmd.length <= maxLen) return cmd
+  return cmd.substring(0, maxLen) + '...'
+}
+
+// Helper: Extract exit code from bash result
+function getExitCode(result) {
+  if (!result) return null
+  // Check for exit code in result content or message
+  if (result.content) {
+    const match = result.content.match(/exit code (\d+)/i)
+    if (match) return parseInt(match[1])
+  }
+  // Default: success = 0, error = 1
+  return result.error ? 1 : 0
+}
+
+// Helper: Count lines in diff
+function countDiffLines(oldStr, newStr) {
+  const oldLines = oldStr ? oldStr.split('\n').length : 0
+  const newLines = newStr ? newStr.split('\n').length : 0
+  return { added: newLines, removed: oldLines }
+}
+
+// Tool summary computed property
+const toolSummary = computed(() => {
+  const toolName = props.toolCall.name
+  const input = props.toolCall.input || {}
+  const result = props.toolCall.result
+  const status = props.toolCall.status
+
+  switch (toolName) {
+    case 'Bash':
+    case 'Shell':
+    case 'Command':
+    case 'SlashCommand': {
+      const cmd = truncateBashCommand(input.command, 200)
+      if (status === 'completed' && result) {
+        const exitCode = getExitCode(result)
+        return `Bash: ${cmd} (exit ${exitCode})`
+      }
+      return `Bash: ${cmd}`
+    }
+
+    case 'Edit': {
+      const filename = getBasename(input.file_path)
+      if (status === 'completed' && result && !result.error) {
+        const { added, removed } = countDiffLines(input.old_string, input.new_string)
+        if (added === removed) {
+          return `Edit: ${filename} (${added} lines changed)`
+        }
+        return `Edit: ${filename} (${added} lines added, ${removed} removed)`
+      }
+      return `Edit: ${filename}`
+    }
+
+    case 'Read': {
+      const filename = getBasename(input.file_path)
+      const hasRange = input.offset !== undefined || input.limit !== undefined
+      if (hasRange) {
+        const start = (input.offset || 0) + 1
+        const end = input.limit ? (input.offset || 0) + input.limit : '∞'
+        return `Read: ${filename} (lines ${start}-${end})`
+      }
+      return `Read: ${filename} (full file)`
+    }
+
+    case 'Write': {
+      const filename = getBasename(input.file_path)
+      if (status === 'completed' && result && !result.error && input.content) {
+        const lineCount = input.content.split('\n').length
+        return `Write: ${filename} (${lineCount} lines written)`
+      }
+      return `Write: ${filename}`
+    }
+
+    case 'Skill': {
+      const skillName = input.command || 'Unknown'
+      if (status === 'completed' && result) {
+        return result.error ? `Skill: ${skillName} (error)` : `Skill: ${skillName} (completed)`
+      }
+      return `Skill: ${skillName}`
+    }
+
+    case 'Task': {
+      const agentType = input.subagent_type || 'general'
+      const description = input.description || 'Task'
+      if (status === 'completed' && result) {
+        return result.error ? `Task: (${agentType}) ${description} (error)` : `Task: (${agentType}) ${description} (completed)`
+      }
+      return `Task: (${agentType}) ${description}`
+    }
+
+    case 'TodoWrite': {
+      if (input.todos && Array.isArray(input.todos)) {
+        const completed = input.todos.filter(t => t.status === 'completed').length
+        const total = input.todos.length
+        const inProgress = input.todos.find(t => t.status === 'in_progress')
+        if (inProgress) {
+          return `Todo: Working on "${inProgress.content}"`
+        }
+        return `Todo: ${completed}/${total} Tasks Completed`
+      }
+      return 'Todo: Updated'
+    }
+
+    case 'Grep':
+    case 'Glob': {
+      const pattern = input.pattern || ''
+      const toolType = toolName === 'Grep' ? 'Grep' : 'Glob'
+      if (status === 'completed' && result && !result.error) {
+        // Count results - result content varies by output_mode
+        let resultCount = 0
+        if (result.content) {
+          const lines = result.content.split('\n').filter(l => l.trim())
+          resultCount = lines.length
+        }
+        return `${toolType}: "${pattern}" (${resultCount} results)`
+      }
+      return `${toolType}: "${pattern}"`
+    }
+
+    case 'WebFetch':
+    case 'WebSearch': {
+      const url = input.url || input.query || ''
+      let domain = ''
+      try {
+        if (url) {
+          const parsedUrl = new URL(url.startsWith('http') ? url : `https://${url}`)
+          domain = parsedUrl.hostname
+        }
+      } catch (e) {
+        // If URL parsing fails, use truncated URL
+        domain = url.length > 50 ? url.substring(0, 50) + '...' : url
+      }
+      if (status === 'completed' && result) {
+        return result.error ? `Web: ${domain} (error)` : `Web: ${domain} (success)`
+      }
+      return `Web: ${domain || url}`
+    }
+
+    case 'NotebookEdit': {
+      const filename = getBasename(input.notebook_path)
+      const cellNum = input.cell_number !== undefined ? input.cell_number : '?'
+      const mode = input.edit_mode || 'replace'
+      return `NotebookEdit: ${filename} cell #${cellNum} (${mode})`
+    }
+
+    case 'ExitPlanMode': {
+      return 'ExitPlanMode: Plan submitted'
+    }
+
+    case 'BashOutput': {
+      const bashId = input.bash_id || 'unknown'
+      return `BashOutput: Read output from ${bashId}`
+    }
+
+    case 'KillShell': {
+      const shellId = input.shell_id || 'unknown'
+      return `KillShell: Terminate ${shellId}`
+    }
+
+    default: {
+      return `${toolName}: executed`
+    }
+  }
+})
+
+// Tooltip with full details
+const toolSummaryTooltip = computed(() => {
+  const toolName = props.toolCall.name
+  const input = props.toolCall.input || {}
+
+  // For bash commands, show full command in tooltip (no truncation)
+  if (['Bash', 'Shell', 'Command', 'SlashCommand'].includes(toolName)) {
+    return input.command || toolName
+  }
+
+  // For file operations, show full path
+  if (['Edit', 'Read', 'Write', 'NotebookEdit'].includes(toolName)) {
+    return input.file_path || input.notebook_path || toolName
+  }
+
+  // For other tools, show tool name
+  return toolName
+})
+
 function toggleExpansion() {
   const sessionId = sessionStore.currentSessionId
   if (sessionId) {
@@ -395,6 +594,16 @@ async function handlePermissionDecision(decision, applySuggestions, guidance = n
   color: #0d6efd;
   font-family: 'Courier New', monospace;
   font-size: 0.95rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+  flex-shrink: 1;
+  min-width: 0;
+}
+
+.min-width-0 {
+  min-width: 0;
 }
 
 /* Border colors based on status */
