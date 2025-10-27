@@ -11,7 +11,6 @@
       <div class="d-flex align-items-center gap-2 flex-grow-1 min-width-0">
         <span class="tool-status-icon">{{ statusIcon }}</span>
         <strong class="tool-name" :title="toolSummaryTooltip">{{ toolSummary }}</strong>
-        <span class="text-muted small">{{ statusText }}</span>
       </div>
       <div class="d-flex align-items-center gap-2">
         <small class="text-muted">{{ formattedTimestamp }}</small>
@@ -275,24 +274,6 @@ const statusIcon = computed(() => {
       return '💥'
     default:
       return '🔧'
-  }
-})
-
-const statusText = computed(() => {
-  switch (props.toolCall.status) {
-    case 'pending':
-      return 'Pending'
-    case 'permission_required':
-      return 'Awaiting Permission'
-    case 'executing':
-      return 'Executing...'
-    case 'completed':
-      if (props.toolCall.permissionDecision === 'deny') return 'Denied'
-      return isError.value ? 'Error' : 'Completed'
-    case 'error':
-      return 'Error'
-    default:
-      return 'Unknown'
   }
 })
 
