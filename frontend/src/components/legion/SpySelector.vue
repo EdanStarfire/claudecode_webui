@@ -161,9 +161,14 @@ function onMinionSelect() {
 
 // Watch for current session changes to restore selection
 watch(() => sessionStore.currentSessionId, (newSessionId) => {
-  // If session cleared (e.g., deleted), clear dropdown selection
+  // If session cleared (e.g., deleted), clear dropdown selection and navigate away
   if (!newSessionId) {
     selectedMinionId.value = ''
+    // Only navigate if we're currently in spy mode for this project
+    const route = router.currentRoute.value
+    if (route.name === 'spy' && route.params.legionId === props.project.project_id) {
+      router.push('/')
+    }
   }
   // If session selected and it's in our minion list, sync it
   else if (props.sessions.some(s => s.session_id === newSessionId)) {
