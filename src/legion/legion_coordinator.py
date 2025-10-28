@@ -126,6 +126,153 @@ class LegionCoordinator:
         (base_path / "channels").mkdir(parents=True, exist_ok=True)
         (base_path / "hordes").mkdir(parents=True, exist_ok=True)
 
+    async def assemble_horde_hierarchy(self, legion_id: str) -> dict:
+        """
+        Assemble complete horde hierarchy with user at root.
+
+        Returns hierarchy structure with:
+        - User entry at root with last outgoing comm
+        - All minions in tree structure (parent-child relationships)
+        - Last outgoing comm for each minion
+        - Current state for each minion
+
+        Args:
+            legion_id: Legion UUID (project_id)
+
+        Returns:
+            Dict with hierarchy structure:
+            {
+                "id": "user",
+                "type": "user",
+                "name": "User (you)",
+                "last_comm": {...} or None,
+                "children": [<minion nodes>]
+            }
+        """
+        # Get all minions for this legion
+        all_sessions = await self.session_manager.list_sessions()
+        minions = [s for s in all_sessions if s.is_minion and s.project_id == legion_id]
+
+        # Get user's last outgoing comm
+        user_last_comm = await self._get_last_outgoing_comm(legion_id, from_user=True)
+
+        # Build minion tree structure
+        minion_map = {}
+        for minion in minions:
+            minion_data = {
+                "id": minion.session_id,
+                "type": "minion",
+                "name": minion.name,
+                "state": minion.state.value if hasattr(minion.state, 'value') else str(minion.state),
+                "is_overseer": minion.is_overseer or False,
+                "is_processing": minion.is_processing or False,
+                "last_comm": await self._get_last_outgoing_comm(legion_id, from_minion_id=minion.session_id),
+                "children": []
+            }
+            minion_map[minion.session_id] = minion_data
+
+        # Build tree by linking children to parents
+        root_minions = []
+        for minion in minions:
+            minion_data = minion_map[minion.session_id]
+
+            if minion.parent_overseer_id is None:
+                # User-spawned minion (root level)
+                root_minions.append(minion_data)
+            else:
+                # Child minion - add to parent's children
+                parent = minion_map.get(minion.parent_overseer_id)
+                if parent:
+                    parent["children"].append(minion_data)
+
+        # Build user entry with children
+        user_entry = {
+            "id": "user",
+            "type": "user",
+            "name": "User (you)",
+            "last_comm": user_last_comm,
+            "children": root_minions
+        }
+
+        return user_entry
+
+    async def _get_last_outgoing_comm(
+        self,
+        legion_id: str,
+        from_user: bool = False,
+        from_minion_id: Optional[str] = None
+    ) -> Optional[dict]:
+        """
+        Get last outgoing comm from user or specific minion.
+
+        Reads timeline.jsonl in reverse to find most recent comm where
+        from_user matches or from_minion_id matches.
+
+        Args:
+            legion_id: Legion UUID
+            from_user: If True, find comm from user
+            from_minion_id: If provided, find comm from this minion
+
+        Returns:
+            Dict with comm data or None if no comms found:
+            {
+                "to_user": bool,
+                "to_minion_name": str or None,
+                "to_channel_name": str or None,
+                "content": str (truncated to 150 chars),
+                "comm_type": str,
+                "timestamp": str (ISO format)
+            }
+        """
+        # Path to timeline file
+        timeline_path = self.system.session_coordinator.data_dir / "legions" / legion_id / "timeline.jsonl"
+
+        if not timeline_path.exists():
+            return None
+
+        # Read timeline in reverse to find most recent match
+        try:
+            with open(timeline_path, 'r', encoding='utf-8') as f:
+                lines = f.readlines()
+
+            # Process lines in reverse (most recent first)
+            for line in reversed(lines):
+                if not line.strip():
+                    continue
+
+                try:
+                    comm = json.loads(line)
+
+                    # Check if this comm matches our criteria
+                    if from_user and comm.get('from_user'):
+                        # Found user's outgoing comm
+                        return self._format_comm_preview(comm)
+                    elif from_minion_id and comm.get('from_minion_id') == from_minion_id:
+                        # Found minion's outgoing comm
+                        return self._format_comm_preview(comm)
+
+                except json.JSONDecodeError:
+                    continue
+
+        except Exception as e:
+            # Log error but don't fail - just return None
+            print(f"Error reading timeline for last comm: {e}")
+
+        return None
+
+    def _format_comm_preview(self, comm: dict) -> dict:
+        """
+        Return the full comm object for frontend display.
+
+        Args:
+            comm: Full comm dict from timeline
+
+        Returns:
+            Full comm dict (frontend handles display logic)
+        """
+        # Return the full comm object - let frontend decide what to display
+        return comm
+
     # TODO: Implement additional legion management methods in later phases
     # - delete_legion()
     # - emergency_halt_all()
