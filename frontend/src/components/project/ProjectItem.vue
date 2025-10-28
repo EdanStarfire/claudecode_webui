@@ -95,10 +95,8 @@
             </div>
           </div>
 
-          <!-- Spy and Horde for Legion projects -->
+          <!-- Horde and Spy for Legion projects -->
           <template v-if="project.is_multi_agent">
-            <SpySelector :project="project" :sessions="projectSessions" />
-
             <!-- Horde View (direct navigation, no dropdown) -->
             <div
               class="list-group-item list-group-item-action horde-item d-flex align-items-center p-2"
@@ -112,6 +110,8 @@
                 <small class="text-muted ms-2">(Minion Hierarchy)</small>
               </div>
             </div>
+
+            <SpySelector :project="project" :sessions="projectSessions" />
           </template>
 
           <!-- Regular Sessions for non-Legion projects -->
