@@ -77,8 +77,11 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useProjectStore } from '../../stores/project'
+import { useSessionStore } from '../../stores/session'
+import { useWebSocketStore } from '../../stores/websocket'
+import { useLegionStore } from '../../stores/legion'
 import HordeHeader from '../header/HordeHeader.vue'
 import HordeStatusBar from '../statusbar/HordeStatusBar.vue'
 import MinionTreeNode from './MinionTreeNode.vue'
@@ -92,6 +95,9 @@ const props = defineProps({
 })
 
 const projectStore = useProjectStore()
+const sessionStore = useSessionStore()
+const websocketStore = useWebSocketStore()
+const legionStore = useLegionStore()
 
 // State
 const hierarchy = ref(null)
@@ -153,6 +159,104 @@ function getCommSummary(comm) {
   }
   return text
 }
+
+// Helper: Find minion node in hierarchy tree recursively
+function findMinionInTree(node, minionId) {
+  if (node.id === minionId) {
+    return node
+  }
+  if (node.children) {
+    for (const child of node.children) {
+      const found = findMinionInTree(child, minionId)
+      if (found) return found
+    }
+  }
+  return null
+}
+
+// Handle state change events from UI WebSocket
+function handleStateChange(data) {
+  if (!hierarchy.value) return
+
+  const sessionId = data.session_id
+
+  // Find the minion in our hierarchy tree
+  const minion = findMinionInTree(hierarchy.value, sessionId)
+  if (minion && minion.type === 'minion') {
+    // Update the minion's state
+    minion.state = data.state
+    console.log(`Updated minion ${minion.name} state to ${data.state}`)
+  }
+}
+
+// Handle new comm events from Legion WebSocket
+function handleNewComm(comm) {
+  if (!hierarchy.value) return
+
+  // If comm is from a minion, update that minion's last_comm
+  if (comm.from_minion_id) {
+    const minion = findMinionInTree(hierarchy.value, comm.from_minion_id)
+    if (minion && minion.type === 'minion') {
+      minion.last_comm = comm
+      console.log(`Updated minion ${minion.name} last_comm`)
+    }
+  }
+
+  // If comm is from user, update user root node
+  if (comm.from_user && hierarchy.value.type === 'user') {
+    hierarchy.value.last_comm = comm
+    console.log('Updated user last_comm')
+  }
+}
+
+// Subscribe to WebSocket events on mount
+onMounted(() => {
+  loadHierarchy()
+
+  // Connect to legion WebSocket for comm updates
+  legionStore.setCurrentLegion(props.legionId)
+  websocketStore.connectLegion(props.legionId)
+
+  // Watch for minion state changes from session store
+  // The WebSocket updates the session store, which triggers this watcher
+  watch(
+    () => sessionStore.sessions,
+    (sessions) => {
+      if (!hierarchy.value) return
+
+      // Update all minion states in our hierarchy
+      for (const [sessionId, session] of sessions) {
+        if (session.is_minion && session.project_id === props.legionId) {
+          const minion = findMinionInTree(hierarchy.value, sessionId)
+          if (minion && minion.type === 'minion' && minion.state !== session.state) {
+            minion.state = session.state
+            console.log(`Updated minion ${minion.name} state to ${session.state}`)
+          }
+        }
+      }
+    },
+    { deep: true }
+  )
+
+  // Watch for new comms (from Legion WebSocket)
+  watch(
+    () => legionStore.commsByLegion.get(props.legionId),
+    (comms) => {
+      if (comms && comms.length > 0) {
+        // Get the most recent comm
+        const latestComm = comms[comms.length - 1]
+        handleNewComm(latestComm)
+      }
+    },
+    { deep: true }
+  )
+})
+
+// Cleanup on unmount
+onUnmounted(() => {
+  // Legion WebSocket cleanup is handled by the store
+  console.log('HordeView unmounted')
+})
 </script>
 
 <style scoped>
