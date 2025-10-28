@@ -33,7 +33,7 @@
                 → <strong>#{{ minionData.last_comm.to_channel_name }}</strong>:
               </span>
             </span>
-            <span class="comm-content">{{ minionData.last_comm.content }}</span>
+            <span class="comm-content">{{ minionData.last_comm.summary }}</span>
           </div>
           <div v-else class="text-muted fst-italic small">
             No communications yet

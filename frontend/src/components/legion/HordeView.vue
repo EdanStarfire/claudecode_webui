@@ -39,7 +39,7 @@
                 <span class="comm-direction">
                   → <strong>{{ hierarchy.last_comm.to_minion_name || hierarchy.last_comm.to_channel_name || 'unknown' }}</strong>:
                 </span>
-                <span class="comm-content">{{ hierarchy.last_comm.content }}</span>
+                <span class="comm-content">{{ hierarchy.last_comm.summary }}</span>
               </div>
               <div v-else class="text-muted fst-italic">
                 No communications yet

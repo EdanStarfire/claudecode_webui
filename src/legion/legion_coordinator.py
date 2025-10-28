@@ -274,16 +274,16 @@ class LegionCoordinator:
         to_minion_name = comm.get('to_minion_name')
         to_channel_name = comm.get('to_channel_name')
 
-        # Truncate content to 150 chars for preview
-        content = comm.get('content', comm.get('summary', ''))
-        if len(content) > 150:
-            content = content[:150]
+        # Prioritize summary over content, truncate to 150 chars for preview
+        summary = comm.get('summary', comm.get('content', ''))
+        if len(summary) > 150:
+            summary = summary[:150]
 
         return {
             "to_user": to_user,
             "to_minion_name": to_minion_name,
             "to_channel_name": to_channel_name,
-            "content": content,
+            "summary": summary,
             "comm_type": comm.get('comm_type', 'info'),
             "timestamp": comm.get('timestamp')
         }
