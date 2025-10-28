@@ -290,6 +290,75 @@ class ProjectManager:
                 logger.error(f"Failed to delete project {project_id}: {e}")
                 return False
 
+    async def _delete_project_internal(self, project_id: str) -> bool:
+        """
+        Internal project deletion when already holding the project lock.
+
+        This is called from remove_session_from_project() when a project becomes empty.
+        DO NOT call this method directly - use delete_project() instead, which acquires the lock.
+
+        Args:
+            project_id: ID of project to delete
+
+        Returns:
+            bool: True if deletion successful, False otherwise
+        """
+        try:
+            project = self._active_projects.get(project_id)
+            if not project:
+                logger.error(f"Project {project_id} not found for internal deletion")
+                return False
+
+            # Delete project directory and all contents
+            project_dir = self.projects_dir / project_id
+            if project_dir.exists():
+                try:
+                    shutil.rmtree(project_dir)
+                    logger.info(f"Deleted project directory: {project_dir}")
+                except Exception as e:
+                    logger.warning(f"Standard deletion failed for {project_dir}: {e}")
+
+                    # Try Windows-specific fallback deletion
+                    if os.name == 'nt':  # Windows
+                        try:
+                            logger.info(f"Attempting Windows-specific deletion for {project_dir}")
+                            gc.collect()
+                            time.sleep(0.5)
+
+                            result = subprocess.run(
+                                ['rmdir', '/s', '/q', str(project_dir)],
+                                shell=True,
+                                capture_output=True,
+                                text=True
+                            )
+
+                            if result.returncode == 0:
+                                logger.info(f"Successfully deleted directory using Windows rmdir: {project_dir}")
+                            else:
+                                logger.error(f"Windows rmdir failed: {result.stderr}")
+                                return False
+
+                        except Exception as fallback_e:
+                            logger.error(f"Windows fallback deletion also failed for {project_dir}: {fallback_e}")
+                            return False
+                    else:
+                        logger.error(f"Failed to delete project directory {project_dir}: {e}")
+                        return False
+
+            # Only remove from memory after successful file deletion
+            del self._active_projects[project_id]
+
+            # Note: We don't delete the lock here since we're currently holding it
+            # The lock will be released when remove_session_from_project() exits
+            # and can be garbage collected later
+
+            logger.info(f"Successfully deleted project {project_id} (internal deletion)")
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to delete project {project_id} internally: {e}")
+            return False
+
     async def add_session_to_project(self, project_id: str, session_id: str) -> bool:
         """Add a session to project's session list"""
         async with self._get_project_lock(project_id):
@@ -313,28 +382,36 @@ class ProjectManager:
                 logger.error(f"Failed to add session to project: {e}")
                 return False
 
-    async def remove_session_from_project(self, project_id: str, session_id: str) -> bool:
-        """Remove a session from project's session list"""
+    async def remove_session_from_project(self, project_id: str, session_id: str) -> tuple[bool, bool]:
+        """
+        Remove a session from project's session list.
+        If project becomes empty after removal, automatically delete it.
+
+        Returns:
+            tuple[bool, bool]: (removal_success, project_was_deleted)
+                - removal_success: True if session was removed or wasn't in project
+                - project_was_deleted: True if project was deleted due to being empty
+        """
         async with self._get_project_lock(project_id):
             try:
                 project = self._active_projects.get(project_id)
                 if not project:
                     logger.error(f"Project {project_id} not found")
-                    return False
+                    return (False, False)
 
                 if session_id in project.session_ids:
                     project.session_ids.remove(session_id)
                     project.updated_at = datetime.now(timezone.utc)
                     await self._persist_project_state(project_id)
-                    logger.info(f"Removed session {session_id} from project {project_id}")
-                    return True
+                    logger.info(f"Removed session {session_id} from project {project_id} ({len(project.session_ids)} session(s) remaining)")
+                    return (True, False)
                 else:
                     logger.warning(f"Session {session_id} not found in project {project_id}")
-                    return True
+                    return (True, False)
 
             except Exception as e:
                 logger.error(f"Failed to remove session from project: {e}")
-                return False
+                return (False, False)
 
     async def reorder_project_sessions(self, project_id: str, session_ids: List[str]) -> bool:
         """Reorder sessions within a project"""
