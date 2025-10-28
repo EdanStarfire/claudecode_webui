@@ -245,8 +245,8 @@ async def test_remove_session_from_project(project_manager, temp_data_dir):
 
 
 @pytest.mark.asyncio
-async def test_remove_last_session_deletes_project(project_manager, temp_data_dir):
-    """Test that removing the last session from a project auto-deletes the project (issue #63)"""
+async def test_remove_last_session_keeps_empty_project(project_manager, temp_data_dir):
+    """Test that removing the last session from a project keeps the empty project (issue #63 - revised)"""
     project = await project_manager.create_project(
         name="Last Session Test",
         working_directory=str(temp_data_dir / "last_session")
@@ -261,19 +261,21 @@ async def test_remove_last_session_deletes_project(project_manager, temp_data_di
     assert updated_project is not None
     assert session_id in updated_project.session_ids
 
-    # Remove the last session - project should be auto-deleted
+    # Remove the last session - project should remain but be empty
     removal_success, project_deleted = await project_manager.remove_session_from_project(project.project_id, session_id)
 
     assert removal_success is True
-    assert project_deleted is True  # Project SHOULD be deleted (no sessions remaining)
+    assert project_deleted is False  # Project should NOT be deleted (empty projects persist)
 
-    # Verify project no longer exists
-    deleted_project = await project_manager.get_project(project.project_id)
-    assert deleted_project is None
+    # Verify project still exists but has no sessions
+    empty_project = await project_manager.get_project(project.project_id)
+    assert empty_project is not None
+    assert len(empty_project.session_ids) == 0
+    assert empty_project.name == "Last Session Test"
 
-    # Verify project directory was also deleted
+    # Verify project directory still exists
     project_dir = temp_data_dir / "projects" / project.project_id
-    assert not project_dir.exists()
+    assert project_dir.exists()
 
 
 @pytest.mark.asyncio

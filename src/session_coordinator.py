@@ -465,8 +465,21 @@ class SessionCoordinator:
             return False
 
     async def delete_session(self, session_id: str) -> bool:
-        """Delete a session and cleanup all resources"""
+        """Delete a session and cleanup all resources (with cascading deletion for child minions)"""
         try:
+            # Step 0: If this is a parent overseer, recursively delete all children first (cascading)
+            session_info = await self.session_manager.get_session_info(session_id)
+            if session_info and session_info.is_minion and session_info.is_overseer and session_info.child_minion_ids:
+                child_ids = list(session_info.child_minion_ids)  # Make a copy
+                coord_logger.info(f"Parent overseer {session_id} has {len(child_ids)} children - cascading deletion")
+
+                for child_id in child_ids:
+                    coord_logger.info(f"Cascading: deleting child minion {child_id} of parent {session_id}")
+                    # Recursively delete child (which may have its own children)
+                    await self.delete_session(child_id)
+
+                coord_logger.info(f"Cascading deletion complete for parent {session_id} - all {len(child_ids)} children deleted")
+
             # Step 1: Find and remove session from its project
             project = await self._find_project_for_session(session_id)
             project_was_deleted = False
@@ -483,6 +496,25 @@ class SessionCoordinator:
                         coord_logger.info(f"Removed session {session_id} from project {project.project_id}")
                 else:
                     logger.warning(f"Failed to remove session {session_id} from project {project.project_id}")
+
+            # Step 1.5: If this is a minion with a parent overseer, remove from parent's child_minion_ids
+            # (session_info was already fetched in Step 0)
+            if not session_info:
+                session_info = await self.session_manager.get_session_info(session_id)
+
+            if session_info and session_info.is_minion and session_info.parent_overseer_id:
+                parent_id = session_info.parent_overseer_id
+                parent_info = await self.session_manager.get_session_info(parent_id)
+
+                if parent_info and session_id in parent_info.child_minion_ids:
+                    parent_info.child_minion_ids.remove(session_id)
+                    parent_info.updated_at = datetime.now(timezone.utc)
+                    await self.session_manager._persist_session_state(parent_id)
+                    coord_logger.info(f"Removed minion {session_id} from parent overseer {parent_id}'s child_minion_ids")
+                elif parent_info:
+                    coord_logger.warning(f"Minion {session_id} not found in parent overseer {parent_id}'s child_minion_ids")
+                else:
+                    coord_logger.warning(f"Parent overseer {parent_id} not found for minion {session_id}")
 
             # Step 2: Terminate the SDK if it's running
             sdk = self._active_sdks.get(session_id)
@@ -1310,7 +1342,6 @@ class SessionCoordinator:
             coord_logger.info(f"Validating {len(projects)} projects for orphaned session references")
 
             cleanup_count = 0
-            deleted_project_count = 0
 
             for project in projects:
                 project_id = project.project_id
@@ -1330,23 +1361,42 @@ class SessionCoordinator:
                 if len(valid_session_ids) != len(session_ids_before):
                     orphaned_count = len(session_ids_before) - len(valid_session_ids)
 
-                    if len(valid_session_ids) == 0:
-                        # No valid sessions remain - delete the empty project
-                        coord_logger.info(f"Project {project_id} ({project.name}) has no valid sessions - deleting")
-                        deletion_success = await self.project_manager.delete_project(project_id)
-                        if deletion_success:
-                            deleted_project_count += 1
-                        else:
-                            logger.error(f"Failed to delete empty project {project_id}")
-                    else:
-                        # Some valid sessions remain - update project with cleaned list
-                        coord_logger.info(f"Removing {orphaned_count} orphaned session(s) from project {project_id} ({project.name})")
-                        project.session_ids = valid_session_ids
-                        project.updated_at = datetime.now(timezone.utc)
-                        await self.project_manager._persist_project_state(project_id)
+                    # Clean the session_ids list but keep the project (even if empty)
+                    coord_logger.info(f"Removing {orphaned_count} orphaned session(s) from project {project_id} ({project.name})")
+                    project.session_ids = valid_session_ids
+                    project.updated_at = datetime.now(timezone.utc)
+                    await self.project_manager._persist_project_state(project_id)
 
-            if cleanup_count > 0 or deleted_project_count > 0:
-                coord_logger.info(f"Startup cleanup complete: removed {cleanup_count} orphaned session reference(s), deleted {deleted_project_count} empty project(s)")
+                    if len(valid_session_ids) == 0:
+                        coord_logger.info(f"Project {project_id} ({project.name}) now has no sessions but will remain for new minions")
+
+            # Also validate parent-child minion relationships (overseer child_minion_ids)
+            sessions = await self.session_manager.list_sessions()
+            child_cleanup_count = 0
+
+            for session in sessions:
+                if session.is_minion and session.is_overseer and session.child_minion_ids:
+                    # This is a parent overseer - validate its children
+                    valid_children = []
+                    children_before = list(session.child_minion_ids)
+
+                    for child_id in children_before:
+                        child_info = await self.session_manager.get_session_info(child_id)
+                        if child_info:
+                            valid_children.append(child_id)
+                        else:
+                            coord_logger.warning(f"Found orphaned child minion reference '{child_id}' in overseer {session.session_id} - will be removed")
+                            child_cleanup_count += 1
+
+                    # Update if we found orphaned children
+                    if len(valid_children) != len(children_before):
+                        session.child_minion_ids = valid_children
+                        session.updated_at = datetime.now(timezone.utc)
+                        await self.session_manager._persist_session_state(session.session_id)
+                        coord_logger.info(f"Removed {len(children_before) - len(valid_children)} orphaned child(ren) from overseer {session.session_id}")
+
+            if cleanup_count > 0 or child_cleanup_count > 0:
+                coord_logger.info(f"Startup cleanup complete: removed {cleanup_count} orphaned project session(s), {child_cleanup_count} orphaned child minion(s)")
             else:
                 coord_logger.info("Startup validation complete: no orphaned data found")
 

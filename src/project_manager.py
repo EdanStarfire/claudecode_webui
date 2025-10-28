@@ -402,18 +402,9 @@ class ProjectManager:
                 if session_id in project.session_ids:
                     project.session_ids.remove(session_id)
                     project.updated_at = datetime.now(timezone.utc)
-
-                    # Check if project is now empty
-                    if len(project.session_ids) == 0:
-                        logger.info(f"Project {project_id} is now empty after removing session {session_id} - deleting project")
-                        # Delete the empty project using internal method (we already hold the lock)
-                        deletion_success = await self._delete_project_internal(project_id)
-                        return (True, deletion_success)
-                    else:
-                        # Project still has sessions - just persist the update
-                        await self._persist_project_state(project_id)
-                        logger.info(f"Removed session {session_id} from project {project_id} ({len(project.session_ids)} session(s) remaining)")
-                        return (True, False)
+                    await self._persist_project_state(project_id)
+                    logger.info(f"Removed session {session_id} from project {project_id} ({len(project.session_ids)} session(s) remaining)")
+                    return (True, False)
                 else:
                     logger.warning(f"Session {session_id} not found in project {project_id}")
                     return (True, False)
