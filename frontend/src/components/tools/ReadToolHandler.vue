@@ -1,7 +1,7 @@
 <template>
   <div class="read-tool-handler">
     <!-- Parameters Section -->
-    <div class="tool-section mb-3">
+    <div class="tool-section">
       <div class="read-file-info">
         <span class="file-icon">📄</span>
         <strong>Reading:</strong>
@@ -110,7 +110,7 @@ const previewContent = computed(() => {
 }
 
 .tool-section {
-  margin-bottom: 1rem;
+  margin-bottom: 0.2rem;
 }
 
 .tool-section:last-child {

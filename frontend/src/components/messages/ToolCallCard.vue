@@ -1,6 +1,6 @@
 <template>
   <div
-    class="tool-call-card card mb-3"
+    class="tool-call-card card"
     :class="cardClass"
   >
     <!-- Card Header (always visible) -->
@@ -137,7 +137,7 @@
       </div>
 
       <!-- Permission Decision (if denied) -->
-      <div v-if="toolCall.permissionDecision === 'deny'" class="tool-section mt-3">
+      <div v-if="toolCall.permissionDecision === 'deny'" class="tool-section">
         <div class="alert alert-danger mb-0">
           <i class="bi bi-x-circle"></i>
           Permission denied
@@ -564,10 +564,19 @@ async function handlePermissionDecision(decision, applySuggestions, guidance = n
 .tool-call-card .card-header {
   background-color: rgba(0, 0, 0, 0.02);
   user-select: none;
+  padding: 0.2rem 0.5rem;
 }
 
 .tool-call-card .card-header:hover {
   background-color: rgba(0, 0, 0, 0.05);
+}
+
+.tool-call-card .card-body {
+  padding: 0.2rem;
+}
+
+.tool-section {
+  padding-bottom: 0.2rem;
 }
 
 .cursor-pointer {
@@ -575,7 +584,7 @@ async function handlePermissionDecision(decision, applySuggestions, guidance = n
 }
 
 .tool-status-icon {
-  font-size: 1.2rem;
+  font-size: 1.0rem;
   line-height: 1;
 }
 

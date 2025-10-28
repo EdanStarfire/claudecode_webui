@@ -1,24 +1,5 @@
 <template>
   <div class="skill-tool-handler">
-    <!-- Skill Info Section -->
-    <div class="tool-section mb-3">
-      <div class="skill-info">
-        <span class="skill-icon">📋</span>
-        <strong>Skill:</strong>
-        <code class="skill-name">{{ skillName }}</code>
-        <span class="skill-status-badge" :class="statusBadgeClass">{{ statusText }}</span>
-      </div>
-    </div>
-
-    <!-- Base Directory Section (if available) -->
-    <div v-if="baseDirectory" class="tool-section mb-3">
-      <div class="base-directory-info">
-        <span class="directory-icon">📁</span>
-        <strong>Base directory:</strong>
-        <code class="directory-path">{{ baseDirectory }}</code>
-      </div>
-    </div>
-
     <!-- Skill Content Section (collapsible) -->
     <div v-if="hasSkillContent" class="tool-section">
       <div class="skill-content-header" @click="toggleContentExpanded">
@@ -209,7 +190,7 @@ const errorMessage = computed(() => {
 }
 
 .tool-section {
-  margin-bottom: 1rem;
+  margin-bottom: 0.2rem;
 }
 
 .tool-section:last-child {

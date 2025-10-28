@@ -1,7 +1,7 @@
 <template>
   <div class="shell-tool-handler">
     <!-- Parameters Section -->
-    <div class="tool-section mb-3">
+    <div class="tool-section">
       <div class="shell-info">
         <span class="shell-icon">{{ toolIcon }}</span>
         <strong>{{ toolLabel }}:</strong>

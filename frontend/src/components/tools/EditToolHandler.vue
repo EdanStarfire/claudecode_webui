@@ -1,7 +1,7 @@
 <template>
   <div class="edit-tool-handler">
     <!-- Parameters Section -->
-    <div class="tool-section mb-3">
+    <div class="tool-section">
       <div class="edit-file-info">
         <span class="file-icon">✏️</span>
         <strong>Editing:</strong>
@@ -166,7 +166,7 @@ const resultContent = computed(() => {
 }
 
 .tool-section {
-  margin-bottom: 1rem;
+  margin-bottom: 0.2rem;
 }
 
 .tool-section:last-child {

@@ -1,7 +1,7 @@
 <template>
   <div class="notebook-edit-tool-handler">
     <!-- Parameters Section -->
-    <div class="tool-section mb-3">
+    <div class="tool-section">
       <div class="notebook-info">
         <span class="notebook-icon">📓</span>
         <strong>Notebook:</strong>

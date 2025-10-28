@@ -1,7 +1,7 @@
 <template>
   <div class="base-tool-handler">
     <!-- Parameters Section -->
-    <div class="tool-section mb-3">
+    <div class="tool-section">
       <div class="tool-section-label">Parameters:</div>
       <div class="tool-parameters">
         <pre class="tool-code">{{ formattedInput }}</pre>
@@ -67,7 +67,7 @@ const resultContent = computed(() => {
 
 <style scoped>
 .tool-section {
-  margin-bottom: 1rem;
+  margin-bottom: 0.2rem;
 }
 
 .tool-section:last-child {

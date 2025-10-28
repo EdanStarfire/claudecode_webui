@@ -1,7 +1,7 @@
 <template>
   <div class="web-tool-handler">
     <!-- Parameters Section -->
-    <div class="tool-section mb-3">
+    <div class="tool-section">
       <div class="web-info">
         <span class="web-icon">{{ webIcon }}</span>
         <strong>{{ webLabel }}:</strong>
@@ -132,7 +132,7 @@ const resultContent = computed(() => {
 }
 
 .tool-section {
-  margin-bottom: 1rem;
+  margin-bottom: 0.2rem;
 }
 
 .tool-section:last-child {

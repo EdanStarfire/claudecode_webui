@@ -1,7 +1,7 @@
 <template>
   <div class="search-tool-handler">
     <!-- Parameters Section -->
-    <div class="tool-section mb-3">
+    <div class="tool-section">
       <div class="search-info">
         <span class="search-icon">{{ searchIcon }}</span>
         <strong>{{ searchLabel }}:</strong>
@@ -128,7 +128,7 @@ const resultCount = computed(() => {
 }
 
 .tool-section {
-  margin-bottom: 1rem;
+  margin-bottom: 0.2rem;
 }
 
 .tool-section:last-child {
