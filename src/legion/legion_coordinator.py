@@ -261,32 +261,16 @@ class LegionCoordinator:
 
     def _format_comm_preview(self, comm: dict) -> dict:
         """
-        Format comm data for preview display.
+        Return the full comm object for frontend display.
 
         Args:
             comm: Full comm dict from timeline
 
         Returns:
-            Formatted dict for frontend display
+            Full comm dict (frontend handles display logic)
         """
-        # Determine recipient
-        to_user = comm.get('to_user', False)
-        to_minion_name = comm.get('to_minion_name')
-        to_channel_name = comm.get('to_channel_name')
-
-        # Prioritize summary over content, truncate to 150 chars for preview
-        summary = comm.get('summary', comm.get('content', ''))
-        if len(summary) > 150:
-            summary = summary[:150]
-
-        return {
-            "to_user": to_user,
-            "to_minion_name": to_minion_name,
-            "to_channel_name": to_channel_name,
-            "summary": summary,
-            "comm_type": comm.get('comm_type', 'info'),
-            "timestamp": comm.get('timestamp')
-        }
+        # Return the full comm object - let frontend decide what to display
+        return comm
 
     # TODO: Implement additional legion management methods in later phases
     # - delete_legion()

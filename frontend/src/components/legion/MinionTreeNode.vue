@@ -23,17 +23,14 @@
         <div class="node-right">
           <div v-if="minionData.last_comm" class="last-comm-preview">
             <span class="comm-direction">
-              <span v-if="minionData.last_comm.to_user">
-                → <strong>User</strong>:
-              </span>
-              <span v-else-if="minionData.last_comm.to_minion_name">
-                → <strong>{{ minionData.last_comm.to_minion_name }}</strong>:
-              </span>
-              <span v-else-if="minionData.last_comm.to_channel_name">
-                → <strong>#{{ minionData.last_comm.to_channel_name }}</strong>:
-              </span>
+              → <strong>{{ getCommRecipient(minionData.last_comm) }}</strong>:
             </span>
-            <span class="comm-content">{{ minionData.last_comm.summary }}</span>
+            <span
+              class="comm-content"
+              :title="minionData.last_comm.content || ''"
+            >
+              {{ getCommSummary(minionData.last_comm) }}
+            </span>
           </div>
           <div v-else class="text-muted fst-italic small">
             No communications yet
@@ -109,6 +106,27 @@ const stateIcons = {
 const stateIcon = computed(() => {
   return stateIcons[props.minionData?.state] || '○'
 })
+
+// Helper: Get comm recipient name
+function getCommRecipient(comm) {
+  if (comm.to_user) {
+    return 'User'
+  } else if (comm.to_minion_name) {
+    return comm.to_minion_name
+  } else if (comm.to_channel_name) {
+    return `#${comm.to_channel_name}`
+  }
+  return 'unknown'
+}
+
+// Helper: Get comm summary (prioritize summary, fallback to content, truncate at 150 chars)
+function getCommSummary(comm) {
+  const text = comm.summary || comm.content || ''
+  if (text.length > 150) {
+    return text.substring(0, 150) + '...'
+  }
+  return text
+}
 </script>
 
 <style scoped>
@@ -157,5 +175,6 @@ const stateIcon = computed(() => {
 .comm-content {
   color: #212529;
   word-wrap: break-word;
+  cursor: help; /* Show help cursor on hover to indicate tooltip */
 }
 </style>

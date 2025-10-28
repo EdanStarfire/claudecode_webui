@@ -37,9 +37,14 @@
             <div class="node-right">
               <div v-if="hierarchy.last_comm" class="last-comm-preview">
                 <span class="comm-direction">
-                  → <strong>{{ hierarchy.last_comm.to_minion_name || hierarchy.last_comm.to_channel_name || 'unknown' }}</strong>:
+                  → <strong>{{ getCommRecipient(hierarchy.last_comm) }}</strong>:
                 </span>
-                <span class="comm-content">{{ hierarchy.last_comm.summary }}</span>
+                <span
+                  class="comm-content"
+                  :title="hierarchy.last_comm.content || ''"
+                >
+                  {{ getCommSummary(hierarchy.last_comm) }}
+                </span>
               </div>
               <div v-else class="text-muted fst-italic">
                 No communications yet
@@ -127,6 +132,27 @@ onMounted(() => {
 watch(() => props.legionId, () => {
   loadHierarchy()
 })
+
+// Helper: Get comm recipient name
+function getCommRecipient(comm) {
+  if (comm.to_user) {
+    return 'User'
+  } else if (comm.to_minion_name) {
+    return comm.to_minion_name
+  } else if (comm.to_channel_name) {
+    return `#${comm.to_channel_name}`
+  }
+  return 'unknown'
+}
+
+// Helper: Get comm summary (prioritize summary, fallback to content, truncate at 150 chars)
+function getCommSummary(comm) {
+  const text = comm.summary || comm.content || ''
+  if (text.length > 150) {
+    return text.substring(0, 150) + '...'
+  }
+  return text
+}
 </script>
 
 <style scoped>
@@ -180,5 +206,6 @@ watch(() => props.legionId, () => {
 .comm-content {
   color: #212529;
   word-wrap: break-word;
+  cursor: help; /* Show help cursor on hover to indicate tooltip */
 }
 </style>
