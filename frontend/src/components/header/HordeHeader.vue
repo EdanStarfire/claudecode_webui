@@ -2,7 +2,7 @@
   <div class="horde-header border-bottom p-3">
     <div>
       <div class="project-name">{{ legionName }}</div>
-      <div class="view-name" :title="overseerId">{{ overseerName }}'s Horde</div>
+      <div class="view-name">Minion Hierarchy</div>
     </div>
   </div>
 </template>
@@ -10,27 +10,18 @@
 <script setup>
 import { computed } from 'vue'
 import { useProjectStore } from '@/stores/project'
-import { useSessionStore } from '@/stores/session'
 
 const props = defineProps({
   legionId: {
-    type: String,
-    required: true
-  },
-  overseerId: {
     type: String,
     required: true
   }
 })
 
 const projectStore = useProjectStore()
-const sessionStore = useSessionStore()
 
 const legion = computed(() => projectStore.projects.get(props.legionId))
 const legionName = computed(() => legion.value?.name || 'Legion')
-
-const overseer = computed(() => sessionStore.sessions.get(props.overseerId))
-const overseerName = computed(() => overseer.value?.name || 'Overseer')
 </script>
 
 <style scoped>

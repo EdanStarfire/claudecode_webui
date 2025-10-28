@@ -98,7 +98,20 @@
           <!-- Spy and Horde for Legion projects -->
           <template v-if="project.is_multi_agent">
             <SpySelector :project="project" :sessions="projectSessions" />
-            <HordeSelector :project="project" :sessions="projectSessions" />
+
+            <!-- Horde View (direct navigation, no dropdown) -->
+            <div
+              class="list-group-item list-group-item-action horde-item d-flex align-items-center p-2"
+              :class="{ active: isHordeActive }"
+              style="cursor: pointer"
+              @click="viewHorde"
+            >
+              <div class="flex-grow-1">
+                <span style="font-size: 1rem; margin-right: 0.5rem;">🌳</span>
+                <span class="fw-semibold">Horde</span>
+                <small class="text-muted ms-2">(Minion Hierarchy)</small>
+              </div>
+            </div>
           </template>
 
           <!-- Regular Sessions for non-Legion projects -->
@@ -125,7 +138,6 @@ import { useUIStore } from '@/stores/ui'
 import ProjectStatusLine from './ProjectStatusLine.vue'
 import SessionItem from '../session/SessionItem.vue'
 import SpySelector from '../legion/SpySelector.vue'
-import HordeSelector from '../legion/HordeSelector.vue'
 
 const props = defineProps({
   project: {
@@ -161,6 +173,11 @@ const projectSessions = computed(() => {
 const isTimelineActive = computed(() => {
   const route = router.currentRoute.value
   return route.name === 'timeline' && route.params.legionId === props.project.project_id
+})
+
+const isHordeActive = computed(() => {
+  const route = router.currentRoute.value
+  return route.name === 'horde' && route.params.legionId === props.project.project_id
 })
 
 // Accordion click handler (manually toggle since we changed button to div)
@@ -223,6 +240,11 @@ function showCreateSessionModal() {
 // Timeline view
 function viewTimeline() {
   router.push(`/timeline/${props.project.project_id}`)
+}
+
+// Horde view
+function viewHorde() {
+  router.push(`/horde/${props.project.project_id}`)
 }
 
 // Drag and Drop

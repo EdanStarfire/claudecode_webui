@@ -30,7 +30,7 @@ const routes = [
     props: true
   },
   {
-    path: '/horde/:legionId/:overseerId',
+    path: '/horde/:legionId',
     name: 'horde',
     component: HordeView,
     props: true
