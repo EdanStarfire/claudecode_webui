@@ -11,10 +11,6 @@ const props = defineProps({
   legionId: {
     type: String,
     required: true
-  },
-  overseerId: {
-    type: String,
-    required: true
   }
 })
 </script>
