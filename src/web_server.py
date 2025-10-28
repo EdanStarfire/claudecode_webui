@@ -538,6 +538,19 @@ class ClaudeWebUI:
                     permission_callback=self._create_permission_callback(session_id)
                 )
 
+                # Broadcast session creation to all UI clients
+                session_info = await self.coordinator.session_manager.get_session(session_id)
+                if session_info:
+                    await self.ui_websocket_manager.broadcast_to_all({
+                        "type": "state_change",
+                        "data": {
+                            "session_id": session_id,
+                            "session": session_info.to_dict(),
+                            "timestamp": datetime.now().isoformat()
+                        }
+                    })
+                    logger.debug(f"Broadcasted state_change for newly created session {session_id}")
+
                 # Broadcast project update to all UI clients (session was added to project)
                 project = await self.coordinator.project_manager.get_project(request.project_id)
                 if project:

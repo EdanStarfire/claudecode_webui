@@ -266,15 +266,21 @@ export const useSessionStore = defineStore('session', () => {
 
   /**
    * Update session data (called from WebSocket updates)
+   * If session doesn't exist, add it (for newly created sessions)
    */
   function updateSession(sessionId, updates) {
     const session = sessions.value.get(sessionId)
     if (session) {
+      // Update existing session
       Object.assign(session, updates)
-
-      // Trigger reactivity
-      sessions.value = new Map(sessions.value)
+    } else {
+      // Add new session (e.g., from state_change broadcast after creation)
+      sessions.value.set(sessionId, updates)
+      console.log(`Added new session ${sessionId} via WebSocket update`)
     }
+
+    // Trigger reactivity
+    sessions.value = new Map(sessions.value)
   }
 
   /**
