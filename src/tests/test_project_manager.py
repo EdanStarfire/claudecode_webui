@@ -220,21 +220,60 @@ async def test_add_duplicate_session(project_manager, temp_data_dir):
 
 @pytest.mark.asyncio
 async def test_remove_session_from_project(project_manager, temp_data_dir):
-    """Test removing session from project"""
+    """Test removing session from project (project has multiple sessions, should persist)"""
     project = await project_manager.create_project(
         name="Remove Test",
         working_directory=str(temp_data_dir / "remove")
     )
 
-    session_id = "remove-session-123"
-    await project_manager.add_session_to_project(project.project_id, session_id)
+    # Add two sessions to the project
+    session_id_1 = "remove-session-123"
+    session_id_2 = "remove-session-456"
+    await project_manager.add_session_to_project(project.project_id, session_id_1)
+    await project_manager.add_session_to_project(project.project_id, session_id_2)
 
-    success = await project_manager.remove_session_from_project(project.project_id, session_id)
+    # Remove one session - project should still exist
+    removal_success, project_deleted = await project_manager.remove_session_from_project(project.project_id, session_id_1)
 
-    assert success is True
+    assert removal_success is True
+    assert project_deleted is False  # Project should NOT be deleted (still has session_id_2)
 
     updated_project = await project_manager.get_project(project.project_id)
-    assert session_id not in updated_project.session_ids
+    assert updated_project is not None  # Project still exists
+    assert session_id_1 not in updated_project.session_ids
+    assert session_id_2 in updated_project.session_ids  # Other session still there
+
+
+@pytest.mark.asyncio
+async def test_remove_last_session_deletes_project(project_manager, temp_data_dir):
+    """Test that removing the last session from a project auto-deletes the project (issue #63)"""
+    project = await project_manager.create_project(
+        name="Last Session Test",
+        working_directory=str(temp_data_dir / "last_session")
+    )
+
+    # Add only one session to the project
+    session_id = "last-session-123"
+    await project_manager.add_session_to_project(project.project_id, session_id)
+
+    # Verify project exists with the session
+    updated_project = await project_manager.get_project(project.project_id)
+    assert updated_project is not None
+    assert session_id in updated_project.session_ids
+
+    # Remove the last session - project should be auto-deleted
+    removal_success, project_deleted = await project_manager.remove_session_from_project(project.project_id, session_id)
+
+    assert removal_success is True
+    assert project_deleted is True  # Project SHOULD be deleted (no sessions remaining)
+
+    # Verify project no longer exists
+    deleted_project = await project_manager.get_project(project.project_id)
+    assert deleted_project is None
+
+    # Verify project directory was also deleted
+    project_dir = temp_data_dir / "projects" / project.project_id
+    assert not project_dir.exists()
 
 
 @pytest.mark.asyncio

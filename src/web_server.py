@@ -652,15 +652,39 @@ class ClaudeWebUI:
         async def delete_session(session_id: str):
             """Delete a session and all its data"""
             try:
+                # Find the project before deletion (so we can check if it gets auto-deleted)
+                project = await self.coordinator._find_project_for_session(session_id)
+                project_id = project.project_id if project else None
+
                 # First force disconnect any WebSocket connections for this session
                 await self.websocket_manager.force_disconnect_session(session_id)
 
                 # Clean up any pending permissions for this session
                 self._cleanup_pending_permissions_for_session(session_id)
 
+                # Delete the session (may also delete the project if it was the last session)
                 success = await self.coordinator.delete_session(session_id)
                 if not success:
                     raise HTTPException(status_code=404, detail="Session not found")
+
+                # Check if the project still exists - if not, it was auto-deleted
+                if project_id:
+                    updated_project = await self.coordinator.project_manager.get_project(project_id)
+                    if updated_project is None:
+                        # Project was deleted because it became empty
+                        await self.ui_websocket_manager.broadcast_to_all({
+                            "type": "project_deleted",
+                            "data": {"project_id": project_id}
+                        })
+                        logger.info(f"Broadcasted project_deleted for auto-deleted project {project_id}")
+                    else:
+                        # Project still exists - broadcast update with reduced session count
+                        await self.ui_websocket_manager.broadcast_to_all({
+                            "type": "project_updated",
+                            "data": {"project": updated_project.to_dict()}
+                        })
+                        logger.debug(f"Broadcasted project_updated for project {project_id} after session deletion")
+
                 return {"success": success}
             except HTTPException:
                 raise

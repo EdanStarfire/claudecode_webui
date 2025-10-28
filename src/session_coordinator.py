@@ -86,6 +86,9 @@ class SessionCoordinator:
             # Initialize storage managers for all existing sessions
             await self._initialize_existing_session_storage()
 
+            # Validate and cleanup orphaned project/session references (issue #63)
+            await self._validate_and_cleanup_projects()
+
             coord_logger.info("Session coordinator initialized successfully")
         except Exception as e:
             logger.error(f"Failed to initialize session coordinator: {e}")
@@ -466,9 +469,20 @@ class SessionCoordinator:
         try:
             # Step 1: Find and remove session from its project
             project = await self._find_project_for_session(session_id)
+            project_was_deleted = False
+            deleted_project_id = None
+
             if project:
-                await self.project_manager.remove_session_from_project(project.project_id, session_id)
-                coord_logger.info(f"Removed session {session_id} from project {project.project_id}")
+                removal_success, project_was_deleted = await self.project_manager.remove_session_from_project(project.project_id, session_id)
+
+                if removal_success:
+                    if project_was_deleted:
+                        coord_logger.info(f"Removed session {session_id} from project {project.project_id} - project was empty and has been deleted")
+                        deleted_project_id = project.project_id
+                    else:
+                        coord_logger.info(f"Removed session {session_id} from project {project.project_id}")
+                else:
+                    logger.warning(f"Failed to remove session {session_id} from project {project.project_id}")
 
             # Step 2: Terminate the SDK if it's running
             sdk = self._active_sdks.get(session_id)
@@ -1282,6 +1296,63 @@ class SessionCoordinator:
         """Handle state changes from session manager"""
         # logger.info(f"Received state change from session manager: {session_id} -> {new_state.value}")
         await self._notify_state_change(session_id, new_state)
+
+    async def _validate_and_cleanup_projects(self):
+        """
+        Validate project/session references and clean up orphaned data.
+
+        This runs on startup to fix any data corruption from previous bugs (like issue #63).
+        Removes orphaned session references and deletes empty projects.
+        Logs all cleanup actions for debugging.
+        """
+        try:
+            projects = await self.project_manager.list_projects()
+            coord_logger.info(f"Validating {len(projects)} projects for orphaned session references")
+
+            cleanup_count = 0
+            deleted_project_count = 0
+
+            for project in projects:
+                project_id = project.project_id
+                session_ids_before = list(project.session_ids)  # Make a copy
+                valid_session_ids = []
+
+                # Check each session ID to see if it actually exists
+                for session_id in session_ids_before:
+                    session_info = await self.session_manager.get_session_info(session_id)
+                    if session_info:
+                        valid_session_ids.append(session_id)
+                    else:
+                        coord_logger.warning(f"Found orphaned session reference '{session_id}' in project {project_id} - will be removed")
+                        cleanup_count += 1
+
+                # If we found orphaned references, update or delete the project
+                if len(valid_session_ids) != len(session_ids_before):
+                    orphaned_count = len(session_ids_before) - len(valid_session_ids)
+
+                    if len(valid_session_ids) == 0:
+                        # No valid sessions remain - delete the empty project
+                        coord_logger.info(f"Project {project_id} ({project.name}) has no valid sessions - deleting")
+                        deletion_success = await self.project_manager.delete_project(project_id)
+                        if deletion_success:
+                            deleted_project_count += 1
+                        else:
+                            logger.error(f"Failed to delete empty project {project_id}")
+                    else:
+                        # Some valid sessions remain - update project with cleaned list
+                        coord_logger.info(f"Removing {orphaned_count} orphaned session(s) from project {project_id} ({project.name})")
+                        project.session_ids = valid_session_ids
+                        project.updated_at = datetime.now(timezone.utc)
+                        await self.project_manager._persist_project_state(project_id)
+
+            if cleanup_count > 0 or deleted_project_count > 0:
+                coord_logger.info(f"Startup cleanup complete: removed {cleanup_count} orphaned session reference(s), deleted {deleted_project_count} empty project(s)")
+            else:
+                coord_logger.info("Startup validation complete: no orphaned data found")
+
+        except Exception as e:
+            logger.error(f"Error during startup project validation: {e}")
+            # Don't raise - this shouldn't block startup
 
     async def cleanup(self):
         """Cleanup all resources"""
