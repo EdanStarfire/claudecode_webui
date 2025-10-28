@@ -808,6 +808,31 @@ class ClaudeWebUI:
                 logger.error(f"Failed to get timeline: {e}")
                 raise HTTPException(status_code=500, detail=str(e))
 
+        @self.app.get("/api/legions/{legion_id}/hordes")
+        async def get_legion_horde(legion_id: str):
+            """Get complete horde hierarchy with user at root"""
+            try:
+                # Verify legion exists
+                project = await self.coordinator.project_manager.get_project(legion_id)
+                if not project or not project.is_multi_agent:
+                    raise HTTPException(status_code=404, detail="Legion not found")
+
+                # Get legion coordinator
+                legion_coord = self.coordinator.legion_system.legion_coordinator
+                if not legion_coord:
+                    raise HTTPException(status_code=500, detail="Legion coordinator not available")
+
+                # Assemble hierarchy
+                hierarchy = await legion_coord.assemble_horde_hierarchy(legion_id)
+
+                return hierarchy
+
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"Failed to get horde hierarchy: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
         @self.app.post("/api/legions/{legion_id}/comms")
         async def send_comm_to_legion(legion_id: str, request: CommSendRequest):
             """Send a Comm in the legion"""

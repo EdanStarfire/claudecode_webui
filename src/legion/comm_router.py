@@ -290,9 +290,10 @@ class CommRouter:
         Persist Comm to appropriate locations.
 
         Comms are stored in:
-        1. Source minion's comm log (if from minion)
-        2. Destination minion's comm log (if to minion)
-        3. Channel's comm log (if to channel)
+        1. Legion timeline (main timeline.jsonl)
+        2. Source minion's comm log (if from minion)
+        3. Destination minion's comm log (if to minion)
+        4. Channel's comm log (if to channel)
 
         Args:
             comm: Comm to persist
@@ -336,6 +337,21 @@ class CommRouter:
                     comm
                 )
 
+        # If legion_id still not found and this is from user, need to get it from to_minion or to_channel
+        if not legion_id and comm.from_user:
+            if comm.to_minion_id:
+                minion = await self.system.legion_coordinator.get_minion_info(comm.to_minion_id)
+                if minion:
+                    legion_id = minion.project_id
+            elif comm.to_channel_id:
+                channel = await self.system.channel_manager.get_channel(comm.to_channel_id)
+                if channel:
+                    legion_id = channel.legion_id
+
+        # ALWAYS persist to main legion timeline (this was missing!)
+        if legion_id:
+            await self._append_to_timeline(legion_id, comm)
+
         # Broadcast comm to WebSocket clients watching this legion
         if legion_id and self._comm_broadcast_callback:
             try:
@@ -372,6 +388,30 @@ class CommRouter:
             f.write("\n")
 
         legion_logger.debug(f"Appended comm {comm.comm_id} to {log_file}")
+
+    async def _append_to_timeline(self, legion_id: str, comm: Comm) -> None:
+        """
+        Append Comm to the main legion timeline.jsonl file.
+
+        Args:
+            legion_id: Legion ID
+            comm: Comm to append
+        """
+        # Get data_dir from SessionCoordinator
+        data_dir = self.system.session_coordinator.data_dir
+
+        # Construct path: {data_dir}/legions/{legion_id}/timeline.jsonl
+        legion_dir = data_dir / "legions" / legion_id
+        legion_dir.mkdir(parents=True, exist_ok=True)
+
+        timeline_file = legion_dir / "timeline.jsonl"
+
+        # Append comm as JSON line
+        with open(timeline_file, "a", encoding="utf-8") as f:
+            json.dump(comm.to_dict(), f)
+            f.write("\n")
+
+        legion_logger.debug(f"Appended comm {comm.comm_id} to timeline {timeline_file}")
 
     def _extract_tags(self, content: str) -> Tuple[List[str], List[str]]:
         """
