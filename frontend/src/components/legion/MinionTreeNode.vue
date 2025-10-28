@@ -95,9 +95,12 @@ const isOverseerWithChildren = computed(() => {
 const displayState = computed(() => {
   if (!props.minionData) return 'created'
 
-  // Note: minionData doesn't have is_processing flag from API
-  // State comes directly from backend
-  return props.minionData.state || 'created'
+  // Special case: PAUSED + processing = waiting for permission response (yellow blinking)
+  if (props.minionData.state === 'paused' && props.minionData.is_processing) {
+    return 'pending-prompt'
+  }
+  // Normal case: processing overrides state (purple blinking)
+  return props.minionData.is_processing ? 'processing' : (props.minionData.state || 'created')
 })
 
 // Status dot CSS classes (matches SessionItem)

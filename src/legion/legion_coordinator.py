@@ -165,6 +165,7 @@ class LegionCoordinator:
                 "name": minion.name,
                 "state": minion.state.value if hasattr(minion.state, 'value') else str(minion.state),
                 "is_overseer": minion.is_overseer or False,
+                "is_processing": minion.is_processing or False,
                 "last_comm": await self._get_last_outgoing_comm(legion_id, from_minion_id=minion.session_id),
                 "children": []
             }

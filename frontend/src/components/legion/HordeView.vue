@@ -224,13 +224,21 @@ onMounted(() => {
     (sessions) => {
       if (!hierarchy.value) return
 
-      // Update all minion states in our hierarchy
+      // Update all minion states and is_processing in our hierarchy
       for (const [sessionId, session] of sessions) {
         if (session.is_minion && session.project_id === props.legionId) {
           const minion = findMinionInTree(hierarchy.value, sessionId)
-          if (minion && minion.type === 'minion' && minion.state !== session.state) {
-            minion.state = session.state
-            console.log(`Updated minion ${minion.name} state to ${session.state}`)
+          if (minion && minion.type === 'minion') {
+            // Update state if changed
+            if (minion.state !== session.state) {
+              minion.state = session.state
+              console.log(`Updated minion ${minion.name} state to ${session.state}`)
+            }
+            // Update is_processing if changed
+            if (minion.is_processing !== session.is_processing) {
+              minion.is_processing = session.is_processing
+              console.log(`Updated minion ${minion.name} is_processing to ${session.is_processing}`)
+            }
           }
         }
       }
