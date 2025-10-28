@@ -1,24 +1,5 @@
 <template>
   <div class="slashcommand-tool-handler">
-    <!-- Command Info Section -->
-    <div class="tool-section mb-3">
-      <div class="command-info">
-        <span class="command-icon">/</span>
-        <strong>Slash Command:</strong>
-        <code class="command-name">{{ commandName }}</code>
-        <span class="command-status-badge" :class="statusBadgeClass">{{ statusText }}</span>
-      </div>
-    </div>
-
-    <!-- Arguments Section (if available) -->
-    <div v-if="commandArguments" class="tool-section mb-3">
-      <div class="arguments-info">
-        <span class="arguments-icon">📌</span>
-        <strong>Arguments:</strong>
-        <code class="arguments-text">{{ commandArguments }}</code>
-      </div>
-    </div>
-
     <!-- Command Content Section (collapsible) -->
     <div v-if="hasCommandContent" class="tool-section">
       <div class="command-content-header" @click="toggleContentExpanded">
@@ -218,7 +199,7 @@ const errorMessage = computed(() => {
 }
 
 .tool-section {
-  margin-bottom: 1rem;
+  margin-bottom: 0.2rem;
 }
 
 .tool-section:last-child {

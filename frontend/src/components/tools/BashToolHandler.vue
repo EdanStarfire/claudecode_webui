@@ -1,7 +1,7 @@
 <template>
   <div class="bash-tool-handler">
     <!-- Parameters Section -->
-    <div class="tool-section mb-3">
+    <div class="tool-section">
       <div class="bash-header">
         <span class="bash-icon">💻</span>
         <div class="bash-header-content">
@@ -111,7 +111,7 @@ const resultContent = computed(() => {
 }
 
 .tool-section {
-  margin-bottom: 1rem;
+  margin-bottom: 0.2rem;
 }
 
 .tool-section:last-child {

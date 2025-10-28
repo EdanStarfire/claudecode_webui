@@ -1,10 +1,8 @@
 <template>
-  <div class="message-item mb-3" :class="`message-${message.type}`">
-    <component
-      :is="messageComponent"
-      :message="message"
-    />
-  </div>
+  <component
+    :is="messageComponent"
+    :message="message"
+  />
 </template>
 
 <script setup>
@@ -37,18 +35,5 @@ const messageComponent = computed(() => {
 </script>
 
 <style scoped>
-.message-item {
-  animation: fadeIn 0.2s ease-in;
-}
-
-@keyframes fadeIn {
-  from {
-    opacity: 0;
-    transform: translateY(-10px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
+/* No styles needed - individual message components handle their own layout */
 </style>

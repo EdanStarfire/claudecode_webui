@@ -1,7 +1,7 @@
 <template>
   <div class="task-tool-handler">
     <!-- Parameters Section -->
-    <div class="tool-section mb-3">
+    <div class="tool-section">
       <div class="task-header">
         <span class="task-icon">🤖</span>
         <strong>Agent Task:</strong>
@@ -104,7 +104,7 @@ const resultLines = computed(() => {
 }
 
 .tool-section {
-  margin-bottom: 1rem;
+  margin-bottom: 0.2rem;
 }
 
 .tool-section:last-child {

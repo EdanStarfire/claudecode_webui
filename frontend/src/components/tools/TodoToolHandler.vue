@@ -1,7 +1,7 @@
 <template>
   <div class="todo-tool-handler">
     <!-- Parameters Section -->
-    <div class="tool-section mb-3">
+    <div class="tool-section">
       <div class="todo-header">
         <span class="todo-icon">📋</span>
         <strong>Task List:</strong>
@@ -118,7 +118,7 @@ const resultContent = computed(() => {
 }
 
 .tool-section {
-  margin-bottom: 1rem;
+  margin-bottom: 0.2rem;
 }
 
 .tool-section:last-child {

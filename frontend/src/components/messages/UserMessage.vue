@@ -1,20 +1,14 @@
 <template>
-  <div class="card user-message bg-light border-start border-primary border-3">
-    <div class="card-body">
-      <!-- Header -->
-      <div class="d-flex justify-content-between align-items-center mb-2">
-        <div class="d-flex align-items-center gap-2">
-          <span class="message-icon">👤</span>
-          <strong class="message-role">User</strong>
-        </div>
-        <small class="text-muted">{{ formattedTimestamp }}</small>
-      </div>
-
+  <div class="message-row message-row-user">
+    <div class="message-speaker" :title="tooltipText">
+      <span class="speaker-label">user</span>
+    </div>
+    <div class="message-content-column">
       <!-- Content -->
-      <div class="message-content" v-html="renderedContent"></div>
+      <div class="message-text" v-html="renderedContent"></div>
 
       <!-- Tool Results (if any) -->
-      <div v-if="hasToolResults" class="tool-results mt-3">
+      <div v-if="hasToolResults" class="tool-results mt-2">
         <div class="tool-results-header text-muted small mb-2">
           <i class="bi bi-tools"></i> Tool Results ({{ toolResults.length }})
         </div>
@@ -62,10 +56,18 @@ const formattedTimestamp = computed(() => {
   return formatTimestamp(props.message.timestamp)
 })
 
+const tooltipText = computed(() => {
+  return `user\n${formattedTimestamp.value}`
+})
+
 const renderedContent = computed(() => {
   const content = props.message.content || ''
   // Render markdown and sanitize
-  const html = marked.parse(content)
+  let html = marked.parse(content)
+  // Remove newlines before HTML tags to reduce whitespace
+  html = html.replace(/\n</g, '<')
+  // Trim trailing newlines
+  html = html.replace(/\n+$/, '')
   return DOMPurify.sanitize(html)
 })
 
@@ -86,27 +88,62 @@ function truncate(text, maxLength) {
 </script>
 
 <style scoped>
-.user-message {
-  max-width: 100%;
+/* Two-column row layout */
+.message-row {
+  display: flex;
+  width: 100%;
+  min-height: 1.2rem;
+  padding: 0.2rem 0;
+  line-height: 1.2rem;
 }
 
-.message-icon {
-  font-size: 1.2rem;
+.message-row-user {
+  background-color: #F3E5F5; /* Light purple */
 }
 
-.message-content {
+/* Speaker column (left) */
+.message-speaker {
+  width: 8em;
+  padding: 0 1rem;
+  flex-shrink: 0;
+  text-align: right;
+  cursor: help;
+  font-weight: 500;
+  color: #495057;
+}
+
+.speaker-label {
+  font-size: 0.9rem;
+  text-transform: lowercase;
+}
+
+/* Content column (right) */
+.message-content-column {
+  flex: 1;
+  padding: 0 1rem 0 0.5rem;
+  overflow-wrap: break-word;
+}
+
+.message-text {
+  line-height: 1.2rem;
   white-space: pre-wrap;
   word-wrap: break-word;
 }
 
-.message-content :deep(pre) {
+/* Markdown/code styling - remove bottom margins by default */
+.message-text :deep(*) {
+  margin-bottom: 0;
+}
+
+.message-text :deep(pre) {
   background: #f8f9fa;
   padding: 0.75rem;
   border-radius: 0.25rem;
   overflow-x: auto;
+  margin: 0.5rem 0;
 }
 
-.message-content :deep(code) {
+.message-text :deep(code) {
   background: #e9ecef;
   padding: 0.2rem 0.4rem;
   border-radius: 0.2rem;
@@ -114,12 +151,61 @@ function truncate(text, maxLength) {
   font-size: 0.9em;
 }
 
-.message-content :deep(pre code) {
+.message-text :deep(pre code) {
   background: transparent;
   padding: 0;
 }
 
+.message-text :deep(ul),
+.message-text :deep(ol) {
+  padding-left: 1.5rem;
+}
+
+.message-text :deep(blockquote) {
+  border-left: 3px solid #dee2e6;
+  padding-left: 1rem;
+  margin-left: 0;
+  color: #6c757d;
+}
+
+.message-text :deep(table) {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 0.5rem 0;
+}
+
+.message-text :deep(table th),
+.message-text :deep(table td) {
+  border: 1px solid #6c757d;
+  padding: 0.5rem;
+  text-align: left;
+}
+
+.message-text :deep(table th) {
+  background-color: rgba(0, 0, 0, 0.05);
+  font-weight: 600;
+}
+
+/* Tool results styling */
 .tool-result-summary {
   border: 1px solid rgba(0, 0, 0, 0.1);
+}
+
+/* Mobile responsive: stack speaker above content */
+@media (max-width: 768px) {
+  .message-row {
+    flex-direction: column;
+  }
+
+  .message-speaker {
+    width: 100%;
+    text-align: left;
+    padding: 0.5rem 1rem;
+    border-bottom: 1px solid rgba(0, 0, 0, 0.05);
+  }
+
+  .message-content-column {
+    padding: 0.5rem 1rem;
+  }
 }
 </style>

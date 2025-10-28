@@ -1,7 +1,7 @@
 <template>
   <div class="exit-plan-mode-tool-handler">
     <!-- Parameters Section -->
-    <div class="tool-section mb-3">
+    <div class="tool-section">
       <div class="plan-info">
         <span class="plan-icon">📋</span>
         <strong>Exiting Plan Mode</strong>
