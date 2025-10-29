@@ -37,8 +37,9 @@ class LegionCoordinator:
         self.channels: Dict = {} # Dict[str, Channel]
 
         # Central capability registry (MVP approach)
-        # Format: {session_id: [capability1, capability2, ...]}
-        self.capability_registry: Dict[str, List[str]] = {}
+        # Format: {capability_keyword: [(minion_id, expertise_score), ...]}
+        # Example: {"python": [("minion-123", 0.9), ("minion-456", 0.6)]}
+        self.capability_registry: Dict[str, List[tuple]] = {}
 
     @property
     def project_manager(self):
@@ -286,10 +287,124 @@ class LegionCoordinator:
         for legion in legions:
             await self.system.channel_manager._load_channels_for_legion(legion.project_id)
 
+    async def register_capability(
+        self,
+        minion_id: str,
+        capability: str,
+        expertise_score: Optional[float] = None
+    ) -> None:
+        """
+        Register a capability for a minion in the central capability registry.
+
+        Capabilities must be lowercase with underscores between words (e.g., "rest_api", "postgresql").
+        Varied case input is automatically lowercased. Improperly formatted capabilities
+        (special characters other than underscore) are rejected.
+
+        If the same minion_id + capability combination already exists, updates the expertise score.
+
+        Args:
+            minion_id: Minion session ID
+            capability: Capability keyword (will be normalized to lowercase)
+            expertise_score: Expertise level (0.0-1.0). If None, uses minion's default score.
+
+        Raises:
+            ValueError: If capability contains invalid characters or minion doesn't exist
+        """
+        # Validate minion exists
+        minion = await self.get_minion_info(minion_id)
+        if not minion:
+            raise ValueError(f"Minion {minion_id} does not exist")
+
+        # Normalize capability to lowercase
+        normalized_capability = capability.lower()
+
+        # Validate capability format (only lowercase letters, numbers, underscores)
+        import re
+        if not re.match(r'^[a-z0-9_]+$', normalized_capability):
+            raise ValueError(
+                f"Invalid capability format: '{capability}'. "
+                "Capabilities must contain only lowercase letters, numbers, and underscores (e.g., 'rest_api', 'postgresql')"
+            )
+
+        # Use minion's expertise_score if not provided
+        if expertise_score is None:
+            expertise_score = minion.expertise_score
+
+        # Validate expertise_score range
+        if not (0.0 <= expertise_score <= 1.0):
+            raise ValueError(f"Expertise score must be between 0.0 and 1.0, got {expertise_score}")
+
+        # Initialize list for this capability if it doesn't exist
+        if normalized_capability not in self.capability_registry:
+            self.capability_registry[normalized_capability] = []
+
+        # Check if minion already has this capability registered
+        existing_entries = self.capability_registry[normalized_capability]
+        for i, (existing_minion_id, _) in enumerate(existing_entries):
+            if existing_minion_id == minion_id:
+                # Update existing entry
+                existing_entries[i] = (minion_id, expertise_score)
+                return
+
+        # Add new entry
+        self.capability_registry[normalized_capability].append((minion_id, expertise_score))
+
+    async def search_capability_registry(
+        self,
+        keyword: str,
+        legion_id: Optional[str] = None
+    ) -> List[tuple]:
+        """
+        Search capability registry for minions with matching capabilities.
+
+        Performs case-insensitive substring matching. Returns ranked results by
+        expertise score (highest first). Minions with 0.0 or None expertise scores
+        are excluded from results.
+
+        Args:
+            keyword: Search keyword (case-insensitive substring match)
+            legion_id: Optional legion filter (only return minions from this legion)
+
+        Returns:
+            List of tuples: [(minion_id, expertise_score, capability_matched), ...]
+            Sorted by expertise_score descending
+
+        Raises:
+            ValueError: If keyword is empty or only whitespace
+        """
+        # Validate keyword is not empty
+        keyword_trimmed = keyword.strip()
+        if not keyword_trimmed:
+            raise ValueError("Search keyword cannot be empty or only whitespace")
+
+        # Normalize keyword to lowercase for case-insensitive search
+        search_term = keyword_trimmed.lower()
+
+        # Find all capabilities that contain the search term (substring match)
+        matching_results = []
+        for capability, entries in self.capability_registry.items():
+            if search_term in capability:
+                # This capability matches - add all minions with non-zero scores
+                for minion_id, expertise_score in entries:
+                    # Skip minions with zero or None expertise
+                    if expertise_score is None or expertise_score == 0.0:
+                        continue
+
+                    # If legion filter is specified, only include minions from that legion
+                    if legion_id:
+                        minion = await self.get_minion_info(minion_id)
+                        if not minion or minion.project_id != legion_id:
+                            continue
+
+                    matching_results.append((minion_id, expertise_score, capability))
+
+        # Sort by expertise_score descending (highest first)
+        matching_results.sort(key=lambda x: x[1], reverse=True)
+
+        return matching_results
+
     # TODO: Implement additional legion management methods in later phases
     # - delete_legion()
     # - emergency_halt_all()
     # - resume_all()
     # - get_fleet_status()
-    # - register_capability()
-    # - search_capability_registry()
