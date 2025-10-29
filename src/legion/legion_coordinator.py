@@ -273,6 +273,19 @@ class LegionCoordinator:
         # Return the full comm object - let frontend decide what to display
         return comm
 
+    async def _load_all_channels(self) -> None:
+        """
+        Load all channels for all legions from disk into memory.
+
+        Called during system initialization to restore channel state.
+        """
+        # Get all legions
+        legions = await self.list_legions()
+
+        # Load channels for each legion
+        for legion in legions:
+            await self.system.channel_manager._load_channels_for_legion(legion.project_id)
+
     # TODO: Implement additional legion management methods in later phases
     # - delete_legion()
     # - emergency_halt_all()

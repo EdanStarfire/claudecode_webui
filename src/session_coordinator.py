@@ -80,6 +80,11 @@ class SessionCoordinator:
             await self.session_manager.initialize()
             await self.project_manager.initialize()
 
+            # Load channels for all legions (if LegionSystem is initialized)
+            if hasattr(self, 'legion_system') and self.legion_system is not None:
+                await self.legion_system.legion_coordinator._load_all_channels()
+                coord_logger.info("Loaded channels for all legions")
+
             # Register callback to receive session manager state changes
             self.session_manager.add_state_change_callback(self._on_session_manager_state_change)
 
