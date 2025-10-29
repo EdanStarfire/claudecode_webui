@@ -746,15 +746,96 @@ class LegionMCPTools:
             }
 
     async def _handle_search_capability(self, args: Dict[str, Any]) -> Dict[str, Any]:
-        """Handle search_capability tool call."""
-        # TODO: Implement in Phase 2
-        return {
-            "content": [{
-                "type": "text",
-                "text": f"search_capability not yet implemented (would search for '{args.get('capability')}')"
-            }],
-            "is_error": True
-        }
+        """
+        Handle search_capability tool call.
+
+        Searches the central capability registry for minions with matching capabilities.
+        Returns formatted text list of ranked results.
+
+        Args:
+            args: Tool arguments with 'capability' keyword
+
+        Returns:
+            Tool result with formatted minion list or error message
+        """
+        try:
+            # Get search keyword
+            keyword = args.get("capability", "").strip()
+
+            if not keyword:
+                return {
+                    "content": [{
+                        "type": "text",
+                        "text": "❌ Error: capability parameter is required and cannot be empty"
+                    }],
+                    "is_error": True
+                }
+
+            # Search the capability registry
+            try:
+                results = await self.system.legion_coordinator.search_capability_registry(
+                    keyword=keyword
+                )
+            except ValueError as e:
+                return {
+                    "content": [{
+                        "type": "text",
+                        "text": f"❌ Search error: {str(e)}"
+                    }],
+                    "is_error": True
+                }
+
+            # Handle empty results
+            if not results:
+                return {
+                    "content": [{
+                        "type": "text",
+                        "text": f"No minions found with capability matching '{keyword}'"
+                    }],
+                    "is_error": False
+                }
+
+            # Format results as text list
+            result_lines = [f"**Minions with capability '{keyword}'** (ranked by expertise):\n"]
+
+            for minion_id, expertise_score, capability_matched in results:
+                # Get minion details
+                minion = await self.system.legion_coordinator.get_minion_info(minion_id)
+                if not minion:
+                    continue  # Skip if minion no longer exists
+
+                name = minion.name or minion_id[:8]
+                role = minion.role or "No role specified"
+                state = minion.state.value if hasattr(minion.state, 'value') else str(minion.state)
+
+                # Format expertise score as percentage
+                expertise_pct = int(expertise_score * 100)
+
+                result_lines.append(
+                    f"\n• **{name}** (ID: {minion_id[:8]}...)\n"
+                    f"  - Role: {role}\n"
+                    f"  - State: {state}\n"
+                    f"  - Expertise: {expertise_pct}% ({expertise_score:.2f})\n"
+                    f"  - Matched capability: {capability_matched}"
+                )
+
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": "".join(result_lines)
+                }],
+                "is_error": False
+            }
+
+        except Exception as e:
+            # Catch-all for unexpected errors
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": f"❌ Failed to search capabilities due to unexpected error: {str(e)}"
+                }],
+                "is_error": True
+            }
 
     async def _handle_list_minions(self, args: Dict[str, Any]) -> Dict[str, Any]:
         """

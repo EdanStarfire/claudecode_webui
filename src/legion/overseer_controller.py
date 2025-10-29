@@ -98,9 +98,16 @@ class OverseerController:
         # Register capabilities in capability registry
         if capabilities:
             for capability in capabilities:
-                if capability not in self.system.legion_coordinator.capability_registry:
-                    self.system.legion_coordinator.capability_registry[capability] = []
-                self.system.legion_coordinator.capability_registry[capability].append(minion_id)
+                try:
+                    await self.system.legion_coordinator.register_capability(
+                        minion_id=minion_id,
+                        capability=capability,
+                        expertise_score=None  # Uses minion's default score (0.5)
+                    )
+                except ValueError as e:
+                    # Log error but don't fail minion creation if capability format is invalid
+                    import logging
+                    logging.warning(f"Failed to register capability '{capability}' for minion {minion_id}: {e}")
 
         # Create or update horde
         await self._ensure_horde_for_minion(legion_id, minion_id, name)
@@ -283,9 +290,15 @@ class OverseerController:
         # 11. Register capabilities in central registry
         if capabilities:
             for capability in capabilities:
-                if capability not in self.system.legion_coordinator.capability_registry:
-                    self.system.legion_coordinator.capability_registry[capability] = []
-                self.system.legion_coordinator.capability_registry[capability].append(child_minion_id)
+                try:
+                    await self.system.legion_coordinator.register_capability(
+                        minion_id=child_minion_id,
+                        capability=capability,
+                        expertise_score=None  # Uses minion's default score (0.5)
+                    )
+                except ValueError as e:
+                    # Log error but don't fail spawn if capability format is invalid
+                    coord_logger.warning(f"Failed to register capability '{capability}' for spawned minion {child_minion_id}: {e}")
 
         # 12. Join channels if specified
         if channels and self.system.channel_manager:

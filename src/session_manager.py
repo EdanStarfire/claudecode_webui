@@ -70,6 +70,7 @@ class SessionInfo:
     horde_id: Optional[str] = None  # Which horde this minion belongs to
     channel_ids: List[str] = None  # Communication channels
     capabilities: List[str] = None  # Capability tags for discovery
+    expertise_score: float = 0.5  # Expertise level (0.0-1.0, default 0.5 for MVP)
 
     def __post_init__(self):
         if self.tools is None:
