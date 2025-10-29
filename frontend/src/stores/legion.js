@@ -26,6 +26,12 @@ export const useLegionStore = defineStore('legion', () => {
   // Channels per legion (legionId -> Channel[])
   const channelsByLegion = ref(new Map())
 
+  // Channel details per channel (channelId -> ChannelDetails)
+  const channelDetailsByChannel = ref(new Map())
+
+  // Channel comms per channel (channelId -> Comm[])
+  const channelCommsByChannel = ref(new Map())
+
   // Currently selected legion
   const currentLegionId = ref(null)
 
@@ -205,6 +211,103 @@ export const useLegionStore = defineStore('legion', () => {
   }
 
   /**
+   * Load channel details
+   */
+  async function loadChannelDetails(channelId) {
+    try {
+      const data = await api.get(`/api/channels/${channelId}`)
+      const channel = data.channel || data
+
+      console.log(`Loaded details for channel ${channelId}`)
+
+      // Store channel details
+      channelDetailsByChannel.value.set(channelId, channel)
+
+      // Trigger reactivity
+      channelDetailsByChannel.value = new Map(channelDetailsByChannel.value)
+
+      return channel
+    } catch (error) {
+      console.error('Failed to load channel details:', error)
+      throw error
+    }
+  }
+
+  /**
+   * Load channel comms (first 1000 messages, no pagination for MVP)
+   */
+  async function loadChannelComms(channelId, limit = 1000) {
+    try {
+      const data = await api.get(`/api/channels/${channelId}/comms?limit=${limit}`)
+      const comms = data.comms || []
+
+      console.log(`Loaded ${comms.length} comms for channel ${channelId}`)
+
+      // Sort comms by timestamp (oldest first, like a chat)
+      comms.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp))
+
+      // Store channel comms
+      channelCommsByChannel.value.set(channelId, comms)
+
+      // Trigger reactivity
+      channelCommsByChannel.value = new Map(channelCommsByChannel.value)
+
+      return comms
+    } catch (error) {
+      console.error('Failed to load channel comms:', error)
+      throw error
+    }
+  }
+
+  /**
+   * Add a member to a channel
+   * User (self_id: "00000000-0000-0000-0000-000000000000") can add any minion
+   */
+  async function addMemberToChannel(channelId, minionId) {
+    try {
+      const USER_MINION_ID = '00000000-0000-0000-0000-000000000000'
+
+      await api.post(`/api/channels/${channelId}/members`, {
+        action: 'add',
+        self_id: USER_MINION_ID,
+        member_id: minionId
+      })
+
+      console.log(`Added minion ${minionId} to channel ${channelId}`)
+
+      // Reload channel details to get updated member list
+      await loadChannelDetails(channelId)
+    } catch (error) {
+      console.error('Failed to add member to channel:', error)
+      throw error
+    }
+  }
+
+  /**
+   * Remove a member from a channel
+   * User (self_id: "00000000-0000-0000-0000-000000000000") can remove any minion
+   */
+  async function removeMemberFromChannel(channelId, minionId) {
+    try {
+      const USER_MINION_ID = '00000000-0000-0000-0000-000000000000'
+
+      await api.post(`/api/channels/${channelId}/members`, {
+        action: 'remove',
+        self_id: USER_MINION_ID,
+        member_id: minionId
+      })
+
+      console.log(`Removed minion ${minionId} from channel ${channelId}`)
+
+      // Reload channel details to get updated member list
+      await loadChannelDetails(channelId)
+    } catch (error) {
+      console.error('Failed to remove member from channel:', error)
+      throw error
+    }
+  }
+
+  /**
    * Clear all legion data
    */
   function clearLegionData(legionId) {
@@ -227,6 +330,8 @@ export const useLegionStore = defineStore('legion', () => {
     minionsByLegion,
     hordesByLegion,
     channelsByLegion,
+    channelDetailsByChannel,
+    channelCommsByChannel,
     currentLegionId,
 
     // Computed
@@ -244,6 +349,10 @@ export const useLegionStore = defineStore('legion', () => {
     createMinion,
     loadHordes,
     loadChannels,
+    loadChannelDetails,
+    loadChannelComms,
+    addMemberToChannel,
+    removeMemberFromChannel,
     clearLegionData
   }
 })
