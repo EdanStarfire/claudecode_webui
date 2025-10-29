@@ -539,7 +539,7 @@ class ClaudeWebUI:
                 )
 
                 # Broadcast session creation to all UI clients
-                session_info = await self.coordinator.session_manager.get_session(session_id)
+                session_info = await self.coordinator.session_manager.get_session_info(session_id)
                 if session_info:
                     await self.ui_websocket_manager.broadcast_to_all({
                         "type": "state_change",
