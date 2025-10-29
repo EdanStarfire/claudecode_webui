@@ -91,6 +91,28 @@ class MinionCreateRequest(BaseModel):
     capabilities: List[str] = []
 
 
+class ChannelCreateRequest(BaseModel):
+    name: str
+    description: str = ""
+    purpose: str = ""
+    member_minion_ids: List[str] = []
+
+
+class ChannelMemberRequest(BaseModel):
+    action: str  # "add" or "remove"
+    self_id: str  # Actor performing the action
+    member_id: str  # Target minion to add/remove
+
+
+class ChannelBroadcastRequest(BaseModel):
+    from_user: bool = False
+    from_minion_id: Optional[str] = None
+    from_minion_name: Optional[str] = None  # Capture name for history
+    content: str
+    summary: str = ""
+    comm_type: str = "info"
+
+
 class UIWebSocketManager:
     """Manages global UI WebSocket connections for session state updates"""
 
@@ -957,6 +979,257 @@ class ClaudeWebUI:
                 raise
             except Exception as e:
                 logger.error(f"Failed to create minion: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+        # ==================== CHANNEL ENDPOINTS ====================
+
+        @self.app.post("/api/legions/{legion_id}/channels", status_code=201)
+        async def create_channel(legion_id: str, request: ChannelCreateRequest):
+            """Create a new channel in the legion"""
+            try:
+                # Validate legion exists
+                legion = await self.coordinator.legion_system.legion_coordinator.get_legion(legion_id)
+                if not legion:
+                    raise HTTPException(status_code=404, detail="Legion not found")
+
+                # Create channel via ChannelManager
+                channel_id = await self.coordinator.legion_system.channel_manager.create_channel(
+                    legion_id=legion_id,
+                    name=request.name,
+                    description=request.description,
+                    purpose=request.purpose,
+                    member_minion_ids=request.member_minion_ids,
+                    created_by_minion_id=None  # User-created channel
+                )
+
+                # Get the created channel
+                channel = await self.coordinator.legion_system.channel_manager.get_channel(channel_id)
+
+                return {
+                    "success": True,
+                    "channel_id": channel_id,
+                    "channel": channel.to_dict() if channel else None
+                }
+
+            except ValueError as e:
+                # ChannelManager raises ValueError for validation errors
+                logger.error(f"Validation error creating channel: {e}")
+                raise HTTPException(status_code=400, detail=str(e))
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"Failed to create channel: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @self.app.get("/api/legions/{legion_id}/channels")
+        async def list_channels(legion_id: str):
+            """List all channels in a legion"""
+            try:
+                # Validate legion exists
+                legion = await self.coordinator.legion_system.legion_coordinator.get_legion(legion_id)
+                if not legion:
+                    raise HTTPException(status_code=404, detail="Legion not found")
+
+                # Get all channels for this legion
+                channels = await self.coordinator.legion_system.channel_manager.list_channels(legion_id)
+
+                return {
+                    "channels": [channel.to_dict() for channel in channels],
+                    "total": len(channels)
+                }
+
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"Failed to list channels: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @self.app.get("/api/channels/{channel_id}")
+        async def get_channel_details(channel_id: str):
+            """Get details for a specific channel"""
+            try:
+                channel = await self.coordinator.legion_system.channel_manager.get_channel(channel_id)
+                if not channel:
+                    raise HTTPException(status_code=404, detail="Channel not found")
+
+                return {"channel": channel.to_dict()}
+
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"Failed to get channel details: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @self.app.post("/api/channels/{channel_id}/members")
+        async def manage_channel_member(channel_id: str, request: ChannelMemberRequest):
+            """Add or remove a member from a channel (with authorization)"""
+            try:
+                from src.models.legion_models import USER_MINION_ID
+
+                # Get channel
+                channel = await self.coordinator.legion_system.channel_manager.get_channel(channel_id)
+                if not channel:
+                    raise HTTPException(status_code=404, detail="Channel not found")
+
+                # Validate action
+                if request.action not in ["add", "remove"]:
+                    raise HTTPException(status_code=400, detail="Action must be 'add' or 'remove'")
+
+                # Authorization logic
+                is_user = request.self_id == USER_MINION_ID
+                is_self_action = request.self_id == request.member_id
+
+                if not is_user and not is_self_action:
+                    # Check if self_id is overseer of member_id
+                    overseer = await self.coordinator.session_manager.get_session_info(request.self_id)
+                    if not overseer or not overseer.is_minion:
+                        raise HTTPException(status_code=403, detail="Unauthorized: Actor is not a valid minion")
+
+                    # Check if member_id is child of overseer
+                    if request.member_id not in (overseer.child_minion_ids or []):
+                        raise HTTPException(
+                            status_code=403,
+                            detail="Unauthorized: Only user, the minion itself, or its overseer can manage membership"
+                        )
+
+                # Perform action
+                if request.action == "add":
+                    await self.coordinator.legion_system.channel_manager.add_member(channel_id, request.member_id)
+                    return {"success": True, "action": "added", "member_id": request.member_id}
+                else:  # remove
+                    await self.coordinator.legion_system.channel_manager.remove_member(channel_id, request.member_id)
+                    return {"success": True, "action": "removed", "member_id": request.member_id}
+
+            except ValueError as e:
+                # ChannelManager raises ValueError for validation errors
+                logger.error(f"Validation error managing channel member: {e}")
+                raise HTTPException(status_code=400, detail=str(e))
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"Failed to manage channel member: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @self.app.post("/api/channels/{channel_id}/broadcast")
+        async def broadcast_to_channel(channel_id: str, request: ChannelBroadcastRequest):
+            """Broadcast a comm to all members of a channel"""
+            try:
+                from src.models.legion_models import Comm, CommType, InterruptPriority, USER_MINION_ID
+
+                # Get channel
+                channel = await self.coordinator.legion_system.channel_manager.get_channel(channel_id)
+                if not channel:
+                    raise HTTPException(status_code=404, detail="Channel not found")
+
+                # Validate sender
+                if request.from_user:
+                    # User can always broadcast
+                    from_minion_id = None
+                    from_minion_name = None
+                elif request.from_minion_id:
+                    # Minion must be a member of the channel
+                    if request.from_minion_id not in channel.member_minion_ids:
+                        raise HTTPException(
+                            status_code=403,
+                            detail="Unauthorized: Minion must be a member to broadcast to this channel"
+                        )
+                    from_minion_id = request.from_minion_id
+                    from_minion_name = request.from_minion_name or "Unknown"
+                else:
+                    raise HTTPException(status_code=400, detail="Must specify from_user=true or from_minion_id")
+
+                # Map comm_type string to CommType enum
+                try:
+                    comm_type = CommType(request.comm_type.lower())
+                except ValueError:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Invalid comm_type. Valid values: {[t.value for t in CommType]}"
+                    )
+
+                # Create Comm for channel broadcast
+                comm = Comm(
+                    comm_id=str(uuid.uuid4()),
+                    from_user=request.from_user,
+                    from_minion_id=from_minion_id,
+                    from_minion_name=from_minion_name,
+                    to_channel_id=channel_id,
+                    to_channel_name=channel.name,
+                    to_user=False,
+                    summary=request.summary,
+                    content=request.content,
+                    comm_type=comm_type,
+                    interrupt_priority=InterruptPriority.ROUTINE,
+                    visible_to_user=True
+                )
+
+                # Route the comm via CommRouter
+                success = await self.coordinator.legion_system.comm_router.route_comm(comm)
+
+                if success:
+                    # Calculate recipient count (all members except sender if sender is a minion)
+                    if request.from_minion_id:
+                        recipient_count = len([m for m in channel.member_minion_ids if m != request.from_minion_id])
+                    else:
+                        recipient_count = len(channel.member_minion_ids)
+
+                    return {
+                        "success": True,
+                        "comm_id": comm.comm_id,
+                        "recipient_count": recipient_count
+                    }
+                else:
+                    raise HTTPException(status_code=500, detail="Failed to broadcast comm to channel")
+
+            except ValueError as e:
+                logger.error(f"Validation error broadcasting to channel: {e}")
+                raise HTTPException(status_code=400, detail=str(e))
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"Failed to broadcast to channel: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @self.app.get("/api/channels/{channel_id}/comms")
+        async def get_channel_history(channel_id: str, limit: int = 1000, offset: int = 0):
+            """Get communication history for a channel (paginated)"""
+            try:
+                # Get channel to verify it exists
+                channel = await self.coordinator.legion_system.channel_manager.get_channel(channel_id)
+                if not channel:
+                    raise HTTPException(status_code=404, detail="Channel not found")
+
+                # Read comms from channel log
+                channel_log_path = Path(channel.comm_log_path)
+                comms = []
+                total = 0
+
+                if channel_log_path.exists():
+                    # Count total comms
+                    with open(channel_log_path, 'r', encoding='utf-8') as f:
+                        lines = f.readlines()
+                        total = len(lines)
+
+                    # Parse paginated comms
+                    for line in lines[offset:offset + limit]:
+                        if line.strip():
+                            try:
+                                comm_data = json.loads(line)
+                                comms.append(comm_data)
+                            except json.JSONDecodeError:
+                                continue
+
+                return {
+                    "comms": comms,
+                    "total": total,
+                    "limit": limit,
+                    "offset": offset
+                }
+
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"Failed to get channel history: {e}")
                 raise HTTPException(status_code=500, detail=str(e))
 
         # ==================== FILESYSTEM ENDPOINTS ====================
