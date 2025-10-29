@@ -35,9 +35,6 @@ export const useLegionStore = defineStore('legion', () => {
   // Currently selected legion
   const currentLegionId = ref(null)
 
-  // Currently selected channel (for modal)
-  const selectedChannelId = ref(null)
-
   // ========== COMPUTED ==========
 
   // Current legion's comms
@@ -58,20 +55,6 @@ export const useLegionStore = defineStore('legion', () => {
   // Current legion's channels
   const currentChannels = computed(() => {
     return channelsByLegion.value.get(currentLegionId.value) || []
-  })
-
-  // Currently selected channel details
-  const selectedChannel = computed(() => {
-    return selectedChannelId.value
-      ? channelDetailsByChannel.value.get(selectedChannelId.value)
-      : null
-  })
-
-  // Currently selected channel comms
-  const selectedChannelComms = computed(() => {
-    return selectedChannelId.value
-      ? channelCommsByChannel.value.get(selectedChannelId.value) || []
-      : []
   })
 
   // ========== ACTIONS ==========
@@ -228,20 +211,6 @@ export const useLegionStore = defineStore('legion', () => {
   }
 
   /**
-   * Select a channel (open detail modal)
-   */
-  function selectChannel(channelId) {
-    selectedChannelId.value = channelId
-  }
-
-  /**
-   * Close channel modal
-   */
-  function closeChannelModal() {
-    selectedChannelId.value = null
-  }
-
-  /**
    * Load channel details
    */
   async function loadChannelDetails(channelId) {
@@ -364,15 +333,12 @@ export const useLegionStore = defineStore('legion', () => {
     channelDetailsByChannel,
     channelCommsByChannel,
     currentLegionId,
-    selectedChannelId,
 
     // Computed
     currentComms,
     currentMinions,
     currentHordes,
     currentChannels,
-    selectedChannel,
-    selectedChannelComms,
 
     // Actions
     setCurrentLegion,
@@ -383,8 +349,6 @@ export const useLegionStore = defineStore('legion', () => {
     createMinion,
     loadHordes,
     loadChannels,
-    selectChannel,
-    closeChannelModal,
     loadChannelDetails,
     loadChannelComms,
     addMemberToChannel,

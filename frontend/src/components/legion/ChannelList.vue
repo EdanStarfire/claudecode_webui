@@ -51,6 +51,7 @@
 
 <script setup>
 import { computed, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
 import { useLegionStore } from '@/stores/legion'
 
 const props = defineProps({
@@ -60,6 +61,7 @@ const props = defineProps({
   }
 })
 
+const router = useRouter()
 const legionStore = useLegionStore()
 
 const channels = computed(() => {
@@ -71,7 +73,8 @@ const channelCount = computed(() => {
 })
 
 function openChannelModal(channelId) {
-  legionStore.selectChannel(channelId)
+  // Navigate to channel view
+  router.push(`/channel/${props.project.project_id}/${channelId}`)
 }
 
 // Load channels when component mounts

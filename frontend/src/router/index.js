@@ -4,6 +4,7 @@ import SessionView from '../components/session/SessionView.vue'
 import TimelineView from '../components/legion/TimelineView.vue'
 import SpyView from '../components/legion/SpyView.vue'
 import HordeView from '../components/legion/HordeView.vue'
+import ChannelView from '../components/legion/ChannelView.vue'
 
 const routes = [
   {
@@ -33,6 +34,12 @@ const routes = [
     path: '/horde/:legionId',
     name: 'horde',
     component: HordeView,
+    props: true
+  },
+  {
+    path: '/channel/:legionId/:channelId',
+    name: 'channel',
+    component: ChannelView,
     props: true
   }
 ]
