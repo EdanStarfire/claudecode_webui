@@ -369,20 +369,165 @@ class LegionMCPTools:
         """
         Handle send_comm_to_channel tool call.
 
+        Broadcasts a message to all members of a channel. Sender must be a member
+        of the channel. Sender does not receive their own message back.
+
         Args:
-            args: {"channel_name": str, "content": str, "comm_type": str}
+            args: {
+                "_from_minion_id": str,  # Injected by tool wrapper
+                "channel_name": str,     # Channel name to send to
+                "content": str,          # Message content
+                "comm_type": str,        # Optional: "task", "question", "report", "info"
+                "summary": str           # Optional: Brief summary
+            }
 
         Returns:
             Tool result with content array
         """
-        # TODO: Implement in Phase 2
-        return {
-            "content": [{
-                "type": "text",
-                "text": f"send_comm_to_channel not yet implemented (would send to #{args.get('channel_name')})"
-            }],
-            "is_error": True
+        import uuid
+        from src.models.legion_models import Comm, CommType, InterruptPriority
+
+        # Get current minion context (from session_id in SDK context)
+        from_minion_id = args.get("_from_minion_id")
+
+        if not from_minion_id:
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": "Error: Unable to determine sender minion ID"
+                }],
+                "is_error": True
+            }
+
+        # Validate comm_type
+        comm_type_str = args.get("comm_type", "info").lower()
+        valid_comm_types = ["task", "question", "report", "info"]
+
+        comm_type_mapping = {
+            "task": "task",
+            "question": "question",
+            "report": "report",
+            "info": "info"
         }
+
+        if comm_type_str not in valid_comm_types:
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": f"Error: Invalid comm_type '{comm_type_str}'. Valid values are: {', '.join(valid_comm_types)}"
+                }],
+                "is_error": True
+            }
+
+        internal_comm_type = comm_type_mapping[comm_type_str]
+
+        # Look up channel by name
+        channel_name = args.get("channel_name")
+        if not channel_name:
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": "Error: 'channel_name' parameter is required"
+                }],
+                "is_error": True
+            }
+
+        # Get sender's legion to find channel
+        sender_session = await self.system.session_coordinator.session_manager.get_session_info(from_minion_id)
+        if not sender_session:
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": "Error: Unable to find sender session"
+                }],
+                "is_error": True
+            }
+
+        legion_id = sender_session.project_id
+
+        # Find channel by name in this legion
+        channels = await self.system.channel_manager.list_channels(legion_id)
+        target_channel = None
+        for channel in channels:
+            if channel.name == channel_name:
+                target_channel = channel
+                break
+
+        if not target_channel:
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": f"Error: Channel '{channel_name}' not found"
+                }],
+                "is_error": True
+            }
+
+        # Validate sender is a member of the channel
+        if from_minion_id not in target_channel.member_minion_ids:
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": f"Error: You are not a member of channel '{channel_name}'"
+                }],
+                "is_error": True
+            }
+
+        # Extract summary and content with fallback
+        content = args.get("content", "")
+        summary = args.get("summary", "")
+
+        # Fallback: If summary is empty, auto-generate from first 50 chars of content
+        if not summary and content:
+            summary = content[:50] + ("..." if len(content) > 50 else "")
+
+        # Look up sender minion name (for historical display)
+        from_minion_name = sender_session.name
+
+        # Create Comm for channel broadcast
+        comm = Comm(
+            comm_id=str(uuid.uuid4()),
+            from_minion_id=from_minion_id,
+            from_user=False,
+            from_minion_name=from_minion_name,
+            to_channel_id=target_channel.channel_id,
+            to_channel_name=target_channel.name,  # Capture channel name
+            to_user=False,
+            summary=summary,
+            content=content,
+            comm_type=CommType(internal_comm_type),
+            interrupt_priority=InterruptPriority.ROUTINE,
+            visible_to_user=True
+        )
+
+        # Route the comm (will broadcast to all members except sender)
+        try:
+            success = await self.system.comm_router.route_comm(comm)
+            if success:
+                # Calculate recipient count (all members except sender)
+                recipient_count = len([m for m in target_channel.member_minion_ids if m != from_minion_id])
+                return {
+                    "content": [{
+                        "type": "text",
+                        "text": f"Message broadcast to channel '{channel_name}' ({recipient_count} recipient{'s' if recipient_count != 1 else ''})"
+                    }],
+                    "is_error": False
+                }
+            else:
+                return {
+                    "content": [{
+                        "type": "text",
+                        "text": f"Failed to broadcast message to channel '{channel_name}'"
+                    }],
+                    "is_error": True
+                }
+        except Exception as e:
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": f"Error broadcasting to channel: {str(e)}"
+                }],
+                "is_error": True
+            }
 
     async def _handle_spawn_minion(self, args: Dict[str, Any]) -> Dict[str, Any]:
         """

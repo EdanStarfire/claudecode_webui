@@ -210,14 +210,91 @@ class CommRouter:
         """
         Broadcast Comm to all members of a channel.
 
+        Each member (except the sender) receives an individual copy of the comm.
+        The broadcast is persisted to the channel log and legion timeline.
+
         Args:
             comm: Comm with to_channel_id set
 
         Returns:
-            bool: True if broadcast succeeded
+            bool: True if broadcast succeeded (even if no recipients)
+
+        Raises:
+            ValueError: If channel does not exist
         """
-        # TODO: Phase 2 - Look up channel members and route to each
-        return True
+        try:
+            # Get channel information
+            channel = await self.system.channel_manager.get_channel(comm.to_channel_id)
+            if not channel:
+                legion_logger.error(f"Channel {comm.to_channel_id} not found for broadcast")
+                # Send error back to sender if from minion
+                if comm.from_minion_id:
+                    await self._send_system_error_comm(
+                        to_minion_id=comm.from_minion_id,
+                        error_message=f"Failed to broadcast: Channel not found",
+                        original_comm_id=comm.comm_id
+                    )
+                return False
+
+            legion_logger.info(f"Broadcasting comm {comm.comm_id} to channel '{channel.name}' (ID: {comm.to_channel_id}) with {len(channel.member_minion_ids)} members")
+
+            # Get list of recipients (all members except sender)
+            recipients = []
+            for member_id in channel.member_minion_ids:
+                # Exclude sender from recipients
+                if comm.from_minion_id and member_id == comm.from_minion_id:
+                    legion_logger.debug(f"Excluding sender {member_id} from channel broadcast recipients")
+                    continue
+                recipients.append(member_id)
+
+            legion_logger.info(f"Channel broadcast will be delivered to {len(recipients)} recipients")
+
+            # Deliver to each recipient individually
+            delivery_count = 0
+            for recipient_id in recipients:
+                # Create individual comm for this recipient
+                recipient_comm = Comm(
+                    comm_id=comm.comm_id,  # Same comm_id for all copies
+                    from_minion_id=comm.from_minion_id,
+                    from_user=comm.from_user,
+                    from_minion_name=comm.from_minion_name,
+                    to_minion_id=recipient_id,  # Individual recipient
+                    to_channel_id=None,  # Clear channel routing for individual delivery
+                    to_user=False,
+                    to_channel_name=comm.to_channel_name,  # Preserve channel context
+                    summary=comm.summary,
+                    content=comm.content,
+                    comm_type=comm.comm_type,
+                    interrupt_priority=comm.interrupt_priority,
+                    in_reply_to=comm.in_reply_to,
+                    related_task_id=comm.related_task_id,
+                    metadata={**comm.metadata, 'broadcast_from_channel': comm.to_channel_id},
+                    visible_to_user=comm.visible_to_user,
+                    timestamp=comm.timestamp
+                )
+
+                # Send to recipient (will auto-persist to recipient's comm log)
+                success = await self._send_to_minion(recipient_comm)
+                if success:
+                    delivery_count += 1
+                else:
+                    legion_logger.warning(f"Failed to deliver channel broadcast to minion {recipient_id}")
+
+            legion_logger.info(f"Channel broadcast delivered to {delivery_count}/{len(recipients)} recipients")
+
+            # Return success even if no recipients (empty channel or sender-only)
+            return True
+
+        except Exception as e:
+            legion_logger.error(f"Failed to broadcast comm {comm.comm_id} to channel {comm.to_channel_id}: {e}")
+            # Send error back to sender if from minion
+            if comm.from_minion_id:
+                await self._send_system_error_comm(
+                    to_minion_id=comm.from_minion_id,
+                    error_message=f"Failed to broadcast to channel: {str(e)}",
+                    original_comm_id=comm.comm_id
+                )
+            return False
 
     async def _send_to_user(self, comm: Comm) -> bool:
         """
