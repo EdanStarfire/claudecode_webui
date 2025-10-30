@@ -86,7 +86,7 @@ const deleteChannel = async () => {
     modalInstance.value?.hide()
   } catch (err) {
     console.error('Failed to delete channel:', err)
-    error.value = err.response?.data?.detail || 'Failed to delete channel'
+    error.value = err.data?.detail || err.message || 'Failed to delete channel'
   } finally {
     deleting.value = false
   }
