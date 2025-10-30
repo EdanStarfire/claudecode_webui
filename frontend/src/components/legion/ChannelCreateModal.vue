@@ -154,7 +154,7 @@ const createChannel = async () => {
     const response = await api.post(`/api/legions/${props.legionId}/channels`, {
       name: formData.value.name.trim(),
       purpose: formData.value.purpose.trim(),
-      description: formData.value.description.trim() || null,
+      description: formData.value.description.trim() || '',
       member_minion_ids: formData.value.member_minion_ids
     })
 
