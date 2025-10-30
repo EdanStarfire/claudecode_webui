@@ -74,11 +74,12 @@ class ChannelManager:
         if not legion:
             raise ValueError(f"Legion {legion_id} does not exist")
 
-        # Check channel name uniqueness per-legion
+        # Check channel name uniqueness per-legion (case-insensitive)
         existing_channels = await self.list_channels(legion_id)
+        name_lower = name.lower()
         for channel in existing_channels:
-            if channel.name == name:
-                raise ValueError(f"Channel with name '{name}' already exists in legion {legion_id}")
+            if channel.name.lower() == name_lower:
+                raise ValueError(f"Channel with name '{name}' already exists in legion {legion_id} (case-insensitive match: '{channel.name}')")
 
         # Validate member minion IDs exist
         member_minion_ids = member_minion_ids or []
