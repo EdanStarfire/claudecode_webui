@@ -1241,7 +1241,7 @@ class ClaudeWebUI:
                 if not legion:
                     raise HTTPException(status_code=404, detail="Legion not found")
 
-                # Validate channel exists
+                # Get channel to validate and capture name for response
                 channel = await self.coordinator.legion_system.channel_manager.get_channel(channel_id)
                 if not channel:
                     raise HTTPException(status_code=404, detail="Channel not found")
@@ -1250,8 +1250,13 @@ class ClaudeWebUI:
                 if channel.legion_id != legion_id:
                     raise HTTPException(status_code=400, detail="Channel does not belong to this legion")
 
-                # Delete channel via ChannelManager
-                await self.coordinator.legion_system.channel_manager.delete_channel(channel_id)
+                channel_name = channel.name
+
+                # Delete channel via ChannelManager (may raise KeyError if not in cache)
+                try:
+                    await self.coordinator.legion_system.channel_manager.delete_channel(channel_id)
+                except KeyError:
+                    raise HTTPException(status_code=404, detail="Channel not found")
 
                 # TODO: Broadcast channel_deleted via WebSocket to all connected clients
                 # await self.ui_websocket_manager.broadcast({
@@ -1262,7 +1267,7 @@ class ClaudeWebUI:
 
                 return {
                     "success": True,
-                    "message": f"Channel {channel.name} deleted successfully"
+                    "message": f"Channel {channel_name} deleted successfully"
                 }
 
             except ValueError as e:

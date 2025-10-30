@@ -33,7 +33,7 @@ class ChannelManager:
 
     async def get_channel(self, channel_id: str) -> Optional['Channel']:
         """
-        Get channel by ID.
+        Get channel by ID. If not in cache, attempts to load from disk.
 
         Args:
             channel_id: Channel UUID
@@ -41,7 +41,41 @@ class ChannelManager:
         Returns:
             Channel if found, None otherwise
         """
-        return self.system.legion_coordinator.channels.get(channel_id)
+        # Check cache first
+        channel = self.system.legion_coordinator.channels.get(channel_id)
+        if channel:
+            return channel
+
+        # Not in cache - try to load from disk
+        # Search all legions' channel directories
+        data_dir = self.system.session_coordinator.data_dir
+        legions_dir = data_dir / "legions"
+
+        if not legions_dir.exists():
+            return None
+
+        # Search each legion's channels directory
+        for legion_dir in legions_dir.iterdir():
+            if not legion_dir.is_dir():
+                continue
+
+            channel_state_path = legion_dir / "channels" / channel_id / "channel_state.json"
+            if channel_state_path.exists():
+                try:
+                    with open(channel_state_path, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+
+                    from src.models.legion_models import Channel
+                    channel = Channel(**data)
+
+                    # Add to cache for future access
+                    self.system.legion_coordinator.channels[channel_id] = channel
+                    return channel
+                except Exception:
+                    # Failed to load - continue searching
+                    continue
+
+        return None
 
     async def create_channel(
         self,
