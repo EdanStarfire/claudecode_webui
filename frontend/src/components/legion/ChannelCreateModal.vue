@@ -158,7 +158,7 @@ const createChannel = async () => {
       member_minion_ids: formData.value.member_minion_ids
     })
 
-    emit('created', response.data.channel)
+    emit('created', response.channel)
     modalInstance.value?.hide()
 
     // Reset form
