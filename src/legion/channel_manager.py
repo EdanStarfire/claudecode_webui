@@ -91,7 +91,6 @@ class ChannelManager:
         from src.models.legion_models import Channel
 
         channel_id = str(uuid.uuid4())
-        comm_log_path = f"data/legions/{legion_id}/channels/{channel_id}/comms.jsonl"
 
         channel = Channel(
             channel_id=channel_id,
@@ -101,7 +100,6 @@ class ChannelManager:
             purpose=purpose,
             member_minion_ids=member_minion_ids.copy(),
             created_by_minion_id=created_by_minion_id,
-            comm_log_path=comm_log_path,
             created_at=datetime.now(),
             updated_at=datetime.now()
         )

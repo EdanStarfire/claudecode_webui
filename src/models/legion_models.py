@@ -105,12 +105,22 @@ class Channel:
     member_minion_ids: List[str] = field(default_factory=list)
     created_by_minion_id: Optional[str] = None  # None if user-created
 
-    # Communication log
-    comm_log_path: str = ""     # Path to comms.jsonl
-
     # Metadata
     created_at: datetime = field(default_factory=datetime.now)
     updated_at: datetime = field(default_factory=datetime.now)
+
+    def get_comm_log_path(self, data_dir: 'Path') -> 'Path':
+        """
+        Get the path to the channel's comm log file.
+
+        Args:
+            data_dir: Base data directory path
+
+        Returns:
+            Absolute path to comms.jsonl for this channel
+        """
+        from pathlib import Path
+        return data_dir / "legions" / self.legion_id / "channels" / self.channel_id / "comms.jsonl"
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for serialization."""
@@ -122,7 +132,6 @@ class Channel:
             "purpose": self.purpose,
             "member_minion_ids": self.member_minion_ids,
             "created_by_minion_id": self.created_by_minion_id,
-            "comm_log_path": self.comm_log_path,
             "created_at": self.created_at.isoformat(),
             "updated_at": self.updated_at.isoformat(),
         }
@@ -133,6 +142,8 @@ class Channel:
         data = data.copy()
         data["created_at"] = datetime.fromisoformat(data["created_at"])
         data["updated_at"] = datetime.fromisoformat(data["updated_at"])
+        # Remove deprecated comm_log_path if present (backward compatibility)
+        data.pop("comm_log_path", None)
         return cls(**data)
 
 
