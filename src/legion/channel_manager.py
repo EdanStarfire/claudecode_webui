@@ -33,7 +33,7 @@ class ChannelManager:
 
     async def get_channel(self, channel_id: str) -> Optional['Channel']:
         """
-        Get channel by ID.
+        Get channel by ID. If not in cache, attempts to load from disk.
 
         Args:
             channel_id: Channel UUID
@@ -41,7 +41,41 @@ class ChannelManager:
         Returns:
             Channel if found, None otherwise
         """
-        return self.system.legion_coordinator.channels.get(channel_id)
+        # Check cache first
+        channel = self.system.legion_coordinator.channels.get(channel_id)
+        if channel:
+            return channel
+
+        # Not in cache - try to load from disk
+        # Search all legions' channel directories
+        data_dir = self.system.session_coordinator.data_dir
+        legions_dir = data_dir / "legions"
+
+        if not legions_dir.exists():
+            return None
+
+        # Search each legion's channels directory
+        for legion_dir in legions_dir.iterdir():
+            if not legion_dir.is_dir():
+                continue
+
+            channel_state_path = legion_dir / "channels" / channel_id / "channel_state.json"
+            if channel_state_path.exists():
+                try:
+                    with open(channel_state_path, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+
+                    from src.models.legion_models import Channel
+                    channel = Channel(**data)
+
+                    # Add to cache for future access
+                    self.system.legion_coordinator.channels[channel_id] = channel
+                    return channel
+                except Exception:
+                    # Failed to load - continue searching
+                    continue
+
+        return None
 
     async def create_channel(
         self,
@@ -74,11 +108,12 @@ class ChannelManager:
         if not legion:
             raise ValueError(f"Legion {legion_id} does not exist")
 
-        # Check channel name uniqueness per-legion
+        # Check channel name uniqueness per-legion (case-insensitive)
         existing_channels = await self.list_channels(legion_id)
+        name_lower = name.lower()
         for channel in existing_channels:
-            if channel.name == name:
-                raise ValueError(f"Channel with name '{name}' already exists in legion {legion_id}")
+            if channel.name.lower() == name_lower:
+                raise ValueError(f"Channel with name '{name}' already exists in legion {legion_id} (case-insensitive match: '{channel.name}')")
 
         # Validate member minion IDs exist
         member_minion_ids = member_minion_ids or []
@@ -199,7 +234,30 @@ class ChannelManager:
 
         if channel_dir.exists():
             import shutil
-            shutil.rmtree(channel_dir)
+            import time
+
+            # Windows-safe deletion with retry logic for locked files
+            def handle_remove_readonly(func, path, exc_info):
+                """Error handler for Windows readonly files."""
+                import os
+                import stat
+                if not os.access(path, os.W_OK):
+                    os.chmod(path, stat.S_IWUSR)
+                    func(path)
+                else:
+                    raise
+
+            try:
+                shutil.rmtree(channel_dir, onerror=handle_remove_readonly)
+            except PermissionError:
+                # Retry once after a brief delay (handles file locks on Windows)
+                time.sleep(0.1)
+                try:
+                    shutil.rmtree(channel_dir, onerror=handle_remove_readonly)
+                except Exception:
+                    # Directory deletion failed but channel removed from cache
+                    # Log warning but don't fail the operation
+                    pass
 
     async def list_channels(self, legion_id: str) -> List['Channel']:
         """

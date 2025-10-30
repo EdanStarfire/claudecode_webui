@@ -1232,6 +1232,53 @@ class ClaudeWebUI:
                 logger.error(f"Failed to get channel history: {e}")
                 raise HTTPException(status_code=500, detail=str(e))
 
+        @self.app.delete("/api/legions/{legion_id}/channels/{channel_id}")
+        async def delete_channel(legion_id: str, channel_id: str):
+            """Delete a channel and all its communications"""
+            try:
+                # Validate legion exists
+                legion = await self.coordinator.legion_system.legion_coordinator.get_legion(legion_id)
+                if not legion:
+                    raise HTTPException(status_code=404, detail="Legion not found")
+
+                # Get channel to validate and capture name for response
+                channel = await self.coordinator.legion_system.channel_manager.get_channel(channel_id)
+                if not channel:
+                    raise HTTPException(status_code=404, detail="Channel not found")
+
+                # Verify channel belongs to this legion
+                if channel.legion_id != legion_id:
+                    raise HTTPException(status_code=400, detail="Channel does not belong to this legion")
+
+                channel_name = channel.name
+
+                # Delete channel via ChannelManager (may raise KeyError if not in cache)
+                try:
+                    await self.coordinator.legion_system.channel_manager.delete_channel(channel_id)
+                except KeyError:
+                    raise HTTPException(status_code=404, detail="Channel not found")
+
+                # TODO: Broadcast channel_deleted via WebSocket to all connected clients
+                # await self.ui_websocket_manager.broadcast({
+                #     "type": "channel_deleted",
+                #     "legion_id": legion_id,
+                #     "channel_id": channel_id
+                # })
+
+                return {
+                    "success": True,
+                    "message": f"Channel {channel_name} deleted successfully"
+                }
+
+            except ValueError as e:
+                logger.error(f"Validation error deleting channel: {e}")
+                raise HTTPException(status_code=400, detail=str(e))
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"Failed to delete channel: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
         # ==================== FILESYSTEM ENDPOINTS ====================
 
         @self.app.get("/api/filesystem/browse")
