@@ -54,8 +54,9 @@
                     class="btn btn-sm btn-link text-danger p-0"
                     @click.stop="confirmDelete(channel)"
                     title="Delete channel"
+                    style="font-size: 1.1rem; line-height: 1;"
                   >
-                    <i class="bi bi-trash"></i>
+                    🗑️
                   </button>
                 </div>
               </div>
