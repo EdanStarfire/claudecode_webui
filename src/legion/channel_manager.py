@@ -234,7 +234,30 @@ class ChannelManager:
 
         if channel_dir.exists():
             import shutil
-            shutil.rmtree(channel_dir)
+            import time
+
+            # Windows-safe deletion with retry logic for locked files
+            def handle_remove_readonly(func, path, exc_info):
+                """Error handler for Windows readonly files."""
+                import os
+                import stat
+                if not os.access(path, os.W_OK):
+                    os.chmod(path, stat.S_IWUSR)
+                    func(path)
+                else:
+                    raise
+
+            try:
+                shutil.rmtree(channel_dir, onerror=handle_remove_readonly)
+            except PermissionError:
+                # Retry once after a brief delay (handles file locks on Windows)
+                time.sleep(0.1)
+                try:
+                    shutil.rmtree(channel_dir, onerror=handle_remove_readonly)
+                except Exception:
+                    # Directory deletion failed but channel removed from cache
+                    # Log warning but don't fail the operation
+                    pass
 
     async def list_channels(self, legion_id: str) -> List['Channel']:
         """
