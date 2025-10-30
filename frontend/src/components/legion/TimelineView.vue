@@ -37,7 +37,7 @@
                     </span>
                     <strong class="ms-2">{{ getSenderName(comm) }}</strong>
                     <span class="text-muted mx-1">→</span>
-                    <strong>{{ getRecipientName(comm) }}</strong>
+                    <strong :class="{ 'recipient-channel': comm.to_channel_id }">{{ getRecipientName(comm) }}</strong>
                   </div>
                 </div>
                 <div class="comm-content">
@@ -122,7 +122,12 @@ function getRecipientName(comm) {
     return minion?.name || 'Unknown'
   }
   if (comm.to_channel_id) {
-    return `#${comm.to_channel_id}`
+    // Prioritize channel name over ID for readability
+    if (comm.to_channel_name) {
+      return `#${comm.to_channel_name}`
+    }
+    // Fallback to UUID if name is missing
+    return comm.to_channel_id
   }
   return 'All'
 }
@@ -246,6 +251,12 @@ onUnmounted(() => {
   background-color: white;
   border: 1px solid #dee2e6;
   border-radius: 0.375rem;
+}
+
+/* Channel names styled distinctly with blue color */
+.recipient-channel {
+  color: #0d6efd !important;
+  font-weight: 500 !important;
 }
 
 .comm-content {
