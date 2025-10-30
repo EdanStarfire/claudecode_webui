@@ -1389,7 +1389,7 @@ class LegionMCPTools:
         comm = Comm(
             comm_id=str(uuid.uuid4()),
             from_minion_id=None,  # System-generated
-            from_user=False,
+            from_user=True,  # SYSTEM comms must have a source (use from_user=True)
             summary=summary,
             content=content,
             comm_type=CommType.SYSTEM,
