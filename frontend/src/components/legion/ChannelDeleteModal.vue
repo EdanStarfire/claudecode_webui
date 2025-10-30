@@ -1,44 +1,46 @@
 <template>
-  <div
-    ref="modalElement"
-    class="modal fade"
-    tabindex="-1"
-    aria-labelledby="deleteChannelModalLabel"
-    aria-hidden="true"
-  >
-    <div class="modal-dialog modal-dialog-centered">
-      <div class="modal-content">
-        <div class="modal-header">
-          <h5 id="deleteChannelModalLabel" class="modal-title">Delete Channel</h5>
-          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
-        </div>
-        <div class="modal-body">
-          <div v-if="error" class="alert alert-danger">{{ error }}</div>
-
-          <div class="alert alert-warning">
-            <strong>⚠️ Warning:</strong> This action cannot be undone.
+  <Teleport to="body">
+    <div
+      ref="modalElement"
+      class="modal fade"
+      tabindex="-1"
+      aria-labelledby="deleteChannelModalLabel"
+      aria-hidden="true"
+    >
+      <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h5 id="deleteChannelModalLabel" class="modal-title">Delete Channel</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
           </div>
+          <div class="modal-body">
+            <div v-if="error" class="alert alert-danger">{{ error }}</div>
 
-          <p>Are you sure you want to delete <strong>{{ channel?.name }}</strong>?</p>
-          <p class="text-muted">
-            This channel has {{ memberCount }} {{ memberCount === 1 ? 'member' : 'members' }}.
-            All channel communications will be permanently deleted.
-          </p>
-        </div>
-        <div class="modal-footer">
-          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-          <button
-            type="button"
-            class="btn btn-danger"
-            @click="deleteChannel"
-            :disabled="deleting"
-          >
-            {{ deleting ? 'Deleting...' : 'Delete Channel' }}
-          </button>
+            <div class="alert alert-warning">
+              <strong>⚠️ Warning:</strong> This action cannot be undone.
+            </div>
+
+            <p>Are you sure you want to delete <strong>{{ channel?.name }}</strong>?</p>
+            <p class="text-muted">
+              This channel has {{ memberCount }} {{ memberCount === 1 ? 'member' : 'members' }}.
+              All channel communications will be permanently deleted.
+            </p>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+            <button
+              type="button"
+              class="btn btn-danger"
+              @click="deleteChannel"
+              :disabled="deleting"
+            >
+              {{ deleting ? 'Deleting...' : 'Delete Channel' }}
+            </button>
+          </div>
         </div>
       </div>
     </div>
-  </div>
+  </Teleport>
 </template>
 
 <script setup>

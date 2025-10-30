@@ -1,21 +1,22 @@
 <template>
-  <div
-    ref="modalElement"
-    class="modal fade"
-    tabindex="-1"
-    aria-labelledby="createChannelModalLabel"
-    aria-hidden="true"
-  >
-    <div class="modal-dialog modal-dialog-centered">
-      <div class="modal-content">
-        <div class="modal-header">
-          <h5 id="createChannelModalLabel" class="modal-title">Create Channel</h5>
-          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
-        </div>
-        <div class="modal-body">
-          <div v-if="error" class="alert alert-danger">{{ error }}</div>
+  <Teleport to="body">
+    <div
+      ref="modalElement"
+      class="modal fade"
+      tabindex="-1"
+      aria-labelledby="createChannelModalLabel"
+      aria-hidden="true"
+    >
+      <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h5 id="createChannelModalLabel" class="modal-title">Create Channel</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+          </div>
+          <div class="modal-body">
+            <div v-if="error" class="alert alert-danger">{{ error }}</div>
 
-          <form @submit.prevent="createChannel">
+            <form @submit.prevent="createChannel">
             <div class="mb-3">
               <label for="channel-name" class="form-label">
                 Channel Name <span class="text-danger">*</span>
@@ -93,7 +94,8 @@
         </div>
       </div>
     </div>
-  </div>
+    </div>
+  </Teleport>
 </template>
 
 <script setup>
