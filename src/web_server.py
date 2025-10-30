@@ -1200,7 +1200,7 @@ class ClaudeWebUI:
                     raise HTTPException(status_code=404, detail="Channel not found")
 
                 # Read comms from channel log
-                channel_log_path = Path(channel.comm_log_path)
+                channel_log_path = channel.get_comm_log_path(self.coordinator.data_dir)
                 comms = []
                 total = 0
 

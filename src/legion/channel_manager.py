@@ -91,7 +91,6 @@ class ChannelManager:
         from src.models.legion_models import Channel
 
         channel_id = str(uuid.uuid4())
-        comm_log_path = f"data/legions/{legion_id}/channels/{channel_id}/comms.jsonl"
 
         channel = Channel(
             channel_id=channel_id,
@@ -101,7 +100,6 @@ class ChannelManager:
             purpose=purpose,
             member_minion_ids=member_minion_ids.copy(),
             created_by_minion_id=created_by_minion_id,
-            comm_log_path=comm_log_path,
             created_at=datetime.now(),
             updated_at=datetime.now()
         )
@@ -136,9 +134,9 @@ class ChannelManager:
         if not minion:
             raise ValueError(f"Minion {minion_id} does not exist")
 
-        # Check not already member
+        # Check not already member (idempotent - return success if already member)
         if minion_id in channel.member_minion_ids:
-            raise ValueError(f"Minion {minion_id} is already a member of channel {channel_id}")
+            return  # Already a member - idempotent success
 
         # Add member
         channel.member_minion_ids.append(minion_id)
@@ -164,9 +162,9 @@ class ChannelManager:
         if not channel:
             raise KeyError(f"Channel {channel_id} does not exist")
 
-        # Check minion is member
+        # Check minion is member (idempotent - return success if not a member)
         if minion_id not in channel.member_minion_ids:
-            raise ValueError(f"Minion {minion_id} is not a member of channel {channel_id}")
+            return  # Already not a member - idempotent success
 
         # Remove member
         channel.member_minion_ids.remove(minion_id)
