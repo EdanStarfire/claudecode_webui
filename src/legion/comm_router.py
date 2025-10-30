@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, List, Tuple, Optional
 from datetime import datetime
 
-from src.models.legion_models import Comm, CommType, InterruptPriority
+from src.models.legion_models import Comm, CommType, InterruptPriority, SYSTEM_MINION_ID, SYSTEM_MINION_NAME
 from src.logging_config import get_logger
 
 if TYPE_CHECKING:
@@ -329,12 +329,13 @@ class CommRouter:
             # Create system error comm
             error_comm = Comm(
                 comm_id=str(uuid.uuid4()),
-                from_minion_id="LEGION_SYSTEM",  # Special system identifier
+                from_minion_id=SYSTEM_MINION_ID,  # System-generated error
+                from_minion_name=SYSTEM_MINION_NAME,
                 from_user=False,
                 to_minion_id=to_minion_id,
                 to_user=False,
                 content=error_message,
-                comm_type=CommType.REPORT,  # Use REPORT for system messages
+                comm_type=CommType.SYSTEM,  # Use SYSTEM for system-generated messages
                 interrupt_priority=InterruptPriority.ROUTINE,
                 in_reply_to=original_comm_id,  # Reference the failed comm
                 visible_to_user=True
