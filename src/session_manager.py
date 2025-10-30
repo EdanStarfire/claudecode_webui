@@ -214,6 +214,11 @@ class SessionManager:
         horde_id: Optional[str] = None
     ) -> None:
         """Create a new session with provided ID (or minion if is_minion=True)"""
+        # Validate session_id is not reserved
+        from src.models.legion_models import RESERVED_MINION_IDS
+        if session_id in RESERVED_MINION_IDS:
+            raise ValueError(f"Cannot create session with reserved ID: {session_id}")
+
         now = datetime.now(timezone.utc)
 
         # Generate default name if not provided

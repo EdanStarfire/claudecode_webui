@@ -329,8 +329,18 @@ class LegionMCPTools:
         to_minion_name = args.get("to_minion_name")
 
         # Check if sending to the special "user" minion
-        from src.models.legion_models import USER_MINION_ID
+        from src.models.legion_models import USER_MINION_ID, SYSTEM_MINION_NAME
         sending_to_user = (to_minion_name == "user")
+
+        # Prevent sending to system (system only sends, never receives)
+        if to_minion_name and to_minion_name.lower() == SYSTEM_MINION_NAME:
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": f"Error: Cannot send comm to '{SYSTEM_MINION_NAME}'. System is a special identifier for system-generated messages only."
+                }],
+                "is_error": True
+            }
 
         if sending_to_user:
             to_minion_id = None  # User doesn't have a minion_id, only use to_user flag
@@ -1373,7 +1383,7 @@ class LegionMCPTools:
             actor_name: Name of the actor (minion or overseer)
         """
         import uuid
-        from src.models.legion_models import Comm, CommType, InterruptPriority
+        from src.models.legion_models import Comm, CommType, InterruptPriority, SYSTEM_MINION_ID, SYSTEM_MINION_NAME
 
         # Format message based on action
         if action in ["joined", "left"]:
@@ -1388,8 +1398,9 @@ class LegionMCPTools:
         # Create SYSTEM comm
         comm = Comm(
             comm_id=str(uuid.uuid4()),
-            from_minion_id=None,  # System-generated
-            from_user=True,  # SYSTEM comms must have a source (use from_user=True)
+            from_minion_id=SYSTEM_MINION_ID,  # System-generated messages
+            from_minion_name=SYSTEM_MINION_NAME,
+            from_user=False,
             summary=summary,
             content=content,
             comm_type=CommType.SYSTEM,

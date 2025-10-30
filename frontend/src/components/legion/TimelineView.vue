@@ -23,19 +23,20 @@
           v-for="comm in comms"
           :key="comm.comm_id"
           class="comm-item message-row row py-2 mb-2"
+          :class="{ 'system-comm': isSystemComm(comm) }"
         >
           <div class="col-auto message-speaker text-end pe-3">
             <small class="text-muted">{{ formatTimestamp(comm.timestamp) }}</small>
           </div>
           <div class="col message-content-column">
-            <div class="comm-card card">
+            <div class="comm-card card" :class="{ 'system-card': isSystemComm(comm) }">
               <div class="card-body p-2">
                 <div class="d-flex justify-content-between align-items-start mb-1">
                   <div>
                     <span class="badge" :class="getCommTypeBadge(comm.comm_type)">
                       {{ comm.comm_type }}
                     </span>
-                    <strong class="ms-2">{{ getSenderName(comm) }}</strong>
+                    <strong class="ms-2" :class="{ 'system-sender': isSystemComm(comm) }">{{ getSenderName(comm) }}</strong>
                     <span class="text-muted mx-1">→</span>
                     <strong :class="{ 'recipient-channel': comm.to_channel_id }">{{ getRecipientName(comm) }}</strong>
                   </div>
@@ -96,6 +97,16 @@ const comms = computed(() => legionStore.currentComms)
 // Get minions for name lookups
 const minions = computed(() => legionStore.currentMinions)
 
+// System minion ID constant (matches backend SYSTEM_MINION_ID)
+const SYSTEM_MINION_ID = 'ffffffff-ffff-ffff-ffff-ffffffffffff'
+
+/**
+ * Check if comm is from system
+ */
+function isSystemComm(comm) {
+  return comm.from_minion_id === SYSTEM_MINION_ID
+}
+
 /**
  * Get sender name (from minion or user)
  */
@@ -104,6 +115,10 @@ function getSenderName(comm) {
     return 'You'
   }
   if (comm.from_minion_id) {
+    // Check if system-generated
+    if (isSystemComm(comm)) {
+      return 'SYSTEM'
+    }
     const minion = sessionStore.sessions.get(comm.from_minion_id)
     return minion?.name || 'Unknown'
   }
@@ -256,6 +271,22 @@ onUnmounted(() => {
 /* Channel names styled distinctly with blue color */
 .recipient-channel {
   color: #0d6efd !important;
+  font-weight: 500 !important;
+}
+
+/* System message styling - muted and distinct */
+.system-comm {
+  opacity: 0.8;
+}
+
+.system-card {
+  background-color: #f5f5f5 !important;
+  border-color: #ced4da !important;
+}
+
+.system-sender {
+  color: #6c757d !important;
+  font-style: italic;
   font-weight: 500 !important;
 }
 

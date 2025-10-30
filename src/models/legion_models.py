@@ -21,6 +21,13 @@ from typing import List, Dict, Optional, Any
 # Reserved minion ID for the user (all zeros UUID)
 USER_MINION_ID = "00000000-0000-0000-0000-000000000000"
 
+# Reserved minion ID for system-generated messages (all F's UUID)
+SYSTEM_MINION_ID = "ffffffff-ffff-ffff-ffff-ffffffffffff"
+SYSTEM_MINION_NAME = "system"
+
+# Set of reserved minion IDs that cannot be used for real minions
+RESERVED_MINION_IDS = {USER_MINION_ID, SYSTEM_MINION_ID}
+
 
 # Enumerations
 
