@@ -182,7 +182,50 @@ class LegionMCPTools:
         )
         async def join_channel_tool(args: Dict[str, Any]) -> Dict[str, Any]:
             """Join a channel."""
+            args["_from_minion_id"] = session_id
             return await self._handle_join_channel(args)
+
+        @tool(
+            "leave_channel",
+            "Leave a channel you previously joined. You'll no longer receive broadcasts "
+            "to this channel. Useful when your work related to that channel is complete.",
+            {
+                "channel_name": str  # Name of channel to leave
+            }
+        )
+        async def leave_channel_tool(args: Dict[str, Any]) -> Dict[str, Any]:
+            """Leave a channel."""
+            args["_from_minion_id"] = session_id
+            return await self._handle_leave_channel(args)
+
+        @tool(
+            "add_minion_to_channel",
+            "Add one of your child minions to a channel (overseers only). You can only add "
+            "minions you directly spawned (your children), not grandchildren or unrelated minions. "
+            "Useful for organizing your team into specialized communication groups.",
+            {
+                "minion_name": str,   # Name of your child minion to add
+                "channel_name": str   # Name of channel to add them to
+            }
+        )
+        async def add_minion_to_channel_tool(args: Dict[str, Any]) -> Dict[str, Any]:
+            """Add child minion to channel."""
+            args["_parent_overseer_id"] = session_id
+            return await self._handle_add_minion_to_channel(args)
+
+        @tool(
+            "remove_minion_from_channel",
+            "Remove one of your child minions from a channel (overseers only). You can only remove "
+            "minions you directly spawned (your children), not grandchildren or unrelated minions.",
+            {
+                "minion_name": str,   # Name of your child minion to remove
+                "channel_name": str   # Name of channel to remove them from
+            }
+        )
+        async def remove_minion_from_channel_tool(args: Dict[str, Any]) -> Dict[str, Any]:
+            """Remove child minion from channel."""
+            args["_parent_overseer_id"] = session_id
+            return await self._handle_remove_minion_from_channel(args)
 
         @tool(
             "create_channel",
@@ -221,6 +264,9 @@ class LegionMCPTools:
                 list_minions_tool,
                 get_minion_info_tool,
                 join_channel_tool,
+                leave_channel_tool,
+                add_minion_to_channel_tool,
+                remove_minion_from_channel_tool,
                 create_channel_tool,
                 list_channels_tool
             ]
@@ -914,15 +960,375 @@ class LegionMCPTools:
         }
 
     async def _handle_join_channel(self, args: Dict[str, Any]) -> Dict[str, Any]:
-        """Handle join_channel tool call."""
-        # TODO: Implement in Phase 2
-        return {
-            "content": [{
-                "type": "text",
-                "text": f"join_channel not yet implemented (would join #{args.get('channel_name')})"
-            }],
-            "is_error": True
-        }
+        """
+        Handle join_channel tool call.
+
+        Minion joins a channel by name. Idempotent - joining an already-joined
+        channel returns success.
+
+        Args:
+            args: {
+                "_from_minion_id": str,  # Injected by tool wrapper
+                "channel_name": str
+            }
+
+        Returns:
+            Tool result with success/error message
+        """
+        from_minion_id = args.get("_from_minion_id")
+        if not from_minion_id:
+            return {
+                "content": [{"type": "text", "text": "Error: Unable to determine minion ID"}],
+                "is_error": True
+            }
+
+        channel_name = args.get("channel_name", "").strip()
+        if not channel_name:
+            return {
+                "content": [{"type": "text", "text": "Error: 'channel_name' parameter is required"}],
+                "is_error": True
+            }
+
+        # Get minion's legion
+        minion_session = await self.system.session_coordinator.session_manager.get_session_info(from_minion_id)
+        if not minion_session:
+            return {
+                "content": [{"type": "text", "text": "Error: Unable to find minion session"}],
+                "is_error": True
+            }
+
+        legion_id = minion_session.project_id
+
+        # Find channel by name
+        channel = await self.system.legion_coordinator.get_channel_by_name(legion_id, channel_name)
+        if not channel:
+            return {
+                "content": [{"type": "text", "text": f"Error: Channel '{channel_name}' not found"}],
+                "is_error": True
+            }
+
+        # Check if already a member (for clear messaging)
+        already_member = from_minion_id in channel.member_minion_ids
+
+        # Add to channel (idempotent)
+        try:
+            await self.system.channel_manager.add_member(channel.channel_id, from_minion_id)
+
+            # Log system comm
+            await self._log_membership_change_comm(
+                legion_id=legion_id,
+                channel=channel,
+                minion_id=from_minion_id,
+                minion_name=minion_session.name,
+                action="joined",
+                actor_name=minion_session.name
+            )
+
+            if already_member:
+                return {
+                    "content": [{"type": "text", "text": f"Already a member of channel '{channel_name}'"}],
+                    "is_error": False
+                }
+            else:
+                member_count = len(channel.member_minion_ids)
+                return {
+                    "content": [{"type": "text", "text": f"Joined channel '{channel_name}' ({member_count} member{'s' if member_count != 1 else ''})"}],
+                    "is_error": False
+                }
+
+        except Exception as e:
+            return {
+                "content": [{"type": "text", "text": f"Error joining channel: {str(e)}"}],
+                "is_error": True
+            }
+
+    async def _handle_leave_channel(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Handle leave_channel tool call.
+
+        Minion leaves a channel by name. Idempotent - leaving an already-left
+        channel returns success.
+
+        Args:
+            args: {
+                "_from_minion_id": str,  # Injected by tool wrapper
+                "channel_name": str
+            }
+
+        Returns:
+            Tool result with success/error message
+        """
+        from_minion_id = args.get("_from_minion_id")
+        if not from_minion_id:
+            return {
+                "content": [{"type": "text", "text": "Error: Unable to determine minion ID"}],
+                "is_error": True
+            }
+
+        channel_name = args.get("channel_name", "").strip()
+        if not channel_name:
+            return {
+                "content": [{"type": "text", "text": "Error: 'channel_name' parameter is required"}],
+                "is_error": True
+            }
+
+        # Get minion's legion
+        minion_session = await self.system.session_coordinator.session_manager.get_session_info(from_minion_id)
+        if not minion_session:
+            return {
+                "content": [{"type": "text", "text": "Error: Unable to find minion session"}],
+                "is_error": True
+            }
+
+        legion_id = minion_session.project_id
+
+        # Find channel by name
+        channel = await self.system.legion_coordinator.get_channel_by_name(legion_id, channel_name)
+        if not channel:
+            return {
+                "content": [{"type": "text", "text": f"Error: Channel '{channel_name}' not found"}],
+                "is_error": True
+            }
+
+        # Check if was a member (for comm logging)
+        was_member = from_minion_id in channel.member_minion_ids
+
+        # Remove from channel (idempotent)
+        try:
+            await self.system.channel_manager.remove_member(channel.channel_id, from_minion_id)
+
+            # Log system comm only if was actually a member
+            if was_member:
+                await self._log_membership_change_comm(
+                    legion_id=legion_id,
+                    channel=channel,
+                    minion_id=from_minion_id,
+                    minion_name=minion_session.name,
+                    action="left",
+                    actor_name=minion_session.name
+                )
+
+            return {
+                "content": [{"type": "text", "text": f"Left channel '{channel_name}'"}],
+                "is_error": False
+            }
+
+        except Exception as e:
+            return {
+                "content": [{"type": "text", "text": f"Error leaving channel: {str(e)}"}],
+                "is_error": True
+            }
+
+    async def _handle_add_minion_to_channel(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Handle add_minion_to_channel tool call (overseer only).
+
+        Overseer adds a direct child minion to a channel. Can only manage
+        direct children (not grandchildren or unrelated minions).
+
+        Args:
+            args: {
+                "_parent_overseer_id": str,  # Injected by tool wrapper
+                "minion_name": str,
+                "channel_name": str
+            }
+
+        Returns:
+            Tool result with success/error message
+        """
+        overseer_id = args.get("_parent_overseer_id")
+        if not overseer_id:
+            return {
+                "content": [{"type": "text", "text": "Error: Unable to determine overseer ID"}],
+                "is_error": True
+            }
+
+        minion_name = args.get("minion_name", "").strip()
+        channel_name = args.get("channel_name", "").strip()
+
+        if not minion_name:
+            return {
+                "content": [{"type": "text", "text": "Error: 'minion_name' parameter is required"}],
+                "is_error": True
+            }
+
+        if not channel_name:
+            return {
+                "content": [{"type": "text", "text": "Error: 'channel_name' parameter is required"}],
+                "is_error": True
+            }
+
+        # Get overseer's legion
+        overseer_session = await self.system.session_coordinator.session_manager.get_session_info(overseer_id)
+        if not overseer_session:
+            return {
+                "content": [{"type": "text", "text": "Error: Unable to find overseer session"}],
+                "is_error": True
+            }
+
+        legion_id = overseer_session.project_id
+
+        # Look up target minion by name
+        target_minion = await self.system.legion_coordinator.get_minion_by_name(minion_name)
+        if not target_minion:
+            return {
+                "content": [{"type": "text", "text": f"Error: Minion '{minion_name}' not found"}],
+                "is_error": True
+            }
+
+        target_minion_id = target_minion.session_id
+
+        # Validate overseer owns this minion (direct child only)
+        if target_minion.parent_overseer_id != overseer_id:
+            return {
+                "content": [{"type": "text", "text": f"Error: Not authorized - '{minion_name}' is not your direct child"}],
+                "is_error": True
+            }
+
+        # Find channel by name
+        channel = await self.system.legion_coordinator.get_channel_by_name(legion_id, channel_name)
+        if not channel:
+            return {
+                "content": [{"type": "text", "text": f"Error: Channel '{channel_name}' not found"}],
+                "is_error": True
+            }
+
+        # Check if already a member (for clear messaging)
+        already_member = target_minion_id in channel.member_minion_ids
+
+        # Add to channel (idempotent)
+        try:
+            await self.system.channel_manager.add_member(channel.channel_id, target_minion_id)
+
+            # Log system comm
+            await self._log_membership_change_comm(
+                legion_id=legion_id,
+                channel=channel,
+                minion_id=target_minion_id,
+                minion_name=minion_name,
+                action="added to",
+                actor_name=overseer_session.name
+            )
+
+            if already_member:
+                return {
+                    "content": [{"type": "text", "text": f"'{minion_name}' is already a member of channel '{channel_name}'"}],
+                    "is_error": False
+                }
+            else:
+                return {
+                    "content": [{"type": "text", "text": f"Added '{minion_name}' to channel '{channel_name}'"}],
+                    "is_error": False
+                }
+
+        except Exception as e:
+            return {
+                "content": [{"type": "text", "text": f"Error adding minion to channel: {str(e)}"}],
+                "is_error": True
+            }
+
+    async def _handle_remove_minion_from_channel(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Handle remove_minion_from_channel tool call (overseer only).
+
+        Overseer removes a direct child minion from a channel. Can only manage
+        direct children (not grandchildren or unrelated minions).
+
+        Args:
+            args: {
+                "_parent_overseer_id": str,  # Injected by tool wrapper
+                "minion_name": str,
+                "channel_name": str
+            }
+
+        Returns:
+            Tool result with success/error message
+        """
+        overseer_id = args.get("_parent_overseer_id")
+        if not overseer_id:
+            return {
+                "content": [{"type": "text", "text": "Error: Unable to determine overseer ID"}],
+                "is_error": True
+            }
+
+        minion_name = args.get("minion_name", "").strip()
+        channel_name = args.get("channel_name", "").strip()
+
+        if not minion_name:
+            return {
+                "content": [{"type": "text", "text": "Error: 'minion_name' parameter is required"}],
+                "is_error": True
+            }
+
+        if not channel_name:
+            return {
+                "content": [{"type": "text", "text": "Error: 'channel_name' parameter is required"}],
+                "is_error": True
+            }
+
+        # Get overseer's legion
+        overseer_session = await self.system.session_coordinator.session_manager.get_session_info(overseer_id)
+        if not overseer_session:
+            return {
+                "content": [{"type": "text", "text": "Error: Unable to find overseer session"}],
+                "is_error": True
+            }
+
+        legion_id = overseer_session.project_id
+
+        # Look up target minion by name
+        target_minion = await self.system.legion_coordinator.get_minion_by_name(minion_name)
+        if not target_minion:
+            return {
+                "content": [{"type": "text", "text": f"Error: Minion '{minion_name}' not found"}],
+                "is_error": True
+            }
+
+        target_minion_id = target_minion.session_id
+
+        # Validate overseer owns this minion (direct child only)
+        if target_minion.parent_overseer_id != overseer_id:
+            return {
+                "content": [{"type": "text", "text": f"Error: Not authorized - '{minion_name}' is not your direct child"}],
+                "is_error": True
+            }
+
+        # Find channel by name
+        channel = await self.system.legion_coordinator.get_channel_by_name(legion_id, channel_name)
+        if not channel:
+            return {
+                "content": [{"type": "text", "text": f"Error: Channel '{channel_name}' not found"}],
+                "is_error": True
+            }
+
+        # Check if was a member (for comm logging)
+        was_member = target_minion_id in channel.member_minion_ids
+
+        # Remove from channel (idempotent)
+        try:
+            await self.system.channel_manager.remove_member(channel.channel_id, target_minion_id)
+
+            # Log system comm only if was actually a member
+            if was_member:
+                await self._log_membership_change_comm(
+                    legion_id=legion_id,
+                    channel=channel,
+                    minion_id=target_minion_id,
+                    minion_name=minion_name,
+                    action="removed from",
+                    actor_name=overseer_session.name
+                )
+
+            return {
+                "content": [{"type": "text", "text": f"Removed '{minion_name}' from channel '{channel_name}'"}],
+                "is_error": False
+            }
+
+        except Exception as e:
+            return {
+                "content": [{"type": "text", "text": f"Error removing minion from channel: {str(e)}"}],
+                "is_error": True
+            }
 
     async def _handle_create_channel(self, args: Dict[str, Any]) -> Dict[str, Any]:
         """Handle create_channel tool call."""
@@ -945,3 +1351,53 @@ class LegionMCPTools:
             }],
             "is_error": True
         }
+
+    async def _log_membership_change_comm(
+        self,
+        legion_id: str,
+        channel: 'Channel',
+        minion_id: str,
+        minion_name: str,
+        action: str,
+        actor_name: str
+    ) -> None:
+        """
+        Log a membership change as a SYSTEM comm.
+
+        Args:
+            legion_id: Legion UUID
+            channel: Channel instance
+            minion_id: ID of minion being added/removed
+            minion_name: Name of minion being added/removed
+            action: "joined", "left", "added to", or "removed from"
+            actor_name: Name of the actor (minion or overseer)
+        """
+        import uuid
+        from src.models.legion_models import Comm, CommType, InterruptPriority
+
+        # Format message based on action
+        if action in ["joined", "left"]:
+            # Self-action by minion
+            summary = f"{minion_name} {action} #{channel.name}"
+            content = f"Minion **{minion_name}** {action} channel **#{channel.name}**"
+        else:
+            # Overseer action
+            summary = f"{actor_name} {action} {minion_name} to #{channel.name}"
+            content = f"Overseer **{actor_name}** {action} minion **{minion_name}** {'to' if 'added' in action else 'from'} channel **#{channel.name}**"
+
+        # Create SYSTEM comm
+        comm = Comm(
+            comm_id=str(uuid.uuid4()),
+            from_minion_id=None,  # System-generated
+            from_user=False,
+            summary=summary,
+            content=content,
+            comm_type=CommType.SYSTEM,
+            interrupt_priority=InterruptPriority.ROUTINE,
+            visible_to_user=True,
+            to_channel_id=channel.channel_id,
+            to_channel_name=channel.name
+        )
+
+        # Route comm (logs to timeline and channel history)
+        await self.system.comm_router.route_comm(comm)

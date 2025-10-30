@@ -82,6 +82,24 @@ class LegionCoordinator:
                 return session
         return None
 
+    async def get_channel_by_name(self, legion_id: str, channel_name: str) -> Optional['Channel']:
+        """
+        Get channel by name within a specific legion (case-sensitive).
+
+        Args:
+            legion_id: Legion UUID
+            channel_name: Channel name
+
+        Returns:
+            Channel if found, None otherwise
+        """
+        from src.models.legion_models import Channel
+        channels = await self.system.channel_manager.list_channels(legion_id)
+        for channel in channels:
+            if channel.name == channel_name:
+                return channel
+        return None
+
     async def get_legion(self, legion_id: str) -> Optional['ProjectInfo']:
         """
         Get legion (project with is_multi_agent=True) by ID.
