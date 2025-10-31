@@ -116,9 +116,20 @@ export const useWebSocketStore = defineStore('websocket', () => {
 
       const timeSincePing = Date.now() - config.lastPing.value
       if (timeSincePing > PING_TIMEOUT_MS) {
-        console.warn(`⚠️ ${config.name} WebSocket heartbeat timeout (${timeSincePing}ms since last ping) - marking as disconnected`)
+        console.warn(`⚠️ ${config.name} WebSocket heartbeat timeout (${timeSincePing}ms since last ping) - forcing close to trigger reconnection`)
         config.connected.value = false
-        // Note: Don't manually close socket - let onclose handler manage reconnection
+
+        // CRITICAL: Manually close the socket to trigger onclose handler and reconnection logic
+        // The socket is still technically "open" from browser's perspective, but network is dead
+        const socketMap = {
+          ui: uiSocket,
+          session: sessionSocket,
+          legion: legionSocket
+        }
+        const socket = socketMap[type]
+        if (socket.value && socket.value.readyState === WebSocket.OPEN) {
+          socket.value.close()
+        }
       }
     }, HEARTBEAT_CHECK_INTERVAL_MS))
 
