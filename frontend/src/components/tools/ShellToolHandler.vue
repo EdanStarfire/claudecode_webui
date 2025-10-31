@@ -22,13 +22,27 @@
         <span v-if="shellStatus" class="badge" :class="statusBadgeClass">{{ shellStatus }}</span>
       </div>
 
-      <!-- Output content -->
-      <div v-if="outputContent" class="shell-output">
-        <pre><code>{{ outputContent }}</code></pre>
+      <!-- Stdout output -->
+      <div v-if="parsedResult?.stdout" class="mb-2">
+        <div class="output-label">Output:</div>
+        <div class="shell-output">
+          <pre><code>{{ parsedResult.stdout }}</code></pre>
+        </div>
       </div>
 
-      <!-- Success/Error message -->
-      <div v-else class="tool-result" :class="resultClass">
+      <!-- Stderr output -->
+      <div v-if="parsedResult?.stderr" class="mb-2">
+        <div class="output-label text-danger">
+          <i class="bi bi-exclamation-triangle"></i>
+          Errors:
+        </div>
+        <div class="shell-output shell-output-error">
+          <pre><code>{{ parsedResult.stderr }}</code></pre>
+        </div>
+      </div>
+
+      <!-- Success/Error message (shown when no stdout/stderr) -->
+      <div v-if="!parsedResult?.stdout && !parsedResult?.stderr" class="tool-result" :class="resultClass">
         <div v-if="toolCall.result.success !== false">
           <i class="bi bi-check-circle"></i>
           {{ resultMessage }}
@@ -78,15 +92,73 @@ const filter = computed(() => {
   return props.toolCall.input?.filter
 })
 
+// Helper to extract content from XML-like tags
+function extractTagContent(text, tag) {
+  if (!text) return null
+  const regex = new RegExp(`<${tag}>([\\s\\S]*?)<\\/${tag}>`, 'i')
+  const match = text.match(regex)
+  return match ? match[1].trim() : null
+}
+
+// Parse the tool result content (which may contain XML-like tags)
+const parsedResult = computed(() => {
+  const result = props.toolCall.result
+  if (!result) return null
+
+  // Extract the actual content - it might be wrapped in result.content
+  let contentToParse = result
+  if (result.content) {
+    contentToParse = result.content
+  }
+
+  // If content is a string, parse XML tags
+  if (typeof contentToParse === 'string') {
+    return {
+      status: extractTagContent(contentToParse, 'status'),
+      stdout: extractTagContent(contentToParse, 'stdout'),
+      stderr: extractTagContent(contentToParse, 'stderr'),
+      exit_code: extractTagContent(contentToParse, 'exit_code')
+    }
+  }
+
+  // If content is an array (Claude SDK format)
+  if (Array.isArray(contentToParse)) {
+    const textContent = contentToParse.find(c => c.type === 'text')?.text || ''
+    return {
+      status: extractTagContent(textContent, 'status'),
+      stdout: extractTagContent(textContent, 'stdout'),
+      stderr: extractTagContent(textContent, 'stderr'),
+      exit_code: extractTagContent(textContent, 'exit_code')
+    }
+  }
+
+  // Otherwise return the result as-is (fallback for object format)
+  return {
+    status: result.status || contentToParse.status,
+    stdout: result.stdout || result.output || contentToParse.stdout || contentToParse.output,
+    stderr: result.stderr || contentToParse.stderr,
+    exit_code: result.exit_code || contentToParse.exit_code
+  }
+})
+
 const outputContent = computed(() => {
   if (props.toolCall.name === 'BashOutput') {
-    return props.toolCall.result?.output || props.toolCall.result?.stdout
+    const parsed = parsedResult.value
+    if (!parsed) return null
+
+    // Combine stdout and stderr if both exist
+    const parts = []
+    if (parsed.stdout) parts.push(parsed.stdout)
+    if (parsed.stderr) parts.push(`[stderr]\n${parsed.stderr}`)
+
+    return parts.length > 0 ? parts.join('\n\n') : null
   }
   return null
 })
 
 const shellStatus = computed(() => {
-  return props.toolCall.result?.status
+  const parsed = parsedResult.value
+  return parsed?.status
 })
 
 const statusBadgeClass = computed(() => {
@@ -111,6 +183,16 @@ const resultMessage = computed(() => {
 
   if (props.toolCall.name === 'KillShell') {
     return 'Shell terminated successfully'
+  }
+
+  if (props.toolCall.name === 'BashOutput') {
+    const parsed = parsedResult.value
+    if (parsed?.status === 'running' && !parsed.stdout && !parsed.stderr) {
+      return 'No new output since last check'
+    }
+    if (parsed?.status === 'failed') {
+      return `Shell failed (exit code ${parsed.exit_code || 'unknown'})`
+    }
   }
 
   return 'Operation completed'
@@ -171,6 +253,12 @@ const resultMessage = computed(() => {
   font-weight: 600;
 }
 
+.output-label {
+  font-weight: 600;
+  margin-bottom: 0.25rem;
+  font-size: 0.875rem;
+}
+
 .shell-output {
   background: #1e1e1e;
   border-radius: 0.25rem;
@@ -187,6 +275,15 @@ const resultMessage = computed(() => {
   font-size: 0.85rem;
   line-height: 1.4;
   white-space: pre;
+}
+
+.shell-output-error {
+  background: #2d1f1f;
+  border: 1px solid #dc3545;
+}
+
+.shell-output-error pre {
+  color: #f48771;
 }
 
 .tool-result {
