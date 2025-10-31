@@ -515,7 +515,7 @@ class ClaudeSDK:
                                 "type": "user",
                                 "content": content,
                                 "session_id": self.session_id,
-                                "timestamp": datetime.now(timezone.utc).isoformat()
+                                "timestamp": datetime.now(timezone.utc).timestamp()
                             }
 
                             # Store user message if storage available

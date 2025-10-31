@@ -11,7 +11,7 @@ This consolidation reduces duplication and leverages existing infrastructure.
 """
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import List, Dict, Optional, Any
 
@@ -187,8 +187,8 @@ class Comm:
     # Visibility
     visible_to_user: bool = True  # Should this show in UI?
 
-    # Timestamp
-    timestamp: datetime = field(default_factory=datetime.now)
+    # Timestamp (Unix timestamp in seconds)
+    timestamp: float = field(default_factory=lambda: datetime.now(timezone.utc).timestamp())
 
     def validate(self) -> bool:
         """Ensure Comm has valid routing."""
@@ -229,7 +229,7 @@ class Comm:
             "related_task_id": self.related_task_id,
             "metadata": self.metadata,
             "visible_to_user": self.visible_to_user,
-            "timestamp": self.timestamp.isoformat(),
+            "timestamp": self.timestamp,
         }
 
     @classmethod
@@ -238,5 +238,12 @@ class Comm:
         data = data.copy()
         data["comm_type"] = CommType(data["comm_type"])
         data["interrupt_priority"] = InterruptPriority(data["interrupt_priority"])
-        data["timestamp"] = datetime.fromisoformat(data["timestamp"])
+
+        # Handle both Unix timestamp (float) and ISO format (str) for backwards compatibility
+        timestamp = data["timestamp"]
+        if isinstance(timestamp, str):
+            # Old ISO format - convert to Unix timestamp
+            data["timestamp"] = datetime.fromisoformat(timestamp).timestamp()
+        # else: already a float, use as-is
+
         return cls(**data)

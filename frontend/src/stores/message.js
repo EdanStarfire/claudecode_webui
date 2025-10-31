@@ -214,6 +214,7 @@ export const useMessageStore = defineStore('message', () => {
 
   /**
    * Add a message to a session (from WebSocket)
+   * Now with deduplication to prevent duplicate messages on reconnection
    */
   function addMessage(sessionId, message) {
     if (!messagesBySession.value.has(sessionId)) {
@@ -221,6 +222,16 @@ export const useMessageStore = defineStore('message', () => {
     }
 
     const messages = messagesBySession.value.get(sessionId)
+
+    // Deduplicate: Check if message with this ID already exists
+    if (message.id) {
+      const existingIndex = messages.findIndex(m => m.id === message.id)
+      if (existingIndex !== -1) {
+        console.log(`Skipping duplicate message ${message.id} (already exists at index ${existingIndex})`)
+        return // Skip duplicate message
+      }
+    }
+
     messages.push(message)
 
     // Track last received timestamp for reconnection sync
@@ -500,10 +511,21 @@ export const useMessageStore = defineStore('message', () => {
       const hasMore = data.has_more || false
 
       // Filter messages newer than last received timestamp
-      const lastTimestampMs = new Date(lastTimestamp).getTime()
+      // Handle both Unix timestamp (float seconds) and ISO 8601 string formats
+      const normalizeTimestamp = (ts) => {
+        if (!ts) return 0
+        if (typeof ts === 'number') {
+          // Unix timestamp in seconds - convert to milliseconds
+          return ts * 1000
+        }
+        // ISO 8601 string
+        return new Date(ts).getTime()
+      }
+
+      const lastTimestampMs = normalizeTimestamp(lastTimestamp)
       const newMessages = allMessages.filter(m => {
         if (!m.timestamp) return false
-        const msgTimestampMs = new Date(m.timestamp).getTime()
+        const msgTimestampMs = normalizeTimestamp(m.timestamp)
         return msgTimestampMs > lastTimestampMs
       })
 
@@ -523,15 +545,56 @@ export const useMessageStore = defineStore('message', () => {
 
       console.log(`After deduplication: ${uniqueNewMessages.length} unique new messages`)
 
-      // Merge new messages and sort by timestamp
-      const mergedMessages = [...existingMessages, ...uniqueNewMessages].sort((a, b) => {
-        const timeA = new Date(a.timestamp || 0).getTime()
-        const timeB = new Date(b.timestamp || 0).getTime()
-        return timeA - timeB
-      })
+      // Only merge and sort if there are new messages
+      // This prevents re-sorting existing messages on every reconnection
+      if (uniqueNewMessages.length > 0) {
+        // Sort only the new messages by timestamp (using normalized timestamps)
+        const sortedNewMessages = uniqueNewMessages.sort((a, b) => {
+          const timeA = normalizeTimestamp(a.timestamp)
+          const timeB = normalizeTimestamp(b.timestamp)
+          return timeA - timeB
+        })
 
-      // Update messages
-      messagesBySession.value.set(sessionId, mergedMessages)
+        // CRITICAL: Get the ACTUAL last message from existingMessages (which may have been
+        // updated by real-time WebSocket messages during disconnect), not the cached timestamp
+        // Re-fetch existingMessages to ensure we have the latest state
+        const currentMessages = messagesBySession.value.get(sessionId) || []
+        const lastExistingTimestamp = currentMessages.length > 0
+          ? normalizeTimestamp(currentMessages[currentMessages.length - 1].timestamp)
+          : 0
+        const firstNewTimestamp = normalizeTimestamp(sortedNewMessages[0].timestamp)
+        const lastNewTimestamp = normalizeTimestamp(sortedNewMessages[sortedNewMessages.length - 1].timestamp)
+
+        console.log(`Timestamp comparison:`, {
+          existingCount: currentMessages.length,
+          lastExisting: lastExistingTimestamp,
+          lastExistingDate: currentMessages.length > 0 ? currentMessages[currentMessages.length - 1].timestamp : 'none',
+          firstNew: firstNewTimestamp,
+          firstNewDate: sortedNewMessages[0].timestamp,
+          lastNew: lastNewTimestamp,
+          lastNewDate: sortedNewMessages[sortedNewMessages.length - 1].timestamp,
+          shouldAppend: firstNewTimestamp > lastExistingTimestamp
+        })
+
+        if (firstNewTimestamp > lastExistingTimestamp) {
+          // Simple append - new messages are all newer than existing ones
+          const mergedMessages = [...currentMessages, ...sortedNewMessages]
+          messagesBySession.value.set(sessionId, mergedMessages)
+          console.log(`✅ Appended ${sortedNewMessages.length} new messages (no full sort needed)`)
+        } else {
+          // Need to merge and sort - some new messages are older than existing ones
+          const mergedMessages = [...currentMessages, ...sortedNewMessages].sort((a, b) => {
+            const timeA = normalizeTimestamp(a.timestamp)
+            const timeB = normalizeTimestamp(b.timestamp)
+            return timeA - timeB
+          })
+          messagesBySession.value.set(sessionId, mergedMessages)
+          console.log(`⚠️ Merged and sorted ${sortedNewMessages.length} new messages (interleaved with existing)`)
+        }
+      } else {
+        // No new messages - don't touch existing array to avoid triggering re-render
+        console.log(`No new messages to merge, keeping existing ${existingMessages.length} messages unchanged`)
+      }
 
       // Process new messages for tool uses, results, etc.
       uniqueNewMessages.forEach(message => {
@@ -566,9 +629,10 @@ export const useMessageStore = defineStore('message', () => {
         }
       })
 
-      // Update last received timestamp
-      if (mergedMessages.length > 0) {
-        const lastMessage = mergedMessages[mergedMessages.length - 1]
+      // Update last received timestamp from the updated message list
+      const updatedMessages = messagesBySession.value.get(sessionId)
+      if (updatedMessages && updatedMessages.length > 0) {
+        const lastMessage = updatedMessages[updatedMessages.length - 1]
         if (lastMessage.timestamp) {
           lastReceivedTimestamp.value.set(sessionId, lastMessage.timestamp)
         }

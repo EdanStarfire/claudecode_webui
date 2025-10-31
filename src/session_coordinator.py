@@ -20,6 +20,7 @@ from .logging_config import get_logger
 from .message_parser import MessageParser, MessageProcessor
 from .project_manager import ProjectInfo, ProjectManager
 from .session_manager import SessionInfo, SessionManager, SessionState
+from .timestamp_utils import get_unix_timestamp
 from src.legion.minion_system_prompts import get_legion_guide_only
 
 # Get specialized logger for coordinator actions
@@ -1129,7 +1130,7 @@ class SessionCoordinator:
                     "session_id": session_id,
                     "error_type": error_type,
                     "error": str(error),
-                    "timestamp": datetime.now(timezone.utc).isoformat()
+                    "timestamp": get_unix_timestamp()
                 }
 
                 logger.error(f"SDK error in session {session_id}: {error_type} - {error}")
@@ -1193,7 +1194,7 @@ class SessionCoordinator:
                 "subtype": "client_launched",
                 "content": "Claude Code Launched",
                 "session_id": session_id,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "timestamp": get_unix_timestamp(),
                 "sdk_message_type": "SystemMessage"
             }
 
@@ -1224,7 +1225,7 @@ class SessionCoordinator:
                 "subtype": "session_failed",
                 "content": f"Session failed to start: {error_message}",
                 "session_id": session_id,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "timestamp": get_unix_timestamp(),
                 "sdk_message_type": "SystemMessage",
                 "error_details": error_message
             }
@@ -1249,7 +1250,7 @@ class SessionCoordinator:
                 "subtype": "interrupt",
                 "content": "User Interrupted Processing",
                 "session_id": session_id,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "timestamp": get_unix_timestamp(),
                 "sdk_message_type": "SystemMessage"
             }
 
@@ -1314,7 +1315,7 @@ class SessionCoordinator:
             state_data = {
                 "session_id": session_id,
                 "new_state": new_state.value,
-                "timestamp": datetime.now(timezone.utc).isoformat()
+                "timestamp": get_unix_timestamp()
             }
 
             for callback in self._state_change_callbacks:

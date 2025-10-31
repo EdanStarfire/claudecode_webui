@@ -13,6 +13,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from .timestamp_utils import get_unix_timestamp
+
 from .logging_config import get_logger
 
 # Get specialized logger for storage debugging
@@ -53,9 +55,9 @@ class DataStorageManager:
     async def append_message(self, message_data: Dict[str, Any]):
         """Append a message to the activity log (JSONL format)"""
         try:
-            # Add timestamp if not present
+            # Add timestamp if not present (Unix timestamp float for consistency)
             if 'timestamp' not in message_data:
-                message_data['timestamp'] = datetime.now(timezone.utc).isoformat()
+                message_data['timestamp'] = get_unix_timestamp()
 
             # Append to JSONL file
             with open(self.messages_file, 'a', encoding='utf-8') as f:
