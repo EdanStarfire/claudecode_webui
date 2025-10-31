@@ -433,6 +433,18 @@ const toolSummary = computed(() => {
     case 'WebFetch':
     case 'WebSearch': {
       const url = input.url || input.query || ''
+
+      // For WebSearch, the query is not a URL - display it directly
+      if (toolName === 'WebSearch') {
+        const query = input.query || ''
+        const displayQuery = query.length > 50 ? query.substring(0, 50) + '...' : query
+        if (status === 'completed' && result) {
+          return result.error ? `Web: ${displayQuery} (error)` : `Web: ${displayQuery} (success)`
+        }
+        return `Web: ${displayQuery}`
+      }
+
+      // For WebFetch, extract domain from URL
       let domain = ''
       try {
         if (url) {
