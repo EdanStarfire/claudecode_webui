@@ -26,6 +26,7 @@ from .logging_config import get_logger
 from .message_parser import MessageParser, MessageProcessor
 from .session_coordinator import SessionCoordinator
 from .session_manager import SessionState
+from .timestamp_utils import normalize_timestamp
 
 # Get specialized logger for WebSocket lifecycle debugging
 ws_logger = get_logger('websocket_debug', category='WS_LIFECYCLE')
@@ -839,8 +840,17 @@ class ClaudeWebUI:
                                             except json.JSONDecodeError:
                                                 continue
 
+                # Normalize timestamps to handle mixed string/float formats (backwards compatibility)
+                for comm in all_comms:
+                    if 'timestamp' in comm:
+                        try:
+                            comm['timestamp'] = normalize_timestamp(comm['timestamp'])
+                        except (ValueError, TypeError) as e:
+                            logger.warning(f"Invalid timestamp in comm {comm.get('comm_id', 'unknown')}: {e}, using current time")
+                            comm['timestamp'] = datetime.now(timezone.utc).timestamp()
+
                 # Sort by timestamp (newest first) and deduplicate
-                all_comms.sort(key=lambda x: x.get('timestamp', ''), reverse=True)
+                all_comms.sort(key=lambda x: x.get('timestamp', 0.0), reverse=True)
 
                 # Deduplicate by comm_id (since comms appear in both sender and receiver logs)
                 seen_ids = set()

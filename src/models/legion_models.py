@@ -15,6 +15,8 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import List, Dict, Optional, Any
 
+from src.timestamp_utils import normalize_timestamp
+
 
 # Constants
 
@@ -239,11 +241,12 @@ class Comm:
         data["comm_type"] = CommType(data["comm_type"])
         data["interrupt_priority"] = InterruptPriority(data["interrupt_priority"])
 
-        # Handle both Unix timestamp (float) and ISO format (str) for backwards compatibility
-        timestamp = data["timestamp"]
-        if isinstance(timestamp, str):
-            # Old ISO format - convert to Unix timestamp
-            data["timestamp"] = datetime.fromisoformat(timestamp).timestamp()
-        # else: already a float, use as-is
+        # Normalize timestamp to handle mixed string/float formats (backwards compatibility)
+        if "timestamp" in data:
+            try:
+                data["timestamp"] = normalize_timestamp(data["timestamp"])
+            except (ValueError, TypeError):
+                # Fallback to current time if timestamp is invalid
+                data["timestamp"] = datetime.now(timezone.utc).timestamp()
 
         return cls(**data)
