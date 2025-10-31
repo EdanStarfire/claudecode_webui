@@ -537,15 +537,35 @@ export const useMessageStore = defineStore('message', () => {
       // Only merge and sort if there are new messages
       // This prevents re-sorting existing messages on every reconnection
       if (uniqueNewMessages.length > 0) {
-        // Merge new messages and sort by timestamp
-        const mergedMessages = [...existingMessages, ...uniqueNewMessages].sort((a, b) => {
+        // Sort only the new messages by timestamp
+        const sortedNewMessages = uniqueNewMessages.sort((a, b) => {
           const timeA = new Date(a.timestamp || 0).getTime()
           const timeB = new Date(b.timestamp || 0).getTime()
           return timeA - timeB
         })
 
-        // Update messages
-        messagesBySession.value.set(sessionId, mergedMessages)
+        // Check if new messages should be appended or need to be merged
+        // If all new messages are newer than the last existing message, just append
+        const lastExistingTimestamp = existingMessages.length > 0
+          ? new Date(existingMessages[existingMessages.length - 1].timestamp || 0).getTime()
+          : 0
+        const firstNewTimestamp = new Date(sortedNewMessages[0].timestamp || 0).getTime()
+
+        if (firstNewTimestamp >= lastExistingTimestamp) {
+          // Simple append - new messages are all newer than existing ones
+          const mergedMessages = [...existingMessages, ...sortedNewMessages]
+          messagesBySession.value.set(sessionId, mergedMessages)
+          console.log(`Appended ${sortedNewMessages.length} new messages (no full sort needed)`)
+        } else {
+          // Need to merge and sort - some new messages are older than existing ones
+          const mergedMessages = [...existingMessages, ...sortedNewMessages].sort((a, b) => {
+            const timeA = new Date(a.timestamp || 0).getTime()
+            const timeB = new Date(b.timestamp || 0).getTime()
+            return timeA - timeB
+          })
+          messagesBySession.value.set(sessionId, mergedMessages)
+          console.log(`Merged and sorted ${sortedNewMessages.length} new messages (interleaved with existing)`)
+        }
       } else {
         // No new messages - don't touch existing array to avoid triggering re-render
         console.log(`No new messages to merge, keeping existing ${existingMessages.length} messages unchanged`)
