@@ -39,6 +39,20 @@ export const useWebSocketStore = defineStore('websocket', () => {
   const maxLegionRetries = 5
   const currentLegionId = ref(null)
 
+  // Heartbeat monitoring configuration
+  const PING_TIMEOUT_MS = 5000  // 5 seconds without ping = disconnected
+  const HEARTBEAT_CHECK_INTERVAL_MS = 1000  // Check every second
+
+  // Heartbeat last received timestamps
+  const uiLastPingTime = ref(Date.now())
+  const sessionLastPingTime = ref(Date.now())
+  const legionLastPingTime = ref(Date.now())
+
+  // Heartbeat check timers
+  let uiHeartbeatTimer = null
+  let sessionHeartbeatTimer = null
+  let legionHeartbeatTimer = null
+
   // ========== COMPUTED ==========
 
   const overallStatus = computed(() => {
@@ -62,6 +76,83 @@ export const useWebSocketStore = defineStore('websocket', () => {
     return `${protocol}//${window.location.host}${path}`
   }
 
+  /**
+   * Start heartbeat timeout monitoring for a connection.
+   * Marks connection as dead if no ping received within PING_TIMEOUT_MS.
+   */
+  function startHeartbeatMonitor(type) {
+    const config = {
+      ui: {
+        timer: () => uiHeartbeatTimer,
+        setTimer: (val) => { uiHeartbeatTimer = val },
+        lastPing: uiLastPingTime,
+        connected: uiConnected,
+        name: 'UI'
+      },
+      session: {
+        timer: () => sessionHeartbeatTimer,
+        setTimer: (val) => { sessionHeartbeatTimer = val },
+        lastPing: sessionLastPingTime,
+        connected: sessionConnected,
+        name: 'Session'
+      },
+      legion: {
+        timer: () => legionHeartbeatTimer,
+        setTimer: (val) => { legionHeartbeatTimer = val },
+        lastPing: legionLastPingTime,
+        connected: legionConnected,
+        name: 'Legion'
+      }
+    }[type]
+
+    // Clear any existing timer
+    if (config.timer()) {
+      clearInterval(config.timer())
+    }
+
+    // Start heartbeat monitoring
+    config.setTimer(setInterval(() => {
+      if (!config.connected.value) return // Already disconnected
+
+      const timeSincePing = Date.now() - config.lastPing.value
+      if (timeSincePing > PING_TIMEOUT_MS) {
+        console.warn(`⚠️ ${config.name} WebSocket heartbeat timeout (${timeSincePing}ms since last ping) - forcing close to trigger reconnection`)
+        config.connected.value = false
+
+        // CRITICAL: Manually close the socket to trigger onclose handler and reconnection logic
+        // The socket is still technically "open" from browser's perspective, but network is dead
+        const socketMap = {
+          ui: uiSocket,
+          session: sessionSocket,
+          legion: legionSocket
+        }
+        const socket = socketMap[type]
+        if (socket.value && socket.value.readyState === WebSocket.OPEN) {
+          socket.value.close()
+        }
+      }
+    }, HEARTBEAT_CHECK_INTERVAL_MS))
+
+    console.log(`✅ Started heartbeat monitor for ${config.name} WebSocket`)
+  }
+
+  /**
+   * Stop heartbeat monitoring for a connection
+   */
+  function stopHeartbeatMonitor(type) {
+    const timers = {
+      ui: { get: () => uiHeartbeatTimer, set: (val) => { uiHeartbeatTimer = val } },
+      session: { get: () => sessionHeartbeatTimer, set: (val) => { sessionHeartbeatTimer = val } },
+      legion: { get: () => legionHeartbeatTimer, set: (val) => { legionHeartbeatTimer = val } }
+    }[type]
+
+    if (timers.get()) {
+      clearInterval(timers.get())
+      timers.set(null)
+      console.log(`🛑 Stopped heartbeat monitor for ${type} WebSocket`)
+    }
+  }
+
   // ========== ACTIONS ==========
 
   /**
@@ -78,6 +169,8 @@ export const useWebSocketStore = defineStore('websocket', () => {
     uiSocket.value.onopen = () => {
       uiConnected.value = true
       uiRetryCount.value = 0
+      uiLastPingTime.value = Date.now()  // Reset ping timestamp
+      startHeartbeatMonitor('ui')  // Start monitoring
       console.log('UI WebSocket connected')
     }
 
@@ -87,6 +180,7 @@ export const useWebSocketStore = defineStore('websocket', () => {
     }
 
     uiSocket.value.onclose = () => {
+      stopHeartbeatMonitor('ui')  // Stop monitoring
       uiConnected.value = false
       uiSocket.value = null
       console.log('UI WebSocket closed')
@@ -160,6 +254,8 @@ export const useWebSocketStore = defineStore('websocket', () => {
 
       sessionConnected.value = true
       sessionRetryCount.value = 0
+      sessionLastPingTime.value = Date.now()  // Reset ping timestamp
+      startHeartbeatMonitor('session')  // Start monitoring
       console.log(`[Gen ${generation}] Session WebSocket connected for ${sessionId}`)
 
       // Check if this is a reconnection (not initial connection)
@@ -205,6 +301,7 @@ export const useWebSocketStore = defineStore('websocket', () => {
     }
 
     sessionSocket.value.onclose = () => {
+      stopHeartbeatMonitor('session')  // Stop monitoring
       sessionConnected.value = false
       sessionSocket.value = null
       console.log(`[Gen ${generation}] Session WebSocket closed for ${sessionId}`)
@@ -392,6 +489,7 @@ export const useWebSocketStore = defineStore('websocket', () => {
         break
 
       case 'ping':
+        uiLastPingTime.value = Date.now()  // Update heartbeat timestamp
         // Respond to keepalive ping with pong
         if (uiSocket.value?.readyState === WebSocket.OPEN) {
           uiSocket.value.send(JSON.stringify({
@@ -499,6 +597,7 @@ export const useWebSocketStore = defineStore('websocket', () => {
         break
 
       case 'ping':
+        sessionLastPingTime.value = Date.now()  // Update heartbeat timestamp
         // Respond to keepalive ping with pong
         if (sessionSocket.value?.readyState === WebSocket.OPEN) {
           sessionSocket.value.send(JSON.stringify({
@@ -529,6 +628,8 @@ export const useWebSocketStore = defineStore('websocket', () => {
     legionSocket.value.onopen = () => {
       legionConnected.value = true
       legionRetryCount.value = 0
+      legionLastPingTime.value = Date.now()  // Reset ping timestamp
+      startHeartbeatMonitor('legion')  // Start monitoring
       console.log(`Legion WebSocket connected for ${legionId}`)
     }
 
@@ -538,6 +639,7 @@ export const useWebSocketStore = defineStore('websocket', () => {
     }
 
     legionSocket.value.onclose = () => {
+      stopHeartbeatMonitor('legion')  // Stop monitoring
       legionConnected.value = false
       legionSocket.value = null
       console.log(`Legion WebSocket closed for ${legionId}`)
@@ -614,6 +716,7 @@ export const useWebSocketStore = defineStore('websocket', () => {
           break
 
         case 'ping':
+          legionLastPingTime.value = Date.now()  // Update heartbeat timestamp
           // Respond to keepalive ping with pong
           if (legionSocket.value?.readyState === WebSocket.OPEN) {
             legionSocket.value.send(JSON.stringify({

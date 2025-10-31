@@ -1351,7 +1351,7 @@ class ClaudeWebUI:
                 while True:
                     try:
                         # Wait for any incoming messages (ping, etc.)
-                        message = await asyncio.wait_for(websocket.receive_text(), timeout=30.0)
+                        message = await asyncio.wait_for(websocket.receive_text(), timeout=3.0)
                         logger.debug(f"UI WebSocket received: {message}")
 
                         # Handle ping/pong for keepalive
@@ -1411,7 +1411,7 @@ class ClaudeWebUI:
                 while True:
                     try:
                         # Wait for ping messages from client (keepalive)
-                        message = await asyncio.wait_for(websocket.receive_text(), timeout=30.0)
+                        message = await asyncio.wait_for(websocket.receive_text(), timeout=3.0)
                         try:
                             message_data = json.loads(message)
                             if message_data.get("type") == "ping":
@@ -1514,9 +1514,9 @@ class ClaudeWebUI:
                     # Wait for incoming messages with proper error handling
                     try:
                         message_wait_start_time = time.time()
-                        ws_logger.debug(f"WebSocket waiting for message from session {session_id} (timeout=30s)")
+                        ws_logger.debug(f"WebSocket waiting for message from session {session_id} (timeout=3s)")
 
-                        message = await asyncio.wait_for(websocket.receive_text(), timeout=30.0)
+                        message = await asyncio.wait_for(websocket.receive_text(), timeout=3.0)
 
                         message_received_time = time.time()
                         ws_logger.debug(f"WebSocket received message from session {session_id} at {message_received_time}: {message[:100]}...")
