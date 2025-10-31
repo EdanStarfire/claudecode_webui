@@ -432,21 +432,10 @@ const toolSummary = computed(() => {
 
     case 'WebFetch':
     case 'WebSearch': {
-      let url = input.url || input.query || ''
-
-      // Decode URL-encoded query for display
-      if (input.query && toolName === 'WebSearch') {
-        try {
-          url = decodeURIComponent(input.query)
-        } catch (e) {
-          // If decoding fails, use original
-          url = input.query
-        }
-      }
-
+      const url = input.url || input.query || ''
       let domain = ''
       try {
-        if (url && toolName === 'WebFetch') {
+        if (url) {
           const parsedUrl = new URL(url.startsWith('http') ? url : `https://${url}`)
           domain = parsedUrl.hostname
         }
@@ -455,7 +444,7 @@ const toolSummary = computed(() => {
         domain = url.length > 50 ? url.substring(0, 50) + '...' : url
       }
       if (status === 'completed' && result) {
-        return result.error ? `Web: ${domain || url} (error)` : `Web: ${domain || url} (success)`
+        return result.error ? `Web: ${domain} (error)` : `Web: ${domain} (success)`
       }
       return `Web: ${domain || url}`
     }

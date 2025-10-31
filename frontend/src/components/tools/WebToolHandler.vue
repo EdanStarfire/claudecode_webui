@@ -6,7 +6,7 @@
         <span class="web-icon">{{ webIcon }}</span>
         <strong>{{ webLabel }}:</strong>
         <a v-if="url" :href="url" target="_blank" class="web-url">{{ url }}</a>
-        <code v-else-if="query" class="web-query">{{ decodedQuery }}</code>
+        <code v-else-if="query" class="web-query">{{ query }}</code>
       </div>
 
       <div v-if="prompt" class="web-prompt-container">
@@ -60,20 +60,6 @@ const url = computed(() => {
 
 const query = computed(() => {
   return props.toolCall.input?.query || null
-})
-
-// Decoded query for display (handles URL encoding)
-const decodedQuery = computed(() => {
-  try {
-    const rawQuery = query.value
-    if (!rawQuery) return null
-    // Decode URL encoding for human-readable display
-    return decodeURIComponent(rawQuery)
-  } catch (e) {
-    // If decoding fails (malformed input), return original
-    console.warn('Failed to decode query:', e)
-    return query.value
-  }
 })
 
 const prompt = computed(() => {
