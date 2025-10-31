@@ -214,6 +214,7 @@ export const useMessageStore = defineStore('message', () => {
 
   /**
    * Add a message to a session (from WebSocket)
+   * Now with deduplication to prevent duplicate messages on reconnection
    */
   function addMessage(sessionId, message) {
     if (!messagesBySession.value.has(sessionId)) {
@@ -221,6 +222,16 @@ export const useMessageStore = defineStore('message', () => {
     }
 
     const messages = messagesBySession.value.get(sessionId)
+
+    // Deduplicate: Check if message with this ID already exists
+    if (message.id) {
+      const existingIndex = messages.findIndex(m => m.id === message.id)
+      if (existingIndex !== -1) {
+        console.log(`Skipping duplicate message ${message.id} (already exists at index ${existingIndex})`)
+        return // Skip duplicate message
+      }
+    }
+
     messages.push(message)
 
     // Track last received timestamp for reconnection sync
@@ -523,15 +534,22 @@ export const useMessageStore = defineStore('message', () => {
 
       console.log(`After deduplication: ${uniqueNewMessages.length} unique new messages`)
 
-      // Merge new messages and sort by timestamp
-      const mergedMessages = [...existingMessages, ...uniqueNewMessages].sort((a, b) => {
-        const timeA = new Date(a.timestamp || 0).getTime()
-        const timeB = new Date(b.timestamp || 0).getTime()
-        return timeA - timeB
-      })
+      // Only merge and sort if there are new messages
+      // This prevents re-sorting existing messages on every reconnection
+      if (uniqueNewMessages.length > 0) {
+        // Merge new messages and sort by timestamp
+        const mergedMessages = [...existingMessages, ...uniqueNewMessages].sort((a, b) => {
+          const timeA = new Date(a.timestamp || 0).getTime()
+          const timeB = new Date(b.timestamp || 0).getTime()
+          return timeA - timeB
+        })
 
-      // Update messages
-      messagesBySession.value.set(sessionId, mergedMessages)
+        // Update messages
+        messagesBySession.value.set(sessionId, mergedMessages)
+      } else {
+        // No new messages - don't touch existing array to avoid triggering re-render
+        console.log(`No new messages to merge, keeping existing ${existingMessages.length} messages unchanged`)
+      }
 
       // Process new messages for tool uses, results, etc.
       uniqueNewMessages.forEach(message => {
