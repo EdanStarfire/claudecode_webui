@@ -105,19 +105,25 @@ const parsedResult = computed(() => {
   const result = props.toolCall.result
   if (!result) return null
 
-  // If result is a string, parse XML tags
-  if (typeof result === 'string') {
+  // Extract the actual content - it might be wrapped in result.content
+  let contentToParse = result
+  if (result.content) {
+    contentToParse = result.content
+  }
+
+  // If content is a string, parse XML tags
+  if (typeof contentToParse === 'string') {
     return {
-      status: extractTagContent(result, 'status'),
-      stdout: extractTagContent(result, 'stdout'),
-      stderr: extractTagContent(result, 'stderr'),
-      exit_code: extractTagContent(result, 'exit_code')
+      status: extractTagContent(contentToParse, 'status'),
+      stdout: extractTagContent(contentToParse, 'stdout'),
+      stderr: extractTagContent(contentToParse, 'stderr'),
+      exit_code: extractTagContent(contentToParse, 'exit_code')
     }
   }
 
-  // If result is an object with content array (Claude SDK format)
-  if (result.content && Array.isArray(result.content)) {
-    const textContent = result.content.find(c => c.type === 'text')?.text || ''
+  // If content is an array (Claude SDK format)
+  if (Array.isArray(contentToParse)) {
+    const textContent = contentToParse.find(c => c.type === 'text')?.text || ''
     return {
       status: extractTagContent(textContent, 'status'),
       stdout: extractTagContent(textContent, 'stdout'),
@@ -126,12 +132,12 @@ const parsedResult = computed(() => {
     }
   }
 
-  // Otherwise return the result as-is
+  // Otherwise return the result as-is (fallback for object format)
   return {
-    status: result.status,
-    stdout: result.stdout || result.output,
-    stderr: result.stderr,
-    exit_code: result.exit_code
+    status: result.status || contentToParse.status,
+    stdout: result.stdout || result.output || contentToParse.stdout || contentToParse.output,
+    stderr: result.stderr || contentToParse.stderr,
+    exit_code: result.exit_code || contentToParse.exit_code
   }
 })
 
