@@ -270,7 +270,7 @@ class OverseerController:
             project_id=legion_id,
             name=name,
             permission_mode=permission_mode or "default",
-            allowed_tools=allowed_tools,  # None means all tools
+            tools=allowed_tools,  # Parameter name is 'tools' in create_session
             system_prompt=system_prompt,
             # Minion-specific fields
             role=role,
