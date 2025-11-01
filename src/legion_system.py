@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Optional, Any
 if TYPE_CHECKING:
     from src.session_coordinator import SessionCoordinator
     from src.data_storage import DataStorageManager
+    from src.template_manager import TemplateManager
     from src.legion.legion_coordinator import LegionCoordinator
     from src.legion.overseer_controller import OverseerController
     from src.legion.channel_manager import ChannelManager
@@ -47,6 +48,7 @@ class LegionSystem:
     # Existing infrastructure (injected at creation)
     session_coordinator: 'SessionCoordinator'
     data_storage_manager: 'DataStorageManager'
+    template_manager: 'TemplateManager'
     ui_websocket_manager: Optional[Any] = None  # UIWebSocketManager (optional, for broadcasting project updates)
 
     # Legion components (initialized in __post_init__)

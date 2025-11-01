@@ -251,6 +251,22 @@ class LegionMCPTools:
             """List all channels."""
             return await self._handle_list_channels(args)
 
+        @tool(
+            "list_templates",
+            "List all available minion templates with their permission configurations. "
+            "Templates are pre-configured permission sets that can be used when spawning "
+            "child minions. Use this to discover what types of minions are available and "
+            "recommend appropriate templates based on task requirements."
+            "\n\nExample:"
+            "\n- list_templates() returns all templates"
+            "\n- Use with spawn_minion to apply template: spawn_minion(name='Helper', template_name='Code Expert')"
+            "\n\nTemplates include permission_mode and allowed_tools for each minion type.",
+            {}  # No parameters required
+        )
+        async def list_templates_tool(args: Dict[str, Any]) -> Dict[str, Any]:
+            """List all minion templates."""
+            return await self._handle_list_templates(args)
+
         # Create and return MCP server with all tools
         return create_sdk_mcp_server(
             name="legion",
@@ -268,7 +284,8 @@ class LegionMCPTools:
                 add_minion_to_channel_tool,
                 remove_minion_from_channel_tool,
                 create_channel_tool,
-                list_channels_tool
+                list_channels_tool,
+                list_templates_tool
             ]
         )
 
@@ -1361,6 +1378,81 @@ class LegionMCPTools:
             }],
             "is_error": True
         }
+
+    async def _handle_list_templates(self, args: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Handle list_templates tool call.
+
+        Returns formatted list of all available minion templates.
+
+        Args:
+            args: {} (no parameters)
+
+        Returns:
+            Tool result with formatted template list
+        """
+        try:
+            # Get all templates from TemplateManager
+            templates = await self.system.template_manager.list_templates()
+
+            # Handle empty case
+            if not templates:
+                return {
+                    "content": [{
+                        "type": "text",
+                        "text": (
+                            "No templates available.\n\n"
+                            "Templates are pre-configured permission sets for minions. "
+                            "Ask the user to create templates through the UI (Manage Templates)."
+                        )
+                    }],
+                    "is_error": False
+                }
+
+            # Sort templates alphabetically by name
+            templates = sorted(templates, key=lambda t: t.name)
+
+            # Build formatted list
+            result_lines = ["**Available Minion Templates:**\n"]
+
+            for template in templates:
+                # Format allowed tools
+                tools_str = ", ".join(template.allowed_tools) if template.allowed_tools else "None"
+                if len(tools_str) > 60:  # Truncate if too long
+                    tools_str = tools_str[:60] + "..."
+
+                # Build template entry
+                result_lines.append(
+                    f"• **{template.name}**\n"
+                    f"  - Description: {template.description or 'No description'}\n"
+                    f"  - Permission Mode: {template.permission_mode}\n"
+                    f"  - Allowed Tools: {tools_str}\n"
+                    f"  - Default Role: {template.default_role or 'Not specified'}\n"
+                )
+
+            # Add usage hint
+            result_lines.append(
+                "\n**Usage:**\n"
+                "To spawn a minion with a template, use:\n"
+                "spawn_minion(name='MinionName', template_name='Template Name')"
+            )
+
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": "\n".join(result_lines)
+                }],
+                "is_error": False
+            }
+
+        except Exception as e:
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": f"Error listing templates: {str(e)}"
+                }],
+                "is_error": True
+            }
 
     async def _log_membership_change_comm(
         self,
