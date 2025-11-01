@@ -736,8 +736,11 @@ export const useWebSocketStore = defineStore('websocket', () => {
   return {
     // State
     uiConnected,
+    uiRetryCount,
     sessionConnected,
+    sessionRetryCount,
     legionConnected,
+    legionRetryCount,
     overallStatus,
 
     // Actions
