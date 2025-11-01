@@ -14,6 +14,30 @@
         </div>
         <div class="modal-body">
           <form @submit.prevent="createMinion">
+            <!-- Template Selection -->
+            <div class="mb-3">
+              <label for="template-select" class="form-label">
+                Template
+                <button type="button" @click="openTemplateManager" class="btn btn-link btn-sm p-0 ms-2">
+                  <i class="bi-gear"></i> Manage Templates
+                </button>
+              </label>
+              <select
+                id="template-select"
+                v-model="selectedTemplateId"
+                @change="applyTemplate"
+                class="form-select"
+              >
+                <option :value="null">[None - Manual Configuration]</option>
+                <option v-for="template in templates" :key="template.template_id" :value="template.template_id">
+                  {{ template.name }}
+                </option>
+              </select>
+              <div v-if="selectedTemplate" class="form-text">
+                {{ selectedTemplate.description }}
+              </div>
+            </div>
+
             <div class="mb-3">
               <label for="minion-name" class="form-label">
                 Name <span class="text-danger">*</span>
@@ -38,9 +62,14 @@
                 v-model="formData.role"
                 type="text"
                 class="form-control"
-                placeholder="e.g., Code Expert, Testing Specialist"
+                :placeholder="rolePlaceholder"
               />
-              <div class="form-text">Optional role description for the minion</div>
+              <div class="form-text">
+                Optional role description for the minion
+                <span v-if="isFieldFromTemplate('role')" class="text-info ms-2">
+                  <i class="bi-lightning-fill"></i> From template
+                </span>
+              </div>
             </div>
 
             <div class="mb-3">
@@ -55,7 +84,12 @@
                 placeholder="Instructions and context for the minion..."
               ></textarea>
               <div class="form-text d-flex justify-content-between">
-                <span>{{ formData.override_system_prompt ? 'This context will replace Claude Code\'s preset and legion guide' : 'This context will be appended to legion guide and Claude Code\'s preset' }}</span>
+                <span>
+                  {{ formData.override_system_prompt ? 'This context will replace Claude Code\'s preset and legion guide' : 'This context will be appended to legion guide and Claude Code\'s preset' }}
+                  <span v-if="isFieldFromTemplate('initialization_context')" class="text-info ms-2">
+                    <i class="bi-lightning-fill"></i> From template
+                  </span>
+                </span>
                 <span :class="{ 'text-danger': initContextExceedsLimit, 'text-warning': initContextNearLimit }">
                   {{ initContextCharCount }} / 2000 chars
                 </span>
@@ -108,6 +142,9 @@
               </select>
               <div class="form-text">
                 Controls which tool actions require permission prompts
+                <span v-if="isFieldFromTemplate('permission_mode')" class="text-info ms-2">
+                  <i class="bi-lightning-fill"></i> From template
+                </span>
               </div>
             </div>
 
@@ -123,6 +160,9 @@
               />
               <div class="form-text">
                 Comma-separated list of allowed tools. Leave empty to allow all tools.
+                <span v-if="isFieldFromTemplate('allowed_tools')" class="text-info ms-2">
+                  <i class="bi-lightning-fill"></i> From template
+                </span>
               </div>
             </div>
 
@@ -166,6 +206,10 @@ const modalElement = ref(null)
 let modalInstance = null
 
 const legionId = ref(null)
+const templates = ref([])
+const selectedTemplateId = ref(null)
+const templateAppliedFields = ref(new Set())
+
 const formData = ref({
   name: '',
   role: '',
@@ -209,7 +253,70 @@ const initContextNearLimit = computed(() => {
   return initContextCharCount.value > 1800 && initContextCharCount.value <= 2000
 })
 
+const selectedTemplate = computed(() => {
+  if (!selectedTemplateId.value) return null
+  return templates.value.find(t => t.template_id === selectedTemplateId.value)
+})
+
+const rolePlaceholder = computed(() => {
+  return selectedTemplate.value?.default_role || 'e.g., Code Expert, Testing Specialist'
+})
+
+const isFieldFromTemplate = (fieldName) => {
+  return templateAppliedFields.value.has(fieldName)
+}
+
 // Methods
+async function loadTemplates() {
+  try {
+    const response = await api.get('/api/templates')
+    templates.value = response.data || []
+  } catch (error) {
+    console.error('Failed to load templates:', error)
+    templates.value = []
+  }
+}
+
+function applyTemplate() {
+  templateAppliedFields.value.clear()
+
+  if (!selectedTemplate.value) {
+    // Clear fields when "[None]" selected
+    formData.value.role = ''
+    formData.value.initialization_context = ''
+    formData.value.permission_mode = 'default'
+    formData.value.allowed_tools = ''
+    return
+  }
+
+  // Apply template values
+  const template = selectedTemplate.value
+
+  if (template.default_role) {
+    formData.value.role = template.default_role
+    templateAppliedFields.value.add('role')
+  }
+
+  if (template.default_system_prompt) {
+    formData.value.initialization_context = template.default_system_prompt
+    templateAppliedFields.value.add('initialization_context')
+  }
+
+  if (template.permission_mode) {
+    formData.value.permission_mode = template.permission_mode
+    templateAppliedFields.value.add('permission_mode')
+  }
+
+  if (template.allowed_tools && template.allowed_tools.length > 0) {
+    formData.value.allowed_tools = template.allowed_tools.join(', ')
+    templateAppliedFields.value.add('allowed_tools')
+  }
+}
+
+function openTemplateManager() {
+  uiStore.showModal('template-management', {})
+}
+
 function resetForm() {
   formData.value = {
     name: '',
@@ -221,6 +328,8 @@ function resetForm() {
     allowed_tools: ''
   }
   capabilitiesInput.value = ''
+  selectedTemplateId.value = null
+  templateAppliedFields.value.clear()
   errorMessage.value = ''
   isCreating.value = false
 }
@@ -314,6 +423,9 @@ onMounted(() => {
       modalElement.value.addEventListener('hidden.bs.modal', onModalHidden)
     })
   }
+
+  // Load templates on mount
+  loadTemplates()
 })
 
 onUnmounted(() => {

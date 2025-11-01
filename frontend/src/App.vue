@@ -27,6 +27,7 @@
     <SessionInfoModal />
     <CreateMinionModal />
     <MinionViewModal />
+    <TemplateManagementModal />
   </div>
 </template>
 
@@ -44,6 +45,7 @@ import SessionManageModal from './components/session/SessionManageModal.vue'
 import SessionInfoModal from './components/session/SessionInfoModal.vue'
 import CreateMinionModal from './components/legion/CreateMinionModal.vue'
 import MinionViewModal from './components/legion/MinionViewModal.vue'
+import TemplateManagementModal from './components/legion/TemplateManagementModal.vue'
 import { useUIStore } from './stores/ui'
 import { useWebSocketStore } from './stores/websocket'
 import { useSessionStore } from './stores/session'
