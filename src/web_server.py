@@ -26,6 +26,7 @@ from .logging_config import get_logger
 from .message_parser import MessageParser, MessageProcessor
 from .session_coordinator import SessionCoordinator
 from .session_manager import SessionState
+from .template_manager import TemplateManager
 from .timestamp_utils import normalize_timestamp
 
 # Get specialized logger for WebSocket lifecycle debugging
@@ -114,6 +115,24 @@ class ChannelBroadcastRequest(BaseModel):
     content: str
     summary: str = ""
     comm_type: str = "info"
+
+
+class TemplateCreateRequest(BaseModel):
+    name: str
+    permission_mode: str
+    allowed_tools: Optional[List[str]] = None
+    default_role: Optional[str] = None
+    default_system_prompt: Optional[str] = None
+    description: Optional[str] = None
+
+
+class TemplateUpdateRequest(BaseModel):
+    name: Optional[str] = None
+    permission_mode: Optional[str] = None
+    allowed_tools: Optional[List[str]] = None
+    default_role: Optional[str] = None
+    default_system_prompt: Optional[str] = None
+    description: Optional[str] = None
 
 
 class UIWebSocketManager:
@@ -271,6 +290,7 @@ class ClaudeWebUI:
     def __init__(self, data_dir: Path = None):
         self.app = FastAPI(title="Claude Code WebUI", version="1.0.0")
         self.coordinator = SessionCoordinator(data_dir)
+        self.template_manager = TemplateManager(data_dir if data_dir else Path("data"))
         self.websocket_manager = WebSocketManager()
         self.ui_websocket_manager = UIWebSocketManager()
         self.legion_websocket_manager = LegionWebSocketManager()
@@ -351,6 +371,12 @@ class ClaudeWebUI:
     async def initialize(self):
         """Initialize the WebUI application"""
         await self.coordinator.initialize()
+
+        # Load templates from disk
+        await self.template_manager.load_templates()
+
+        # Create default templates if none exist
+        await self.template_manager.create_default_templates()
 
         # Register callbacks
         self.coordinator.add_state_change_callback(self._on_state_change)
@@ -1341,6 +1367,85 @@ class ClaudeWebUI:
                 raise
             except Exception as e:
                 logger.error(f"Failed to browse filesystem: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+        # ========== Template Endpoints ==========
+
+        @self.app.get("/api/templates")
+        async def list_templates():
+            """List all minion templates"""
+            try:
+                templates = await self.template_manager.list_templates()
+                return [t.to_dict() for t in templates]
+            except Exception as e:
+                logger.error(f"Failed to list templates: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @self.app.get("/api/templates/{template_id}")
+        async def get_template(template_id: str):
+            """Get specific template"""
+            try:
+                template = await self.template_manager.get_template(template_id)
+                if not template:
+                    raise HTTPException(status_code=404, detail="Template not found")
+                return template.to_dict()
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"Failed to get template: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @self.app.post("/api/templates")
+        async def create_template(request: TemplateCreateRequest):
+            """Create new template"""
+            try:
+                template = await self.template_manager.create_template(
+                    name=request.name,
+                    permission_mode=request.permission_mode,
+                    allowed_tools=request.allowed_tools,
+                    default_role=request.default_role,
+                    default_system_prompt=request.default_system_prompt,
+                    description=request.description
+                )
+                return template.to_dict()
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e))
+            except Exception as e:
+                logger.error(f"Failed to create template: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @self.app.put("/api/templates/{template_id}")
+        async def update_template(template_id: str, request: TemplateUpdateRequest):
+            """Update existing template"""
+            try:
+                template = await self.template_manager.update_template(
+                    template_id=template_id,
+                    name=request.name,
+                    permission_mode=request.permission_mode,
+                    allowed_tools=request.allowed_tools,
+                    default_role=request.default_role,
+                    default_system_prompt=request.default_system_prompt,
+                    description=request.description
+                )
+                return template.to_dict()
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e))
+            except Exception as e:
+                logger.error(f"Failed to update template: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @self.app.delete("/api/templates/{template_id}")
+        async def delete_template(template_id: str):
+            """Delete template"""
+            try:
+                success = await self.template_manager.delete_template(template_id)
+                if not success:
+                    raise HTTPException(status_code=404, detail="Template not found")
+                return {"deleted": True}
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"Failed to delete template: {e}")
                 raise HTTPException(status_code=500, detail=str(e))
 
         @self.app.websocket("/ws/ui")
