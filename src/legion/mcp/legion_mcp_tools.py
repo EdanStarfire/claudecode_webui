@@ -1065,14 +1065,145 @@ class LegionMCPTools:
             }
 
     async def _handle_get_minion_info(self, args: Dict[str, Any]) -> Dict[str, Any]:
-        """Handle get_minion_info tool call."""
-        # TODO: Implement in Phase 2
+        """
+        Handle get_minion_info tool call.
+
+        Returns detailed profile of a minion including name, role, state, capabilities,
+        hierarchy relationships, channels, and legion membership.
+
+        Args:
+            args: {
+                "minion_name": str  # Required - name of minion to query
+            }
+
+        Returns:
+            Tool result with formatted minion profile or error message
+        """
+        # 1. Validate minion_name parameter
+        minion_name = args.get("minion_name", "").strip() if isinstance(args.get("minion_name"), str) else ""
+
+        if not minion_name:
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": "❌ Error: 'minion_name' parameter is required and cannot be empty"
+                }],
+                "is_error": True
+            }
+
+        # 2. Look up minion by name
+        minion = await self.system.legion_coordinator.get_minion_by_name(minion_name)
+
+        if not minion:
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": f"❌ Error: Minion '{minion_name}' not found"
+                }],
+                "is_error": True
+            }
+
+        # 3. Build formatted profile
+        profile_lines = []
+
+        # Header
+        profile_lines.append(f"# Minion Profile: {minion.name}\n")
+
+        # Basic info
+        profile_lines.append(f"**ID:** {minion.session_id[:8]}...")
+        profile_lines.append(f"**Role:** {minion.role or 'No role specified'}")
+
+        # State
+        state_str = minion.state.value if hasattr(minion.state, 'value') else str(minion.state)
+        profile_lines.append(f"**State:** {state_str}")
+
+        # Capabilities with expertise scores
+        if minion.capabilities:
+            profile_lines.append("\n**Capabilities:**")
+
+            # Get expertise scores from capability registry
+            capability_scores = {}
+            for capability, entries in self.system.legion_coordinator.capability_registry.items():
+                for mid, score in entries:
+                    if mid == minion.session_id:
+                        capability_scores[capability] = score
+                        break
+
+            # Format capabilities with scores
+            for capability in minion.capabilities:
+                score = capability_scores.get(capability)
+                if score is not None:
+                    score_pct = int(score * 100)
+                    profile_lines.append(f"- {capability}: {score_pct}%")
+                else:
+                    profile_lines.append(f"- {capability}")
+        else:
+            profile_lines.append("\n**Capabilities:** None registered")
+
+        # Hierarchy info
+        if minion.is_overseer:
+            profile_lines.append("\n**Is Overseer:** Yes")
+
+            if minion.child_minion_ids:
+                # Resolve child names
+                child_names = []
+                for child_id in minion.child_minion_ids:
+                    child_session = await self.system.session_coordinator.session_manager.get_session_info(child_id)
+                    if child_session:
+                        child_names.append(child_session.name or child_id[:8])
+                    else:
+                        child_names.append(child_id[:8])
+
+                profile_lines.append(f"**Child Minions:** {', '.join(child_names)}")
+            else:
+                profile_lines.append("**Child Minions:** None")
+        else:
+            profile_lines.append("\n**Is Overseer:** No")
+
+        # Parent overseer
+        if minion.parent_overseer_id:
+            # Resolve parent name
+            parent_session = await self.system.session_coordinator.session_manager.get_session_info(minion.parent_overseer_id)
+            parent_name = parent_session.name if parent_session else minion.parent_overseer_id[:8]
+            profile_lines.append(f"**Parent Overseer:** {parent_name}")
+
+        # Channels
+        if minion.channel_ids:
+            profile_lines.append("\n**Channels:**")
+
+            # Resolve channel names
+            for channel_id in minion.channel_ids:
+                try:
+                    channel = await self.system.channel_manager.get_channel(channel_id)
+                    if channel:
+                        profile_lines.append(f"- #{channel.name}")
+                    else:
+                        profile_lines.append(f"- {channel_id[:8]}...")
+                except Exception:
+                    profile_lines.append(f"- {channel_id[:8]}...")
+        else:
+            profile_lines.append("\n**Channels:** None")
+
+        # Legion
+        if minion.project_id:
+            # Resolve legion name
+            try:
+                legion = await self.system.session_coordinator.project_manager.get_project(minion.project_id)
+                legion_name = legion.name if legion else minion.project_id[:8]
+            except Exception:
+                legion_name = minion.project_id[:8]
+
+            profile_lines.append(f"\n**Legion:** {legion_name}")
+
+        # Join lines and return
+        profile_text = "\n".join(profile_lines)
+
         return {
             "content": [{
                 "type": "text",
-                "text": f"get_minion_info not yet implemented (would query {args.get('minion_name')})"
+                "text": profile_text
             }],
-            "is_error": True
+            "is_error": False
         }
 
     async def _handle_join_channel(self, args: Dict[str, Any]) -> Dict[str, Any]:
