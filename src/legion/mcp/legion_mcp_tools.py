@@ -108,12 +108,22 @@ class LegionMCPTools:
             "spawn_minion",
             "Create a new child minion to delegate specialized work. You become the overseer "
             "of this minion and can later dispose of it when done. The child minion will be a "
-            "full Claude agent with access to tools.",
+            "full Claude agent with access to tools."
+            "\n\n**Using Templates (Recommended):**"
+            "\nUse a template to spawn with specific permissions:"
+            "\n- First, use list_templates() to see available templates"
+            "\n- Then spawn: spawn_minion(name='Helper', template_name='Code Expert', initialization_context='Review auth code')"
+            "\n- Template enforces permission_mode and allowed_tools (secure, user-controlled)"
+            "\n\n**Without Template:**"
+            "\nIf no template specified, child gets default restricted permissions:"
+            "\n- permission_mode='default' (prompts for every tool use)"
+            "\n- allowed_tools=[] (no pre-authorized tools)",
             {
-                "name": str,                    # Unique name for new minion
-                "role": str,                    # Human-readable role description
-                "initialization_context": str,  # System prompt defining expertise
-                "channels": list                # List of channel names to join (optional)
+                "name": str,                           # Unique name for new minion
+                "role": str,                           # Human-readable role description
+                "initialization_context": str,         # System prompt defining expertise
+                "template_name": str,                  # Template to apply for permissions (optional)
+                "channels": list                       # List of channel names to join (optional)
             }
         )
         async def spawn_minion_tool(args: Dict[str, Any]) -> Dict[str, Any]:
@@ -606,12 +616,18 @@ class LegionMCPTools:
         """
         Handle spawn_minion tool call from a minion.
 
+        Security Model:
+        - Minions can ONLY use templates or default restricted permissions
+        - NO ad-hoc permission specification allowed (prevents privilege escalation)
+        - Templates are user-controlled and enforce specific permission sets
+
         Args:
             args: {
                 "_parent_overseer_id": str,  # Injected by tool wrapper
                 "name": str,
                 "role": str,
                 "initialization_context": str,
+                "template_name": str,  # Optional - if provided, enforces template permissions
                 "capabilities": List[str],  # Optional
                 "channels": List[str]  # Optional
             }
@@ -637,6 +653,7 @@ class LegionMCPTools:
         name = args.get("name", "").strip()
         role = args.get("role", "").strip()
         initialization_context = args.get("initialization_context", "").strip()
+        template_name = args.get("template_name", "").strip()
         capabilities = args.get("capabilities", [])
         channels = args.get("channels", [])
 
@@ -650,20 +667,69 @@ class LegionMCPTools:
                 "is_error": True
             }
 
-        if not role:
-            return {
-                "content": [{
-                    "type": "text",
-                    "text": "Error: 'role' parameter is required and cannot be empty"
-                }],
-                "is_error": True
-            }
-
         if not initialization_context:
             return {
                 "content": [{
                     "type": "text",
                     "text": "Error: 'initialization_context' parameter is required and cannot be empty. Provide clear instructions for what this minion should do."
+                }],
+                "is_error": True
+            }
+
+        # SECURITY: Apply template permissions or use safe defaults
+        # Minions cannot specify custom permissions directly
+        permission_mode = None
+        allowed_tools = None
+        template_applied = None
+
+        if template_name:
+            # Template specified - look up and apply (no overrides allowed)
+            try:
+                template = await self.system.template_manager.get_template_by_name(template_name)
+
+                if not template:
+                    return {
+                        "content": [{
+                            "type": "text",
+                            "text": f"❌ Error: Template '{template_name}' not found. Use list_templates() to see available templates."
+                        }],
+                        "is_error": True
+                    }
+
+                template_applied = template
+
+                # Apply template values (enforced, no overrides)
+                permission_mode = template.permission_mode
+                allowed_tools = template.allowed_tools
+
+                # Use template's default_role if role not provided
+                if not role and template.default_role:
+                    role = template.default_role
+
+                # Prepend template's default_system_prompt if exists
+                if template.default_system_prompt:
+                    initialization_context = f"{template.default_system_prompt}\n\n{initialization_context}"
+
+            except Exception as e:
+                coord_logger.error(f"Error applying template: {e}", exc_info=True)
+                return {
+                    "content": [{
+                        "type": "text",
+                        "text": f"❌ Error applying template: {str(e)}"
+                    }],
+                    "is_error": True
+                }
+        else:
+            # No template - use safe default restricted permissions
+            permission_mode = "default"  # Prompts for most actions
+            allowed_tools = []  # No pre-authorized tools (user must approve each tool use)
+
+        # Validate role is set (from parameter or template)
+        if not role:
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": "Error: 'role' parameter is required (or use a template with default_role)"
                 }],
                 "is_error": True
             }
@@ -677,8 +743,26 @@ class LegionMCPTools:
                 role=role,
                 system_prompt=initialization_context,
                 capabilities=capabilities,
-                channels=channels
+                channels=channels,
+                permission_mode=permission_mode,
+                allowed_tools=allowed_tools
             )
+
+            # Build success message with permission info
+            perm_info = ""
+            if template_applied:
+                tools_str = ", ".join(template_applied.allowed_tools) if template_applied.allowed_tools else "all"
+                perm_info = (
+                    f"\n**Permissions** (from template '{template_applied.name}'):\n"
+                    f"  - Permission Mode: {template_applied.permission_mode}\n"
+                    f"  - Allowed Tools: {tools_str}"
+                )
+            else:
+                perm_info = (
+                    f"\n**Permissions** (safe defaults):\n"
+                    f"  - Permission Mode: default\n"
+                    f"  - Allowed Tools: none (user must approve each tool use)"
+                )
 
             return {
                 "content": [{
@@ -686,6 +770,7 @@ class LegionMCPTools:
                     "text": (
                         f"✅ Successfully spawned minion '{name}' with role '{role}'.\n\n"
                         f"Minion ID: {child_minion_id}\n"
+                        f"{perm_info}\n\n"
                         f"The child minion is now active and ready to receive comms. "
                         f"You can communicate with them using send_comm(to_minion_name='{name}', ...)."
                     )

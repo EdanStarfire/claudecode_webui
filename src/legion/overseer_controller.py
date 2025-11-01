@@ -92,12 +92,13 @@ class OverseerController:
         minion_id = str(uuid.uuid4())
 
         # Create session via SessionCoordinator (which will auto-detect minion from parent project)
+        # Convert None to empty list for allowed_tools (safe default: no pre-authorized tools)
         await self.system.session_coordinator.create_session(
             session_id=minion_id,
             project_id=legion_id,
             name=name,
             permission_mode=permission_mode,
-            tools=allowed_tools,
+            tools=allowed_tools if allowed_tools is not None else [],
             system_prompt=system_prompt,
             override_system_prompt=override_system_prompt,
             # Minion-specific fields
@@ -192,7 +193,9 @@ class OverseerController:
         role: str,
         system_prompt: str,
         capabilities: Optional[List[str]] = None,
-        channels: Optional[List[str]] = None
+        channels: Optional[List[str]] = None,
+        permission_mode: Optional[str] = None,
+        allowed_tools: Optional[List[str]] = None
     ) -> str:
         """
         Spawn a child minion autonomously by a parent overseer.
@@ -206,6 +209,8 @@ class OverseerController:
             system_prompt: System prompt/instructions for child (appended to Claude Code preset)
             capabilities: Capability keywords for discovery
             channels: Channel IDs to join immediately
+            permission_mode: Permission mode (from template or safe default)
+            allowed_tools: List of allowed tools (from template or safe default)
 
         Returns:
             str: Child minion's session_id
@@ -259,11 +264,13 @@ class OverseerController:
             parent_horde_id = parent_session.horde_id
 
         # 8. Create child session via SessionCoordinator
+        # Use provided permission_mode/allowed_tools (from template or safe defaults)
         await self.system.session_coordinator.create_session(
             session_id=child_minion_id,
             project_id=legion_id,
             name=name,
-            permission_mode="default",
+            permission_mode=permission_mode or "default",
+            tools=allowed_tools,  # Parameter name is 'tools' in create_session
             system_prompt=system_prompt,
             # Minion-specific fields
             role=role,

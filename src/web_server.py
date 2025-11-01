@@ -92,7 +92,7 @@ class MinionCreateRequest(BaseModel):
     override_system_prompt: bool = False
     capabilities: List[str] = []
     permission_mode: str = "default"
-    allowed_tools: Optional[List[str]] = None
+    allowed_tools: List[str] = []  # Empty list means no pre-authorized tools (prompts for everything)
 
 
 class ChannelCreateRequest(BaseModel):
