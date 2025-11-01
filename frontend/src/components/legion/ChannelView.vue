@@ -74,6 +74,7 @@
       v-if="channel"
       :channel="channel"
       :members="members"
+      :legion-id="legionId"
     />
 
     <!-- Modals -->

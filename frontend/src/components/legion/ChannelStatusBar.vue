@@ -36,6 +36,10 @@ const props = defineProps({
   members: {
     type: Array,
     default: () => []
+  },
+  legionId: {
+    type: String,
+    required: true
   }
 })
 
@@ -52,7 +56,9 @@ function showInfo() {
 function showMembers() {
   uiStore.showModal('channel-members', {
     channel: props.channel,
-    members: props.members
+    members: props.members,
+    legionId: props.legionId,
+    channelId: props.channel.channel_id
   })
 }
 </script>

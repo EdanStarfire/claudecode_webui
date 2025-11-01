@@ -25,6 +25,43 @@
 
         <!-- Modal Body -->
         <div class="modal-body">
+          <!-- Add Member Section -->
+          <div class="mb-3">
+            <button
+              class="btn btn-sm btn-primary"
+              @click="showAddMemberSelector = !showAddMemberSelector"
+              :disabled="isAddingMember || nonMemberMinions.length === 0"
+            >
+              ➕ Add Member
+            </button>
+            <small v-if="nonMemberMinions.length === 0" class="text-muted ms-2">
+              (All minions are already members)
+            </small>
+
+            <!-- Add Member Selector (shown when button clicked) -->
+            <div v-if="showAddMemberSelector && nonMemberMinions.length > 0" class="mt-2">
+              <select
+                v-model="selectedMinionToAdd"
+                class="form-select form-select-sm"
+                @change="onAddMember"
+                :disabled="isAddingMember"
+              >
+                <option value="">-- Select minion to add --</option>
+                <option
+                  v-for="minion in nonMemberMinions"
+                  :key="minion.session_id"
+                  :value="minion.session_id"
+                >
+                  {{ minion.name }} {{ minion.role ? `(${minion.role})` : '(No role)' }}
+                </option>
+              </select>
+              <div v-if="isAddingMember" class="text-muted small mt-1">
+                <span class="spinner-border spinner-border-sm me-1"></span>
+                Adding member...
+              </div>
+            </div>
+          </div>
+
           <!-- Member Count -->
           <p class="member-count" v-if="members && members.length > 0">
             {{ members.length }} {{ members.length === 1 ? 'member' : 'members' }}
@@ -49,6 +86,14 @@
                   <span class="status-text">{{ formatState(member.state) }}</span>
                 </div>
               </div>
+              <button
+                class="btn btn-sm btn-outline-danger"
+                @click="onRemoveMember(member.session_id)"
+                :disabled="isRemovingMember"
+                title="Remove from channel"
+              >
+                🗑️
+              </button>
             </div>
           </div>
 
@@ -74,15 +119,47 @@
 </template>
 
 <script setup>
-import { ref, watch, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useUIStore } from '@/stores/ui'
+import { useLegionStore } from '@/stores/legion'
+import { useSessionStore } from '@/stores/session'
+import { useProjectStore } from '@/stores/project'
 
 const uiStore = useUIStore()
+const legionStore = useLegionStore()
+const sessionStore = useSessionStore()
+const projectStore = useProjectStore()
+
 const modalElement = ref(null)
 let modalInstance = null
 
 const channel = ref(null)
 const members = ref([])
+const legionId = ref(null)
+const channelId = ref(null)
+
+const selectedMinionToAdd = ref('')
+const showAddMemberSelector = ref(false)
+const isAddingMember = ref(false)
+const isRemovingMember = ref(false)
+
+// Computed property for non-member minions
+const nonMemberMinions = computed(() => {
+  if (!legionId.value) return []
+
+  // Get all minions in the legion
+  const legion = projectStore.projects.get(legionId.value)
+  if (!legion || !legion.session_ids) return []
+
+  // Get all minion session objects
+  const allMinions = legion.session_ids
+    .map(sessionId => sessionStore.sessions.get(sessionId))
+    .filter(Boolean)
+
+  // Filter out members that are already in the channel
+  const memberIds = new Set(members.value.map(m => m.session_id))
+  return allMinions.filter(minion => !memberIds.has(minion.session_id))
+})
 
 // Watch for modal show requests from UI store
 watch(
@@ -91,6 +168,10 @@ watch(
     if (modal?.name === 'channel-members' && modalInstance) {
       channel.value = modal.data?.channel || null
       members.value = modal.data?.members || []
+      legionId.value = modal.data?.legionId || null
+      channelId.value = modal.data?.channelId || null
+      showAddMemberSelector.value = false
+      selectedMinionToAdd.value = ''
       modalInstance.show()
     }
   }
@@ -125,6 +206,65 @@ function formatState(state) {
 
   // Capitalize first letter and replace underscores with spaces
   return state.charAt(0).toUpperCase() + state.slice(1).replace(/_/g, ' ')
+}
+
+// Add member to channel
+async function onAddMember() {
+  if (!selectedMinionToAdd.value || !channelId.value) return
+
+  isAddingMember.value = true
+  try {
+    await legionStore.addMemberToChannel(channelId.value, selectedMinionToAdd.value)
+
+    // Reload channel details to get updated member list
+    const updatedChannel = await legionStore.loadChannelDetails(channelId.value)
+
+    // Update local members list from the updated channel
+    if (updatedChannel?.member_minion_ids) {
+      members.value = updatedChannel.member_minion_ids
+        .map(minionId => sessionStore.sessions.get(minionId))
+        .filter(Boolean)
+    }
+
+    // Reset selector
+    selectedMinionToAdd.value = ''
+    showAddMemberSelector.value = false
+  } catch (error) {
+    console.error('Failed to add member:', error)
+    alert(`Failed to add member: ${error.message}`)
+  } finally {
+    isAddingMember.value = false
+  }
+}
+
+// Remove member from channel
+async function onRemoveMember(minionId) {
+  if (!minionId || !channelId.value) return
+
+  const member = members.value.find(m => m.session_id === minionId)
+  if (!confirm(`Remove ${member?.name || 'this member'} from the channel?`)) {
+    return
+  }
+
+  isRemovingMember.value = true
+  try {
+    await legionStore.removeMemberFromChannel(channelId.value, minionId)
+
+    // Reload channel details to get updated member list
+    const updatedChannel = await legionStore.loadChannelDetails(channelId.value)
+
+    // Update local members list from the updated channel
+    if (updatedChannel?.member_minion_ids) {
+      members.value = updatedChannel.member_minion_ids
+        .map(minionId => sessionStore.sessions.get(minionId))
+        .filter(Boolean)
+    }
+  } catch (error) {
+    console.error('Failed to remove member:', error)
+    alert(`Failed to remove member: ${error.message}`)
+  } finally {
+    isRemovingMember.value = false
+  }
 }
 
 // Initialize Bootstrap modal
