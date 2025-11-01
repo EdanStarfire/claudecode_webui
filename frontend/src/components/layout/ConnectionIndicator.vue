@@ -1,99 +1,167 @@
 <template>
-  <span
-    id="connection-indicator"
-    class="badge"
-    :class="statusClass"
-  >
-    {{ statusText }}
-  </span>
+  <div class="connection-indicators">
+    <!-- UI WebSocket Indicator -->
+    <div
+      class="indicator"
+      :class="getIndicatorClass('ui')"
+      :title="getTooltip('ui')"
+    >
+      🌐
+    </div>
+
+    <!-- Session WebSocket Indicator -->
+    <div
+      class="indicator"
+      :class="getIndicatorClass('session')"
+      :title="getTooltip('session')"
+    >
+      💬
+    </div>
+
+    <!-- Legion WebSocket Indicator -->
+    <div
+      class="indicator"
+      :class="getIndicatorClass('legion')"
+      :title="getTooltip('legion')"
+    >
+      👥
+    </div>
+  </div>
 </template>
 
 <script setup>
-import { computed, watch, ref } from 'vue'
+import { computed } from 'vue'
 import { useWebSocketStore } from '@/stores/websocket'
 
 const wsStore = useWebSocketStore()
-const flashActive = ref(false)
 
-// Watch for status changes and trigger flash animation
-watch(() => wsStore.overallStatus, (newStatus, oldStatus) => {
-  if (newStatus !== oldStatus && oldStatus !== undefined) {
-    console.log(`🔄 Connection status changed: ${oldStatus} → ${newStatus}`)
-
-    // Trigger flash animation
-    flashActive.value = true
-    setTimeout(() => {
-      flashActive.value = false
-    }, 600)
-  }
-})
-
-const statusClass = computed(() => {
-  const classes = []
-
-  switch (wsStore.overallStatus) {
-    case 'connected':
-      classes.push('bg-success')
-      break
-    case 'partial':
-      classes.push('bg-warning')
-      break
-    default:
-      classes.push('bg-secondary')
+/**
+ * Get indicator background class based on connection state
+ * @param {string} type - 'ui', 'session', or 'legion'
+ * @returns {string} CSS class for background color
+ */
+function getIndicatorClass(type) {
+  const connectionMap = {
+    ui: { connected: wsStore.uiConnected, retryCount: wsStore.uiRetryCount },
+    session: { connected: wsStore.sessionConnected, retryCount: wsStore.sessionRetryCount },
+    legion: { connected: wsStore.legionConnected, retryCount: wsStore.legionRetryCount }
   }
 
-  if (flashActive.value) {
-    classes.push('status-flash')
+  const { connected, retryCount } = connectionMap[type]
+
+  // Connecting/Reconnecting: yellow (retry count > 0 but trying to connect)
+  if (retryCount > 0 && !connected) {
+    return 'indicator-connecting'
   }
 
-  return classes.join(' ')
-})
-
-const statusText = computed(() => {
-  switch (wsStore.overallStatus) {
-    case 'connected':
-      return 'Connected'
-    case 'partial':
-      return 'Partial Connection'
-    default:
-      return 'Disconnected'
+  // Connected: green
+  if (connected) {
+    return 'indicator-connected'
   }
-})
+
+  // Disconnected: red
+  return 'indicator-disconnected'
+}
+
+/**
+ * Get tooltip text with connection details
+ * @param {string} type - 'ui', 'session', or 'legion'
+ * @returns {string} Tooltip text
+ */
+function getTooltip(type) {
+  const labels = {
+    ui: 'UI WebSocket',
+    session: 'Session WebSocket',
+    legion: 'Legion WebSocket'
+  }
+
+  const descriptions = {
+    ui: 'Global UI state updates',
+    session: 'Session message streaming',
+    legion: 'Multi-agent communications'
+  }
+
+  const connectionMap = {
+    ui: { connected: wsStore.uiConnected, retryCount: wsStore.uiRetryCount },
+    session: { connected: wsStore.sessionConnected, retryCount: wsStore.sessionRetryCount },
+    legion: { connected: wsStore.legionConnected, retryCount: wsStore.legionRetryCount }
+  }
+
+  const { connected, retryCount } = connectionMap[type]
+
+  let status = 'Disconnected'
+  if (connected) {
+    status = 'Connected'
+  } else if (retryCount > 0) {
+    status = `Reconnecting (attempt ${retryCount})`
+  }
+
+  return `${labels[type]}\n${descriptions[type]}\nStatus: ${status}`
+}
 </script>
 
 <style scoped>
-.badge {
-  transition: all 0.2s ease;
-  font-weight: 600;
-  padding: 0.5rem 0.75rem;
-  font-size: 0.9rem;
-  min-width: 120px;
-  text-align: center;
+.connection-indicators {
+  display: flex;
+  gap: 4px;
+  align-items: center;
 }
 
-/* Flash animation on status change */
-@keyframes statusFlash {
-  0% { transform: scale(1); box-shadow: none; }
-  50% { transform: scale(1.15); box-shadow: 0 0 15px currentColor; }
-  100% { transform: scale(1); box-shadow: none; }
+.indicator {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  transition: all 0.3s ease;
+  cursor: help;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
 }
 
-.status-flash {
-  animation: statusFlash 0.6s ease-out;
+.indicator:hover {
+  transform: scale(1.1);
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.15);
 }
 
-/* Pulse for disconnected/warning */
-@keyframes pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.65; }
+/* Connected: Green background */
+.indicator-connected {
+  background-color: #28a745;
 }
 
-.bg-secondary {
-  background-color: #dc3545 !important; /* Red for disconnected */
+/* Connecting/Reconnecting: Yellow background with pulse animation */
+.indicator-connecting {
+  background-color: #ffc107;
   animation: pulse 2s ease-in-out infinite;
 }
 
-.bg-warning {
-  animation: pulse 3s ease-in-out infinite;
+/* Disconnected: Red background with pulse animation */
+.indicator-disconnected {
+  background-color: #dc3545;
+  animation: pulse 2s ease-in-out infinite;
+}
+
+/* Pulse animation for connecting/disconnected states */
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.6;
+  }
+}
+
+/* Mobile responsiveness */
+@media (max-width: 768px) {
+  .indicator {
+    width: 24px;
+    height: 24px;
+    font-size: 14px;
+  }
+
+  .connection-indicators {
+    gap: 3px;
+  }
 }
 </style>
