@@ -407,13 +407,18 @@ async function createMinion() {
 // Watch for modal show requests from UI store
 watch(
   () => uiStore.currentModal,
-  (modal) => {
+  (modal, oldModal) => {
+    // If create-minion modal is being shown
     if (modal?.name === 'create-minion' && modalInstance) {
       const data = modal.data || {}
       legionId.value = data.project?.project_id || null
       resetForm()
       loadTemplates()  // Reload templates when modal opens (in case they changed)
       modalInstance.show()
+    }
+    // If template management modal just closed and create-minion is still visible
+    else if (oldModal?.name === 'template-management' && modalInstance && modalElement.value?.classList.contains('show')) {
+      loadTemplates()  // Reload templates after management modal closes
     }
   }
 )
