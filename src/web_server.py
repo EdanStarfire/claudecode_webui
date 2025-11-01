@@ -90,6 +90,8 @@ class MinionCreateRequest(BaseModel):
     initialization_context: Optional[str] = ""
     override_system_prompt: bool = False
     capabilities: List[str] = []
+    permission_mode: str = "default"
+    allowed_tools: Optional[List[str]] = None
 
 
 class ChannelCreateRequest(BaseModel):
@@ -969,7 +971,9 @@ class ClaudeWebUI:
                     role=request.role,
                     system_prompt=request.initialization_context,
                     override_system_prompt=request.override_system_prompt,
-                    capabilities=request.capabilities
+                    capabilities=request.capabilities,
+                    permission_mode=request.permission_mode,
+                    allowed_tools=request.allowed_tools
                 )
 
                 # Get the created minion info

@@ -42,7 +42,9 @@ class OverseerController:
         role: str = "",
         system_prompt: str = "",
         override_system_prompt: bool = False,
-        capabilities: Optional[List[str]] = None
+        capabilities: Optional[List[str]] = None,
+        permission_mode: str = "default",
+        allowed_tools: Optional[List[str]] = None
     ) -> str:
         """
         Create a minion for the user (root overseer).
@@ -54,12 +56,14 @@ class OverseerController:
             system_prompt: Instructions/context for the minion (appended to Claude Code preset unless override is True)
             override_system_prompt: If True, use only custom prompt (no Claude Code preset or legion guide)
             capabilities: List of capability keywords for discovery
+            permission_mode: Permission mode (default, acceptEdits, plan, bypassPermissions)
+            allowed_tools: List of pre-authorized tools (e.g., ["edit", "read", "bash"])
 
         Returns:
             str: The created minion's session_id
 
         Raises:
-            ValueError: If name is not unique or legion doesn't exist or is at capacity
+            ValueError: If name is not unique or legion doesn't exist or is at capacity or invalid permission mode
         """
         # Validate legion exists and is multi-agent
         project = await self.system.session_coordinator.project_manager.get_project(legion_id)
@@ -67,6 +71,11 @@ class OverseerController:
             raise ValueError(f"Legion {legion_id} not found")
         if not project.is_multi_agent:
             raise ValueError(f"Project {legion_id} is not a legion (is_multi_agent=False)")
+
+        # Validate permission_mode
+        valid_modes = ["default", "acceptEdits", "plan", "bypassPermissions"]
+        if permission_mode not in valid_modes:
+            raise ValueError(f"Invalid permission_mode '{permission_mode}'. Must be one of: {', '.join(valid_modes)}")
 
         # Check minion limit (max 20 concurrent minions per legion)
         existing_sessions = await self.system.session_coordinator.session_manager.list_sessions()
@@ -87,7 +96,8 @@ class OverseerController:
             session_id=minion_id,
             project_id=legion_id,
             name=name,
-            permission_mode="default",  # Default permission mode for minions
+            permission_mode=permission_mode,
+            tools=allowed_tools,
             system_prompt=system_prompt,
             override_system_prompt=override_system_prompt,
             # Minion-specific fields
