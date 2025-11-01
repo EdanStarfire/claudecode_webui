@@ -9,6 +9,8 @@
 </template>
 
 <script setup>
+import { onMounted, onBeforeUnmount } from 'vue'
+import { useWebSocketStore } from '@/stores/websocket'
 import SessionView from '../session/SessionView.vue'
 
 const props = defineProps({
@@ -20,6 +22,18 @@ const props = defineProps({
     type: String,
     required: true
   }
+})
+
+const wsStore = useWebSocketStore()
+
+// Connect to Legion WebSocket to receive broad legion-wide updates
+// (minion creation, state changes, etc.)
+onMounted(() => {
+  wsStore.connectLegion(props.legionId)
+})
+
+onBeforeUnmount(() => {
+  wsStore.disconnectLegion()
 })
 </script>
 
