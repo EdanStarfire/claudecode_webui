@@ -259,6 +259,8 @@ class LegionMCPTools:
         )
         async def list_channels_tool(args: Dict[str, Any]) -> Dict[str, Any]:
             """List all channels."""
+            # Inject session context
+            args["_from_minion_id"] = session_id
             return await self._handle_list_channels(args)
 
         @tool(
@@ -1454,15 +1456,104 @@ class LegionMCPTools:
         }
 
     async def _handle_list_channels(self, args: Dict[str, Any]) -> Dict[str, Any]:
-        """Handle list_channels tool call."""
-        # TODO: Implement in Phase 2
-        return {
-            "content": [{
-                "type": "text",
-                "text": "list_channels not yet implemented"
-            }],
-            "is_error": True
-        }
+        """
+        Handle list_channels tool call.
+
+        Lists all channels in the minion's legion with details.
+
+        Args:
+            args: {
+                "_from_minion_id": str  # Injected by tool wrapper
+            }
+
+        Returns:
+            Tool result with formatted channel list
+        """
+        # Get minion context
+        from_minion_id = args.get("_from_minion_id")
+
+        if not from_minion_id:
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": "Error: Unable to determine minion ID"
+                }],
+                "is_error": True
+            }
+
+        # Get minion's session info to find legion_id
+        minion_session = await self.system.session_coordinator.session_manager.get_session_info(from_minion_id)
+        if not minion_session:
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": "Error: Unable to find minion session"
+                }],
+                "is_error": True
+            }
+
+        legion_id = minion_session.project_id
+        if not legion_id:
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": "Error: Minion is not part of a legion"
+                }],
+                "is_error": True
+            }
+
+        # Get all channels in legion
+        try:
+            channels = await self.system.channel_manager.list_channels(legion_id)
+
+            # Handle empty case
+            if not channels:
+                return {
+                    "content": [{
+                        "type": "text",
+                        "text": (
+                            "No channels found in this legion.\n\n"
+                            "You can create a channel using: create_channel(name='...', description='...')"
+                        )
+                    }],
+                    "is_error": False
+                }
+
+            # Sort channels alphabetically by name
+            channels = sorted(channels, key=lambda ch: ch.name)
+
+            # Build formatted list
+            channel_lines = [f"**Channels in this Legion ({len(channels)}):**\n"]
+
+            for channel in channels:
+                # Check if this minion is a member
+                is_member = from_minion_id in channel.member_minion_ids
+                member_badge = " **(member)**" if is_member else ""
+
+                # Format channel entry
+                channel_lines.append(
+                    f"• **#{channel.name}**{member_badge}\n"
+                    f"  - Description: {channel.description}\n"
+                    f"  - Purpose: {channel.purpose}\n"
+                    f"  - Members: {len(channel.member_minion_ids)}"
+                )
+
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": "\n\n".join(channel_lines)
+                }],
+                "is_error": False
+            }
+
+        except Exception as e:
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": f"Error listing channels: {str(e)}"
+                }],
+                "is_error": True
+            }
 
     async def _handle_list_templates(self, args: Dict[str, Any]) -> Dict[str, Any]:
         """
