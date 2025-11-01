@@ -93,6 +93,39 @@
               <div class="form-text">Comma-separated list of capability keywords (optional)</div>
             </div>
 
+            <!-- Permission Mode -->
+            <div class="mb-3">
+              <label for="permission-mode" class="form-label">Permission Mode</label>
+              <select
+                class="form-select"
+                id="permission-mode"
+                v-model="formData.permission_mode"
+              >
+                <option value="default">Default (Prompt for tools not in settings)</option>
+                <option value="acceptEdits">Accept Edits (Auto-approve Edit/Write)</option>
+                <option value="plan">Plan Mode (Auto-resets after ExitPlanMode)</option>
+                <option value="bypassPermissions">⚠️ Bypass Permissions (No prompts - use with caution)</option>
+              </select>
+              <div class="form-text">
+                Controls which tool actions require permission prompts
+              </div>
+            </div>
+
+            <!-- Allowed Tools -->
+            <div class="mb-3">
+              <label for="allowed-tools" class="form-label">Allowed Tools (Optional)</label>
+              <input
+                type="text"
+                class="form-control"
+                id="allowed-tools"
+                v-model="formData.allowed_tools"
+                placeholder="bash, read, edit, write, glob, grep, webfetch, websearch, task, todo"
+              />
+              <div class="form-text">
+                Comma-separated list of allowed tools. Leave empty to allow all tools.
+              </div>
+            </div>
+
             <div v-if="errorMessage" class="alert alert-danger">
               {{ errorMessage }}
             </div>
@@ -138,7 +171,9 @@ const formData = ref({
   role: '',
   initialization_context: '',
   override_system_prompt: false,
-  capabilities: []
+  capabilities: [],
+  permission_mode: 'default',
+  allowed_tools: ''
 })
 const capabilitiesInput = ref('')
 const errorMessage = ref('')
@@ -151,6 +186,14 @@ const capabilities = computed(() => {
     .split(',')
     .map(c => c.trim())
     .filter(c => c.length > 0)
+})
+
+const allowedTools = computed(() => {
+  if (!formData.value.allowed_tools.trim()) return null
+  return formData.value.allowed_tools
+    .split(',')
+    .map(t => t.trim())
+    .filter(t => t.length > 0)
 })
 
 // Computed - Initialization context character limits
@@ -173,7 +216,9 @@ function resetForm() {
     role: '',
     initialization_context: '',
     override_system_prompt: false,
-    capabilities: []
+    capabilities: [],
+    permission_mode: 'default',
+    allowed_tools: ''
   }
   capabilitiesInput.value = ''
   errorMessage.value = ''
@@ -217,7 +262,9 @@ async function createMinion() {
       role: formData.value.role.trim(),
       initialization_context: formData.value.initialization_context.trim(),
       override_system_prompt: formData.value.override_system_prompt,
-      capabilities: capabilities.value
+      capabilities: capabilities.value,
+      permission_mode: formData.value.permission_mode,
+      allowed_tools: allowedTools.value
     }
 
     const response = await api.post(`/api/legions/${legionId.value}/minions`, payload)
