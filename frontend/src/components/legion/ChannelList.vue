@@ -5,10 +5,9 @@
         <button
           :class="['accordion-button', { collapsed: !isExpanded }]"
           type="button"
-          data-bs-toggle="collapse"
-          :data-bs-target="`#${collapsePanelId}`"
           :aria-expanded="isExpanded"
           :aria-controls="collapsePanelId"
+          @click="toggleChannels"
         >
           <span style="font-size: 1rem; margin-right: 0.5rem;">💬</span>
           <span class="fw-semibold">Channels</span>
@@ -19,6 +18,8 @@
         :id="collapsePanelId"
         :class="['accordion-collapse', 'collapse', { show: isExpanded }]"
         :data-bs-parent="`#${accordionId}`"
+        @shown.bs.collapse="onExpand"
+        @hidden.bs.collapse="onCollapse"
       >
         <div class="accordion-body p-0">
           <!-- New Channel button -->
@@ -116,6 +117,27 @@ const channelCount = computed(() => {
   return channels.value.length
 })
 
+// Toggle channels expansion (following ProjectItem pattern)
+function toggleChannels() {
+  const bootstrap = window.bootstrap
+  if (!bootstrap) return
+
+  const collapseElement = document.getElementById(collapsePanelId.value)
+  if (!collapseElement) return
+
+  const bsCollapse = bootstrap.Collapse.getOrCreateInstance(collapseElement)
+  bsCollapse.toggle()
+}
+
+// Collapse event handlers (sync Vue state with Bootstrap)
+function onExpand() {
+  isExpanded.value = true
+}
+
+function onCollapse() {
+  isExpanded.value = false
+}
+
 function openChannelModal(channelId) {
   // Navigate to channel view
   router.push(`/channel/${props.project.project_id}/${channelId}`)
@@ -155,17 +177,6 @@ onMounted(async () => {
     } catch (error) {
       console.error('Failed to load channels:', error)
     }
-  }
-
-  // Sync Vue state with Bootstrap collapse events (issue #157)
-  const collapseElement = document.getElementById(collapsePanelId.value)
-  if (collapseElement) {
-    collapseElement.addEventListener('shown.bs.collapse', () => {
-      isExpanded.value = true
-    })
-    collapseElement.addEventListener('hidden.bs.collapse', () => {
-      isExpanded.value = false
-    })
   }
 })
 </script>
