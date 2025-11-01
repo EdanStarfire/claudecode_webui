@@ -1,14 +1,13 @@
 <template>
-  <div class="accordion mt-2" id="channelsAccordion">
+  <div class="accordion mt-2" :id="accordionId">
     <div class="accordion-item">
       <h2 class="accordion-header">
         <button
-          class="accordion-button collapsed"
+          :class="['accordion-button', { collapsed: !isExpanded }]"
           type="button"
-          data-bs-toggle="collapse"
-          data-bs-target="#channelsCollapsePanel"
-          aria-expanded="false"
-          aria-controls="channelsCollapsePanel"
+          :aria-expanded="isExpanded"
+          :aria-controls="collapsePanelId"
+          @click="toggleChannels"
         >
           <span style="font-size: 1rem; margin-right: 0.5rem;">💬</span>
           <span class="fw-semibold">Channels</span>
@@ -16,9 +15,11 @@
         </button>
       </h2>
       <div
-        id="channelsCollapsePanel"
-        class="accordion-collapse collapse"
-        data-bs-parent="#channelsAccordion"
+        :id="collapsePanelId"
+        :class="['accordion-collapse', 'collapse', { show: isExpanded }]"
+        :data-bs-parent="`#${accordionId}`"
+        @shown.bs.collapse="onExpand"
+        @hidden.bs.collapse="onCollapse"
       >
         <div class="accordion-body p-0">
           <!-- New Channel button -->
@@ -101,6 +102,13 @@ const createModal = ref(null)
 const deleteModal = ref(null)
 const channelToDelete = ref(null)
 
+// Channels expanded by default (issue #157)
+const isExpanded = ref(true)
+
+// Unique IDs for this project's accordion (prevent collisions with multiple legions)
+const accordionId = computed(() => `channelsAccordion-${props.project.project_id}`)
+const collapsePanelId = computed(() => `channelsCollapsePanel-${props.project.project_id}`)
+
 const channels = computed(() => {
   return legionStore.channelsByLegion.get(props.project.project_id) || []
 })
@@ -108,6 +116,27 @@ const channels = computed(() => {
 const channelCount = computed(() => {
   return channels.value.length
 })
+
+// Toggle channels expansion (following ProjectItem pattern)
+function toggleChannels() {
+  const bootstrap = window.bootstrap
+  if (!bootstrap) return
+
+  const collapseElement = document.getElementById(collapsePanelId.value)
+  if (!collapseElement) return
+
+  const bsCollapse = bootstrap.Collapse.getOrCreateInstance(collapseElement)
+  bsCollapse.toggle()
+}
+
+// Collapse event handlers (sync Vue state with Bootstrap)
+function onExpand() {
+  isExpanded.value = true
+}
+
+function onCollapse() {
+  isExpanded.value = false
+}
 
 function openChannelModal(channelId) {
   // Navigate to channel view
