@@ -48,6 +48,10 @@ class SessionCoordinator:
         self.message_parser = MessageParser()
         self.message_processor = MessageProcessor(self.message_parser)
 
+        # Template manager for minion templates
+        from src.template_manager import TemplateManager
+        self.template_manager = TemplateManager(self.data_dir)
+
         # Active SDK instances
         self._active_sdks: Dict[str, ClaudeSDK] = {}
         self._storage_managers: Dict[str, DataStorageManager] = {}
@@ -72,7 +76,8 @@ class SessionCoordinator:
         dummy_storage = DataStorageManager(self.data_dir / "legion_temp")
         self.legion_system = LegionSystem(
             session_coordinator=self,
-            data_storage_manager=dummy_storage
+            data_storage_manager=dummy_storage,
+            template_manager=self.template_manager
         )
 
     async def initialize(self):
@@ -80,6 +85,12 @@ class SessionCoordinator:
         try:
             await self.session_manager.initialize()
             await self.project_manager.initialize()
+
+            # Load templates from disk
+            await self.template_manager.load_templates()
+            # Create default templates if none exist
+            await self.template_manager.create_default_templates()
+            coord_logger.info("Loaded minion templates")
 
             # Load channels for all legions (if LegionSystem is initialized)
             if hasattr(self, 'legion_system') and self.legion_system is not None:

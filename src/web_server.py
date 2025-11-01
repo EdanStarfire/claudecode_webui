@@ -290,7 +290,6 @@ class ClaudeWebUI:
     def __init__(self, data_dir: Path = None):
         self.app = FastAPI(title="Claude Code WebUI", version="1.0.0")
         self.coordinator = SessionCoordinator(data_dir)
-        self.template_manager = TemplateManager(data_dir if data_dir else Path("data"))
         self.websocket_manager = WebSocketManager()
         self.ui_websocket_manager = UIWebSocketManager()
         self.legion_websocket_manager = LegionWebSocketManager()
@@ -372,11 +371,7 @@ class ClaudeWebUI:
         """Initialize the WebUI application"""
         await self.coordinator.initialize()
 
-        # Load templates from disk
-        await self.template_manager.load_templates()
-
-        # Create default templates if none exist
-        await self.template_manager.create_default_templates()
+        # Templates are now loaded in SessionCoordinator.initialize()
 
         # Register callbacks
         self.coordinator.add_state_change_callback(self._on_state_change)
@@ -1375,7 +1370,7 @@ class ClaudeWebUI:
         async def list_templates():
             """List all minion templates"""
             try:
-                templates = await self.template_manager.list_templates()
+                templates = await self.coordinator.template_manager.list_templates()
                 return [t.to_dict() for t in templates]
             except Exception as e:
                 logger.error(f"Failed to list templates: {e}")
@@ -1385,7 +1380,7 @@ class ClaudeWebUI:
         async def get_template(template_id: str):
             """Get specific template"""
             try:
-                template = await self.template_manager.get_template(template_id)
+                template = await self.coordinator.template_manager.get_template(template_id)
                 if not template:
                     raise HTTPException(status_code=404, detail="Template not found")
                 return template.to_dict()
@@ -1399,7 +1394,7 @@ class ClaudeWebUI:
         async def create_template(request: TemplateCreateRequest):
             """Create new template"""
             try:
-                template = await self.template_manager.create_template(
+                template = await self.coordinator.template_manager.create_template(
                     name=request.name,
                     permission_mode=request.permission_mode,
                     allowed_tools=request.allowed_tools,
@@ -1418,7 +1413,7 @@ class ClaudeWebUI:
         async def update_template(template_id: str, request: TemplateUpdateRequest):
             """Update existing template"""
             try:
-                template = await self.template_manager.update_template(
+                template = await self.coordinator.template_manager.update_template(
                     template_id=template_id,
                     name=request.name,
                     permission_mode=request.permission_mode,
@@ -1438,7 +1433,7 @@ class ClaudeWebUI:
         async def delete_template(template_id: str):
             """Delete template"""
             try:
-                success = await self.template_manager.delete_template(template_id)
+                success = await self.coordinator.template_manager.delete_template(template_id)
                 if not success:
                     raise HTTPException(status_code=404, detail="Template not found")
                 return {"deleted": True}
