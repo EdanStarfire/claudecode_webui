@@ -1,14 +1,14 @@
 <template>
-  <div class="accordion mt-2" id="channelsAccordion">
+  <div class="accordion mt-2" :id="accordionId">
     <div class="accordion-item">
       <h2 class="accordion-header">
         <button
-          class="accordion-button collapsed"
+          :class="['accordion-button', { collapsed: !isExpanded }]"
           type="button"
           data-bs-toggle="collapse"
-          data-bs-target="#channelsCollapsePanel"
-          aria-expanded="false"
-          aria-controls="channelsCollapsePanel"
+          :data-bs-target="`#${collapsePanelId}`"
+          :aria-expanded="isExpanded"
+          :aria-controls="collapsePanelId"
         >
           <span style="font-size: 1rem; margin-right: 0.5rem;">💬</span>
           <span class="fw-semibold">Channels</span>
@@ -16,9 +16,9 @@
         </button>
       </h2>
       <div
-        id="channelsCollapsePanel"
-        class="accordion-collapse collapse"
-        data-bs-parent="#channelsAccordion"
+        :id="collapsePanelId"
+        :class="['accordion-collapse', 'collapse', { show: isExpanded }]"
+        :data-bs-parent="`#${accordionId}`"
       >
         <div class="accordion-body p-0">
           <!-- New Channel button -->
@@ -101,6 +101,13 @@ const createModal = ref(null)
 const deleteModal = ref(null)
 const channelToDelete = ref(null)
 
+// Channels expanded by default (issue #157)
+const isExpanded = ref(true)
+
+// Unique IDs for this project's accordion (prevent collisions with multiple legions)
+const accordionId = computed(() => `channelsAccordion-${props.project.project_id}`)
+const collapsePanelId = computed(() => `channelsCollapsePanel-${props.project.project_id}`)
+
 const channels = computed(() => {
   return legionStore.channelsByLegion.get(props.project.project_id) || []
 })
@@ -148,6 +155,17 @@ onMounted(async () => {
     } catch (error) {
       console.error('Failed to load channels:', error)
     }
+  }
+
+  // Sync Vue state with Bootstrap collapse events (issue #157)
+  const collapseElement = document.getElementById(collapsePanelId.value)
+  if (collapseElement) {
+    collapseElement.addEventListener('shown.bs.collapse', () => {
+      isExpanded.value = true
+    })
+    collapseElement.addEventListener('hidden.bs.collapse', () => {
+      isExpanded.value = false
+    })
   }
 })
 </script>
