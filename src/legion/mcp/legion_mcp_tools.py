@@ -1470,7 +1470,16 @@ class LegionMCPTools:
         name = args.get("name", "").strip() if isinstance(args.get("name"), str) else ""
         description = args.get("description", "").strip() if isinstance(args.get("description"), str) else ""
         purpose = args.get("purpose", "coordination").strip() if isinstance(args.get("purpose"), str) else "coordination"
-        initial_members = args.get("initial_members", []) if isinstance(args.get("initial_members"), list) else []
+
+        # Handle initial_members as both string (single member) and list (multiple members)
+        initial_members_param = args.get("initial_members", [])
+        if isinstance(initial_members_param, str):
+            # Convert single string to list
+            initial_members = [initial_members_param] if initial_members_param.strip() else []
+        elif isinstance(initial_members_param, list):
+            initial_members = initial_members_param
+        else:
+            initial_members = []
 
         # 2. Validate context
         if not from_minion_id:
