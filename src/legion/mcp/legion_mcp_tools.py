@@ -250,6 +250,8 @@ class LegionMCPTools:
         )
         async def create_channel_tool(args: Dict[str, Any]) -> Dict[str, Any]:
             """Create a new channel."""
+            # Inject session context
+            args["_from_minion_id"] = session_id
             return await self._handle_create_channel(args)
 
         @tool(
@@ -1445,14 +1447,181 @@ class LegionMCPTools:
             }
 
     async def _handle_create_channel(self, args: Dict[str, Any]) -> Dict[str, Any]:
-        """Handle create_channel tool call."""
-        # TODO: Implement in Phase 2
+        """
+        Handle create_channel tool call.
+
+        Creates a new channel and automatically adds creator as first member.
+        Optionally adds initial members by name.
+
+        Args:
+            args: {
+                "_from_minion_id": str,       # Injected by tool wrapper
+                "name": str,                  # Required: Channel name
+                "description": str,           # Required: Channel description
+                "purpose": str,               # Optional: One of coordination/planning/research/scene
+                "initial_members": list       # Optional: List of minion names to add
+            }
+
+        Returns:
+            Tool result with success message or error
+        """
+        # 1. Extract parameters
+        from_minion_id = args.get("_from_minion_id")
+        name = args.get("name", "").strip() if isinstance(args.get("name"), str) else ""
+        description = args.get("description", "").strip() if isinstance(args.get("description"), str) else ""
+        purpose = args.get("purpose", "coordination").strip() if isinstance(args.get("purpose"), str) else "coordination"
+
+        # Handle initial_members as both string (single member) and list (multiple members)
+        initial_members_param = args.get("initial_members", [])
+        if isinstance(initial_members_param, str):
+            # Convert single string to list
+            initial_members = [initial_members_param] if initial_members_param.strip() else []
+        elif isinstance(initial_members_param, list):
+            initial_members = initial_members_param
+        else:
+            initial_members = []
+
+        # 2. Validate context
+        if not from_minion_id:
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": "❌ Error: Unable to determine minion ID"
+                }],
+                "is_error": True
+            }
+
+        # 3. Validate required parameters
+        if not name:
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": "❌ Error: 'name' parameter is required and cannot be empty"
+                }],
+                "is_error": True
+            }
+
+        if not description:
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": "❌ Error: 'description' parameter is required and cannot be empty"
+                }],
+                "is_error": True
+            }
+
+        # 4. Validate purpose
+        valid_purposes = ["coordination", "planning", "research", "scene"]
+        if purpose not in valid_purposes:
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": f"❌ Error: Invalid purpose '{purpose}'. Must be one of: {', '.join(valid_purposes)}"
+                }],
+                "is_error": True
+            }
+
+        # 5. Get creator session and legion_id
+        creator_session = await self.system.session_coordinator.session_manager.get_session_info(from_minion_id)
+        if not creator_session:
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": "❌ Error: Unable to find minion session"
+                }],
+                "is_error": True
+            }
+
+        legion_id = creator_session.project_id
+        if not legion_id:
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": "❌ Error: Minion is not part of a legion"
+                }],
+                "is_error": True
+            }
+
+        # 6. Resolve initial member names to IDs
+        member_ids = [from_minion_id]  # Creator is first member
+        warnings = []
+
+        for member_name in initial_members:
+            if not isinstance(member_name, str):
+                continue
+
+            member_name = member_name.strip()
+            if not member_name:
+                continue
+
+            # Look up minion by name
+            minion = await self.system.legion_coordinator.get_minion_by_name(member_name)
+            if minion:
+                # Don't add creator twice
+                if minion.session_id != from_minion_id:
+                    member_ids.append(minion.session_id)
+            else:
+                warnings.append(f"⚠️  Could not add '{member_name}': minion not found")
+
+        # 7. Create channel via ChannelManager
+        try:
+            channel_id = await self.system.channel_manager.create_channel(
+                legion_id=legion_id,
+                name=name,
+                description=description,
+                purpose=purpose,
+                member_minion_ids=member_ids,
+                created_by_minion_id=from_minion_id
+            )
+        except ValueError as e:
+            # ChannelManager raises ValueError for duplicate names and invalid members
+            error_msg = str(e)
+            # Make error message more user-friendly
+            if "already exists" in error_msg.lower():
+                return {
+                    "content": [{
+                        "type": "text",
+                        "text": f"❌ Error: Channel '{name}' already exists in this legion"
+                    }],
+                    "is_error": True
+                }
+            else:
+                return {
+                    "content": [{
+                        "type": "text",
+                        "text": f"❌ Error: {error_msg}"
+                    }],
+                    "is_error": True
+                }
+        except Exception as e:
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": f"❌ Error: Failed to create channel: {str(e)}"
+                }],
+                "is_error": True
+            }
+
+        # 8. Format success message
+        message_parts = [
+            f"✅ Successfully created channel '#{name}'",
+            f"Channel ID: {channel_id}",
+            f"Members: {len(member_ids)} (including you)"
+        ]
+
+        if warnings:
+            message_parts.append("")
+            message_parts.extend(warnings)
+
+        message_parts.append("")
+        message_parts.append(f"You can now send messages using: send_comm_to_channel(channel_name='{name}', ...)")
+
         return {
             "content": [{
                 "type": "text",
-                "text": f"create_channel not yet implemented (would create #{args.get('name')})"
+                "text": "\n".join(message_parts)
             }],
-            "is_error": True
+            "is_error": False
         }
 
     async def _handle_list_channels(self, args: Dict[str, Any]) -> Dict[str, Any]:
