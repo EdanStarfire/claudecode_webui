@@ -56,39 +56,52 @@
             </div>
 
             <div class="mb-3">
-              <label for="minion-role" class="form-label">Role</label>
+              <label for="minion-role" class="form-label">
+                Role
+                <span v-if="fieldStates.role === 'autofilled'" class="field-indicator autofilled" title="Auto-filled from template">
+                  ⚡
+                </span>
+                <span v-if="fieldStates.role === 'modified'" class="field-indicator modified" title="Modified from template">
+                  ✏️
+                </span>
+              </label>
               <input
                 id="minion-role"
                 v-model="formData.role"
                 type="text"
                 class="form-control"
+                :class="roleFieldClass"
                 :placeholder="rolePlaceholder"
+                :title="getFieldTooltip('role')"
               />
               <div class="form-text">
                 Optional role description for the minion
-                <span v-if="isFieldFromTemplate('role')" class="text-info ms-2">
-                  <i class="bi-lightning-fill"></i> From template
-                </span>
               </div>
             </div>
 
             <div class="mb-3">
-              <label for="minion-context" class="form-label">Initialization Context</label>
+              <label for="minion-context" class="form-label">
+                Initialization Context
+                <span v-if="fieldStates.initialization_context === 'autofilled'" class="field-indicator autofilled" title="Auto-filled from template">
+                  ⚡
+                </span>
+                <span v-if="fieldStates.initialization_context === 'modified'" class="field-indicator modified" title="Modified from template">
+                  ✏️
+                </span>
+              </label>
               <textarea
                 id="minion-context"
                 v-model="formData.initialization_context"
                 class="form-control"
-                :class="{ 'is-invalid': initContextExceedsLimit }"
+                :class="[initContextFieldClass, { 'is-invalid': initContextExceedsLimit }]"
                 rows="4"
                 :maxlength="2000"
                 placeholder="Instructions and context for the minion..."
+                :title="getFieldTooltip('initialization_context')"
               ></textarea>
               <div class="form-text d-flex justify-content-between">
                 <span>
                   {{ formData.override_system_prompt ? 'This context will replace Claude Code\'s preset and legion guide' : 'This context will be appended to legion guide and Claude Code\'s preset' }}
-                  <span v-if="isFieldFromTemplate('initialization_context')" class="text-info ms-2">
-                    <i class="bi-lightning-fill"></i> From template
-                  </span>
                 </span>
                 <span :class="{ 'text-danger': initContextExceedsLimit, 'text-warning': initContextNearLimit }">
                   {{ initContextCharCount }} / 2000 chars
@@ -129,11 +142,21 @@
 
             <!-- Permission Mode -->
             <div class="mb-3">
-              <label for="permission-mode" class="form-label">Permission Mode</label>
+              <label for="permission-mode" class="form-label">
+                Permission Mode
+                <span v-if="fieldStates.permission_mode === 'autofilled'" class="field-indicator autofilled" title="Auto-filled from template">
+                  ⚡
+                </span>
+                <span v-if="fieldStates.permission_mode === 'modified'" class="field-indicator modified" title="Modified from template">
+                  ✏️
+                </span>
+              </label>
               <select
                 class="form-select"
                 id="permission-mode"
                 v-model="formData.permission_mode"
+                :class="permissionModeFieldClass"
+                :title="getFieldTooltip('permission_mode')"
               >
                 <option value="default">Default (Prompt for tools not in settings)</option>
                 <option value="acceptEdits">Accept Edits (Auto-approve Edit/Write)</option>
@@ -142,27 +165,31 @@
               </select>
               <div class="form-text">
                 Controls which tool actions require permission prompts
-                <span v-if="isFieldFromTemplate('permission_mode')" class="text-info ms-2">
-                  <i class="bi-lightning-fill"></i> From template
-                </span>
               </div>
             </div>
 
             <!-- Allowed Tools -->
             <div class="mb-3">
-              <label for="allowed-tools" class="form-label">Allowed Tools (Optional)</label>
+              <label for="allowed-tools" class="form-label">
+                Allowed Tools (Optional)
+                <span v-if="fieldStates.allowed_tools === 'autofilled'" class="field-indicator autofilled" title="Auto-filled from template">
+                  ⚡
+                </span>
+                <span v-if="fieldStates.allowed_tools === 'modified'" class="field-indicator modified" title="Modified from template">
+                  ✏️
+                </span>
+              </label>
               <input
                 type="text"
                 class="form-control"
                 id="allowed-tools"
                 v-model="formData.allowed_tools"
+                :class="allowedToolsFieldClass"
                 placeholder="bash, read, edit, write, glob, grep, webfetch, websearch, task, todo"
+                :title="getFieldTooltip('allowed_tools')"
               />
               <div class="form-text">
                 Comma-separated list of allowed tools. Leave empty to allow all tools.
-                <span v-if="isFieldFromTemplate('allowed_tools')" class="text-info ms-2">
-                  <i class="bi-lightning-fill"></i> From template
-                </span>
               </div>
             </div>
 
@@ -209,6 +236,22 @@ const legionId = ref(null)
 const templates = ref([])
 const selectedTemplateId = ref(null)
 const templateAppliedFields = ref(new Set())
+
+// Track original template values for modification detection
+const templateOriginalValues = ref({
+  role: null,
+  initialization_context: null,
+  permission_mode: null,
+  allowed_tools: null
+})
+
+// Track field states: 'normal', 'autofilled', or 'modified'
+const fieldStates = ref({
+  role: 'normal',
+  initialization_context: 'normal',
+  permission_mode: 'normal',
+  allowed_tools: 'normal'
+})
 
 const formData = ref({
   name: '',
@@ -266,6 +309,39 @@ const isFieldFromTemplate = (fieldName) => {
   return templateAppliedFields.value.has(fieldName)
 }
 
+// Computed classes for field highlighting
+const roleFieldClass = computed(() => ({
+  'field-autofilled': fieldStates.value.role === 'autofilled',
+  'field-modified': fieldStates.value.role === 'modified'
+}))
+
+const initContextFieldClass = computed(() => ({
+  'field-autofilled': fieldStates.value.initialization_context === 'autofilled',
+  'field-modified': fieldStates.value.initialization_context === 'modified'
+}))
+
+const permissionModeFieldClass = computed(() => ({
+  'field-autofilled': fieldStates.value.permission_mode === 'autofilled',
+  'field-modified': fieldStates.value.permission_mode === 'modified'
+}))
+
+const allowedToolsFieldClass = computed(() => ({
+  'field-autofilled': fieldStates.value.allowed_tools === 'autofilled',
+  'field-modified': fieldStates.value.allowed_tools === 'modified'
+}))
+
+// Get tooltip text for field state
+const getFieldTooltip = (fieldName) => {
+  const state = fieldStates.value[fieldName]
+  if (state === 'autofilled') {
+    return `Auto-filled from template: ${selectedTemplate.value?.name}`
+  }
+  if (state === 'modified') {
+    return 'Modified from template value'
+  }
+  return ''
+}
+
 // Methods
 async function loadTemplates() {
   try {
@@ -289,30 +365,84 @@ function applyTemplate() {
     formData.value.initialization_context = ''
     formData.value.permission_mode = 'default'
     formData.value.allowed_tools = ''
+
+    // Reset all field states to normal
+    fieldStates.value = {
+      role: 'normal',
+      initialization_context: 'normal',
+      permission_mode: 'normal',
+      allowed_tools: 'normal'
+    }
+
+    // Clear template values
+    templateOriginalValues.value = {
+      role: null,
+      initialization_context: null,
+      permission_mode: null,
+      allowed_tools: null
+    }
+
     return
   }
 
   // Apply template values
   const template = selectedTemplate.value
 
+  // Reset field states before applying new template
+  fieldStates.value = {
+    role: 'normal',
+    initialization_context: 'normal',
+    permission_mode: 'normal',
+    allowed_tools: 'normal'
+  }
+
+  // Apply and track role
   if (template.default_role) {
     formData.value.role = template.default_role
     templateAppliedFields.value.add('role')
+    templateOriginalValues.value.role = template.default_role
+    fieldStates.value.role = 'autofilled'
+  } else {
+    formData.value.role = ''
+    templateOriginalValues.value.role = null
+    fieldStates.value.role = 'normal'
   }
 
+  // Apply and track initialization context
   if (template.default_system_prompt) {
     formData.value.initialization_context = template.default_system_prompt
     templateAppliedFields.value.add('initialization_context')
+    templateOriginalValues.value.initialization_context = template.default_system_prompt
+    fieldStates.value.initialization_context = 'autofilled'
+  } else {
+    formData.value.initialization_context = ''
+    templateOriginalValues.value.initialization_context = null
+    fieldStates.value.initialization_context = 'normal'
   }
 
+  // Apply and track permission mode
   if (template.permission_mode) {
     formData.value.permission_mode = template.permission_mode
     templateAppliedFields.value.add('permission_mode')
+    templateOriginalValues.value.permission_mode = template.permission_mode
+    fieldStates.value.permission_mode = 'autofilled'
+  } else {
+    formData.value.permission_mode = 'default'
+    templateOriginalValues.value.permission_mode = null
+    fieldStates.value.permission_mode = 'normal'
   }
 
+  // Apply and track allowed tools
   if (template.allowed_tools && template.allowed_tools.length > 0) {
-    formData.value.allowed_tools = template.allowed_tools.join(', ')
+    const toolsStr = template.allowed_tools.join(', ')
+    formData.value.allowed_tools = toolsStr
     templateAppliedFields.value.add('allowed_tools')
+    templateOriginalValues.value.allowed_tools = toolsStr
+    fieldStates.value.allowed_tools = 'autofilled'
+  } else {
+    formData.value.allowed_tools = ''
+    templateOriginalValues.value.allowed_tools = null
+    fieldStates.value.allowed_tools = 'normal'
   }
 }
 
@@ -333,6 +463,23 @@ function resetForm() {
   capabilitiesInput.value = ''
   selectedTemplateId.value = null
   templateAppliedFields.value.clear()
+
+  // Reset field states
+  fieldStates.value = {
+    role: 'normal',
+    initialization_context: 'normal',
+    permission_mode: 'normal',
+    allowed_tools: 'normal'
+  }
+
+  // Clear template original values
+  templateOriginalValues.value = {
+    role: null,
+    initialization_context: null,
+    permission_mode: null,
+    allowed_tools: null
+  }
+
   errorMessage.value = ''
   isCreating.value = false
 }
@@ -423,6 +570,51 @@ watch(
   }
 )
 
+// Watch for modifications to auto-filled fields
+watch(() => formData.value.role, (newVal) => {
+  // Only track changes if field has a template value
+  if (templateOriginalValues.value.role !== null) {
+    if (newVal === templateOriginalValues.value.role) {
+      fieldStates.value.role = 'autofilled'
+    } else {
+      fieldStates.value.role = 'modified'
+    }
+  }
+})
+
+watch(() => formData.value.initialization_context, (newVal) => {
+  // Only track changes if field has a template value
+  if (templateOriginalValues.value.initialization_context !== null) {
+    if (newVal === templateOriginalValues.value.initialization_context) {
+      fieldStates.value.initialization_context = 'autofilled'
+    } else {
+      fieldStates.value.initialization_context = 'modified'
+    }
+  }
+})
+
+watch(() => formData.value.permission_mode, (newVal) => {
+  // Only track changes if field has a template value
+  if (templateOriginalValues.value.permission_mode !== null) {
+    if (newVal === templateOriginalValues.value.permission_mode) {
+      fieldStates.value.permission_mode = 'autofilled'
+    } else {
+      fieldStates.value.permission_mode = 'modified'
+    }
+  }
+})
+
+watch(() => formData.value.allowed_tools, (newVal) => {
+  // Only track changes if field has a template value
+  if (templateOriginalValues.value.allowed_tools !== null) {
+    if (newVal === templateOriginalValues.value.allowed_tools) {
+      fieldStates.value.allowed_tools = 'autofilled'
+    } else {
+      fieldStates.value.allowed_tools = 'modified'
+    }
+  }
+})
+
 // Initialize Bootstrap modal
 onMounted(() => {
   if (modalElement.value) {
@@ -452,5 +644,60 @@ onUnmounted(() => {
   width: 1rem;
   height: 1rem;
   border-width: 0.15em;
+}
+
+/* Field highlighting states */
+.field-autofilled {
+  background-color: #fffbea !important; /* Light yellow */
+  transition: background-color 0.3s ease;
+}
+
+.field-modified {
+  background-color: #ffe4cc !important; /* Darker orange - more distinct from yellow */
+  transition: background-color 0.3s ease;
+}
+
+/* Ensure text readability */
+.field-autofilled,
+.field-modified {
+  color: #212529; /* Keep text dark */
+}
+
+/* Ensure borders remain visible */
+.form-control.field-autofilled,
+.form-control.field-modified,
+.form-select.field-autofilled,
+.form-select.field-modified {
+  border: 1px solid #dee2e6;
+}
+
+/* Focus states should override background but keep highlight */
+.form-control.field-autofilled:focus,
+.form-control.field-modified:focus,
+.form-select.field-autofilled:focus,
+.form-select.field-modified:focus {
+  border-color: #0d6efd;
+  box-shadow: 0 0 0 0.25rem rgba(13, 110, 253, 0.25);
+}
+
+/* Field indicators (icons) */
+.field-indicator {
+  margin-left: 0.5rem;
+  font-size: 0.875rem;
+  cursor: help;
+}
+
+.field-indicator.autofilled {
+  color: #856404; /* Dark yellow */
+}
+
+.field-indicator.modified {
+  color: #cc5500; /* Dark orange */
+}
+
+/* Smooth transitions when switching templates */
+.form-control,
+.form-select {
+  transition: background-color 0.3s ease, border-color 0.3s ease;
 }
 </style>
