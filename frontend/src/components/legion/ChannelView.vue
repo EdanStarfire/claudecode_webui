@@ -28,97 +28,8 @@
         Channel not found
       </div>
 
-      <div v-else class="p-3">
-        <!-- Overview Section -->
-        <div class="overview-section mb-4">
-          <h6 class="text-muted border-bottom pb-2">Overview</h6>
-          <div class="row g-3">
-            <div class="col-md-6">
-              <strong>Channel ID:</strong>
-              <div class="font-monospace small text-muted">{{ channel.channel_id }}</div>
-            </div>
-            <div class="col-md-6">
-              <strong>Created:</strong>
-              <div class="text-muted">{{ formatDate(channel.created_at) }}</div>
-            </div>
-            <div class="col-12">
-              <strong>Purpose:</strong>
-              <div class="text-muted">{{ channel.purpose || 'No purpose specified' }}</div>
-            </div>
-            <div class="col-12">
-              <strong>Description:</strong>
-              <div class="text-muted">{{ channel.description || 'No description provided' }}</div>
-            </div>
-          </div>
-        </div>
-
-        <!-- Members Section -->
-        <div class="members-section mb-4">
-          <h6 class="text-muted border-bottom pb-2 d-flex align-items-center justify-content-between">
-            <span>Members ({{ memberCount }})</span>
-            <button
-              class="btn btn-sm btn-primary"
-              @click="showAddMemberSelector = !showAddMemberSelector"
-            >
-              ➕ Add Member
-            </button>
-          </h6>
-
-          <!-- Add Member Selector -->
-          <div v-if="showAddMemberSelector" class="mb-3">
-            <select
-              v-model="selectedMinionToAdd"
-              class="form-select form-select-sm"
-              @change="onAddMember"
-            >
-              <option value="">-- Select Minion to Add --</option>
-              <option
-                v-for="minion in nonMemberMinions"
-                :key="minion.session_id"
-                :value="minion.session_id"
-              >
-                {{ minion.name }} ({{ minion.role || 'No role' }})
-              </option>
-            </select>
-          </div>
-
-          <!-- Empty state -->
-          <div v-if="members.length === 0" class="text-center text-muted py-3">
-            No members in this channel yet
-          </div>
-
-          <!-- Member list -->
-          <div v-else class="list-group">
-            <div
-              v-for="member in members"
-              :key="member.session_id"
-              class="list-group-item d-flex align-items-center justify-content-between"
-            >
-              <div class="d-flex align-items-center gap-2">
-                <!-- Status dot -->
-                <span
-                  class="status-dot"
-                  :class="getStatusClass(member)"
-                  :style="getStatusStyle(member)"
-                  :title="member.state"
-                ></span>
-                <div>
-                  <div class="fw-semibold">{{ member.name }}</div>
-                  <small class="text-muted">{{ member.role || 'No role' }}</small>
-                </div>
-              </div>
-              <button
-                class="btn btn-sm btn-outline-danger"
-                @click="onRemoveMember(member.session_id)"
-                title="Remove member from channel"
-              >
-                Remove
-              </button>
-            </div>
-          </div>
-        </div>
-
-        <!-- Comms Section -->
+      <div v-else class="p-3 pb-5">
+        <!-- Comms Section (now gets full vertical space) -->
         <div class="comms-section">
           <h6 class="text-muted border-bottom pb-2">Communications ({{ commsCount }})</h6>
 
@@ -157,6 +68,17 @@
         </div>
       </div>
     </div>
+
+    <!-- Channel Status Bar (fixed at bottom) -->
+    <ChannelStatusBar
+      v-if="channel"
+      :channel="channel"
+      :members="members"
+    />
+
+    <!-- Modals -->
+    <ChannelInfoModal />
+    <ChannelMembersModal />
   </div>
 </template>
 
@@ -165,6 +87,9 @@ import { ref, computed, onMounted, watch } from 'vue'
 import { useLegionStore } from '../../stores/legion'
 import { useProjectStore } from '../../stores/project'
 import { useSessionStore } from '../../stores/session'
+import ChannelStatusBar from './ChannelStatusBar.vue'
+import ChannelInfoModal from './ChannelInfoModal.vue'
+import ChannelMembersModal from './ChannelMembersModal.vue'
 
 const props = defineProps({
   legionId: {
@@ -184,8 +109,6 @@ const sessionStore = useSessionStore()
 const loading = ref(true)
 const error = ref(null)
 const commsLoading = ref(false)
-const showAddMemberSelector = ref(false)
-const selectedMinionToAdd = ref('')
 
 // Get legion and channel data
 const legion = computed(() => projectStore.projects.get(props.legionId))
@@ -209,16 +132,6 @@ const members = computed(() => {
     .filter(Boolean)
 })
 
-// Get non-member minions for the "Add Member" selector
-const nonMemberMinions = computed(() => {
-  if (!channel.value) return []
-
-  const memberIds = new Set(channel.value.member_minion_ids || [])
-  const allMinions = Array.from(sessionStore.sessions.values())
-    .filter(session => session.is_minion)
-
-  return allMinions.filter(minion => !memberIds.has(minion.session_id))
-})
 
 function getStatusClass(member) {
   if (member.state === 'paused' && member.is_processing) {
@@ -284,30 +197,6 @@ function formatTimestamp(timestamp) {
   return date.toLocaleString()
 }
 
-async function onAddMember() {
-  if (!selectedMinionToAdd.value || !props.channelId) return
-
-  try {
-    await legionStore.addMemberToChannel(props.channelId, selectedMinionToAdd.value)
-    selectedMinionToAdd.value = ''
-    showAddMemberSelector.value = false
-  } catch (error) {
-    console.error('Failed to add member:', error)
-    alert('Failed to add member to channel')
-  }
-}
-
-async function onRemoveMember(minionId) {
-  const confirmRemove = confirm('Remove this minion from the channel?')
-  if (!confirmRemove) return
-
-  try {
-    await legionStore.removeMemberFromChannel(props.channelId, minionId)
-  } catch (error) {
-    console.error('Failed to remove member:', error)
-    alert('Failed to remove member from channel')
-  }
-}
 
 // Load channel data on mount
 onMounted(async () => {
