@@ -92,12 +92,13 @@ class OverseerController:
         minion_id = str(uuid.uuid4())
 
         # Create session via SessionCoordinator (which will auto-detect minion from parent project)
+        # Convert None to empty list for allowed_tools (safe default: no pre-authorized tools)
         await self.system.session_coordinator.create_session(
             session_id=minion_id,
             project_id=legion_id,
             name=name,
             permission_mode=permission_mode,
-            tools=allowed_tools,
+            tools=allowed_tools if allowed_tools is not None else [],
             system_prompt=system_prompt,
             override_system_prompt=override_system_prompt,
             # Minion-specific fields

@@ -116,8 +116,8 @@ class LegionMCPTools:
             "\n- Template enforces permission_mode and allowed_tools (secure, user-controlled)"
             "\n\n**Without Template:**"
             "\nIf no template specified, child gets default restricted permissions:"
-            "\n- permission_mode='default' (prompts for most actions)"
-            "\n- allowed_tools=['read', 'grep', 'glob'] (safe read-only tools)",
+            "\n- permission_mode='default' (prompts for every tool use)"
+            "\n- allowed_tools=[] (no pre-authorized tools)",
             {
                 "name": str,                           # Unique name for new minion
                 "role": str,                           # Human-readable role description
@@ -722,7 +722,7 @@ class LegionMCPTools:
         else:
             # No template - use safe default restricted permissions
             permission_mode = "default"  # Prompts for most actions
-            allowed_tools = ["read", "grep", "glob"]  # Safe read-only tools
+            allowed_tools = []  # No pre-authorized tools (user must approve each tool use)
 
         # Validate role is set (from parameter or template)
         if not role:
@@ -761,7 +761,7 @@ class LegionMCPTools:
                 perm_info = (
                     f"\n**Permissions** (safe defaults):\n"
                     f"  - Permission Mode: default\n"
-                    f"  - Allowed Tools: read, grep, glob"
+                    f"  - Allowed Tools: none (user must approve each tool use)"
                 )
 
             return {
