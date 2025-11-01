@@ -269,10 +269,13 @@ const isFieldFromTemplate = (fieldName) => {
 // Methods
 async function loadTemplates() {
   try {
-    const response = await api.get('/api/templates')
-    templates.value = response.data || []
+    console.log('[CreateMinionModal] Loading templates...')
+    const data = await api.get('/api/templates')
+    console.log('[CreateMinionModal] Templates data:', data)
+    templates.value = data || []
+    console.log('[CreateMinionModal] Templates set to:', templates.value)
   } catch (error) {
-    console.error('Failed to load templates:', error)
+    console.error('[CreateMinionModal] Failed to load templates:', error)
     templates.value = []
   }
 }
@@ -409,6 +412,7 @@ watch(
       const data = modal.data || {}
       legionId.value = data.project?.project_id || null
       resetForm()
+      loadTemplates()  // Reload templates when modal opens (in case they changed)
       modalInstance.show()
     }
   }

@@ -18,7 +18,7 @@
             <div class="d-flex justify-content-between align-items-center mb-3">
               <h6 class="mb-0">Templates</h6>
               <button @click="createNew" class="btn btn-primary btn-sm">
-                <i class="bi-plus-lg"></i> Create New
+                ➕ Create New
               </button>
             </div>
 
@@ -39,10 +39,10 @@
                   </div>
                   <div class="btn-group btn-group-sm ms-3">
                     <button @click="editTemplate(template)" class="btn btn-outline-primary" title="Edit">
-                      <i class="bi-pencil"></i>
+                      ✏️
                     </button>
                     <button @click="deleteTemplate(template)" class="btn btn-outline-danger" title="Delete">
-                      <i class="bi-trash"></i>
+                      🗑️
                     </button>
                   </div>
                 </div>
@@ -168,8 +168,8 @@ const isSaving = ref(false)
 // Methods
 async function loadTemplates() {
   try {
-    const response = await api.get('/api/templates')
-    templates.value = response.data || []
+    const data = await api.get('/api/templates')
+    templates.value = data || []
   } catch (error) {
     console.error('Failed to load templates:', error)
     templates.value = []
