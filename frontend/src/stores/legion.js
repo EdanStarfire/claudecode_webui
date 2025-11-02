@@ -106,6 +106,14 @@ export const useLegionStore = defineStore('legion', () => {
     }
 
     const comms = commsByLegion.value.get(legionId)
+
+    // Check if comm already exists (prevent duplicates from multiple WebSocket connections)
+    const exists = comms.some(c => c.comm_id === comm.comm_id)
+    if (exists) {
+      console.log(`Duplicate comm ${comm.comm_id} prevented in timeline`)
+      return
+    }
+
     comms.push(comm)
 
     // Trigger reactivity
@@ -126,6 +134,14 @@ export const useLegionStore = defineStore('legion', () => {
     }
 
     const comms = channelCommsByChannel.value.get(channelId)
+
+    // Check if comm already exists (prevent duplicates from multiple WebSocket connections)
+    const exists = comms.some(c => c.comm_id === comm.comm_id)
+    if (exists) {
+      console.log(`Duplicate comm ${comm.comm_id} prevented in channel ${channelId}`)
+      return
+    }
+
     comms.push(comm)
 
     // Trigger reactivity
