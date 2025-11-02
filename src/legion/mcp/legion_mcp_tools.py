@@ -1167,12 +1167,11 @@ class LegionMCPTools:
             parent_name = parent_session.name if parent_session else minion.parent_overseer_id[:8]
             profile_lines.append(f"**Parent Overseer:** {parent_name}")
 
-        # Channels - query all channels to find memberships (workaround for sync issue)
-        # Note: minion.channel_ids may be stale if channels were added via ChannelManager
-        # without updating the minion's SessionInfo.channel_ids list
+        # Channels - now correctly maintained via bidirectional updates
         minion_channels = []
-        for channel_id, channel in self.system.legion_coordinator.channels.items():
-            if minion.session_id in channel.member_minion_ids:
+        for channel_id in minion.channel_ids:
+            channel = self.system.legion_coordinator.channels.get(channel_id)
+            if channel:
                 minion_channels.append(channel.name)
 
         if minion_channels:

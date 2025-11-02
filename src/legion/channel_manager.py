@@ -151,6 +151,9 @@ class ChannelManager:
         """
         Add a member to a channel.
 
+        Maintains bidirectional relationship: updates both channel.member_minion_ids
+        and minion.channel_ids to ensure data consistency.
+
         Args:
             channel_id: Channel UUID
             minion_id: Minion UUID to add
@@ -173,16 +176,24 @@ class ChannelManager:
         if minion_id in channel.member_minion_ids:
             return  # Already a member - idempotent success
 
-        # Add member
+        # Update channel's member list
         channel.member_minion_ids.append(minion_id)
         channel.updated_at = datetime.now()
 
-        # Persist to disk
+        # Update minion's channel list (bidirectional relationship)
+        if channel_id not in minion.channel_ids:
+            minion.channel_ids.append(channel_id)
+            await self.system.session_coordinator.session_manager.save_session_state(minion_id)
+
+        # Persist channel to disk
         await self._persist_channel(channel)
 
     async def remove_member(self, channel_id: str, minion_id: str) -> None:
         """
         Remove a member from a channel.
+
+        Maintains bidirectional relationship: updates both channel.member_minion_ids
+        and minion.channel_ids to ensure data consistency.
 
         Args:
             channel_id: Channel UUID
@@ -201,11 +212,17 @@ class ChannelManager:
         if minion_id not in channel.member_minion_ids:
             return  # Already not a member - idempotent success
 
-        # Remove member
+        # Remove from channel's member list
         channel.member_minion_ids.remove(minion_id)
         channel.updated_at = datetime.now()
 
-        # Persist to disk
+        # Remove from minion's channel list (bidirectional relationship)
+        minion = await self.system.legion_coordinator.get_minion_info(minion_id)
+        if minion and channel_id in minion.channel_ids:
+            minion.channel_ids.remove(channel_id)
+            await self.system.session_coordinator.session_manager.save_session_state(minion_id)
+
+        # Persist channel to disk
         await self._persist_channel(channel)
 
     async def delete_channel(self, channel_id: str) -> None:
