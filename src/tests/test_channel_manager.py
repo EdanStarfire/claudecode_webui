@@ -9,17 +9,15 @@ Tests cover:
 - Edge cases (duplicate names, invalid IDs, etc.)
 """
 
-import pytest
 import json
-import tempfile
 import shutil
+import tempfile
 from pathlib import Path
-from unittest.mock import Mock, AsyncMock, patch
-from datetime import datetime
+from unittest.mock import AsyncMock, Mock
+
+import pytest
 
 from src.legion_system import LegionSystem
-from src.legion.channel_manager import ChannelManager
-from src.models.legion_models import Channel
 
 
 @pytest.fixture
@@ -67,10 +65,13 @@ def mock_session_manager():
             mock_session = Mock()
             mock_session.session_id = session_id
             mock_session.is_minion = True
+            mock_session.channel_ids = []  # Add channel_ids list
             return mock_session
         return None
 
     mock.get_session_info = AsyncMock(side_effect=mock_get_session_info)
+    # Mock _persist_session_state (called when updating minion's channel list)
+    mock._persist_session_state = AsyncMock()
     return mock
 
 
@@ -79,7 +80,8 @@ def legion_system(mock_session_coordinator, mock_project_manager, mock_session_m
     """Create LegionSystem with mocked dependencies."""
     system = LegionSystem(
         session_coordinator=mock_session_coordinator,
-        data_storage_manager=Mock()
+        data_storage_manager=Mock(),
+        template_manager=Mock()
     )
 
     # Override project_manager and session_manager accessors
@@ -204,8 +206,8 @@ async def test_add_member_success(channel_manager):
 
 
 @pytest.mark.asyncio
-async def test_add_member_duplicate_raises_error(channel_manager):
-    """Test that adding duplicate member raises ValueError."""
+async def test_add_member_duplicate_is_idempotent(channel_manager):
+    """Test that adding duplicate member is idempotent (no error)."""
     # Create channel with member
     channel_id = await channel_manager.create_channel(
         legion_id="legion-123",
@@ -215,9 +217,12 @@ async def test_add_member_duplicate_raises_error(channel_manager):
         member_minion_ids=["minion-1"]
     )
 
-    # Attempt to add same member again
-    with pytest.raises(ValueError, match="already a member"):
-        await channel_manager.add_member(channel_id, "minion-1")
+    # Add same member again - should succeed idempotently
+    await channel_manager.add_member(channel_id, "minion-1")
+
+    # Verify member still in channel (not duplicated)
+    channel = await channel_manager.get_channel(channel_id)
+    assert channel.member_minion_ids.count("minion-1") == 1
 
 
 @pytest.mark.asyncio
@@ -268,8 +273,8 @@ async def test_remove_member_success(channel_manager):
 
 
 @pytest.mark.asyncio
-async def test_remove_member_not_member_raises_error(channel_manager):
-    """Test that removing non-member raises ValueError."""
+async def test_remove_member_not_member_is_idempotent(channel_manager):
+    """Test that removing non-member is idempotent (no error)."""
     # Create channel
     channel_id = await channel_manager.create_channel(
         legion_id="legion-123",
@@ -279,9 +284,13 @@ async def test_remove_member_not_member_raises_error(channel_manager):
         member_minion_ids=["minion-1"]
     )
 
-    # Attempt to remove non-member
-    with pytest.raises(ValueError, match="is not a member"):
-        await channel_manager.remove_member(channel_id, "minion-2")
+    # Remove non-member - should succeed idempotently
+    await channel_manager.remove_member(channel_id, "minion-2")
+
+    # Verify original member still in channel
+    channel = await channel_manager.get_channel(channel_id)
+    assert "minion-1" in channel.member_minion_ids
+    assert len(channel.member_minion_ids) == 1
 
 
 @pytest.mark.asyncio
@@ -383,7 +392,7 @@ async def test_persist_channel_creates_files(channel_manager, temp_data_dir):
     assert channel_file.exists()
 
     # Verify JSON content
-    with open(channel_file, 'r', encoding='utf-8') as f:
+    with open(channel_file, encoding='utf-8') as f:
         data = json.load(f)
 
     assert data['channel_id'] == channel_id
@@ -492,7 +501,8 @@ async def test_channel_state_survives_restart(legion_system, temp_data_dir):
     # Create new system
     new_system = LegionSystem(
         session_coordinator=mock_session_coordinator,
-        data_storage_manager=Mock()
+        data_storage_manager=Mock(),
+        template_manager=Mock()
     )
 
     # Step 3: Load channels
