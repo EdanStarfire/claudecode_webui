@@ -211,6 +211,10 @@ function formatTimestamp(timestamp) {
 onMounted(async () => {
   loading.value = true
   try {
+    // Set current legion and load channels list
+    legionStore.setCurrentLegion(props.legionId)
+    await legionStore.loadChannels(props.legionId)
+
     await legionStore.loadChannelDetails(props.channelId)
 
     // Load comms
@@ -231,6 +235,10 @@ watch(() => props.channelId, async (newChannelId) => {
     loading.value = true
     error.value = null
     try {
+      // Set current legion and load channels list
+      legionStore.setCurrentLegion(props.legionId)
+      await legionStore.loadChannels(props.legionId)
+
       await legionStore.loadChannelDetails(newChannelId)
 
       commsLoading.value = true
