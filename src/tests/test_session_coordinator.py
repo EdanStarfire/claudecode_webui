@@ -1,10 +1,11 @@
 """Tests for session_coordinator module."""
 
 import asyncio
-import pytest
 import tempfile
 from pathlib import Path
-from unittest.mock import Mock, AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
+
+import pytest
 
 from ..session_coordinator import SessionCoordinator
 from ..session_manager import SessionState
@@ -21,10 +22,20 @@ async def temp_coordinator():
 
 
 @pytest.fixture
-def sample_session_config():
-    """Sample session configuration for testing."""
+async def sample_session_config(temp_coordinator):
+    """Sample session configuration for testing with project setup."""
+    import uuid
+    coordinator = temp_coordinator
+
+    # Create the project first (returns ProjectInfo with generated project_id)
+    project = await coordinator.project_manager.create_project(
+        name="Test Project",
+        working_directory="/test/project"
+    )
+
     return {
-        "working_directory": "/test/project",
+        "session_id": str(uuid.uuid4()),
+        "project_id": project.project_id,
         "permission_mode": "acceptEdits",
         "system_prompt": "Test system prompt",
         "tools": ["bash", "edit", "read"],
@@ -68,18 +79,27 @@ class TestSessionCoordinator:
     @pytest.mark.asyncio
     async def test_create_session_with_defaults(self, temp_coordinator):
         """Test session creation with default parameters."""
+        import uuid
         coordinator = temp_coordinator
 
-        session_id = await coordinator.create_session(
+        # Create a test project first
+        project = await coordinator.project_manager.create_project(
+            name="Test Project",
             working_directory="/default/project"
         )
 
-        assert session_id is not None
+        session_id = str(uuid.uuid4())
+        returned_session_id = await coordinator.create_session(
+            session_id=session_id,
+            project_id=project.project_id
+        )
+
+        assert returned_session_id == session_id
 
         # Verify SDK has default configuration
         sdk = coordinator._active_sdks[session_id]
         assert sdk.current_permission_mode == "acceptEdits"
-        assert sdk.tools == ["bash", "edit", "read"]
+        assert sdk.tools == []  # Default tools changed to empty list
         assert sdk.model is None  # No default model set
 
     @pytest.mark.asyncio
@@ -87,33 +107,39 @@ class TestSessionCoordinator:
         """Test starting a session through coordinator."""
         coordinator = temp_coordinator
 
-        # Mock the SDK start method to avoid actual Claude Code SDK calls
-        with patch.object(coordinator, '_active_sdks', {}):
-            session_id = await coordinator.create_session(**sample_session_config)
+        # Create session first
+        session_id = await coordinator.create_session(**sample_session_config)
 
-            # Create a mock SDK
-            mock_sdk = AsyncMock()
-            mock_sdk.start.return_value = True
-            coordinator._active_sdks[session_id] = mock_sdk
+        # Mock ClaudeSDK class to avoid actual SDK calls
+        with patch('src.session_coordinator.ClaudeSDK') as mock_claude_sdk:
+            mock_sdk_instance = AsyncMock()
+            mock_sdk_instance.start.return_value = True
+            mock_sdk_instance.is_running.return_value = False
+            mock_claude_sdk.return_value = mock_sdk_instance
 
             # Start the session
             success = await coordinator.start_session(session_id)
 
             assert success is True
-            mock_sdk.start.assert_called_once()
+            mock_sdk_instance.start.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_start_session_sdk_failure(self, temp_coordinator, sample_session_config):
         """Test starting session when SDK start fails."""
         coordinator = temp_coordinator
 
-        with patch.object(coordinator, '_active_sdks', {}):
-            session_id = await coordinator.create_session(**sample_session_config)
+        # Create session first
+        session_id = await coordinator.create_session(**sample_session_config)
 
-            # Create a mock SDK that fails to start
-            mock_sdk = AsyncMock()
-            mock_sdk.start.return_value = False
-            coordinator._active_sdks[session_id] = mock_sdk
+        # Mock ClaudeSDK class with failing start
+        with patch('src.session_coordinator.ClaudeSDK') as mock_claude_sdk:
+            mock_sdk_instance = AsyncMock()
+            mock_sdk_instance.start.return_value = False
+            mock_sdk_instance.is_running.return_value = False
+            # Add info attribute with error_message for error handling
+            mock_sdk_instance.info = Mock()
+            mock_sdk_instance.info.error_message = "Test SDK start failure"
+            mock_claude_sdk.return_value = mock_sdk_instance
 
             success = await coordinator.start_session(session_id)
 
@@ -165,9 +191,14 @@ class TestSessionCoordinator:
     @pytest.mark.asyncio
     async def test_send_message(self, temp_coordinator, sample_session_config):
         """Test sending message through coordinator."""
+        from ..session_manager import SessionState
+
         coordinator = temp_coordinator
 
         session_id = await coordinator.create_session(**sample_session_config)
+
+        # Set session to ACTIVE state (normally done by SDK when ready)
+        await coordinator.session_manager.update_session_state(session_id, SessionState.ACTIVE)
 
         # Mock SDK send_message method
         mock_sdk = AsyncMock()
@@ -226,11 +257,15 @@ class TestSessionCoordinator:
     @pytest.mark.asyncio
     async def test_list_sessions(self, temp_coordinator, sample_session_config):
         """Test listing all sessions through coordinator."""
+        import uuid
         coordinator = temp_coordinator
 
-        # Create multiple sessions
-        session_id_1 = await coordinator.create_session(**sample_session_config)
-        session_id_2 = await coordinator.create_session(**sample_session_config)
+        # Create multiple sessions with unique IDs
+        config1 = {**sample_session_config, "session_id": str(uuid.uuid4())}
+        config2 = {**sample_session_config, "session_id": str(uuid.uuid4())}
+
+        session_id_1 = await coordinator.create_session(**config1)
+        session_id_2 = await coordinator.create_session(**config2)
 
         sessions = await coordinator.list_sessions()
 
@@ -249,15 +284,20 @@ class TestSessionCoordinator:
         # Mock storage manager
         mock_storage = AsyncMock()
         mock_storage.read_messages.return_value = [
-            {"type": "user", "content": "Hello"},
-            {"type": "assistant", "content": "Hi there!"}
+            {"type": "user", "content": "Hello", "metadata": {}},
+            {"type": "assistant", "content": "Hi there!", "metadata": {}}
         ]
+        mock_storage.get_message_count.return_value = 2
         coordinator._storage_managers[session_id] = mock_storage
 
-        messages = await coordinator.get_session_messages(session_id, limit=10, offset=0)
+        result = await coordinator.get_session_messages(session_id, limit=10, offset=0)
 
-        assert len(messages) == 2
-        assert messages[0]["content"] == "Hello"
+        # API now returns dict with pagination metadata
+        assert isinstance(result, dict)
+        assert "messages" in result
+        assert len(result["messages"]) == 2
+        assert result["messages"][0]["content"] == "Hello"
+        assert result["total_count"] == 2
         mock_storage.read_messages.assert_called_once_with(limit=10, offset=0)
 
     @pytest.mark.asyncio
@@ -265,8 +305,13 @@ class TestSessionCoordinator:
         """Test getting messages when no storage manager exists."""
         coordinator = temp_coordinator
 
-        messages = await coordinator.get_session_messages("nonexistent-session")
-        assert len(messages) == 0
+        result = await coordinator.get_session_messages("nonexistent-session")
+
+        # API returns dict with empty messages when no storage
+        assert isinstance(result, dict)
+        assert "messages" in result
+        assert len(result["messages"]) == 0
+        assert result["total_count"] == 0
 
     def test_add_message_callback(self, temp_coordinator):
         """Test adding message callback."""
@@ -376,11 +421,15 @@ class TestSessionCoordinator:
     @pytest.mark.asyncio
     async def test_cleanup_all_sessions(self, temp_coordinator, sample_session_config):
         """Test cleanup of all sessions."""
+        import uuid
         coordinator = temp_coordinator
 
-        # Create multiple sessions
-        session_id_1 = await coordinator.create_session(**sample_session_config)
-        session_id_2 = await coordinator.create_session(**sample_session_config)
+        # Create multiple sessions with unique IDs
+        config1 = {**sample_session_config, "session_id": str(uuid.uuid4())}
+        config2 = {**sample_session_config, "session_id": str(uuid.uuid4())}
+
+        session_id_1 = await coordinator.create_session(**config1)
+        session_id_2 = await coordinator.create_session(**config2)
 
         # Mock SDK terminate methods
         mock_sdk_1 = AsyncMock()
@@ -445,7 +494,7 @@ class TestSessionCoordinator:
         session_info = await coordinator.session_manager.get_session_info(session_id)
         assert session_info is not None
         assert session_info.session_id == session_id
-        assert session_info.working_directory == sample_session_config["working_directory"]
+        assert session_info.project_id == sample_session_config["project_id"]
 
         # Verify session directory was created
         session_dir = await coordinator.session_manager.get_session_directory(session_id)

@@ -1,19 +1,21 @@
 """Tests for SDK message parser."""
 
-import pytest
 import time
-from unittest.mock import Mock
+
+import pytest
 
 from ..message_parser import (
-    MessageParser, ParsedMessage, MessageType,
-    SystemMessageHandler, AssistantMessageHandler,
-    UserMessageHandler, ResultMessageHandler,
-    ToolUseHandler, ErrorHandler, UnknownMessageHandler
+    AssistantMessageHandler,
+    ErrorHandler,
+    MessageParser,
+    MessageType,
+    ParsedMessage,
+    ResultMessageHandler,
+    SystemMessageHandler,
+    ToolUseHandler,
+    UnknownMessageHandler,
+    UserMessageHandler,
 )
-from ..logging_config import setup_logging
-
-# Set up logging for tests
-setup_logging(log_level="DEBUG", enable_console=True)
 
 
 class TestMessageHandlers:

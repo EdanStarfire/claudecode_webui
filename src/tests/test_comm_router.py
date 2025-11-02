@@ -2,25 +2,58 @@
 Tests for CommRouter communication routing.
 """
 
-import pytest
-import uuid
 import tempfile
+import uuid
 from pathlib import Path
-from unittest.mock import Mock, AsyncMock, patch
-from datetime import datetime
+from unittest.mock import AsyncMock, Mock, patch
+
+import pytest
 
 from src.legion_system import LegionSystem
-from src.legion.comm_router import CommRouter
-from src.models.legion_models import Comm, CommType, InterruptPriority, Channel
+from src.models.legion_models import Channel, Comm, CommType
 
 
 @pytest.fixture
 def legion_system():
     """Create mock LegionSystem for testing."""
-    return LegionSystem(
-        session_coordinator=Mock(),
-        data_storage_manager=Mock()
+    from src.session_manager import SessionInfo, SessionState
+
+    # Create a default active minion for tests
+    default_minion = Mock(spec=SessionInfo)
+    default_minion.session_id = "test-minion-123"
+    default_minion.name = "TestMinion"
+    default_minion.project_id = "test-legion-456"
+    default_minion.is_minion = True
+    default_minion.state = SessionState.ACTIVE
+
+    mock_session_coordinator = Mock()
+    mock_session_coordinator.send_message = AsyncMock()
+    mock_session_coordinator.session_manager = Mock()
+    mock_session_coordinator.session_manager.get_session_info = AsyncMock(return_value=default_minion)
+    mock_session_coordinator.start_session = AsyncMock()
+    mock_session_coordinator.data_dir = Path("/tmp/test")
+
+    system = LegionSystem(
+        session_coordinator=mock_session_coordinator,
+        data_storage_manager=Mock(),
+        template_manager=Mock()
     )
+
+    # Create a default channel for tests
+    default_channel = Channel(
+        channel_id="test-channel-789",
+        legion_id="test-legion-456",
+        name="test-channel",
+        description="Test channel",
+        purpose="coordination",
+        member_minion_ids=["test-minion-123"]
+    )
+
+    # Mock async methods that tests will use
+    system.legion_coordinator.get_minion_info = AsyncMock(return_value=default_minion)
+    system.channel_manager.get_channel = AsyncMock(return_value=default_channel)
+
+    return system
 
 
 @pytest.fixture

@@ -1,11 +1,11 @@
 """Tests for data_storage module."""
 
 import asyncio
-import pytest
-import tempfile
 import json
+import tempfile
 from pathlib import Path
-from datetime import datetime, timezone
+
+import pytest
 
 from ..data_storage import DataStorageManager
 
@@ -142,8 +142,8 @@ class TestDataStorageManager:
     # Integrity verification tests removed - feature no longer used
 
     @pytest.mark.asyncio
-    async def test_corruption_detection_invalid_json(self, temp_storage_manager, sample_message):
-        """Test corruption detection with invalid JSON."""
+    async def test_corruption_detection_disabled(self, temp_storage_manager, sample_message):
+        """Test that corruption detection is disabled (always returns False)."""
         manager = temp_storage_manager
 
         # Add a valid message first
@@ -153,10 +153,10 @@ class TestDataStorageManager:
         with open(manager.messages_file, 'a') as f:
             f.write('{"invalid": json content\n')
 
-        # Detect corruption
+        # Detect corruption - should return False since detection is disabled
         corruption_report = await manager.detect_corruption()
-        assert corruption_report["corrupted"] is True
-        assert any("Invalid JSON" in issue for issue in corruption_report["issues"])
+        assert corruption_report["corrupted"] is False
+        assert len(corruption_report["issues"]) == 0
 
     @pytest.mark.asyncio
     async def test_corruption_detection_missing_file(self, temp_storage_manager):
@@ -183,7 +183,7 @@ class TestDataStorageManager:
             await manager.append_message(message)
 
         # Manually read the JSONL file
-        with open(manager.messages_file, 'r') as f:
+        with open(manager.messages_file) as f:
             lines = f.readlines()
 
         assert len(lines) == len(sample_messages)
@@ -299,6 +299,7 @@ class TestDataStorageManager:
         assert len(messages) == 1
         assert "timestamp" in messages[0]
 
-        # Parse timestamp to verify it's valid ISO format
-        timestamp_str = messages[0]["timestamp"]
-        datetime.fromisoformat(timestamp_str)  # Should not raise exception
+        # Verify timestamp is a Unix timestamp (float)
+        timestamp = messages[0]["timestamp"]
+        assert isinstance(timestamp, (int, float))
+        assert timestamp > 0  # Should be positive Unix timestamp
