@@ -2,8 +2,8 @@
 Tests for LegionSystem dependency injection container.
 """
 
-import pytest
 from unittest.mock import Mock
+
 from src.legion_system import LegionSystem
 
 
@@ -12,11 +12,13 @@ def test_legion_system_initialization():
     # Create mock infrastructure
     mock_session_coordinator = Mock()
     mock_data_storage = Mock()
+    mock_template_manager = Mock()
 
     # Create LegionSystem
     system = LegionSystem(
         session_coordinator=mock_session_coordinator,
-        data_storage_manager=mock_data_storage
+        data_storage_manager=mock_data_storage,
+        template_manager=mock_template_manager
     )
 
     # Verify infrastructure was injected
@@ -37,7 +39,8 @@ def test_legion_components_have_system_reference():
     # Create LegionSystem with mocks
     system = LegionSystem(
         session_coordinator=Mock(),
-        data_storage_manager=Mock()
+        data_storage_manager=Mock(),
+        template_manager=Mock()
     )
 
     # Verify each component has system reference
@@ -53,7 +56,8 @@ def test_legion_coordinator_has_capability_registry():
     """Test that LegionCoordinator initializes capability registry."""
     system = LegionSystem(
         session_coordinator=Mock(),
-        data_storage_manager=Mock()
+        data_storage_manager=Mock(),
+        template_manager=Mock()
     )
 
     # Verify capability registry exists and is empty
@@ -65,15 +69,13 @@ def test_legion_coordinator_has_state_dicts():
     """Test that LegionCoordinator initializes state dictionaries."""
     system = LegionSystem(
         session_coordinator=Mock(),
-        data_storage_manager=Mock()
+        data_storage_manager=Mock(),
+        template_manager=Mock()
     )
 
-    # Verify all state dictionaries exist and are empty
-    assert hasattr(system.legion_coordinator, 'legions')
-    assert hasattr(system.legion_coordinator, 'minions')
+    # Verify Legion-specific state dictionaries exist and are empty
+    # Note: legions/minions are managed in ProjectManager/SessionManager
     assert hasattr(system.legion_coordinator, 'hordes')
     assert hasattr(system.legion_coordinator, 'channels')
-    assert system.legion_coordinator.legions == {}
-    assert system.legion_coordinator.minions == {}
     assert system.legion_coordinator.hordes == {}
     assert system.legion_coordinator.channels == {}
