@@ -26,14 +26,15 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Debug Flags:
-  --debug-websocket      Enable WebSocket lifecycle debugging
-  --debug-sdk            Enable SDK integration debugging
-  --debug-permissions    Enable permission callback debugging
-  --debug-storage        Enable data storage debugging
-  --debug-parser         Enable message parser debugging
-  --debug-error-handler  Enable error handler debugging
-  --debug-legion         Enable Legion multi-agent system debugging
-  --debug-all            Enable all debug logging
+  --debug-websocket         Enable WebSocket lifecycle debugging
+  --debug-websocket-verbose Enable verbose WebSocket ping/pong logging
+  --debug-sdk               Enable SDK integration debugging
+  --debug-permissions       Enable permission callback debugging
+  --debug-storage           Enable data storage debugging
+  --debug-parser            Enable message parser debugging
+  --debug-error-handler     Enable error handler debugging
+  --debug-legion            Enable Legion multi-agent system debugging
+  --debug-all               Enable all debug logging
         """
     )
 
@@ -44,6 +45,7 @@ Debug Flags:
 
     # Debug flags
     parser.add_argument('--debug-websocket', action='store_true', help='Enable WebSocket lifecycle debugging')
+    parser.add_argument('--debug-websocket-verbose', action='store_true', help='Enable verbose WebSocket ping/pong logging')
     parser.add_argument('--debug-sdk', action='store_true', help='Enable SDK integration debugging')
     parser.add_argument('--debug-permissions', action='store_true', help='Enable permission callback debugging')
     parser.add_argument('--debug-storage', action='store_true', help='Enable data storage debugging')
@@ -66,6 +68,7 @@ Debug Flags:
     # Configure logging with debug flags
     configure_logging(
         debug_websocket=args.debug_websocket,
+        debug_websocket_verbose=args.debug_websocket_verbose,
         debug_sdk=args.debug_sdk,
         debug_permissions=args.debug_permissions,
         debug_storage=args.debug_storage,

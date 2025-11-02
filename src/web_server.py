@@ -31,6 +31,8 @@ from .timestamp_utils import normalize_timestamp
 
 # Get specialized logger for WebSocket lifecycle debugging
 ws_logger = get_logger('websocket_debug', category='WS_LIFECYCLE')
+# Get verbose logger for ping/pong (use only with --debug-websocket-verbose)
+ws_verbose_logger = get_logger('websocket_verbose', category='WS_PING_PONG')
 # Keep standard logger for errors
 logger = logging.getLogger(__name__)
 
@@ -1782,14 +1784,14 @@ class ClaudeWebUI:
                     except asyncio.TimeoutError:
                         # Send ping to keep connection alive
                         timeout_time = time.time()
-                        ws_logger.debug(f"WebSocket timeout for session {session_id} at {timeout_time} - sending ping")
+                        ws_verbose_logger.debug(f"WebSocket timeout for session {session_id} at {timeout_time} - sending ping")
 
                         try:
                             ping_start_time = time.time()
                             await websocket.send_text(json.dumps({"type": "ping", "timestamp": datetime.now(timezone.utc).isoformat()}))
 
                             ping_sent_time = time.time()
-                            ws_logger.debug(f"Ping sent successfully at {ping_sent_time}")
+                            ws_verbose_logger.debug(f"Ping sent successfully at {ping_sent_time}")
 
                         except Exception as ping_error:
                             # Connection is dead, break the loop

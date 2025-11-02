@@ -55,6 +55,7 @@ _log_config = {}
 
 def configure_logging(
     debug_websocket: bool = False,
+    debug_websocket_verbose: bool = False,
     debug_sdk: bool = False,
     debug_permissions: bool = False,
     debug_storage: bool = False,
@@ -68,6 +69,7 @@ def configure_logging(
 
     Args:
         debug_websocket: Enable WebSocket lifecycle debugging
+        debug_websocket_verbose: Enable verbose WebSocket ping/pong logging
         debug_sdk: Enable SDK integration debugging
         debug_permissions: Enable permission callback debugging
         debug_storage: Enable data storage debugging
@@ -85,6 +87,7 @@ def configure_logging(
     # Store configuration for get_logger to reference
     _log_config = {
         'debug_websocket': debug_websocket or debug_all,
+        'debug_websocket_verbose': debug_websocket_verbose,  # Only enabled with explicit --debug-websocket-verbose
         'debug_sdk': debug_sdk or debug_all,
         'debug_permissions': debug_permissions or debug_all,
         'debug_storage': debug_storage or debug_all,
@@ -119,6 +122,12 @@ def configure_logging(
             'file': f"{log_dir}/websocket_debug.log",
             'enabled': _log_config['debug_websocket'],
             'console': _log_config['debug_websocket'],
+            'level': logging.DEBUG
+        },
+        'websocket_verbose': {
+            'file': f"{log_dir}/websocket_verbose.log",
+            'enabled': _log_config['debug_websocket_verbose'],
+            'console': _log_config['debug_websocket_verbose'],
             'level': logging.DEBUG
         },
         'sdk_debug': {
