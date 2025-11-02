@@ -30,7 +30,6 @@ class DataStorageManager:
         self.session_dir = Path(session_directory)
         self.messages_file = self.session_dir / "messages.jsonl"
         self.state_file = self.session_dir / "state.json"
-        self.history_file = self.session_dir / "history.json"
 
     async def initialize(self):
         """Initialize storage directory and files"""
@@ -41,8 +40,11 @@ class DataStorageManager:
             if not self.messages_file.exists():
                 self.messages_file.touch()
 
-            if not self.history_file.exists():
-                await self._write_history([])
+            # Migration: Delete legacy history.json files (no longer used)
+            history_file = self.session_dir / "history.json"
+            if history_file.exists():
+                history_file.unlink()
+                storage_logger.info(f"Deleted legacy history.json for session {self.session_dir.name}")
 
             # Data integrity check disabled to prevent session startup issues
             # await self._verify_integrity()
@@ -138,51 +140,6 @@ class DataStorageManager:
             logger.error(f"Failed to clear messages: {e}")
             return False
 
-    async def write_history(self, history_data: List[Dict[str, Any]]):
-        """Write command history data"""
-        await self._write_history(history_data)
-
-    async def read_history(self) -> List[Dict[str, Any]]:
-        """Read command history data"""
-        try:
-            if not self.history_file.exists():
-                return []
-
-            with open(self.history_file, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        except Exception as e:
-            logger.error(f"Failed to read history: {e}")
-            return []
-
-    async def append_history_item(self, history_item: Dict[str, Any]):
-        """Add item to command history"""
-        try:
-            history = await self.read_history()
-
-            # Add timestamp if not present
-            if 'timestamp' not in history_item:
-                history_item['timestamp'] = datetime.now(timezone.utc).isoformat()
-
-            history.append(history_item)
-
-            # Limit history size (keep last 1000 items)
-            if len(history) > 1000:
-                history = history[-1000:]
-
-            await self._write_history(history)
-        except Exception as e:
-            logger.error(f"Failed to append history item: {e}")
-            raise
-
-    async def _write_history(self, history_data: List[Dict[str, Any]]):
-        """Internal method to write history data"""
-        try:
-            with open(self.history_file, 'w', encoding='utf-8') as f:
-                json.dump(history_data, f, indent=2, ensure_ascii=False)
-
-        except Exception as e:
-            logger.error(f"Failed to write history: {e}")
-            raise
 
 
 
@@ -224,16 +181,6 @@ class DataStorageManager:
                     corruption_report['corrupted'] = True
                     corruption_report['issues'].append(f'Cannot read messages.jsonl: {str(e)}')
 
-            # Check JSON format in history file
-            if self.history_file.exists():
-                corruption_report['files_checked'].append(str(self.history_file))
-                try:
-                    with open(self.history_file, 'r', encoding='utf-8') as f:
-                        json.load(f)
-                except Exception as e:
-                    corruption_report['corrupted'] = True
-                    corruption_report['issues'].append(f'Invalid JSON in history.json: {str(e)}')
-
             # Check JSON format in state file
             if self.state_file.exists():
                 corruption_report['files_checked'].append(str(self.state_file))
@@ -273,7 +220,6 @@ class DataStorageManager:
                 self.session_dir = None
                 self.messages_file = None
                 self.state_file = None
-                self.history_file = None
                 # Force another GC to clear the Path objects
                 gc.collect()
 
