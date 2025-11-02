@@ -7,10 +7,6 @@ import tempfile
 from pathlib import Path
 
 from ..claude_sdk import ClaudeSDK, SessionState, SessionInfo
-from ..logging_config import setup_logging
-
-# Set up logging for tests
-setup_logging(log_level="DEBUG", enable_console=True)
 
 
 class TestClaudeSDK:

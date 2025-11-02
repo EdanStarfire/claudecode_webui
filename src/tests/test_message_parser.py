@@ -10,10 +10,6 @@ from ..message_parser import (
     UserMessageHandler, ResultMessageHandler,
     ToolUseHandler, ErrorHandler, UnknownMessageHandler
 )
-from ..logging_config import setup_logging
-
-# Set up logging for tests
-setup_logging(log_level="DEBUG", enable_console=True)
 
 
 class TestMessageHandlers:

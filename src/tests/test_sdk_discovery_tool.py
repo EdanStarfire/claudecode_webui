@@ -8,10 +8,6 @@ from pathlib import Path
 
 from ..sdk_discovery_tool import SDKDiscoveryTool, DiscoveryScenario, DiscoveryResult
 from ..message_parser import MessageType
-from ..logging_config import setup_logging
-
-# Set up logging for tests
-setup_logging(log_level="DEBUG", enable_console=True)
 
 
 class TestDiscoveryScenario:
