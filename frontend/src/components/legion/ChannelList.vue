@@ -153,8 +153,9 @@ function confirmDelete(channel) {
 }
 
 function handleChannelCreated(channel) {
-  // Reload channels list
-  legionStore.loadChannels(props.project.project_id)
+  // No action needed - WebSocket broadcast will update all clients including creator
+  // The backend will send channel_created event via Legion WebSocket after creation
+  console.log('Channel created, waiting for WebSocket update:', channel)
 }
 
 function handleChannelDeleted(channelId) {
