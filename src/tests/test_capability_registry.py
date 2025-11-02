@@ -11,14 +11,13 @@ Tests cover:
 - MCP tool search_capability
 """
 
+from unittest.mock import AsyncMock, Mock
+
 import pytest
-from unittest.mock import Mock, AsyncMock
-from pathlib import Path
 
 from src.legion.legion_coordinator import LegionCoordinator
 from src.legion.mcp.legion_mcp_tools import LegionMCPTools
 from src.session_manager import SessionInfo, SessionState
-from datetime import datetime
 
 
 @pytest.fixture
