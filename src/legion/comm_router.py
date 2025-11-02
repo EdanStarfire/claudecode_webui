@@ -180,11 +180,23 @@ class CommRouter:
             # Use summary in header if available, otherwise use truncated content
             header_summary = comm.summary if comm.summary else (comm.content[:50] + "..." if len(comm.content) > 50 else comm.content)
 
+            # Check if this message came from a channel broadcast
+            from_channel_name = comm.to_channel_name
+
             # Only add send_comm instruction if message is from user, not from other minions
             if is_from_user:
-                formatted_message = f"**{comm_type_prefix} from {from_name}:** {header_summary}\n\n{comm.content}\n\n---\n**Please respond using the `send_comm` tool to send your reply back to {from_name}.**"
+                if from_channel_name:
+                    # Message from user via channel - instruct to reply to channel
+                    formatted_message = f"**{comm_type_prefix} from {from_name} in channel #{from_channel_name}:** {header_summary}\n\n{comm.content}\n\n---\n**Please respond using the `send_comm_to_channel` tool to send your reply to channel #{from_channel_name}.**"
+                else:
+                    # Direct message from user - instruct to reply to user
+                    formatted_message = f"**{comm_type_prefix} from {from_name}:** {header_summary}\n\n{comm.content}\n\n---\n**Please respond using the `send_comm` tool to send your reply back to {from_name}.**"
             else:
-                formatted_message = f"**{comm_type_prefix} from {from_name}:** {header_summary}\n\n{comm.content}"
+                # Message from another minion
+                if from_channel_name:
+                    formatted_message = f"**{comm_type_prefix} from {from_name} in channel #{from_channel_name}:** {header_summary}\n\n{comm.content}"
+                else:
+                    formatted_message = f"**{comm_type_prefix} from {from_name}:** {header_summary}\n\n{comm.content}"
 
             # Send message to target minion via SessionCoordinator
             await self.system.session_coordinator.send_message(
