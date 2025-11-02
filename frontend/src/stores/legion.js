@@ -106,10 +106,46 @@ export const useLegionStore = defineStore('legion', () => {
     }
 
     const comms = commsByLegion.value.get(legionId)
+
+    // Check if comm already exists (prevent duplicates from multiple WebSocket connections)
+    const exists = comms.some(c => c.comm_id === comm.comm_id)
+    if (exists) {
+      console.log(`Duplicate comm ${comm.comm_id} prevented in timeline`)
+      return
+    }
+
     comms.push(comm)
 
     // Trigger reactivity
     commsByLegion.value = new Map(commsByLegion.value)
+
+    // Also add to channel-specific list if this comm is for a channel
+    if (comm.to_channel_id) {
+      addChannelComm(comm.to_channel_id, comm)
+    }
+  }
+
+  /**
+   * Add a comm to a channel's comm list (from WebSocket or API)
+   */
+  function addChannelComm(channelId, comm) {
+    if (!channelCommsByChannel.value.has(channelId)) {
+      channelCommsByChannel.value.set(channelId, [])
+    }
+
+    const comms = channelCommsByChannel.value.get(channelId)
+
+    // Check if comm already exists (prevent duplicates from multiple WebSocket connections)
+    const exists = comms.some(c => c.comm_id === comm.comm_id)
+    if (exists) {
+      console.log(`Duplicate comm ${comm.comm_id} prevented in channel ${channelId}`)
+      return
+    }
+
+    comms.push(comm)
+
+    // Trigger reactivity
+    channelCommsByChannel.value = new Map(channelCommsByChannel.value)
   }
 
   /**
@@ -344,6 +380,7 @@ export const useLegionStore = defineStore('legion', () => {
     setCurrentLegion,
     loadTimeline,
     addComm,
+    addChannelComm,
     sendComm,
     loadMinions,
     createMinion,

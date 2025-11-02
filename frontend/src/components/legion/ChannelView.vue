@@ -69,6 +69,13 @@
       </div>
     </div>
 
+    <!-- Message Composer (above status bar) -->
+    <CommComposer
+      v-if="channel"
+      :legion-id="legionId"
+      :default-channel-id="channelId"
+    />
+
     <!-- Channel Status Bar (fixed at bottom) -->
     <ChannelStatusBar
       v-if="channel"
@@ -84,13 +91,15 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useLegionStore } from '../../stores/legion'
 import { useProjectStore } from '../../stores/project'
 import { useSessionStore } from '../../stores/session'
+import { useWebSocketStore } from '../../stores/websocket'
 import ChannelStatusBar from './ChannelStatusBar.vue'
 import ChannelInfoModal from './ChannelInfoModal.vue'
 import ChannelMembersModal from './ChannelMembersModal.vue'
+import CommComposer from './CommComposer.vue'
 
 const props = defineProps({
   legionId: {
@@ -106,6 +115,7 @@ const props = defineProps({
 const legionStore = useLegionStore()
 const projectStore = useProjectStore()
 const sessionStore = useSessionStore()
+const wsStore = useWebSocketStore()
 
 const loading = ref(true)
 const error = ref(null)
@@ -198,11 +208,28 @@ function formatTimestamp(timestamp) {
   return date.toLocaleString()
 }
 
+/**
+ * Connect to Legion WebSocket
+ */
+function connectWebSocket() {
+  wsStore.connectLegion(props.legionId)
+}
+
+/**
+ * Disconnect from Legion WebSocket
+ */
+function disconnectWebSocket() {
+  wsStore.disconnectLegion()
+}
 
 // Load channel data on mount
 onMounted(async () => {
   loading.value = true
   try {
+    // Set current legion and load channels list
+    legionStore.setCurrentLegion(props.legionId)
+    await legionStore.loadChannels(props.legionId)
+
     await legionStore.loadChannelDetails(props.channelId)
 
     // Load comms
@@ -215,6 +242,9 @@ onMounted(async () => {
   } finally {
     loading.value = false
   }
+
+  // Connect to WebSocket for real-time updates
+  connectWebSocket()
 })
 
 // Watch for channel changes
@@ -223,6 +253,10 @@ watch(() => props.channelId, async (newChannelId) => {
     loading.value = true
     error.value = null
     try {
+      // Set current legion and load channels list
+      legionStore.setCurrentLegion(props.legionId)
+      await legionStore.loadChannels(props.legionId)
+
       await legionStore.loadChannelDetails(newChannelId)
 
       commsLoading.value = true
@@ -236,6 +270,10 @@ watch(() => props.channelId, async (newChannelId) => {
     }
   }
 })
+
+onUnmounted(() => {
+  disconnectWebSocket()
+})
 </script>
 
 <style scoped>
@@ -245,6 +283,10 @@ watch(() => props.channelId, async (newChannelId) => {
 
 .channel-header {
   background-color: #f8f9fa;
+}
+
+.channel-content {
+  padding-bottom: 160px; /* Space for CommComposer + StatusBar */
 }
 
 .status-dot {

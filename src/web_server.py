@@ -647,6 +647,10 @@ class ClaudeWebUI:
         async def start_session(session_id: str):
             """Start a session"""
             try:
+                # Clear any existing callbacks to prevent duplicates (in case session is restarted)
+                if session_id in self.coordinator._message_callbacks:
+                    self.coordinator._message_callbacks[session_id] = []
+
                 # Register WebSocket callback for this session (works for both new and resumed sessions)
                 self.coordinator.add_message_callback(
                     session_id,
@@ -834,9 +838,9 @@ class ClaudeWebUI:
 
         @self.app.get("/api/legions/{legion_id}/timeline")
         async def get_legion_timeline(legion_id: str, limit: int = 100, offset: int = 0):
-            """Get Comms for legion timeline (all minions in the legion)"""
+            """Get Comms for legion timeline (all communications in the legion)"""
             try:
-                # Read all comms from all minions in the legion
+                # Read all comms from the main legion timeline
                 legion_dir = self.coordinator.data_dir / "legions" / legion_id
                 if not legion_dir.exists():
                     return {
@@ -847,23 +851,19 @@ class ClaudeWebUI:
                     }
 
                 all_comms = []
-                minions_dir = legion_dir / "minions"
 
-                if minions_dir.exists():
-                    # Read comms from each minion's directory
-                    for minion_dir in minions_dir.iterdir():
-                        if minion_dir.is_dir():
-                            comms_file = minion_dir / "comms.jsonl"
-                            if comms_file.exists():
-                                with open(comms_file, 'r', encoding='utf-8') as f:
-                                    for line in f:
-                                        line = line.strip()
-                                        if line:
-                                            try:
-                                                comm_data = json.loads(line)
-                                                all_comms.append(comm_data)
-                                            except json.JSONDecodeError:
-                                                continue
+                # Read from main timeline.jsonl (contains ALL comms)
+                timeline_file = legion_dir / "timeline.jsonl"
+                if timeline_file.exists():
+                    with open(timeline_file, 'r', encoding='utf-8') as f:
+                        for line in f:
+                            line = line.strip()
+                            if line:
+                                try:
+                                    comm_data = json.loads(line)
+                                    all_comms.append(comm_data)
+                                except json.JSONDecodeError:
+                                    continue
 
                 # Normalize timestamps to handle mixed string/float formats (backwards compatibility)
                 for comm in all_comms:
@@ -945,8 +945,12 @@ class ClaudeWebUI:
                     if minion_session:
                         to_minion_name = minion_session.name
 
-                # TODO: Look up channel name when channels are implemented
+                # Look up channel name if targeting a channel
                 to_channel_name = None
+                if request.to_channel_id:
+                    channel = await self.coordinator.legion_system.channel_manager.get_channel(request.to_channel_id)
+                    if channel:
+                        to_channel_name = channel.name
 
                 # Create Comm from user
                 comm = Comm(
