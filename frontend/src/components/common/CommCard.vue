@@ -34,7 +34,7 @@
 
         <!-- Right: Expand/Collapse Icon -->
         <div class="expand-icon">
-          <i :class="isExpanded ? 'bi bi-chevron-up' : 'bi bi-chevron-down'"></i>
+          {{ isExpanded ? '▲' : '▼' }}
         </div>
       </div>
 
