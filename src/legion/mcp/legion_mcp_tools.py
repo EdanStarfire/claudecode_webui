@@ -661,6 +661,49 @@ class LegionMCPTools:
         capabilities = args.get("capabilities", [])
         channels = args.get("channels", [])
 
+        # Get parent session to determine legion_id for channel name resolution
+        parent_session = await self.system.session_coordinator.session_manager.get_session_info(parent_overseer_id)
+        if not parent_session:
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": f"Error: Parent overseer session {parent_overseer_id} not found"
+                }],
+                "is_error": True
+            }
+
+        legion_id = parent_session.project_id
+        if not legion_id:
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": "Error: Parent overseer is not part of a legion"
+                }],
+                "is_error": True
+            }
+
+        # Convert channels parameter to list of channel IDs
+        # Channels can be provided as:
+        # - string: "channel1" or "channel1,channel2,channel3"
+        # - list: ["channel1", "channel2"]
+        channel_ids = []
+        if channels:
+            # Normalize to list of channel names
+            if isinstance(channels, str):
+                channel_names = [ch.strip() for ch in channels.split(',') if ch.strip()]
+            else:
+                channel_names = [ch.strip() for ch in channels if ch.strip()]
+
+            # Resolve channel names to IDs
+            for channel_name in channel_names:
+                channel = await self.system.legion_coordinator.get_channel_by_name(legion_id, channel_name)
+                if channel:
+                    channel_ids.append(channel.channel_id)
+                else:
+                    coord_logger.warning(f"Channel '{channel_name}' not found in legion {legion_id} during spawn_minion")
+
+            coord_logger.debug(f"Resolved channels {channel_names} to IDs {channel_ids}")
+
         # Validate required fields
         if not name:
             return {
@@ -741,13 +784,14 @@ class LegionMCPTools:
         # Attempt to spawn child minion
         try:
             # Map initialization_context to system_prompt (initialization_context is semantic UI term)
+            # Use channel_ids (resolved from channel names)
             child_minion_id = await self.system.overseer_controller.spawn_minion(
                 parent_overseer_id=parent_overseer_id,
                 name=name,
                 role=role,
                 system_prompt=initialization_context,
                 capabilities=capabilities,
-                channels=channels,
+                channels=channel_ids,
                 permission_mode=permission_mode,
                 allowed_tools=allowed_tools
             )
@@ -1167,12 +1211,11 @@ class LegionMCPTools:
             parent_name = parent_session.name if parent_session else minion.parent_overseer_id[:8]
             profile_lines.append(f"**Parent Overseer:** {parent_name}")
 
-        # Channels - query all channels to find memberships (workaround for sync issue)
-        # Note: minion.channel_ids may be stale if channels were added via ChannelManager
-        # without updating the minion's SessionInfo.channel_ids list
+        # Channels - now correctly maintained via bidirectional updates
         minion_channels = []
-        for channel_id, channel in self.system.legion_coordinator.channels.items():
-            if minion.session_id in channel.member_minion_ids:
+        for channel_id in minion.channel_ids:
+            channel = self.system.legion_coordinator.channels.get(channel_id)
+            if channel:
                 minion_channels.append(channel.name)
 
         if minion_channels:
