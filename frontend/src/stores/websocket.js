@@ -40,7 +40,7 @@ export const useWebSocketStore = defineStore('websocket', () => {
   const currentLegionId = ref(null)
 
   // Heartbeat monitoring configuration
-  const PING_TIMEOUT_MS = 5000  // 5 seconds without ping = disconnected
+  const PING_TIMEOUT_MS = 10000  // 10 seconds without ping = disconnected (allows 3+ ping attempts)
   const HEARTBEAT_CHECK_INTERVAL_MS = 1000  // Check every second
 
   // Heartbeat last received timestamps
