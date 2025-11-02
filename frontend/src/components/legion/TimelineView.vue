@@ -4,7 +4,7 @@
     <TimelineHeader :legion-id="legionId" />
 
     <!-- Timeline Messages -->
-    <div ref="messagesArea" class="timeline-messages flex-grow-1 overflow-auto p-3">
+    <div ref="messagesArea" class="timeline-messages flex-grow-1 overflow-auto">
       <div v-if="loading" class="text-center text-muted">
         <div class="spinner-border spinner-border-sm me-2" role="status"></div>
         Loading timeline...
@@ -19,35 +19,13 @@
       </div>
 
       <div v-else class="comm-list">
-        <div
+        <CommCard
           v-for="comm in comms"
           :key="comm.comm_id"
-          class="comm-item message-row row py-2 mb-2"
-          :class="{ 'system-comm': isSystemComm(comm) }"
-        >
-          <div class="col-auto message-speaker text-end pe-3">
-            <small class="text-muted">{{ formatTimestamp(comm.timestamp) }}</small>
-          </div>
-          <div class="col message-content-column">
-            <div class="comm-card card" :class="{ 'system-card': isSystemComm(comm) }">
-              <div class="card-body p-2">
-                <div class="d-flex justify-content-between align-items-start mb-1">
-                  <div>
-                    <span class="badge" :class="getCommTypeBadge(comm.comm_type)">
-                      {{ comm.comm_type }}
-                    </span>
-                    <strong class="ms-2" :class="{ 'system-sender': isSystemComm(comm) }">{{ getSenderName(comm) }}</strong>
-                    <span class="text-muted mx-1">→</span>
-                    <strong :class="{ 'recipient-channel': comm.to_channel_id }">{{ getRecipientName(comm) }}</strong>
-                  </div>
-                </div>
-                <div class="comm-content">
-                  {{ comm.content }}
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
+          :comm="comm"
+          :sender-name="getSenderName(comm)"
+          :recipient-name="getRecipientName(comm)"
+        />
       </div>
     </div>
 
@@ -69,6 +47,7 @@ import { useUIStore } from '../../stores/ui'
 import TimelineHeader from '../header/TimelineHeader.vue'
 import TimelineStatusBar from '../statusbar/TimelineStatusBar.vue'
 import CommComposer from './CommComposer.vue'
+import CommCard from '../common/CommCard.vue'
 
 const props = defineProps({
   legionId: {
@@ -97,16 +76,6 @@ const comms = computed(() => legionStore.currentComms)
 // Get minions for name lookups
 const minions = computed(() => legionStore.currentMinions)
 
-// System minion ID constant (matches backend SYSTEM_MINION_ID)
-const SYSTEM_MINION_ID = 'ffffffff-ffff-ffff-ffff-ffffffffffff'
-
-/**
- * Check if comm is from system
- */
-function isSystemComm(comm) {
-  return comm.from_minion_id === SYSTEM_MINION_ID
-}
-
 /**
  * Get sender name (from minion or user)
  */
@@ -115,8 +84,8 @@ function getSenderName(comm) {
     return 'You'
   }
   if (comm.from_minion_id) {
-    // Check if system-generated
-    if (isSystemComm(comm)) {
+    // Check if system-generated (matches backend SYSTEM_MINION_ID)
+    if (comm.from_minion_id === 'ffffffff-ffff-ffff-ffff-ffffffffffff') {
       return 'SYSTEM'
     }
     const minion = sessionStore.sessions.get(comm.from_minion_id)
@@ -137,35 +106,20 @@ function getRecipientName(comm) {
     return minion?.name || 'Unknown'
   }
   if (comm.to_channel_id) {
-    // Prioritize channel name over ID for readability
+    // 1. Prioritize channel name from comm (survives channel deletion)
     if (comm.to_channel_name) {
       return `#${comm.to_channel_name}`
     }
-    // Fallback to UUID if name is missing
+    // 2. Fallback to channel lookup by ID
+    const channel = legionStore.channelsByLegion.get(props.legionId)
+      ?.find(ch => ch.channel_id === comm.to_channel_id)
+    if (channel?.name) {
+      return `#${channel.name}`
+    }
+    // 3. Final fallback to UUID
     return comm.to_channel_id
   }
   return 'All'
-}
-
-/**
- * Get badge class for comm type
- */
-function getCommTypeBadge(commType) {
-  const badgeMap = {
-    task: 'bg-primary',
-    question: 'bg-info',
-    info: 'bg-secondary',
-    report: 'bg-success'
-  }
-  return badgeMap[commType] || 'bg-secondary'
-}
-
-/**
- * Format timestamp
- */
-function formatTimestamp(timestamp) {
-  const date = new Date(timestamp)
-  return date.toLocaleTimeString()
 }
 
 /**
@@ -260,50 +214,5 @@ onUnmounted(() => {
 
 .timeline-messages {
   background-color: #f8f9fa;
-}
-
-.comm-card {
-  background-color: white;
-  border: 1px solid #dee2e6;
-  border-radius: 0.375rem;
-}
-
-/* Channel names styled distinctly with blue color */
-.recipient-channel {
-  color: #0d6efd !important;
-  font-weight: 500 !important;
-}
-
-/* System message styling - muted and distinct */
-.system-comm {
-  opacity: 0.8;
-}
-
-.system-card {
-  background-color: #f5f5f5 !important;
-  border-color: #ced4da !important;
-}
-
-.system-sender {
-  color: #6c757d !important;
-  font-style: italic;
-  font-weight: 500 !important;
-}
-
-.comm-content {
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-.message-speaker {
-  min-width: 80px;
-  max-width: 80px;
-  font-size: 0.875rem;
-  color: #6c757d;
-}
-
-.message-content-column {
-  flex: 1;
-  min-width: 0;
 }
 </style>
