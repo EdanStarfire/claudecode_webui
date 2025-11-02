@@ -101,6 +101,10 @@ const props = defineProps({
   legionId: {
     type: String,
     required: true
+  },
+  defaultChannelId: {
+    type: String,
+    default: ''
   }
 })
 
@@ -367,6 +371,13 @@ async function sendComm() {
     sending.value = false
   }
 }
+
+// Auto-select default channel if provided
+watch(() => props.defaultChannelId, (newChannelId) => {
+  if (newChannelId) {
+    recipient.value = `channel:${newChannelId}`
+  }
+}, { immediate: true })
 
 // Close autocomplete when clicking outside
 watch(showAutocomplete, (show) => {

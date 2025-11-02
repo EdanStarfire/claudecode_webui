@@ -69,6 +69,13 @@
       </div>
     </div>
 
+    <!-- Message Composer (above status bar) -->
+    <CommComposer
+      v-if="channel"
+      :legion-id="legionId"
+      :default-channel-id="channelId"
+    />
+
     <!-- Channel Status Bar (fixed at bottom) -->
     <ChannelStatusBar
       v-if="channel"
@@ -91,6 +98,7 @@ import { useSessionStore } from '../../stores/session'
 import ChannelStatusBar from './ChannelStatusBar.vue'
 import ChannelInfoModal from './ChannelInfoModal.vue'
 import ChannelMembersModal from './ChannelMembersModal.vue'
+import CommComposer from './CommComposer.vue'
 
 const props = defineProps({
   legionId: {
@@ -245,6 +253,10 @@ watch(() => props.channelId, async (newChannelId) => {
 
 .channel-header {
   background-color: #f8f9fa;
+}
+
+.channel-content {
+  padding-bottom: 160px; /* Space for CommComposer + StatusBar */
 }
 
 .status-dot {
