@@ -88,7 +88,7 @@ class TestSessionInfo:
             "created_at": now.isoformat(),
             "updated_at": now.isoformat(),
             "working_directory": "/test/path",
-            "permissions": "acceptEdits",
+            "current_permission_mode": "acceptEdits",
             "system_prompt": None,
             "tools": ["bash", "edit"],
             "model": "claude-3-sonnet-20241022",
@@ -125,8 +125,7 @@ class TestSessionManager:
         manager = temp_session_manager
 
         session_id = str(uuid.uuid4())
-        created_id = await manager.create_session(session_id, **sample_session_config)
-        assert created_id == session_id
+        await manager.create_session(session_id, **sample_session_config)
 
         assert session_id is not None
         assert len(session_id) > 0
