@@ -2,10 +2,11 @@
 Tests for Legion MCP tools with SDK integration.
 """
 
+from unittest.mock import Mock
+
 import pytest
-from unittest.mock import Mock, patch
+
 from src.legion_system import LegionSystem
-from src.legion.mcp.legion_mcp_tools import LegionMCPTools
 
 
 @pytest.fixture
@@ -13,7 +14,8 @@ def legion_system():
     """Create mock LegionSystem for testing."""
     return LegionSystem(
         session_coordinator=Mock(),
-        data_storage_manager=Mock()
+        data_storage_manager=Mock(),
+        template_manager=Mock()
     )
 
 
