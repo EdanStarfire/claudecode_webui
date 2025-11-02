@@ -154,7 +154,7 @@ class TestSessionManager:
 
         session_info = manager._active_sessions[session_id]
         assert session_info.current_permission_mode == "acceptEdits"
-        assert session_info.tools == ["bash", "edit", "read"]
+        assert session_info.tools == []  # No default tools (must be specified explicitly)
         assert session_info.model is None  # No default model
 
     @pytest.mark.asyncio
@@ -169,7 +169,8 @@ class TestSessionManager:
         assert success is True
 
         session_info = manager._active_sessions[session_id]
-        assert session_info.state == SessionState.ACTIVE
+        # State is STARTING immediately after start_session() - transitions to ACTIVE when SDK actually starts
+        assert session_info.state == SessionState.STARTING
 
     @pytest.mark.asyncio
     async def test_start_nonexistent_session(self, temp_session_manager):
@@ -187,6 +188,10 @@ class TestSessionManager:
         session_id = str(uuid.uuid4())
         await manager.create_session(session_id, **sample_session_config)
         await manager.start_session(session_id)
+
+        # Manually transition to ACTIVE state to simulate SDK fully started
+        await manager._update_session_state(session_id, SessionState.ACTIVE)
+
         success = await manager.pause_session(session_id)
 
         assert success is True
@@ -350,4 +355,5 @@ class TestSessionManager:
         with open(state_file, 'r') as f:
             state_data = json.load(f)
 
-        assert state_data["state"] == "active"
+        # State is persisted as 'starting' immediately after start_session()
+        assert state_data["state"] == "starting"
