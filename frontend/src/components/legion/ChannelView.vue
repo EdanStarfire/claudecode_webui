@@ -28,10 +28,10 @@
         Channel not found
       </div>
 
-      <div v-else class="p-3 pb-5">
+      <div v-else class="pb-5">
         <!-- Comms Section (now gets full vertical space) -->
         <div class="comms-section">
-          <h6 class="text-muted border-bottom pb-2">Communications ({{ commsCount }})</h6>
+          <h6 class="text-muted border-bottom pb-2 px-3">Communications ({{ commsCount }})</h6>
 
           <div v-if="commsLoading" class="text-center text-muted py-4">
             <div class="spinner-border spinner-border-sm" role="status"></div>
@@ -43,27 +43,13 @@
           </div>
 
           <div v-else class="comm-list">
-            <div
+            <CommCard
               v-for="comm in comms"
               :key="comm.comm_id"
-              class="comm-item card mb-2"
-            >
-              <div class="card-body p-2">
-                <div class="d-flex justify-content-between align-items-start mb-1">
-                  <div>
-                    <span class="badge" :class="getCommTypeBadge(comm.comm_type)">
-                      {{ comm.comm_type }}
-                    </span>
-                    <strong class="ms-2">{{ getSenderName(comm) }}</strong>
-                    <small class="text-muted ms-2">{{ formatTimestamp(comm.timestamp) }}</small>
-                  </div>
-                </div>
-                <div v-if="comm.summary" class="text-muted small mb-1">
-                  <strong>Summary:</strong> {{ comm.summary }}
-                </div>
-                <div class="comm-content">{{ comm.content }}</div>
-              </div>
-            </div>
+              :comm="comm"
+              :sender-name="getSenderName(comm)"
+              :recipient-name="getRecipientName(comm)"
+            />
           </div>
         </div>
       </div>
@@ -100,6 +86,7 @@ import ChannelStatusBar from './ChannelStatusBar.vue'
 import ChannelInfoModal from './ChannelInfoModal.vue'
 import ChannelMembersModal from './ChannelMembersModal.vue'
 import CommComposer from './CommComposer.vue'
+import CommCard from '../common/CommCard.vue'
 
 const props = defineProps({
   legionId: {
@@ -184,28 +171,9 @@ function getSenderName(comm) {
   return 'Unknown'
 }
 
-function getCommTypeBadge(commType) {
-  const badgeMap = {
-    'task': 'bg-primary',
-    'question': 'bg-info',
-    'report': 'bg-success',
-    'info': 'bg-secondary',
-    'halt': 'bg-danger',
-    'pivot': 'bg-warning'
-  }
-  return badgeMap[commType?.toLowerCase()] || 'bg-secondary'
-}
-
-function formatDate(dateString) {
-  if (!dateString) return 'N/A'
-  const date = new Date(dateString)
-  return date.toLocaleString()
-}
-
-function formatTimestamp(timestamp) {
-  if (!timestamp) return 'N/A'
-  const date = new Date(timestamp)
-  return date.toLocaleString()
+function getRecipientName(comm) {
+  // In channel view, the channel is always the recipient, so don't display it
+  return ''
 }
 
 /**
@@ -306,13 +274,6 @@ onUnmounted(() => {
   50% { opacity: 0.5; }
 }
 
-.comm-content {
-  white-space: pre-wrap;
-  word-wrap: break-word;
-}
-
-.overview-section,
-.members-section,
 .comms-section {
   background-color: #fff;
 }
