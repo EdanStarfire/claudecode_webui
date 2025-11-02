@@ -1,16 +1,24 @@
 <template>
   <div class="messages-area flex-grow-1 overflow-auto" ref="messagesArea">
-    <div v-if="displayableMessages.length === 0" class="text-muted text-center py-5">
+    <div v-if="displayableItems.length === 0" class="text-muted text-center py-5">
       No messages yet. Start a conversation!
     </div>
 
-    <!-- Messages using new component architecture -->
+    <!-- Messages and compaction events using new component architecture -->
     <!-- Tool cards are embedded within AssistantMessage components -->
-    <MessageItem
-      v-for="(message, index) in displayableMessages"
-      :key="`msg-${message.timestamp}-${index}`"
-      :message="normalizeMessage(message)"
-    />
+    <template v-for="(item, index) in displayableItems" :key="`item-${index}`">
+      <!-- Regular message -->
+      <MessageItem
+        v-if="item.type === 'message'"
+        :message="normalizeMessage(item.message)"
+      />
+
+      <!-- Compaction event group -->
+      <CompactionEventGroup
+        v-else-if="item.type === 'compaction'"
+        :messages="item.messages"
+      />
+    </template>
   </div>
 </template>
 
@@ -19,15 +27,92 @@ import { computed, ref, watch, nextTick, onMounted } from 'vue'
 import { useMessageStore } from '@/stores/message'
 import { useUIStore } from '@/stores/ui'
 import MessageItem from './MessageItem.vue'
+import CompactionEventGroup from './CompactionEventGroup.vue'
 
 const messageStore = useMessageStore()
 const uiStore = useUIStore()
 
 const messagesArea = ref(null)
 
-const displayableMessages = computed(() => {
-  return messageStore.currentMessages.filter(msg => shouldDisplayMessage(msg))
+/**
+ * Group messages into displayable items, detecting compaction event sequences
+ * Returns array of:
+ * - Regular messages: { type: 'message', message: {...} }
+ * - Compaction events: { type: 'compaction', messages: [{...}, {...}, {...}, {...}] }
+ */
+const displayableItems = computed(() => {
+  const messages = messageStore.currentMessages
+  const items = []
+  let i = 0
+
+  while (i < messages.length) {
+    const msg = messages[i]
+
+    // Check if this is the start of a compaction event (4-message sequence)
+    if (isCompactionStart(msg, messages, i)) {
+      const compactionMessages = messages.slice(i, i + 4)
+      items.push({
+        type: 'compaction',
+        messages: compactionMessages
+      })
+      i += 4 // Skip the 4 compaction messages
+    } else if (shouldDisplayMessage(msg)) {
+      // Regular message
+      items.push({
+        type: 'message',
+        message: msg
+      })
+      i++
+    } else {
+      // Skip hidden messages
+      i++
+    }
+  }
+
+  return items
 })
+
+/**
+ * Check if message at index i is the start of a compaction event
+ * Pattern:
+ * 1. System (subtype=status) - status = 'compacting'
+ * 2. System (subtype=status) - status = null
+ * 3. System (subtype=compact_boundary)
+ * 4. User (starts with "This session is being continued...")
+ */
+function isCompactionStart(msg, messages, index) {
+  // Need at least 4 messages remaining
+  if (index + 3 >= messages.length) return false
+
+  const msg1 = messages[index]
+  const msg2 = messages[index + 1]
+  const msg3 = messages[index + 2]
+  const msg4 = messages[index + 3]
+
+  // Message 1: System status=compacting
+  const isMsg1Valid =
+    msg1.type === 'system' &&
+    msg1.metadata?.subtype === 'status' &&
+    msg1.metadata?.init_data?.status === 'compacting'
+
+  // Message 2: System status=null
+  const isMsg2Valid =
+    msg2.type === 'system' &&
+    msg2.metadata?.subtype === 'status' &&
+    (msg2.metadata?.init_data?.status === null || msg2.metadata?.init_data?.status === undefined)
+
+  // Message 3: System compact_boundary
+  const isMsg3Valid =
+    msg3.type === 'system' &&
+    msg3.metadata?.subtype === 'compact_boundary'
+
+  // Message 4: User continuation message
+  const isMsg4Valid =
+    msg4.type === 'user' &&
+    msg4.content?.startsWith('This session is being continued from a previous conversation')
+
+  return isMsg1Valid && isMsg2Valid && isMsg3Valid && isMsg4Valid
+}
 
 const currentToolCalls = computed(() => messageStore.currentToolCalls)
 
@@ -41,8 +126,8 @@ async function scrollToBottom() {
   }
 }
 
-// Auto-scroll on new messages
-watch(() => messageStore.currentMessages.length, scrollToBottom)
+// Auto-scroll on new messages (watch displayableItems length changes)
+watch(() => displayableItems.value.length, scrollToBottom)
 
 // Auto-scroll on tool call updates (for permission requests, status changes, etc.)
 watch(() => messageStore.currentToolCalls.length, scrollToBottom)
