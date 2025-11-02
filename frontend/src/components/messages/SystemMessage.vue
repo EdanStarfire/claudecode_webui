@@ -1,5 +1,20 @@
 <template>
-  <div class="message-row message-row-system">
+  <!-- Special handling for compaction status messages -->
+  <div v-if="isCompactionStatus" class="message-row message-row-compaction">
+    <div class="message-speaker" :title="tooltipText">
+      <span class="speaker-label">system</span>
+    </div>
+    <div class="message-content-column">
+      <div class="compaction-status-content">
+        <span class="me-2">🗜️</span>
+        <strong class="me-2">Context compaction in progress...</strong>
+        <small class="text-muted ms-auto">{{ formattedTimestamp }}</small>
+      </div>
+    </div>
+  </div>
+
+  <!-- Regular system message -->
+  <div v-else class="message-row message-row-system">
     <div class="message-speaker" :title="tooltipText">
       <span class="speaker-label">system</span>
     </div>
@@ -27,6 +42,12 @@ const formattedTimestamp = computed(() => {
 const tooltipText = computed(() => {
   return `system\n${formattedTimestamp.value}`
 })
+
+// Check if this is a compaction status message
+const isCompactionStatus = computed(() => {
+  return props.message.metadata?.subtype === 'status' &&
+         props.message.metadata?.init_data?.status === 'compacting'
+})
 </script>
 
 <style scoped>
@@ -37,10 +58,24 @@ const tooltipText = computed(() => {
   min-height: 1.2rem;
   padding: 0.2rem 0;
   line-height: 1.2rem;
+  margin: 0;
 }
 
 .message-row-system {
   background-color: #F5F5F5; /* Light grey */
+}
+
+.message-row-compaction {
+  background-color: #fffbea; /* Light yellow - matches template field highlight */
+  padding: 0.2rem 0;
+  margin: 0;
+}
+
+/* Compaction status content */
+.compaction-status-content {
+  display: flex;
+  align-items: center;
+  font-size: 0.9rem;
 }
 
 /* Speaker column (left) */

@@ -1,32 +1,35 @@
 <template>
-  <div class="compaction-event-group mb-3">
-    <!-- Bootstrap Accordion -->
-    <div class="accordion" :id="accordionId">
-      <div class="accordion-item border-warning">
-        <h2 class="accordion-header" :id="headerId">
-          <button
-            class="accordion-button collapsed bg-warning bg-opacity-10"
-            type="button"
-            data-bs-toggle="collapse"
-            :data-bs-target="`#${collapseId}`"
-            aria-expanded="false"
-            :aria-controls="collapseId"
-          >
-            <div class="d-flex align-items-center w-100">
-              <span class="me-2">🗜️</span>
-              <strong class="text-warning me-2">Context Compaction Event</strong>
-              <span class="badge bg-warning text-dark ms-auto me-2">
-                {{ formatTokenCount(preTokens) }}
-              </span>
-              <small class="text-muted">{{ formattedTimestamp }}</small>
-            </div>
-          </button>
-        </h2>
+  <div class="message-row message-row-compaction" :key="accordionId">
+    <div class="message-speaker">
+      <span class="speaker-label">system</span>
+    </div>
+    <div class="message-content-column">
+      <!-- Bootstrap Accordion -->
+      <div class="accordion compaction-accordion" :id="accordionId">
+        <div class="accordion-item">
+          <h2 class="accordion-header" :id="headerId">
+            <button
+              class="accordion-button collapsed"
+              type="button"
+              :aria-expanded="false"
+              :aria-controls="collapseId"
+              @click="toggleCollapse"
+            >
+              <div class="d-flex align-items-center w-100">
+                <span class="me-2">🗜️</span>
+                <strong class="me-2">Context Compaction Event</strong>
+                <span class="badge bg-warning text-dark ms-auto me-2">
+                  {{ formatTokenCount(preTokens) }}
+                </span>
+                <small class="text-muted">{{ formattedTimestamp }}</small>
+              </div>
+            </button>
+          </h2>
         <div
+          ref="collapseElement"
           :id="collapseId"
           class="accordion-collapse collapse"
           :aria-labelledby="headerId"
-          :data-bs-parent="`#${accordionId}`"
         >
           <div class="accordion-body bg-light">
             <!-- Compaction Metadata -->
@@ -62,6 +65,7 @@
               </div>
             </div>
           </div>
+          </div>
         </div>
       </div>
     </div>
@@ -69,19 +73,27 @@
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, ref, onMounted, onBeforeUnmount } from 'vue'
 import { formatTimestamp } from '@/utils/time'
+import { Collapse } from 'bootstrap'
 
 const props = defineProps({
-  // The 4 messages in the compaction event:
-  // 1. System status=compacting
-  // 2. System status=null
-  // 3. System compact_boundary
-  // 4. User continuation message
+  // The messages in the compaction event (4 or 5):
+  // Pattern 1 (4 messages):
+  //   1. System status=compacting
+  //   2. System status=null
+  //   3. System compact_boundary
+  //   4. User continuation message
+  // Pattern 2 (5 messages - with init):
+  //   1. System status=compacting
+  //   2. System status=null
+  //   3. System init (new session after compaction)
+  //   4. System compact_boundary
+  //   5. User continuation message
   messages: {
     type: Array,
     required: true,
-    validator: (messages) => messages.length === 4
+    validator: (messages) => messages.length === 4 || messages.length === 5
   }
 })
 
@@ -94,8 +106,46 @@ const accordionId = computed(() => {
 const headerId = computed(() => `heading-${accordionId.value}`)
 const collapseId = computed(() => `collapse-${accordionId.value}`)
 
-// Extract compact metadata from the boundary message (message 3)
-const boundaryMessage = computed(() => props.messages[2])
+// Ref for the collapse element
+const collapseElement = ref(null)
+let bsCollapse = null
+
+// Initialize Bootstrap Collapse instance
+onMounted(() => {
+  if (collapseElement.value) {
+    bsCollapse = new Collapse(collapseElement.value, {
+      toggle: false // Don't auto-toggle on init
+    })
+  }
+})
+
+// Clean up Bootstrap instance
+onBeforeUnmount(() => {
+  if (bsCollapse) {
+    bsCollapse.dispose()
+  }
+})
+
+// Toggle collapse state
+function toggleCollapse() {
+  if (bsCollapse) {
+    bsCollapse.toggle()
+  }
+}
+
+// Determine if this is a 5-message pattern (with init)
+const hasInitMessage = computed(() => {
+  return props.messages.length === 5 &&
+    props.messages[2]?.type === 'system' &&
+    props.messages[2]?.metadata?.subtype === 'init'
+})
+
+// Extract compact metadata from the boundary message
+// - Message 2 (index 2) if 4-message pattern
+// - Message 3 (index 3) if 5-message pattern (with init)
+const boundaryMessage = computed(() => {
+  return hasInitMessage.value ? props.messages[3] : props.messages[2]
+})
 
 const compactMetadata = computed(() => {
   return boundaryMessage.value?.metadata?.init_data?.compact_metadata || {}
@@ -105,8 +155,12 @@ const preTokens = computed(() => {
   return compactMetadata.value.pre_tokens || 0
 })
 
-// Extract continuation content from the user message (message 4)
-const continuationMessage = computed(() => props.messages[3])
+// Extract continuation content from the user message
+// - Message 3 (index 3) if 4-message pattern
+// - Message 4 (index 4) if 5-message pattern (with init)
+const continuationMessage = computed(() => {
+  return hasInitMessage.value ? props.messages[4] : props.messages[3]
+})
 
 const continuationContent = computed(() => {
   return continuationMessage.value?.content || ''
@@ -126,24 +180,70 @@ function formatTokenCount(tokens) {
 </script>
 
 <style scoped>
-.compaction-event-group {
-  margin: 0.5rem 0;
+/* Message row layout */
+.message-row {
+  display: flex;
+  width: 100%;
+  min-height: 1.2rem;
+  padding: 0.2rem 0;
+  line-height: 1.2rem;
+  margin: 0;
+}
+
+.message-row-compaction {
+  background-color: #fffbea; /* Light yellow */
+  padding: 0.2rem 0;
+  margin: 0;
+}
+
+.message-speaker {
+  width: 8em;
+  padding: 0 1rem;
+  flex-shrink: 0;
+  text-align: right;
+  font-weight: 500;
+  color: #495057;
+}
+
+.speaker-label {
+  font-size: 0.9rem;
+  text-transform: lowercase;
+}
+
+.message-content-column {
+  flex: 1;
+  padding: 0 1rem 0 0.5rem;
+  overflow-wrap: break-word;
+}
+
+/* Compaction accordion styling */
+.compaction-accordion {
+  margin: 0;
+}
+
+.compaction-accordion .accordion-item {
+  border: none;
+  background-color: transparent;
 }
 
 /* Override Bootstrap accordion button styling for compaction event */
-.accordion-button {
-  font-size: 0.95rem;
-  padding: 0.75rem 1rem;
+.compaction-accordion .accordion-button {
+  font-size: 0.9rem;
+  padding: 0;
+  background-color: transparent;
+  border: none;
+  box-shadow: none;
 }
 
-.accordion-button:not(.collapsed) {
-  background-color: rgba(255, 193, 7, 0.1) !important;
+.compaction-accordion .accordion-button:not(.collapsed) {
+  background-color: transparent;
   color: inherit;
+  box-shadow: none;
 }
 
-.accordion-button:focus {
-  border-color: rgba(255, 193, 7, 0.5);
-  box-shadow: 0 0 0 0.25rem rgba(255, 193, 7, 0.25);
+.compaction-accordion .accordion-button:focus {
+  border: none;
+  box-shadow: none;
 }
 
 /* Metadata display */

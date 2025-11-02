@@ -48,25 +48,32 @@ const displayableItems = computed(() => {
   while (i < messages.length) {
     const msg = messages[i]
 
-    // Check if this is the start of a compaction event (4-message sequence)
+    // Check for compaction event FIRST (before shouldDisplayMessage filter)
+    // This is critical because the status messages may be filtered by shouldDisplayMessage
     if (isCompactionStart(msg, messages, i)) {
-      const compactionMessages = messages.slice(i, i + 4)
+      // Determine if this is a 4-message or 5-message pattern
+      const msg3 = messages[i + 2]
+      const hasInitMessage = msg3?.type === 'system' && msg3?.metadata?.subtype === 'init'
+      const messageCount = hasInitMessage ? 5 : 4
+
+      const compactionMessages = messages.slice(i, i + messageCount)
       items.push({
         type: 'compaction',
         messages: compactionMessages
       })
-      i += 4 // Skip the 4 compaction messages
-    } else if (shouldDisplayMessage(msg)) {
-      // Regular message
+      i += messageCount // Skip the compaction messages
+      continue
+    }
+
+    // Regular message filtering
+    if (shouldDisplayMessage(msg)) {
       items.push({
         type: 'message',
         message: msg
       })
-      i++
-    } else {
-      // Skip hidden messages
-      i++
     }
+
+    i++
   }
 
   return items
@@ -74,20 +81,22 @@ const displayableItems = computed(() => {
 
 /**
  * Check if message at index i is the start of a compaction event
- * Pattern:
+ * Pattern (with optional init message):
  * 1. System (subtype=status) - status = 'compacting'
  * 2. System (subtype=status) - status = null
- * 3. System (subtype=compact_boundary)
- * 4. User (starts with "This session is being continued...")
+ * 3. [OPTIONAL] System (subtype=init) - new session init after compaction
+ * 4. System (subtype=compact_boundary)
+ * 5. User (starts with "This session is being continued...")
  */
 function isCompactionStart(msg, messages, index) {
-  // Need at least 4 messages remaining
+  // Need at least 4 messages remaining (5 if init is present)
   if (index + 3 >= messages.length) return false
 
   const msg1 = messages[index]
   const msg2 = messages[index + 1]
-  const msg3 = messages[index + 2]
-  const msg4 = messages[index + 3]
+  let msg3 = messages[index + 2]
+  let msg4 = messages[index + 3]
+  let msg5 = messages[index + 4]
 
   // Message 1: System status=compacting
   const isMsg1Valid =
@@ -101,17 +110,53 @@ function isCompactionStart(msg, messages, index) {
     msg2.metadata?.subtype === 'status' &&
     (msg2.metadata?.init_data?.status === null || msg2.metadata?.init_data?.status === undefined)
 
-  // Message 3: System compact_boundary
-  const isMsg3Valid =
-    msg3.type === 'system' &&
-    msg3.metadata?.subtype === 'compact_boundary'
+  // Check if msg3 is an optional init message
+  const hasInitMessage = msg3?.type === 'system' && msg3?.metadata?.subtype === 'init'
 
-  // Message 4: User continuation message
-  const isMsg4Valid =
-    msg4.type === 'user' &&
-    msg4.content?.startsWith('This session is being continued from a previous conversation')
+  // If init message present, shift the expected positions
+  if (hasInitMessage) {
+    // Pattern becomes: compacting, null, init, compact_boundary, continuation
+    if (index + 4 >= messages.length) return false
 
-  return isMsg1Valid && isMsg2Valid && isMsg3Valid && isMsg4Valid
+    const isMsg3Init = true // We already checked this
+    const isMsg4Boundary =
+      msg4?.type === 'system' &&
+      msg4?.metadata?.subtype === 'compact_boundary'
+    const isMsg5Continuation =
+      msg5?.type === 'user' &&
+      msg5?.content?.startsWith('This session is being continued from a previous conversation')
+
+    // Debug logging
+    if (msg1.type === 'system' && msg1.metadata?.subtype === 'status') {
+      console.log('[Compaction Debug] Checking 5-message pattern (with init) at index', index)
+      console.log('  Msg1 (compacting):', isMsg1Valid)
+      console.log('  Msg2 (null status):', isMsg2Valid)
+      console.log('  Msg3 (init):', isMsg3Init)
+      console.log('  Msg4 (boundary):', isMsg4Boundary)
+      console.log('  Msg5 (continuation):', isMsg5Continuation)
+    }
+
+    return isMsg1Valid && isMsg2Valid && isMsg3Init && isMsg4Boundary && isMsg5Continuation
+  } else {
+    // Standard 4-message pattern: compacting, null, compact_boundary, continuation
+    const isMsg3Boundary =
+      msg3?.type === 'system' &&
+      msg3?.metadata?.subtype === 'compact_boundary'
+    const isMsg4Continuation =
+      msg4?.type === 'user' &&
+      msg4?.content?.startsWith('This session is being continued from a previous conversation')
+
+    // Debug logging
+    if (msg1.type === 'system' && msg1.metadata?.subtype === 'status') {
+      console.log('[Compaction Debug] Checking 4-message pattern (no init) at index', index)
+      console.log('  Msg1 (compacting):', isMsg1Valid)
+      console.log('  Msg2 (null status):', isMsg2Valid)
+      console.log('  Msg3 (boundary):', isMsg3Boundary)
+      console.log('  Msg4 (continuation):', isMsg4Continuation)
+    }
+
+    return isMsg1Valid && isMsg2Valid && isMsg3Boundary && isMsg4Continuation
+  }
 }
 
 const currentToolCalls = computed(() => messageStore.currentToolCalls)
@@ -150,8 +195,11 @@ function shouldDisplayMessage(message) {
   // Filter messages that shouldn't be displayed
   const subtype = message.subtype || message.metadata?.subtype
 
-  // Hide system init messages
+  // Hide system init messages (but NOT status or compact_boundary messages)
   if (message.type === 'system' && subtype === 'init') return false
+
+  // Note: We do NOT hide 'status' or 'compact_boundary' messages here
+  // because they are handled by the compaction event grouping logic above
 
   // Show client_launched, interrupt, and other system messages
   // (These inform the user about session state changes)
