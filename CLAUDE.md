@@ -3,6 +3,7 @@ DO NOT SAY THAT THE USER IS CORRECT OR COMPLEMENT THEIR REQUEST. FORMAL, CONCISE
 # Development Requirements - REQUIRED
 1. Server-side code is all in Python using `uv`, using commands like `uv run ...` or `uv add ...` or `uv run pytest ...` for executing, testing, linting, and managing dependencies.
 2. **Frontend is Vue 3 + Pinia + Vite** (PRODUCTION): Frontend code is in `frontend/` directory. The `static/` directory has been sunset and should not be referenced for new development.
+3. **Code Quality - Ruff Linting** (REQUIRED): All Python code must be linted with Ruff before committing. Run `uv run ruff check --fix src/` on changed files to auto-fix violations. New code must not introduce linting violations.
 
 # High-Level Goal
 We are building a web-based interface for Claude Agent SDK that provides:
@@ -82,6 +83,54 @@ options = ClaudeAgentOptions(
 2. Test imports and function calls in isolation first
 3. Handle JSON serialization of SDK objects properly
 4. Always use try/except blocks around SDK calls
+
+## Code Quality - Ruff Linting Workflow
+
+**REQUIRED**: All Python code changes must be linted with Ruff before committing.
+
+### Development Workflow
+1. **Before Committing**: Run Ruff on changed files
+   ```bash
+   uv run ruff check --fix src/
+   ```
+
+2. **Check Specific Files**:
+   ```bash
+   uv run ruff check --fix src/module_name.py
+   ```
+
+3. **View Violations** (without fixing):
+   ```bash
+   uv run ruff check src/
+   ```
+
+### Progressive Strictness Strategy
+The project uses **Option 3: Progressive Strictness** to manage existing technical debt:
+
+**Current State** (as of initial Ruff integration):
+- 791 total violations identified
+- 684 auto-fixable with `--fix`
+- Rule sets enabled: E (pycodestyle errors), W (warnings), F (pyflakes), I (isort), N (pep8-naming), UP (pyupgrade), B (flake8-bugbear)
+
+**Requirements**:
+1. **New code MUST NOT introduce new violations**
+2. **Changed code SHOULD fix existing violations when touched**
+3. **Auto-fix safe violations** in files you modify
+4. **Legacy code** with violations is acceptable until modified
+
+### When Working on Files
+1. Run `uv run ruff check --fix <file>` before committing
+2. Review and commit auto-fixes separately if desired
+3. For unfixable violations (marked with `[ ]`), either:
+   - Fix manually if straightforward
+   - Add inline `# noqa: <code>` with justification if needed
+   - Document in PR why violation remains
+
+### Configuration
+Ruff configuration is in `pyproject.toml`:
+- Line length: 100 characters
+- Target Python: 3.11+
+- Unused imports in `__init__.py` are allowed
 
 # Frontend Architecture - Vue 3 + Pinia + Vite (PRODUCTION)
 

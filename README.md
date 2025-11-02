@@ -82,6 +82,25 @@ npm run dev
 # Access dev server at http://localhost:5173
 ```
 
+### Code Quality
+
+The project uses **Ruff** for Python linting to maintain code quality:
+
+```bash
+# Check and auto-fix violations in changed files
+uv run ruff check --fix src/
+
+# Check specific file
+uv run ruff check --fix src/module_name.py
+
+# View violations without fixing
+uv run ruff check src/
+```
+
+**Progressive Strictness Strategy**: The codebase currently has existing linting violations that are being addressed incrementally. New code must not introduce violations, and violations should be fixed when modifying existing files.
+
+See [CLAUDE.md](./CLAUDE.md#code-quality---ruff-linting-workflow) for detailed workflow and requirements.
+
 ## Core Features
 
 ### Single-Agent Mode (Standard Sessions)
