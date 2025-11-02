@@ -957,3 +957,5 @@ NEVER create files unless they're absolutely necessary for achieving your goal.
 ALWAYS prefer editing an existing file to creating a new one.
 NEVER proactively create documentation files (*.md) or README files. Only create documentation files if explicitly requested by the User.
 ALWAYS remove temporary test files after debugging is complete.
+
+There is windows file modification bug in Claude Code. The workaround is: always use complete absolute Windows paths  with drive letters and backslashes for ALL file operations. Apply this rule going forward, not just for this  file.
