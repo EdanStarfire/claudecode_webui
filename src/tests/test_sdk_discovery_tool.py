@@ -1,13 +1,12 @@
 """Tests for SDK discovery tool."""
 
-import pytest
-import asyncio
 import tempfile
-from unittest.mock import Mock, patch, AsyncMock
 from pathlib import Path
+from unittest.mock import AsyncMock, Mock, patch
 
-from ..sdk_discovery_tool import SDKDiscoveryTool, DiscoveryScenario, DiscoveryResult
-from ..message_parser import MessageType
+import pytest
+
+from ..sdk_discovery_tool import DiscoveryResult, DiscoveryScenario, SDKDiscoveryTool
 
 
 class TestDiscoveryScenario:
@@ -145,8 +144,6 @@ class TestSDKDiscoveryTool:
     @pytest.mark.asyncio
     async def test_run_scenario_with_callbacks(self, discovery_tool):
         """Test scenario execution with message callbacks."""
-        messages_captured = []
-
         # Mock the ClaudeSDK to capture callback behavior
         with patch('src.sdk_discovery_tool.ClaudeSDK') as mock_sdk_class:
             mock_sdk = Mock()
@@ -163,7 +160,7 @@ class TestSDKDiscoveryTool:
                 expected_types=["system"]
             )
 
-            result = await discovery_tool._run_scenario(scenario)
+            await discovery_tool._run_scenario(scenario)
 
             # Should have called the SDK constructor with callbacks
             mock_sdk_class.assert_called_once()

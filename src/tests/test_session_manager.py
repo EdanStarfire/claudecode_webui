@@ -1,14 +1,15 @@
 """Tests for session_manager module."""
 
 import asyncio
-import pytest
-import tempfile
 import json
+import tempfile
 import uuid
+from datetime import UTC, datetime
 from pathlib import Path
-from datetime import datetime, timezone
 
-from ..session_manager import SessionManager, SessionState, SessionInfo
+import pytest
+
+from ..session_manager import SessionInfo, SessionManager, SessionState
 
 
 @pytest.fixture
@@ -38,7 +39,7 @@ class TestSessionInfo:
     def test_session_info_creation(self):
         """Test SessionInfo creation and default values."""
         session_id = "test-session-123"
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         info = SessionInfo(
             session_id=session_id,
@@ -59,7 +60,7 @@ class TestSessionInfo:
     def test_session_info_to_dict(self):
         """Test SessionInfo to_dict conversion."""
         session_id = "test-session-123"
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         info = SessionInfo(
             session_id=session_id,
@@ -80,7 +81,7 @@ class TestSessionInfo:
     def test_session_info_from_dict(self):
         """Test SessionInfo from_dict creation."""
         session_id = "test-session-123"
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         data = {
             "session_id": session_id,
@@ -352,7 +353,7 @@ class TestSessionManager:
         # Start session and check persistence
         await manager.start_session(session_id)
 
-        with open(state_file, 'r') as f:
+        with open(state_file) as f:
             state_data = json.load(f)
 
         # State is persisted as 'starting' immediately after start_session()

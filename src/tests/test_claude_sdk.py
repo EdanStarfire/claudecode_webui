@@ -1,12 +1,11 @@
 """Tests for Claude Code SDK wrapper."""
 
-import pytest
 import asyncio
-from unittest.mock import Mock, patch, AsyncMock
 import tempfile
-from pathlib import Path
 
-from ..claude_sdk import ClaudeSDK, SessionState, SessionInfo
+import pytest
+
+from ..claude_sdk import ClaudeSDK, SessionInfo, SessionState
 
 
 class TestClaudeSDK:
@@ -111,10 +110,9 @@ class TestClaudeSDK:
         await sdk_instance.start()
 
         # Give the SDK a moment to transition to RUNNING state
-        import asyncio
         await asyncio.sleep(0.1)
 
-        success = await sdk_instance.send_message("Test message")
+        await sdk_instance.send_message("Test message")
 
         # Success may be False if still in STARTING state, which is expected
         # The important thing is that we don't get an exception
