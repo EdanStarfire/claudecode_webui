@@ -110,6 +110,26 @@ export const useLegionStore = defineStore('legion', () => {
 
     // Trigger reactivity
     commsByLegion.value = new Map(commsByLegion.value)
+
+    // Also add to channel-specific list if this comm is for a channel
+    if (comm.to_channel_id) {
+      addChannelComm(comm.to_channel_id, comm)
+    }
+  }
+
+  /**
+   * Add a comm to a channel's comm list (from WebSocket or API)
+   */
+  function addChannelComm(channelId, comm) {
+    if (!channelCommsByChannel.value.has(channelId)) {
+      channelCommsByChannel.value.set(channelId, [])
+    }
+
+    const comms = channelCommsByChannel.value.get(channelId)
+    comms.push(comm)
+
+    // Trigger reactivity
+    channelCommsByChannel.value = new Map(channelCommsByChannel.value)
   }
 
   /**
@@ -344,6 +364,7 @@ export const useLegionStore = defineStore('legion', () => {
     setCurrentLegion,
     loadTimeline,
     addComm,
+    addChannelComm,
     sendComm,
     loadMinions,
     createMinion,
