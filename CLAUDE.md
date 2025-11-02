@@ -89,20 +89,21 @@ options = ClaudeAgentOptions(
 **REQUIRED**: All Python code changes must be linted with Ruff before committing.
 
 ### Development Workflow
-1. **Before Committing**: Run Ruff on changed files
+1. **Before Committing**: Run Ruff on the specific files you modified
    ```bash
-   uv run ruff check --fix src/
+   # Lint specific files you changed
+   uv run ruff check --fix src/web_server.py src/session_manager.py
+
+   # Or use git to find changed files
+   uv run ruff check --fix $(git diff --name-only --diff-filter=AM | grep '\.py$')
    ```
 
-2. **Check Specific Files**:
+2. **View Violations** (without fixing):
    ```bash
-   uv run ruff check --fix src/module_name.py
+   uv run ruff check src/module_name.py
    ```
 
-3. **View Violations** (without fixing):
-   ```bash
-   uv run ruff check src/
-   ```
+3. **AVOID running on entire codebase**: Do NOT run `uv run ruff check --fix src/` as this will auto-fix 684+ unrelated violations across the codebase, creating massive unrelated changes in your PR.
 
 ### Progressive Strictness Strategy
 The project uses **Option 3: Progressive Strictness** to manage existing technical debt:

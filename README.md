@@ -87,15 +87,17 @@ npm run dev
 The project uses **Ruff** for Python linting to maintain code quality:
 
 ```bash
-# Check and auto-fix violations in changed files
-uv run ruff check --fix src/
+# Lint specific files you changed
+uv run ruff check --fix src/web_server.py src/session_manager.py
 
-# Check specific file
-uv run ruff check --fix src/module_name.py
+# Or use git to find changed files
+uv run ruff check --fix $(git diff --name-only --diff-filter=AM | grep '\.py$')
 
 # View violations without fixing
-uv run ruff check src/
+uv run ruff check src/module_name.py
 ```
+
+**Important**: Only run Ruff on files you've modified, not the entire `src/` directory. Running `--fix` on the whole codebase will auto-fix 684+ unrelated violations.
 
 **Progressive Strictness Strategy**: The codebase currently has existing linting violations that are being addressed incrementally. New code must not introduce violations, and violations should be fixed when modifying existing files.
 
