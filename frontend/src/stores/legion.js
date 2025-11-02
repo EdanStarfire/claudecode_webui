@@ -247,6 +247,33 @@ export const useLegionStore = defineStore('legion', () => {
   }
 
   /**
+   * Add a single channel to the legion's channel list (from WebSocket)
+   * Prevents duplicates and triggers reactivity
+   */
+  function addChannel(legionId, channel) {
+    if (!channelsByLegion.value.has(legionId)) {
+      channelsByLegion.value.set(legionId, [])
+    }
+
+    const channels = channelsByLegion.value.get(legionId)
+
+    // Check if channel already exists (prevent duplicates)
+    const exists = channels.some(ch => ch.channel_id === channel.channel_id)
+    if (exists) {
+      console.log(`Duplicate channel ${channel.channel_id} prevented`)
+      return
+    }
+
+    // Add to list
+    channels.push(channel)
+
+    // Trigger Vue reactivity
+    channelsByLegion.value = new Map(channelsByLegion.value)
+
+    console.log(`Added channel ${channel.name} to legion ${legionId}`)
+  }
+
+  /**
    * Load channel details
    */
   async function loadChannelDetails(channelId) {
@@ -386,6 +413,7 @@ export const useLegionStore = defineStore('legion', () => {
     createMinion,
     loadHordes,
     loadChannels,
+    addChannel,
     loadChannelDetails,
     loadChannelComms,
     addMemberToChannel,

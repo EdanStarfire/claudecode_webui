@@ -30,6 +30,16 @@ class ChannelManager:
             system: LegionSystem instance for accessing other components
         """
         self.system = system
+        self._channel_broadcast_callback = None  # Callback for broadcasting channel creation via WebSocket
+
+    def set_channel_broadcast_callback(self, callback):
+        """
+        Set callback for broadcasting channel creation to WebSocket clients.
+
+        Args:
+            callback: Async function(legion_id, channel) to broadcast channel_created events
+        """
+        self._channel_broadcast_callback = callback
 
     async def get_channel(self, channel_id: str) -> Optional['Channel']:
         """
@@ -148,6 +158,17 @@ class ChannelManager:
         # Add initial members using add_member() to maintain bidirectional relationship
         for minion_id in member_minion_ids:
             await self.add_member(channel_id, minion_id)
+
+        # Broadcast channel creation to WebSocket clients watching this legion
+        if self._channel_broadcast_callback:
+            try:
+                await self._channel_broadcast_callback(legion_id, channel)
+            except Exception as e:
+                # Log error but don't fail channel creation
+                # Channel is already created and persisted successfully
+                from src.logging_config import get_logger
+                logger = get_logger(__name__, "CHANNEL")
+                logger.error(f"Failed to broadcast channel creation for {channel_id}: {e}")
 
         return channel_id
 

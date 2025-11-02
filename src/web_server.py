@@ -309,9 +309,12 @@ class ClaudeWebUI:
         # Setup routes
         self._setup_routes()
 
-        # Setup Legion WebSocket broadcast callback
+        # Setup Legion WebSocket broadcast callbacks
         self.coordinator.legion_system.comm_router.set_comm_broadcast_callback(
             self._broadcast_comm_to_legion_websocket
+        )
+        self.coordinator.legion_system.channel_manager.set_channel_broadcast_callback(
+            self._broadcast_channel_created_to_legion_websocket
         )
 
         # Setup static files (Vue 3 production build)
@@ -338,6 +341,22 @@ class ClaudeWebUI:
             logger.debug(f"Broadcast comm {comm.comm_id} to legion {legion_id} WebSocket clients")
         except Exception as e:
             logger.error(f"Error broadcasting comm to legion WebSocket: {e}")
+
+    async def _broadcast_channel_created_to_legion_websocket(self, legion_id: str, channel):
+        """Broadcast new channel to WebSocket clients watching this legion"""
+        try:
+            # Convert channel to dict for JSON serialization
+            channel_dict = channel.to_dict()
+
+            # Broadcast to all clients watching this legion
+            await self.legion_websocket_manager.broadcast_to_legion(legion_id, {
+                "type": "channel_created",
+                "channel": channel_dict,
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            })
+            logger.debug(f"Broadcast channel_created {channel.channel_id} to legion {legion_id} WebSocket clients")
+        except Exception as e:
+            logger.error(f"Error broadcasting channel creation to legion WebSocket: {e}")
 
     def _cleanup_pending_permissions_for_session(self, session_id: str):
         """Clean up pending permissions for a specific session by auto-denying them"""
