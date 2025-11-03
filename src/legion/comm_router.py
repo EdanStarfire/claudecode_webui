@@ -10,14 +10,18 @@ Responsibilities:
 - Parse #minion-name and #channel-name tags for explicit references
 """
 
-import re
 import json
-from pathlib import Path
-from typing import TYPE_CHECKING, List, Tuple, Optional
-from datetime import datetime
+import re
+from typing import TYPE_CHECKING
 
-from src.models.legion_models import Comm, CommType, InterruptPriority, SYSTEM_MINION_ID, SYSTEM_MINION_NAME
 from src.logging_config import get_logger
+from src.models.legion_models import (
+    SYSTEM_MINION_ID,
+    SYSTEM_MINION_NAME,
+    Comm,
+    CommType,
+    InterruptPriority,
+)
 
 if TYPE_CHECKING:
     from src.legion_system import LegionSystem
@@ -107,7 +111,7 @@ class CommRouter:
                 if comm.from_minion_id:
                     await self._send_system_error_comm(
                         to_minion_id=comm.from_minion_id,
-                        error_message=f"Failed to deliver message: Target minion not found",
+                        error_message="Failed to deliver message: Target minion not found",
                         original_comm_id=comm.comm_id
                     )
                 return False
@@ -198,6 +202,18 @@ class CommRouter:
                 else:
                     formatted_message = f"**{comm_type_prefix} from {from_name}:** {header_summary}\n\n{comm.content}"
 
+            # Handle interrupt priority
+            if comm.interrupt_priority in [InterruptPriority.HALT, InterruptPriority.PIVOT]:
+                legion_logger.info(f"Comm {comm.comm_id} has {comm.interrupt_priority.value} priority - interrupting session {comm.to_minion_id}")
+
+                # Interrupt the target session
+                try:
+                    await self.system.session_coordinator.interrupt_session(comm.to_minion_id)
+                    legion_logger.debug(f"Successfully interrupted session {comm.to_minion_id}")
+                except Exception as e:
+                    legion_logger.warning(f"Failed to interrupt session {comm.to_minion_id}: {e}")
+                    # Continue anyway - message will queue if interrupt fails
+
             # Send message to target minion via SessionCoordinator
             await self.system.session_coordinator.send_message(
                 session_id=comm.to_minion_id,
@@ -243,7 +259,7 @@ class CommRouter:
                 if comm.from_minion_id:
                     await self._send_system_error_comm(
                         to_minion_id=comm.from_minion_id,
-                        error_message=f"Failed to broadcast: Channel not found",
+                        error_message="Failed to broadcast: Channel not found",
                         original_comm_id=comm.comm_id
                     )
                 return False
@@ -348,7 +364,7 @@ class CommRouter:
                 to_user=False,
                 content=error_message,
                 comm_type=CommType.SYSTEM,  # Use SYSTEM for system-generated messages
-                interrupt_priority=InterruptPriority.ROUTINE,
+                interrupt_priority=InterruptPriority.NONE,
                 in_reply_to=original_comm_id,  # Reference the failed comm
                 visible_to_user=True
             )
@@ -503,7 +519,7 @@ class CommRouter:
 
         legion_logger.debug(f"Appended comm {comm.comm_id} to timeline {timeline_file}")
 
-    def _extract_tags(self, content: str) -> Tuple[List[str], List[str]]:
+    def _extract_tags(self, content: str) -> tuple[list[str], list[str]]:
         """
         Extract #minion-name and #channel-name tags from content.
 

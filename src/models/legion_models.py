@@ -11,12 +11,11 @@ This consolidation reduces duplication and leverages existing infrastructure.
 """
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import Enum
-from typing import List, Dict, Optional, Any
+from typing import Any
 
 from src.timestamp_utils import normalize_timestamp
-
 
 # Constants
 
@@ -49,10 +48,10 @@ class CommType(Enum):
 
 
 class InterruptPriority(Enum):
-    """Priority level for interrupt handling."""
-    ROUTINE = "routine"         # Normal queue
-    IMPORTANT = "important"     # High priority (unused in MVP)
-    PIVOT = "pivot"             # Clear queue, redirect
+    """Priority level for message delivery and interrupt handling."""
+    NONE = "none"               # Normal queue (default)
+    HALT = "halt"               # Interrupt target, deliver immediately
+    PIVOT = "pivot"             # Interrupt target with redirect message
     CRITICAL = "critical"       # Emergency (unused in MVP)
 
 
@@ -70,14 +69,14 @@ class Horde:
 
     # Hierarchy
     root_overseer_id: str       # Top-level overseer (user-created minion)
-    all_minion_ids: List[str] = field(default_factory=list)   # Flattened list of all minions in tree
+    all_minion_ids: list[str] = field(default_factory=list)   # Flattened list of all minions in tree
 
     # Metadata
     created_by: str = "user"    # "user" or minion_id
     created_at: datetime = field(default_factory=datetime.now)
     updated_at: datetime = field(default_factory=datetime.now)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization."""
         return {
             "horde_id": self.horde_id,
@@ -91,7 +90,7 @@ class Horde:
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'Horde':
+    def from_dict(cls, data: dict[str, Any]) -> 'Horde':
         """Create from dictionary."""
         data = data.copy()
         data["created_at"] = datetime.fromisoformat(data["created_at"])
@@ -111,8 +110,8 @@ class Channel:
     purpose: str                # "coordination" | "planning" | "scene" | "research"
 
     # Membership
-    member_minion_ids: List[str] = field(default_factory=list)
-    created_by_minion_id: Optional[str] = None  # None if user-created
+    member_minion_ids: list[str] = field(default_factory=list)
+    created_by_minion_id: str | None = None  # None if user-created
 
     # Metadata
     created_at: datetime = field(default_factory=datetime.now)
@@ -128,10 +127,9 @@ class Channel:
         Returns:
             Absolute path to comms.jsonl for this channel
         """
-        from pathlib import Path
         return data_dir / "legions" / self.legion_id / "channels" / self.channel_id / "comms.jsonl"
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization."""
         return {
             "channel_id": self.channel_id,
@@ -146,7 +144,7 @@ class Channel:
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'Channel':
+    def from_dict(cls, data: dict[str, Any]) -> 'Channel':
         """Create from dictionary."""
         data = data.copy()
         data["created_at"] = datetime.fromisoformat(data["created_at"])
@@ -164,33 +162,33 @@ class Comm:
     comm_id: str                # UUID
 
     # Source
-    from_minion_id: Optional[str] = None  # None if from user
+    from_minion_id: str | None = None  # None if from user
     from_user: bool = False
-    from_minion_name: Optional[str] = None  # Captured name (for historical display)
+    from_minion_name: str | None = None  # Captured name (for historical display)
 
     # Destination
-    to_minion_id: Optional[str] = None    # Direct to minion
-    to_channel_id: Optional[str] = None   # Broadcast to channel
+    to_minion_id: str | None = None    # Direct to minion
+    to_channel_id: str | None = None   # Broadcast to channel
     to_user: bool = False
-    to_minion_name: Optional[str] = None  # Captured name (for historical display)
-    to_channel_name: Optional[str] = None  # Captured name (for historical display)
+    to_minion_name: str | None = None  # Captured name (for historical display)
+    to_channel_name: str | None = None  # Captured name (for historical display)
 
     # Content
     summary: str = ""  # Brief one-line description (~50 chars, shown collapsed)
     content: str = ""  # Full detailed message (shown expanded, supports markdown)
     comm_type: CommType = CommType.SYSTEM
-    interrupt_priority: InterruptPriority = InterruptPriority.ROUTINE
+    interrupt_priority: InterruptPriority = InterruptPriority.NONE
 
     # Context
-    in_reply_to: Optional[str] = None
-    related_task_id: Optional[str] = None
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    in_reply_to: str | None = None
+    related_task_id: str | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     # Visibility
     visible_to_user: bool = True  # Should this show in UI?
 
     # Timestamp (Unix timestamp in seconds)
-    timestamp: float = field(default_factory=lambda: datetime.now(timezone.utc).timestamp())
+    timestamp: float = field(default_factory=lambda: datetime.now(UTC).timestamp())
 
     def validate(self) -> bool:
         """Ensure Comm has valid routing."""
@@ -211,7 +209,7 @@ class Comm:
 
         return True
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization."""
         return {
             "comm_id": self.comm_id,
@@ -235,7 +233,7 @@ class Comm:
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'Comm':
+    def from_dict(cls, data: dict[str, Any]) -> 'Comm':
         """Create from dictionary."""
         data = data.copy()
         data["comm_type"] = CommType(data["comm_type"])
@@ -247,6 +245,6 @@ class Comm:
                 data["timestamp"] = normalize_timestamp(data["timestamp"])
             except (ValueError, TypeError):
                 # Fallback to current time if timestamp is invalid
-                data["timestamp"] = datetime.now(timezone.utc).timestamp()
+                data["timestamp"] = datetime.now(UTC).timestamp()
 
         return cls(**data)
