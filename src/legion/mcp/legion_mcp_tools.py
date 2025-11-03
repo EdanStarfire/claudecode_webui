@@ -13,10 +13,10 @@ Implementation uses Claude Agent SDK's @tool decorator and create_sdk_mcp_server
 Tools are exposed to minions with names like: mcp__legion__send_comm
 """
 
-from typing import TYPE_CHECKING, Dict, Any
+from typing import TYPE_CHECKING, Any
 
 try:
-    from claude_agent_sdk import tool, create_sdk_mcp_server
+    from claude_agent_sdk import create_sdk_mcp_server, tool
 except ImportError:
     # For testing environments without SDK
     tool = None
@@ -60,23 +60,21 @@ class LegionMCPTools:
 
         @tool(
             "send_comm",
-            "Send a communication (message) to another minion by name. "
-            "Proactively use when needing to respond to or ask questions of another #minion. "
-            "Use this for direct collaboration, asking questions, delegating tasks, "
-            "or sharing information. You can reference other minions in your message "
-            "using #minion-name syntax (e.g., 'Check with #DatabaseArchitect about schema'). "
-            "\n\nValid comm_type values: 'task', 'question', 'report', 'info'"
-            "\n\nProvide BOTH summary and content:"
-            "\n- summary: Brief one-line description (~50 chars, shown collapsed in timeline)"
-            "\n- content: Full detailed message (shown when expanded, supports markdown)",
+            "Send a communication to another minion. BE CONCISE - only send when necessary "
+            "(task complete, blocked/need help, milestone reached, question needing input). "
+            "NEVER send acknowledgments ('OK', 'Got it'), goodbyes, or unsolicited comments. "
+            "\n\nSummary must be SPECIFIC and actionable (e.g., 'Completed auth.py refactor - 3 tests added', "
+            "'Blocked: missing DATABASE_URL'). AVOID generic summaries like 'Status update' or 'Progress report'. "
+            "\n\nSTOP when: task acknowledged complete OR awaiting external input (no 'standing by' messages). "
+            "\n\nValid comm_type: 'task', 'question', 'report', 'info'",
             {
                 "to_minion_name": str,  # Exact name of target minion (case-sensitive)
-                "summary": str,          # Brief one-line description (~50 chars)
-                "content": str,          # Full detailed message (supports markdown)
+                "summary": str,          # Specific one-sentence update (actionable)
+                "content": str,          # Details only if summary needs elaboration (supports markdown)
                 "comm_type": str         # One of: task, question, report, info
             }
         )
-        async def send_comm_tool(args: Dict[str, Any]) -> Dict[str, Any]:
+        async def send_comm_tool(args: dict[str, Any]) -> dict[str, Any]:
             """Send communication to another minion."""
             # Inject session context
             args["_from_minion_id"] = session_id
@@ -84,21 +82,21 @@ class LegionMCPTools:
 
         @tool(
             "send_comm_to_channel",
-            "Broadcast a message to all members of a channel. All channel members will "
-            "receive your message. Use for group coordination, status updates, or questions "
-            "to the team. Reference specific minions using #minion-name syntax. "
-            "\n\nValid comm_type values: 'task', 'question', 'report', 'info'"
-            "\n\nProvide BOTH summary and content:"
-            "\n- summary: Brief one-line description (~50 chars, shown collapsed in timeline)"
-            "\n- content: Full detailed message (shown when expanded, supports markdown)",
+            "Broadcast to all channel members. BE CONCISE - only send when necessary "
+            "(milestone reached, blocked, question for team). NEVER send acknowledgments, "
+            "goodbyes, or unsolicited status updates. "
+            "\n\nSummary must be SPECIFIC and actionable (e.g., 'Schema ready for review - 3 endpoints added', "
+            "'Blocked: need API key for testing'). AVOID generic summaries like 'Update' or 'FYI'. "
+            "\n\nSTOP when: task acknowledged OR awaiting team response. "
+            "\n\nValid comm_type: 'task', 'question', 'report', 'info'",
             {
                 "channel_name": str,  # Name of channel to broadcast to
-                "summary": str,       # Brief one-line description (~50 chars)
-                "content": str,       # Full detailed message (supports markdown)
+                "summary": str,       # Specific one-sentence update (actionable)
+                "content": str,       # Details only if summary needs elaboration (supports markdown)
                 "comm_type": str      # One of: task, question, report, info (optional)
             }
         )
-        async def send_comm_to_channel_tool(args: Dict[str, Any]) -> Dict[str, Any]:
+        async def send_comm_to_channel_tool(args: dict[str, Any]) -> dict[str, Any]:
             """Broadcast communication to channel."""
             # Inject session context
             args["_from_minion_id"] = session_id
@@ -126,7 +124,7 @@ class LegionMCPTools:
                 "channels": list                       # List of channel names to join (optional)
             }
         )
-        async def spawn_minion_tool(args: Dict[str, Any]) -> Dict[str, Any]:
+        async def spawn_minion_tool(args: dict[str, Any]) -> dict[str, Any]:
             """Spawn a new child minion."""
             # Inject session context (parent overseer ID)
             args["_parent_overseer_id"] = session_id
@@ -141,7 +139,7 @@ class LegionMCPTools:
                 "minion_name": str  # Name of child minion to dispose
             }
         )
-        async def dispose_minion_tool(args: Dict[str, Any]) -> Dict[str, Any]:
+        async def dispose_minion_tool(args: dict[str, Any]) -> dict[str, Any]:
             """Dispose of a child minion."""
             # Inject session context (parent overseer ID)
             args["_parent_overseer_id"] = session_id
@@ -156,7 +154,7 @@ class LegionMCPTools:
                 "capability": str  # Capability keyword to search for
             }
         )
-        async def search_capability_tool(args: Dict[str, Any]) -> Dict[str, Any]:
+        async def search_capability_tool(args: dict[str, Any]) -> dict[str, Any]:
             """Search for minions by capability."""
             return await self._handle_search_capability(args)
 
@@ -166,7 +164,7 @@ class LegionMCPTools:
             "current states. Useful for understanding who's available to collaborate with.",
             {}  # No parameters required
         )
-        async def list_minions_tool(args: Dict[str, Any]) -> Dict[str, Any]:
+        async def list_minions_tool(args: dict[str, Any]) -> dict[str, Any]:
             """List all active minions."""
             return await self._handle_list_minions(args)
 
@@ -178,7 +176,7 @@ class LegionMCPTools:
                 "minion_name": str  # Name of minion to query
             }
         )
-        async def get_minion_info_tool(args: Dict[str, Any]) -> Dict[str, Any]:
+        async def get_minion_info_tool(args: dict[str, Any]) -> dict[str, Any]:
             """Get detailed minion information."""
             return await self._handle_get_minion_info(args)
 
@@ -190,7 +188,7 @@ class LegionMCPTools:
                 "channel_name": str  # Name of channel to join
             }
         )
-        async def join_channel_tool(args: Dict[str, Any]) -> Dict[str, Any]:
+        async def join_channel_tool(args: dict[str, Any]) -> dict[str, Any]:
             """Join a channel."""
             args["_from_minion_id"] = session_id
             return await self._handle_join_channel(args)
@@ -203,7 +201,7 @@ class LegionMCPTools:
                 "channel_name": str  # Name of channel to leave
             }
         )
-        async def leave_channel_tool(args: Dict[str, Any]) -> Dict[str, Any]:
+        async def leave_channel_tool(args: dict[str, Any]) -> dict[str, Any]:
             """Leave a channel."""
             args["_from_minion_id"] = session_id
             return await self._handle_leave_channel(args)
@@ -218,7 +216,7 @@ class LegionMCPTools:
                 "channel_name": str   # Name of channel to add them to
             }
         )
-        async def add_minion_to_channel_tool(args: Dict[str, Any]) -> Dict[str, Any]:
+        async def add_minion_to_channel_tool(args: dict[str, Any]) -> dict[str, Any]:
             """Add child minion to channel."""
             args["_parent_overseer_id"] = session_id
             return await self._handle_add_minion_to_channel(args)
@@ -232,7 +230,7 @@ class LegionMCPTools:
                 "channel_name": str   # Name of channel to remove them from
             }
         )
-        async def remove_minion_from_channel_tool(args: Dict[str, Any]) -> Dict[str, Any]:
+        async def remove_minion_from_channel_tool(args: dict[str, Any]) -> dict[str, Any]:
             """Remove child minion from channel."""
             args["_parent_overseer_id"] = session_id
             return await self._handle_remove_minion_from_channel(args)
@@ -248,7 +246,7 @@ class LegionMCPTools:
                 "initial_members": list   # List of minion names (optional)
             }
         )
-        async def create_channel_tool(args: Dict[str, Any]) -> Dict[str, Any]:
+        async def create_channel_tool(args: dict[str, Any]) -> dict[str, Any]:
             """Create a new channel."""
             # Inject session context
             args["_from_minion_id"] = session_id
@@ -259,7 +257,7 @@ class LegionMCPTools:
             "Get list of all channels in the legion with their names, descriptions, and member counts.",
             {}  # No parameters required
         )
-        async def list_channels_tool(args: Dict[str, Any]) -> Dict[str, Any]:
+        async def list_channels_tool(args: dict[str, Any]) -> dict[str, Any]:
             """List all channels."""
             # Inject session context
             args["_from_minion_id"] = session_id
@@ -277,7 +275,7 @@ class LegionMCPTools:
             "\n\nTemplates include permission_mode and allowed_tools for each minion type.",
             {}  # No parameters required
         )
-        async def list_templates_tool(args: Dict[str, Any]) -> Dict[str, Any]:
+        async def list_templates_tool(args: dict[str, Any]) -> dict[str, Any]:
             """List all minion templates."""
             return await self._handle_list_templates(args)
 
@@ -306,7 +304,7 @@ class LegionMCPTools:
     # Tool Handler Methods - Implementation in Phase 2
     # These are called by the @tool decorated functions above
 
-    async def _handle_send_comm(self, args: Dict[str, Any]) -> Dict[str, Any]:
+    async def _handle_send_comm(self, args: dict[str, Any]) -> dict[str, Any]:
         """
         Handle send_comm tool call.
 
@@ -317,6 +315,7 @@ class LegionMCPTools:
             Tool result with content array
         """
         import uuid
+
         from src.models.legion_models import Comm, CommType, InterruptPriority
 
         # Get current minion context (from session_id in SDK context)
@@ -360,7 +359,7 @@ class LegionMCPTools:
         to_minion_name = args.get("to_minion_name")
 
         # Check if sending to the special "user" minion
-        from src.models.legion_models import USER_MINION_ID, SYSTEM_MINION_NAME
+        from src.models.legion_models import SYSTEM_MINION_NAME
         sending_to_user = (to_minion_name == "user")
 
         # Prevent sending to system (system only sends, never receives)
@@ -452,7 +451,7 @@ class LegionMCPTools:
                 "is_error": True
             }
 
-    async def _handle_send_comm_to_channel(self, args: Dict[str, Any]) -> Dict[str, Any]:
+    async def _handle_send_comm_to_channel(self, args: dict[str, Any]) -> dict[str, Any]:
         """
         Handle send_comm_to_channel tool call.
 
@@ -472,6 +471,7 @@ class LegionMCPTools:
             Tool result with content array
         """
         import uuid
+
         from src.models.legion_models import Comm, CommType, InterruptPriority
 
         # Get current minion context (from session_id in SDK context)
@@ -616,7 +616,7 @@ class LegionMCPTools:
                 "is_error": True
             }
 
-    async def _handle_spawn_minion(self, args: Dict[str, Any]) -> Dict[str, Any]:
+    async def _handle_spawn_minion(self, args: dict[str, Any]) -> dict[str, Any]:
         """
         Handle spawn_minion tool call from a minion.
 
@@ -807,9 +807,9 @@ class LegionMCPTools:
                 )
             else:
                 perm_info = (
-                    f"\n**Permissions** (safe defaults):\n"
-                    f"  - Permission Mode: default\n"
-                    f"  - Allowed Tools: none (user must approve each tool use)"
+                    "\n**Permissions** (safe defaults):\n"
+                    "  - Permission Mode: default\n"
+                    "  - Allowed Tools: none (user must approve each tool use)"
                 )
 
             return {
@@ -857,7 +857,7 @@ class LegionMCPTools:
                 "is_error": True
             }
 
-    async def _handle_dispose_minion(self, args: Dict[str, Any]) -> Dict[str, Any]:
+    async def _handle_dispose_minion(self, args: dict[str, Any]) -> dict[str, Any]:
         """
         Handle dispose_minion tool call from a minion.
 
@@ -951,7 +951,7 @@ class LegionMCPTools:
                 "is_error": True
             }
 
-    async def _handle_search_capability(self, args: Dict[str, Any]) -> Dict[str, Any]:
+    async def _handle_search_capability(self, args: dict[str, Any]) -> dict[str, Any]:
         """
         Handle search_capability tool call.
 
@@ -1043,7 +1043,7 @@ class LegionMCPTools:
                 "is_error": True
             }
 
-    async def _handle_list_minions(self, args: Dict[str, Any]) -> Dict[str, Any]:
+    async def _handle_list_minions(self, args: dict[str, Any]) -> dict[str, Any]:
         """
         Handle list_minions tool call.
 
@@ -1108,7 +1108,7 @@ class LegionMCPTools:
                 "is_error": True
             }
 
-    async def _handle_get_minion_info(self, args: Dict[str, Any]) -> Dict[str, Any]:
+    async def _handle_get_minion_info(self, args: dict[str, Any]) -> dict[str, Any]:
         """
         Handle get_minion_info tool call.
 
@@ -1247,7 +1247,7 @@ class LegionMCPTools:
             "is_error": False
         }
 
-    async def _handle_join_channel(self, args: Dict[str, Any]) -> Dict[str, Any]:
+    async def _handle_join_channel(self, args: dict[str, Any]) -> dict[str, Any]:
         """
         Handle join_channel tool call.
 
@@ -1330,7 +1330,7 @@ class LegionMCPTools:
                 "is_error": True
             }
 
-    async def _handle_leave_channel(self, args: Dict[str, Any]) -> Dict[str, Any]:
+    async def _handle_leave_channel(self, args: dict[str, Any]) -> dict[str, Any]:
         """
         Handle leave_channel tool call.
 
@@ -1407,7 +1407,7 @@ class LegionMCPTools:
                 "is_error": True
             }
 
-    async def _handle_add_minion_to_channel(self, args: Dict[str, Any]) -> Dict[str, Any]:
+    async def _handle_add_minion_to_channel(self, args: dict[str, Any]) -> dict[str, Any]:
         """
         Handle add_minion_to_channel tool call (overseer only).
 
@@ -1515,7 +1515,7 @@ class LegionMCPTools:
                 "is_error": True
             }
 
-    async def _handle_remove_minion_from_channel(self, args: Dict[str, Any]) -> Dict[str, Any]:
+    async def _handle_remove_minion_from_channel(self, args: dict[str, Any]) -> dict[str, Any]:
         """
         Handle remove_minion_from_channel tool call (overseer only).
 
@@ -1618,7 +1618,7 @@ class LegionMCPTools:
                 "is_error": True
             }
 
-    async def _handle_create_channel(self, args: Dict[str, Any]) -> Dict[str, Any]:
+    async def _handle_create_channel(self, args: dict[str, Any]) -> dict[str, Any]:
         """
         Handle create_channel tool call.
 
@@ -1796,7 +1796,7 @@ class LegionMCPTools:
             "is_error": False
         }
 
-    async def _handle_list_channels(self, args: Dict[str, Any]) -> Dict[str, Any]:
+    async def _handle_list_channels(self, args: dict[str, Any]) -> dict[str, Any]:
         """
         Handle list_channels tool call.
 
@@ -1896,7 +1896,7 @@ class LegionMCPTools:
                 "is_error": True
             }
 
-    async def _handle_list_templates(self, args: Dict[str, Any]) -> Dict[str, Any]:
+    async def _handle_list_templates(self, args: dict[str, Any]) -> dict[str, Any]:
         """
         Handle list_templates tool call.
 
@@ -1992,7 +1992,14 @@ class LegionMCPTools:
             actor_name: Name of the actor (minion or overseer)
         """
         import uuid
-        from src.models.legion_models import Comm, CommType, InterruptPriority, SYSTEM_MINION_ID, SYSTEM_MINION_NAME
+
+        from src.models.legion_models import (
+            SYSTEM_MINION_ID,
+            SYSTEM_MINION_NAME,
+            Comm,
+            CommType,
+            InterruptPriority,
+        )
 
         # Format message based on action
         if action in ["joined", "left"]:
