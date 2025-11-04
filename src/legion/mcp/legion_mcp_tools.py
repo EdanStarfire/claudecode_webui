@@ -66,12 +66,20 @@ class LegionMCPTools:
             "\n\nSummary must be SPECIFIC and actionable (e.g., 'Completed auth.py refactor - 3 tests added', "
             "'Blocked: missing DATABASE_URL'). AVOID generic summaries like 'Status update' or 'Progress report'. "
             "\n\nSTOP when: task acknowledged complete OR awaiting external input (no 'standing by' messages). "
-            "\n\nValid comm_type: 'task', 'question', 'report', 'info'",
+            "\n\nValid comm_type: 'task', 'question', 'report', 'info'"
+            "\n\nInterrupt Priority (optional):"
+            "\n- 'none' (default): Queue message normally"
+            "\n- 'halt': Interrupt target minion immediately (use for critical errors, urgent questions)"
+            "\n- 'pivot': Interrupt target and redirect work (message must include explicit 'cease prior work' instructions)"
+            "\n\nUse HALT when: critical error/blocker discovered, time-sensitive question needing immediate answer"
+            "\nUse PIVOT when: requirements changed, discovered target working on wrong task, need to completely change direction"
+            "\nUse NONE when: normal coordination, non-urgent updates, FYI messages (task completion notification)",
             {
-                "to_minion_name": str,  # Exact name of target minion (case-sensitive)
-                "summary": str,          # Specific one-sentence update (actionable)
-                "content": str,          # Details only if summary needs elaboration (supports markdown)
-                "comm_type": str         # One of: task, question, report, info
+                "to_minion_name": str,       # Exact name of target minion (case-sensitive)
+                "summary": str,              # Specific one-sentence update (actionable)
+                "content": str,              # Details only if summary needs elaboration (supports markdown)
+                "comm_type": str,            # One of: task, question, report, info
+                "interrupt_priority": str    # Optional: "none", "halt", or "pivot" (default: "none")
             }
         )
         async def send_comm_tool(args: dict[str, Any]) -> dict[str, Any]:
@@ -88,12 +96,14 @@ class LegionMCPTools:
             "\n\nSummary must be SPECIFIC and actionable (e.g., 'Schema ready for review - 3 endpoints added', "
             "'Blocked: need API key for testing'). AVOID generic summaries like 'Update' or 'FYI'. "
             "\n\nSTOP when: task acknowledged OR awaiting team response. "
-            "\n\nValid comm_type: 'task', 'question', 'report', 'info'",
+            "\n\nValid comm_type: 'task', 'question', 'report', 'info'"
+            "\n\nInterrupt Priority (optional): 'none' (default), 'halt', 'pivot' - same as send_comm",
             {
-                "channel_name": str,  # Name of channel to broadcast to
-                "summary": str,       # Specific one-sentence update (actionable)
-                "content": str,       # Details only if summary needs elaboration (supports markdown)
-                "comm_type": str      # One of: task, question, report, info (optional)
+                "channel_name": str,       # Name of channel to broadcast to
+                "summary": str,            # Specific one-sentence update (actionable)
+                "content": str,            # Details only if summary needs elaboration (supports markdown)
+                "comm_type": str,          # One of: task, question, report, info (optional)
+                "interrupt_priority": str  # Optional: "none", "halt", or "pivot" (default: "none")
             }
         )
         async def send_comm_to_channel_tool(args: dict[str, Any]) -> dict[str, Any]:
@@ -355,6 +365,28 @@ class LegionMCPTools:
         # Get the internal enum value
         internal_comm_type = comm_type_mapping[comm_type_str]
 
+        # Validate interrupt_priority (optional)
+        interrupt_priority_str = args.get("interrupt_priority", "none").lower()
+        valid_priorities = ["none", "halt", "pivot"]
+
+        if interrupt_priority_str not in valid_priorities:
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": f"Error: Invalid interrupt_priority '{interrupt_priority_str}'. Valid values are: {', '.join(valid_priorities)}"
+                }],
+                "is_error": True
+            }
+
+        # Map to InterruptPriority enum
+        priority_mapping = {
+            "none": InterruptPriority.NONE,
+            "halt": InterruptPriority.HALT,
+            "pivot": InterruptPriority.PIVOT
+        }
+
+        interrupt_priority = priority_mapping[interrupt_priority_str]
+
         # Look up target minion by name
         to_minion_name = args.get("to_minion_name")
 
@@ -419,7 +451,7 @@ class LegionMCPTools:
             summary=summary,
             content=content,
             comm_type=CommType(internal_comm_type),
-            interrupt_priority=InterruptPriority.ROUTINE,
+            interrupt_priority=interrupt_priority,  # Use validated priority
             visible_to_user=True
         )
 
@@ -508,6 +540,28 @@ class LegionMCPTools:
 
         internal_comm_type = comm_type_mapping[comm_type_str]
 
+        # Validate interrupt_priority (optional)
+        interrupt_priority_str = args.get("interrupt_priority", "none").lower()
+        valid_priorities = ["none", "halt", "pivot"]
+
+        if interrupt_priority_str not in valid_priorities:
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": f"Error: Invalid interrupt_priority '{interrupt_priority_str}'. Valid values are: {', '.join(valid_priorities)}"
+                }],
+                "is_error": True
+            }
+
+        # Map to InterruptPriority enum
+        priority_mapping = {
+            "none": InterruptPriority.NONE,
+            "halt": InterruptPriority.HALT,
+            "pivot": InterruptPriority.PIVOT
+        }
+
+        interrupt_priority = priority_mapping[interrupt_priority_str]
+
         # Look up channel by name
         channel_name = args.get("channel_name")
         if not channel_name:
@@ -582,7 +636,7 @@ class LegionMCPTools:
             summary=summary,
             content=content,
             comm_type=CommType(internal_comm_type),
-            interrupt_priority=InterruptPriority.ROUTINE,
+            interrupt_priority=interrupt_priority,  # Use validated priority
             visible_to_user=True
         )
 
@@ -2020,7 +2074,7 @@ class LegionMCPTools:
             summary=summary,
             content=content,
             comm_type=CommType.SYSTEM,
-            interrupt_priority=InterruptPriority.ROUTINE,
+            interrupt_priority=InterruptPriority.NONE,
             visible_to_user=True,
             to_channel_id=channel.channel_id,
             to_channel_name=channel.name

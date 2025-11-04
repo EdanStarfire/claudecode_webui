@@ -10,9 +10,8 @@ Responsibilities:
 """
 
 import uuid
-from pathlib import Path
-from typing import TYPE_CHECKING, Dict, List, Optional
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from src.models.legion_models import Horde
 
@@ -33,7 +32,7 @@ class OverseerController:
         self.system = system
 
         # Track hordes by horde_id
-        self.hordes: Dict[str, Horde] = {}
+        self.hordes: dict[str, Horde] = {}
 
     async def create_minion_for_user(
         self,
@@ -42,9 +41,9 @@ class OverseerController:
         role: str = "",
         system_prompt: str = "",
         override_system_prompt: bool = False,
-        capabilities: Optional[List[str]] = None,
+        capabilities: list[str] | None = None,
         permission_mode: str = "default",
-        allowed_tools: Optional[List[str]] = None
+        allowed_tools: list[str] | None = None
     ) -> str:
         """
         Create a minion for the user (root overseer).
@@ -192,10 +191,10 @@ class OverseerController:
         name: str,
         role: str,
         system_prompt: str,
-        capabilities: Optional[List[str]] = None,
-        channels: Optional[List[str]] = None,
-        permission_mode: Optional[str] = None,
-        allowed_tools: Optional[List[str]] = None
+        capabilities: list[str] | None = None,
+        channels: list[str] | None = None,
+        permission_mode: str | None = None,
+        allowed_tools: list[str] | None = None
     ) -> str:
         """
         Spawn a child minion autonomously by a parent overseer.
@@ -335,7 +334,7 @@ class OverseerController:
             summary=f"Spawned {name}",
             content=f"**{parent_session.name}** spawned minion **{name}** ({role})",
             comm_type=CommType.SPAWN,
-            interrupt_priority=InterruptPriority.ROUTINE,
+            interrupt_priority=InterruptPriority.NONE,
             visible_to_user=True
         )
         await self.system.comm_router.route_comm(spawn_comm)
@@ -361,7 +360,7 @@ class OverseerController:
         self,
         parent_overseer_id: str,
         child_minion_name: str
-    ) -> Dict[str, any]:
+    ) -> dict[str, any]:
         """
         Dispose of a child minion (terminate with cleanup).
 
@@ -470,7 +469,7 @@ class OverseerController:
                 f" (and {descendants_disposed} descendants)" if descendants_disposed > 0 else ""
             ),
             comm_type=CommType.DISPOSE,
-            interrupt_priority=InterruptPriority.ROUTINE,
+            interrupt_priority=InterruptPriority.NONE,
             visible_to_user=True
         )
         await self.system.comm_router.route_comm(dispose_comm)

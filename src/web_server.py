@@ -3,30 +3,27 @@ FastAPI web server for Claude Code WebUI with WebSocket support.
 """
 
 import asyncio
-import gc
 import json
 import logging
 import os
 import platform
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
-
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse, JSONResponse
-from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from typing import Any
 
 from claude_agent_sdk import PermissionUpdate
 from claude_agent_sdk.types import PermissionRuleValue
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
 from .logging_config import get_logger
 from .message_parser import MessageParser, MessageProcessor
 from .session_coordinator import SessionCoordinator
 from .session_manager import SessionState
-from .template_manager import TemplateManager
 from .timestamp_utils import normalize_timestamp
 
 # Get specialized logger for WebSocket lifecycle debugging
@@ -45,22 +42,22 @@ class ProjectCreateRequest(BaseModel):
 
 
 class ProjectUpdateRequest(BaseModel):
-    name: Optional[str] = None
-    is_expanded: Optional[bool] = None
+    name: str | None = None
+    is_expanded: bool | None = None
 
 
 class ProjectReorderRequest(BaseModel):
-    project_ids: List[str]
+    project_ids: list[str]
 
 
 class SessionCreateRequest(BaseModel):
     project_id: str
     permission_mode: str = "acceptEdits"
-    system_prompt: Optional[str] = None
+    system_prompt: str | None = None
     override_system_prompt: bool = False
-    tools: List[str] = []
-    model: Optional[str] = None
-    name: Optional[str] = None
+    tools: list[str] = []
+    model: str | None = None
+    name: str | None = None
 
 
 class MessageRequest(BaseModel):
@@ -72,7 +69,7 @@ class SessionNameUpdateRequest(BaseModel):
 
 
 class SessionReorderRequest(BaseModel):
-    session_ids: List[str]
+    session_ids: list[str]
 
 
 class PermissionModeRequest(BaseModel):
@@ -80,8 +77,8 @@ class PermissionModeRequest(BaseModel):
 
 
 class CommSendRequest(BaseModel):
-    to_minion_id: Optional[str] = None
-    to_channel_id: Optional[str] = None
+    to_minion_id: str | None = None
+    to_channel_id: str | None = None
     to_user: bool = False
     content: str
     comm_type: str = "task"
@@ -89,19 +86,19 @@ class CommSendRequest(BaseModel):
 
 class MinionCreateRequest(BaseModel):
     name: str
-    role: Optional[str] = ""
-    initialization_context: Optional[str] = ""
+    role: str | None = ""
+    initialization_context: str | None = ""
     override_system_prompt: bool = False
-    capabilities: List[str] = []
+    capabilities: list[str] = []
     permission_mode: str = "default"
-    allowed_tools: List[str] = []  # Empty list means no pre-authorized tools (prompts for everything)
+    allowed_tools: list[str] = []  # Empty list means no pre-authorized tools (prompts for everything)
 
 
 class ChannelCreateRequest(BaseModel):
     name: str
     description: str = ""
     purpose: str = ""
-    member_minion_ids: List[str] = []
+    member_minion_ids: list[str] = []
 
 
 class ChannelMemberRequest(BaseModel):
@@ -112,8 +109,8 @@ class ChannelMemberRequest(BaseModel):
 
 class ChannelBroadcastRequest(BaseModel):
     from_user: bool = False
-    from_minion_id: Optional[str] = None
-    from_minion_name: Optional[str] = None  # Capture name for history
+    from_minion_id: str | None = None
+    from_minion_name: str | None = None  # Capture name for history
     content: str
     summary: str = ""
     comm_type: str = "info"
@@ -122,26 +119,26 @@ class ChannelBroadcastRequest(BaseModel):
 class TemplateCreateRequest(BaseModel):
     name: str
     permission_mode: str
-    allowed_tools: Optional[List[str]] = None
-    default_role: Optional[str] = None
-    default_system_prompt: Optional[str] = None
-    description: Optional[str] = None
+    allowed_tools: list[str] | None = None
+    default_role: str | None = None
+    default_system_prompt: str | None = None
+    description: str | None = None
 
 
 class TemplateUpdateRequest(BaseModel):
-    name: Optional[str] = None
-    permission_mode: Optional[str] = None
-    allowed_tools: Optional[List[str]] = None
-    default_role: Optional[str] = None
-    default_system_prompt: Optional[str] = None
-    description: Optional[str] = None
+    name: str | None = None
+    permission_mode: str | None = None
+    allowed_tools: list[str] | None = None
+    default_role: str | None = None
+    default_system_prompt: str | None = None
+    description: str | None = None
 
 
 class UIWebSocketManager:
     """Manages global UI WebSocket connections for session state updates"""
 
     def __init__(self):
-        self.active_connections: List[WebSocket] = []
+        self.active_connections: list[WebSocket] = []
 
     async def connect(self, websocket: WebSocket):
         await websocket.accept()
@@ -184,7 +181,7 @@ class WebSocketManager:
     """Manages WebSocket connections for session-specific messaging"""
 
     def __init__(self):
-        self.active_connections: Dict[str, List[WebSocket]] = {}
+        self.active_connections: dict[str, list[WebSocket]] = {}
 
     async def connect(self, websocket: WebSocket, session_id: str):
         await websocket.accept()
@@ -244,7 +241,7 @@ class LegionWebSocketManager:
     """Manages WebSocket connections for legion-specific real-time updates"""
 
     def __init__(self):
-        self.active_connections: Dict[str, List[WebSocket]] = {}
+        self.active_connections: dict[str, list[WebSocket]] = {}
 
     async def connect(self, websocket: WebSocket, legion_id: str):
         await websocket.accept()
@@ -304,7 +301,7 @@ class ClaudeWebUI:
         self._message_processor = MessageProcessor(self._message_parser)
 
         # Track pending permission requests with asyncio.Future objects
-        self.pending_permissions: Dict[str, asyncio.Future] = {}
+        self.pending_permissions: dict[str, asyncio.Future] = {}
 
         # Setup routes
         self._setup_routes()
@@ -336,7 +333,7 @@ class ClaudeWebUI:
             await self.legion_websocket_manager.broadcast_to_legion(legion_id, {
                 "type": "comm",
                 "comm": comm_dict,
-                "timestamp": datetime.now(timezone.utc).isoformat()
+                "timestamp": datetime.now(UTC).isoformat()
             })
             logger.debug(f"Broadcast comm {comm.comm_id} to legion {legion_id} WebSocket clients")
         except Exception as e:
@@ -352,7 +349,7 @@ class ClaudeWebUI:
             await self.legion_websocket_manager.broadcast_to_legion(legion_id, {
                 "type": "channel_created",
                 "channel": channel_dict,
-                "timestamp": datetime.now(timezone.utc).isoformat()
+                "timestamp": datetime.now(UTC).isoformat()
             })
             logger.debug(f"Broadcast channel_created {channel.channel_id} to legion {legion_id} WebSocket clients")
         except Exception as e:
@@ -413,7 +410,7 @@ class ClaudeWebUI:
         @self.app.get("/health")
         async def health_check():
             """Health check endpoint"""
-            return {"status": "healthy", "timestamp": datetime.now(timezone.utc).isoformat()}
+            return {"status": "healthy", "timestamp": datetime.now(UTC).isoformat()}
 
         # ==================== PROJECT ENDPOINTS ====================
 
@@ -774,7 +771,7 @@ class ClaudeWebUI:
                 raise HTTPException(status_code=500, detail=str(e))
 
         @self.app.get("/api/sessions/{session_id}/messages")
-        async def get_messages(session_id: str, limit: Optional[int] = 50, offset: int = 0):
+        async def get_messages(session_id: str, limit: int | None = 50, offset: int = 0):
             """Get messages from a session with pagination metadata"""
             try:
                 result = await self.coordinator.get_session_messages(
@@ -874,7 +871,7 @@ class ClaudeWebUI:
                 # Read from main timeline.jsonl (contains ALL comms)
                 timeline_file = legion_dir / "timeline.jsonl"
                 if timeline_file.exists():
-                    with open(timeline_file, 'r', encoding='utf-8') as f:
+                    with open(timeline_file, encoding='utf-8') as f:
                         for line in f:
                             line = line.strip()
                             if line:
@@ -891,7 +888,7 @@ class ClaudeWebUI:
                             comm['timestamp'] = normalize_timestamp(comm['timestamp'])
                         except (ValueError, TypeError) as e:
                             logger.warning(f"Invalid timestamp in comm {comm.get('comm_id', 'unknown')}: {e}, using current time")
-                            comm['timestamp'] = datetime.now(timezone.utc).timestamp()
+                            comm['timestamp'] = datetime.now(UTC).timestamp()
 
                 # Sort by timestamp (newest first) and deduplicate
                 all_comms.sort(key=lambda x: x.get('timestamp', 0.0), reverse=True)
@@ -951,7 +948,8 @@ class ClaudeWebUI:
             """Send a Comm in the legion"""
             try:
                 import uuid
-                from src.models.legion_models import Comm, CommType, InterruptPriority
+
+                from src.models.legion_models import Comm, CommType
 
                 legion = await self.coordinator.legion_system.legion_coordinator.get_legion(legion_id)
                 if not legion:
@@ -1174,7 +1172,11 @@ class ClaudeWebUI:
         async def broadcast_to_channel(channel_id: str, request: ChannelBroadcastRequest):
             """Broadcast a comm to all members of a channel"""
             try:
-                from src.models.legion_models import Comm, CommType, InterruptPriority, USER_MINION_ID
+                from src.models.legion_models import (
+                    Comm,
+                    CommType,
+                    InterruptPriority,
+                )
 
                 # Get channel
                 channel = await self.coordinator.legion_system.channel_manager.get_channel(channel_id)
@@ -1219,7 +1221,7 @@ class ClaudeWebUI:
                     summary=request.summary,
                     content=request.content,
                     comm_type=comm_type,
-                    interrupt_priority=InterruptPriority.ROUTINE,
+                    interrupt_priority=InterruptPriority.NONE,
                     visible_to_user=True
                 )
 
@@ -1266,7 +1268,7 @@ class ClaudeWebUI:
 
                 if channel_log_path.exists():
                     # Count total comms
-                    with open(channel_log_path, 'r', encoding='utf-8') as f:
+                    with open(channel_log_path, encoding='utf-8') as f:
                         lines = f.readlines()
                         total = len(lines)
 
@@ -1497,15 +1499,15 @@ class ClaudeWebUI:
                         try:
                             message_data = json.loads(message)
                             if message_data.get("type") == "ping":
-                                await websocket.send_json({"type": "pong", "timestamp": datetime.now(timezone.utc).isoformat()})
+                                await websocket.send_json({"type": "pong", "timestamp": datetime.now(UTC).isoformat()})
                         except json.JSONDecodeError:
                             logger.warning(f"Invalid JSON in UI WebSocket message: {message}")
 
-                    except asyncio.TimeoutError:
+                    except TimeoutError:
                         # Send periodic ping to keep connection alive
                         await websocket.send_json({
                             "type": "ping",
-                            "timestamp": datetime.now(timezone.utc).isoformat()
+                            "timestamp": datetime.now(UTC).isoformat()
                         })
 
             except WebSocketDisconnect:
@@ -1539,7 +1541,7 @@ class ClaudeWebUI:
                 await websocket.send_json({
                     "type": "connection_established",
                     "legion_id": legion_id,
-                    "timestamp": datetime.now(timezone.utc).isoformat()
+                    "timestamp": datetime.now(UTC).isoformat()
                 })
             except Exception as e:
                 logger.error(f"Failed to send initial message to legion WebSocket {legion_id}: {e}")
@@ -1554,14 +1556,14 @@ class ClaudeWebUI:
                         try:
                             message_data = json.loads(message)
                             if message_data.get("type") == "ping":
-                                await websocket.send_json({"type": "pong", "timestamp": datetime.now(timezone.utc).isoformat()})
+                                await websocket.send_json({"type": "pong", "timestamp": datetime.now(UTC).isoformat()})
                         except json.JSONDecodeError:
                             logger.warning(f"Invalid JSON in legion WebSocket message: {message}")
-                    except asyncio.TimeoutError:
+                    except TimeoutError:
                         # Send periodic ping to keep connection alive
                         await websocket.send_json({
                             "type": "ping",
-                            "timestamp": datetime.now(timezone.utc).isoformat()
+                            "timestamp": datetime.now(UTC).isoformat()
                         })
             except WebSocketDisconnect:
                 logger.info(f"Legion WebSocket disconnected for legion {legion_id}")
@@ -1595,7 +1597,7 @@ class ClaudeWebUI:
                 if session_state not in ['active', 'error', 'paused']:
                     rejection_time = time.time()
                     ws_logger.debug(f"WebSocket connection REJECTED for session: {session_id} (state: {session_state}) at {rejection_time}")
-                    ws_logger.debug(f"WebSocket will only connect to sessions in 'active', 'error', or 'paused' state")
+                    ws_logger.debug("WebSocket will only connect to sessions in 'active', 'error', or 'paused' state")
                     await websocket.close(code=4003)
                     return
 
@@ -1627,7 +1629,7 @@ class ClaudeWebUI:
                 await websocket.send_text(json.dumps({
                     "type": "connection_established",
                     "session_id": session_id,
-                    "timestamp": datetime.now(timezone.utc).isoformat()
+                    "timestamp": datetime.now(UTC).isoformat()
                 }))
 
                 initial_message_sent_time = time.time()
@@ -1724,7 +1726,7 @@ class ClaudeWebUI:
                                         "success": True,
                                         "message": "Interrupt initiated successfully",
                                         "session_id": session_id,
-                                        "timestamp": datetime.now(timezone.utc).isoformat()
+                                        "timestamp": datetime.now(UTC).isoformat()
                                     }))
                                 else:
                                     ws_logger.debug(f"Interrupt failed for session {session_id} at {interrupt_end_time}")
@@ -1735,7 +1737,7 @@ class ClaudeWebUI:
                                         "success": False,
                                         "message": "Failed to initiate interrupt",
                                         "session_id": session_id,
-                                        "timestamp": datetime.now(timezone.utc).isoformat()
+                                        "timestamp": datetime.now(UTC).isoformat()
                                     }))
 
                             except Exception as interrupt_error:
@@ -1748,7 +1750,7 @@ class ClaudeWebUI:
                                         "success": False,
                                         "message": f"Interrupt error: {str(interrupt_error)}",
                                         "session_id": session_id,
-                                        "timestamp": datetime.now(timezone.utc).isoformat()
+                                        "timestamp": datetime.now(UTC).isoformat()
                                     }))
                                 except Exception as response_error:
                                     logger.error(f"Failed to send interrupt error response: {response_error}")
@@ -1804,14 +1806,14 @@ class ClaudeWebUI:
                             else:
                                 ws_logger.debug(f"No pending permission found for request_id: {request_id}")
 
-                    except asyncio.TimeoutError:
+                    except TimeoutError:
                         # Send ping to keep connection alive
                         timeout_time = time.time()
                         ws_verbose_logger.debug(f"WebSocket timeout for session {session_id} at {timeout_time} - sending ping")
 
                         try:
                             ping_start_time = time.time()
-                            await websocket.send_text(json.dumps({"type": "ping", "timestamp": datetime.now(timezone.utc).isoformat()}))
+                            await websocket.send_text(json.dumps({"type": "ping", "timestamp": datetime.now(UTC).isoformat()}))
 
                             ping_sent_time = time.time()
                             ws_verbose_logger.debug(f"Ping sent successfully at {ping_sent_time}")
@@ -1820,7 +1822,7 @@ class ClaudeWebUI:
                             # Connection is dead, break the loop
                             connection_death_time = time.time()
                             ws_logger.debug(f"WebSocket connection DEAD for session {session_id} at {connection_death_time}: {ping_error}")
-                            ws_logger.debug(f"Breaking message loop due to dead connection")
+                            ws_logger.debug("Breaking message loop due to dead connection")
                             break
 
                     except json.JSONDecodeError as e:
@@ -1872,7 +1874,7 @@ class ClaudeWebUI:
                     "type": "message",
                     "session_id": session_id,
                     "data": websocket_data,
-                    "timestamp": datetime.now(timezone.utc).isoformat()
+                    "timestamp": datetime.now(UTC).isoformat()
                 }
 
                 logger.info(f"Attempting to send WebSocket message for session {session_id}: {serialized['type']}")
@@ -1975,7 +1977,7 @@ class ClaudeWebUI:
                             "type": "message",
                             "session_id": session_id,
                             "data": websocket_data,
-                            "timestamp": datetime.now(timezone.utc).isoformat()
+                            "timestamp": datetime.now(UTC).isoformat()
                         }
                         await self.websocket_manager.send_message(session_id, websocket_message)
                         logger.info(f"Broadcasted permission request to WebSocket for session {session_id}")
@@ -1994,7 +1996,7 @@ class ClaudeWebUI:
                             "type": "message",
                             "session_id": session_id,
                             "data": permission_request,
-                            "timestamp": datetime.now(timezone.utc).isoformat()
+                            "timestamp": datetime.now(UTC).isoformat()
                         }
                         await self.websocket_manager.send_message(session_id, websocket_message)
                         logger.info(f"Broadcasted permission request to WebSocket for session {session_id}")
@@ -2148,7 +2150,7 @@ class ClaudeWebUI:
                             "type": "message",
                             "session_id": session_id,
                             "data": permission_response,
-                            "timestamp": datetime.now(timezone.utc).isoformat()
+                            "timestamp": datetime.now(UTC).isoformat()
                         }
                         await self.websocket_manager.send_message(session_id, websocket_message)
                         logger.info(f"Broadcasted permission response to WebSocket for session {session_id}")
