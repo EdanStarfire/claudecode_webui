@@ -73,6 +73,9 @@
 
     <!-- Status Bar (at bottom) -->
     <HordeStatusBar :legion-id="legionId" />
+
+    <!-- Fleet Control Modal -->
+    <FleetControlModal />
   </div>
 </template>
 
@@ -85,6 +88,7 @@ import { useLegionStore } from '../../stores/legion'
 import HordeHeader from '../header/HordeHeader.vue'
 import HordeStatusBar from '../statusbar/HordeStatusBar.vue'
 import MinionTreeNode from './MinionTreeNode.vue'
+import FleetControlModal from './FleetControlModal.vue'
 import { api } from '../../utils/api'
 
 const props = defineProps({

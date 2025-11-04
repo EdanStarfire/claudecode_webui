@@ -1039,6 +1039,62 @@ class ClaudeWebUI:
                 logger.error(f"Failed to create minion: {e}")
                 raise HTTPException(status_code=500, detail=str(e))
 
+        # ==================== FLEET CONTROL ENDPOINTS ====================
+
+        @self.app.post("/api/legions/{legion_id}/halt-all")
+        async def emergency_halt_all(legion_id: str):
+            """Emergency halt all minions in the legion"""
+            try:
+                # Validate legion exists
+                project = await self.coordinator.project_manager.get_project(legion_id)
+                if not project:
+                    raise HTTPException(status_code=404, detail="Legion not found")
+                if not project.is_multi_agent:
+                    raise HTTPException(status_code=400, detail="Project is not a legion")
+
+                # Call LegionCoordinator.emergency_halt_all()
+                result = await self.coordinator.legion_system.legion_coordinator.emergency_halt_all(legion_id)
+
+                return {
+                    "success": True,
+                    "halted_count": result["halted_count"],
+                    "failed_minions": result["failed_minions"],
+                    "total_minions": result["total_minions"]
+                }
+
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"Failed to halt all minions: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @self.app.post("/api/legions/{legion_id}/resume-all")
+        async def resume_all(legion_id: str):
+            """Resume all minions in the legion"""
+            try:
+                # Validate legion exists
+                project = await self.coordinator.project_manager.get_project(legion_id)
+                if not project:
+                    raise HTTPException(status_code=404, detail="Legion not found")
+                if not project.is_multi_agent:
+                    raise HTTPException(status_code=400, detail="Project is not a legion")
+
+                # Call LegionCoordinator.resume_all()
+                result = await self.coordinator.legion_system.legion_coordinator.resume_all(legion_id)
+
+                return {
+                    "success": True,
+                    "resumed_count": result["resumed_count"],
+                    "failed_minions": result["failed_minions"],
+                    "total_minions": result["total_minions"]
+                }
+
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"Failed to resume all minions: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
         # ==================== CHANNEL ENDPOINTS ====================
 
         @self.app.post("/api/legions/{legion_id}/channels", status_code=201)

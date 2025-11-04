@@ -56,21 +56,32 @@ class CommRouter:
         """
         Route a Comm to its destination(s).
 
+        If legion is in emergency halt, queues comm instead of routing.
+
         Args:
             comm: Comm object to route
 
         Returns:
-            bool: True if routing succeeded
+            bool: True if routing succeeded (or queued during halt)
 
         Raises:
-            ValueError: If comm validation fails
+            ValueError: If comm validation fails or queue overflow
         """
         legion_logger.debug(f"Routing comm {comm.comm_id}: from={comm.from_minion_id}, to_minion={comm.to_minion_id}, to_channel={comm.to_channel_id}, to_user={comm.to_user}")
 
         # Validate comm has proper routing
         comm.validate()
 
-        # Persist the comm
+        # Check for emergency halt - queue instead of routing
+        legion_id = await self._get_legion_id_for_comm(comm)
+        if legion_id:
+            coordinator = self.system.legion_coordinator
+            if coordinator.emergency_halt_active.get(legion_id, False):
+                # Legion is halted - queue this comm
+                legion_logger.info(f"Legion {legion_id} in emergency halt - queuing comm {comm.comm_id}")
+                return await self._queue_comm_during_halt(legion_id, comm)
+
+        # Normal routing - persist and route
         await self._persist_comm(comm)
         legion_logger.debug(f"Comm {comm.comm_id} persisted successfully")
 
@@ -551,3 +562,118 @@ class CommRouter:
                 channel_names.append(tag)
 
         return (minion_names, channel_names)
+
+    async def _get_legion_id_for_comm(self, comm: Comm) -> str | None:
+        """
+        Extract legion_id from a comm by looking up the source or target minion.
+
+        Args:
+            comm: Comm object
+
+        Returns:
+            Legion UUID (project_id) or None if not a legion comm
+        """
+        # Try to get legion_id from sender minion
+        if comm.from_minion_id and comm.from_minion_id != SYSTEM_MINION_ID:
+            minion = await self.system.legion_coordinator.get_minion_info(comm.from_minion_id)
+            if minion:
+                return minion.project_id
+
+        # Try to get legion_id from target minion
+        if comm.to_minion_id:
+            minion = await self.system.legion_coordinator.get_minion_info(comm.to_minion_id)
+            if minion:
+                return minion.project_id
+
+        # Try to get legion_id from channel
+        if comm.to_channel_id:
+            channel = await self.system.channel_manager.get_channel(comm.to_channel_id)
+            if channel:
+                return channel.legion_id
+
+        return None
+
+    async def _queue_comm_during_halt(self, legion_id: str, comm: Comm) -> bool:
+        """
+        Queue comm during emergency halt.
+
+        Organizes queue by recipient minion for FIFO delivery per minion.
+
+        Args:
+            legion_id: Legion UUID
+            comm: Comm to queue
+
+        Returns:
+            True if queued successfully
+
+        Raises:
+            ValueError: If queue size exceeds limit (10,000 comms)
+        """
+        coordinator = self.system.legion_coordinator
+
+        # Get or create queue for this legion
+        if legion_id not in coordinator.halted_comm_queues:
+            coordinator.halted_comm_queues[legion_id] = {}
+
+        legion_queue = coordinator.halted_comm_queues[legion_id]
+
+        # Determine target minion(s)
+        target_minions = await self._get_target_minions_for_comm(comm)
+
+        # Queue for each target minion
+        for minion_id in target_minions:
+            if minion_id not in legion_queue:
+                legion_queue[minion_id] = []
+
+            legion_queue[minion_id].append(comm)
+
+        # Check total queue size across all minions
+        total_queued = sum(len(q) for q in legion_queue.values())
+
+        if total_queued > coordinator.MAX_QUEUED_COMMS:
+            # Remove the comm we just added (overflow)
+            for minion_id in target_minions:
+                if legion_queue[minion_id] and legion_queue[minion_id][-1] == comm:
+                    legion_queue[minion_id].pop()
+
+            raise ValueError(
+                f"Comm queue overflow for legion {legion_id}: "
+                f"{total_queued} comms queued (limit: {coordinator.MAX_QUEUED_COMMS}). "
+                f"Latest comm dropped."
+            )
+
+        # Log queuing
+        legion_logger.info(
+            f"Queued comm {comm.comm_id} during emergency halt "
+            f"(total: {total_queued}, targets: {len(target_minions)})"
+        )
+
+        return True
+
+    async def _get_target_minions_for_comm(self, comm: Comm) -> list[str]:
+        """
+        Get list of minion IDs that should receive this comm.
+
+        Handles:
+        - Direct minion-to-minion (single target)
+        - Channel broadcasts (multiple targets)
+
+        Args:
+            comm: Comm object
+
+        Returns:
+            List of minion session IDs
+        """
+        targets = []
+
+        if comm.to_minion_id:
+            # Direct to specific minion
+            targets.append(comm.to_minion_id)
+        elif comm.to_channel_id:
+            # Channel broadcast - get all members
+            channel = await self.system.channel_manager.get_channel(comm.to_channel_id)
+            if channel:
+                # Exclude sender from receiving own broadcast
+                targets = [m for m in channel.member_ids if m != comm.from_minion_id]
+
+        return targets
