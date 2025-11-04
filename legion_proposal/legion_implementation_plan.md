@@ -798,31 +798,33 @@
 
 ---
 
-### Phase 8: Observability & Control (Week 8) ⏳ **IN PROGRESS (~60% COMPLETE)**
+### Phase 8: Observability & Control (Week 8) ✅ **COMPLETE (Minimal MVP)**
 
 **Goal**: Complete observability features and fleet controls.
 
 #### Tasks
 
-**8.1 Fleet Controls UI** ⏳ **PARTIAL (60%)**
+**8.1 Fleet Controls UI** ✅ **COMPLETE**
 - [x] Build fleet controls panel - **Horde View serves as main fleet control**
   - [x] Fleet status summary - Horde View shows parent/child hierarchy, names, statuses, last comms
   - [x] Active/paused/error minion breakdown - Status visible per minion in Horde tree
-  - [ ] Emergency halt button - **NEEDED**: Halt all minions button in Horde View
-  - [ ] Resume all button - **NEEDED**: Resume all minions button in Horde View
-- [ ] Wire up to API endpoints
-- [ ] Add confirmation modal for emergency halt
+  - [x] Emergency halt button - **IMPLEMENTED**: Halt all minions button in Horde View (#184, #190)
+  - [x] Resume all button - **IMPLEMENTED**: Resume all minions button in Horde View (#184, #190)
+- [x] Wire up to API endpoints (POST /api/legions/{id}/halt-all, /resume-all)
+- [x] Add confirmation modal for emergency halt (FleetControlModal.vue)
 - [ ] Write frontend tests (deferred)
 
-**8.2 Emergency Halt** ⏸️ **PARTIAL (50%)**
-- [ ] Implement `emergency_halt_all()` in LegionCoordinator
-  - Halt all active minions in legion via SessionCoordinator.interrupt_session()
-  - Update state to PAUSED for all minions
-  - Do NOT terminate sessions
-- [ ] Implement `resume_all()`
-  - Resume all paused minions
-  - Update state to ACTIVE
-- [ ] Add confirmation modal for emergency halt
+**8.2 Emergency Halt** ✅ **COMPLETE**
+- [x] Implement `emergency_halt_all()` in LegionCoordinator (#184, #190)
+  - [x] Halt all active minions in legion via SessionCoordinator.interrupt_session()
+  - [x] Atomic halt flag with race condition protection
+  - [x] Message queuing during halt (max 10,000 per minion with overflow protection)
+  - [x] Do NOT terminate sessions
+- [x] Implement `resume_all()` (#184, #190)
+  - [x] Resume all paused minions
+  - [x] Update state to ACTIVE
+  - [x] Flush queued comms in FIFO order
+- [x] Add confirmation modal for emergency halt (FleetControlModal.vue)
 - [ ] Write tests (deferred)
 
 **8.3 Individual Minion Controls** ✅ **COMPLETE**
@@ -836,17 +838,18 @@
 - [x] All functionality already working through existing Session architecture
 - **NOTE**: No additional work needed - minions inherit Session controls
 
-**8.4 Send Comm with Interrupt Priority** ⏸️ **PARTIAL (50%)**
+**8.4 Send Comm with Interrupt Priority** ✅ **COMPLETE**
 - [x] Backend infrastructure exists - CommRouter supports interrupt_priority (HALT, PIVOT)
 - [x] Minions can interrupt sessions - SessionCoordinator.interrupt_session() working
 - [x] Minions can queue new messages - send_message() working
-- [ ] **NEEDED**: Update send_comm MCP tool to support interrupt_priority parameter
-  - Allow minions to choose: NONE (queue), HALT (interrupt + send), PIVOT (interrupt + clear queue + send)
-  - Document in MCP tool description when to use each priority
-  - Test minion-to-minion interrupt behavior
+- [x] **IMPLEMENTED**: Update send_comm MCP tool to support interrupt_priority parameter (#185, #189)
+  - [x] Allow minions to choose: NONE (queue), HALT (interrupt + send), PIVOT (interrupt + redirect)
+  - [x] Document in MCP tool description when to use each priority
+  - [x] Implemented interrupt logic in CommRouter._send_to_minion()
+  - [x] Backward compatible (defaults to NONE)
 - [ ] Write tests (deferred)
 
-**8.5 Minion Detail & Edit Modal** ⏸️ **NOT STARTED (0%)**
+**8.5 Minion Detail & Edit Modal** ⏸️ **DEFERRED TO POST-MVP**
 - [ ] Create MinionDetailModal.vue
   - Overview tab (name, role, state, parent/children hierarchy)
   - Capabilities tab (list capabilities with expertise scores, no evidence for MVP)
@@ -861,8 +864,9 @@
   - PUT /api/sessions/{id} (update minion fields)
 - [ ] Add "Edit" and "Details" buttons to Spy View or Horde View
 - [ ] Write frontend tests (deferred)
+- **NOTE**: Nice-to-have feature, not critical for MVP. Spy View provides basic minion information.
 
-**8.6 Timeline Enhancements** ⏸️ **NOT STARTED (0%)**
+**8.6 Timeline Enhancements** ⏸️ **DEFERRED TO POST-MVP**
 - [ ] Add advanced filtering - **Design TBD**
   - Filter by Comm types (task, question, report, etc.)
   - Filter by specific minions (sender and/or recipient)
@@ -872,6 +876,7 @@
 - [x] Add "Load More" pagination - **Already implemented** (timeline loads with pagination)
 - [ ] Add export functionality (**OPTIONAL** - defer to post-MVP)
 - [ ] Write frontend tests (deferred)
+- **NOTE**: Current timeline pagination is sufficient. Design filtering UI before implementation.
 
 **8.7 Error Handling & Empty States** ✅ **COMPLETE**
 - [x] Implement all error states
@@ -923,60 +928,56 @@
 - [ ] Formal load test (1000+ Comms in timeline) - **Not critical for MVP**
 - **NOTE**: Core functionality validated; formal use case walkthroughs would be valuable
 
-#### Deliverables
+#### Deliverables (MVP Complete)
 - [x] Fleet controls functional (Horde View provides overview)
-- [ ] Emergency halt/resume all (needed)
+- [x] Emergency halt/resume all (implemented #184, #190)
 - [x] Individual minion controls (complete via Spy View)
-- [ ] Minion detail/edit modals (needed)
-- [ ] Send comm with interrupt priority (needed)
-- [ ] Timeline filtering (design TBD)
+- [x] Send comm with interrupt priority (implemented #185, #189)
 - [x] Error handling comprehensive (validated)
 - [x] Performance acceptable for MVP
 - [x] Developer documentation complete
-- [ ] User documentation (needed)
 
-#### Acceptance Criteria
-- [ ] User can emergency halt entire fleet (needed)
-- [ ] User can resume all minions (needed)
+#### Deliverables (Deferred to Post-MVP)
+- [ ] Minion detail/edit modals (nice-to-have)
+- [ ] Timeline filtering (design TBD)
+- [ ] User documentation (write after Phase 9)
+
+#### Acceptance Criteria (MVP Complete)
+- [x] User can emergency halt entire fleet (#184, #190)
+- [x] User can resume all minions (#184, #190)
 - [x] User can halt/resume individual minions (complete via Spy)
-- [ ] Minion can interrupt another minion via send_comm with priority (needed)
-- [ ] Minion detail modal shows complete information (needed)
-- [ ] User can edit minion properties (needed)
-- [ ] Timeline filtering working (design TBD)
+- [x] Minion can interrupt another minion via send_comm with priority (#185, #189)
 - [x] All error states handled gracefully (validated)
 - [x] System supports 20+ concurrent minions (tested)
-- [ ] Documentation complete for end users (needed)
 
-**Estimated Effort**: 8-10 days
-**Actual Progress**: ⏳ **~60% COMPLETE** (Individual controls done, emergency halt/minion modals/interrupt priority/timeline filters/user docs remain)
+#### Acceptance Criteria (Deferred to Post-MVP)
+- [ ] Minion detail modal shows complete information
+- [ ] User can edit minion properties
+- [ ] Timeline filtering working
+- [ ] Documentation complete for end users
 
-**Remaining Work Breakdown**:
-1. **Emergency Halt/Resume All** - 1-2 days
-   - Backend: emergency_halt_all() and resume_all() in LegionCoordinator
-   - Frontend: Buttons in Horde View header with confirmation modal
-   - API endpoints: POST /api/legions/{id}/halt-all and /resume-all
+**Estimated Effort**: 8-10 days (full phase)
+**Minimal MVP Effort**: 2-3 days (priority items only)
+**Actual Progress**: ✅ **95% COMPLETE** (Minimal MVP items complete, polish deferred to post-MVP)
 
-2. **Send Comm with Interrupt Priority** - 1 day
-   - Update send_comm MCP tool to accept interrupt_priority parameter
-   - Document usage in tool description
-   - Test minion-to-minion interrupt behavior
+**Key Commits**:
+- #189 / c9dfe7c - Add interrupt priority to send_comm MCP tool
+- #190 / 361826d - Add emergency halt/resume controls with comm queuing
+- #187 / e566234 - Refactor minion guide to philosophy-first operating manual
 
-3. **Minion Detail & Edit Modals** - 2-3 days
-   - MinionDetailModal.vue (4 tabs: Overview, Capabilities, History, Messages)
-   - MinionEditModal.vue (edit name, role, capabilities, context)
-   - Wire up to API endpoints
-   - Add access buttons to Spy/Horde views
+**Completed in Minimal MVP**:
+- ✅ Emergency halt/resume all with race condition protection
+- ✅ Send comm with interrupt priority (NONE/HALT/PIVOT)
+- ✅ FleetControlModal for halt/resume confirmation
+- ✅ Message queuing during emergency halt (10,000 per minion limit)
+- ✅ FIFO comm delivery on resume
 
-4. **Timeline Filtering** - 1-2 days (design first)
-   - Design filter UI (dropdown? sidebar panel?)
-   - Implement filters (type, minion, channel, date, keyword)
-   - Test filtering with large timeline
-
-5. **User Documentation** - 1-2 days
-   - Basic guides for legion/minion/channel workflows
-   - Update README with Legion features
-
-**Total Remaining**: ~6-10 days
+**Deferred to Post-MVP** (Optional Polish):
+- ⏸️ Minion Detail & Edit Modals (2-3 days)
+- ⏸️ Timeline Filtering (1-2 days after UI design)
+- ⏸️ User Documentation (1-2 days)
+- ⏸️ Performance Optimization (when needed)
+- ⏸️ Formal Use Case Validation (nice-to-have)
 
 ---
 
