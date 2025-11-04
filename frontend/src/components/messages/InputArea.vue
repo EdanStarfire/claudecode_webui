@@ -24,7 +24,7 @@
         :disabled="isStarting || !isConnected"
         rows="1"
         @input="autoResizeTextarea"
-        @keydown.enter.exact.prevent="sendMessage"
+        @keydown="handleKeyPress"
       ></textarea>
 
       <button
@@ -49,7 +49,7 @@
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useSessionStore } from '@/stores/session'
 import { useWebSocketStore } from '@/stores/websocket'
 
@@ -57,6 +57,7 @@ const sessionStore = useSessionStore()
 const wsStore = useWebSocketStore()
 
 const messageTextarea = ref(null)
+const windowWidth = ref(window.innerWidth)
 
 const inputText = computed({
   get: () => sessionStore.currentInput,
@@ -67,6 +68,9 @@ const isProcessing = computed(() => sessionStore.currentSession?.is_processing |
 const isConnected = computed(() => wsStore.sessionConnected)
 const isStarting = computed(() => sessionStore.currentSession?.state === 'starting')
 
+// Mobile detection based on viewport width
+const isMobile = computed(() => windowWidth.value < 768)
+
 const inputPlaceholder = computed(() => {
   if (isStarting.value) {
     return 'Session is starting...'
@@ -76,6 +80,37 @@ const inputPlaceholder = computed(() => {
   }
   return 'Type your message to Claude Code...'
 })
+
+// Update window width on resize
+function handleResize() {
+  windowWidth.value = window.innerWidth
+}
+
+onMounted(() => {
+  window.addEventListener('resize', handleResize)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('resize', handleResize)
+})
+
+/**
+ * Handle Enter key press with mobile-specific behavior
+ * Mobile (< 768px): Enter creates new line, Shift+Enter also creates new line
+ * Desktop (>= 768px): Enter sends message, Shift+Enter creates new line
+ */
+function handleKeyPress(event) {
+  if (event.key === 'Enter' && !event.shiftKey) {
+    if (isMobile.value) {
+      // Mobile: allow new line (do nothing, default behavior)
+      return
+    } else {
+      // Desktop: send message
+      event.preventDefault()
+      sendMessage()
+    }
+  }
+}
 
 /**
  * Auto-resize textarea based on content (matching CommComposer behavior)
