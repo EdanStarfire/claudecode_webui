@@ -371,6 +371,46 @@ export const useLegionStore = defineStore('legion', () => {
   }
 
   /**
+   * Emergency halt all minions in legion
+   */
+  async function haltAll(legionId) {
+    try {
+      const data = await api.post(`/api/legions/${legionId}/halt-all`)
+
+      console.log(`Halted ${data.halted_count} of ${data.total_minions} minions in legion ${legionId}`)
+
+      if (data.failed_minions && data.failed_minions.length > 0) {
+        console.warn('Failed to halt some minions:', data.failed_minions)
+      }
+
+      return data
+    } catch (error) {
+      console.error('Failed to halt all minions:', error)
+      throw error
+    }
+  }
+
+  /**
+   * Resume all minions in legion
+   */
+  async function resumeAll(legionId) {
+    try {
+      const data = await api.post(`/api/legions/${legionId}/resume-all`)
+
+      console.log(`Resumed ${data.resumed_count} of ${data.total_minions} minions in legion ${legionId}`)
+
+      if (data.failed_minions && data.failed_minions.length > 0) {
+        console.warn('Failed to resume some minions:', data.failed_minions)
+      }
+
+      return data
+    } catch (error) {
+      console.error('Failed to resume all minions:', error)
+      throw error
+    }
+  }
+
+  /**
    * Clear all legion data
    */
   function clearLegionData(legionId) {
@@ -418,6 +458,8 @@ export const useLegionStore = defineStore('legion', () => {
     loadChannelComms,
     addMemberToChannel,
     removeMemberFromChannel,
+    haltAll,
+    resumeAll,
     clearLegionData
   }
 })
