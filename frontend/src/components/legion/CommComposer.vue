@@ -92,7 +92,7 @@
 </template>
 
 <script setup>
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useLegionStore } from '../../stores/legion'
 import { useSessionStore } from '../../stores/session'
 import { useProjectStore } from '../../stores/project'
@@ -116,6 +116,7 @@ const recipient = ref('')
 const commType = ref('task')
 const content = ref('')
 const sending = ref(false)
+const windowWidth = ref(window.innerWidth)
 
 // Autocomplete state
 const showAutocomplete = ref(false)
@@ -124,6 +125,9 @@ const selectedAutocompleteIndex = ref(0)
 const mentionStartPos = ref(-1)
 const contentTextarea = ref(null)
 const autocompleteDropdown = ref(null)
+
+// Mobile detection based on viewport width
+const isMobile = computed(() => windowWidth.value < 768)
 
 // Get minions for this legion
 const minions = computed(() => {
@@ -266,14 +270,22 @@ function scrollAutocompleteItemIntoView() {
 }
 
 /**
- * Handle keyboard navigation in autocomplete
+ * Handle keyboard navigation in autocomplete and mobile-specific Enter behavior
  */
 function handleKeydown(event) {
   if (!showAutocomplete.value) {
-    // Handle Enter to send
-    if (event.key === 'Enter' && !event.shiftKey && canSend.value) {
-      event.preventDefault()
-      sendComm()
+    // Handle Enter to send (mobile-specific behavior)
+    if (event.key === 'Enter' && !event.shiftKey) {
+      if (isMobile.value) {
+        // Mobile: allow new line (do nothing, default behavior)
+        return
+      } else {
+        // Desktop: send message if valid
+        if (canSend.value) {
+          event.preventDefault()
+          sendComm()
+        }
+      }
     }
     return
   }
@@ -371,6 +383,19 @@ async function sendComm() {
     sending.value = false
   }
 }
+
+// Update window width on resize
+function handleResize() {
+  windowWidth.value = window.innerWidth
+}
+
+onMounted(() => {
+  window.addEventListener('resize', handleResize)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('resize', handleResize)
+})
 
 // Auto-select default channel if provided
 watch(() => props.defaultChannelId, (newChannelId) => {
