@@ -4,7 +4,7 @@
     <div v-if="hasCommandContent" class="tool-section">
       <div class="command-content-header" @click="toggleContentExpanded">
         <div class="d-flex align-items-center gap-2">
-          <i class="bi" :class="isContentExpanded ? 'bi-chevron-down' : 'bi-chevron-right'"></i>
+          <span :aria-label="isContentExpanded ? 'Collapse' : 'Expand'">{{ isContentExpanded ? '▾' : '▸' }}</span>
           <strong>Command Content</strong>
           <span class="text-muted small">({{ commandContentLineCount }} lines)</span>
         </div>

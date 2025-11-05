@@ -14,7 +14,7 @@
       </div>
       <div class="d-flex align-items-center gap-2">
         <small class="text-muted">{{ formattedTimestamp }}</small>
-        <i class="bi" :class="toolCall.isExpanded ? 'bi-chevron-up' : 'bi-chevron-down'"></i>
+        <span :aria-label="toolCall.isExpanded ? 'Collapse' : 'Expand'">{{ toolCall.isExpanded ? '▾' : '▸' }}</span>
       </div>
     </div>
 
