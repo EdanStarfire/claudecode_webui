@@ -262,9 +262,9 @@ const statusIcon = computed(() => {
       return '⚡'
     case 'completed':
       if (props.toolCall.permissionDecision === 'deny') return '❌'
-      return isError.value ? '💥' : '✅'
+      return isError.value ? '❗' : '✅'
     case 'error':
-      return '💥'
+      return '❗'
     default:
       return '🔧'
   }
