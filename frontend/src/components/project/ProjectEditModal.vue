@@ -62,7 +62,7 @@
               @click="showDeleteConfirmation = true"
               :disabled="isDeleting"
             >
-              <i class="bi bi-trash"></i> Delete Project
+              🗑️ Delete Project
             </button>
           </div>
 

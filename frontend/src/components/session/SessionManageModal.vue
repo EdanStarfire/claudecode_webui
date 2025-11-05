@@ -94,7 +94,7 @@
                 @click="showDeleteConfirmation"
                 :disabled="isPerformingAction"
               >
-                <strong>❌ Delete Session</strong>
+                <strong>🗑️ Delete Session</strong>
                 <div class="small text-muted">Permanently delete this session and all its data</div>
               </button>
             </div>
