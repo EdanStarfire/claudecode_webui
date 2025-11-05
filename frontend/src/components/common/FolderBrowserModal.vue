@@ -277,8 +277,4 @@ onUnmounted(() => {
 .folder-item.selected {
   background-color: #e7f3ff;
 }
-
-.bi {
-  font-size: 1.2rem;
-}
 </style>
