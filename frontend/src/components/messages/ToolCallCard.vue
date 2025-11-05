@@ -23,7 +23,7 @@
       <!-- Orphaned Tool Banner (if applicable) -->
       <div v-if="isOrphaned" class="alert alert-warning mb-3">
         <div class="d-flex align-items-center">
-          <i class="bi bi-x-circle me-2" style="font-size: 1.2rem;"></i>
+          <span class="me-2" style="font-size: 1.2rem;">⏹️</span>
           <div>
             <strong>Tool Execution Cancelled</strong>
             <p class="mb-0 small">{{ orphanedInfo?.message || 'Session was terminated' }}</p>
@@ -69,7 +69,6 @@
             @click="handlePermissionDecision('allow', true)"
             :disabled="isSubmittingPermission"
           >
-            <i class="bi bi-check-circle me-1"></i>
             {{ isSubmittingPermission && permissionAction === 'approve-apply' ? '⏳ Submitting...' : '✅ Approve & Apply' }}
           </button>
 
@@ -80,7 +79,6 @@
             @click="handlePermissionDecision('allow', false)"
             :disabled="isSubmittingPermission"
           >
-            <i class="bi bi-check-circle me-1"></i>
             {{ isSubmittingPermission && permissionAction === 'approve' ? '⏳ Submitting...' : (hasSuggestions ? '✅ Approve Only' : '✅ Approve') }}
           </button>
 
@@ -90,8 +88,7 @@
             @click="handlePermissionDecision('deny', false)"
             :disabled="isSubmittingPermission"
           >
-            <i class="bi bi-x-circle me-1"></i>
-            {{ isSubmittingPermission && permissionAction === 'deny' ? '⏳ Submitting...' : '❌ Deny' }}
+            🚫 {{ isSubmittingPermission && permissionAction === 'deny' ? 'Submitting...' : 'Deny' }}
           </button>
         </div>
 
@@ -139,8 +136,7 @@
       <!-- Permission Decision (if denied) -->
       <div v-if="toolCall.permissionDecision === 'deny'" class="tool-section">
         <div class="alert alert-danger mb-0">
-          <i class="bi bi-x-circle"></i>
-          Permission denied
+          🚫 Permission denied
           <span v-if="toolCall.result?.message"> - {{ toolCall.result.message }}</span>
         </div>
       </div>

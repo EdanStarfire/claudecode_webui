@@ -39,12 +39,10 @@
       </div>
       <div class="tool-result" :class="resultClass">
         <div v-if="toolCall.result.success !== false">
-          <i class="bi bi-check-circle"></i>
-          {{ resultMessage }}
+          ✅ {{ resultMessage }}
         </div>
         <div v-else class="text-danger">
-          <i class="bi bi-x-circle"></i>
-          {{ toolCall.result.error || 'Operation failed' }}
+          ❗ {{ toolCall.result.error || 'Operation failed' }}
         </div>
       </div>
     </div>

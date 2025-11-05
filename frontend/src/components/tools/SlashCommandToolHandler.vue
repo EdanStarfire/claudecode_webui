@@ -18,8 +18,7 @@
     <!-- Result Section (for errors or non-standard results) -->
     <div v-if="hasError" class="tool-section mt-3">
       <div class="tool-section-label text-danger">
-        <i class="bi bi-x-circle"></i>
-        Error:
+        ❗ Error:
       </div>
       <div class="tool-result tool-result-error">
         <pre class="tool-code">{{ errorMessage }}</pre>
