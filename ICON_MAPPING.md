@@ -47,13 +47,17 @@ This document maps all current icon usage across the Vue 3 frontend to proposed 
 
 ### Expand/Collapse
 **Bootstrap Icon**: `bi-chevron-up`, `bi-chevron-down`, `bi-chevron-right`
-**Current**: Bootstrap icons for expandable sections
-**Proposed**: ▼ (expanded) / ▶ (collapsed)
+**Current**: Bootstrap icons for expandable sections (inconsistent patterns: up/down vs down/right)
+**Proposed**: ▾ (expanded) / ▸ (collapsed)
+**Rationale**:
+- Standardizes to down/right pattern (points to where content is)
+- ▾/▸ are smaller, more compact triangles designed for UI indicators
+- Fixes current inconsistency between components
 **Use Case**: Expand/collapse UI sections
 **Where Used**:
-- `ToolCallCard.vue:17` - Tool card expansion (`bi-chevron-up` / `bi-chevron-down`)
-- `ThinkingBlock.vue:7` - Thinking block expansion (`bi-chevron-down` / `bi-chevron-right`)
-- `SlashCommandToolHandler.vue:7` - Content expansion (`bi-chevron-down` / `bi-chevron-right`)
+- `ToolCallCard.vue:17` - Tool card expansion (currently `bi-chevron-up` / `bi-chevron-down`)
+- `ThinkingBlock.vue:7` - Thinking block expansion (currently `bi-chevron-down` / `bi-chevron-right`)
+- `SlashCommandToolHandler.vue:7` - Content expansion (currently `bi-chevron-down` / `bi-chevron-right`)
 
 ### Refresh/Reload
 **Bootstrap Icon**: `bi-arrow-clockwise`
@@ -275,7 +279,7 @@ This document maps all current icon usage across the Vue 3 frontend to proposed 
 1. **Settings/Configuration**: `bi-gear` → ⚙️
 2. **Delete**: `bi-trash` → 🗑️
 3. **Error/Cancel**: `bi-x-circle` → ❌
-4. **Expand/Collapse**: `bi-chevron-up/down/right` → ▼/▶
+4. **Expand/Collapse**: `bi-chevron-up/down/right` → ▾/▸
 5. **Refresh**: `bi-arrow-clockwise` → 🔄
 6. **Navigate Up**: `bi-arrow-up-circle` → ⬆️
 7. **Folder**: `bi-folder-fill` → 📁
@@ -357,8 +361,8 @@ This document maps all current icon usage across the Vue 3 frontend to proposed 
 
 Based on frequency and impact, suggested commit order:
 
-1. **Expand/Collapse Icons** (`bi-chevron-*`) - High visibility, 3 components
-2. **Success/Error Icons** (`bi-check-circle`, `bi-x-circle`) - High frequency, 8+ components
+1. **Expand/Collapse Icons** (`bi-chevron-*` → ▾/▸) - High visibility, 3 components, fixes inconsistency
+2. **Success/Error Icons** (`bi-check-circle`, `bi-x-circle` → ✅/❌) - High frequency, 8+ components
 3. **Settings/Configuration** (`bi-gear`) - 1 component
 4. **Delete** (`bi-trash`) - 1 component
 5. **Folder Browser Icons** (`bi-arrow-clockwise`, `bi-arrow-up-circle`, `bi-folder-fill`) - 1 component, 3 icons
