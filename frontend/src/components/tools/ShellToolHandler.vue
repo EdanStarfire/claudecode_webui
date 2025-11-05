@@ -33,8 +33,7 @@
       <!-- Stderr output -->
       <div v-if="parsedResult?.stderr" class="mb-2">
         <div class="output-label text-danger">
-          <i class="bi bi-exclamation-triangle"></i>
-          Errors:
+          ❗ Errors:
         </div>
         <div class="shell-output shell-output-error">
           <pre><code>{{ parsedResult.stderr }}</code></pre>
