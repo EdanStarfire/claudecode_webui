@@ -85,7 +85,7 @@
                 @click="showResetConfirmation"
                 :disabled="isPerformingAction"
               >
-                <strong>🗑️ Reset Session</strong>
+                <strong>🧹 Reset Session</strong>
                 <div class="small text-muted">Clear all messages and start fresh (keeps settings)</div>
               </button>
 
@@ -94,7 +94,7 @@
                 @click="showDeleteConfirmation"
                 :disabled="isPerformingAction"
               >
-                <strong>❌ Delete Session</strong>
+                <strong>🗑️ Delete Session</strong>
                 <div class="small text-muted">Permanently delete this session and all its data</div>
               </button>
             </div>

@@ -10,7 +10,7 @@
       <!-- Tool Results (if any) -->
       <div v-if="hasToolResults" class="tool-results mt-2">
         <div class="tool-results-header text-muted small mb-2">
-          <i class="bi bi-tools"></i> Tool Results ({{ toolResults.length }})
+          🔧 Tool Results ({{ toolResults.length }})
         </div>
         <div
           v-for="(result, index) in toolResults"

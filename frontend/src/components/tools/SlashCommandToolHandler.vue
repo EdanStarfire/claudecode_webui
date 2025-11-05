@@ -4,7 +4,7 @@
     <div v-if="hasCommandContent" class="tool-section">
       <div class="command-content-header" @click="toggleContentExpanded">
         <div class="d-flex align-items-center gap-2">
-          <i class="bi" :class="isContentExpanded ? 'bi-chevron-down' : 'bi-chevron-right'"></i>
+          <span :aria-label="isContentExpanded ? 'Collapse' : 'Expand'">{{ isContentExpanded ? '▾' : '▸' }}</span>
           <strong>Command Content</strong>
           <span class="text-muted small">({{ commandContentLineCount }} lines)</span>
         </div>
@@ -18,8 +18,7 @@
     <!-- Result Section (for errors or non-standard results) -->
     <div v-if="hasError" class="tool-section mt-3">
       <div class="tool-section-label text-danger">
-        <i class="bi bi-x-circle"></i>
-        Error:
+        ❗ Error:
       </div>
       <div class="tool-result tool-result-error">
         <pre class="tool-code">{{ errorMessage }}</pre>

@@ -24,12 +24,10 @@
       </div>
       <div class="tool-result" :class="resultClass">
         <div v-if="toolCall.result.success !== false">
-          <i class="bi bi-check-circle"></i>
-          Permission mode reverted to default
+          ✅ Permission mode reverted to default
         </div>
         <div v-else class="text-danger">
-          <i class="bi bi-x-circle"></i>
-          {{ toolCall.result.error || 'Failed to exit plan mode' }}
+          ❗ {{ toolCall.result.error || 'Failed to exit plan mode' }}
         </div>
       </div>
     </div>

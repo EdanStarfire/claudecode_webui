@@ -19,7 +19,7 @@
               <label for="template-select" class="form-label">
                 Template
                 <button type="button" @click="openTemplateManager" class="btn btn-link btn-sm p-0 ms-2">
-                  <i class="bi-gear"></i> Manage Templates
+                  ⚙️ Manage Templates
                 </button>
               </label>
               <select

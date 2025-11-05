@@ -4,9 +4,9 @@
       class="thinking-header d-flex align-items-center gap-2 p-2 bg-info bg-opacity-10 rounded cursor-pointer"
       @click="toggleExpanded"
     >
-      <i class="bi" :class="isExpanded ? 'bi-chevron-down' : 'bi-chevron-right'"></i>
+      <span :aria-label="isExpanded ? 'Collapse' : 'Expand'">{{ isExpanded ? '▾' : '▸' }}</span>
       <span class="thinking-label">
-        <i class="bi bi-lightbulb"></i> Thinking
+        💡 Thinking
       </span>
       <small class="text-muted ms-auto">{{ contentLength }} characters</small>
     </div>

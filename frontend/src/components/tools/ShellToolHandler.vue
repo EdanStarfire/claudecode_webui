@@ -33,8 +33,7 @@
       <!-- Stderr output -->
       <div v-if="parsedResult?.stderr" class="mb-2">
         <div class="output-label text-danger">
-          <i class="bi bi-exclamation-triangle"></i>
-          Errors:
+          ❗ Errors:
         </div>
         <div class="shell-output shell-output-error">
           <pre><code>{{ parsedResult.stderr }}</code></pre>
@@ -44,12 +43,10 @@
       <!-- Success/Error message (shown when no stdout/stderr) -->
       <div v-if="!parsedResult?.stdout && !parsedResult?.stderr" class="tool-result" :class="resultClass">
         <div v-if="toolCall.result.success !== false">
-          <i class="bi bi-check-circle"></i>
-          {{ resultMessage }}
+          ✅ {{ resultMessage }}
         </div>
         <div v-else class="text-danger">
-          <i class="bi bi-x-circle"></i>
-          {{ toolCall.result.error || 'Operation failed' }}
+          ❗ {{ toolCall.result.error || 'Operation failed' }}
         </div>
       </div>
     </div>

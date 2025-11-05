@@ -14,7 +14,7 @@
       </div>
       <div class="d-flex align-items-center gap-2">
         <small class="text-muted">{{ formattedTimestamp }}</small>
-        <i class="bi" :class="toolCall.isExpanded ? 'bi-chevron-up' : 'bi-chevron-down'"></i>
+        <span :aria-label="toolCall.isExpanded ? 'Collapse' : 'Expand'">{{ toolCall.isExpanded ? '▾' : '▸' }}</span>
       </div>
     </div>
 
@@ -23,7 +23,7 @@
       <!-- Orphaned Tool Banner (if applicable) -->
       <div v-if="isOrphaned" class="alert alert-warning mb-3">
         <div class="d-flex align-items-center">
-          <i class="bi bi-x-circle me-2" style="font-size: 1.2rem;"></i>
+          <span class="me-2" style="font-size: 1.2rem;">⏹️</span>
           <div>
             <strong>Tool Execution Cancelled</strong>
             <p class="mb-0 small">{{ orphanedInfo?.message || 'Session was terminated' }}</p>
@@ -45,8 +45,7 @@
         <div v-if="hasSuggestions" class="suggestions-section mb-3">
           <div class="alert alert-info mb-0">
             <h6 class="mb-2">
-              <i class="bi bi-lightbulb me-2"></i>
-              Suggested Permission Update
+              💾 Suggested Permission Update
             </h6>
             <p class="mb-2 small">Claude suggests updating your permissions:</p>
             <div class="suggestion-details p-2 bg-white rounded">
@@ -69,7 +68,6 @@
             @click="handlePermissionDecision('allow', true)"
             :disabled="isSubmittingPermission"
           >
-            <i class="bi bi-check-circle me-1"></i>
             {{ isSubmittingPermission && permissionAction === 'approve-apply' ? '⏳ Submitting...' : '✅ Approve & Apply' }}
           </button>
 
@@ -80,7 +78,6 @@
             @click="handlePermissionDecision('allow', false)"
             :disabled="isSubmittingPermission"
           >
-            <i class="bi bi-check-circle me-1"></i>
             {{ isSubmittingPermission && permissionAction === 'approve' ? '⏳ Submitting...' : (hasSuggestions ? '✅ Approve Only' : '✅ Approve') }}
           </button>
 
@@ -90,15 +87,13 @@
             @click="handlePermissionDecision('deny', false)"
             :disabled="isSubmittingPermission"
           >
-            <i class="bi bi-x-circle me-1"></i>
-            {{ isSubmittingPermission && permissionAction === 'deny' ? '⏳ Submitting...' : '❌ Deny' }}
+            🚫 {{ isSubmittingPermission && permissionAction === 'deny' ? 'Submitting...' : 'Deny' }}
           </button>
         </div>
 
         <!-- Provide Guidance -->
         <div class="guidance-section mt-3">
           <label class="form-label fw-bold">
-            <i class="bi bi-chat-left-text me-1"></i>
             Provide Guidance (Optional)
           </label>
           <p class="text-muted small mb-2">
@@ -117,8 +112,7 @@
             @click="handlePermissionDecision('deny', false, guidanceMessage)"
             :disabled="isSubmittingPermission"
           >
-            <i class="bi bi-arrow-repeat me-1"></i>
-            {{ isSubmittingPermission && permissionAction === 'deny-guidance' ? '⏳ Submitting...' : '💡 Provide Guidance & Continue' }}
+            {{ isSubmittingPermission && permissionAction === 'deny-guidance' ? '⏳ Submitting...' : '🔀 Provide Guidance & Continue' }}
           </button>
         </div>
       </div>
@@ -127,7 +121,7 @@
       <div v-if="toolCall.status === 'permission_required' && isOrphaned" class="mt-3">
         <div class="alert alert-warning mb-0">
           <div class="d-flex align-items-center">
-            <i class="bi bi-shield-x me-2" style="font-size: 1.2rem;"></i>
+            <span class="me-2" style="font-size: 1.2rem;">🚧</span>
             <div>
               <strong>Permission Request Cancelled</strong>
               <p class="mb-0 small">{{ orphanedInfo?.message || 'Session was terminated before permission could be granted' }}</p>
@@ -139,8 +133,7 @@
       <!-- Permission Decision (if denied) -->
       <div v-if="toolCall.permissionDecision === 'deny'" class="tool-section">
         <div class="alert alert-danger mb-0">
-          <i class="bi bi-x-circle"></i>
-          Permission denied
+          🚫 Permission denied
           <span v-if="toolCall.result?.message"> - {{ toolCall.result.message }}</span>
         </div>
       </div>
@@ -269,9 +262,9 @@ const statusIcon = computed(() => {
       return '⚡'
     case 'completed':
       if (props.toolCall.permissionDecision === 'deny') return '❌'
-      return isError.value ? '💥' : '✅'
+      return isError.value ? '❗' : '✅'
     case 'error':
-      return '💥'
+      return '❗'
     default:
       return '🔧'
   }

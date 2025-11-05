@@ -212,6 +212,11 @@ onMounted(async () => {
   padding: 0.5rem 0.75rem;
 }
 
+/* Hide Bootstrap's default ::after chevron */
+.accordion-button::after {
+  display: none;
+}
+
 .accordion-button:not(.collapsed) {
   background-color: #e7f1ff;
   color: #0d6efd;
