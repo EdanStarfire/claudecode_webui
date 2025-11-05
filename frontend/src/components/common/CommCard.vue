@@ -33,8 +33,8 @@
         </div>
 
         <!-- Right: Expand/Collapse Icon -->
-        <div class="expand-icon">
-          {{ isExpanded ? '▲' : '▼' }}
+        <div class="expand-icon" :aria-label="isExpanded ? 'Collapse' : 'Expand'">
+          {{ isExpanded ? '▾' : '▸' }}
         </div>
       </div>
 
