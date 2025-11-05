@@ -26,7 +26,7 @@
                 placeholder="Enter or select a directory path"
               />
               <button class="btn btn-outline-secondary" @click="loadDirectory" :disabled="isLoading">
-                <i class="bi bi-arrow-clockwise"></i> Refresh
+                🔄 Refresh
               </button>
             </div>
           </div>
@@ -52,7 +52,7 @@
               @click="navigateToParent"
               role="button"
             >
-              <i class="bi bi-arrow-up-circle me-2 text-secondary"></i>
+              <span class="me-2 text-secondary">⬆️</span>
               <span class="text-secondary">..</span>
             </div>
 
@@ -67,7 +67,7 @@
               role="button"
             >
               <div class="d-flex align-items-center flex-grow-1">
-                <i class="bi bi-folder-fill me-2 text-warning"></i>
+                <span class="me-2">📁</span>
                 <span>{{ folder.name }}</span>
               </div>
               <button
