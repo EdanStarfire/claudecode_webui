@@ -85,7 +85,7 @@
                 @click="showResetConfirmation"
                 :disabled="isPerformingAction"
               >
-                <strong>🗑️ Reset Session</strong>
+                <strong>🧹 Reset Session</strong>
                 <div class="small text-muted">Clear all messages and start fresh (keeps settings)</div>
               </button>
 
