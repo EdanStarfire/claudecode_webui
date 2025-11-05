@@ -6,7 +6,7 @@
     >
       <span :aria-label="isExpanded ? 'Collapse' : 'Expand'">{{ isExpanded ? '▾' : '▸' }}</span>
       <span class="thinking-label">
-        <i class="bi bi-lightbulb"></i> Thinking
+        💡 Thinking
       </span>
       <small class="text-muted ms-auto">{{ contentLength }} characters</small>
     </div>

@@ -45,8 +45,7 @@
         <div v-if="hasSuggestions" class="suggestions-section mb-3">
           <div class="alert alert-info mb-0">
             <h6 class="mb-2">
-              <i class="bi bi-lightbulb me-2"></i>
-              Suggested Permission Update
+              💾 Suggested Permission Update
             </h6>
             <p class="mb-2 small">Claude suggests updating your permissions:</p>
             <div class="suggestion-details p-2 bg-white rounded">
@@ -95,7 +94,6 @@
         <!-- Provide Guidance -->
         <div class="guidance-section mt-3">
           <label class="form-label fw-bold">
-            <i class="bi bi-chat-left-text me-1"></i>
             Provide Guidance (Optional)
           </label>
           <p class="text-muted small mb-2">
@@ -114,8 +112,7 @@
             @click="handlePermissionDecision('deny', false, guidanceMessage)"
             :disabled="isSubmittingPermission"
           >
-            <i class="bi bi-arrow-repeat me-1"></i>
-            {{ isSubmittingPermission && permissionAction === 'deny-guidance' ? '⏳ Submitting...' : '💡 Provide Guidance & Continue' }}
+            {{ isSubmittingPermission && permissionAction === 'deny-guidance' ? '⏳ Submitting...' : '🔀 Provide Guidance & Continue' }}
           </button>
         </div>
       </div>
@@ -124,7 +121,7 @@
       <div v-if="toolCall.status === 'permission_required' && isOrphaned" class="mt-3">
         <div class="alert alert-warning mb-0">
           <div class="d-flex align-items-center">
-            <i class="bi bi-shield-x me-2" style="font-size: 1.2rem;"></i>
+            <span class="me-2" style="font-size: 1.2rem;">🚧</span>
             <div>
               <strong>Permission Request Cancelled</strong>
               <p class="mb-0 small">{{ orphanedInfo?.message || 'Session was terminated before permission could be granted' }}</p>
