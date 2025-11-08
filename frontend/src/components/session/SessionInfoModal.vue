@@ -43,13 +43,13 @@
               <div>{{ initData.permissionMode || 'default' }}</div>
             </div>
 
-            <!-- Available Tools -->
+            <!-- Pre-Authorized Tools -->
             <div class="mb-3">
-              <h6 class="text-muted">Available Tools</h6>
-              <div v-if="initData.tools && initData.tools.length > 0">
+              <h6 class="text-muted">Pre-Authorized Tools</h6>
+              <div v-if="(initData.allowed_tools || initData.tools) && (initData.allowed_tools || initData.tools).length > 0">
                 <div class="d-flex flex-wrap gap-1">
                   <span
-                    v-for="tool in initData.tools"
+                    v-for="tool in (initData.allowed_tools || initData.tools)"
                     :key="tool"
                     class="badge bg-secondary"
                   >
@@ -57,7 +57,7 @@
                   </span>
                 </div>
               </div>
-              <div v-else class="text-muted small">All tools available</div>
+              <div v-else class="text-muted small">No pre-authorized tools (will prompt for permissions)</div>
             </div>
 
             <!-- Commands -->

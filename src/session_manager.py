@@ -13,12 +13,12 @@ import os
 import shutil
 import subprocess
 import time
-import uuid
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any
 
 from .logging_config import get_logger
 
@@ -46,35 +46,35 @@ class SessionInfo:
     state: SessionState
     created_at: datetime
     updated_at: datetime
-    working_directory: Optional[str] = None
+    working_directory: str | None = None
     current_permission_mode: str = "acceptEdits"
-    initial_permission_mode: Optional[str] = None
-    system_prompt: Optional[str] = None
+    initial_permission_mode: str | None = None
+    system_prompt: str | None = None
     override_system_prompt: bool = False  # If True, use custom prompt only (no Claude Code preset)
-    tools: List[str] = None
-    model: Optional[str] = None
-    error_message: Optional[str] = None
-    claude_code_session_id: Optional[str] = None
+    allowed_tools: list[str] = None
+    model: str | None = None
+    error_message: str | None = None
+    claude_code_session_id: str | None = None
     is_processing: bool = False
-    name: Optional[str] = None
-    order: Optional[int] = None
-    project_id: Optional[str] = None
+    name: str | None = None
+    order: int | None = None
+    project_id: str | None = None
 
     # Minion-specific fields (only used when is_minion=True)
     is_minion: bool = False  # True if this is a minion in a legion
-    role: Optional[str] = None  # Minion role description
+    role: str | None = None  # Minion role description
     is_overseer: bool = False  # True if has spawned children
     overseer_level: int = 0  # 0=user-created, 1=child, 2=grandchild
-    parent_overseer_id: Optional[str] = None  # None if user-created
-    child_minion_ids: List[str] = None  # Child minion session IDs
-    horde_id: Optional[str] = None  # Which horde this minion belongs to
-    channel_ids: List[str] = None  # Communication channels
-    capabilities: List[str] = None  # Capability tags for discovery
+    parent_overseer_id: str | None = None  # None if user-created
+    child_minion_ids: list[str] = None  # Child minion session IDs
+    horde_id: str | None = None  # Which horde this minion belongs to
+    channel_ids: list[str] = None  # Communication channels
+    capabilities: list[str] = None  # Capability tags for discovery
     expertise_score: float = 0.5  # Expertise level (0.0-1.0, default 0.5 for MVP)
 
     def __post_init__(self):
-        if self.tools is None:
-            self.tools = ["bash", "edit", "read"]
+        if self.allowed_tools is None:
+            self.allowed_tools = ["bash", "edit", "read"]
         if self.child_minion_ids is None:
             self.child_minion_ids = []
         if self.channel_ids is None:
@@ -82,7 +82,7 @@ class SessionInfo:
         if self.capabilities is None:
             self.capabilities = []
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for JSON serialization"""
         data = asdict(self)
         data['state'] = self.state.value
@@ -91,7 +91,7 @@ class SessionInfo:
         return data
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'SessionInfo':
+    def from_dict(cls, data: dict[str, Any]) -> 'SessionInfo':
         """Create from dictionary loaded from JSON"""
         data['state'] = SessionState(data['state'])
         data['created_at'] = datetime.fromisoformat(data['created_at'])
@@ -112,6 +112,11 @@ class SessionInfo:
         # Migration: Add override_system_prompt if missing (backward compatibility)
         if 'override_system_prompt' not in data:
             data['override_system_prompt'] = False
+        # Migration: Rename tools to allowed_tools for backward compatibility
+        if 'allowed_tools' not in data and 'tools' in data:
+            data['allowed_tools'] = data.pop('tools')
+        elif 'allowed_tools' not in data:
+            data['allowed_tools'] = []
         return cls(**data)
 
 
@@ -121,9 +126,9 @@ class SessionManager:
     def __init__(self, data_dir: Path = None):
         self.data_dir = data_dir or Path("data")
         self.sessions_dir = self.data_dir / "sessions"
-        self._active_sessions: Dict[str, SessionInfo] = {}
-        self._session_locks: Dict[str, asyncio.Lock] = {}
-        self._state_change_callbacks: List[Callable] = []
+        self._active_sessions: dict[str, SessionInfo] = {}
+        self._session_locks: dict[str, asyncio.Lock] = {}
+        self._state_change_callbacks: list[Callable] = []
 
     async def initialize(self):
         """Initialize session manager and load existing sessions"""
@@ -144,7 +149,7 @@ class SessionManager:
                     state_file = session_dir / "state.json"
                     if state_file.exists():
                         try:
-                            with open(state_file, 'r') as f:
+                            with open(state_file) as f:
                                 data = json.load(f)
 
                             # Migration: Add initial_permission_mode if missing
@@ -161,7 +166,7 @@ class SessionManager:
 
                             if session_info.state in [SessionState.ACTIVE, SessionState.STARTING]:
                                 session_info.state = SessionState.CREATED
-                                session_info.updated_at = datetime.now(timezone.utc)
+                                session_info.updated_at = datetime.now(UTC)
                                 state_changed = True
                                 session_logger.info(f"Reset session {session_info.session_id} from {original_state.value} to {session_info.state.value} on startup")
 
@@ -169,14 +174,14 @@ class SessionManager:
                             # PAUSED state means session was waiting for permission response
                             if session_info.state == SessionState.PAUSED:
                                 session_info.state = SessionState.TERMINATED
-                                session_info.updated_at = datetime.now(timezone.utc)
+                                session_info.updated_at = datetime.now(UTC)
                                 state_changed = True
                                 session_logger.info(f"Reset session {session_info.session_id} from PAUSED to TERMINATED on startup (orphaned permission request)")
 
                             # Reset processing state since no SDKs are running on startup
                             if session_info.is_processing:
                                 session_info.is_processing = False
-                                session_info.updated_at = datetime.now(timezone.utc)
+                                session_info.updated_at = datetime.now(UTC)
                                 state_changed = True
                                 session_logger.info(f"Reset processing state for session {session_info.session_id} from {original_processing} to False on startup")
 
@@ -195,23 +200,23 @@ class SessionManager:
     async def create_session(
         self,
         session_id: str,
-        working_directory: Optional[str] = None,
+        working_directory: str | None = None,
         permission_mode: str = "acceptEdits",
-        system_prompt: Optional[str] = None,
+        system_prompt: str | None = None,
         override_system_prompt: bool = False,
-        tools: List[str] = None,
-        model: Optional[str] = None,
-        name: Optional[str] = None,
-        order: Optional[int] = None,
-        project_id: Optional[str] = None,
+        allowed_tools: list[str] = None,
+        model: str | None = None,
+        name: str | None = None,
+        order: int | None = None,
+        project_id: str | None = None,
         # Minion-specific fields
         is_minion: bool = False,
-        role: Optional[str] = None,
-        capabilities: List[str] = None,
+        role: str | None = None,
+        capabilities: list[str] = None,
         # Hierarchy fields (Phase 5)
-        parent_overseer_id: Optional[str] = None,
+        parent_overseer_id: str | None = None,
         overseer_level: int = 0,
-        horde_id: Optional[str] = None
+        horde_id: str | None = None
     ) -> None:
         """Create a new session with provided ID (or minion if is_minion=True)"""
         # Validate session_id is not reserved
@@ -219,7 +224,7 @@ class SessionManager:
         if session_id in RESERVED_MINION_IDS:
             raise ValueError(f"Cannot create session with reserved ID: {session_id}")
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         # Generate default name if not provided
         if name is None:
@@ -239,7 +244,7 @@ class SessionManager:
             initial_permission_mode=permission_mode,
             system_prompt=system_prompt,
             override_system_prompt=override_system_prompt,
-            tools=tools if tools is not None else [],
+            allowed_tools=allowed_tools if allowed_tools is not None else [],
             model=model,
             name=name,
             order=order,
@@ -370,7 +375,7 @@ class SessionManager:
                 await self._update_session_state(session_id, SessionState.ERROR, str(e))
                 return False
 
-    async def update_session_state(self, session_id: str, new_state: SessionState, error_message: Optional[str] = None) -> bool:
+    async def update_session_state(self, session_id: str, new_state: SessionState, error_message: str | None = None) -> bool:
         """Update session state with optional error message"""
         async with self._get_session_lock(session_id):
             try:
@@ -391,7 +396,7 @@ class SessionManager:
                     return False
 
                 session.is_processing = is_processing
-                session.updated_at = datetime.now(timezone.utc)
+                session.updated_at = datetime.now(UTC)
                 await self._persist_session_state(session_id)
                 await self._notify_state_change_callbacks(session_id, session.state)
                 session_logger.info(f"Updated session {session_id} processing state to {is_processing}")
@@ -400,11 +405,11 @@ class SessionManager:
                 logger.error(f"Failed to update session {session_id} processing state: {e}")
                 return False
 
-    async def get_session_info(self, session_id: str) -> Optional[SessionInfo]:
+    async def get_session_info(self, session_id: str) -> SessionInfo | None:
         """Get session information"""
         return self._active_sessions.get(session_id)
 
-    async def list_sessions(self) -> List[SessionInfo]:
+    async def list_sessions(self) -> list[SessionInfo]:
         """List all sessions sorted by order"""
         sessions = list(self._active_sessions.values())
 
@@ -415,7 +420,7 @@ class SessionManager:
 
         return sorted(sessions, key=sort_key)
 
-    async def get_sessions_by_ids(self, session_ids: List[str]) -> List[SessionInfo]:
+    async def get_sessions_by_ids(self, session_ids: list[str]) -> list[SessionInfo]:
         """Get sessions by IDs in the order provided"""
         sessions = []
         for session_id in session_ids:
@@ -426,7 +431,7 @@ class SessionManager:
                 session_logger.warning(f"Session {session_id} not found in get_sessions_by_ids")
         return sessions
 
-    async def get_session_directory(self, session_id: str) -> Optional[Path]:
+    async def get_session_directory(self, session_id: str) -> Path | None:
         """Get the data directory path for a session"""
         if session_id not in self._active_sessions:
             return None
@@ -442,7 +447,7 @@ class SessionManager:
         self,
         session_id: str,
         new_state: SessionState,
-        error_message: Optional[str] = None
+        error_message: str | None = None
     ):
         """Update session state and persist changes"""
         session = self._active_sessions.get(session_id)
@@ -450,7 +455,7 @@ class SessionManager:
             raise ValueError(f"Session {session_id} not found")
 
         session.state = new_state
-        session.updated_at = datetime.now(timezone.utc)
+        session.updated_at = datetime.now(UTC)
         if error_message:
             session.error_message = error_message
 
@@ -472,7 +477,7 @@ class SessionManager:
             logger.error(f"Failed to persist session state for {session_id}: {e}")
             raise
 
-    async def update_claude_code_session_id(self, session_id: str, claude_code_session_id: Optional[str]):
+    async def update_claude_code_session_id(self, session_id: str, claude_code_session_id: str | None):
         """Update the Claude Code session ID for a session (including setting to None for reset)"""
         async with self._get_session_lock(session_id):
             try:
@@ -481,7 +486,7 @@ class SessionManager:
                     raise ValueError(f"Session {session_id} not found")
 
                 session.claude_code_session_id = claude_code_session_id
-                session.updated_at = datetime.now(timezone.utc)
+                session.updated_at = datetime.now(UTC)
                 await self._persist_session_state(session_id)
                 session_logger.info(f"Updated Claude Code session ID for {session_id}: {claude_code_session_id}")
 
@@ -499,7 +504,7 @@ class SessionManager:
                     return False
 
                 session.name = name.strip()
-                session.updated_at = datetime.now(timezone.utc)
+                session.updated_at = datetime.now(UTC)
                 await self._persist_session_state(session_id)
                 await self._notify_state_change_callbacks(session_id, session.state)
                 session_logger.info(f"Updated session {session_id} name to '{name}'")
@@ -524,7 +529,7 @@ class SessionManager:
                     return False
 
                 session.current_permission_mode = mode
-                session.updated_at = datetime.now(timezone.utc)
+                session.updated_at = datetime.now(UTC)
                 await self._persist_session_state(session_id)
                 await self._notify_state_change_callbacks(session_id, session.state)
                 session_logger.info(f"Updated session {session_id} permission mode to '{mode}'")
@@ -609,7 +614,7 @@ class SessionManager:
                     return False
 
                 session.order = order
-                session.updated_at = datetime.now(timezone.utc)
+                session.updated_at = datetime.now(UTC)
                 await self._persist_session_state(session_id)
                 await self._notify_state_change_callbacks(session_id, session.state)
                 session_logger.info(f"Updated session {session_id} order to {order}")
@@ -649,7 +654,7 @@ class SessionManager:
                     else:
                         logger.warning(f"Session field '{key}' does not exist, skipping")
 
-                session.updated_at = datetime.now(timezone.utc)
+                session.updated_at = datetime.now(UTC)
                 await self._persist_session_state(session_id)
                 await self._notify_state_change_callbacks(session_id, session.state)
                 session_logger.info(f"Updated session {session_id} fields: {list(kwargs.keys())}")
@@ -658,7 +663,7 @@ class SessionManager:
                 logger.error(f"Failed to update session {session_id}: {e}")
                 return False
 
-    async def reorder_sessions(self, session_ids: List[str]) -> bool:
+    async def reorder_sessions(self, session_ids: list[str]) -> bool:
         """Reorder sessions by assigning sequential order values (within project context)"""
         try:
             # Filter sessions to only those that exist
