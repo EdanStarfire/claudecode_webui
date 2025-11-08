@@ -38,7 +38,7 @@ async def sample_session_config(temp_coordinator):
         "project_id": project.project_id,
         "permission_mode": "acceptEdits",
         "system_prompt": "Test system prompt",
-        "tools": ["bash", "edit", "read"],
+        "allowed_tools": ["bash", "edit", "read"],
         "model": "claude-3-sonnet-20241022"
     }
 
@@ -96,11 +96,11 @@ class TestSessionCoordinator:
 
         assert returned_session_id == session_id
 
-        # Verify SDK has default configuration
-        sdk = coordinator._active_sdks[session_id]
-        assert sdk.current_permission_mode == "acceptEdits"
-        assert sdk.tools == []  # Default tools changed to empty list
-        assert sdk.model is None  # No default model set
+        # Verify session has default configuration
+        session_info = await coordinator.session_manager.get_session_info(session_id)
+        assert session_info.current_permission_mode == "acceptEdits"
+        assert session_info.allowed_tools == []  # Default allowed_tools is empty list
+        assert session_info.model is None  # No default model set
 
     @pytest.mark.asyncio
     async def test_start_session(self, temp_coordinator, sample_session_config):
