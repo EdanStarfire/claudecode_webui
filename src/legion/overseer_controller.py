@@ -43,7 +43,8 @@ class OverseerController:
         override_system_prompt: bool = False,
         capabilities: list[str] | None = None,
         permission_mode: str = "default",
-        allowed_tools: list[str] | None = None
+        allowed_tools: list[str] | None = None,
+        working_directory: str | None = None
     ) -> str:
         """
         Create a minion for the user (root overseer).
@@ -57,6 +58,7 @@ class OverseerController:
             capabilities: List of capability keywords for discovery
             permission_mode: Permission mode (default, acceptEdits, plan, bypassPermissions)
             allowed_tools: List of pre-authorized tools (e.g., ["edit", "read", "bash"])
+            working_directory: Optional custom working directory (defaults to project directory)
 
         Returns:
             str: The created minion's session_id
@@ -100,6 +102,7 @@ class OverseerController:
             allowed_tools=allowed_tools if allowed_tools is not None else [],
             system_prompt=system_prompt,
             override_system_prompt=override_system_prompt,
+            working_directory=working_directory,
             # Minion-specific fields
             role=role,
             capabilities=capabilities or []
@@ -125,11 +128,9 @@ class OverseerController:
         return minion_id
 
     def _belongs_to_legion(self, session_info, legion_id: str) -> bool:
-        """Check if a session belongs to a legion by checking working directory."""
-        project = self.system.session_coordinator.project_manager._active_projects.get(legion_id)
-        if not project:
-            return False
-        return session_info.working_directory == project.working_directory
+        """Check if a session belongs to a legion by checking project_id."""
+        # Use project_id instead of working_directory since minions can have custom directories
+        return session_info.project_id == legion_id
 
     async def _ensure_horde_for_minion(self, legion_id: str, minion_id: str, minion_name: str):
         """
@@ -194,7 +195,8 @@ class OverseerController:
         capabilities: list[str] | None = None,
         channels: list[str] | None = None,
         permission_mode: str | None = None,
-        allowed_tools: list[str] | None = None
+        allowed_tools: list[str] | None = None,
+        working_directory: str | None = None
     ) -> str:
         """
         Spawn a child minion autonomously by a parent overseer.
@@ -210,6 +212,7 @@ class OverseerController:
             channels: Channel IDs to join immediately
             permission_mode: Permission mode (from template or safe default)
             allowed_tools: List of allowed tools (from template or safe default)
+            working_directory: Optional custom working directory (defaults to parent's directory)
 
         Returns:
             str: Child minion's session_id
@@ -271,6 +274,7 @@ class OverseerController:
             permission_mode=permission_mode or "default",
             allowed_tools=allowed_tools,  # Now uses consistent parameter name
             system_prompt=system_prompt,
+            working_directory=working_directory,  # Custom working directory for git worktrees/multi-repo
             # Minion-specific fields
             role=role,
             capabilities=capabilities or [],

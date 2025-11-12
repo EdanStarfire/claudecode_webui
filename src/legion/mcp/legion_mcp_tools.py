@@ -125,13 +125,18 @@ class LegionMCPTools:
             "\n\n**Without Template:**"
             "\nIf no template specified, child gets default restricted permissions:"
             "\n- permission_mode='default' (prompts for every tool use)"
-            "\n- allowed_tools=[] (no pre-authorized tools)",
+            "\n- allowed_tools=[] (no pre-authorized tools)"
+            "\n\n**Working Directory (Optional):**"
+            "\nSpecify a custom working directory for git worktrees or multi-repo workflows:"
+            "\n- working_directory='/path/to/worktree' - Use absolute or relative path"
+            "\n- If not specified, child inherits parent's working directory",
             {
                 "name": str,                           # Unique name for new minion
                 "role": str,                           # Human-readable role description
                 "initialization_context": str,         # System prompt defining expertise
                 "template_name": str,                  # Template to apply for permissions (optional)
-                "channels": list                       # List of channel names to join (optional)
+                "channels": list,                      # List of channel names to join (optional)
+                "working_directory": str               # Custom working directory (optional)
             }
         )
         async def spawn_minion_tool(args: dict[str, Any]) -> dict[str, Any]:
@@ -714,6 +719,7 @@ class LegionMCPTools:
         template_name = args.get("template_name", "").strip()
         capabilities = args.get("capabilities", [])
         channels = args.get("channels", [])
+        working_directory_raw = args.get("working_directory")
 
         # Get parent session to determine legion_id for channel name resolution
         parent_session = await self.system.session_coordinator.session_manager.get_session_info(parent_overseer_id)
@@ -835,6 +841,27 @@ class LegionMCPTools:
                 "is_error": True
             }
 
+        # Validate and normalize working directory if provided
+        working_directory = None
+        if working_directory_raw:
+            try:
+                # Import validation function
+                from src.web_server import validate_and_normalize_working_directory
+
+                # Use parent's working directory as default
+                working_directory = str(validate_and_normalize_working_directory(
+                    working_directory_raw,
+                    str(parent_session.working_directory)
+                ))
+            except ValueError as e:
+                return {
+                    "content": [{
+                        "type": "text",
+                        "text": f"❌ Invalid working_directory: {str(e)}"
+                    }],
+                    "is_error": True
+                }
+
         # Attempt to spawn child minion
         try:
             # Map initialization_context to system_prompt (initialization_context is semantic UI term)
@@ -847,7 +874,8 @@ class LegionMCPTools:
                 capabilities=capabilities,
                 channels=channel_ids,
                 permission_mode=permission_mode,
-                allowed_tools=allowed_tools
+                allowed_tools=allowed_tools,
+                working_directory=working_directory
             )
 
             # Build success message with permission info
@@ -866,12 +894,18 @@ class LegionMCPTools:
                     "  - Allowed Tools: none (user must approve each tool use)"
                 )
 
+            # Add working directory info if specified
+            wd_info = ""
+            if working_directory:
+                wd_info = f"\nWorking Directory: {working_directory}\n"
+
             return {
                 "content": [{
                     "type": "text",
                     "text": (
                         f"✅ Successfully spawned minion '{name}' with role '{role}'.\n\n"
                         f"Minion ID: {child_minion_id}\n"
+                        f"{wd_info}"
                         f"{perm_info}\n\n"
                         f"The child minion is now active and ready to receive comms. "
                         f"You can communicate with them using send_comm(to_minion_name='{name}', ...)."

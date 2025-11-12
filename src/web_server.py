@@ -34,6 +34,48 @@ ws_verbose_logger = get_logger('websocket_verbose', category='WS_PING_PONG')
 logger = logging.getLogger(__name__)
 
 
+def validate_and_normalize_working_directory(
+    path: str | None,
+    default_path: str
+) -> Path:
+    """
+    Validate and normalize working directory path.
+
+    Args:
+        path: User-provided path (may be None, relative, or absolute)
+        default_path: Default path if none provided
+
+    Returns:
+        Absolute Path object
+
+    Raises:
+        ValueError: If path doesn't exist or is network path
+    """
+    if not path:
+        return Path(default_path).resolve()
+
+    path_obj = Path(path)
+
+    # Convert relative to absolute
+    if not path_obj.is_absolute():
+        path_obj = path_obj.resolve()
+
+    # Check if it exists
+    if not path_obj.exists():
+        raise ValueError(f"Working directory does not exist: {path_obj}")
+
+    # Check if it's a directory (not file)
+    if not path_obj.is_dir():
+        raise ValueError(f"Working directory path is not a directory: {path_obj}")
+
+    # Reject network paths (Windows UNC or mapped drives that don't exist)
+    path_str = str(path_obj)
+    if path_str.startswith('//') or path_str.startswith('\\\\'):
+        raise ValueError(f"Network paths are not supported: {path_obj}")
+
+    return path_obj
+
+
 class ProjectCreateRequest(BaseModel):
     name: str
     working_directory: str
@@ -92,6 +134,7 @@ class MinionCreateRequest(BaseModel):
     capabilities: list[str] = []
     permission_mode: str = "default"
     allowed_tools: list[str] = []  # Empty list means no pre-authorized tools (prompts for everything)
+    working_directory: str | None = None  # Optional custom working directory for this minion
 
 
 class ChannelCreateRequest(BaseModel):
@@ -1007,6 +1050,15 @@ class ClaudeWebUI:
                 if not project.is_multi_agent:
                     raise HTTPException(status_code=400, detail="Project is not a legion")
 
+                # Validate and normalize working directory
+                try:
+                    working_dir = validate_and_normalize_working_directory(
+                        request.working_directory,
+                        str(project.working_directory)
+                    )
+                except ValueError as e:
+                    raise HTTPException(status_code=400, detail=str(e))
+
                 # Create minion via OverseerController
                 # Map initialization_context to system_prompt (initialization_context is just UI semantics)
                 minion_id = await self.coordinator.legion_system.overseer_controller.create_minion_for_user(
@@ -1017,7 +1069,8 @@ class ClaudeWebUI:
                     override_system_prompt=request.override_system_prompt,
                     capabilities=request.capabilities,
                     permission_mode=request.permission_mode,
-                    allowed_tools=request.allowed_tools
+                    allowed_tools=request.allowed_tools,
+                    working_directory=str(working_dir)
                 )
 
                 # Get the created minion info
