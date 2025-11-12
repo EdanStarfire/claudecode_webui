@@ -97,7 +97,7 @@ class SessionCreateRequest(BaseModel):
     permission_mode: str = "acceptEdits"
     system_prompt: str | None = None
     override_system_prompt: bool = False
-    allowed_tools: list[str] = []
+    allowed_tools: list[str] | None = None
     model: str | None = None
     name: str | None = None
 
@@ -131,9 +131,9 @@ class MinionCreateRequest(BaseModel):
     role: str | None = ""
     initialization_context: str | None = ""
     override_system_prompt: bool = False
-    capabilities: list[str] = []
+    capabilities: list[str] | None = None
     permission_mode: str = "default"
-    allowed_tools: list[str] = []  # Empty list means no pre-authorized tools (prompts for everything)
+    allowed_tools: list[str] | None = None  # None or empty list means no pre-authorized tools
     working_directory: str | None = None  # Optional custom working directory for this minion
 
 
