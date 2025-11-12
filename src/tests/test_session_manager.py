@@ -28,7 +28,7 @@ def sample_session_config():
         "working_directory": "/test/project",
         "permission_mode": "acceptEdits",
         "system_prompt": "Test system prompt",
-        "tools": ["bash", "edit", "read"],
+        "allowed_tools": ["bash", "edit", "read"],
         "model": "claude-3-sonnet-20241022"
     }
 
@@ -54,7 +54,7 @@ class TestSessionInfo:
         assert info.updated_at == now
         assert info.working_directory is None
         assert info.current_permission_mode == "acceptEdits"
-        assert info.tools == ["bash", "edit", "read"]
+        assert info.allowed_tools == ["bash", "edit", "read"]
         assert info.model is None  # No default model
 
     def test_session_info_to_dict(self):
@@ -91,7 +91,7 @@ class TestSessionInfo:
             "working_directory": "/test/path",
             "current_permission_mode": "acceptEdits",
             "system_prompt": None,
-            "tools": ["bash", "edit"],
+            "allowed_tools": ["bash", "edit"],
             "model": "claude-3-sonnet-20241022",
             "error_message": None
         }
@@ -103,7 +103,34 @@ class TestSessionInfo:
         assert info.created_at == now
         assert info.updated_at == now
         assert info.working_directory == "/test/path"
-        assert info.tools == ["bash", "edit"]
+        assert info.allowed_tools == ["bash", "edit"]
+
+    def test_backward_compatibility_tools_to_allowed_tools(self):
+        """Test backward compatibility: old 'tools' field should be migrated to 'allowed_tools'."""
+        session_id = "test-session-migration"
+        now = datetime.now(UTC)
+
+        # Simulate old session file with 'tools' instead of 'allowed_tools'
+        old_data = {
+            "session_id": session_id,
+            "state": "created",
+            "created_at": now.isoformat(),
+            "updated_at": now.isoformat(),
+            "working_directory": "/old/path",
+            "current_permission_mode": "default",
+            "system_prompt": None,
+            "tools": ["bash", "read"],  # Old field name
+            "model": "claude-3-sonnet-20241022",
+            "error_message": None
+        }
+
+        # from_dict should migrate 'tools' to 'allowed_tools'
+        info = SessionInfo.from_dict(old_data)
+
+        assert info.session_id == session_id
+        assert info.allowed_tools == ["bash", "read"]
+        # Verify the old 'tools' field doesn't exist anymore
+        assert not hasattr(info, 'tools') or info.allowed_tools is not None
 
 
 class TestSessionManager:
@@ -155,7 +182,7 @@ class TestSessionManager:
 
         session_info = manager._active_sessions[session_id]
         assert session_info.current_permission_mode == "acceptEdits"
-        assert session_info.tools == []  # No default tools (must be specified explicitly)
+        assert session_info.allowed_tools == []  # No default tools (must be specified explicitly)
         assert session_info.model is None  # No default model
 
     @pytest.mark.asyncio

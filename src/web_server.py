@@ -55,7 +55,7 @@ class SessionCreateRequest(BaseModel):
     permission_mode: str = "acceptEdits"
     system_prompt: str | None = None
     override_system_prompt: bool = False
-    tools: list[str] = []
+    allowed_tools: list[str] = []
     model: str | None = None
     name: str | None = None
 
@@ -596,7 +596,7 @@ class ClaudeWebUI:
                     permission_mode=request.permission_mode,
                     system_prompt=request.system_prompt,
                     override_system_prompt=request.override_system_prompt,
-                    tools=request.tools,
+                    allowed_tools=request.allowed_tools,
                     model=request.model,
                     name=request.name,
                     permission_callback=self._create_permission_callback(session_id)

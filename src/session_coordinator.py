@@ -10,18 +10,20 @@ import gc
 import logging
 import os
 import re
-from datetime import datetime, timezone
+from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Union
+from typing import Any
+
+from src.legion.minion_system_prompts import get_legion_guide_only
 
 from .claude_sdk import ClaudeSDK
 from .data_storage import DataStorageManager
 from .logging_config import get_logger
 from .message_parser import MessageParser, MessageProcessor
 from .project_manager import ProjectInfo, ProjectManager
-from .session_manager import SessionInfo, SessionManager, SessionState
+from .session_manager import SessionManager, SessionState
 from .timestamp_utils import get_unix_timestamp
-from src.legion.minion_system_prompts import get_legion_guide_only
 
 # Get specialized logger for coordinator actions
 coord_logger = get_logger('coordinator', category='COORDINATOR')
@@ -53,22 +55,22 @@ class SessionCoordinator:
         self.template_manager = TemplateManager(self.data_dir)
 
         # Active SDK instances
-        self._active_sdks: Dict[str, ClaudeSDK] = {}
-        self._storage_managers: Dict[str, DataStorageManager] = {}
+        self._active_sdks: dict[str, ClaudeSDK] = {}
+        self._storage_managers: dict[str, DataStorageManager] = {}
 
         # Event callbacks
-        self._message_callbacks: Dict[str, List[Callable]] = {}
-        self._error_callbacks: Dict[str, List[Callable]] = {}
-        self._state_change_callbacks: List[Callable] = []
+        self._message_callbacks: dict[str, list[Callable]] = {}
+        self._error_callbacks: dict[str, list[Callable]] = {}
+        self._state_change_callbacks: list[Callable] = []
 
         # Track recent tool uses for ExitPlanMode detection
-        self._recent_tool_uses: Dict[str, Dict[str, str]] = {}  # session_id -> {tool_use_id: tool_name}
+        self._recent_tool_uses: dict[str, dict[str, str]] = {}  # session_id -> {tool_use_id: tool_name}
 
         # Track applied permission updates for state management
-        self._permission_updates: Dict[str, List[dict]] = {}  # session_id -> list of applied updates
+        self._permission_updates: dict[str, list[dict]] = {}  # session_id -> list of applied updates
 
         # Track ExitPlanMode that had setMode suggestions applied (to prevent auto-reset)
-        self._exitplanmode_with_setmode: Dict[str, bool] = {}  # session_id -> bool
+        self._exitplanmode_with_setmode: dict[str, bool] = {}  # session_id -> bool
 
         # Initialize Legion multi-agent system
         from src.legion_system import LegionSystem
@@ -137,19 +139,19 @@ class SessionCoordinator:
         session_id: str,
         project_id: str,
         permission_mode: str = "acceptEdits",
-        system_prompt: Optional[str] = None,
+        system_prompt: str | None = None,
         override_system_prompt: bool = False,
-        tools: List[str] = None,
-        model: Optional[str] = None,
-        name: Optional[str] = None,
-        permission_callback: Optional[Callable[[str, Dict[str, Any]], Union[bool, Dict[str, Any]]]] = None,
+        allowed_tools: list[str] = None,
+        model: str | None = None,
+        name: str | None = None,
+        permission_callback: Callable[[str, dict[str, Any]], bool | dict[str, Any]] | None = None,
         # Minion-specific fields
-        role: Optional[str] = None,
-        capabilities: List[str] = None,
+        role: str | None = None,
+        capabilities: list[str] = None,
         # Hierarchy fields (Phase 5)
-        parent_overseer_id: Optional[str] = None,
+        parent_overseer_id: str | None = None,
         overseer_level: int = 0,
-        horde_id: Optional[str] = None,
+        horde_id: str | None = None,
     ) -> str:
         """Create a new Claude Code session with integrated components (within a project)"""
         try:
@@ -174,7 +176,7 @@ class SessionCoordinator:
                 permission_mode=permission_mode,
                 system_prompt=system_prompt,
                 override_system_prompt=override_system_prompt,
-                tools=tools,
+                allowed_tools=allowed_tools,
                 model=model,
                 name=name,
                 order=order,
@@ -222,8 +224,8 @@ class SessionCoordinator:
                 elif not self.legion_system.mcp_tools:
                     coord_logger.warning(f"Legion system mcp_tools is None for session {session_id}")
 
-            # Merge Legion tools with any provided tools
-            all_tools = tools if tools else []
+            # Merge Legion tools with any provided allowed_tools
+            all_tools = allowed_tools if allowed_tools else []
             all_tools = list(set(all_tools + legion_tools))  # Deduplicate
 
             # Escape special characters in system_prompt for subprocess command-line safety
@@ -271,7 +273,7 @@ class SessionCoordinator:
         """Get storage manager for a session"""
         return self._storage_managers.get(session_id)
 
-    async def start_session(self, session_id: str, permission_callback: Optional[Callable[[str, Dict[str, Any]], Union[bool, Dict[str, Any]]]] = None) -> bool:
+    async def start_session(self, session_id: str, permission_callback: Callable[[str, dict[str, Any]], bool | dict[str, Any]] | None = None) -> bool:
         """Start a session with SDK integration"""
         try:
             # Start session through session manager
@@ -329,8 +331,8 @@ class SessionCoordinator:
                     legion_tools = ["mcp__legion"]
                     coord_logger.info(f"Attaching Legion MCP tools to minion session {session_id} (on start): {legion_tools}")
 
-            # Merge Legion tools with session's stored tools
-            all_tools = session_info.tools if session_info.tools else []
+            # Merge Legion tools with session's stored allowed_tools
+            all_tools = session_info.allowed_tools if session_info.allowed_tools else []
             all_tools = list(set(all_tools + legion_tools))  # Deduplicate
 
             # Build minion system prompt by prepending legion guide to stored system_prompt
@@ -525,7 +527,7 @@ class SessionCoordinator:
 
                 if parent_info and session_id in parent_info.child_minion_ids:
                     parent_info.child_minion_ids.remove(session_id)
-                    parent_info.updated_at = datetime.now(timezone.utc)
+                    parent_info.updated_at = datetime.now(UTC)
                     await self.session_manager._persist_session_state(parent_id)
                     coord_logger.info(f"Removed minion {session_id} from parent overseer {parent_id}'s child_minion_ids")
                 elif parent_info:
@@ -585,7 +587,7 @@ class SessionCoordinator:
             logger.error(f"Failed to delete integrated session {session_id}: {e}")
             return False
 
-    async def _find_project_for_session(self, session_id: str) -> Optional[ProjectInfo]:
+    async def _find_project_for_session(self, session_id: str) -> ProjectInfo | None:
         """Find the project that contains a given session"""
         projects = await self.project_manager.list_projects()
         for project in projects:
@@ -714,7 +716,7 @@ class SessionCoordinator:
             logger.error(f"Failed to set permission mode for session {session_id}: {e}")
             return False
 
-    async def restart_session(self, session_id: str, permission_callback: Optional[Callable] = None) -> bool:
+    async def restart_session(self, session_id: str, permission_callback: Callable | None = None) -> bool:
         """
         Restart a session by disconnecting SDK and resuming with same session ID.
 
@@ -757,7 +759,7 @@ class SessionCoordinator:
             logger.error(f"Failed to restart session {session_id}: {e}")
             return False
 
-    async def reset_session(self, session_id: str, permission_callback: Optional[Callable] = None) -> bool:
+    async def reset_session(self, session_id: str, permission_callback: Callable | None = None) -> bool:
         """
         Reset a session by clearing all messages and starting fresh.
 
@@ -836,7 +838,7 @@ class SessionCoordinator:
                 pass  # Don't fail on state update error
             return False
 
-    async def get_session_info(self, session_id: str) -> Optional[Dict[str, Any]]:
+    async def get_session_info(self, session_id: str) -> dict[str, Any] | None:
         """Get comprehensive session information"""
         try:
             # Get session info from manager
@@ -872,7 +874,7 @@ class SessionCoordinator:
             logger.error(f"Failed to get session info for {session_id}: {e}")
             return None
 
-    async def list_sessions(self) -> List[Dict[str, Any]]:
+    async def list_sessions(self) -> list[dict[str, Any]]:
         """List all sessions with their current status"""
         try:
             sessions = await self.session_manager.list_sessions()
@@ -884,9 +886,9 @@ class SessionCoordinator:
     async def get_session_messages(
         self,
         session_id: str,
-        limit: Optional[int] = None,
+        limit: int | None = None,
         offset: int = 0
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Get messages from a session with pagination metadata"""
         try:
             storage = self._storage_managers.get(session_id)
@@ -927,7 +929,7 @@ class SessionCoordinator:
                                         data_str = data_match.group(1)
                                         init_data = ast.literal_eval(data_str)
                                         metadata["init_data"] = init_data
-                                        logger.debug(f"Extracted init_data from historical raw_sdk_message")
+                                        logger.debug("Extracted init_data from historical raw_sdk_message")
                                 except Exception as parse_error:
                                     logger.warning(f"Failed to parse init_data from raw_sdk_message: {parse_error}")
 
@@ -999,7 +1001,7 @@ class SessionCoordinator:
         """Add callback for session state changes"""
         self._state_change_callbacks.append(callback)
 
-    async def _store_processed_message(self, session_id: str, message_data: Dict[str, Any]):
+    async def _store_processed_message(self, session_id: str, message_data: dict[str, Any]):
         """Store message using unified MessageProcessor for consistent format."""
         try:
             # Process the message through MessageProcessor
@@ -1025,7 +1027,7 @@ class SessionCoordinator:
 
     def _create_message_callback(self, session_id: str) -> Callable:
         """Create message callback for a session using unified MessageProcessor"""
-        async def callback(message_data: Dict[str, Any]):
+        async def callback(message_data: dict[str, Any]):
             try:
                 # Process message using unified MessageProcessor
                 parsed_message = self.message_processor.process_message(message_data, source="sdk")
@@ -1381,7 +1383,7 @@ class SessionCoordinator:
                     # Clean the session_ids list but keep the project (even if empty)
                     coord_logger.info(f"Removing {orphaned_count} orphaned session(s) from project {project_id} ({project.name})")
                     project.session_ids = valid_session_ids
-                    project.updated_at = datetime.now(timezone.utc)
+                    project.updated_at = datetime.now(UTC)
                     await self.project_manager._persist_project_state(project_id)
 
                     if len(valid_session_ids) == 0:
@@ -1408,7 +1410,7 @@ class SessionCoordinator:
                     # Update if we found orphaned children
                     if len(valid_children) != len(children_before):
                         session.child_minion_ids = valid_children
-                        session.updated_at = datetime.now(timezone.utc)
+                        session.updated_at = datetime.now(UTC)
                         await self.session_manager._persist_session_state(session.session_id)
                         coord_logger.info(f"Removed {len(children_before) - len(valid_children)} orphaned child(ren) from overseer {session.session_id}")
 

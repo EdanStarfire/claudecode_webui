@@ -97,7 +97,7 @@ class OverseerController:
             project_id=legion_id,
             name=name,
             permission_mode=permission_mode,
-            tools=allowed_tools if allowed_tools is not None else [],
+            allowed_tools=allowed_tools if allowed_tools is not None else [],
             system_prompt=system_prompt,
             override_system_prompt=override_system_prompt,
             # Minion-specific fields
@@ -269,7 +269,7 @@ class OverseerController:
             project_id=legion_id,
             name=name,
             permission_mode=permission_mode or "default",
-            tools=allowed_tools,  # Parameter name is 'tools' in create_session
+            allowed_tools=allowed_tools,  # Now uses consistent parameter name
             system_prompt=system_prompt,
             # Minion-specific fields
             role=role,

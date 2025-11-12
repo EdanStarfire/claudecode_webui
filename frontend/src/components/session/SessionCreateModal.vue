@@ -106,12 +106,12 @@
 
             <!-- Tool Allowlist -->
             <div class="mb-3">
-              <label for="tools" class="form-label">Allowed Tools (Optional)</label>
+              <label for="allowed-tools" class="form-label">Allowed Tools (Optional)</label>
               <input
                 type="text"
                 class="form-control"
-                id="tools"
-                v-model="formData.tools"
+                id="allowed-tools"
+                v-model="formData.allowed_tools"
                 placeholder="bash, read, edit, write, glob, grep, webfetch, websearch, task, todo"
               />
               <div class="form-text">
@@ -174,7 +174,7 @@ const formData = ref({
   model: 'claude-sonnet-4-5-20250929',
   system_prompt: '',
   override_system_prompt: false,
-  tools: '',
+  allowed_tools: '',
   startImmediately: true
 })
 const errors = ref({
@@ -225,8 +225,8 @@ async function handleSubmit() {
   errorMessage.value = ''
 
   try {
-    // Parse tools from comma-separated string
-    const toolsList = formData.value.tools
+    // Parse allowed_tools from comma-separated string
+    const toolsList = formData.value.allowed_tools
       .split(',')
       .map(t => t.trim())
       .filter(t => t.length > 0)
@@ -237,7 +237,7 @@ async function handleSubmit() {
       model: formData.value.model,
       system_prompt: formData.value.system_prompt.trim() || null,
       override_system_prompt: formData.value.override_system_prompt,
-      tools: toolsList
+      allowed_tools: toolsList
     }
 
     const session = await sessionStore.createSession(project.value.project_id, sessionData)
@@ -273,7 +273,7 @@ function resetForm() {
     model: 'claude-sonnet-4-5-20250929',
     system_prompt: '',
     override_system_prompt: false,
-    tools: '',
+    allowed_tools: '',
     startImmediately: true
   }
   errors.value = {}
