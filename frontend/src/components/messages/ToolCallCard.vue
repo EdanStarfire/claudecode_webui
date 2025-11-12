@@ -378,7 +378,7 @@ const toolSummary = computed(() => {
     }
 
     case 'Skill': {
-      const skillName = input.command || 'Unknown'
+      const skillName = input.skill || 'Unknown'
       if (status === 'completed' && result) {
         return result.error ? `Skill: ${skillName} (error)` : `Skill: ${skillName} (completed)`
       }
