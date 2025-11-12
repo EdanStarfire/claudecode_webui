@@ -2178,9 +2178,21 @@ class LegionMCPTools:
                 "is_error": True
             }
 
-        # Validate expertise_score if provided
+        # Validate and convert expertise_score if provided
         if expertise_score is not None:
-            if not isinstance(expertise_score, (int, float)):
+            # Convert string to float if needed (MCP may pass as string)
+            if isinstance(expertise_score, str):
+                try:
+                    expertise_score = float(expertise_score)
+                except ValueError:
+                    return {
+                        "content": [{
+                            "type": "text",
+                            "text": "Error: expertise_score must be a number between 0.0 and 1.0"
+                        }],
+                        "is_error": True
+                    }
+            elif not isinstance(expertise_score, (int, float)):
                 return {
                     "content": [{
                         "type": "text",
@@ -2189,6 +2201,7 @@ class LegionMCPTools:
                     "is_error": True
                 }
 
+            # Validate range
             if expertise_score < 0.0 or expertise_score > 1.0:
                 return {
                     "content": [{
