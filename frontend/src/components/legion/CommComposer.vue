@@ -1,7 +1,7 @@
 <template>
   <div class="comm-composer border-top p-3">
     <!-- Top Row: Recipient and Comm Type -->
-    <div class="d-flex gap-2 mb-2">
+    <div v-if="!hideRecipientSelector" class="d-flex gap-2 mb-2">
       <!-- Recipient Selection -->
       <div class="flex-grow-1">
         <select v-model="recipient" class="form-select form-select-sm" :disabled="sending">
@@ -105,6 +105,10 @@ const props = defineProps({
   defaultChannelId: {
     type: String,
     default: ''
+  },
+  hideRecipientSelector: {
+    type: Boolean,
+    default: false
   }
 })
 
