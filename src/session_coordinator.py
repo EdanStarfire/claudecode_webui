@@ -99,6 +99,9 @@ class SessionCoordinator:
                 await self.legion_system.legion_coordinator._load_all_channels()
                 coord_logger.info("Loaded channels for all legions")
 
+                # Rebuild capability registry from persisted session data
+                await self.legion_system.legion_coordinator.rebuild_capability_registry()
+
             # Register callback to receive session manager state changes
             self.session_manager.add_state_change_callback(self._on_session_manager_state_change)
 
@@ -536,6 +539,13 @@ class SessionCoordinator:
                     coord_logger.warning(f"Minion {session_id} not found in parent overseer {parent_id}'s child_minion_ids")
                 else:
                     coord_logger.warning(f"Parent overseer {parent_id} not found for minion {session_id}")
+
+            # Step 1.6: If this is a minion with capabilities, clean up capability registry
+            if session_info and session_info.is_minion and session_info.capabilities:
+                # Clean up capability registry (project check ensures this is a legion minion)
+                if project and project.is_multi_agent and self.legion_system:
+                    self.legion_system.legion_coordinator.unregister_minion_capabilities(session_id)
+                    coord_logger.info(f"Cleaned up {len(session_info.capabilities)} capabilities from registry for minion {session_id}")
 
             # Step 2: Terminate the SDK if it's running
             sdk = self._active_sdks.get(session_id)
