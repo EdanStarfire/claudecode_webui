@@ -11,8 +11,9 @@ Responsibilities:
 import json
 import uuid
 from datetime import datetime
-from pathlib import Path
-from typing import TYPE_CHECKING, List, Optional
+from typing import TYPE_CHECKING, Optional
+
+from src.legion.utils import normalize_channel_name
 
 if TYPE_CHECKING:
     from src.legion_system import LegionSystem
@@ -72,7 +73,7 @@ class ChannelManager:
             channel_state_path = legion_dir / "channels" / channel_id / "channel_state.json"
             if channel_state_path.exists():
                 try:
-                    with open(channel_state_path, 'r', encoding='utf-8') as f:
+                    with open(channel_state_path, encoding='utf-8') as f:
                         data = json.load(f)
 
                     from src.models.legion_models import Channel
@@ -93,8 +94,8 @@ class ChannelManager:
         name: str,
         description: str,
         purpose: str,
-        member_minion_ids: Optional[List[str]] = None,
-        created_by_minion_id: Optional[str] = None
+        member_minion_ids: list[str] | None = None,
+        created_by_minion_id: str | None = None
     ) -> str:
         """
         Create a new channel with name, purpose, and description.
@@ -113,6 +114,9 @@ class ChannelManager:
         Raises:
             ValueError: If legion doesn't exist, channel name already exists, or invalid member IDs
         """
+        # Normalize channel name (strip leading # if present)
+        name = normalize_channel_name(name)
+
         # Validate legion exists
         legion = await self.system.legion_coordinator.get_legion(legion_id)
         if not legion:
@@ -301,7 +305,7 @@ class ChannelManager:
                     # Log warning but don't fail the operation
                     pass
 
-    async def list_channels(self, legion_id: str) -> List['Channel']:
+    async def list_channels(self, legion_id: str) -> list['Channel']:
         """
         List all channels for a specific legion.
 
@@ -368,7 +372,7 @@ class ChannelManager:
                 continue
 
             try:
-                with open(channel_file, 'r', encoding='utf-8') as f:
+                with open(channel_file, encoding='utf-8') as f:
                     channel_data = json.load(f)
 
                 # Deserialize channel
