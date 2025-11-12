@@ -478,7 +478,12 @@ function openTemplateManager() {
 }
 
 function openFolderBrowser() {
+  // Get the project's working directory as default
+  const project = legionId.value ? projectStore.projects.get(legionId.value) : null
+  const defaultPath = project?.working_directory || ''
+
   uiStore.showModal('folder-browser', {
+    defaultPath: defaultPath,
     currentPath: formData.value.working_directory || '',
     onSelect: (path) => {
       formData.value.working_directory = path
