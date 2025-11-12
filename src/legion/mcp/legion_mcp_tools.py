@@ -2220,7 +2220,7 @@ class LegionMCPTools:
             )
 
             # Get updated capability count
-            minion = await self.system.session_coordinator.session_manager.get_session(from_minion_id)
+            minion = await self.system.session_coordinator.session_manager.get_session_info(from_minion_id)
             capability_count = len(minion.capabilities) if minion else 0
 
             # Format score for display
