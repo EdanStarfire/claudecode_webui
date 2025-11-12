@@ -366,14 +366,23 @@ class LegionCoordinator:
 
         # Check if minion already has this capability registered
         existing_entries = self.capability_registry[normalized_capability]
+        is_update = False
         for i, (existing_minion_id, _) in enumerate(existing_entries):
             if existing_minion_id == minion_id:
                 # Update existing entry
                 existing_entries[i] = (minion_id, expertise_score)
-                return
+                is_update = True
+                break
 
-        # Add new entry
-        self.capability_registry[normalized_capability].append((minion_id, expertise_score))
+        if not is_update:
+            # Add new entry to registry
+            self.capability_registry[normalized_capability].append((minion_id, expertise_score))
+
+            # Add to minion's capabilities list if not already present
+            if normalized_capability not in minion.capabilities:
+                minion.capabilities.append(normalized_capability)
+                # Persist to state.json
+                await self.system.session_coordinator.session_manager._persist_session_state(minion_id)
 
     async def search_capability_registry(
         self,
