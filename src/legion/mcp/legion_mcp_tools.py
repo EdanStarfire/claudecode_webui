@@ -945,7 +945,7 @@ class LegionMCPTools:
                     # Resolve channel IDs back to names for display
                     joined_names = []
                     for channel_id in channels_joined:
-                        channel = await self.system.legion_coordinator.get_channel(channel_id)
+                        channel = await self.system.channel_manager.get_channel(channel_id)
                         if channel:
                             joined_names.append(channel.name)
                         else:
