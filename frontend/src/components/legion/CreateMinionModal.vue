@@ -140,6 +140,32 @@
               <div class="form-text">Comma-separated list of capability keywords (optional)</div>
             </div>
 
+            <!-- Working Directory -->
+            <div class="mb-3">
+              <label for="working-directory" class="form-label">
+                Working Directory (Optional)
+              </label>
+              <div class="input-group">
+                <input
+                  id="working-directory"
+                  v-model="formData.working_directory"
+                  type="text"
+                  class="form-control"
+                  placeholder="Leave empty to inherit from legion"
+                />
+                <button
+                  type="button"
+                  class="btn btn-outline-secondary"
+                  @click="openFolderBrowser"
+                >
+                  📁 Browse
+                </button>
+              </div>
+              <div class="form-text">
+                Custom working directory for git worktrees or multi-repo workflows. Relative paths will be converted to absolute.
+              </div>
+            </div>
+
             <!-- Permission Mode -->
             <div class="mb-3">
               <label for="permission-mode" class="form-label">
@@ -260,7 +286,8 @@ const formData = ref({
   override_system_prompt: false,
   capabilities: [],
   permission_mode: 'default',
-  allowed_tools: ''
+  allowed_tools: '',
+  working_directory: ''
 })
 const capabilitiesInput = ref('')
 const errorMessage = ref('')
@@ -450,6 +477,15 @@ function openTemplateManager() {
   uiStore.showModal('template-management', {})
 }
 
+function openFolderBrowser() {
+  uiStore.showModal('folder-browser', {
+    currentPath: formData.value.working_directory || '',
+    onSelect: (path) => {
+      formData.value.working_directory = path
+    }
+  })
+}
+
 function resetForm() {
   formData.value = {
     name: '',
@@ -458,7 +494,8 @@ function resetForm() {
     override_system_prompt: false,
     capabilities: [],
     permission_mode: 'default',
-    allowed_tools: ''
+    allowed_tools: '',
+    working_directory: ''
   }
   capabilitiesInput.value = ''
   selectedTemplateId.value = null
@@ -523,7 +560,8 @@ async function createMinion() {
       override_system_prompt: formData.value.override_system_prompt,
       capabilities: capabilities.value,
       permission_mode: formData.value.permission_mode,
-      allowed_tools: allowedTools.value
+      allowed_tools: allowedTools.value,
+      working_directory: formData.value.working_directory.trim() || null
     }
 
     const response = await api.post(`/api/legions/${legionId.value}/minions`, payload)

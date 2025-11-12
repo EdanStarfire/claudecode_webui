@@ -145,6 +145,7 @@ class SessionCoordinator:
         model: str | None = None,
         name: str | None = None,
         permission_callback: Callable[[str, dict[str, Any]], bool | dict[str, Any]] | None = None,
+        working_directory: str | None = None,  # Custom working directory (defaults to project directory)
         # Minion-specific fields
         role: str | None = None,
         capabilities: list[str] = None,
@@ -160,7 +161,8 @@ class SessionCoordinator:
             if not project:
                 raise ValueError(f"Project {project_id} not found")
 
-            working_directory = project.working_directory
+            # Use custom working directory if provided, otherwise use project directory
+            working_directory = working_directory or project.working_directory
 
             # Calculate order based on existing sessions in project
             order = len(project.session_ids)
