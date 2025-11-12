@@ -324,7 +324,7 @@ const resultContent = computed(() => {
 
 .diff-content {
   padding: 0.25rem 0.5rem;
-  white-space: nowrap;
+  white-space: pre;
 }
 
 .tool-result {
