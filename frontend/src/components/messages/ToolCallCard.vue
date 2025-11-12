@@ -292,6 +292,19 @@ function getBasename(path) {
   return parts[parts.length - 1]
 }
 
+// Helper: Extract actual command from bash command (remove cd prefix)
+function extractBashCommand(cmd) {
+  if (!cmd) return ''
+  // Remove cd "..." && prefix to show only the actual command
+  // Match: cd "any path" && actual_command
+  const match = cmd.match(/cd\s+"[^"]+"\s+&&\s+(.+)$/)
+  if (match) {
+    return match[1]
+  }
+  // No cd prefix found, return command as-is
+  return cmd
+}
+
 // Helper: Truncate bash command to max length
 function truncateBashCommand(cmd, maxLen = 200) {
   if (!cmd) return ''
@@ -329,7 +342,9 @@ const toolSummary = computed(() => {
     case 'Bash':
     case 'Shell':
     case 'Command': {
-      const cmd = truncateBashCommand(input.command, 200)
+      // Extract actual command (remove cd prefix), then truncate
+      const extractedCmd = extractBashCommand(input.command)
+      const cmd = truncateBashCommand(extractedCmd, 200)
       if (status === 'completed' && result) {
         const exitCode = getExitCode(result)
         return `Bash: ${cmd} (exit ${exitCode})`
