@@ -781,6 +781,9 @@ class LegionMCPTools:
         # - string: "channel1" or "channel1,channel2,channel3"
         # - list: ["channel1", "channel2"]
         channel_ids = []
+        channel_names = []
+        channels_not_found = []  # Track channels that don't exist during lookup
+
         if channels:
             # Normalize to list of channel names
             if isinstance(channels, str):
@@ -794,6 +797,7 @@ class LegionMCPTools:
                 if channel:
                     channel_ids.append(channel.channel_id)
                 else:
+                    channels_not_found.append(channel_name)
                     coord_logger.warning(f"Channel '{channel_name}' not found in legion {legion_id} during spawn_minion")
 
             coord_logger.debug(f"Resolved channels {channel_names} to IDs {channel_ids}")
@@ -939,7 +943,7 @@ class LegionMCPTools:
 
             # Format channel join results
             channel_info = ""
-            if channels_joined or channels_failed:
+            if channels_joined or channels_failed or channels_not_found:
                 channel_info = "\n**Channel Membership:**\n"
                 if channels_joined:
                     # Resolve channel IDs back to names for display
@@ -952,8 +956,12 @@ class LegionMCPTools:
                             joined_names.append(channel_id)  # Fallback to ID if name unavailable
                     channel_info += f"  ✅ Joined: {', '.join(joined_names)}\n"
 
-                if channels_failed:
+                if channels_failed or channels_not_found:
                     channel_info += "  ❌ Failed:\n"
+                    # First, show channels that failed during lookup (not found)
+                    for channel_name in channels_not_found:
+                        channel_info += f"     - {channel_name}: Channel does not exist\n"
+                    # Then show channels that failed during add_member (other errors)
                     for failed in channels_failed:
                         # Try to get channel name from channel_id
                         channel_id = failed["channel_id"]
