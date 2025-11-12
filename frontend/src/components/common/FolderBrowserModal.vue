@@ -215,7 +215,8 @@ watch(
   (modal) => {
     if (modal?.name === 'folder-browser' && modalInstance) {
       const data = modal.data || {}
-      currentPath.value = data.currentPath || ''
+      // Use defaultPath if provided, fallback to currentPath, then empty string
+      currentPath.value = data.defaultPath || data.currentPath || ''
       onSelectCallback = data.onSelect || null
       modalInstance.show()
     }
