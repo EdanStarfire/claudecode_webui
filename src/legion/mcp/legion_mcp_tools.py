@@ -15,6 +15,8 @@ Tools are exposed to minions with names like: mcp__legion__send_comm
 
 from typing import TYPE_CHECKING, Any
 
+from src.legion.utils import normalize_channel_name
+
 try:
     from claude_agent_sdk import create_sdk_mcp_server, tool
 except ImportError:
@@ -24,6 +26,7 @@ except ImportError:
 
 if TYPE_CHECKING:
     from src.legion_system import LegionSystem
+    from src.models.legion_models import Channel
 
 
 class LegionMCPTools:
@@ -97,9 +100,10 @@ class LegionMCPTools:
             "'Blocked: need API key for testing'). AVOID generic summaries like 'Update' or 'FYI'. "
             "\n\nSTOP when: task acknowledged OR awaiting team response. "
             "\n\nValid comm_type: 'task', 'question', 'report', 'info'"
-            "\n\nInterrupt Priority (optional): 'none' (default), 'halt', 'pivot' - same as send_comm",
+            "\n\nInterrupt Priority (optional): 'none' (default), 'halt', 'pivot' - same as send_comm"
+            "\n\nChannel name can include # prefix (e.g., '#backend' or 'backend' both work)",
             {
-                "channel_name": str,       # Name of channel to broadcast to
+                "channel_name": str,       # Name of channel to broadcast to (with or without # prefix)
                 "summary": str,            # Specific one-sentence update (actionable)
                 "content": str,            # Details only if summary needs elaboration (supports markdown)
                 "comm_type": str,          # One of: task, question, report, info (optional)
@@ -198,9 +202,10 @@ class LegionMCPTools:
         @tool(
             "join_channel",
             "Join an existing channel to collaborate with its members. You'll receive all "
-            "future broadcasts to this channel.",
+            "future broadcasts to this channel."
+            "\n\nChannel name can include # prefix (e.g., '#backend' or 'backend' both work)",
             {
-                "channel_name": str  # Name of channel to join
+                "channel_name": str  # Name of channel to join (with or without # prefix)
             }
         )
         async def join_channel_tool(args: dict[str, Any]) -> dict[str, Any]:
@@ -211,9 +216,10 @@ class LegionMCPTools:
         @tool(
             "leave_channel",
             "Leave a channel you previously joined. You'll no longer receive broadcasts "
-            "to this channel. Useful when your work related to that channel is complete.",
+            "to this channel. Useful when your work related to that channel is complete."
+            "\n\nChannel name can include # prefix (e.g., '#backend' or 'backend' both work)",
             {
-                "channel_name": str  # Name of channel to leave
+                "channel_name": str  # Name of channel to leave (with or without # prefix)
             }
         )
         async def leave_channel_tool(args: dict[str, Any]) -> dict[str, Any]:
@@ -225,10 +231,11 @@ class LegionMCPTools:
             "add_minion_to_channel",
             "Add one of your child minions to a channel (overseers only). You can only add "
             "minions you directly spawned (your children), not grandchildren or unrelated minions. "
-            "Useful for organizing your team into specialized communication groups.",
+            "Useful for organizing your team into specialized communication groups."
+            "\n\nChannel name can include # prefix (e.g., '#backend' or 'backend' both work)",
             {
                 "minion_name": str,   # Name of your child minion to add
-                "channel_name": str   # Name of channel to add them to
+                "channel_name": str   # Name of channel to add them to (with or without # prefix)
             }
         )
         async def add_minion_to_channel_tool(args: dict[str, Any]) -> dict[str, Any]:
@@ -239,10 +246,11 @@ class LegionMCPTools:
         @tool(
             "remove_minion_from_channel",
             "Remove one of your child minions from a channel (overseers only). You can only remove "
-            "minions you directly spawned (your children), not grandchildren or unrelated minions.",
+            "minions you directly spawned (your children), not grandchildren or unrelated minions."
+            "\n\nChannel name can include # prefix (e.g., '#backend' or 'backend' both work)",
             {
                 "minion_name": str,   # Name of your child minion to remove
-                "channel_name": str   # Name of channel to remove them from
+                "channel_name": str   # Name of channel to remove them from (with or without # prefix)
             }
         )
         async def remove_minion_from_channel_tool(args: dict[str, Any]) -> dict[str, Any]:
@@ -253,9 +261,10 @@ class LegionMCPTools:
         @tool(
             "create_channel",
             "Create a new channel for group communication. You'll be automatically added as a member. "
-            "Use channels to coordinate with multiple minions on a shared task.",
+            "Use channels to coordinate with multiple minions on a shared task."
+            "\n\nChannel name can include # prefix (e.g., '#backend' or 'backend' both work)",
             {
-                "name": str,              # Unique name for channel
+                "name": str,              # Unique name for channel (with or without # prefix)
                 "description": str,       # Purpose and description
                 "purpose": str,           # One of: coordination, planning, research, scene
                 "initial_members": list   # List of minion names (optional)
@@ -599,6 +608,9 @@ class LegionMCPTools:
                 }],
                 "is_error": True
             }
+
+        # Normalize channel name (strip leading # if present)
+        channel_name = normalize_channel_name(channel_name)
 
         # Get sender's legion to find channel
         sender_session = await self.system.session_coordinator.session_manager.get_session_info(from_minion_id)
@@ -1387,6 +1399,9 @@ class LegionMCPTools:
                 "is_error": True
             }
 
+        # Normalize channel name (strip leading # if present)
+        channel_name = normalize_channel_name(channel_name)
+
         # Get minion's legion
         minion_session = await self.system.session_coordinator.session_manager.get_session_info(from_minion_id)
         if not minion_session:
@@ -1469,6 +1484,9 @@ class LegionMCPTools:
                 "content": [{"type": "text", "text": "Error: 'channel_name' parameter is required"}],
                 "is_error": True
             }
+
+        # Normalize channel name (strip leading # if present)
+        channel_name = normalize_channel_name(channel_name)
 
         # Get minion's legion
         minion_session = await self.system.session_coordinator.session_manager.get_session_info(from_minion_id)
@@ -1555,6 +1573,9 @@ class LegionMCPTools:
                 "content": [{"type": "text", "text": "Error: 'channel_name' parameter is required"}],
                 "is_error": True
             }
+
+        # Normalize channel name (strip leading # if present)
+        channel_name = normalize_channel_name(channel_name)
 
         # Get overseer's legion
         overseer_session = await self.system.session_coordinator.session_manager.get_session_info(overseer_id)
@@ -1664,6 +1685,9 @@ class LegionMCPTools:
                 "is_error": True
             }
 
+        # Normalize channel name (strip leading # if present)
+        channel_name = normalize_channel_name(channel_name)
+
         # Get overseer's legion
         overseer_session = await self.system.session_coordinator.session_manager.get_session_info(overseer_id)
         if not overseer_session:
@@ -1752,6 +1776,9 @@ class LegionMCPTools:
         name = args.get("name", "").strip() if isinstance(args.get("name"), str) else ""
         description = args.get("description", "").strip() if isinstance(args.get("description"), str) else ""
         purpose = args.get("purpose", "coordination").strip() if isinstance(args.get("purpose"), str) else "coordination"
+
+        # Normalize channel name (strip leading # if present)
+        name = normalize_channel_name(name)
 
         # Handle initial_members as both string (single member) and list (multiple members)
         initial_members_param = args.get("initial_members", [])
