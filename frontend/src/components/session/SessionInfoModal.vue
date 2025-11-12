@@ -28,7 +28,13 @@
             <!-- Working Directory -->
             <div class="mb-3">
               <h6 class="text-muted">Working Directory</h6>
-              <div class="font-monospace small">{{ initData.cwd || 'Not specified' }}</div>
+              <input
+                type="text"
+                class="form-control form-control-sm font-monospace path-input"
+                :value="initData.cwd || 'Not specified'"
+                readonly
+                @click="selectPath"
+              />
             </div>
 
             <!-- Model -->
@@ -157,6 +163,11 @@ function formatSystemPrompt(prompt) {
   return JSON.stringify(prompt, null, 2)
 }
 
+// Auto-select path text on click for easy copying
+function selectPath(event) {
+  event.target.select()
+}
+
 // Reset state
 function resetState() {
   sessionId.value = null
@@ -212,5 +223,29 @@ pre {
 
 .badge {
   font-weight: normal;
+}
+
+/* Read-only path input styling */
+.path-input {
+  background-color: #f8f9fa;
+  cursor: text;
+  color: #495057;
+  overflow-x: auto;
+  white-space: nowrap;
+  font-size: 0.875rem;
+}
+
+.path-input:focus {
+  background-color: #f8f9fa;
+  outline: 2px solid #0d6efd;
+  outline-offset: 2px;
+}
+
+/* Mobile responsive */
+@media (max-width: 768px) {
+  .path-input {
+    font-size: 0.8rem;
+    padding: 0.375rem 0.5rem;
+  }
 }
 </style>
