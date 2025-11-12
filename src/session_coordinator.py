@@ -507,7 +507,6 @@ class SessionCoordinator:
             # Step 1: Find and remove session from its project
             project = await self._find_project_for_session(session_id)
             project_was_deleted = False
-            deleted_project_id = None
 
             if project:
                 removal_success, project_was_deleted = await self.project_manager.remove_session_from_project(project.project_id, session_id)
@@ -515,7 +514,6 @@ class SessionCoordinator:
                 if removal_success:
                     if project_was_deleted:
                         coord_logger.info(f"Removed session {session_id} from project {project.project_id} - project was empty and has been deleted")
-                        deleted_project_id = project.project_id
                     else:
                         coord_logger.info(f"Removed session {session_id} from project {project.project_id}")
                 else:
@@ -546,6 +544,64 @@ class SessionCoordinator:
                 if project and project.is_multi_agent and self.legion_system:
                     self.legion_system.legion_coordinator.unregister_minion_capabilities(session_id)
                     coord_logger.info(f"Cleaned up {len(session_info.capabilities)} capabilities from registry for minion {session_id}")
+
+            # Step 1.7: Legion-specific cleanup for minions
+            if session_info and session_info.is_minion and project and project.is_multi_agent and self.legion_system:
+                legion_id = project.project_id
+                coord_logger.info(f"Starting Legion-specific cleanup for minion {session_id} in legion {legion_id}")
+
+                # 1.7a: Delete minion directory in legions/{legion_id}/minions/{minion_id}/
+                minion_dir = self.data_dir / "legions" / legion_id / "minions" / session_id
+                if minion_dir.exists():
+                    try:
+                        import shutil
+                        shutil.rmtree(minion_dir)
+                        coord_logger.info(f"Deleted Legion minion directory: {minion_dir}")
+                    except Exception as e:
+                        coord_logger.error(f"Failed to delete Legion minion directory {minion_dir}: {e}")
+                else:
+                    coord_logger.debug(f"Legion minion directory does not exist (already cleaned): {minion_dir}")
+
+                # 1.7b: Remove from all channel memberships
+                if self.legion_system.channel_manager:
+                    try:
+                        removed_channels = await self.legion_system.channel_manager.remove_member_from_all_channels(
+                            legion_id, session_id
+                        )
+                        if removed_channels:
+                            coord_logger.info(f"Removed minion {session_id} from {len(removed_channels)} channels: {removed_channels}")
+                        else:
+                            coord_logger.debug(f"Minion {session_id} was not a member of any channels")
+                    except Exception as e:
+                        coord_logger.error(f"Failed to remove minion {session_id} from channels: {e}")
+
+                # 1.7c: Horde cleanup - remove from horde or delete horde if root_overseer
+                if session_info.horde_id and self.legion_system.overseer_controller:
+                    try:
+                        horde = self.legion_system.overseer_controller.hordes.get(session_info.horde_id)
+                        if horde:
+                            # Check if this minion is the root overseer of the horde
+                            if horde.root_overseer_id == session_id:
+                                # This minion is the root overseer - delete entire horde after verifying all members are gone
+                                if len(horde.all_minion_ids) <= 1:  # Only this minion remains (or already empty)
+                                    del self.legion_system.overseer_controller.hordes[session_info.horde_id]
+                                    # Delete horde state file
+                                    horde_file = self.data_dir / "legions" / legion_id / "hordes" / f"{session_info.horde_id}.json"
+                                    if horde_file.exists():
+                                        horde_file.unlink()
+                                        coord_logger.info(f"Deleted horde {session_info.horde_id} (root overseer {session_id} was last member)")
+                                else:
+                                    coord_logger.warning(f"Root overseer {session_id} deleted but horde {session_info.horde_id} still has {len(horde.all_minion_ids) - 1} other members - horde not deleted")
+                            else:
+                                # This minion is a regular horde member - just remove from all_minion_ids
+                                if session_id in horde.all_minion_ids:
+                                    horde.all_minion_ids.remove(session_id)
+                                    horde.updated_at = datetime.now(UTC)
+                                    # Persist updated horde
+                                    await self.legion_system.overseer_controller._persist_horde(horde)
+                                    coord_logger.info(f"Removed minion {session_id} from horde {session_info.horde_id} all_minion_ids")
+                    except Exception as e:
+                        coord_logger.error(f"Failed to clean up horde for minion {session_id}: {e}")
 
             # Step 2: Terminate the SDK if it's running
             sdk = self._active_sdks.get(session_id)
@@ -812,42 +868,6 @@ class SessionCoordinator:
 
         except Exception as e:
             logger.error(f"Failed to reset session {session_id}: {e}")
-            return False
-
-    async def send_message(self, session_id: str, message: str) -> bool:
-        """Send a message to a session"""
-        try:
-            # Check if SDK exists and is active
-            sdk = self._active_sdks.get(session_id)
-            if not sdk:
-                logger.warning(f"No active SDK found for session {session_id}")
-                return False
-
-            # Check session state
-            session_info = await self.session_manager.get_session_info(session_id)
-            if not session_info:
-                logger.warning(f"Session {session_id} not found")
-                return False
-
-            # Only allow sending messages to active sessions
-            if session_info.state not in [SessionState.ACTIVE]:
-                logger.warning(f"Session {session_id} not active (state: {session_info.state})")
-                return False
-
-            # Update processing state before sending message
-            await self.session_manager.update_processing_state(session_id, True)
-
-            # Send message via SDK
-            result = await sdk.send_message(message)
-            return result
-
-        except Exception as e:
-            logger.error(f"Failed to send message to session {session_id}: {e}")
-            # Reset processing state on error
-            try:
-                await self.session_manager.update_processing_state(session_id, False)
-            except Exception:
-                pass  # Don't fail on state update error
             return False
 
     async def get_session_info(self, session_id: str) -> dict[str, Any] | None:
