@@ -254,6 +254,40 @@ class ChannelManager:
         # Persist channel to disk
         await self._persist_channel(channel)
 
+    async def remove_member_from_all_channels(self, legion_id: str, minion_id: str) -> list[str]:
+        """
+        Remove a minion from all channels in a legion.
+
+        Called during minion deletion to clean up channel memberships.
+        Maintains bidirectional relationship by updating both channel.member_minion_ids
+        and minion.channel_ids.
+
+        Args:
+            legion_id: The legion ID
+            minion_id: The minion to remove from all channels
+
+        Returns:
+            list[str]: List of channel names the minion was removed from
+        """
+        removed_channel_names = []
+
+        # Get all channels for this legion
+        channels = await self.list_channels(legion_id)
+
+        # Remove minion from each channel they're a member of
+        for channel in channels:
+            if minion_id in channel.member_minion_ids:
+                try:
+                    await self.remove_member(channel.channel_id, minion_id)
+                    removed_channel_names.append(channel.name)
+                except Exception as e:
+                    # Log error but continue with other channels
+                    from src.logging_config import get_logger
+                    logger = get_logger(__name__, "CHANNEL")
+                    logger.error(f"Failed to remove minion {minion_id} from channel {channel.channel_id} ({channel.name}): {e}")
+
+        return removed_channel_names
+
     async def delete_channel(self, channel_id: str) -> None:
         """
         Delete a channel and its associated files.
