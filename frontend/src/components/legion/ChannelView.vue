@@ -60,6 +60,7 @@
       v-if="channel"
       :legion-id="legionId"
       :default-channel-id="channelId"
+      :hide-recipient-selector="true"
     />
 
     <!-- Channel Status Bar (fixed at bottom) -->
