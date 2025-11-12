@@ -900,7 +900,7 @@ class LegionMCPTools:
         try:
             # Map initialization_context to system_prompt (initialization_context is semantic UI term)
             # Use channel_ids (resolved from channel names)
-            child_minion_id = await self.system.overseer_controller.spawn_minion(
+            spawn_result = await self.system.overseer_controller.spawn_minion(
                 parent_overseer_id=parent_overseer_id,
                 name=name,
                 role=role,
@@ -911,6 +911,10 @@ class LegionMCPTools:
                 allowed_tools=allowed_tools,
                 working_directory=working_directory
             )
+
+            child_minion_id = spawn_result["minion_id"]
+            channels_joined = spawn_result["channels_joined"]
+            channels_failed = spawn_result["channels_failed"]
 
             # Build success message with permission info
             perm_info = ""
@@ -933,6 +937,35 @@ class LegionMCPTools:
             if working_directory:
                 wd_info = f"\nWorking Directory: {working_directory}\n"
 
+            # Format channel join results
+            channel_info = ""
+            if channels_joined or channels_failed:
+                channel_info = "\n**Channel Membership:**\n"
+                if channels_joined:
+                    # Resolve channel IDs back to names for display
+                    joined_names = []
+                    for channel_id in channels_joined:
+                        channel = await self.system.legion_coordinator.get_channel(channel_id)
+                        if channel:
+                            joined_names.append(channel.name)
+                        else:
+                            joined_names.append(channel_id)  # Fallback to ID if name unavailable
+                    channel_info += f"  ✅ Joined: {', '.join(joined_names)}\n"
+
+                if channels_failed:
+                    channel_info += "  ❌ Failed:\n"
+                    for failed in channels_failed:
+                        # Try to get channel name from channel_id
+                        channel_id = failed["channel_id"]
+                        reason = failed["reason"]
+                        # Look up in the original channel_names list to show the name the user provided
+                        display_name = channel_id
+                        for idx, cid in enumerate(channel_ids):
+                            if cid == channel_id and idx < len(channel_names):
+                                display_name = channel_names[idx]
+                                break
+                        channel_info += f"     - {display_name}: {reason}\n"
+
             return {
                 "content": [{
                     "type": "text",
@@ -940,7 +973,8 @@ class LegionMCPTools:
                         f"✅ Successfully spawned minion '{name}' with role '{role}'.\n\n"
                         f"Minion ID: {child_minion_id}\n"
                         f"{wd_info}"
-                        f"{perm_info}\n\n"
+                        f"{perm_info}"
+                        f"{channel_info}\n"
                         f"The child minion is now active and ready to receive comms. "
                         f"You can communicate with them using send_comm(to_minion_name='{name}', ...)."
                     )
