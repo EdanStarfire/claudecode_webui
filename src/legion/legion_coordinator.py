@@ -366,14 +366,85 @@ class LegionCoordinator:
 
         # Check if minion already has this capability registered
         existing_entries = self.capability_registry[normalized_capability]
+        is_update = False
         for i, (existing_minion_id, _) in enumerate(existing_entries):
             if existing_minion_id == minion_id:
                 # Update existing entry
                 existing_entries[i] = (minion_id, expertise_score)
-                return
+                is_update = True
+                break
 
-        # Add new entry
-        self.capability_registry[normalized_capability].append((minion_id, expertise_score))
+        if not is_update:
+            # Add new entry to registry
+            self.capability_registry[normalized_capability].append((minion_id, expertise_score))
+
+            # Add to minion's capabilities list if not already present
+            if normalized_capability not in minion.capabilities:
+                minion.capabilities.append(normalized_capability)
+                # Persist to state.json
+                await self.system.session_coordinator.session_manager._persist_session_state(minion_id)
+
+    def unregister_minion_capabilities(self, minion_id: str) -> None:
+        """
+        Remove all capabilities for a minion from the registry.
+        Called when a minion/session is deleted to clean up stale references.
+
+        Args:
+            minion_id: ID of the minion being deleted
+        """
+        # Iterate through all capabilities and remove entries for this minion
+        for capability, entries in list(self.capability_registry.items()):
+            # Filter out entries for this minion
+            filtered_entries = [(mid, score) for mid, score in entries if mid != minion_id]
+
+            if filtered_entries:
+                # Update the registry with filtered list
+                self.capability_registry[capability] = filtered_entries
+            else:
+                # If no entries remain, remove the capability key entirely
+                del self.capability_registry[capability]
+
+    async def rebuild_capability_registry(self) -> None:
+        """
+        Rebuild capability registry from persisted SessionInfo data.
+        Called on startup to restore in-memory registry from disk.
+        """
+        # Clear existing registry
+        self.capability_registry.clear()
+
+        # Get all sessions
+        all_sessions = await self.session_manager.list_sessions()
+
+        # Filter to minions with capabilities
+        minions_with_capabilities = [
+            session for session in all_sessions
+            if session.is_minion and session.capabilities
+        ]
+
+        # Rebuild registry from persisted capabilities
+        for minion in minions_with_capabilities:
+            for capability in minion.capabilities:
+                # Use minion's default expertise_score (0.5) for capabilities without explicit scores
+                # In the future, we could store per-capability scores in SessionInfo
+                expertise_score = minion.expertise_score if minion.expertise_score is not None else 0.5
+
+                # Register capability
+                if capability not in self.capability_registry:
+                    self.capability_registry[capability] = []
+
+                # Add entry if not already present
+                if not any(mid == minion.session_id for mid, _ in self.capability_registry[capability]):
+                    self.capability_registry[capability].append((minion.session_id, expertise_score))
+
+        # Log rebuild summary
+        total_capabilities = len(self.capability_registry)
+        total_entries = sum(len(entries) for entries in self.capability_registry.values())
+        if total_capabilities > 0:
+            import logging
+            logging.info(
+                f"Rebuilt capability registry: {total_capabilities} capabilities, "
+                f"{total_entries} total entries from {len(minions_with_capabilities)} minions"
+            )
 
     async def search_capability_registry(
         self,

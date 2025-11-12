@@ -294,6 +294,27 @@ class LegionMCPTools:
             """List all minion templates."""
             return await self._handle_list_templates(args)
 
+        @tool(
+            "update_expertise",
+            "Report a new or improved technical capability. Updates your expertise score "
+            "for the capability in the central registry so other minions can discover you. "
+            "\n\nExpertise score should be 0.0-1.0 (0.0=no knowledge, 0.5=intermediate, 1.0=expert). "
+            "Defaults to 0.5 if not provided."
+            "\n\nCapability names must be lowercase with underscores (e.g., 'jwt_authentication', 'postgresql')."
+            "\n\nExamples:"
+            "\n- update_expertise('jwt_authentication', 0.7)"
+            "\n- update_expertise('postgresql', 0.9)"
+            "\n- update_expertise('docker')  # Uses default 0.5",
+            {
+                "capability": str,                    # Capability keyword (lowercase with underscores)
+                "expertise_score": float | None       # 0.0-1.0 score (default: 0.5 if None)
+            }
+        )
+        async def update_expertise_tool(args: dict[str, Any]) -> dict[str, Any]:
+            """Update minion's expertise for a capability."""
+            args["_from_minion_id"] = session_id
+            return await self._handle_update_expertise(args)
+
         # Create and return MCP server with all tools
         return create_sdk_mcp_server(
             name="legion",
@@ -312,7 +333,8 @@ class LegionMCPTools:
                 remove_minion_from_channel_tool,
                 create_channel_tool,
                 list_channels_tool,
-                list_templates_tool
+                list_templates_tool,
+                update_expertise_tool
             ]
         )
 
@@ -2116,3 +2138,119 @@ class LegionMCPTools:
 
         # Route comm (logs to timeline and channel history)
         await self.system.comm_router.route_comm(comm)
+
+    async def _handle_update_expertise(self, args: dict[str, Any]) -> dict[str, Any]:
+        """
+        Handle update_expertise tool call.
+
+        Args:
+            args: {
+                "_from_minion_id": str,  # Injected by tool wrapper
+                "capability": str,
+                "expertise_score": float | None
+            }
+
+        Returns:
+            Tool result with success/error
+        """
+        from_minion_id = args.get("_from_minion_id")
+
+        if not from_minion_id:
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": "Error: Unable to determine minion ID"
+                }],
+                "is_error": True
+            }
+
+        # Extract parameters
+        capability = args.get("capability", "").strip()
+        expertise_score = args.get("expertise_score")
+
+        # Validate capability
+        if not capability:
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": "Error: capability parameter is required and cannot be empty"
+                }],
+                "is_error": True
+            }
+
+        # Validate and convert expertise_score if provided
+        if expertise_score is not None:
+            # Convert string to float if needed (MCP may pass as string)
+            if isinstance(expertise_score, str):
+                try:
+                    expertise_score = float(expertise_score)
+                except ValueError:
+                    return {
+                        "content": [{
+                            "type": "text",
+                            "text": "Error: expertise_score must be a number between 0.0 and 1.0"
+                        }],
+                        "is_error": True
+                    }
+            elif not isinstance(expertise_score, (int, float)):
+                return {
+                    "content": [{
+                        "type": "text",
+                        "text": "Error: expertise_score must be a number between 0.0 and 1.0"
+                    }],
+                    "is_error": True
+                }
+
+            # Validate range
+            if expertise_score < 0.0 or expertise_score > 1.0:
+                return {
+                    "content": [{
+                        "type": "text",
+                        "text": "Error: expertise_score must be between 0.0 and 1.0"
+                    }],
+                    "is_error": True
+                }
+
+        # Call existing register_capability method
+        try:
+            await self.system.legion_coordinator.register_capability(
+                minion_id=from_minion_id,
+                capability=capability,
+                expertise_score=expertise_score  # Will use minion's default if None
+            )
+
+            # Get updated capability count
+            minion = await self.system.session_coordinator.session_manager.get_session_info(from_minion_id)
+            capability_count = len(minion.capabilities) if minion else 0
+
+            # Format score for display
+            score_display = expertise_score if expertise_score is not None else 0.5
+
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": (
+                        f"✅ Successfully updated expertise for '{capability}' to {score_display:.2f}. "
+                        f"You now have {capability_count} capabilit{'y' if capability_count == 1 else 'ies'}."
+                    )
+                }],
+                "is_error": False
+            }
+
+        except ValueError as e:
+            # Validation errors from register_capability
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": f"❌ Error: {str(e)}"
+                }],
+                "is_error": True
+            }
+        except Exception as e:
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": f"❌ Unexpected error updating expertise: {str(e)}"
+                }],
+                "is_error": True
+            }
