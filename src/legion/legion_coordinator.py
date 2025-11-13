@@ -77,7 +77,10 @@ class LegionCoordinator:
 
     async def get_minion_by_name(self, name: str) -> Optional['SessionInfo']:
         """
-        Get minion by name (case-sensitive).
+        Get minion by name (case-sensitive) - GLOBAL search across all legions.
+
+        WARNING: This method searches globally and may return minions from other legions.
+        For legion-scoped lookups, use get_minion_by_name_in_legion() instead.
 
         Args:
             name: Minion name
@@ -89,6 +92,33 @@ class LegionCoordinator:
         for session in sessions:
             if session.is_minion and session.name == name:
                 return session
+        return None
+
+    async def get_minion_by_name_in_legion(self, legion_id: str, name: str) -> Optional['SessionInfo']:
+        """
+        Get minion by name within a specific legion (case-sensitive).
+
+        This method enforces legion boundaries by only searching minions
+        that belong to the specified legion (where project_id == legion_id).
+
+        Args:
+            legion_id: Legion UUID (project_id)
+            name: Minion name
+
+        Returns:
+            SessionInfo if found within legion and is_minion=True, None otherwise
+        """
+        # Get all sessions in this legion (project_id == legion_id)
+        legion = await self.get_legion(legion_id)
+        if not legion:
+            return None
+
+        # Search through legion's sessions for matching minion name
+        for session_id in legion.session_ids:
+            session = await self.session_manager.get_session_info(session_id)
+            if session and session.is_minion and session.name == name:
+                return session
+
         return None
 
     async def get_channel_by_name(self, legion_id: str, channel_name: str) -> Optional['Channel']:

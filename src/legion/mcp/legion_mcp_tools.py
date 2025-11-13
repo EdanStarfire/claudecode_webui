@@ -179,17 +179,18 @@ class LegionMCPTools:
 
         @tool(
             "list_minions",
-            "Get a list of all active minions in the legion with their names, roles, and "
+            "Get a list of all active minions in your legion with their names, roles, and "
             "current states. Useful for understanding who's available to collaborate with.",
             {}  # No parameters required
         )
         async def list_minions_tool(args: dict[str, Any]) -> dict[str, Any]:
             """List all active minions."""
+            args["_from_minion_id"] = session_id
             return await self._handle_list_minions(args)
 
         @tool(
             "get_minion_info",
-            "Get detailed information about a specific minion, including their role, capabilities, "
+            "Get detailed information about a specific minion in your legion, including their role, capabilities, "
             "current task, parent/children, and channels.",
             {
                 "minion_name": str  # Name of minion to query
@@ -197,6 +198,7 @@ class LegionMCPTools:
         )
         async def get_minion_info_tool(args: dict[str, Any]) -> dict[str, Any]:
             """Get detailed minion information."""
+            args["_from_minion_id"] = session_id
             return await self._handle_get_minion_info(args)
 
         @tool(
@@ -443,12 +445,26 @@ class LegionMCPTools:
         if sending_to_user:
             to_minion_id = None  # User doesn't have a minion_id, only use to_user flag
         else:
-            to_minion = await self.system.legion_coordinator.get_minion_by_name(to_minion_name)
+            # Get sender's legion to scope lookup
+            sender_session = await self.system.session_coordinator.session_manager.get_session_info(from_minion_id)
+            if not sender_session:
+                return {
+                    "content": [{
+                        "type": "text",
+                        "text": "Error: Unable to find sender session"
+                    }],
+                    "is_error": True
+                }
+
+            legion_id = sender_session.project_id
+
+            # Legion-scoped lookup (only search within sender's legion)
+            to_minion = await self.system.legion_coordinator.get_minion_by_name_in_legion(legion_id, to_minion_name)
             if not to_minion:
                 return {
                     "content": [{
                         "type": "text",
-                        "text": f"Error: Minion '{to_minion_name}' not found"
+                        "text": f"Error: Minion '{to_minion_name}' not found in legion {legion_id}"
                     }],
                     "is_error": True
                 }
@@ -1211,7 +1227,7 @@ class LegionMCPTools:
         """
         Handle list_minions tool call.
 
-        Lists all active minions in the legion with their names, roles, and states.
+        Lists all active minions in the caller's legion with their names, roles, and states.
         Always includes the special "user" minion for sending comms to the user.
 
         Returns:
@@ -1220,12 +1236,47 @@ class LegionMCPTools:
         try:
             from src.models.legion_models import USER_MINION_ID
 
-            # Get all sessions from SessionManager
-            session_manager = self.system.session_coordinator.session_manager
-            all_sessions = await session_manager.list_sessions()
+            # Get caller's legion to scope listing
+            from_minion_id = args.get("_from_minion_id")
+            if not from_minion_id:
+                return {
+                    "content": [{
+                        "type": "text",
+                        "text": "Error: Unable to determine caller minion ID"
+                    }],
+                    "is_error": True
+                }
 
-            # Filter to only minions
-            minions = [s for s in all_sessions if s.is_minion]
+            caller_session = await self.system.session_coordinator.session_manager.get_session_info(from_minion_id)
+            if not caller_session:
+                return {
+                    "content": [{
+                        "type": "text",
+                        "text": "Error: Unable to find caller session"
+                    }],
+                    "is_error": True
+                }
+
+            legion_id = caller_session.project_id
+
+            # Get legion and its sessions
+            legion = await self.system.legion_coordinator.get_legion(legion_id)
+            if not legion:
+                return {
+                    "content": [{
+                        "type": "text",
+                        "text": "Error: Caller is not part of a legion"
+                    }],
+                    "is_error": True
+                }
+
+            # Get minions in this legion (project_id matches legion_id)
+            session_manager = self.system.session_coordinator.session_manager
+            minions = []
+            for session_id in legion.session_ids:
+                session = await session_manager.get_session_info(session_id)
+                if session and session.is_minion:
+                    minions.append(session)
 
             # Format minion list
             minion_lines = []
@@ -1299,14 +1350,37 @@ class LegionMCPTools:
                 "is_error": True
             }
 
-        # 2. Look up minion by name
-        minion = await self.system.legion_coordinator.get_minion_by_name(minion_name)
+        # 2. Get caller's legion to scope lookup
+        from_minion_id = args.get("_from_minion_id")
+        if not from_minion_id:
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": "❌ Error: Unable to determine caller minion ID"
+                }],
+                "is_error": True
+            }
+
+        caller_session = await self.system.session_coordinator.session_manager.get_session_info(from_minion_id)
+        if not caller_session:
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": "❌ Error: Unable to find caller session"
+                }],
+                "is_error": True
+            }
+
+        legion_id = caller_session.project_id
+
+        # Legion-scoped lookup (only search within caller's legion)
+        minion = await self.system.legion_coordinator.get_minion_by_name_in_legion(legion_id, minion_name)
 
         if not minion:
             return {
                 "content": [{
                     "type": "text",
-                    "text": f"❌ Error: Minion '{minion_name}' not found"
+                    "text": f"❌ Error: Minion '{minion_name}' not found in legion {legion_id}"
                 }],
                 "is_error": True
             }
@@ -1629,11 +1703,11 @@ class LegionMCPTools:
 
         legion_id = overseer_session.project_id
 
-        # Look up target minion by name
-        target_minion = await self.system.legion_coordinator.get_minion_by_name(minion_name)
+        # Legion-scoped lookup (only search within overseer's legion)
+        target_minion = await self.system.legion_coordinator.get_minion_by_name_in_legion(legion_id, minion_name)
         if not target_minion:
             return {
-                "content": [{"type": "text", "text": f"Error: Minion '{minion_name}' not found"}],
+                "content": [{"type": "text", "text": f"Error: Minion '{minion_name}' not found in legion {legion_id}"}],
                 "is_error": True
             }
 
@@ -1740,11 +1814,11 @@ class LegionMCPTools:
 
         legion_id = overseer_session.project_id
 
-        # Look up target minion by name
-        target_minion = await self.system.legion_coordinator.get_minion_by_name(minion_name)
+        # Legion-scoped lookup (only search within overseer's legion)
+        target_minion = await self.system.legion_coordinator.get_minion_by_name_in_legion(legion_id, minion_name)
         if not target_minion:
             return {
-                "content": [{"type": "text", "text": f"Error: Minion '{minion_name}' not found"}],
+                "content": [{"type": "text", "text": f"Error: Minion '{minion_name}' not found in legion {legion_id}"}],
                 "is_error": True
             }
 
@@ -1905,14 +1979,14 @@ class LegionMCPTools:
             if not member_name:
                 continue
 
-            # Look up minion by name
-            minion = await self.system.legion_coordinator.get_minion_by_name(member_name)
+            # Legion-scoped lookup (only search within creator's legion)
+            minion = await self.system.legion_coordinator.get_minion_by_name_in_legion(legion_id, member_name)
             if minion:
                 # Don't add creator twice
                 if minion.session_id != from_minion_id:
                     member_ids.append(minion.session_id)
             else:
-                warnings.append(f"⚠️  Could not add '{member_name}': minion not found")
+                warnings.append(f"⚠️  Could not add '{member_name}': minion not found in legion")
 
         # 7. Create channel via ChannelManager
         try:
