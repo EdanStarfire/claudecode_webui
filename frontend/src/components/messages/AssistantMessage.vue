@@ -12,14 +12,11 @@
       <!-- Content -->
       <div v-if="hasContent" class="message-text" v-html="renderedContent"></div>
 
-      <!-- Tool Calls (embedded inline) -->
-      <div v-if="hasToolUses" class="tool-calls">
-        <ToolCallCard
-          v-for="toolCall in enrichedToolCalls"
-          :key="toolCall.id"
-          :toolCall="toolCall"
-        />
-      </div>
+      <!-- Tool Footer (hybrid active area + collapsible summary) -->
+      <ToolFooter
+        v-if="hasToolUses"
+        :tools="enrichedToolCalls"
+      />
     </div>
   </div>
 </template>
@@ -32,12 +29,16 @@ import { formatTimestamp } from '@/utils/time'
 import { useMessageStore } from '@/stores/message'
 import { useSessionStore } from '@/stores/session'
 import ThinkingBlock from './ThinkingBlock.vue'
-import ToolCallCard from './ToolCallCard.vue'
+import ToolFooter from './ToolFooter.vue'
 
 const props = defineProps({
   message: {
     type: Object,
     required: true
+  },
+  attachedTools: {
+    type: Array,
+    default: () => []
   }
 })
 
@@ -90,12 +91,23 @@ const thinkingContent = computed(() => {
 })
 
 const hasToolUses = computed(() => {
-  return props.message.metadata?.has_tool_uses &&
-         props.message.metadata?.tool_uses?.length > 0
+  const messageTools = props.message.metadata?.has_tool_uses && props.message.metadata?.tool_uses?.length > 0
+  const hasAttached = props.attachedTools && props.attachedTools.length > 0
+  return messageTools || hasAttached
 })
 
 const toolUses = computed(() => {
-  return props.message.metadata?.tool_uses || []
+  const messageTools = props.message.metadata?.tool_uses || []
+  const attachedTools = props.attachedTools || []
+  // Combine message tools and attached tools, avoiding duplicates by ID
+  const allTools = [...messageTools]
+  const existingIds = new Set(messageTools.map(t => t.id))
+  for (const tool of attachedTools) {
+    if (!existingIds.has(tool.id)) {
+      allTools.push(tool)
+    }
+  }
+  return allTools
 })
 
 /**

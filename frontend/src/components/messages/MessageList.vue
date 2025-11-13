@@ -11,6 +11,7 @@
       <MessageItem
         v-if="item.type === 'message'"
         :message="normalizeMessage(item.message)"
+        :attachedTools="item.attachedTools || []"
       />
 
       <!-- Compaction event group -->
@@ -36,8 +37,9 @@ const messagesArea = ref(null)
 
 /**
  * Group messages into displayable items, detecting compaction event sequences
+ * and attaching tools to their parent assistant messages
  * Returns array of:
- * - Regular messages: { type: 'message', message: {...} }
+ * - Regular messages: { type: 'message', message: {...}, attachedTools: [...] }
  * - Compaction events: { type: 'compaction', messages: [{...}, {...}, {...}, {...}] }
  */
 const displayableItems = computed(() => {
@@ -69,15 +71,82 @@ const displayableItems = computed(() => {
     if (shouldDisplayMessage(msg)) {
       items.push({
         type: 'message',
-        message: msg
+        message: msg,
+        attachedTools: [] // Will be populated by tool grouping
       })
     }
 
     i++
   }
 
-  return items
+  // Second pass: Group tools to parent assistant messages
+  return groupToolsToParentMessages(items)
 })
+
+/**
+ * Group tools from content-less assistant messages to the most recent
+ * assistant message with content.
+ *
+ * Algorithm:
+ * - Walk through items backwards
+ * - When we find an assistant message with no content but has tools:
+ *   - Attach those tools to the most recent assistant message with content
+ *   - Mark the content-less message for removal
+ */
+function groupToolsToParentMessages(items) {
+  const processedItems = []
+
+  for (let i = items.length - 1; i >= 0; i--) {
+    const item = items[i]
+
+    // Skip compaction events
+    if (item.type === 'compaction') {
+      processedItems.unshift(item)
+      continue
+    }
+
+    const msg = item.message
+
+    // Check if this is an assistant message with tools but no content
+    const hasContent = msg.content && msg.content.trim().length > 0 && msg.content !== 'Assistant response'
+    const hasTools = msg.type === 'assistant' && msg.metadata?.has_tool_uses && msg.metadata?.tool_uses?.length > 0
+
+    if (msg.type === 'assistant' && hasTools && !hasContent) {
+      // This is a content-less assistant message with tools
+      // Find the most recent assistant message with content (looking backwards from current position)
+      let parentIndex = -1
+      for (let j = i - 1; j >= 0; j--) {
+        const candidateItem = items[j]
+        if (candidateItem.type === 'message' && candidateItem.message.type === 'assistant') {
+          const candidateMsg = candidateItem.message
+          const candidateHasContent = candidateMsg.content && candidateMsg.content.trim().length > 0 && candidateMsg.content !== 'Assistant response'
+          if (candidateHasContent) {
+            parentIndex = j
+            break
+          }
+        }
+      }
+
+      if (parentIndex >= 0) {
+        // Attach tools to parent message
+        if (!items[parentIndex].attachedTools) {
+          items[parentIndex].attachedTools = []
+        }
+        items[parentIndex].attachedTools.push(...msg.metadata.tool_uses)
+        // Don't add this content-less message to processed items (filter it out)
+        continue
+      } else {
+        // No parent found - keep the message but it will show as synthetic "Tools Executed"
+        processedItems.unshift(item)
+      }
+    } else {
+      // Regular message - keep it
+      processedItems.unshift(item)
+    }
+  }
+
+  return processedItems
+}
 
 /**
  * Check if message at index i is the start of a compaction event

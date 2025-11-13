@@ -10,7 +10,7 @@
     >
       <div class="d-flex align-items-center gap-2 flex-grow-1 min-width-0">
         <span class="tool-status-icon">{{ statusIcon }}</span>
-        <strong class="tool-name" :title="toolSummaryTooltip">{{ toolSummary }}</strong>
+        <span class="tool-name" :title="toolSummaryTooltip">{{ toolSummary }}</span>
       </div>
       <div class="d-flex align-items-center gap-2">
         <small class="text-muted">{{ formattedTimestamp }}</small>
@@ -611,7 +611,6 @@ async function handlePermissionDecision(decision, applySuggestions, guidance = n
 .tool-name {
   color: #0d6efd;
   font-family: 'Courier New', monospace;
-  font-size: 0.95rem;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

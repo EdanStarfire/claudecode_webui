@@ -2,6 +2,7 @@
   <component
     :is="messageComponent"
     :message="message"
+    :attachedTools="attachedTools"
   />
 </template>
 
@@ -15,6 +16,10 @@ const props = defineProps({
   message: {
     type: Object,
     required: true
+  },
+  attachedTools: {
+    type: Array,
+    default: () => []
   }
 })
 
