@@ -12,14 +12,11 @@
       <!-- Content -->
       <div v-if="hasContent" class="message-text" v-html="renderedContent"></div>
 
-      <!-- Tool Calls (embedded inline) -->
-      <div v-if="hasToolUses" class="tool-calls">
-        <ToolCallCard
-          v-for="toolCall in enrichedToolCalls"
-          :key="toolCall.id"
-          :toolCall="toolCall"
-        />
-      </div>
+      <!-- Tool Footer (hybrid active area + collapsible summary) -->
+      <ToolFooter
+        v-if="hasToolUses"
+        :tools="enrichedToolCalls"
+      />
     </div>
   </div>
 </template>
@@ -32,7 +29,7 @@ import { formatTimestamp } from '@/utils/time'
 import { useMessageStore } from '@/stores/message'
 import { useSessionStore } from '@/stores/session'
 import ThinkingBlock from './ThinkingBlock.vue'
-import ToolCallCard from './ToolCallCard.vue'
+import ToolFooter from './ToolFooter.vue'
 
 const props = defineProps({
   message: {
