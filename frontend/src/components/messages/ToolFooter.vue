@@ -66,23 +66,49 @@ const isExpanded = ref(false)
 // ========== COMPUTED PROPERTIES ==========
 
 /**
+ * Sort tools by timestamp (chronological order)
+ * Primary: timestamp, Fallback: original array index
+ */
+function sortToolsChronologically(tools) {
+  return tools
+    .map((tool, index) => ({ tool, originalIndex: index }))
+    .sort((a, b) => {
+      // Primary sort: timestamp (if both have timestamps)
+      if (a.tool.timestamp && b.tool.timestamp) {
+        const timeA = new Date(a.tool.timestamp).getTime()
+        const timeB = new Date(b.tool.timestamp).getTime()
+        if (timeA !== timeB) {
+          return timeA - timeB
+        }
+      }
+      // Fallback: original array order (stable sort)
+      return a.originalIndex - b.originalIndex
+    })
+    .map(({ tool }) => tool)
+}
+
+/**
  * Active tools: Only executing or permission_required
  * These appear in the active tools area above the footer
+ * Sorted chronologically by timestamp
  */
 const activeTools = computed(() => {
-  return props.tools.filter(tool =>
+  const filtered = props.tools.filter(tool =>
     tool.status === 'executing' || tool.status === 'permission_required'
   )
+  return sortToolsChronologically(filtered)
 })
 
 /**
  * Completed tools: All tools that are NOT executing or permission_required
  * These appear in the expanded footer
+ * Sorted chronologically by timestamp
  */
 const completedTools = computed(() => {
-  return props.tools.filter(tool =>
+  const filtered = props.tools.filter(tool =>
     tool.status !== 'executing' && tool.status !== 'permission_required'
   )
+  return sortToolsChronologically(filtered)
 })
 
 /**
