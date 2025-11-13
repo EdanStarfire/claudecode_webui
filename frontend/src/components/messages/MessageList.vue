@@ -85,23 +85,26 @@ const displayableItems = computed(() => {
 
 /**
  * Group tools from content-less assistant messages to the most recent
- * assistant message with content.
+ * assistant message with content, BUT only if no non-assistant message
+ * is encountered during the search.
  *
  * Algorithm:
- * - Walk through items backwards
- * - When we find an assistant message with no content but has tools:
- *   - Attach those tools to the most recent assistant message with content
- *   - Mark the content-less message for removal
+ * - First pass (forward): Build attachment map
+ * - Second pass (forward): Apply attachments and filter
+ *
+ * This ensures tools appear in chronological order after triggering messages,
+ * and consecutive empty assistants consolidate into one message row.
  */
 function groupToolsToParentMessages(items) {
-  const processedItems = []
+  // First pass: Determine where each item's tools should attach
+  const attachMap = new Map() // index -> array of tool_uses to attach
+  const hideSet = new Set() // indices to hide
 
-  for (let i = items.length - 1; i >= 0; i--) {
+  for (let i = 0; i < items.length; i++) {
     const item = items[i]
 
     // Skip compaction events
     if (item.type === 'compaction') {
-      processedItems.unshift(item)
       continue
     }
 
@@ -113,36 +116,83 @@ function groupToolsToParentMessages(items) {
 
     if (msg.type === 'assistant' && hasTools && !hasContent) {
       // This is a content-less assistant message with tools
-      // Find the most recent assistant message with content (looking backwards from current position)
+      // Search backwards for assistant with content OR first empty assistant that's NOT hidden
       let parentIndex = -1
+      let hitNonAssistant = false
+
       for (let j = i - 1; j >= 0; j--) {
         const candidateItem = items[j]
+
+        // Skip items already marked for hiding
+        if (hideSet.has(j)) {
+          continue
+        }
+
+        // If we hit a non-assistant message (user/system), stop searching
+        if (candidateItem.type === 'message' && candidateItem.message.type !== 'assistant') {
+          hitNonAssistant = true
+          break
+        }
+
+        // Check if this is an assistant message
         if (candidateItem.type === 'message' && candidateItem.message.type === 'assistant') {
           const candidateMsg = candidateItem.message
           const candidateHasContent = candidateMsg.content && candidateMsg.content.trim().length > 0 && candidateMsg.content !== 'Assistant response'
+
           if (candidateHasContent) {
+            // Found assistant with content - use it
+            parentIndex = j
+            break
+          } else {
+            // Found empty assistant - use it as consolidation point
             parentIndex = j
             break
           }
         }
       }
 
-      if (parentIndex >= 0) {
-        // Attach tools to parent message
-        if (!items[parentIndex].attachedTools) {
-          items[parentIndex].attachedTools = []
+      if (hitNonAssistant && parentIndex === -1) {
+        // Hit non-assistant but found no assistant after it
+        // Keep this empty assistant message - it's the first after the blocker
+        // Tools stay on this message
+      } else if (hitNonAssistant && parentIndex >= 0) {
+        // Hit non-assistant and found empty assistant after it
+        // Consolidate tools into that first empty assistant
+        if (!attachMap.has(parentIndex)) {
+          attachMap.set(parentIndex, [])
         }
-        items[parentIndex].attachedTools.push(...msg.metadata.tool_uses)
-        // Don't add this content-less message to processed items (filter it out)
-        continue
-      } else {
-        // No parent found - keep the message but it will show as synthetic "Tools Executed"
-        processedItems.unshift(item)
+        attachMap.get(parentIndex).push(...msg.metadata.tool_uses)
+        hideSet.add(i) // Hide this message
+      } else if (!hitNonAssistant && parentIndex >= 0) {
+        // No blocker, found parent assistant (with or without content)
+        // Attach tools to parent, hide this empty message
+        if (!attachMap.has(parentIndex)) {
+          attachMap.set(parentIndex, [])
+        }
+        attachMap.get(parentIndex).push(...msg.metadata.tool_uses)
+        hideSet.add(i) // Hide this message
       }
-    } else {
-      // Regular message - keep it
-      processedItems.unshift(item)
+      // else: No parent found at all - keep this message with its tools
     }
+  }
+
+  // Second pass: Apply attachments and build result
+  const processedItems = []
+
+  for (let i = 0; i < items.length; i++) {
+    // Skip items marked for hiding
+    if (hideSet.has(i)) {
+      continue
+    }
+
+    const item = items[i]
+
+    // Apply attachments if any
+    if (attachMap.has(i)) {
+      item.attachedTools = [...(item.attachedTools || []), ...attachMap.get(i)]
+    }
+
+    processedItems.push(item)
   }
 
   return processedItems
