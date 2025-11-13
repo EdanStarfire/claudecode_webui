@@ -206,7 +206,7 @@ function toggleExpanded() {
 <style scoped>
 /* Container */
 .tool-footer-container {
-  margin-top: 0.75em;
+  /* No margin - footer sits directly after message content */
 }
 
 /* Active Tools Area (conditional) */
@@ -243,8 +243,7 @@ function toggleExpanded() {
 }
 
 .tool-footer-summary:focus {
-  outline: 2px solid #0d6efd;
-  outline-offset: -2px;
+  outline: none; /* Remove blue focus outline */
 }
 
 /* Footer sections */
@@ -341,6 +340,12 @@ function toggleExpanded() {
   border-bottom: none;
 }
 
+/* Match ToolCallCard header styling to footer */
+.tool-footer-expanded :deep(.card-header) {
+  font-size: 0.85rem; /* Match footer font size */
+  font-weight: 400; /* Remove bold from header itself */
+}
+
 /* Mobile Responsiveness */
 @media (max-width: 768px) {
   .tool-footer-summary {
@@ -351,12 +356,16 @@ function toggleExpanded() {
     padding: 0.3em 0.75em;
   }
 
-  .footer-left,
-  .footer-middle {
+  .footer-left {
     flex-basis: 100%;
   }
 
   .footer-middle {
+    flex: 1;
+    margin-top: 0.2em;
+  }
+
+  .footer-right {
     margin-top: 0.2em;
   }
 }

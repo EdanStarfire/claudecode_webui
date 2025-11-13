@@ -35,6 +35,10 @@ const props = defineProps({
   message: {
     type: Object,
     required: true
+  },
+  attachedTools: {
+    type: Array,
+    default: () => []
   }
 })
 
@@ -87,12 +91,23 @@ const thinkingContent = computed(() => {
 })
 
 const hasToolUses = computed(() => {
-  return props.message.metadata?.has_tool_uses &&
-         props.message.metadata?.tool_uses?.length > 0
+  const messageTools = props.message.metadata?.has_tool_uses && props.message.metadata?.tool_uses?.length > 0
+  const hasAttached = props.attachedTools && props.attachedTools.length > 0
+  return messageTools || hasAttached
 })
 
 const toolUses = computed(() => {
-  return props.message.metadata?.tool_uses || []
+  const messageTools = props.message.metadata?.tool_uses || []
+  const attachedTools = props.attachedTools || []
+  // Combine message tools and attached tools, avoiding duplicates by ID
+  const allTools = [...messageTools]
+  const existingIds = new Set(messageTools.map(t => t.id))
+  for (const tool of attachedTools) {
+    if (!existingIds.has(tool.id)) {
+      allTools.push(tool)
+    }
+  }
+  return allTools
 })
 
 /**
