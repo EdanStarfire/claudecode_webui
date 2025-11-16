@@ -96,13 +96,25 @@ description: Create, view, and merge GitHub pull requests with validation. Use w
    - Squash all commits into one
    - Merge to main/master
    - Delete remote branch
-   - Delete local tracking branch
+   - Delete local tracking branch (if it exists)
 
 3. **Update Local Repository**
    ```bash
    git checkout main
    git pull origin main
    ```
+
+4. **Clean Up Local Branch** (if still exists)
+   ```bash
+   # Check if branch still exists
+   git branch --list <branch-name>
+
+   # Delete only if exists
+   if git branch --list <branch-name> | grep -q <branch-name>; then
+     git branch -d <branch-name>
+   fi
+   ```
+   **Note**: The `--delete-branch` flag usually handles this, but verify to ensure cleanup
 
 ### Error Handling
 
@@ -118,7 +130,9 @@ description: Create, view, and merge GitHub pull requests with validation. Use w
 **Branch Deletion Fails:**
 - Branch may be protected
 - User may have the branch checked out
-- Ignore and continue if branch is already deleted
+- Branch may not exist locally (already deleted or never checked out)
+- Always check branch existence before deletion
+- Ignore "branch not found" errors - treat as already cleaned up
 
 ### PR Title and Body Standards
 
@@ -174,8 +188,9 @@ Output: "PR #123 is ready to merge" or list blockers
 ```
 User: "Merge PR #123"
 Action:
-1. Validate PR state
+1. Validate PR state and extract branch name
 2. Squash merge with branch deletion
 3. Switch to main and pull
-Output: "PR #123 merged successfully"
+4. Verify local branch cleanup (check existence first)
+Output: "PR #123 merged successfully, branch cleaned up"
 ```

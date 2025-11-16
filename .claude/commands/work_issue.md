@@ -81,13 +81,8 @@ EOF
 - Run isolated test environment (port 8001, test_data/)
 - Automated API testing with curl (preferred)
 - Manual testing with background server (if UI needed)
+- Skill handles all process management
 - Verify all functionality works
-
-**Invoke the `process-manager` skill** for background servers:
-- Start server in background
-- Find process by PID
-- Stop server safely by PID
-- Verify cleanup
 
 #### 5. Commit Changes
 
@@ -101,15 +96,7 @@ EOF
 - Include detailed explanation
 - Link to issue with `Fixes #$1`
 - Add co-author attribution
-
-Add and commit:
-```bash
-git add .
-git commit -m "$(cat <<'EOF'
-[commit message from git-commit-composer skill]
-EOF
-)"
-```
+- Skill handles `git add` and `git commit` execution
 
 #### 6. Push and Create PR
 

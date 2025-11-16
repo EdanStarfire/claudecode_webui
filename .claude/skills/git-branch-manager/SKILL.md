@@ -25,10 +25,11 @@ description: Create, switch, and manage git branches with proper handling of unc
 
 #### Creating a New Branch
 
-1. **Check for Uncommitted Changes**
-   ```bash
-   git status --porcelain
-   ```
+1. **Check Repository State**
+   **Invoke the `git-state-validator` skill** to verify:
+   - Current branch status
+   - Uncommitted changes
+   - Working directory state
 
 2. **Handle Uncommitted Changes**
    If changes exist, ask user:
@@ -66,26 +67,22 @@ description: Create, switch, and manage git branches with proper handling of unc
 
 #### Switching Branches
 
-1. **Check Current Branch**
-   ```bash
-   git branch --show-current
-   ```
+1. **Check Repository State**
+   **Invoke the `git-state-validator` skill** to verify:
+   - Current branch name
+   - Uncommitted changes
+   - Working directory status
 
-2. **Check for Uncommitted Changes**
-   ```bash
-   git status --porcelain
-   ```
-
-3. **Handle Changes** (if any)
+2. **Handle Changes** (if any)
    - Offer to stash, commit, or abort
    - If stash: `git stash push -m "WIP: switching from <current> to <target>"`
 
-4. **Switch Branch**
+3. **Switch Branch**
    ```bash
    git checkout <branch-name>
    ```
 
-5. **Restore Stash** (if applicable)
+4. **Restore Stash** (if applicable)
    After switching, if user stashed:
    ```bash
    git stash list
@@ -104,7 +101,13 @@ description: Create, switch, and manage git branches with proper handling of unc
    git checkout main
    ```
 
-3. **Delete Local Branch**
+3. **Check Branch Exists Before Deletion**
+   ```bash
+   git branch --list <branch-name>
+   ```
+   If no output, branch doesn't exist - skip deletion
+
+4. **Delete Local Branch** (only if exists)
    ```bash
    git branch -d <branch-name>
    ```
@@ -114,10 +117,30 @@ description: Create, switch, and manage git branches with proper handling of unc
    git branch -D <branch-name>
    ```
 
-4. **Verify Deletion**
+5. **Verify Deletion**
    ```bash
    git branch --list <branch-name>
    ```
+
+### Safe Branch Deletion Helper
+
+**CRITICAL**: Always check if branch exists before attempting deletion to avoid errors.
+
+**Safe Deletion Pattern:**
+```bash
+# Check if branch exists
+if git branch --list <branch-name> | grep -q <branch-name>; then
+  git branch -d <branch-name>
+  echo "Branch deleted"
+else
+  echo "Branch does not exist, skipping"
+fi
+```
+
+**Why This Matters:**
+- Prevents "branch not found" errors in automated workflows
+- Handles cases where remote deletion already removed local tracking branch
+- Makes cleanup scripts idempotent (safe to run multiple times)
 
 ### Branch Naming Conventions
 
@@ -192,8 +215,9 @@ Context: PR merged, need to clean up local branch
 Action:
 1. Verify branch is merged: git branch --merged main
 2. Switch to main: git checkout main
-3. Delete branch: git branch -d feat/old-feature
-4. Update main: git pull origin main
+3. Check if branch exists: git branch --list feat/old-feature
+4. Delete branch (if exists): git branch -d feat/old-feature
+5. Update main: git pull origin main
 Output: "Branch cleaned up, main is up to date"
 ```
 

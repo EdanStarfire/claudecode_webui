@@ -48,10 +48,11 @@ TCP    0.0.0.0:8001    0.0.0.0:0    LISTENING    12345
 
 **Kill Process by PID:**
 ```bash
-taskkill /PID <PID> /F
+cmd //c taskkill //PID <PID> //F
 ```
-- `/F` = Force termination
+- `/F` = Force termination (use `//F` in Git Bash to prevent path conversion)
 - Replace `<PID>` with actual process ID
+- **Git Bash Users**: Use `cmd //c` wrapper to prevent Git Bash from converting `/PID` to a Windows path
 
 **Verify Process Stopped:**
 ```bash
@@ -180,7 +181,7 @@ ps -p <PID>
 **3. Kill by PID:**
 ```bash
 # Windows
-taskkill /PID <PID> /F
+cmd //c taskkill //PID <PID> //F
 
 # Unix/Linux/macOS
 kill <PID>
@@ -277,7 +278,7 @@ kill -9 <PID>
 **Windows:**
 ```bash
 # Already using /F flag which is force kill
-taskkill /PID <PID> /F
+cmd //c taskkill //PID <PID> //F
 
 # If still fails, use Task Manager
 ```
@@ -342,7 +343,7 @@ netstat -ano | findstr ":8001"
 # Output: ... LISTENING    12345
 
 # Stop
-taskkill /PID 12345 /F
+cmd //c taskkill //PID 12345 //F
 
 # Verify
 netstat -ano | findstr ":8001"
@@ -387,7 +388,7 @@ ps -p 12345
 
 # If it's old test server, kill it
 # Windows:
-taskkill /PID 12345 /F
+cmd //c taskkill //PID 12345 //F
 # Unix/Linux/macOS:
 kill 12345
 
@@ -407,8 +408,8 @@ lsof -i :8001
 
 # For each PID found, kill individually
 # Windows:
-taskkill /PID 12345 /F
-taskkill /PID 12346 /F
+cmd //c taskkill //PID 12345 //F
+cmd //c taskkill //PID 12346 //F
 # Unix/Linux/macOS:
 kill 12345 12346
 

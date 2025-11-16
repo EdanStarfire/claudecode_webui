@@ -26,37 +26,25 @@ You are merging GitHub pull request #$1. Follow these steps:
 
 #### 2. Verify Current Branch
 
-**Invoke the `git-state-validator` skill** to check current branch:
-- Get current branch name
-- Check for uncommitted changes
+**Invoke the `git-state-validator` skill** to verify repository state:
+- Current branch name
+- Uncommitted changes
+- Working directory status
 
-**If not on PR's branch:**
-- Ask user if they want to switch to PR branch first
-- If yes, invoke `git-branch-manager` to switch
-- If no, continue (can merge from any branch)
+**If not on PR's branch**, ask user if they want to switch to PR branch first (optional, can merge from any branch)
 
 #### 3. Merge PR
 
-**Invoke the `github-pr-manager` skill** to perform merge:
-- Squash merge the PR
-- Delete remote branch automatically
-- Confirm merge success
-
-This will:
-- Squash all commits into one
-- Merge to main on remote
-- Delete the remote branch
+**Invoke the `github-pr-manager` skill** to perform squash merge and delete remote branch
 
 #### 4. Clean Up Local Repository
 
-**Invoke the `git-branch-manager` skill** to clean up:
+**Invoke the `git-branch-manager` skill** to:
 - Switch to main branch
-- Pull latest changes from remote
-- Verify local branch is deleted
+- Pull latest changes
+- Delete local branch (if exists, using safe deletion pattern)
 
-**Invoke the `git-state-validator` skill** to confirm:
-- Show final git status
-- Verify on main with latest changes
+**Invoke the `git-state-validator` skill** to confirm final state on main
 
 #### 5. Completion
 

@@ -34,17 +34,13 @@ The skill will provide a structured summary of what needs to be done.
 
 #### 3. Create Git Branch
 
-**Invoke the `git-state-validator` skill** to check current repository state:
-- Verify working directory status
-- Check for uncommitted changes
-- Confirm current branch
+**Invoke the `git-state-validator` skill** to check repository state
 
 **Invoke the `git-branch-manager` skill** to create feature branch:
 - Handle any uncommitted changes (stash/commit/abort)
 - Ensure on latest main
-- Determine branch prefix based on issue type (feat/fix/chore/docs/refactor/test)
-- Create branch from issue title (kebab-case, max 50 chars)
-- Switch to new branch
+- Determine appropriate branch prefix and name from issue context
+- Create and switch to new branch
 
 #### 4. Next Steps
 

@@ -85,82 +85,24 @@ rm -rf test_data/
 
 Use when user needs to interact with frontend.
 
-**1. Launch Server in Background**
+**1. Start Test Server in Background**
 
-**Windows:**
-```bash
-start /B uv run python main.py --debug-all --data-dir test_data --port 8001
-```
+**Invoke the `process-manager` skill** to safely manage the test server:
+- Start server: `uv run python main.py --debug-all --data-dir test_data --port 8001`
+- Track process by PID
+- Inform user: "Test server running on http://localhost:8001 - please test the changes"
 
-**Unix/Linux/macOS:**
-```bash
-uv run python main.py --debug-all --data-dir test_data --port 8001 &
-```
-
-**2. Find Process ID**
-
-**Windows:**
-```bash
-netstat -ano | findstr ":8001"
-# Output shows PID in last column
-```
-
-**Unix/Linux/macOS:**
-```bash
-lsof -i :8001
-# or
-netstat -tulpn | grep :8001
-# Output shows PID
-```
-
-**3. Inform User**
-"Test server running on http://localhost:8001 - please test the changes"
-
-**4. Wait for User Confirmation**
+**2. Wait for User Confirmation**
 User tests functionality in browser at http://localhost:8001
 
-**5. Kill Server by PID**
+**3. Stop Test Server**
 
-**CRITICAL**: Always kill by PID, never by name or pattern.
+**Invoke the `process-manager` skill** to safely terminate:
+- Stop server by PID (never by name/pattern)
+- Verify cleanup
+- Confirm port 8001 is free
 
-**Windows:**
-```bash
-taskkill /PID <PID> /F
-# Replace <PID> with actual process ID from step 2
-```
-
-**Unix/Linux/macOS:**
-```bash
-kill <PID>
-# or if process won't die:
-kill -9 <PID>
-# Replace <PID> with actual process ID from step 2
-```
-
-**6. Verify Server Stopped**
-```bash
-# Windows
-netstat -ano | findstr ":8001"
-
-# Unix/Linux/macOS
-lsof -i :8001
-```
-Should return no results.
-
-### Process Management - CRITICAL RULES
-
-**DO:**
-- ✅ Find PID using `netstat` or `lsof`
-- ✅ Kill by specific PID number
-- ✅ Verify process is gone after killing
-
-**DON'T:**
-- ❌ NEVER use `pkill -f` (Unix/Linux/macOS)
-- ❌ NEVER use `taskkill /IM python.exe` (Windows)
-- ❌ NEVER use `killall` (Unix/Linux/macOS)
-- ❌ NEVER kill by command name or pattern
-
-**Why?** Killing by name/pattern can terminate unrelated processes including the user's production instance.
+**CRITICAL**: Always delegate process management to the skill to avoid killing production servers.
 
 ### Testing Strategies
 
@@ -320,13 +262,13 @@ Test:
 Context: Fixed WebSocket reconnection issue
 
 Test:
-1. Start in background (Windows): start /B uv run python main.py --debug-all --data-dir test_data --port 8001
-2. Find PID: netstat -ano | findstr ":8001"
+1. Invoke process-manager skill to start server in background
+2. Server runs on port 8001 with test_data/
 3. Inform user: "Test at http://localhost:8001"
 4. User tests reconnection scenario
 5. User confirms: "Works now"
-6. Kill server: taskkill /PID <PID> /F
-7. Verify stopped: netstat -ano | findstr ":8001"
+6. Invoke process-manager skill to stop server by PID
+7. Verify cleanup successful
 ```
 
 ### Example 3: Automated regression test
