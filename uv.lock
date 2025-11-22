@@ -119,15 +119,17 @@ wheels = [
 
 [[package]]
 name = "claude-agent-sdk"
-version = "0.1.6"
+version = "0.1.9"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "anyio" },
     { name = "mcp" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/4f/b6/b73279eb875333fcc3e14c28fc080f815abaf35d2a65b132be0c8b05851c/claude_agent_sdk-0.1.6.tar.gz", hash = "sha256:3090a595896d65a5d951e158e191b462759aafc97399e700e4f857d5265a8f23", size = 49328, upload-time = "2025-10-31T05:15:55.803Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/08/c5/ffb02e51f6fc5e5516a52f8f1e338c16830ee616caa5e140d6c0c3f77e7e/claude_agent_sdk-0.1.9.tar.gz", hash = "sha256:5dcf04a4639bd3dd76145b5067851febe515f5540abd90e3af26a4aa22ed91b1", size = 51067, upload-time = "2025-11-21T20:24:32.613Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/cc/12/38e4e9f7f79f2c04c7be34cd995ef4a56681f8266e382a5288ce815ede71/claude_agent_sdk-0.1.6-py3-none-any.whl", hash = "sha256:54227b096e8c7cfb60fc8b570082fce1f91ea060413092f65a08a2824cb9cb4b", size = 36369, upload-time = "2025-10-31T05:15:54.767Z" },
+    { url = "https://files.pythonhosted.org/packages/22/71/4d99c86f14754ea3998d8a59abf9db4f10498988d45fab102faa6c909fc4/claude_agent_sdk-0.1.9-py3-none-macosx_11_0_arm64.whl", hash = "sha256:d692baac86d5d0dbf0729121e85bcbd390c4413b7aa5a988f7dd5aa7c4237afb", size = 49323542, upload-time = "2025-11-21T20:24:20.053Z" },
+    { url = "https://files.pythonhosted.org/packages/c0/08/5894220578a000f3e2c7d02911ff4196fd9ddf1e77b26ea4b7a1be294639/claude_agent_sdk-0.1.9-py3-none-manylinux_2_17_x86_64.whl", hash = "sha256:d826a8afabc5e2d4edca5eb65771f4293a5d9df0eeebcbb5171fdce93d4fea1b", size = 65196329, upload-time = "2025-11-21T20:24:24.666Z" },
+    { url = "https://files.pythonhosted.org/packages/e3/fd/810628f5e020171cbaa48e82de14fccd66383f5e77d0f3fdd8859fef796e/claude_agent_sdk-0.1.9-py3-none-win_amd64.whl", hash = "sha256:37e0cff2d277e617c5597f7bb0eb160c12ca57409d36060f7020fc9893f6337c", size = 68083295, upload-time = "2025-11-21T20:24:30.133Z" },
 ]
 
 [[package]]
@@ -160,7 +162,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "black", marker = "extra == 'dev'", specifier = ">=23.0.0" },
-    { name = "claude-agent-sdk", specifier = ">=0.1.5" },
+    { name = "claude-agent-sdk", specifier = ">=0.1.9" },
     { name = "fastapi", specifier = ">=0.104.0" },
     { name = "isort", marker = "extra == 'dev'", specifier = ">=5.12.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.7.0" },
