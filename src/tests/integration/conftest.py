@@ -71,9 +71,11 @@ async def legion_test_env(request):
             **kwargs: Additional session creation parameters
 
         Returns:
-            SessionInfo of created minion
+            SessionInfo of created minion (in ACTIVE state)
         """
+        import asyncio
         import uuid
+        from src.session_manager import SessionState
 
         # Generate session_id
         session_id = str(uuid.uuid4())
@@ -89,11 +91,50 @@ async def legion_test_env(request):
             **kwargs
         )
 
+        # Add session to project's session list
+        await project_manager.add_session_to_project(legion_id, session_id)
+
         # Start the minion session (required for active minions)
         await session_coordinator.start_session(session_id)
 
-        # Return session info
-        return await session_coordinator.session_manager.get_session_info(session_id)
+        # Wait for session to become ACTIVE (with timeout and timing)
+        import time
+        max_wait = 50.0  # 50 second timeout (generous for CI environments)
+        poll_interval = 0.1  # Check every 100ms
+        start_time = time.time()
+
+        while True:
+            elapsed = time.time() - start_time
+
+            if elapsed >= max_wait:
+                # Timeout - raise error
+                session_info = await session_coordinator.session_manager.get_session_info(session_id)
+                raise TimeoutError(
+                    f"Session {name} ({session_id}) did not become ACTIVE within {max_wait}s. "
+                    f"Current state: {session_info.state}"
+                )
+
+            session_info = await session_coordinator.session_manager.get_session_info(session_id)
+            if session_info.state == SessionState.ACTIVE:
+                # Session is active - check timing thresholds
+                if elapsed > 45.0:
+                    raise RuntimeError(
+                        f"ERROR: Session {name} took {elapsed:.2f}s to become ACTIVE (>45s threshold). "
+                        "This indicates a serious performance issue."
+                    )
+                elif elapsed > 20.0:
+                    import warnings
+                    warnings.warn(
+                        f"WARNING: Session {name} took {elapsed:.2f}s to become ACTIVE (>20s threshold). "
+                        "This is slower than expected.",
+                        UserWarning
+                    )
+
+                # Log timing for all sessions (useful for performance tracking)
+                print(f"  > Session {name} became ACTIVE in {elapsed:.2f}s")
+                return session_info
+
+            await asyncio.sleep(poll_interval)
 
     # Build environment dict
     env = {
