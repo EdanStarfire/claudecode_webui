@@ -191,6 +191,23 @@ async def test_spawn_minion_with_template(legion_test_env):
     # The system prompt should include the initialization_context we provided
     assert "Test child with template" in child_info.system_prompt
 
+    # SECURITY CRITICAL: Verify template permissions were applied
+    # Templates are a security mechanism to prevent privilege escalation
+    template = await template_manager.get_template_by_name(template_name)
+    if template.permission_mode:
+        assert child_info.current_permission_mode == template.permission_mode, \
+            f"Child permission_mode should match template: {template.permission_mode}"
+    if template.allowed_tools:
+        # Verify template's allowed_tools are in child's allowed_tools
+        child_tools = set(child_info.allowed_tools or [])
+        template_tools = set(template.allowed_tools)
+        assert template_tools.issubset(child_tools), \
+            f"Child should have template's allowed_tools: {template.allowed_tools}"
+    # Verify template's default_system_prompt was prepended
+    if template.default_system_prompt:
+        assert template.default_system_prompt in child_info.system_prompt, \
+            "Child system_prompt should include template's default_system_prompt"
+
 
 @pytest.mark.asyncio
 async def test_spawn_minion_with_channels(legion_test_env):

@@ -527,6 +527,26 @@ async def test_join_channel_basic(legion_test_env):
     joiner_updated = await env["session_coordinator"].session_manager.get_session_info(joiner.session_id)
     assert channel.channel_id in joiner_updated.channel_ids
 
+    # SIDE EFFECT 3: SYSTEM comm logged to timeline
+    data_dir = env["data_dir"]
+    timeline_file = data_dir / "legions" / legion_id / "timeline.jsonl"
+    assert timeline_file.exists(), "Timeline file should exist"
+
+    with open(timeline_file, 'r') as f:
+        timeline_comms = [json.loads(line) for line in f]
+
+    # Find SYSTEM comm for join action
+    system_comm = None
+    for c in timeline_comms:
+        if (c.get("comm_type") == "system" and
+            "joined" in c.get("summary", "").lower() and
+            "#public-channel" in c.get("summary", "")):
+            system_comm = c
+            break
+
+    assert system_comm is not None, "SYSTEM comm should be logged to timeline for join_channel"
+    assert system_comm["to_channel_id"] == channel.channel_id
+
 
 @pytest.mark.asyncio
 async def test_join_channel_idempotent(legion_test_env):
@@ -678,6 +698,26 @@ async def test_leave_channel_basic(legion_test_env):
     # SIDE EFFECT 2: SessionInfo updated
     creator_updated = await env["session_coordinator"].session_manager.get_session_info(creator.session_id)
     assert channel.channel_id not in creator_updated.channel_ids
+
+    # SIDE EFFECT 3: SYSTEM comm logged to timeline
+    data_dir = env["data_dir"]
+    timeline_file = data_dir / "legions" / legion_id / "timeline.jsonl"
+    assert timeline_file.exists(), "Timeline file should exist"
+
+    with open(timeline_file, 'r') as f:
+        timeline_comms = [json.loads(line) for line in f]
+
+    # Find SYSTEM comm for leave action
+    system_comm = None
+    for c in timeline_comms:
+        if (c.get("comm_type") == "system" and
+            "left" in c.get("summary", "").lower() and
+            "#temp-channel" in c.get("summary", "")):
+            system_comm = c
+            break
+
+    assert system_comm is not None, "SYSTEM comm should be logged to timeline for leave_channel"
+    assert system_comm["to_channel_id"] == channel.channel_id
 
 
 @pytest.mark.asyncio
@@ -832,6 +872,26 @@ async def test_add_minion_to_channel_basic(legion_test_env):
     # SIDE EFFECT 2: SessionInfo updated
     child_updated = await env["session_coordinator"].session_manager.get_session_info(child.session_id)
     assert channel.channel_id in child_updated.channel_ids
+
+    # SIDE EFFECT 3: SYSTEM comm logged to timeline with actor_name
+    data_dir = env["data_dir"]
+    timeline_file = data_dir / "legions" / legion_id / "timeline.jsonl"
+    assert timeline_file.exists(), "Timeline file should exist"
+
+    with open(timeline_file, 'r') as f:
+        timeline_comms = [json.loads(line) for line in f]
+
+    # Find SYSTEM comm for add action
+    system_comm = None
+    for c in timeline_comms:
+        if (c.get("comm_type") == "system" and
+            "added to" in c.get("summary", "").lower() and
+            "#team-channel" in c.get("summary", "")):
+            system_comm = c
+            break
+
+    assert system_comm is not None, "SYSTEM comm should be logged to timeline for add_minion_to_channel"
+    assert system_comm["to_channel_id"] == channel.channel_id
 
 
 @pytest.mark.asyncio
@@ -1066,6 +1126,26 @@ async def test_remove_minion_from_channel_basic(legion_test_env):
     # SIDE EFFECT 2: SessionInfo updated
     child_updated = await env["session_coordinator"].session_manager.get_session_info(child.session_id)
     assert channel.channel_id not in child_updated.channel_ids
+
+    # SIDE EFFECT 3: SYSTEM comm logged to timeline
+    data_dir = env["data_dir"]
+    timeline_file = data_dir / "legions" / legion_id / "timeline.jsonl"
+    assert timeline_file.exists(), "Timeline file should exist"
+
+    with open(timeline_file, 'r') as f:
+        timeline_comms = [json.loads(line) for line in f]
+
+    # Find SYSTEM comm for remove action
+    system_comm = None
+    for c in timeline_comms:
+        if (c.get("comm_type") == "system" and
+            "removed from" in c.get("summary", "").lower() and
+            "#team-channel" in c.get("summary", "")):
+            system_comm = c
+            break
+
+    assert system_comm is not None, "SYSTEM comm should be logged to timeline for remove_minion_from_channel"
+    assert system_comm["to_channel_id"] == channel.channel_id
 
 
 @pytest.mark.asyncio
