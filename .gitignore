@@ -208,6 +208,7 @@ __marimo__/
 data/
 tmp*/
 test_data/
+test_data_*/
 
 # Claude settings
 .claude/settings.local.json
