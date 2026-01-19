@@ -750,7 +750,7 @@ class LegionMCPTools:
         """
         from src.logging_config import get_logger
 
-        coord_logger = get_logger(__name__, "COORDINATOR")
+        coord_logger = get_logger('legion', category='MCP_TOOLS')
 
         parent_overseer_id = args.get("_parent_overseer_id")
         if not parent_overseer_id:
@@ -1052,7 +1052,7 @@ class LegionMCPTools:
         """
         from src.logging_config import get_logger
 
-        coord_logger = get_logger(__name__, "COORDINATOR")
+        coord_logger = get_logger('legion', category='MCP_TOOLS')
 
         parent_overseer_id = args.get("_parent_overseer_id")  # This is actually the CALLER's session_id
         if not parent_overseer_id:
