@@ -148,6 +148,7 @@ def configure_logging(
         'debug_error_handler': debug_error_handler or debug_all,
         'debug_legion': debug_legion or debug_all,
         'debug_session_manager': debug_all,
+        'debug_template_manager': debug_all,
         'log_dir': log_dir
     }
 
@@ -225,6 +226,12 @@ def configure_logging(
             'file': f"{log_dir}/legion.log",
             'enabled': _log_config['debug_legion'],
             'console': _log_config['debug_legion'],
+            'level': logging.DEBUG
+        },
+        'template_manager': {
+            'file': f"{log_dir}/template_manager.log",
+            'enabled': _log_config['debug_template_manager'],
+            'console': _log_config['debug_template_manager'],
             'level': logging.DEBUG
         }
     }
