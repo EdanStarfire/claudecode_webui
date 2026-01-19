@@ -50,9 +50,6 @@ class CategoryAdapter(logging.LoggerAdapter):
         kwargs['extra'] = extra
         return msg, kwargs
 
-
-# Global registry of configured loggers
-_configured_loggers = {}
 _log_config = {}
 
 
