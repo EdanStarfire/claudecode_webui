@@ -78,6 +78,14 @@ def configure_logging(
         debug_legion: Enable Legion multi-agent system debugging
         debug_all: Enable all debug logging
         log_dir: Directory for log files
+
+    Behavior:
+        - Debug logs for specific categories are written to their respective
+          files only when the corresponding debug flag is enabled.
+        - ERROR-level and above messages are always routed to both error.log
+          and console output, regardless of debug flag settings.
+        - This ensures critical errors are never lost due to disabled debug
+          settings.
     """
     global _log_config
 
