@@ -1,10 +1,55 @@
 """Comprehensive logging configuration for Claude Code WebUI.
 
 This module provides a multi-tier logging system with:
-- Configurable debug logging via CLI flags
-- Category-specific log files
-- Standardized log formatting
-- Console and file output control
+- Category-based debug logging to separate files (e.g., websocket_debug.log, sdk_debug.log)
+- Unified error logging to error.log (all ERROR+ messages route here)
+- Console output for errors (always) and debug messages (when enabled via CLI flags)
+- Standardized log formatting with timestamps and category tags
+
+Usage Patterns
+--------------
+
+1. **Single Logger with Category** (recommended for most cases):
+
+   Use when you only need debug-level logging with a category tag::
+
+       from logging_config import get_logger
+
+       logger = get_logger('sdk_debug', category='MY_MODULE')
+       logger.debug("Processing request")  # -> sdk_debug.log
+       logger.error("Failed")              # -> sdk_debug.log AND error.log
+
+2. **Dual Logger Pattern** (for modules requiring debug/error separation):
+
+   Use when you need explicit separation between debug output and error handling.
+   This pattern is used in web_server.py, claude_sdk.py, data_storage.py,
+   message_parser.py, session_manager.py, and session_coordinator.py::
+
+       import logging
+       from logging_config import get_logger
+
+       # Debug logger: routes to category-specific file (e.g., sdk_debug.log)
+       debug_logger = get_logger('sdk_debug', category='SDK')
+
+       # Error logger: uses standard Python logging for error handling
+       # Routes to error.log via root logger configuration
+       logger = logging.getLogger(__name__)
+
+       # Usage:
+       debug_logger.debug("SDK initialized")  # -> sdk_debug.log only
+       debug_logger.info("Session started")   # -> sdk_debug.log only
+       logger.error("Connection failed")      # -> error.log + console
+
+   The dual pattern provides:
+   - Clear intent: debug_logger for diagnostics, logger for errors
+   - Separate routing: debug goes to category files, errors to error.log
+   - Standard Python logging compatibility for error handling
+
+Log Routing Summary
+-------------------
+- DEBUG/INFO via get_logger() -> category-specific log file (when enabled)
+- ERROR+ via get_logger() -> category file AND error.log AND console
+- ERROR+ via logging.getLogger(__name__) -> error.log AND console
 """
 
 import logging
