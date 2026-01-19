@@ -10,7 +10,10 @@ This module provides a multi-tier logging system with:
 import logging
 import logging.handlers
 from pathlib import Path
-from typing import Optional
+
+# Logging configuration constants
+MAX_LOG_FILE_SIZE = 10 * 1024 * 1024  # 10 MB
+LOG_BACKUP_COUNT = 5
 
 
 class StandardizedFormatter(logging.Formatter):
@@ -104,8 +107,8 @@ def configure_logging(
     # Create shared error handler (all ERROR+ logs go here)
     error_handler = logging.handlers.RotatingFileHandler(
         f"{log_dir}/error.log",
-        maxBytes=10485760,  # 10MB
-        backupCount=5,
+        maxBytes=MAX_LOG_FILE_SIZE,
+        backupCount=LOG_BACKUP_COUNT,
         encoding='utf8'
     )
     error_handler.setLevel(logging.ERROR)
@@ -185,8 +188,8 @@ def configure_logging(
             # File handler
             file_handler = logging.handlers.RotatingFileHandler(
                 config['file'],
-                maxBytes=10485760,  # 10MB
-                backupCount=5,
+                maxBytes=MAX_LOG_FILE_SIZE,
+                backupCount=LOG_BACKUP_COUNT,
                 encoding='utf8'
             )
             file_handler.setLevel(config['level'])
@@ -218,7 +221,7 @@ def configure_logging(
     coord_logger.info("Logging system configured")
 
 
-def get_logger(name: str, category: Optional[str] = None) -> logging.Logger:
+def get_logger(name: str, category: str | None = None) -> logging.Logger:
     """Get a logger instance with optional category.
 
     Args:
