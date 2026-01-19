@@ -505,7 +505,6 @@ npm run build  # Output: frontend/dist/
 
 **Files Managed**:
 - `messages.jsonl`: Append-only message log
-- `history.json`: Command history
 - `state.json`: Session metadata (managed by SessionManager)
 
 **Key Methods**:
@@ -600,8 +599,7 @@ data/
 │
 ├── sessions/{uuid}/                # One folder per session
 │   ├── state.json                  # SessionInfo serialized
-│   ├── messages.jsonl              # Append-only message log
-│   └── history.json                # Command history
+│   └── messages.jsonl              # Append-only message log
 │
 └── legions/{uuid}/                 # One folder per legion (multi-agent project)
     ├── timeline.jsonl              # Unified comm log

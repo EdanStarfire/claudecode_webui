@@ -275,8 +275,7 @@ data/
 ├── projects/{uuid}/state.json      # Project metadata
 ├── sessions/{uuid}/                # Session data
 │   ├── state.json                  # Session state
-│   ├── messages.jsonl              # Append-only message log
-│   └── history.json                # Command history
+│   └── messages.jsonl              # Append-only message log
 └── legions/{uuid}/                 # Multi-agent legions
     ├── timeline.jsonl              # Unified comm log
     ├── hordes/{uuid}/              # Hierarchical groups
