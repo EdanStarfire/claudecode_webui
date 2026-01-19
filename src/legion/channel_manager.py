@@ -171,7 +171,7 @@ class ChannelManager:
                 # Log error but don't fail channel creation
                 # Channel is already created and persisted successfully
                 from src.logging_config import get_logger
-                logger = get_logger(__name__, "CHANNEL")
+                logger = get_logger('legion', category='CHANNEL')
                 logger.error(f"Failed to broadcast channel creation for {channel_id}: {e}")
 
         return channel_id
@@ -283,7 +283,7 @@ class ChannelManager:
                 except Exception as e:
                     # Log error but continue with other channels
                     from src.logging_config import get_logger
-                    logger = get_logger(__name__, "CHANNEL")
+                    logger = get_logger('legion', category='CHANNEL')
                     logger.error(f"Failed to remove minion {minion_id} from channel {channel.channel_id} ({channel.name}): {e}")
 
         return removed_channel_names

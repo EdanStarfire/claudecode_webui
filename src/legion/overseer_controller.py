@@ -228,7 +228,7 @@ class OverseerController:
         from src.logging_config import get_logger
         from src.models.legion_models import Comm, CommType, InterruptPriority
 
-        coord_logger = get_logger(__name__, "COORDINATOR")
+        coord_logger = get_logger('legion', category='OVERSEER')
 
         # 1. Get parent minion session
         parent_session = await self.system.session_coordinator.session_manager.get_session_info(parent_overseer_id)
@@ -412,7 +412,7 @@ class OverseerController:
         from src.logging_config import get_logger
         from src.models.legion_models import Comm, CommType, InterruptPriority
 
-        coord_logger = get_logger(__name__, "COORDINATOR")
+        coord_logger = get_logger('legion', category='OVERSEER')
 
         # 1. Get parent session
         parent_session = await self.system.session_coordinator.session_manager.get_session_info(parent_overseer_id)
