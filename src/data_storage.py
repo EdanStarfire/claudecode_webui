@@ -9,13 +9,12 @@ import gc
 import json
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
-
-from .timestamp_utils import get_unix_timestamp
+from typing import Any
 
 from .logging_config import get_logger
+from .timestamp_utils import get_unix_timestamp
 
 # Get specialized logger for storage debugging
 storage_logger = get_logger('storage', category='STORAGE')
@@ -40,12 +39,6 @@ class DataStorageManager:
             if not self.messages_file.exists():
                 self.messages_file.touch()
 
-            # Migration: Delete legacy history.json files (no longer used)
-            history_file = self.session_dir / "history.json"
-            if history_file.exists():
-                history_file.unlink()
-                storage_logger.info(f"Deleted legacy history.json for session {self.session_dir.name}")
-
             # Data integrity check disabled to prevent session startup issues
             # await self._verify_integrity()
 
@@ -54,7 +47,7 @@ class DataStorageManager:
             logger.error(f"Failed to initialize storage: {e}")
             raise
 
-    async def append_message(self, message_data: Dict[str, Any]):
+    async def append_message(self, message_data: dict[str, Any]):
         """Append a message to the activity log (JSONL format)"""
         try:
             # Add timestamp if not present (Unix timestamp float for consistency)
@@ -72,7 +65,7 @@ class DataStorageManager:
             logger.error(f"Failed to append message: {e}")
             raise
 
-    async def read_messages(self, limit: Optional[int] = None, offset: int = 0) -> List[Dict[str, Any]]:
+    async def read_messages(self, limit: int | None = None, offset: int = 0) -> list[dict[str, Any]]:
         """Read messages from activity log with pagination"""
         try:
             messages = []
@@ -80,7 +73,7 @@ class DataStorageManager:
             if not self.messages_file.exists():
                 return messages
 
-            with open(self.messages_file, 'r', encoding='utf-8') as f:
+            with open(self.messages_file, encoding='utf-8') as f:
                 lines = f.readlines()
 
             # Apply offset and limit
@@ -109,7 +102,7 @@ class DataStorageManager:
                 return 0
 
             count = 0
-            with open(self.messages_file, 'r', encoding='utf-8') as f:
+            with open(self.messages_file, encoding='utf-8') as f:
                 for line in f:
                     if line.strip():
                         count += 1
@@ -130,8 +123,7 @@ class DataStorageManager:
             # Truncate messages file
             messages_path = self.messages_file
             if messages_path.exists():
-                with open(messages_path, 'w') as f:
-                    pass  # Truncate to empty
+                messages_path.write_text('')
                 storage_logger.info(f"Cleared all messages for session {self.session_dir.name}")
 
             return True
@@ -144,14 +136,14 @@ class DataStorageManager:
 
 
 
-    async def detect_corruption(self) -> Dict[str, Any]:
+    async def detect_corruption(self) -> dict[str, Any]:
         """Detect and report data corruption issues - DISABLED"""
         # Corruption detection disabled to prevent session startup issues
         corruption_report = {
             'corrupted': False,
             'issues': [],
             'files_checked': [],
-            'timestamp': datetime.now(timezone.utc).isoformat()
+            'timestamp': datetime.now(UTC).isoformat()
         }
 
         return corruption_report
@@ -166,7 +158,7 @@ class DataStorageManager:
             if self.messages_file.exists():
                 corruption_report['files_checked'].append(str(self.messages_file))
                 try:
-                    with open(self.messages_file, 'r', encoding='utf-8') as f:
+                    with open(self.messages_file, encoding='utf-8') as f:
                         line_num = 0
                         for line in f:
                             line_num += 1
@@ -185,7 +177,7 @@ class DataStorageManager:
             if self.state_file.exists():
                 corruption_report['files_checked'].append(str(self.state_file))
                 try:
-                    with open(self.state_file, 'r', encoding='utf-8') as f:
+                    with open(self.state_file, encoding='utf-8') as f:
                         json.load(f)
                 except Exception as e:
                     corruption_report['corrupted'] = True
