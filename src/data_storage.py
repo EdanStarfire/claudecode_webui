@@ -9,7 +9,6 @@ import gc
 import json
 import logging
 import os
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -39,8 +38,11 @@ class DataStorageManager:
             if not self.messages_file.exists():
                 self.messages_file.touch()
 
-            # Data integrity check disabled to prevent session startup issues
-            # await self._verify_integrity()
+            # Migration: Delete legacy history.json files (no longer used)
+            history_file = self.session_dir / "history.json"
+            if history_file.exists():
+                history_file.unlink()
+                storage_logger.info(f"Deleted legacy history.json for session {self.session_dir.name}")
 
             storage_logger.debug(f"Initialized storage for session {self.session_dir.name}")
         except Exception as e:
@@ -123,7 +125,7 @@ class DataStorageManager:
             # Truncate messages file
             messages_path = self.messages_file
             if messages_path.exists():
-                messages_path.write_text('')
+                messages_path.write_text("")  # Truncate to empty
                 storage_logger.info(f"Cleared all messages for session {self.session_dir.name}")
 
             return True
@@ -131,66 +133,6 @@ class DataStorageManager:
         except Exception as e:
             logger.error(f"Failed to clear messages: {e}")
             return False
-
-
-
-
-
-    async def detect_corruption(self) -> dict[str, Any]:
-        """Detect and report data corruption issues - DISABLED"""
-        # Corruption detection disabled to prevent session startup issues
-        corruption_report = {
-            'corrupted': False,
-            'issues': [],
-            'files_checked': [],
-            'timestamp': datetime.now(UTC).isoformat()
-        }
-
-        return corruption_report
-
-        try:
-            # Check integrity hash
-            if not await self._verify_integrity():
-                corruption_report['corrupted'] = True
-                corruption_report['issues'].append('Integrity hash mismatch')
-
-            # Check JSONL format in messages file
-            if self.messages_file.exists():
-                corruption_report['files_checked'].append(str(self.messages_file))
-                try:
-                    with open(self.messages_file, encoding='utf-8') as f:
-                        line_num = 0
-                        for line in f:
-                            line_num += 1
-                            line = line.strip()
-                            if line:
-                                try:
-                                    json.loads(line)
-                                except json.JSONDecodeError:
-                                    corruption_report['corrupted'] = True
-                                    corruption_report['issues'].append(f'Invalid JSON at line {line_num} in messages.jsonl')
-                except Exception as e:
-                    corruption_report['corrupted'] = True
-                    corruption_report['issues'].append(f'Cannot read messages.jsonl: {str(e)}')
-
-            # Check JSON format in state file
-            if self.state_file.exists():
-                corruption_report['files_checked'].append(str(self.state_file))
-                try:
-                    with open(self.state_file, encoding='utf-8') as f:
-                        json.load(f)
-                except Exception as e:
-                    corruption_report['corrupted'] = True
-                    corruption_report['issues'].append(f'Invalid JSON in state.json: {str(e)}')
-
-        except Exception as e:
-            corruption_report['corrupted'] = True
-            corruption_report['issues'].append(f'Error during corruption detection: {str(e)}')
-
-        if corruption_report['corrupted']:
-            logger.error(f"Corruption detected in {self.session_dir.name}: {corruption_report['issues']}")
-
-        return corruption_report
 
     async def cleanup(self):
         """Cleanup and ensure all file handles and directory references are closed"""

@@ -139,31 +139,12 @@ class TestDataStorageManager:
         count = await manager.get_message_count()
         assert count == len(sample_messages)
 
-    # Integrity verification tests removed - feature no longer used
-
     @pytest.mark.asyncio
-    async def test_corruption_detection_disabled(self, temp_storage_manager, sample_message):
-        """Test that corruption detection is disabled (always returns False)."""
+    async def test_missing_file_handling(self, temp_storage_manager):
+        """Test that reading messages and counting handles missing files gracefully."""
         manager = temp_storage_manager
 
-        # Add a valid message first
-        await manager.append_message(sample_message)
-
-        # Manually corrupt the messages file
-        with open(manager.messages_file, 'a') as f:
-            f.write('{"invalid": json content\n')
-
-        # Detect corruption - should return False since detection is disabled
-        corruption_report = await manager.detect_corruption()
-        assert corruption_report["corrupted"] is False
-        assert len(corruption_report["issues"]) == 0
-
-    @pytest.mark.asyncio
-    async def test_corruption_detection_missing_file(self, temp_storage_manager):
-        """Test corruption detection with missing files."""
-        manager = temp_storage_manager
-
-        # Remove a file
+        # Remove the messages file
         manager.messages_file.unlink()
 
         # Should handle missing file gracefully

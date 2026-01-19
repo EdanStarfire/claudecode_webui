@@ -892,8 +892,7 @@ class SessionCoordinator:
             storage = self._storage_managers.get(session_id)
             if storage:
                 storage_info = {
-                    "message_count": await storage.get_message_count(),
-                    "corruption_check": await storage.detect_corruption()
+                    "message_count": await storage.get_message_count()
                 }
 
             return {
