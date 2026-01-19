@@ -234,7 +234,6 @@ class TestSessionCoordinator:
 
         mock_storage = AsyncMock()
         mock_storage.get_message_count.return_value = 10
-        mock_storage.detect_corruption.return_value = {"corrupted": False, "issues": []}
         coordinator._storage_managers[session_id] = mock_storage
 
         info = await coordinator.get_session_info(session_id)
@@ -466,7 +465,6 @@ class TestSessionCoordinator:
         # Mock storage manager as well for get_session_info call
         mock_storage = AsyncMock()
         mock_storage.get_message_count.return_value = 0
-        mock_storage.detect_corruption.return_value = {"corrupted": False, "issues": []}
         coordinator._storage_managers[session_id] = mock_storage
 
         # Run concurrent operations
