@@ -1925,8 +1925,7 @@ data/
 │       ├── comms.jsonl                 # Comms involving this minion
 │       ├── short_term_memory.json      # List[MemoryEntry]
 │       ├── long_term_memory.json       # List[MemoryEntry]
-│       ├── capability_evidence.json    # Dict[capability, List[task_id]]
-│       └── history.json                # Command history (existing)
+│       └── capability_evidence.json    # Dict[capability, List[task_id]]
 │
 └── logs/                               # Existing debug logs
     ├── coordinator.log
