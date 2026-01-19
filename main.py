@@ -26,7 +26,7 @@ def main():
         epilog="""
 Debug Flags:
   --debug-websocket         Enable WebSocket lifecycle debugging
-  --debug-websocket-verbose Enable verbose WebSocket ping/pong logging
+  --debug-ping-pong         Enable WebSocket ping/pong logging (high volume)
   --debug-sdk               Enable SDK integration debugging
   --debug-permissions       Enable permission callback debugging
   --debug-storage           Enable data storage debugging
@@ -35,7 +35,7 @@ Debug Flags:
   --debug-legion            Enable Legion multi-agent system debugging
   --debug-session-manager   Enable session manager debugging
   --debug-template-manager  Enable template manager debugging
-  --debug-all               Enable all debug logging
+  --debug-all               Enable all debug logging (excludes ping/pong)
         """
     )
 
@@ -46,7 +46,10 @@ Debug Flags:
 
     # Debug flags
     parser.add_argument('--debug-websocket', action='store_true', help='Enable WebSocket lifecycle debugging')
-    parser.add_argument('--debug-websocket-verbose', action='store_true', help='Enable verbose WebSocket ping/pong logging')
+    # Note: debug_all excludes ping/pong logging due to excessive noise that obscures other debug output.
+    # Ping/pong keepalive messages occur every 3 seconds per WebSocket connection, generating thousands
+    # of log entries that make it difficult to identify relevant debugging information.
+    parser.add_argument('--debug-ping-pong', action='store_true', help='Enable WebSocket ping/pong logging (high volume)')
     parser.add_argument('--debug-sdk', action='store_true', help='Enable SDK integration debugging')
     parser.add_argument('--debug-permissions', action='store_true', help='Enable permission callback debugging')
     parser.add_argument('--debug-storage', action='store_true', help='Enable data storage debugging')
@@ -55,7 +58,7 @@ Debug Flags:
     parser.add_argument('--debug-legion', action='store_true', help='Enable Legion multi-agent system debugging')
     parser.add_argument('--debug-session-manager', action='store_true', help='Enable session manager debugging')
     parser.add_argument('--debug-template-manager', action='store_true', help='Enable template manager debugging')
-    parser.add_argument('--debug-all', action='store_true', help='Enable all debug logging')
+    parser.add_argument('--debug-all', action='store_true', help='Enable all debug logging (excludes ping/pong)')
 
     args = parser.parse_args()
 
@@ -71,7 +74,7 @@ Debug Flags:
     # Configure logging with debug flags
     configure_logging(
         debug_websocket=args.debug_websocket,
-        debug_websocket_verbose=args.debug_websocket_verbose,
+        debug_ping_pong=args.debug_ping_pong,
         debug_sdk=args.debug_sdk,
         debug_permissions=args.debug_permissions,
         debug_storage=args.debug_storage,

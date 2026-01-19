@@ -28,7 +28,7 @@ from .timestamp_utils import normalize_timestamp
 
 # Get specialized logger for WebSocket lifecycle debugging
 ws_logger = get_logger('websocket_debug', category='WS_LIFECYCLE')
-# Get verbose logger for ping/pong (use only with --debug-websocket-verbose)
+# Get verbose logger for ping/pong (use only with --debug-ping-pong)
 ws_verbose_logger = get_logger('websocket_verbose', category='WS_PING_PONG')
 # Keep standard logger for errors
 logger = logging.getLogger(__name__)
@@ -1602,13 +1602,16 @@ class ClaudeWebUI:
                     try:
                         # Wait for any incoming messages (ping, etc.)
                         message = await asyncio.wait_for(websocket.receive_text(), timeout=3.0)
-                        logger.debug(f"UI WebSocket received: {message}")
 
                         # Handle ping/pong for keepalive
                         try:
                             message_data = json.loads(message)
                             if message_data.get("type") == "ping":
+                                ws_verbose_logger.debug("UI WebSocket received ping, sending pong")
                                 await websocket.send_json({"type": "pong", "timestamp": datetime.now(UTC).isoformat()})
+                            else:
+                                # Log non-ping/pong messages
+                                logger.debug(f"UI WebSocket received: {message}")
                         except json.JSONDecodeError:
                             logger.warning(f"Invalid JSON in UI WebSocket message: {message}")
 
@@ -1769,12 +1772,16 @@ class ClaudeWebUI:
                         message = await asyncio.wait_for(websocket.receive_text(), timeout=3.0)
 
                         message_received_time = time.time()
-                        ws_logger.debug(f"WebSocket received message from session {session_id} at {message_received_time}: {message[:100]}...")
-                        ws_logger.debug(f"Message wait took {message_received_time - message_wait_start_time:.3f}s")
-
                         message_data = json.loads(message)
-                        ws_logger.debug(f"DEBUG: Received message type: '{message_data.get('type', 'unknown')}' from session {session_id}")
-                        ws_logger.debug(f"DEBUG: Full message data: {message_data}")
+
+                        # Filter ping/pong messages from general debug logging (use ws_verbose_logger for those)
+                        if message_data.get("type") in ["ping", "pong"]:
+                            ws_verbose_logger.debug(f"WebSocket received {message_data.get('type')} from session {session_id}")
+                        else:
+                            ws_logger.debug(f"WebSocket received message from session {session_id} at {message_received_time}: {message[:100]}...")
+                            ws_logger.debug(f"Message wait took {message_received_time - message_wait_start_time:.3f}s")
+                            ws_logger.debug(f"DEBUG: Received message type: '{message_data.get('type', 'unknown')}' from session {session_id}")
+                            ws_logger.debug(f"DEBUG: Full message data: {message_data}")
 
                         if message_data.get("type") == "send_message":
                             # Handle message sending through WebSocket
