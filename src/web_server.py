@@ -28,7 +28,7 @@ from .timestamp_utils import normalize_timestamp
 
 # Get specialized logger for WebSocket lifecycle debugging
 ws_logger = get_logger('websocket_debug', category='WS_LIFECYCLE')
-# Get verbose logger for ping/pong (use only with --debug-websocket-verbose)
+# Get verbose logger for ping/pong (use only with --debug-ping-pong)
 ws_verbose_logger = get_logger('websocket_verbose', category='WS_PING_PONG')
 # Keep standard logger for errors
 logger = logging.getLogger(__name__)

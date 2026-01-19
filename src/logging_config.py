@@ -100,7 +100,7 @@ _log_config = {}
 
 def configure_logging(
     debug_websocket: bool = False,
-    debug_websocket_verbose: bool = False,
+    debug_ping_pong: bool = False,
     debug_sdk: bool = False,
     debug_permissions: bool = False,
     debug_storage: bool = False,
@@ -116,7 +116,7 @@ def configure_logging(
 
     Args:
         debug_websocket: Enable WebSocket lifecycle debugging
-        debug_websocket_verbose: Enable verbose WebSocket ping/pong logging
+        debug_ping_pong: Enable WebSocket ping/pong logging (excluded from debug_all)
         debug_sdk: Enable SDK integration debugging
         debug_permissions: Enable permission callback debugging
         debug_storage: Enable data storage debugging
@@ -125,7 +125,7 @@ def configure_logging(
         debug_legion: Enable Legion multi-agent system debugging
         debug_session_manager: Enable session manager debugging
         debug_template_manager: Enable template manager debugging
-        debug_all: Enable all debug logging
+        debug_all: Enable all debug logging (excludes ping/pong due to excessive noise)
         log_dir: Directory for log files
 
     Behavior:
@@ -135,6 +135,10 @@ def configure_logging(
           and console output, regardless of debug flag settings.
         - This ensures critical errors are never lost due to disabled debug
           settings.
+        - Ping/pong logging is intentionally excluded from debug_all to prevent
+          excessive noise. WebSocket keepalive messages occur every 3 seconds per
+          connection, generating thousands of log entries that obscure other debug
+          information. Use --debug-ping-pong explicitly if needed.
     """
     global _log_config
 
@@ -142,9 +146,10 @@ def configure_logging(
     Path(log_dir).mkdir(parents=True, exist_ok=True)
 
     # Store configuration for get_logger to reference
+    # Note: debug_all excludes ping/pong logging due to excessive noise that obscures other debug output
     _log_config = {
         'debug_websocket': debug_websocket or debug_all,
-        'debug_websocket_verbose': debug_websocket_verbose,  # Only enabled with explicit --debug-websocket-verbose
+        'debug_ping_pong': debug_ping_pong,  # Only enabled with explicit --debug-ping-pong (excluded from debug_all)
         'debug_sdk': debug_sdk or debug_all,
         'debug_permissions': debug_permissions or debug_all,
         'debug_storage': debug_storage or debug_all,
@@ -184,8 +189,8 @@ def configure_logging(
         },
         'websocket_verbose': {
             'file': f"{log_dir}/websocket_verbose.log",
-            'enabled': _log_config['debug_websocket_verbose'],
-            'console': _log_config['debug_websocket_verbose'],
+            'enabled': _log_config['debug_ping_pong'],
+            'console': _log_config['debug_ping_pong'],
             'level': logging.DEBUG
         },
         # Enable SDK logging when either SDK or permissions debugging is active,
