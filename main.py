@@ -4,7 +4,6 @@ Main entry point for Claude Code WebUI server.
 """
 
 import argparse
-import asyncio
 import sys
 from pathlib import Path
 
@@ -13,8 +12,8 @@ import uvicorn
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent / "src"))
 
-from src.web_server import create_app, startup_event, shutdown_event
 from src.logging_config import configure_logging
+from src.web_server import create_app, shutdown_event, startup_event
 
 
 def main():
@@ -34,6 +33,8 @@ Debug Flags:
   --debug-parser            Enable message parser debugging
   --debug-error-handler     Enable error handler debugging
   --debug-legion            Enable Legion multi-agent system debugging
+  --debug-session-manager   Enable session manager debugging
+  --debug-template-manager  Enable template manager debugging
   --debug-all               Enable all debug logging
         """
     )
@@ -52,6 +53,8 @@ Debug Flags:
     parser.add_argument('--debug-parser', action='store_true', help='Enable message parser debugging')
     parser.add_argument('--debug-error-handler', action='store_true', help='Enable error handler debugging')
     parser.add_argument('--debug-legion', action='store_true', help='Enable Legion multi-agent system debugging')
+    parser.add_argument('--debug-session-manager', action='store_true', help='Enable session manager debugging')
+    parser.add_argument('--debug-template-manager', action='store_true', help='Enable template manager debugging')
     parser.add_argument('--debug-all', action='store_true', help='Enable all debug logging')
 
     args = parser.parse_args()
@@ -75,6 +78,8 @@ Debug Flags:
         debug_parser=args.debug_parser,
         debug_error_handler=args.debug_error_handler,
         debug_legion=args.debug_legion,
+        debug_session_manager=args.debug_session_manager,
+        debug_template_manager=args.debug_template_manager,
         debug_all=args.debug_all,
         log_dir=str(data_dir_path / "logs")
     )
