@@ -66,7 +66,7 @@ class SDKErrorDetectionHandler(logging.Handler):
         super().__init__()
         self.session_id = session_id
         self.error_callback = error_callback
-        self.logger = get_logger(__name__)
+        self.logger = get_logger('sdk_debug', category='SDK_ERROR_HANDLER')
 
     def emit(self, record):
         """Handle log records from claude_code_sdk._internal.query."""
