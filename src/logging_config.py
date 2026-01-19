@@ -133,6 +133,8 @@ def configure_logging(
             'console': _log_config['debug_websocket_verbose'],
             'level': logging.DEBUG
         },
+        # Enable SDK logging when either SDK or permissions debugging is active,
+        # since permission callbacks are processed through the SDK message stream
         'sdk_debug': {
             'file': f"{log_dir}/sdk_debug.log",
             'enabled': _log_config['debug_sdk'] or _log_config['debug_permissions'],
