@@ -1809,17 +1809,17 @@ class ClaudeWebUI:
 
             message_loop_iteration = 0
             try:
-                ws_logger.debug(f"Starting message loop for session {session_id}")
+                ws_verbose_logger.debug(f"Starting message loop for session {session_id}")
 
                 while True:
                     message_loop_iteration += 1
                     loop_iteration_start_time = time.time()
-                    ws_logger.debug(f"Message loop iteration {message_loop_iteration} started at {loop_iteration_start_time}")
+                    ws_verbose_logger.debug(f"Message loop iteration {message_loop_iteration} started at {loop_iteration_start_time}")
 
                     # Wait for incoming messages with proper error handling
                     try:
                         message_wait_start_time = time.time()
-                        ws_logger.debug(f"WebSocket waiting for message from session {session_id} (timeout=3s)")
+                        ws_verbose_logger.debug(f"WebSocket waiting for message from session {session_id} (timeout=3s)")
 
                         message = await asyncio.wait_for(websocket.receive_text(), timeout=3.0)
 
@@ -1999,7 +1999,7 @@ class ClaudeWebUI:
                         continue
 
                     loop_iteration_end_time = time.time()
-                    ws_logger.debug(f"Message loop iteration {message_loop_iteration} completed at {loop_iteration_end_time}")
+                    ws_verbose_logger.debug(f"Message loop iteration {message_loop_iteration} completed at {loop_iteration_end_time}")
 
             except WebSocketDisconnect as disconnect_error:
                 disconnect_time = time.time()
