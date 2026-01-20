@@ -79,7 +79,6 @@ class SessionInfo:
     overseer_level: int = 0  # 0=user-created, 1=child, 2=grandchild
     parent_overseer_id: str | None = None  # None if user-created
     child_minion_ids: list[str] = None  # Child minion session IDs
-    channel_ids: list[str] = None  # Communication channels
     capabilities: list[str] = None  # Capability tags for discovery
     expertise_score: float = 0.5  # Expertise level (0.0-1.0, default 0.5 for MVP)
 
@@ -88,8 +87,6 @@ class SessionInfo:
             self.allowed_tools = ["bash", "edit", "read"]
         if self.child_minion_ids is None:
             self.child_minion_ids = []
-        if self.channel_ids is None:
-            self.channel_ids = []
         if self.capabilities is None:
             self.capabilities = []
 
@@ -112,8 +109,8 @@ class SessionInfo:
             data['is_minion'] = False
         if 'child_minion_ids' not in data:
             data['child_minion_ids'] = []
-        if 'channel_ids' not in data:
-            data['channel_ids'] = []
+        # Remove deprecated channel_ids field if present (backward compatibility)
+        data.pop('channel_ids', None)
         if 'capabilities' not in data:
             data['capabilities'] = []
         if 'is_overseer' not in data:

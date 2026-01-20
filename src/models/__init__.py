@@ -7,7 +7,6 @@ NOTE: LegionInfo and MinionInfo have been consolidated:
 """
 
 from src.models.legion_models import (
-    Channel,
     Comm,
     CommType,
     InterruptPriority,
@@ -21,8 +20,7 @@ from src.models.memory_models import (
 )
 
 __all__ = [
-    # Legion grouping models
-    "Channel",
+    # Legion communication models
     "Comm",
     "CommType",
     "InterruptPriority",

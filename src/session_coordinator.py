@@ -102,12 +102,8 @@ class SessionCoordinator:
             await self.template_manager.create_default_templates()
             coord_logger.info("Loaded minion templates")
 
-            # Load channels for all legions (if LegionSystem is initialized)
+            # Rebuild capability registry from persisted session data (if LegionSystem is initialized)
             if hasattr(self, 'legion_system') and self.legion_system is not None:
-                await self.legion_system.legion_coordinator._load_all_channels()
-                coord_logger.info("Loaded channels for all legions")
-
-                # Rebuild capability registry from persisted session data
                 await self.legion_system.legion_coordinator.rebuild_capability_registry()
 
             # Register callback to receive session manager state changes

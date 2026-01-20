@@ -4,10 +4,10 @@ CommRouter - Communication routing for Legion multi-agent system.
 Responsibilities:
 - Convert Comm → Message for SDK injection
 - Convert SDK Message → Comm for routing
-- Route Comms to minions, channels, or user
+- Route Comms to minions or user (direct communication only)
 - Handle interrupt priorities (Halt, Pivot)
-- Persist Comms to multiple locations
-- Parse #minion-name and #channel-name tags for explicit references
+- Persist Comms to legion timeline and minion-specific logs
+- Parse #minion-name tags for explicit references
 """
 
 import json
@@ -31,7 +31,7 @@ legion_logger = get_logger('legion', 'COMM_ROUTER')
 
 
 class CommRouter:
-    """Routes communications between minions, channels, and user."""
+    """Routes direct communications between minions and user."""
 
     def __init__(self, system: 'LegionSystem'):
         """
@@ -67,7 +67,7 @@ class CommRouter:
         Raises:
             ValueError: If comm validation fails or queue overflow
         """
-        legion_logger.debug(f"Routing comm {comm.comm_id}: from={comm.from_minion_id}, to_minion={comm.to_minion_id}, to_channel={comm.to_channel_id}, to_user={comm.to_user}")
+        legion_logger.debug(f"Routing comm {comm.comm_id}: from={comm.from_minion_id}, to_minion={comm.to_minion_id}, to_user={comm.to_user}")
 
         # Validate comm has proper routing
         comm.validate()
@@ -89,10 +89,6 @@ class CommRouter:
         if comm.to_minion_id:
             result = await self._send_to_minion(comm)
             legion_logger.info(f"Comm {comm.comm_id} routed to minion {comm.to_minion_id}: {'success' if result else 'failed'}")
-            return result
-        elif comm.to_channel_id:
-            result = await self._broadcast_to_channel(comm)
-            legion_logger.info(f"Comm {comm.comm_id} broadcast to channel {comm.to_channel_id}: {'success' if result else 'failed'}")
             return result
         elif comm.to_user:
             result = await self._send_to_user(comm)
@@ -211,23 +207,13 @@ class CommRouter:
             # Use summary in header if available, otherwise use truncated content
             header_summary = comm.summary if comm.summary else (comm.content[:50] + "..." if len(comm.content) > 50 else comm.content)
 
-            # Check if this message came from a channel broadcast
-            from_channel_name = comm.to_channel_name
-
             # Only add send_comm instruction if message is from user, not from other minions
             if is_from_user:
-                if from_channel_name:
-                    # Message from user via channel - instruct to reply to channel
-                    formatted_message = f"**{comm_type_prefix} from {from_name} in channel #{from_channel_name}:** {header_summary}\n\n{comm.content}\n\n---\n**Please respond using the `send_comm_to_channel` tool to send your reply to channel #{from_channel_name}.**"
-                else:
-                    # Direct message from user - instruct to reply to user
-                    formatted_message = f"**{comm_type_prefix} from {from_name}:** {header_summary}\n\n{comm.content}\n\n---\n**Please respond using the `send_comm` tool to send your reply back to {from_name}.**"
+                # Direct message from user - instruct to reply to user
+                formatted_message = f"**{comm_type_prefix} from {from_name}:** {header_summary}\n\n{comm.content}\n\n---\n**Please respond using the `send_comm` tool to send your reply back to {from_name}.**"
             else:
                 # Message from another minion
-                if from_channel_name:
-                    formatted_message = f"**{comm_type_prefix} from {from_name} in channel #{from_channel_name}:** {header_summary}\n\n{comm.content}"
-                else:
-                    formatted_message = f"**{comm_type_prefix} from {from_name}:** {header_summary}\n\n{comm.content}"
+                formatted_message = f"**{comm_type_prefix} from {from_name}:** {header_summary}\n\n{comm.content}"
 
             # Handle interrupt priority
             if comm.interrupt_priority in [InterruptPriority.HALT, InterruptPriority.PIVOT]:
@@ -257,96 +243,6 @@ class CommRouter:
                 await self._send_system_error_comm(
                     to_minion_id=comm.from_minion_id,
                     error_message=f"Failed to deliver message: {str(e)}",
-                    original_comm_id=comm.comm_id
-                )
-            return False
-
-    async def _broadcast_to_channel(self, comm: Comm) -> bool:
-        """
-        Broadcast Comm to all members of a channel.
-
-        Each member (except the sender) receives an individual copy of the comm.
-        The broadcast is persisted to the channel log and legion timeline.
-
-        Args:
-            comm: Comm with to_channel_id set
-
-        Returns:
-            bool: True if broadcast succeeded (even if no recipients)
-
-        Raises:
-            ValueError: If channel does not exist
-        """
-        try:
-            # Get channel information
-            channel = await self.system.channel_manager.get_channel(comm.to_channel_id)
-            if not channel:
-                legion_logger.error(f"Channel {comm.to_channel_id} not found for broadcast")
-                # Send error back to sender if from minion
-                if comm.from_minion_id:
-                    await self._send_system_error_comm(
-                        to_minion_id=comm.from_minion_id,
-                        error_message="Failed to broadcast: Channel not found",
-                        original_comm_id=comm.comm_id
-                    )
-                return False
-
-            legion_logger.info(f"Broadcasting comm {comm.comm_id} to channel '{channel.name}' (ID: {comm.to_channel_id}) with {len(channel.member_minion_ids)} members")
-
-            # Get list of recipients (all members except sender)
-            recipients = []
-            for member_id in channel.member_minion_ids:
-                # Exclude sender from recipients
-                if comm.from_minion_id and member_id == comm.from_minion_id:
-                    legion_logger.debug(f"Excluding sender {member_id} from channel broadcast recipients")
-                    continue
-                recipients.append(member_id)
-
-            legion_logger.info(f"Channel broadcast will be delivered to {len(recipients)} recipients")
-
-            # Deliver to each recipient individually
-            delivery_count = 0
-            for recipient_id in recipients:
-                # Create individual comm for this recipient
-                recipient_comm = Comm(
-                    comm_id=comm.comm_id,  # Same comm_id for all copies
-                    from_minion_id=comm.from_minion_id,
-                    from_user=comm.from_user,
-                    from_minion_name=comm.from_minion_name,
-                    to_minion_id=recipient_id,  # Individual recipient
-                    to_channel_id=None,  # Clear channel routing for individual delivery
-                    to_user=False,
-                    to_channel_name=comm.to_channel_name,  # Preserve channel context
-                    summary=comm.summary,
-                    content=comm.content,
-                    comm_type=comm.comm_type,
-                    interrupt_priority=comm.interrupt_priority,
-                    in_reply_to=comm.in_reply_to,
-                    related_task_id=comm.related_task_id,
-                    metadata={**comm.metadata, 'broadcast_from_channel': comm.to_channel_id},
-                    visible_to_user=comm.visible_to_user,
-                    timestamp=comm.timestamp
-                )
-
-                # Send to recipient (will auto-persist to recipient's comm log)
-                success = await self._send_to_minion(recipient_comm)
-                if success:
-                    delivery_count += 1
-                else:
-                    legion_logger.warning(f"Failed to deliver channel broadcast to minion {recipient_id}")
-
-            legion_logger.info(f"Channel broadcast delivered to {delivery_count}/{len(recipients)} recipients")
-
-            # Return success even if no recipients (empty channel or sender-only)
-            return True
-
-        except Exception as e:
-            legion_logger.error(f"Failed to broadcast comm {comm.comm_id} to channel {comm.to_channel_id}: {e}")
-            # Send error back to sender if from minion
-            if comm.from_minion_id:
-                await self._send_system_error_comm(
-                    to_minion_id=comm.from_minion_id,
-                    error_message=f"Failed to broadcast to channel: {str(e)}",
                     original_comm_id=comm.comm_id
                 )
             return False
@@ -426,7 +322,6 @@ class CommRouter:
         1. Legion timeline (main timeline.jsonl)
         2. Source minion's comm log (if from minion)
         3. Destination minion's comm log (if to minion)
-        4. Channel's comm log (if to channel)
 
         Args:
             comm: Comm to persist
@@ -458,28 +353,12 @@ class CommRouter:
                     comm
                 )
 
-        if comm.to_channel_id:
-            # Get channel info to find legion_id
-            channel = await self.system.channel_manager.get_channel(comm.to_channel_id)
-            if channel:
-                legion_id = channel.legion_id
-                # Persist to channel's log
-                await self._append_to_comm_log(
-                    legion_id,
-                    f"channels/{comm.to_channel_id}",
-                    comm
-                )
-
-        # If legion_id still not found and this is from user, need to get it from to_minion or to_channel
+        # If legion_id still not found and this is from user, need to get it from to_minion
         if not legion_id and comm.from_user:
             if comm.to_minion_id:
                 minion = await self.system.legion_coordinator.get_minion_info(comm.to_minion_id)
                 if minion:
                     legion_id = minion.project_id
-            elif comm.to_channel_id:
-                channel = await self.system.channel_manager.get_channel(comm.to_channel_id)
-                if channel:
-                    legion_id = channel.legion_id
 
         # ALWAYS persist to main legion timeline (this was missing!)
         if legion_id:
@@ -548,36 +427,26 @@ class CommRouter:
 
     def _extract_tags(self, content: str) -> tuple[list[str], list[str]]:
         """
-        Extract #minion-name and #channel-name tags from content.
+        Extract #minion-name tags from content.
 
         Args:
             content: Message content
 
         Returns:
-            Tuple of (minion_names, channel_names)
+            Tuple of (minion_names, []) - second element kept empty for backward compatibility
 
         Examples:
             "#DatabaseExpert can you review this?" -> (["DatabaseExpert"], [])
-            "Posted in #planning channel" -> ([], ["planning"])
-            "Check with #Alice and #Bob in #coordination" -> (["Alice", "Bob"], ["coordination"])
+            "Check with #Alice and #Bob" -> (["Alice", "Bob"], [])
         """
         # Pattern: # followed by word characters (letters, digits, underscores, hyphens)
         tags = re.findall(r'#([\w-]+)', content)
 
-        # Separate into minion and channel tags
-        # For now, we'll need to check against actual minion/channel names
-        # Simplified: assume lowercase names are channels, CamelCase are minions
-        minion_names = []
-        channel_names = []
+        # All tags are treated as potential minion references
+        # Actual validation against known minions happens elsewhere
+        minion_names = tags
 
-        for tag in tags:
-            # Check if it matches a known minion (has uppercase)
-            if any(c.isupper() for c in tag):
-                minion_names.append(tag)
-            else:
-                channel_names.append(tag)
-
-        return (minion_names, channel_names)
+        return (minion_names, [])
 
     async def _get_legion_id_for_comm(self, comm: Comm) -> str | None:
         """
@@ -600,12 +469,6 @@ class CommRouter:
             minion = await self.system.legion_coordinator.get_minion_info(comm.to_minion_id)
             if minion:
                 return minion.project_id
-
-        # Try to get legion_id from channel
-        if comm.to_channel_id:
-            channel = await self.system.channel_manager.get_channel(comm.to_channel_id)
-            if channel:
-                return channel.legion_id
 
         return None
 
@@ -670,26 +533,18 @@ class CommRouter:
         """
         Get list of minion IDs that should receive this comm.
 
-        Handles:
-        - Direct minion-to-minion (single target)
-        - Channel broadcasts (multiple targets)
+        Handles direct minion-to-minion communication only.
 
         Args:
             comm: Comm object
 
         Returns:
-            List of minion session IDs
+            List of minion session IDs (single element for direct communication)
         """
         targets = []
 
         if comm.to_minion_id:
             # Direct to specific minion
             targets.append(comm.to_minion_id)
-        elif comm.to_channel_id:
-            # Channel broadcast - get all members
-            channel = await self.system.channel_manager.get_channel(comm.to_channel_id)
-            if channel:
-                # Exclude sender from receiving own broadcast
-                targets = [m for m in channel.member_ids if m != comm.from_minion_id]
 
         return targets

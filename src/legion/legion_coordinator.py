@@ -3,7 +3,7 @@ LegionCoordinator - Top-level orchestrator for Legion multi-agent system.
 
 Responsibilities:
 - Delegate legion/minion CRUD to ProjectManager/SessionManager
-- Track hordes and channels (grouping mechanisms)
+- Track hordes (hierarchical grouping)
 - Coordinate emergency halt/resume
 - Provide fleet status
 - Maintain central capability registry (MVP approach)
@@ -31,9 +31,8 @@ class LegionCoordinator:
         """
         self.system = system
 
-        # Multi-agent grouping state (hordes and channels are not duplicated elsewhere)
+        # Multi-agent grouping state (hordes are not duplicated elsewhere)
         self.hordes: dict = {}   # Dict[str, Horde]
-        self.channels: dict = {} # Dict[str, Channel]
 
         # Central capability registry (MVP approach)
         # Format: {capability_keyword: [(minion_id, expertise_score), ...]}
@@ -121,23 +120,6 @@ class LegionCoordinator:
 
         return None
 
-    async def get_channel_by_name(self, legion_id: str, channel_name: str) -> Optional['Channel']:
-        """
-        Get channel by name within a specific legion (case-sensitive).
-
-        Args:
-            legion_id: Legion UUID
-            channel_name: Channel name
-
-        Returns:
-            Channel if found, None otherwise
-        """
-        channels = await self.system.channel_manager.list_channels(legion_id)
-        for channel in channels:
-            if channel.name == channel_name:
-                return channel
-        return None
-
     async def get_legion(self, legion_id: str) -> Optional['ProjectInfo']:
         """
         Get legion (project with is_multi_agent=True) by ID.
@@ -165,11 +147,10 @@ class LegionCoordinator:
 
     async def _create_legion_directories(self, legion_id: str) -> None:
         """
-        Create directory structure for legion-specific data (hordes/channels).
+        Create directory structure for legion-specific data (hordes).
 
         Creates:
         - data/legions/{legion_id}/
-        - data/legions/{legion_id}/channels/
         - data/legions/{legion_id}/hordes/
 
         Note: Minion data is stored in data/sessions/{session_id}/ via SessionManager
@@ -180,7 +161,6 @@ class LegionCoordinator:
         base_path = self.system.session_coordinator.data_dir / "legions" / legion_id
 
         # Create subdirectories for legion-specific grouping data
-        (base_path / "channels").mkdir(parents=True, exist_ok=True)
         (base_path / "hordes").mkdir(parents=True, exist_ok=True)
 
     async def assemble_minion_hierarchy(self, legion_id: str) -> dict:
@@ -329,19 +309,6 @@ class LegionCoordinator:
         """
         # Return the full comm object - let frontend decide what to display
         return comm
-
-    async def _load_all_channels(self) -> None:
-        """
-        Load all channels for all legions from disk into memory.
-
-        Called during system initialization to restore channel state.
-        """
-        # Get all legions
-        legions = await self.list_legions()
-
-        # Load channels for each legion
-        for legion in legions:
-            await self.system.channel_manager._load_channels_for_legion(legion.project_id)
 
     async def register_capability(
         self,

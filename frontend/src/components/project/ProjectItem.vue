@@ -112,9 +112,6 @@
             </div>
 
             <SpySelector :project="project" :sessions="projectSessions" />
-
-            <!-- Channels Section -->
-            <ChannelList :project="project" />
           </template>
 
           <!-- Regular Sessions for non-Legion projects -->
@@ -141,7 +138,6 @@ import { useUIStore } from '@/stores/ui'
 import ProjectStatusLine from './ProjectStatusLine.vue'
 import SessionItem from '../session/SessionItem.vue'
 import SpySelector from '../legion/SpySelector.vue'
-import ChannelList from '../legion/ChannelList.vue'
 
 const props = defineProps({
   project: {
