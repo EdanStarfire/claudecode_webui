@@ -28,6 +28,18 @@ session_logger = get_logger('session_manager', category='SESSION_MANAGER')
 logger = logging.getLogger(__name__)
 
 
+# Valid model identifiers (current API aliases)
+VALID_MODELS = {
+    "opus",
+    "sonnet",
+    "haiku",
+    "opusplan",
+}
+
+# Default model for new sessions
+DEFAULT_MODEL = "sonnet"
+
+
 class SessionState(Enum):
     """Session lifecycle states"""
     CREATED = "created"

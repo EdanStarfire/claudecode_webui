@@ -40,7 +40,7 @@
             <!-- Model -->
             <div class="mb-3">
               <h6 class="text-muted">Model</h6>
-              <div>{{ initData.model || 'Default' }}</div>
+              <div>{{ getModelDisplayName(initData.model) }}</div>
             </div>
 
             <!-- Permission Mode -->
@@ -129,6 +129,14 @@ const showRawData = ref(false)
 const modalElement = ref(null)
 let modalInstance = null
 
+// Model display names mapping
+const modelDisplayNames = {
+  'sonnet': 'Sonnet 4.5',
+  'opus': 'Opus 4.5',
+  'haiku': 'Haiku 4.5',
+  'opusplan': 'OpusPlan (Opus + Sonnet)'
+}
+
 // Get init data - try session store first, then search messages
 const initData = computed(() => {
   if (!sessionId.value) {
@@ -151,6 +159,14 @@ const initData = computed(() => {
 
   return initMessage?.metadata?.init_data || null
 })
+
+// Get human-readable model display name
+function getModelDisplayName(modelId) {
+  if (!modelId) {
+    return 'Default (Sonnet 4.5)'
+  }
+  return modelDisplayNames[modelId] || modelId
+}
 
 // Format system prompt for display
 function formatSystemPrompt(prompt) {
