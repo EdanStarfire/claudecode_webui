@@ -115,15 +115,6 @@
               <div v-else class="text-muted small">No children</div>
             </div>
 
-            <!-- Horde Membership -->
-            <div class="mb-3">
-              <h6 class="text-muted">Horde Membership</h6>
-              <div v-if="session.horde_id" class="font-monospace small">
-                {{ session.horde_id }}
-              </div>
-              <div v-else class="text-muted small">Not in a horde</div>
-            </div>
-
             <!-- Channel Memberships -->
             <div class="mb-3">
               <h6 class="text-muted">Channel Memberships</h6>

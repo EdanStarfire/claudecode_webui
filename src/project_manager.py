@@ -15,10 +15,9 @@ import subprocess
 import time
 import uuid
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
-from enum import Enum
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +28,7 @@ class ProjectInfo:
     project_id: str
     name: str
     working_directory: str  # Absolute path (IMMUTABLE)
-    session_ids: List[str]  # Ordered list of child session IDs (or minion IDs if is_multi_agent)
+    session_ids: list[str]  # Ordered list of child session IDs (or minion IDs if is_multi_agent)
     is_expanded: bool = True  # Expansion state (persisted)
     created_at: datetime = None
     updated_at: datetime = None
@@ -37,28 +36,25 @@ class ProjectInfo:
     is_multi_agent: bool = False  # True if this is a Legion (multi-agent project)
 
     # Legion-specific fields (only used when is_multi_agent=True)
-    horde_ids: List[str] = None  # All hordes in this legion
-    channel_ids: List[str] = None  # All channels in this legion
-    minion_ids: List[str] = None  # All minions (alias for session_ids when is_multi_agent=True)
+    channel_ids: list[str] = None  # All channels in this legion
+    minion_ids: list[str] = None  # All minions (alias for session_ids when is_multi_agent=True)
     max_concurrent_minions: int = 20  # Max concurrent minions
     active_minion_count: int = 0  # Currently active minions
 
     def __post_init__(self):
         if self.created_at is None:
-            self.created_at = datetime.now(timezone.utc)
+            self.created_at = datetime.now(UTC)
         if self.updated_at is None:
-            self.updated_at = datetime.now(timezone.utc)
+            self.updated_at = datetime.now(UTC)
         if self.session_ids is None:
             self.session_ids = []
         # Initialize legion-specific fields
-        if self.horde_ids is None:
-            self.horde_ids = []
         if self.channel_ids is None:
             self.channel_ids = []
         if self.minion_ids is None:
             self.minion_ids = []
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for JSON serialization"""
         data = asdict(self)
         data['created_at'] = self.created_at.isoformat()
@@ -66,7 +62,7 @@ class ProjectInfo:
         return data
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'ProjectInfo':
+    def from_dict(cls, data: dict[str, Any]) -> 'ProjectInfo':
         """Create from dictionary loaded from JSON"""
         data['created_at'] = datetime.fromisoformat(data['created_at'])
         data['updated_at'] = datetime.fromisoformat(data['updated_at'])
@@ -76,8 +72,6 @@ class ProjectInfo:
         if 'is_multi_agent' not in data:
             data['is_multi_agent'] = False
         # Migration: Add legion fields if missing
-        if 'horde_ids' not in data:
-            data['horde_ids'] = []
         if 'channel_ids' not in data:
             data['channel_ids'] = []
         if 'minion_ids' not in data:
@@ -86,6 +80,8 @@ class ProjectInfo:
             data['max_concurrent_minions'] = 20
         if 'active_minion_count' not in data:
             data['active_minion_count'] = 0
+        # Migration: Remove deprecated horde_ids field (backward compatibility)
+        data.pop('horde_ids', None)
         return cls(**data)
 
 
@@ -95,8 +91,8 @@ class ProjectManager:
     def __init__(self, data_dir: Path = None):
         self.data_dir = data_dir or Path("data")
         self.projects_dir = self.data_dir / "projects"
-        self._active_projects: Dict[str, ProjectInfo] = {}
-        self._project_locks: Dict[str, asyncio.Lock] = {}
+        self._active_projects: dict[str, ProjectInfo] = {}
+        self._project_locks: dict[str, asyncio.Lock] = {}
 
     async def initialize(self):
         """Initialize project manager and load existing projects"""
@@ -117,7 +113,7 @@ class ProjectManager:
                     state_file = project_dir / "state.json"
                     if state_file.exists():
                         try:
-                            with open(state_file, 'r') as f:
+                            with open(state_file) as f:
                                 data = json.load(f)
                             project_info = ProjectInfo.from_dict(data)
                             self._active_projects[project_info.project_id] = project_info
@@ -132,13 +128,13 @@ class ProjectManager:
         self,
         name: str,
         working_directory: str,
-        order: Optional[int] = None,
+        order: int | None = None,
         is_multi_agent: bool = False,
         max_concurrent_minions: int = 20
     ) -> ProjectInfo:
         """Create a new project with unique ID (or legion if is_multi_agent=True)"""
         project_id = str(uuid.uuid4())
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         # Convert to absolute path
         working_directory = str(Path(working_directory).resolve())
@@ -184,11 +180,11 @@ class ProjectManager:
                 del self._project_locks[project_id]
             raise
 
-    async def get_project(self, project_id: str) -> Optional[ProjectInfo]:
+    async def get_project(self, project_id: str) -> ProjectInfo | None:
         """Get project information"""
         return self._active_projects.get(project_id)
 
-    async def list_projects(self) -> List[ProjectInfo]:
+    async def list_projects(self) -> list[ProjectInfo]:
         """List all projects sorted by order"""
         projects = list(self._active_projects.values())
 
@@ -202,9 +198,9 @@ class ProjectManager:
     async def update_project(
         self,
         project_id: str,
-        name: Optional[str] = None,
-        is_expanded: Optional[bool] = None,
-        order: Optional[int] = None
+        name: str | None = None,
+        is_expanded: bool | None = None,
+        order: int | None = None
     ) -> bool:
         """Update project metadata (name, expansion state, order only - path is immutable)"""
         async with self._get_project_lock(project_id):
@@ -222,7 +218,7 @@ class ProjectManager:
                 if order is not None:
                     project.order = order
 
-                project.updated_at = datetime.now(timezone.utc)
+                project.updated_at = datetime.now(UTC)
                 await self._persist_project_state(project_id)
                 logger.info(f"Updated project {project_id}")
                 return True
@@ -370,7 +366,7 @@ class ProjectManager:
 
                 if session_id not in project.session_ids:
                     project.session_ids.insert(0, session_id)  # Insert at beginning (new sessions at top)
-                    project.updated_at = datetime.now(timezone.utc)
+                    project.updated_at = datetime.now(UTC)
                     await self._persist_project_state(project_id)
                     logger.info(f"Added session {session_id} to project {project_id}")
                     return True
@@ -401,7 +397,7 @@ class ProjectManager:
 
                 if session_id in project.session_ids:
                     project.session_ids.remove(session_id)
-                    project.updated_at = datetime.now(timezone.utc)
+                    project.updated_at = datetime.now(UTC)
                     await self._persist_project_state(project_id)
                     logger.info(f"Removed session {session_id} from project {project_id} ({len(project.session_ids)} session(s) remaining)")
                     return (True, False)
@@ -413,7 +409,7 @@ class ProjectManager:
                 logger.error(f"Failed to remove session from project: {e}")
                 return (False, False)
 
-    async def reorder_project_sessions(self, project_id: str, session_ids: List[str]) -> bool:
+    async def reorder_project_sessions(self, project_id: str, session_ids: list[str]) -> bool:
         """Reorder sessions within a project"""
         async with self._get_project_lock(project_id):
             try:
@@ -432,7 +428,7 @@ class ProjectManager:
 
                 # Update session order
                 project.session_ids = session_ids
-                project.updated_at = datetime.now(timezone.utc)
+                project.updated_at = datetime.now(UTC)
                 await self._persist_project_state(project_id)
                 logger.info(f"Reordered sessions in project {project_id}")
                 return True
@@ -441,7 +437,7 @@ class ProjectManager:
                 logger.error(f"Failed to reorder sessions in project: {e}")
                 return False
 
-    async def reorder_projects(self, project_ids: List[str]) -> bool:
+    async def reorder_projects(self, project_ids: list[str]) -> bool:
         """Reorder projects by assigning sequential order values"""
         try:
             logger.debug(f"Reorder request for projects: {project_ids}")
@@ -489,7 +485,7 @@ class ProjectManager:
                     return False
 
                 project.is_expanded = not project.is_expanded
-                project.updated_at = datetime.now(timezone.utc)
+                project.updated_at = datetime.now(UTC)
                 await self._persist_project_state(project_id)
                 logger.info(f"Toggled expansion for project {project_id} to {project.is_expanded}")
                 return True
@@ -508,7 +504,7 @@ class ProjectManager:
                     return False
 
                 project.order = order
-                project.updated_at = datetime.now(timezone.utc)
+                project.updated_at = datetime.now(UTC)
                 await self._persist_project_state(project_id)
                 return True
 

@@ -1013,9 +1013,9 @@ class ClaudeWebUI:
                 logger.error(f"Failed to get timeline: {e}")
                 raise HTTPException(status_code=500, detail=str(e))
 
-        @self.app.get("/api/legions/{legion_id}/hordes")
-        async def get_legion_horde(legion_id: str):
-            """Get complete horde hierarchy with user at root"""
+        @self.app.get("/api/legions/{legion_id}/hierarchy")
+        async def get_legion_hierarchy(legion_id: str):
+            """Get complete minion hierarchy with user at root"""
             try:
                 # Verify legion exists
                 project = await self.coordinator.project_manager.get_project(legion_id)
@@ -1028,14 +1028,14 @@ class ClaudeWebUI:
                     raise HTTPException(status_code=500, detail="Legion coordinator not available")
 
                 # Assemble hierarchy
-                hierarchy = await legion_coord.assemble_horde_hierarchy(legion_id)
+                hierarchy = await legion_coord.assemble_minion_hierarchy(legion_id)
 
                 return hierarchy
 
             except HTTPException:
                 raise
             except Exception as e:
-                logger.error(f"Failed to get horde hierarchy: {e}")
+                logger.error(f"Failed to get minion hierarchy: {e}")
                 raise HTTPException(status_code=500, detail=str(e))
 
         @self.app.post("/api/legions/{legion_id}/comms")

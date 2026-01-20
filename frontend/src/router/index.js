@@ -3,7 +3,7 @@ import NoSessionSelected from '../components/session/NoSessionSelected.vue'
 import SessionView from '../components/session/SessionView.vue'
 import TimelineView from '../components/legion/TimelineView.vue'
 import SpyView from '../components/legion/SpyView.vue'
-import HordeView from '../components/legion/HordeView.vue'
+import HierarchyView from '../components/legion/HierarchyView.vue'
 import ChannelView from '../components/legion/ChannelView.vue'
 
 const routes = [
@@ -31,9 +31,9 @@ const routes = [
     props: true
   },
   {
-    path: '/horde/:legionId',
-    name: 'horde',
-    component: HordeView,
+    path: '/hierarchy/:legionId',
+    name: 'hierarchy',
+    component: HierarchyView,
     props: true
   },
   {

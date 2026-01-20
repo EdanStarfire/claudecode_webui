@@ -183,9 +183,9 @@ class LegionCoordinator:
         (base_path / "channels").mkdir(parents=True, exist_ok=True)
         (base_path / "hordes").mkdir(parents=True, exist_ok=True)
 
-    async def assemble_horde_hierarchy(self, legion_id: str) -> dict:
+    async def assemble_minion_hierarchy(self, legion_id: str) -> dict:
         """
-        Assemble complete horde hierarchy with user at root.
+        Assemble complete minion hierarchy with user at root.
 
         Returns hierarchy structure with:
         - User entry at root with last outgoing comm

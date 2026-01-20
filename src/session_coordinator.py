@@ -163,7 +163,6 @@ class SessionCoordinator:
         # Hierarchy fields (Phase 5)
         parent_overseer_id: str | None = None,
         overseer_level: int = 0,
-        horde_id: str | None = None,
     ) -> str:
         """Create a new Claude Code session with integrated components (within a project)"""
         try:
@@ -200,8 +199,7 @@ class SessionCoordinator:
                 capabilities=capabilities,
                 # Hierarchy fields (Phase 5)
                 parent_overseer_id=parent_overseer_id,
-                overseer_level=overseer_level,
-                horde_id=horde_id
+                overseer_level=overseer_level
             )
 
             # Add session to project
@@ -618,34 +616,6 @@ class SessionCoordinator:
                             coord_logger.debug(f"Minion {session_id} was not a member of any channels")
                     except Exception as e:
                         coord_logger.error(f"Failed to remove minion {session_id} from channels: {e}")
-
-                # 1.7c: Horde cleanup - remove from horde or delete horde if root_overseer
-                if session_info.horde_id and self.legion_system.overseer_controller:
-                    try:
-                        horde = self.legion_system.overseer_controller.hordes.get(session_info.horde_id)
-                        if horde:
-                            # Check if this minion is the root overseer of the horde
-                            if horde.root_overseer_id == session_id:
-                                # This minion is the root overseer - delete entire horde after verifying all members are gone
-                                if len(horde.all_minion_ids) <= 1:  # Only this minion remains (or already empty)
-                                    del self.legion_system.overseer_controller.hordes[session_info.horde_id]
-                                    # Delete horde state file
-                                    horde_file = self.data_dir / "legions" / legion_id / "hordes" / f"{session_info.horde_id}.json"
-                                    if horde_file.exists():
-                                        horde_file.unlink()
-                                        coord_logger.info(f"Deleted horde {session_info.horde_id} (root overseer {session_id} was last member)")
-                                else:
-                                    coord_logger.warning(f"Root overseer {session_id} deleted but horde {session_info.horde_id} still has {len(horde.all_minion_ids) - 1} other members - horde not deleted")
-                            else:
-                                # This minion is a regular horde member - just remove from all_minion_ids
-                                if session_id in horde.all_minion_ids:
-                                    horde.all_minion_ids.remove(session_id)
-                                    horde.updated_at = datetime.now(UTC)
-                                    # Persist updated horde
-                                    await self.legion_system.overseer_controller._persist_horde(horde)
-                                    coord_logger.info(f"Removed minion {session_id} from horde {session_info.horde_id} all_minion_ids")
-                    except Exception as e:
-                        coord_logger.error(f"Failed to clean up horde for minion {session_id}: {e}")
 
             # Step 2: Terminate the SDK if it's running
             sdk = self._active_sdks.get(session_id)

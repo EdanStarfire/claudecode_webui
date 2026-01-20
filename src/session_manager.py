@@ -79,7 +79,6 @@ class SessionInfo:
     overseer_level: int = 0  # 0=user-created, 1=child, 2=grandchild
     parent_overseer_id: str | None = None  # None if user-created
     child_minion_ids: list[str] = None  # Child minion session IDs
-    horde_id: str | None = None  # Which horde this minion belongs to
     channel_ids: list[str] = None  # Communication channels
     capabilities: list[str] = None  # Capability tags for discovery
     expertise_score: float = 0.5  # Expertise level (0.0-1.0, default 0.5 for MVP)
@@ -129,6 +128,8 @@ class SessionInfo:
             data['allowed_tools'] = data.pop('tools')
         elif 'allowed_tools' not in data:
             data['allowed_tools'] = []
+        # Migration: Remove deprecated horde_id field (backward compatibility)
+        data.pop('horde_id', None)
         return cls(**data)
 
 
@@ -227,8 +228,7 @@ class SessionManager:
         capabilities: list[str] = None,
         # Hierarchy fields (Phase 5)
         parent_overseer_id: str | None = None,
-        overseer_level: int = 0,
-        horde_id: str | None = None
+        overseer_level: int = 0
     ) -> None:
         """Create a new session with provided ID (or minion if is_minion=True)"""
         # Validate session_id is not reserved
@@ -267,8 +267,7 @@ class SessionManager:
             capabilities=capabilities if capabilities is not None else [],
             # Hierarchy fields (Phase 5)
             parent_overseer_id=parent_overseer_id,
-            overseer_level=overseer_level,
-            horde_id=horde_id
+            overseer_level=overseer_level
         )
 
         try:
@@ -642,7 +641,6 @@ class SessionManager:
         Supported fields:
         - is_overseer (bool)
         - child_minion_ids (List[str])
-        - horde_id (str)
         - Any other SessionInfo field
 
         Example:
