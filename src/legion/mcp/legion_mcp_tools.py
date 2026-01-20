@@ -479,32 +479,6 @@ class LegionMCPTools:
                 "is_error": True
             }
 
-        # Convert channels parameter to list of channel IDs
-        # Channels can be provided as:
-        # - string: "channel1" or "channel1,channel2,channel3"
-        # - list: ["channel1", "channel2"]
-        channel_ids = []
-        channel_names = []
-        channels_not_found = []  # Track channels that don't exist during lookup
-
-        if channels:
-            # Normalize to list of channel names
-            if isinstance(channels, str):
-                channel_names = [ch.strip() for ch in channels.split(',') if ch.strip()]
-            else:
-                channel_names = [ch.strip() for ch in channels if ch.strip()]
-
-            # Resolve channel names to IDs
-            for channel_name in channel_names:
-                channel = await self.system.legion_coordinator.get_channel_by_name(legion_id, channel_name)
-                if channel:
-                    channel_ids.append(channel.channel_id)
-                else:
-                    channels_not_found.append(channel_name)
-                    coord_logger.warning(f"Channel '{channel_name}' not found in legion {legion_id} during spawn_minion")
-
-            coord_logger.debug(f"Resolved channels {channel_names} to IDs {channel_ids}")
-
         # Validate required fields
         if not name:
             return {
@@ -606,22 +580,18 @@ class LegionMCPTools:
         # Attempt to spawn child minion
         try:
             # Map initialization_context to system_prompt (initialization_context is semantic UI term)
-            # Use channel_ids (resolved from channel names)
             spawn_result = await self.system.overseer_controller.spawn_minion(
                 parent_overseer_id=parent_overseer_id,
                 name=name,
                 role=role,
                 system_prompt=initialization_context,
                 capabilities=capabilities,
-                channels=channel_ids,
                 permission_mode=permission_mode,
                 allowed_tools=allowed_tools,
                 working_directory=working_directory
             )
 
             child_minion_id = spawn_result["minion_id"]
-            channels_joined = spawn_result["channels_joined"]
-            channels_failed = spawn_result["channels_failed"]
 
             # Build success message with permission info
             perm_info = ""
@@ -644,39 +614,6 @@ class LegionMCPTools:
             if working_directory:
                 wd_info = f"\nWorking Directory: {working_directory}\n"
 
-            # Format channel join results
-            channel_info = ""
-            if channels_joined or channels_failed or channels_not_found:
-                channel_info = "\n**Channel Membership:**\n"
-                if channels_joined:
-                    # Resolve channel IDs back to names for display
-                    joined_names = []
-                    for channel_id in channels_joined:
-                        channel = await self.system.channel_manager.get_channel(channel_id)
-                        if channel:
-                            joined_names.append(channel.name)
-                        else:
-                            joined_names.append(channel_id)  # Fallback to ID if name unavailable
-                    channel_info += f"  ✅ Joined: {', '.join(joined_names)}\n"
-
-                if channels_failed or channels_not_found:
-                    channel_info += "  ❌ Failed:\n"
-                    # First, show channels that failed during lookup (not found)
-                    for channel_name in channels_not_found:
-                        channel_info += f"     - {channel_name}: Channel does not exist\n"
-                    # Then show channels that failed during add_member (other errors)
-                    for failed in channels_failed:
-                        # Try to get channel name from channel_id
-                        channel_id = failed["channel_id"]
-                        reason = failed["reason"]
-                        # Look up in the original channel_names list to show the name the user provided
-                        display_name = channel_id
-                        for idx, cid in enumerate(channel_ids):
-                            if cid == channel_id and idx < len(channel_names):
-                                display_name = channel_names[idx]
-                                break
-                        channel_info += f"     - {display_name}: {reason}\n"
-
             return {
                 "content": [{
                     "type": "text",
@@ -684,8 +621,7 @@ class LegionMCPTools:
                         f"✅ Successfully spawned minion '{name}' with role '{role}'.\n\n"
                         f"Minion ID: {child_minion_id}\n"
                         f"{wd_info}"
-                        f"{perm_info}"
-                        f"{channel_info}\n"
+                        f"{perm_info}\n"
                         f"The child minion is now active and ready to receive comms. "
                         f"You can communicate with them using send_comm(to_minion_name='{name}', ...)."
                     )
@@ -1135,20 +1071,6 @@ class LegionMCPTools:
             parent_session = await self.system.session_coordinator.session_manager.get_session_info(minion.parent_overseer_id)
             parent_name = parent_session.name if parent_session else minion.parent_overseer_id[:8]
             profile_lines.append(f"**Parent Overseer:** {parent_name}")
-
-        # Channels - now correctly maintained via bidirectional updates
-        minion_channels = []
-        for channel_id in minion.channel_ids:
-            channel = self.system.legion_coordinator.channels.get(channel_id)
-            if channel:
-                minion_channels.append(channel.name)
-
-        if minion_channels:
-            profile_lines.append("\n**Channels:**")
-            for channel_name in sorted(minion_channels):
-                profile_lines.append(f"- #{channel_name}")
-        else:
-            profile_lines.append("\n**Channels:** None")
 
         # Legion
         if minion.project_id:
