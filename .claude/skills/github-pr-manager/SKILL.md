@@ -88,23 +88,67 @@ description: Create, view, and merge GitHub pull requests with validation. Use w
    - Verify mergeable is "MERGEABLE"
    - Extract branch name for cleanup
 
-2. **Perform Squash Merge**
+2. **Detect Environment and Perform Squash Merge**
+
+   **Check if in worktree:**
    ```bash
-   gh pr merge <pr_number> --squash --delete-branch
+   # Worktrees have .git as a file, main repos have .git as a directory
+   if [ -f .git ]; then
+     echo "📍 Worktree detected"
+     IN_WORKTREE=true
+   else
+     echo "📍 Main repository detected"
+     IN_WORKTREE=false
+   fi
    ```
-   This will:
-   - Squash all commits into one
-   - Merge to main/master
-   - Delete remote branch
-   - Delete local tracking branch (if it exists)
+
+   **Merge with conditional branch deletion:**
+   ```bash
+   if [ "$IN_WORKTREE" = "true" ]; then
+     # In worktree: merge without --delete-branch (would fail trying to checkout main)
+     gh pr merge <pr_number> --squash
+     echo "Note: Remote branch NOT auto-deleted (worktree limitation)"
+   else
+     # In main repo: merge with automatic branch deletion
+     gh pr merge <pr_number> --squash --delete-branch
+   fi
+   ```
+
+   **Why different approaches:**
+   - `--delete-branch` flag attempts to checkout main after deletion
+   - This fails in worktrees where main is already checked out in root
+   - Manual cleanup is safer and more explicit in worktree workflows
 
 3. **Update Local Repository**
+
+   **Switch to main (if not in worktree):**
    ```bash
-   git checkout main
+   if [ "$IN_WORKTREE" = "false" ]; then
+     git checkout main
+   fi
+   ```
+
+   **Pull latest changes:**
+   ```bash
    git pull origin main
    ```
 
-4. **Clean Up Local Branch** (if still exists)
+   **Note**: In worktree environments:
+   - Main is checked out in the root repository
+   - Cannot checkout a branch that's active elsewhere
+   - Worktree cleanup is handled by orchestrator or worktree-manager skill
+
+4. **Clean Up Branches**
+
+   **Delete remote branch (if in worktree and not already deleted):**
+   ```bash
+   if [ "$IN_WORKTREE" = "true" ]; then
+     # Manually delete remote branch
+     git push origin --delete <branch-name>
+   fi
+   ```
+
+   **Delete local branch** (if still exists)
    ```bash
    # Check if branch still exists
    git branch --list <branch-name>
@@ -133,6 +177,14 @@ description: Create, view, and merge GitHub pull requests with validation. Use w
 - Branch may not exist locally (already deleted or never checked out)
 - Always check branch existence before deletion
 - Ignore "branch not found" errors - treat as already cleaned up
+
+**Worktree Environment:**
+- In git worktrees, `.git` is a file (not directory) pointing to actual git dir
+- Cannot checkout main because it's active in root repository
+- Skill automatically detects worktrees and skips checkout step
+- Branch deletion still works normally from worktrees
+- Pull operation fetches latest changes without switching branches
+- Worktree cleanup should be handled separately (use worktree-manager skill)
 
 ### PR Title and Body Standards
 
@@ -193,4 +245,30 @@ Action:
 3. Switch to main and pull
 4. Verify local branch cleanup (check existence first)
 Output: "PR #123 merged successfully, branch cleaned up"
+```
+### Example 4: Merge PR from worktree
+```
+User: "Merge PR #789"
+Context: Working in worktree at worktrees/issue-275/
+Action:
+1. Validate PR state (gh pr view 789 --json headRefName,state,mergeable)
+2. Extract branch name: fix/issue-275
+3. Detect worktree environment (test -f .git returns true)
+4. Squash merge WITHOUT --delete-branch (gh pr merge 789 --squash)
+5. Skip checkout to main (would fail in worktree)
+6. Pull latest changes (git pull origin main)
+7. Manually delete remote branch (git push origin --delete fix/issue-275)
+8. Verify local branch cleanup
+
+Output:
+"📍 Worktree detected
+Merging PR #789...
+Note: Remote branch NOT auto-deleted (worktree limitation)
+PR #789 merged successfully
+Pulled latest changes from main
+Deleting remote branch fix/issue-275...
+Remote branch deleted
+Ready for worktree cleanup"
+
+Note: The worktree itself should be cleaned up using worktree-manager skill after merge
 ```
