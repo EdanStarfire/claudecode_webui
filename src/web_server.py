@@ -357,6 +357,17 @@ class ClaudeWebUI:
             self._broadcast_channel_created_to_legion_websocket
         )
 
+        # Inject permission callback factory into SessionCoordinator
+        # This allows legion components (overseer_controller, comm_router) to create
+        # permission callbacks for spawned minions without direct access to web_server
+        self.coordinator.set_permission_callback_factory(self._get_permission_callback_factory())
+        logger.info("Permission callback factory injected into SessionCoordinator")
+
+        # Inject message callback registrar into SessionCoordinator
+        # This allows legion components to register WebSocket message callbacks
+        self.coordinator.set_message_callback_registrar(self._get_message_callback_registrar())
+        logger.info("Message callback registrar injected into SessionCoordinator")
+
         # Setup static files (Vue 3 production build)
         static_dir = Path(__file__).parent.parent / "frontend" / "dist"
         if not static_dir.exists():
@@ -365,6 +376,47 @@ class ClaudeWebUI:
                 "Run 'cd frontend && npm run build' to create production build."
             )
         self.app.mount("/assets", StaticFiles(directory=str(static_dir / "assets")), name="assets")
+
+    def _get_permission_callback_factory(self):
+        """
+        Return a factory function that creates permission callbacks for any session.
+
+        This allows components without direct access to web_server (like overseer_controller)
+        to create permission callbacks that broadcast to WebSockets and handle async approval.
+
+        Pattern: Same as user-created minions, but accessible from legion components.
+
+        Returns:
+            Callable[[str], Callable]: Factory function taking session_id, returning permission_callback
+        """
+        def factory(session_id: str):
+            return self._create_permission_callback(session_id)
+        return factory
+
+    def _get_message_callback_registrar(self):
+        """
+        Return a function that registers message callbacks for any session.
+
+        This allows components without direct access to web_server (like overseer_controller)
+        to register WebSocket message callbacks for spawned minions.
+
+        Pattern: Same as user-created minions, but accessible from legion components.
+
+        Returns:
+            Callable[[str], None]: Function taking session_id, registers message callback
+        """
+        def registrar(session_id: str):
+            # Clear any existing callbacks to prevent duplicates
+            if session_id in self.coordinator._message_callbacks:
+                self.coordinator._message_callbacks[session_id] = []
+
+            # Register WebSocket callback for this session
+            self.coordinator.add_message_callback(
+                session_id,
+                self._create_message_callback(session_id)
+            )
+            logger.info(f"Registered WebSocket message callback for session {session_id}")
+        return registrar
 
     async def _broadcast_comm_to_legion_websocket(self, legion_id: str, comm):
         """Broadcast new comm to WebSocket clients watching this legion"""

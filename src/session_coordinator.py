@@ -72,6 +72,14 @@ class SessionCoordinator:
         # Track ExitPlanMode that had setMode suggestions applied (to prevent auto-reset)
         self._exitplanmode_with_setmode: dict[str, bool] = {}  # session_id -> bool
 
+        # Permission callback factory (injected by web_server)
+        # Allows legion components to create permission callbacks on-demand
+        self._permission_callback_factory: Callable[[str], Callable] | None = None
+
+        # Message callback registrar (injected by web_server)
+        # Allows legion components to register WebSocket message callbacks
+        self._message_callback_registrar: Callable[[str], None] | None = None
+
         # Initialize Legion multi-agent system
         from src.legion_system import LegionSystem
         # Create a dummy storage manager for now (legion will create its own per-legion storage)
@@ -277,6 +285,42 @@ class SessionCoordinator:
     async def get_session_storage(self, session_id: str):
         """Get storage manager for a session"""
         return self._storage_managers.get(session_id)
+
+    def set_permission_callback_factory(self, factory: Callable[[str], Callable]) -> None:
+        """
+        Set the permission callback factory for creating callbacks on demand.
+
+        This factory is used by legion components (overseer_controller, comm_router)
+        to create permission callbacks for spawned minions.
+
+        Args:
+            factory: Function that takes session_id and returns permission_callback
+        """
+        self._permission_callback_factory = factory
+        coord_logger.info("Permission callback factory registered in SessionCoordinator")
+
+        # Propagate to legion_system if it exists
+        if self.legion_system:
+            self.legion_system.permission_callback_factory = factory
+            coord_logger.info("Permission callback factory propagated to LegionSystem")
+
+    def set_message_callback_registrar(self, registrar: Callable[[str], None]) -> None:
+        """
+        Set the message callback registrar for registering WebSocket callbacks.
+
+        This registrar is used by legion components (overseer_controller, comm_router)
+        to register WebSocket message callbacks for spawned minions.
+
+        Args:
+            registrar: Function that takes session_id and registers message callback
+        """
+        self._message_callback_registrar = registrar
+        coord_logger.info("Message callback registrar registered in SessionCoordinator")
+
+        # Propagate to legion_system if it exists
+        if self.legion_system:
+            self.legion_system.message_callback_registrar = registrar
+            coord_logger.info("Message callback registrar propagated to LegionSystem")
 
     async def start_session(self, session_id: str, permission_callback: Callable[[str, dict[str, Any]], bool | dict[str, Any]] | None = None) -> bool:
         """Start a session with SDK integration"""

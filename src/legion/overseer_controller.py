@@ -369,8 +369,27 @@ class OverseerController:
         )
         await self.system.comm_router.route_comm(spawn_comm)
 
-        # 14. Start child session (make it active)
-        await self.system.session_coordinator.start_session(child_minion_id)
+        # 14. Register WebSocket message callback for child session
+        # This ensures messages from the spawned minion broadcast to WebSocket clients (Spy view)
+        if self.system.message_callback_registrar:
+            self.system.message_callback_registrar(child_minion_id)
+            coord_logger.info(f"Registered WebSocket message callback for spawned minion {child_minion_id} ({name})")
+        else:
+            coord_logger.warning(f"No message callback registrar available for minion {child_minion_id} - WebSocket streaming will not work!")
+
+        # 15. Start child session with permission callback
+        # Create permission callback using factory (same pattern as user-created minions)
+        permission_callback = None
+        if self.system.permission_callback_factory:
+            permission_callback = self.system.permission_callback_factory(child_minion_id)
+            coord_logger.info(f"Created permission callback for spawned minion {child_minion_id} ({name})")
+        else:
+            coord_logger.warning(f"No permission callback factory available for minion {child_minion_id} - permissions will not work!")
+
+        await self.system.session_coordinator.start_session(
+            child_minion_id,
+            permission_callback=permission_callback
+        )
 
         # 15. Broadcast project update to UI WebSocket (new session added)
         if self.system.ui_websocket_manager:
