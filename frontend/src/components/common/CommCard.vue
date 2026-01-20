@@ -16,7 +16,7 @@
           </strong>
           <template v-if="recipientName">
             <span class="text-muted mx-1">→</span>
-            <strong :class="{ 'recipient-channel': comm.to_channel_id }">
+            <strong>
               {{ recipientName }}
             </strong>
           </template>
@@ -229,12 +229,6 @@ const renderedContent = computed(() => {
 .system-sender {
   color: #6c757d !important;
   font-style: italic;
-}
-
-/* Channel recipient styling */
-.recipient-channel {
-  color: #0d6efd !important;
-  font-weight: 500 !important;
 }
 
 /* Collapsible content body */

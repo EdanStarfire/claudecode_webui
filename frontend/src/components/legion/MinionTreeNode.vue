@@ -147,8 +147,6 @@ function getCommRecipient(comm) {
     return 'User'
   } else if (comm.to_minion_name) {
     return comm.to_minion_name
-  } else if (comm.to_channel_name) {
-    return `#${comm.to_channel_name}`
   }
   return 'unknown'
 }

@@ -115,23 +115,6 @@
               <div v-else class="text-muted small">No children</div>
             </div>
 
-            <!-- Channel Memberships -->
-            <div class="mb-3">
-              <h6 class="text-muted">Channel Memberships</h6>
-              <div v-if="session.channel_ids && session.channel_ids.length > 0">
-                <div class="d-flex flex-wrap gap-1">
-                  <span
-                    v-for="channelId in session.channel_ids"
-                    :key="channelId"
-                    class="badge bg-info"
-                  >
-                    {{ channelId }}
-                  </span>
-                </div>
-              </div>
-              <div v-else class="text-muted small">No channels</div>
-            </div>
-
             <!-- Created Timestamp -->
             <div class="mb-3">
               <h6 class="text-muted">Created</h6>
