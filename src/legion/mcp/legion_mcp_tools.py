@@ -24,8 +24,7 @@ except ImportError:
 
 if TYPE_CHECKING:
     from src.legion_system import LegionSystem
-    from src.models.legion_models import Channel
-
+    
 
 class LegionMCPTools:
     """
@@ -1168,64 +1167,6 @@ class LegionMCPTools:
                 }],
                 "is_error": True
             }
-
-    async def _log_membership_change_comm(
-        self,
-        legion_id: str,
-        channel: 'Channel',
-        minion_id: str,
-        minion_name: str,
-        action: str,
-        actor_name: str
-    ) -> None:
-        """
-        Log a membership change as a SYSTEM comm.
-
-        Args:
-            legion_id: Legion UUID
-            channel: Channel instance
-            minion_id: ID of minion being added/removed
-            minion_name: Name of minion being added/removed
-            action: "joined", "left", "added to", or "removed from"
-            actor_name: Name of the actor (minion or overseer)
-        """
-        import uuid
-
-        from src.models.legion_models import (
-            SYSTEM_MINION_ID,
-            SYSTEM_MINION_NAME,
-            Comm,
-            CommType,
-            InterruptPriority,
-        )
-
-        # Format message based on action
-        if action in ["joined", "left"]:
-            # Self-action by minion
-            summary = f"{minion_name} {action} #{channel.name}"
-            content = f"Minion **{minion_name}** {action} channel **#{channel.name}**"
-        else:
-            # Overseer action
-            summary = f"{actor_name} {action} {minion_name} to #{channel.name}"
-            content = f"Overseer **{actor_name}** {action} minion **{minion_name}** {'to' if 'added' in action else 'from'} channel **#{channel.name}**"
-
-        # Create SYSTEM comm
-        comm = Comm(
-            comm_id=str(uuid.uuid4()),
-            from_minion_id=SYSTEM_MINION_ID,  # System-generated messages
-            from_minion_name=SYSTEM_MINION_NAME,
-            from_user=False,
-            summary=summary,
-            content=content,
-            comm_type=CommType.SYSTEM,
-            interrupt_priority=InterruptPriority.NONE,
-            visible_to_user=True,
-            to_channel_id=channel.channel_id,
-            to_channel_name=channel.name
-        )
-
-        # Route comm (logs to timeline and channel history)
-        await self.system.comm_router.route_comm(comm)
 
     async def _handle_update_expertise(self, args: dict[str, Any]) -> dict[str, Any]:
         """

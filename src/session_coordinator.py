@@ -600,19 +600,6 @@ class SessionCoordinator:
                 else:
                     coord_logger.debug(f"Legion minion directory does not exist (already cleaned): {minion_dir}")
 
-                # 1.7b: Remove from all channel memberships
-                if self.legion_system.channel_manager:
-                    try:
-                        removed_channels = await self.legion_system.channel_manager.remove_member_from_all_channels(
-                            legion_id, session_id
-                        )
-                        if removed_channels:
-                            coord_logger.info(f"Removed minion {session_id} from {len(removed_channels)} channels: {removed_channels}")
-                        else:
-                            coord_logger.debug(f"Minion {session_id} was not a member of any channels")
-                    except Exception as e:
-                        coord_logger.error(f"Failed to remove minion {session_id} from channels: {e}")
-
             # Step 2: Terminate the SDK if it's running
             sdk = self._active_sdks.get(session_id)
             if sdk:
