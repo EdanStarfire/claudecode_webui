@@ -59,10 +59,22 @@
                 id="model"
                 v-model="formData.model"
               >
-                <option value="claude-sonnet-4-5-20250929">Claude Sonnet 4.5 (Default)</option>
-                <option value="claude-sonnet-3-7-20250219">Claude Sonnet 3.7</option>
-                <option value="claude-opus-4-20250514">Claude Opus 4</option>
+                <option value="sonnet">
+                  Sonnet 4.5 (Recommended) - Coding & complex agents
+                </option>
+                <option value="opus">
+                  Opus 4.5 - Complex reasoning tasks
+                </option>
+                <option value="haiku">
+                  Haiku 4.5 - Fastest for simple tasks
+                </option>
+                <option value="opusplan">
+                  OpusPlan - Opus planning + Sonnet execution
+                </option>
               </select>
+              <small class="form-text text-muted" v-if="selectedModelInfo">
+                {{ selectedModelInfo.description }}
+              </small>
             </div>
 
             <!-- System Prompt Append -->
@@ -171,7 +183,7 @@ const project = ref(null)
 const formData = ref({
   name: '',
   permission_mode: 'default',
-  model: 'claude-sonnet-4-5-20250929',
+  model: 'sonnet',
   system_prompt: '',
   override_system_prompt: false,
   allowed_tools: '',
@@ -185,6 +197,22 @@ const errorMessage = ref('')
 const modalElement = ref(null)
 let modalInstance = null
 
+// Model information for descriptions
+const modelInfo = {
+  'sonnet': {
+    description: 'Smart model for coding and complex agents - best balance of speed & capability'
+  },
+  'opus': {
+    description: 'Most capable model for complex reasoning, advanced analysis, and sophisticated tasks'
+  },
+  'haiku': {
+    description: 'Optimized for speed and cost-efficiency on straightforward tasks'
+  },
+  'opusplan': {
+    description: 'Uses Opus for planning phase, Sonnet for execution - best of both worlds'
+  }
+}
+
 // Computed - System prompt character limits
 const systemPromptCharCount = computed(() => {
   return formData.value.system_prompt.length
@@ -196,6 +224,11 @@ const systemPromptExceedsLimit = computed(() => {
 
 const systemPromptNearLimit = computed(() => {
   return systemPromptCharCount.value > 5500 && systemPromptCharCount.value <= 6000
+})
+
+// Computed - Selected model info
+const selectedModelInfo = computed(() => {
+  return modelInfo[formData.value.model] || null
 })
 
 // Validate form
@@ -270,7 +303,7 @@ function resetForm() {
   formData.value = {
     name: '',
     permission_mode: 'default',
-    model: 'claude-sonnet-4-5-20250929',
+    model: 'sonnet',
     system_prompt: '',
     override_system_prompt: false,
     allowed_tools: '',
