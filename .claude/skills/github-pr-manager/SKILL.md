@@ -99,10 +99,36 @@ description: Create, view, and merge GitHub pull requests with validation. Use w
    - Delete local tracking branch (if it exists)
 
 3. **Update Local Repository**
+
+   **Detect environment:**
    ```bash
-   git checkout main
+   # Check if in worktree (.git is file) or main repo (.git is directory)
+   if [ -f .git ]; then
+     echo "📍 Worktree detected - skipping checkout to main"
+     echo "   (Main branch is checked out in root repository)"
+     SKIP_CHECKOUT=true
+   else
+     echo "📍 Main repository detected"
+     SKIP_CHECKOUT=false
+   fi
+   ```
+
+   **Switch to main (if not in worktree):**
+   ```bash
+   if [ "$SKIP_CHECKOUT" = "false" ]; then
+     git checkout main
+   fi
+   ```
+
+   **Pull latest changes:**
+   ```bash
    git pull origin main
    ```
+
+   **Note**: In worktree environments:
+   - Main is checked out in the root repository
+   - Cannot checkout a branch that's active elsewhere
+   - Worktree cleanup is handled by orchestrator or worktree-manager skill
 
 4. **Clean Up Local Branch** (if still exists)
    ```bash
@@ -133,6 +159,14 @@ description: Create, view, and merge GitHub pull requests with validation. Use w
 - Branch may not exist locally (already deleted or never checked out)
 - Always check branch existence before deletion
 - Ignore "branch not found" errors - treat as already cleaned up
+
+**Worktree Environment:**
+- In git worktrees, `.git` is a file (not directory) pointing to actual git dir
+- Cannot checkout main because it's active in root repository
+- Skill automatically detects worktrees and skips checkout step
+- Branch deletion still works normally from worktrees
+- Pull operation fetches latest changes without switching branches
+- Worktree cleanup should be handled separately (use worktree-manager skill)
 
 ### PR Title and Body Standards
 
@@ -193,4 +227,27 @@ Action:
 3. Switch to main and pull
 4. Verify local branch cleanup (check existence first)
 Output: "PR #123 merged successfully, branch cleaned up"
+```
+### Example 4: Merge PR from worktree
+```
+User: "Merge PR #789"
+Context: Working in worktree at worktrees/issue-275/
+Action:
+1. Validate PR state (gh pr view 789 --json headRefName,state,mergeable)
+2. Extract branch name from PR
+3. Squash merge with branch deletion (gh pr merge 789 --squash --delete-branch)
+4. Detect worktree environment (test -f .git returns true)
+5. Skip checkout to main (with informative message)
+6. Pull latest changes (git pull origin main)
+7. Verify local branch cleanup
+
+Output:
+"📍 Worktree detected - skipping checkout to main
+   (Main branch is checked out in root repository)
+PR #789 merged successfully
+Remote branch deleted
+Pulled latest changes from main
+Ready for worktree cleanup"
+
+Note: The worktree itself should be cleaned up using worktree-manager skill after merge
 ```
