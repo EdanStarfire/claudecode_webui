@@ -7,7 +7,6 @@ NOTE: LegionInfo and MinionInfo have been consolidated:
 """
 
 from src.models.legion_models import (
-    Horde,
     Channel,
     Comm,
     CommType,
@@ -23,7 +22,6 @@ from src.models.memory_models import (
 
 __all__ = [
     # Legion grouping models
-    "Horde",
     "Channel",
     "Comm",
     "CommType",

@@ -1,5 +1,5 @@
 <template>
-  <div class="horde-header border-bottom p-3">
+  <div class="hierarchy-header border-bottom p-3">
     <div class="d-flex justify-content-between align-items-center">
       <div>
         <div class="project-name">{{ legionName }}</div>
@@ -89,7 +89,7 @@ function handleResumeAll() {
 </script>
 
 <style scoped>
-.horde-header {
+.hierarchy-header {
   background-color: #f8f9fa;
 }
 

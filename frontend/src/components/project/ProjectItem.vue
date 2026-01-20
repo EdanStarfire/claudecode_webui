@@ -95,19 +95,19 @@
             </div>
           </div>
 
-          <!-- Horde and Spy for Legion projects -->
+          <!-- Hierarchy and Spy for Legion projects -->
           <template v-if="project.is_multi_agent">
-            <!-- Horde View (direct navigation, no dropdown) -->
+            <!-- Hierarchy View (direct navigation, no dropdown) -->
             <div
-              class="list-group-item list-group-item-action horde-item d-flex align-items-center p-2"
-              :class="{ active: isHordeActive }"
+              class="list-group-item list-group-item-action hierarchy-item d-flex align-items-center p-2"
+              :class="{ active: isHierarchyActive }"
               style="cursor: pointer"
-              @click="viewHorde"
+              @click="viewHierarchy"
             >
               <div class="flex-grow-1">
                 <span style="font-size: 1rem; margin-right: 0.5rem;">🌳</span>
-                <span class="fw-semibold">Horde</span>
-                <small class="text-muted ms-2">(Minion Hierarchy)</small>
+                <span class="fw-semibold">Hierarchy</span>
+                <small class="text-muted ms-2">(Minion Tree)</small>
               </div>
             </div>
 
@@ -179,9 +179,9 @@ const isTimelineActive = computed(() => {
   return route.name === 'timeline' && route.params.legionId === props.project.project_id
 })
 
-const isHordeActive = computed(() => {
+const isHierarchyActive = computed(() => {
   const route = router.currentRoute.value
-  return route.name === 'horde' && route.params.legionId === props.project.project_id
+  return route.name === 'hierarchy' && route.params.legionId === props.project.project_id
 })
 
 // Accordion click handler (manually toggle since we changed button to div)
@@ -246,9 +246,9 @@ function viewTimeline() {
   router.push(`/timeline/${props.project.project_id}`)
 }
 
-// Horde view
-function viewHorde() {
-  router.push(`/horde/${props.project.project_id}`)
+// Hierarchy view
+function viewHierarchy() {
+  router.push(`/hierarchy/${props.project.project_id}`)
 }
 
 // Drag and Drop

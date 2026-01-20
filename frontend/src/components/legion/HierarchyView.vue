@@ -1,10 +1,10 @@
 <template>
-  <div class="horde-view d-flex flex-column h-100">
-    <!-- Horde Header (at top) -->
-    <HordeHeader :legion-id="legionId" />
+  <div class="hierarchy-view d-flex flex-column h-100">
+    <!-- Hierarchy Header (at top) -->
+    <HierarchyHeader :legion-id="legionId" />
 
     <!-- Tree View -->
-    <div class="horde-tree-container flex-grow-1 overflow-auto p-3">
+    <div class="hierarchy-tree-container flex-grow-1 overflow-auto p-3">
       <!-- Loading State -->
       <div v-if="loading" class="text-center py-5">
         <div class="spinner-border text-primary" role="status">
@@ -20,7 +20,7 @@
       </div>
 
       <!-- Hierarchy Tree -->
-      <div v-else-if="hierarchy" class="horde-tree">
+      <div v-else-if="hierarchy" class="hierarchy-tree">
         <!-- User Root Node -->
         <div class="user-root-node mb-3 border rounded bg-white">
           <div class="node-row">
@@ -72,7 +72,7 @@
     </div>
 
     <!-- Status Bar (at bottom) -->
-    <HordeStatusBar :legion-id="legionId" />
+    <HierarchyStatusBar :legion-id="legionId" />
 
     <!-- Fleet Control Modal -->
     <FleetControlModal />
@@ -85,8 +85,8 @@ import { useProjectStore } from '../../stores/project'
 import { useSessionStore } from '../../stores/session'
 import { useWebSocketStore } from '../../stores/websocket'
 import { useLegionStore } from '../../stores/legion'
-import HordeHeader from '../header/HordeHeader.vue'
-import HordeStatusBar from '../statusbar/HordeStatusBar.vue'
+import HierarchyHeader from '../header/HierarchyHeader.vue'
+import HierarchyStatusBar from '../statusbar/HierarchyStatusBar.vue'
 import MinionTreeNode from './MinionTreeNode.vue'
 import FleetControlModal from './FleetControlModal.vue'
 import { api } from '../../utils/api'
@@ -122,7 +122,7 @@ async function loadHierarchy() {
   error.value = null
 
   try {
-    const response = await api.get(`/api/legions/${props.legionId}/hordes`)
+    const response = await api.get(`/api/legions/${props.legionId}/hierarchy`)
     hierarchy.value = response
     console.log('Loaded hierarchy:', response)
   } catch (err) {
@@ -289,16 +289,16 @@ onMounted(() => {
 // Cleanup on unmount
 onUnmounted(() => {
   // Legion WebSocket cleanup is handled by the store
-  console.log('HordeView unmounted')
+  console.log('HierarchyView unmounted')
 })
 </script>
 
 <style scoped>
-.horde-view {
+.hierarchy-view {
   height: 100%;
 }
 
-.horde-tree-container {
+.hierarchy-tree-container {
   background-color: #f8f9fa;
 }
 

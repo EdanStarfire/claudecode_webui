@@ -8,8 +8,7 @@ import { api } from '../utils/api'
  * Handles:
  * - Comms (communications between minions/user)
  * - Minions (agent sessions within a legion)
- * - Hordes (hierarchical groups of minions)
- * - Channels (cross-horde communication groups)
+ * - Channels (communication groups)
  */
 export const useLegionStore = defineStore('legion', () => {
   // ========== STATE ==========
@@ -19,9 +18,6 @@ export const useLegionStore = defineStore('legion', () => {
 
   // Minions per legion (legionId -> Minion[])
   const minionsByLegion = ref(new Map())
-
-  // Hordes per legion (legionId -> Horde[])
-  const hordesByLegion = ref(new Map())
 
   // Channels per legion (legionId -> Channel[])
   const channelsByLegion = ref(new Map())
@@ -45,11 +41,6 @@ export const useLegionStore = defineStore('legion', () => {
   // Current legion's minions
   const currentMinions = computed(() => {
     return minionsByLegion.value.get(currentLegionId.value) || []
-  })
-
-  // Current legion's hordes
-  const currentHordes = computed(() => {
-    return hordesByLegion.value.get(currentLegionId.value) || []
   })
 
   // Current legion's channels
@@ -196,29 +187,6 @@ export const useLegionStore = defineStore('legion', () => {
       return minion
     } catch (error) {
       console.error('Failed to create minion:', error)
-      throw error
-    }
-  }
-
-  /**
-   * Load hordes for a legion
-   */
-  async function loadHordes(legionId) {
-    try {
-      const data = await api.get(`/api/legions/${legionId}/hordes`)
-      const hordes = data.hordes || []
-
-      console.log(`Loaded ${hordes.length} hordes for legion ${legionId}`)
-
-      // Store hordes
-      hordesByLegion.value.set(legionId, hordes)
-
-      // Trigger reactivity
-      hordesByLegion.value = new Map(hordesByLegion.value)
-
-      return hordes
-    } catch (error) {
-      console.error('Failed to load hordes:', error)
       throw error
     }
   }
@@ -422,7 +390,6 @@ export const useLegionStore = defineStore('legion', () => {
     // Trigger reactivity
     commsByLegion.value = new Map(commsByLegion.value)
     minionsByLegion.value = new Map(minionsByLegion.value)
-    hordesByLegion.value = new Map(hordesByLegion.value)
     channelsByLegion.value = new Map(channelsByLegion.value)
   }
 
@@ -431,7 +398,6 @@ export const useLegionStore = defineStore('legion', () => {
     // State
     commsByLegion,
     minionsByLegion,
-    hordesByLegion,
     channelsByLegion,
     channelDetailsByChannel,
     channelCommsByChannel,
@@ -440,7 +406,6 @@ export const useLegionStore = defineStore('legion', () => {
     // Computed
     currentComms,
     currentMinions,
-    currentHordes,
     currentChannels,
 
     // Actions
@@ -451,7 +416,6 @@ export const useLegionStore = defineStore('legion', () => {
     sendComm,
     loadMinions,
     createMinion,
-    loadHordes,
     loadChannels,
     addChannel,
     loadChannelDetails,

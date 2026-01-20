@@ -4,23 +4,19 @@ OverseerController - Minion lifecycle management for Legion multi-agent system.
 Responsibilities:
 - Create minions (user-initiated and minion-spawned)
 - Dispose minions (parent authority enforcement)
-- Track horde hierarchy
 - Coordinate memory transfer on disposal
 - Manage minion state transitions
 """
 
 import uuid
-from datetime import datetime
 from typing import TYPE_CHECKING
-
-from src.models.legion_models import Horde
 
 if TYPE_CHECKING:
     from src.legion_system import LegionSystem
 
 
 class OverseerController:
-    """Manages minion lifecycle and horde hierarchy."""
+    """Manages minion lifecycle."""
 
     def __init__(self, system: 'LegionSystem'):
         """
@@ -30,9 +26,6 @@ class OverseerController:
             system: LegionSystem instance for accessing other components
         """
         self.system = system
-
-        # Track hordes by horde_id
-        self.hordes: dict[str, Horde] = {}
 
     async def create_minion_for_user(
         self,
@@ -122,69 +115,12 @@ class OverseerController:
                     import logging
                     logging.warning(f"Failed to register capability '{capability}' for minion {minion_id}: {e}")
 
-        # Create or update horde
-        await self._ensure_horde_for_minion(legion_id, minion_id, name)
-
         return minion_id
 
     def _belongs_to_legion(self, session_info, legion_id: str) -> bool:
         """Check if a session belongs to a legion by checking project_id."""
         # Use project_id instead of working_directory since minions can have custom directories
         return session_info.project_id == legion_id
-
-    async def _ensure_horde_for_minion(self, legion_id: str, minion_id: str, minion_name: str):
-        """
-        Create horde if this is the first minion, otherwise add to existing horde.
-
-        Args:
-            legion_id: Legion ID
-            minion_id: Minion session ID
-            minion_name: Minion name
-        """
-        # Check if legion already has a horde
-        existing_horde = None
-        for horde in self.hordes.values():
-            if horde.legion_id == legion_id:
-                existing_horde = horde
-                break
-
-        if existing_horde:
-            # Add minion to existing horde
-            if minion_id not in existing_horde.all_minion_ids:
-                existing_horde.all_minion_ids.append(minion_id)
-                existing_horde.updated_at = datetime.now()
-                await self._persist_horde(existing_horde)
-        else:
-            # Create new horde with this minion as root overseer
-            horde_id = str(uuid.uuid4())
-            horde = Horde(
-                horde_id=horde_id,
-                legion_id=legion_id,
-                name=f"{minion_name}'s Horde",
-                root_overseer_id=minion_id,
-                all_minion_ids=[minion_id],
-                created_by="user"
-            )
-            self.hordes[horde_id] = horde
-            await self._persist_horde(horde)
-
-    async def _persist_horde(self, horde: Horde):
-        """
-        Persist horde to disk.
-
-        Args:
-            horde: Horde instance to persist
-        """
-        # Get data directory from session coordinator
-        data_dir = self.system.session_coordinator.data_dir
-        hordes_dir = data_dir / "hordes"
-        hordes_dir.mkdir(exist_ok=True)
-
-        horde_file = hordes_dir / f"{horde.horde_id}.json"
-
-        import json
-        with open(horde_file, 'w') as f:
-            json.dump(horde.to_dict(), f, indent=2)
 
     async def spawn_minion(
         self,
@@ -261,15 +197,7 @@ class OverseerController:
         # 6. Calculate overseer level (parent + 1)
         overseer_level = (parent_session.overseer_level or 0) + 1
 
-        # 7. Get parent's horde_id (child joins parent's horde)
-        parent_horde_id = parent_session.horde_id
-        if not parent_horde_id:
-            # Parent has no horde yet - create one
-            await self._ensure_horde_for_minion(legion_id, parent_overseer_id, parent_session.name)
-            parent_session = await self.system.session_coordinator.session_manager.get_session_info(parent_overseer_id)
-            parent_horde_id = parent_session.horde_id
-
-        # 8. Create child session via SessionCoordinator
+        # 7. Create child session via SessionCoordinator
         # Use provided permission_mode/allowed_tools (from template or safe defaults)
         await self.system.session_coordinator.create_session(
             session_id=child_minion_id,
@@ -284,11 +212,10 @@ class OverseerController:
             capabilities=capabilities or [],
             # Hierarchy fields
             parent_overseer_id=parent_overseer_id,
-            overseer_level=overseer_level,
-            horde_id=parent_horde_id
+            overseer_level=overseer_level
         )
 
-        # 9. Update parent: mark as overseer, add child to child_minion_ids
+        # 8. Update parent: mark as overseer, add child to child_minion_ids
         if not parent_session.is_overseer:
             await self.system.session_coordinator.session_manager.update_session(
                 parent_overseer_id,
@@ -303,15 +230,7 @@ class OverseerController:
             child_minion_ids=parent_children
         )
 
-        # 10. Update horde: add child to all_minion_ids
-        horde = self.hordes.get(parent_horde_id)
-        if horde:
-            if child_minion_id not in horde.all_minion_ids:
-                horde.all_minion_ids.append(child_minion_id)
-                horde.updated_at = datetime.now()
-                await self._persist_horde(horde)
-
-        # 11. Register capabilities in central registry
+        # 9. Register capabilities in central registry
         if capabilities:
             for capability in capabilities:
                 try:
@@ -324,7 +243,7 @@ class OverseerController:
                     # Log error but don't fail spawn if capability format is invalid
                     coord_logger.warning(f"Failed to register capability '{capability}' for spawned minion {child_minion_id}: {e}")
 
-        # 12. Join channels if specified - collect results
+        # 10. Join channels if specified - collect results
         channels_joined = []
         channels_failed = []
 
@@ -355,7 +274,7 @@ class OverseerController:
                     })
                     coord_logger.warning(f"Failed to add {name} to channel {channel_id}: {e}")
 
-        # 13. Send SPAWN notification to user
+        # 11. Send SPAWN notification to user
         spawn_comm = Comm(
             comm_id=str(uuid.uuid4()),
             from_minion_id=parent_overseer_id,
@@ -369,7 +288,7 @@ class OverseerController:
         )
         await self.system.comm_router.route_comm(spawn_comm)
 
-        # 14. Register WebSocket message callback for child session
+        # 12. Register WebSocket message callback for child session
         # This ensures messages from the spawned minion broadcast to WebSocket clients (Spy view)
         if self.system.message_callback_registrar:
             self.system.message_callback_registrar(child_minion_id)
@@ -377,7 +296,7 @@ class OverseerController:
         else:
             coord_logger.warning(f"No message callback registrar available for minion {child_minion_id} - WebSocket streaming will not work!")
 
-        # 15. Start child session with permission callback
+        # 13. Start child session with permission callback
         # Create permission callback using factory (same pattern as user-created minions)
         permission_callback = None
         if self.system.permission_callback_factory:
@@ -391,7 +310,7 @@ class OverseerController:
             permission_callback=permission_callback
         )
 
-        # 15. Broadcast project update to UI WebSocket (new session added)
+        # 14. Broadcast project update to UI WebSocket (new session added)
         if self.system.ui_websocket_manager:
             project = await self.system.session_coordinator.project_manager.get_project(legion_id)
             if project:
@@ -497,21 +416,12 @@ class OverseerController:
                 is_overseer=False
             )
 
-        # 8. Update horde: remove child from all_minion_ids
-        horde_id = child_session.horde_id
-        if horde_id:
-            horde = self.hordes.get(horde_id)
-            if horde and child_minion_id in horde.all_minion_ids:
-                horde.all_minion_ids.remove(child_minion_id)
-                horde.updated_at = datetime.now()
-                await self._persist_horde(horde)
-
-        # 9. Deregister from capability registry
-        for capability, minion_ids in self.system.legion_coordinator.capability_registry.items():
+        # 8. Deregister from capability registry
+        for _capability, minion_ids in self.system.legion_coordinator.capability_registry.items():
             if child_minion_id in minion_ids:
                 minion_ids.remove(child_minion_id)
 
-        # 10. Send DISPOSE notification to user
+        # 9. Send DISPOSE notification to user
         dispose_comm = Comm(
             comm_id=str(uuid.uuid4()),
             from_minion_id=parent_overseer_id,

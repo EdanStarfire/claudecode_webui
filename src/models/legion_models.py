@@ -1,7 +1,7 @@
 """
 Core data models for Legion multi-agent system.
 
-This module defines data structures for Legion grouping mechanisms (hordes, channels, communications).
+This module defines data structures for Legion grouping mechanisms (channels, communications).
 
 NOTE: Legion and Minion data models have been consolidated:
 - Legions are now ProjectInfo with is_multi_agent=True (see src/project_manager.py)
@@ -57,46 +57,6 @@ class InterruptPriority(Enum):
 
 # Core Data Models
 # NOTE: LegionInfo and MinionInfo have been removed - use ProjectInfo and SessionInfo instead
-
-@dataclass
-class Horde:
-    """
-    Hierarchical group: overseer + all descendant minions.
-    """
-    horde_id: str               # UUID
-    legion_id: str              # Parent legion
-    name: str                   # "Architecture Planning Team"
-
-    # Hierarchy
-    root_overseer_id: str       # Top-level overseer (user-created minion)
-    all_minion_ids: list[str] = field(default_factory=list)   # Flattened list of all minions in tree
-
-    # Metadata
-    created_by: str = "user"    # "user" or minion_id
-    created_at: datetime = field(default_factory=datetime.now)
-    updated_at: datetime = field(default_factory=datetime.now)
-
-    def to_dict(self) -> dict[str, Any]:
-        """Convert to dictionary for serialization."""
-        return {
-            "horde_id": self.horde_id,
-            "legion_id": self.legion_id,
-            "name": self.name,
-            "root_overseer_id": self.root_overseer_id,
-            "all_minion_ids": self.all_minion_ids,
-            "created_by": self.created_by,
-            "created_at": self.created_at.isoformat(),
-            "updated_at": self.updated_at.isoformat(),
-        }
-
-    @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> 'Horde':
-        """Create from dictionary."""
-        data = data.copy()
-        data["created_at"] = datetime.fromisoformat(data["created_at"])
-        data["updated_at"] = datetime.fromisoformat(data["updated_at"])
-        return cls(**data)
-
 
 @dataclass
 class Channel:
