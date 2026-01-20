@@ -11,7 +11,6 @@ from src.models.legion_models import (
     CommType,
     InterruptPriority,
 )
-
 from src.models.memory_models import (
     MemoryEntry,
     MemoryType,
