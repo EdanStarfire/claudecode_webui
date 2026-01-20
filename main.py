@@ -9,8 +9,8 @@ from pathlib import Path
 
 import uvicorn
 
-# Add src to path
-sys.path.insert(0, str(Path(__file__).parent / "src"))
+# Add project root to path (so imports like "from src.legion..." work)
+sys.path.insert(0, str(Path(__file__).parent))
 
 from src.logging_config import configure_logging
 from src.web_server import create_app, shutdown_event, startup_event
