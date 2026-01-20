@@ -132,3 +132,4 @@ The minion will report when PR is ready for your review.
 - Minions work independently in parallel
 - You'll review PRs before merging
 - Worktrees cleaned up after merge
+- IMPORTANT! If a directory path starts with `/var`, such as `/var/home/...`, remove the leading `/var` as it causes issues and is a side effect of a linked folder issue.
