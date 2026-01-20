@@ -132,10 +132,26 @@ class CommRouter:
             if target_minion.state not in [SessionState.ACTIVE, SessionState.STARTING]:
                 legion_logger.info(f"Target minion {comm.to_minion_id} is in {target_minion.state} state - auto-starting")
 
-                # Start the session
+                # Register WebSocket message callback before starting
+                # This ensures messages from the auto-started minion broadcast to WebSocket clients
+                if self.system.message_callback_registrar:
+                    self.system.message_callback_registrar(comm.to_minion_id)
+                    legion_logger.info(f"Registered WebSocket message callback for auto-started minion {comm.to_minion_id}")
+                else:
+                    legion_logger.warning(f"No message callback registrar available for auto-start of {comm.to_minion_id}")
+
+                # Start the session with permission callback
+                # Create permission callback using factory (same pattern as user-created minions)
+                permission_callback = None
+                if self.system.permission_callback_factory:
+                    permission_callback = self.system.permission_callback_factory(comm.to_minion_id)
+                    legion_logger.info(f"Created permission callback for auto-started minion {comm.to_minion_id}")
+                else:
+                    legion_logger.warning(f"No permission callback factory available for auto-start of {comm.to_minion_id}")
+
                 success = await self.system.session_coordinator.start_session(
                     session_id=comm.to_minion_id,
-                    permission_callback=None  # Use default permission callback
+                    permission_callback=permission_callback
                 )
 
                 if not success:

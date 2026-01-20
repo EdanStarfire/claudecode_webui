@@ -11,19 +11,20 @@ Architecture Pattern:
 - Easy to test (mock LegionSystem)
 """
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Optional, Any
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from src.session_coordinator import SessionCoordinator
     from src.data_storage import DataStorageManager
-    from src.template_manager import TemplateManager
-    from src.legion.legion_coordinator import LegionCoordinator
-    from src.legion.overseer_controller import OverseerController
     from src.legion.channel_manager import ChannelManager
     from src.legion.comm_router import CommRouter
-    from src.legion.memory_manager import MemoryManager
+    from src.legion.legion_coordinator import LegionCoordinator
     from src.legion.mcp.legion_mcp_tools import LegionMCPTools
+    from src.legion.memory_manager import MemoryManager
+    from src.legion.overseer_controller import OverseerController
+    from src.session_coordinator import SessionCoordinator
+    from src.template_manager import TemplateManager
 
 
 @dataclass
@@ -49,7 +50,15 @@ class LegionSystem:
     session_coordinator: 'SessionCoordinator'
     data_storage_manager: 'DataStorageManager'
     template_manager: 'TemplateManager'
-    ui_websocket_manager: Optional[Any] = None  # UIWebSocketManager (optional, for broadcasting project updates)
+    ui_websocket_manager: Any | None = None  # UIWebSocketManager (optional, for broadcasting project updates)
+
+    # Permission callback factory (injected after creation by web_server via session_coordinator)
+    # Allows legion components to create permission callbacks for spawned minions
+    permission_callback_factory: Callable[[str], Callable] | None = None
+
+    # Message callback registrar (injected after creation by web_server via session_coordinator)
+    # Allows legion components to register WebSocket message callbacks for spawned minions
+    message_callback_registrar: Callable[[str], None] | None = None
 
     # Legion components (initialized in __post_init__)
     legion_coordinator: 'LegionCoordinator' = field(init=False)
@@ -66,12 +75,12 @@ class LegionSystem:
         Order matters: components with fewer dependencies first.
         """
         # Import here to avoid circular imports at module level
-        from src.legion.comm_router import CommRouter
         from src.legion.channel_manager import ChannelManager
-        from src.legion.memory_manager import MemoryManager
-        from src.legion.overseer_controller import OverseerController
+        from src.legion.comm_router import CommRouter
         from src.legion.legion_coordinator import LegionCoordinator
         from src.legion.mcp.legion_mcp_tools import LegionMCPTools
+        from src.legion.memory_manager import MemoryManager
+        from src.legion.overseer_controller import OverseerController
 
         # Initialize components in dependency order
         # Lower-level components first (fewer dependencies)
