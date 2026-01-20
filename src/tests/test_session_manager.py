@@ -105,12 +105,12 @@ class TestSessionInfo:
         assert info.working_directory == "/test/path"
         assert info.allowed_tools == ["bash", "edit"]
 
-    def test_backward_compatibility_tools_to_allowed_tools(self):
-        """Test backward compatibility: old 'tools' field should be migrated to 'allowed_tools'."""
+    def test_backward_compatibility_horde_id_removal(self):
+        """Test backward compatibility: deprecated 'horde_id' field should be removed."""
         session_id = "test-session-migration"
         now = datetime.now(UTC)
 
-        # Simulate old session file with 'tools' instead of 'allowed_tools'
+        # Simulate session file with deprecated horde_id field (from pre-PR #281)
         old_data = {
             "session_id": session_id,
             "state": "created",
@@ -119,18 +119,33 @@ class TestSessionInfo:
             "working_directory": "/old/path",
             "current_permission_mode": "default",
             "system_prompt": None,
-            "tools": ["bash", "read"],  # Old field name
+            "allowed_tools": ["bash", "read"],
             "model": "claude-3-sonnet-20241022",
-            "error_message": None
+            "error_message": None,
+            "horde_id": None,  # Deprecated field from pre-PR #281
+            "is_minion": False,
+            "child_minion_ids": [],
+            "channel_ids": [],
+            "capabilities": [],
+            "is_overseer": False,
+            "overseer_level": 0,
+            "override_system_prompt": False,
+            "parent_overseer_id": None,
+            "project_id": None,
+            "role": None,
+            "order": 0,
+            "is_processing": False,
+            "initial_permission_mode": "default",
+            "expertise_score": 0.5
         }
 
-        # from_dict should migrate 'tools' to 'allowed_tools'
+        # from_dict should remove horde_id and create SessionInfo successfully
         info = SessionInfo.from_dict(old_data)
 
         assert info.session_id == session_id
         assert info.allowed_tools == ["bash", "read"]
-        # Verify the old 'tools' field doesn't exist anymore
-        assert not hasattr(info, 'tools') or info.allowed_tools is not None
+        # Verify the deprecated horde_id field was removed
+        assert not hasattr(info, 'horde_id')
 
 
 class TestSessionManager:
