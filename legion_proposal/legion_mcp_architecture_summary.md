@@ -1,5 +1,7 @@
 # Legion Multi-Agent System - MCP Architecture Summary
 
+> **NOTE**: This document is historical. The channel system and related MCP tools (send_comm_to_channel, create_channel, join_channel, list_channels) described throughout this document have been removed in issue #268. The system now uses only direct minion-to-minion communication via the send_comm tool. See the main CLAUDE.md for current MCP tool definitions.
+
 ## Executive Summary
 
 The Legion Multi-Agent System uses **MCP (Model Context Protocol) tools** as the primary mechanism for minion actions. This architectural decision provides reliability, debuggability, and extensibility superior to natural language parsing approaches.

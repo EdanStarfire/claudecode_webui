@@ -95,7 +95,6 @@ Store this for minion initialization context.
 
   See MINION_TEMPLATE.md for complete detailed workflow and communication guidelines.
   ```
-- **channels**: `#issue-workers` (for coordination with other workers)
 
 #### 6. Track Active Worker
 

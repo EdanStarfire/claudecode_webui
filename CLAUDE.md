@@ -158,7 +158,7 @@ frontend/
 │   │   ├── project.js             # Project hierarchy, ordering
 │   │   ├── message.js             # Messages, tool calls, orphaned detection
 │   │   ├── websocket.js           # 3 WebSocket connections (UI, session, legion)
-│   │   ├── legion.js              # Multi-agent: comms, minions, hordes, channels
+│   │   ├── legion.js              # Multi-agent: comms, minions, hordes
 │   │   └── ui.js                  # Sidebar, modals, loading, responsive
 │   │
 │   ├── components/
@@ -277,19 +277,18 @@ npm run build  # Output: frontend/dist/
 - Automatic reconnection with exponential backoff (max 10 UI retries, 5 session/legion)
 
 ### 5. Legion Store (`stores/legion.js`)
-**Responsibility**: Multi-agent data (comms, minions, hordes, channels)
+**Responsibility**: Multi-agent data (comms, minions, hordes)
 
 **State**:
 - `commsByLegion` (Map): Timeline communications per legion
 - `minionsByLegion` (Map): Minions per legion
 - `hordesByLegion` (Map): Hierarchical groups
-- `channelsByLegion` (Map): Communication groups
 
 **Key Actions**:
 - `loadTimeline()`: Paginated comm loading (100/page)
 - `addComm()`: Real-time comm from WebSocket
-- `sendComm()`: User sends comm to minion/channel
-- `createMinion()`, `loadHordes()`, `loadChannels()`
+- `sendComm()`: User sends comm to minion
+- `createMinion()`, `loadHordes()`
 
 ### 6. UI Store (`stores/ui.js`)
 **Responsibility**: UI state (sidebar, modals, scroll, responsive)
@@ -384,10 +383,9 @@ npm run build  # Output: frontend/dist/
 │  │  │ Legion      │  │Overseer  │  │  CommRouter            │   │ │
 │  │  │ Coordinator │  │Control   │  │  (minion comms)        │   │ │
 │  │  └─────────────┘  └──────────┘  └────────────────────────┘   │ │
-│  │  ┌─────────────┐  ┌──────────────────────────────────────┐   │ │
-│  │  │ Channel     │  │  MemoryManager                        │   │ │
-│  │  │ Manager     │  │  (distillation, reinforcement)        │   │ │
-│  │  └─────────────┘  └──────────────────────────────────────┘   │ │
+│  │  ┌──────────────────────────────────────────────────────┐     │ │
+│  │  │  MemoryManager (distillation, reinforcement)         │     │ │
+│  │  └──────────────────────────────────────────────────────┘     │ │
 │  └────────────────────────────────────────────────────────────────┘ │
 └────────┬─────────────────────────────────────────────────────────────┘
          │ query() API
@@ -444,7 +442,7 @@ npm run build  # Output: frontend/dist/
 
 **SessionInfo Fields** (Extended for Legion):
 - Standard: `session_id`, `state`, `working_directory`, `current_permission_mode`, `tools`, `model`, `name`, `order`
-- Legion: `is_minion`, `role`, `is_overseer`, `parent_overseer_id`, `child_minion_ids`, `horde_id`, `channel_ids`, `capabilities`, `initialization_context`
+- Legion: `is_minion`, `role`, `is_overseer`, `parent_overseer_id`, `child_minion_ids`, `horde_id`, `capabilities`, `initialization_context`
 
 **Key Methods**:
 - `create_session()`: Create directory, persist state.json
@@ -457,7 +455,7 @@ npm run build  # Output: frontend/dist/
 
 **ProjectInfo Fields** (Extended for Legion):
 - Standard: `project_id`, `name`, `working_directory`, `session_ids`, `is_expanded`, `order`
-- Legion: `is_multi_agent`, `horde_ids`, `channel_ids`, `minion_ids`, `max_concurrent_minions`, `active_minion_count`
+- Legion: `is_multi_agent`, `horde_ids`, `minion_ids`, `max_concurrent_minions`, `active_minion_count`
 
 **Key Methods**:
 - `create_project()`: Create with order shifting
@@ -521,7 +519,7 @@ npm run build  # Output: frontend/dist/
 - Legion creation and deletion
 - Fleet control (halt all, resume all, emergency halt)
 - Central capability registry (MVP: keyword search)
-- Horde and channel tracking
+- Horde tracking
 
 #### `src/legion/overseer_controller.py` - **Minion Management**
 **Main Class**: `OverseerController`
@@ -538,19 +536,10 @@ npm run build  # Output: frontend/dist/
 
 **Responsibilities**:
 - Convert between Comms and SDK Messages
-- Route Comms to minions, channels, or user
+- Route Comms to minions or user
 - Handle interrupt priorities (HALT, PIVOT)
-- Persist to timeline, channel logs, minion logs
+- Persist to timeline and minion logs
 - Parse and validate #tag references
-
-#### `src/legion/channel_manager.py` - **Channel Management**
-**Main Class**: `ChannelManager`
-
-**Responsibilities**:
-- Create channels with purpose and metadata
-- Add/remove members
-- Broadcast to members
-- Persist channel state
 
 #### `src/legion/memory_manager.py` - **Memory & Learning** (Planned)
 **Main Class**: `MemoryManager`
@@ -566,10 +555,9 @@ npm run build  # Output: frontend/dist/
 **Main Class**: `LegionMCPTools`
 
 **Tools Provided**:
-- **Communication**: `send_comm`, `send_comm_to_channel`
-- **Lifecycle** (Future): `spawn_minion`, `dispose_minion`
+- **Communication**: `send_comm`
+- **Lifecycle**: `spawn_minion`, `dispose_minion`
 - **Discovery**: `list_minions`, `get_minion_info`, `search_capability`
-- **Channels**: `create_channel`, `join_channel`, `list_channels`
 
 **Integration**: Single instance per legion, attached to all minion SDK sessions
 
@@ -577,7 +565,6 @@ npm run build  # Output: frontend/dist/
 
 **Core Entities**:
 - `Horde`: Tree structure with root overseer + members
-- `Channel`: Purpose-driven group with membership
 - `Comm`: High-level message with routing info
 - `CommType` enum: TASK, QUESTION, REPORT, INFO, HALT, PIVOT, THOUGHT, SPAWN, DISPOSE, SYSTEM
 - `MemoryEntry`, `MinionMemory`: Knowledge management (future)
@@ -605,9 +592,6 @@ data/
     ├── timeline.jsonl              # Unified comm log
     ├── hordes/{horde_id}/
     │   └── horde_state.json
-    ├── channels/{channel_id}/
-    │   ├── channel_state.json
-    │   └── comms.jsonl
     └── minions/{minion_id}/
         ├── minion_state.json
         ├── session_messages.jsonl  # SDK messages
@@ -654,10 +638,9 @@ POST   /api/sessions/{id}/disconnect      # End SDK session, keep state
 
 ```
 GET    /api/legions/{id}/timeline?limit=100&offset=0  # Get comm timeline (paginated)
-POST   /api/legions/{id}/comms            # Send comm (user to minion/channel)
+POST   /api/legions/{id}/comms            # Send comm (user to minion)
 POST   /api/legions/{id}/minions          # Create minion
 GET    /api/legions/{id}/hordes           # Load hordes
-GET    /api/legions/{id}/channels         # Load channels
 ```
 
 ### Utility Endpoints
@@ -820,7 +803,6 @@ main.py
       │   ├─ legion/legion_coordinator.py (if multi-agent)
       │   │   ├─ legion/overseer_controller.py
       │   │   ├─ legion/comm_router.py
-      │   │   ├─ legion/channel_manager.py
       │   │   ├─ legion/memory_manager.py
       │   │   └─ legion/legion_mcp_tools.py
       │   └─ logging_config.py
@@ -948,12 +930,10 @@ npm run dev  # http://localhost:5173
 - Multi-user authorization
 
 **Legion**:
-- Autonomous minion spawning (system prompts teaching when/how)
-- Channel collaboration (cross-horde groups)
 - Memory distillation and reinforcement
 - Knowledge transfer on disposal
 - Minion forking for A/B testing
-- Gossip-based capability discovery
+- Enhanced capability discovery
 
 ## Additional Resources
 
@@ -985,7 +965,6 @@ Claude WebUI is a **production-ready web interface** for Claude Agent SDK with:
 - Timeline, Spy, Horde views for observability
 - MCP tools for explicit minion actions
 - Hierarchical organization (hordes)
-- Purpose-driven channels (future)
 - Memory & learning system (future)
 
 **Developer Experience**:

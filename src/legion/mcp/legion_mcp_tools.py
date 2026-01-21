@@ -2,10 +2,10 @@
 LegionMCPTools - MCP tool definitions for Legion multi-agent capabilities.
 
 This module provides MCP tools that minions can use for:
-- Communication (send_comm, send_comm_to_channel)
+- Communication (send_comm - direct minion-to-minion)
 - Lifecycle (spawn_minion, dispose_minion)
 - Discovery (search_capability, list_minions, get_minion_info)
-- Channels (join_channel, create_channel, list_channels)
+- Expertise (update_expertise)
 
 All minion SDK sessions receive these tools on creation via MCP server.
 
@@ -14,8 +14,6 @@ Tools are exposed to minions with names like: mcp__legion__send_comm
 """
 
 from typing import TYPE_CHECKING, Any
-
-from src.legion.utils import normalize_channel_name
 
 try:
     from claude_agent_sdk import create_sdk_mcp_server, tool
@@ -26,7 +24,6 @@ except ImportError:
 
 if TYPE_CHECKING:
     from src.legion_system import LegionSystem
-    from src.models.legion_models import Channel
 
 
 class LegionMCPTools:
@@ -92,31 +89,6 @@ class LegionMCPTools:
             return await self._handle_send_comm(args)
 
         @tool(
-            "send_comm_to_channel",
-            "Broadcast to all channel members. BE CONCISE - only send when necessary "
-            "(milestone reached, blocked, question for team). NEVER send acknowledgments, "
-            "goodbyes, or unsolicited status updates. "
-            "\n\nSummary must be SPECIFIC and actionable (e.g., 'Schema ready for review - 3 endpoints added', "
-            "'Blocked: need API key for testing'). AVOID generic summaries like 'Update' or 'FYI'. "
-            "\n\nSTOP when: task acknowledged OR awaiting team response. "
-            "\n\nValid comm_type: 'task', 'question', 'report', 'info'"
-            "\n\nInterrupt Priority (optional): 'none' (default), 'halt', 'pivot' - same as send_comm"
-            "\n\nChannel name can include # prefix (e.g., '#backend' or 'backend' both work)",
-            {
-                "channel_name": str,       # Name of channel to broadcast to (with or without # prefix)
-                "summary": str,            # Specific one-sentence update (actionable)
-                "content": str,            # Details only if summary needs elaboration (supports markdown)
-                "comm_type": str,          # One of: task, question, report, info (optional)
-                "interrupt_priority": str  # Optional: "none", "halt", or "pivot" (default: "none")
-            }
-        )
-        async def send_comm_to_channel_tool(args: dict[str, Any]) -> dict[str, Any]:
-            """Broadcast communication to channel."""
-            # Inject session context
-            args["_from_minion_id"] = session_id
-            return await self._handle_send_comm_to_channel(args)
-
-        @tool(
             "spawn_minion",
             "Create a new child minion to delegate specialized work. You become the overseer "
             "of this minion and can later dispose of it when done. The child minion will be a "
@@ -139,7 +111,6 @@ class LegionMCPTools:
                 "role": str,                           # Human-readable role description
                 "initialization_context": str,         # System prompt defining expertise
                 "template_name": str,                  # Template to apply for permissions (optional)
-                "channels": list,                      # List of channel names to join (optional)
                 "working_directory": str               # Custom working directory (optional)
             }
         )
@@ -191,7 +162,7 @@ class LegionMCPTools:
         @tool(
             "get_minion_info",
             "Get detailed information about a specific minion in your legion, including their role, capabilities, "
-            "current task, parent/children, and channels.",
+            "current task, and parent/children hierarchy.",
             {
                 "minion_name": str  # Name of minion to query
             }
@@ -200,94 +171,6 @@ class LegionMCPTools:
             """Get detailed minion information."""
             args["_from_minion_id"] = session_id
             return await self._handle_get_minion_info(args)
-
-        @tool(
-            "join_channel",
-            "Join an existing channel to collaborate with its members. You'll receive all "
-            "future broadcasts to this channel."
-            "\n\nChannel name can include # prefix (e.g., '#backend' or 'backend' both work)",
-            {
-                "channel_name": str  # Name of channel to join (with or without # prefix)
-            }
-        )
-        async def join_channel_tool(args: dict[str, Any]) -> dict[str, Any]:
-            """Join a channel."""
-            args["_from_minion_id"] = session_id
-            return await self._handle_join_channel(args)
-
-        @tool(
-            "leave_channel",
-            "Leave a channel you previously joined. You'll no longer receive broadcasts "
-            "to this channel. Useful when your work related to that channel is complete."
-            "\n\nChannel name can include # prefix (e.g., '#backend' or 'backend' both work)",
-            {
-                "channel_name": str  # Name of channel to leave (with or without # prefix)
-            }
-        )
-        async def leave_channel_tool(args: dict[str, Any]) -> dict[str, Any]:
-            """Leave a channel."""
-            args["_from_minion_id"] = session_id
-            return await self._handle_leave_channel(args)
-
-        @tool(
-            "add_minion_to_channel",
-            "Add one of your child minions to a channel (overseers only). You can only add "
-            "minions you directly spawned (your children), not grandchildren or unrelated minions. "
-            "Useful for organizing your team into specialized communication groups."
-            "\n\nChannel name can include # prefix (e.g., '#backend' or 'backend' both work)",
-            {
-                "minion_name": str,   # Name of your child minion to add
-                "channel_name": str   # Name of channel to add them to (with or without # prefix)
-            }
-        )
-        async def add_minion_to_channel_tool(args: dict[str, Any]) -> dict[str, Any]:
-            """Add child minion to channel."""
-            args["_parent_overseer_id"] = session_id
-            return await self._handle_add_minion_to_channel(args)
-
-        @tool(
-            "remove_minion_from_channel",
-            "Remove one of your child minions from a channel (overseers only). You can only remove "
-            "minions you directly spawned (your children), not grandchildren or unrelated minions."
-            "\n\nChannel name can include # prefix (e.g., '#backend' or 'backend' both work)",
-            {
-                "minion_name": str,   # Name of your child minion to remove
-                "channel_name": str   # Name of channel to remove them from (with or without # prefix)
-            }
-        )
-        async def remove_minion_from_channel_tool(args: dict[str, Any]) -> dict[str, Any]:
-            """Remove child minion from channel."""
-            args["_parent_overseer_id"] = session_id
-            return await self._handle_remove_minion_from_channel(args)
-
-        @tool(
-            "create_channel",
-            "Create a new channel for group communication. You'll be automatically added as a member. "
-            "Use channels to coordinate with multiple minions on a shared task."
-            "\n\nChannel name can include # prefix (e.g., '#backend' or 'backend' both work)",
-            {
-                "name": str,              # Unique name for channel (with or without # prefix)
-                "description": str,       # Purpose and description
-                "purpose": str,           # One of: coordination, planning, research, scene
-                "initial_members": list   # List of minion names (optional)
-            }
-        )
-        async def create_channel_tool(args: dict[str, Any]) -> dict[str, Any]:
-            """Create a new channel."""
-            # Inject session context
-            args["_from_minion_id"] = session_id
-            return await self._handle_create_channel(args)
-
-        @tool(
-            "list_channels",
-            "Get list of all channels in the legion with their names, descriptions, and member counts.",
-            {}  # No parameters required
-        )
-        async def list_channels_tool(args: dict[str, Any]) -> dict[str, Any]:
-            """List all channels."""
-            # Inject session context
-            args["_from_minion_id"] = session_id
-            return await self._handle_list_channels(args)
 
         @tool(
             "list_templates",
@@ -332,18 +215,11 @@ class LegionMCPTools:
             version="1.0.0",
             tools=[
                 send_comm_tool,
-                send_comm_to_channel_tool,
                 spawn_minion_tool,
                 dispose_minion_tool,
                 search_capability_tool,
                 list_minions_tool,
                 get_minion_info_tool,
-                join_channel_tool,
-                leave_channel_tool,
-                add_minion_to_channel_tool,
-                remove_minion_from_channel_tool,
-                create_channel_tool,
-                list_channels_tool,
                 list_templates_tool,
                 update_expertise_tool
             ]
@@ -535,196 +411,6 @@ class LegionMCPTools:
                 "is_error": True
             }
 
-    async def _handle_send_comm_to_channel(self, args: dict[str, Any]) -> dict[str, Any]:
-        """
-        Handle send_comm_to_channel tool call.
-
-        Broadcasts a message to all members of a channel. Sender must be a member
-        of the channel. Sender does not receive their own message back.
-
-        Args:
-            args: {
-                "_from_minion_id": str,  # Injected by tool wrapper
-                "channel_name": str,     # Channel name to send to
-                "content": str,          # Message content
-                "comm_type": str,        # Optional: "task", "question", "report", "info"
-                "summary": str           # Optional: Brief summary
-            }
-
-        Returns:
-            Tool result with content array
-        """
-        import uuid
-
-        from src.models.legion_models import Comm, CommType, InterruptPriority
-
-        # Get current minion context (from session_id in SDK context)
-        from_minion_id = args.get("_from_minion_id")
-
-        if not from_minion_id:
-            return {
-                "content": [{
-                    "type": "text",
-                    "text": "Error: Unable to determine sender minion ID"
-                }],
-                "is_error": True
-            }
-
-        # Validate comm_type
-        comm_type_str = args.get("comm_type", "info").lower()
-        valid_comm_types = ["task", "question", "report", "info"]
-
-        comm_type_mapping = {
-            "task": "task",
-            "question": "question",
-            "report": "report",
-            "info": "info"
-        }
-
-        if comm_type_str not in valid_comm_types:
-            return {
-                "content": [{
-                    "type": "text",
-                    "text": f"Error: Invalid comm_type '{comm_type_str}'. Valid values are: {', '.join(valid_comm_types)}"
-                }],
-                "is_error": True
-            }
-
-        internal_comm_type = comm_type_mapping[comm_type_str]
-
-        # Validate interrupt_priority (optional)
-        interrupt_priority_str = args.get("interrupt_priority", "none").lower()
-        valid_priorities = ["none", "halt", "pivot"]
-
-        if interrupt_priority_str not in valid_priorities:
-            return {
-                "content": [{
-                    "type": "text",
-                    "text": f"Error: Invalid interrupt_priority '{interrupt_priority_str}'. Valid values are: {', '.join(valid_priorities)}"
-                }],
-                "is_error": True
-            }
-
-        # Map to InterruptPriority enum
-        priority_mapping = {
-            "none": InterruptPriority.NONE,
-            "halt": InterruptPriority.HALT,
-            "pivot": InterruptPriority.PIVOT
-        }
-
-        interrupt_priority = priority_mapping[interrupt_priority_str]
-
-        # Look up channel by name
-        channel_name = args.get("channel_name")
-        if not channel_name:
-            return {
-                "content": [{
-                    "type": "text",
-                    "text": "Error: 'channel_name' parameter is required"
-                }],
-                "is_error": True
-            }
-
-        # Normalize channel name (strip leading # if present)
-        channel_name = normalize_channel_name(channel_name)
-
-        # Get sender's legion to find channel
-        sender_session = await self.system.session_coordinator.session_manager.get_session_info(from_minion_id)
-        if not sender_session:
-            return {
-                "content": [{
-                    "type": "text",
-                    "text": "Error: Unable to find sender session"
-                }],
-                "is_error": True
-            }
-
-        legion_id = sender_session.project_id
-
-        # Find channel by name in this legion
-        channels = await self.system.channel_manager.list_channels(legion_id)
-        target_channel = None
-        for channel in channels:
-            if channel.name == channel_name:
-                target_channel = channel
-                break
-
-        if not target_channel:
-            return {
-                "content": [{
-                    "type": "text",
-                    "text": f"Error: Channel '{channel_name}' not found"
-                }],
-                "is_error": True
-            }
-
-        # Validate sender is a member of the channel
-        if from_minion_id not in target_channel.member_minion_ids:
-            return {
-                "content": [{
-                    "type": "text",
-                    "text": f"Error: You are not a member of channel '{channel_name}'"
-                }],
-                "is_error": True
-            }
-
-        # Extract summary and content with fallback
-        content = args.get("content", "")
-        summary = args.get("summary", "")
-
-        # Fallback: If summary is empty, auto-generate from first 50 chars of content
-        if not summary and content:
-            summary = content[:50] + ("..." if len(content) > 50 else "")
-
-        # Look up sender minion name (for historical display)
-        from_minion_name = sender_session.name
-
-        # Create Comm for channel broadcast
-        comm = Comm(
-            comm_id=str(uuid.uuid4()),
-            from_minion_id=from_minion_id,
-            from_user=False,
-            from_minion_name=from_minion_name,
-            to_channel_id=target_channel.channel_id,
-            to_channel_name=target_channel.name,  # Capture channel name
-            to_user=False,
-            summary=summary,
-            content=content,
-            comm_type=CommType(internal_comm_type),
-            interrupt_priority=interrupt_priority,  # Use validated priority
-            visible_to_user=True
-        )
-
-        # Route the comm (will broadcast to all members except sender)
-        try:
-            success = await self.system.comm_router.route_comm(comm)
-            if success:
-                # Calculate recipient count (all members except sender)
-                recipient_count = len([m for m in target_channel.member_minion_ids if m != from_minion_id])
-                return {
-                    "content": [{
-                        "type": "text",
-                        "text": f"Message broadcast to channel '{channel_name}' ({recipient_count} recipient{'s' if recipient_count != 1 else ''})"
-                    }],
-                    "is_error": False
-                }
-            else:
-                return {
-                    "content": [{
-                        "type": "text",
-                        "text": f"Failed to broadcast message to channel '{channel_name}'"
-                    }],
-                    "is_error": True
-                }
-        except Exception as e:
-            return {
-                "content": [{
-                    "type": "text",
-                    "text": f"Error broadcasting to channel: {str(e)}"
-                }],
-                "is_error": True
-            }
-
     async def _handle_spawn_minion(self, args: dict[str, Any]) -> dict[str, Any]:
         """
         Handle spawn_minion tool call from a minion.
@@ -741,8 +427,7 @@ class LegionMCPTools:
                 "role": str,
                 "initialization_context": str,
                 "template_name": str,  # Optional - if provided, enforces template permissions
-                "capabilities": List[str],  # Optional
-                "channels": List[str]  # Optional
+                "capabilities": List[str]  # Optional
             }
 
         Returns:
@@ -768,10 +453,9 @@ class LegionMCPTools:
         initialization_context = args.get("initialization_context", "").strip()
         template_name = args.get("template_name", "").strip()
         capabilities = args.get("capabilities", [])
-        channels = args.get("channels", [])
         working_directory_raw = args.get("working_directory")
 
-        # Get parent session to determine legion_id for channel name resolution
+        # Get parent session to determine legion_id
         parent_session = await self.system.session_coordinator.session_manager.get_session_info(parent_overseer_id)
         if not parent_session:
             return {
@@ -791,32 +475,6 @@ class LegionMCPTools:
                 }],
                 "is_error": True
             }
-
-        # Convert channels parameter to list of channel IDs
-        # Channels can be provided as:
-        # - string: "channel1" or "channel1,channel2,channel3"
-        # - list: ["channel1", "channel2"]
-        channel_ids = []
-        channel_names = []
-        channels_not_found = []  # Track channels that don't exist during lookup
-
-        if channels:
-            # Normalize to list of channel names
-            if isinstance(channels, str):
-                channel_names = [ch.strip() for ch in channels.split(',') if ch.strip()]
-            else:
-                channel_names = [ch.strip() for ch in channels if ch.strip()]
-
-            # Resolve channel names to IDs
-            for channel_name in channel_names:
-                channel = await self.system.legion_coordinator.get_channel_by_name(legion_id, channel_name)
-                if channel:
-                    channel_ids.append(channel.channel_id)
-                else:
-                    channels_not_found.append(channel_name)
-                    coord_logger.warning(f"Channel '{channel_name}' not found in legion {legion_id} during spawn_minion")
-
-            coord_logger.debug(f"Resolved channels {channel_names} to IDs {channel_ids}")
 
         # Validate required fields
         if not name:
@@ -919,22 +577,18 @@ class LegionMCPTools:
         # Attempt to spawn child minion
         try:
             # Map initialization_context to system_prompt (initialization_context is semantic UI term)
-            # Use channel_ids (resolved from channel names)
             spawn_result = await self.system.overseer_controller.spawn_minion(
                 parent_overseer_id=parent_overseer_id,
                 name=name,
                 role=role,
                 system_prompt=initialization_context,
                 capabilities=capabilities,
-                channels=channel_ids,
                 permission_mode=permission_mode,
                 allowed_tools=allowed_tools,
                 working_directory=working_directory
             )
 
             child_minion_id = spawn_result["minion_id"]
-            channels_joined = spawn_result["channels_joined"]
-            channels_failed = spawn_result["channels_failed"]
 
             # Build success message with permission info
             perm_info = ""
@@ -957,39 +611,6 @@ class LegionMCPTools:
             if working_directory:
                 wd_info = f"\nWorking Directory: {working_directory}\n"
 
-            # Format channel join results
-            channel_info = ""
-            if channels_joined or channels_failed or channels_not_found:
-                channel_info = "\n**Channel Membership:**\n"
-                if channels_joined:
-                    # Resolve channel IDs back to names for display
-                    joined_names = []
-                    for channel_id in channels_joined:
-                        channel = await self.system.channel_manager.get_channel(channel_id)
-                        if channel:
-                            joined_names.append(channel.name)
-                        else:
-                            joined_names.append(channel_id)  # Fallback to ID if name unavailable
-                    channel_info += f"  ✅ Joined: {', '.join(joined_names)}\n"
-
-                if channels_failed or channels_not_found:
-                    channel_info += "  ❌ Failed:\n"
-                    # First, show channels that failed during lookup (not found)
-                    for channel_name in channels_not_found:
-                        channel_info += f"     - {channel_name}: Channel does not exist\n"
-                    # Then show channels that failed during add_member (other errors)
-                    for failed in channels_failed:
-                        # Try to get channel name from channel_id
-                        channel_id = failed["channel_id"]
-                        reason = failed["reason"]
-                        # Look up in the original channel_names list to show the name the user provided
-                        display_name = channel_id
-                        for idx, cid in enumerate(channel_ids):
-                            if cid == channel_id and idx < len(channel_names):
-                                display_name = channel_names[idx]
-                                break
-                        channel_info += f"     - {display_name}: {reason}\n"
-
             return {
                 "content": [{
                     "type": "text",
@@ -997,8 +618,7 @@ class LegionMCPTools:
                         f"✅ Successfully spawned minion '{name}' with role '{role}'.\n\n"
                         f"Minion ID: {child_minion_id}\n"
                         f"{wd_info}"
-                        f"{perm_info}"
-                        f"{channel_info}\n"
+                        f"{perm_info}\n"
                         f"The child minion is now active and ready to receive comms. "
                         f"You can communicate with them using send_comm(to_minion_name='{name}', ...)."
                     )
@@ -1328,7 +948,7 @@ class LegionMCPTools:
         Handle get_minion_info tool call.
 
         Returns detailed profile of a minion including name, role, state, capabilities,
-        hierarchy relationships, channels, and legion membership.
+        hierarchy relationships, and legion membership.
 
         Args:
             args: {
@@ -1449,20 +1069,6 @@ class LegionMCPTools:
             parent_name = parent_session.name if parent_session else minion.parent_overseer_id[:8]
             profile_lines.append(f"**Parent Overseer:** {parent_name}")
 
-        # Channels - now correctly maintained via bidirectional updates
-        minion_channels = []
-        for channel_id in minion.channel_ids:
-            channel = self.system.legion_coordinator.channels.get(channel_id)
-            if channel:
-                minion_channels.append(channel.name)
-
-        if minion_channels:
-            profile_lines.append("\n**Channels:**")
-            for channel_name in sorted(minion_channels):
-                profile_lines.append(f"- #{channel_name}")
-        else:
-            profile_lines.append("\n**Channels:** None")
-
         # Legion
         if minion.project_id:
             # Resolve legion name
@@ -1484,670 +1090,6 @@ class LegionMCPTools:
             }],
             "is_error": False
         }
-
-    async def _handle_join_channel(self, args: dict[str, Any]) -> dict[str, Any]:
-        """
-        Handle join_channel tool call.
-
-        Minion joins a channel by name. Idempotent - joining an already-joined
-        channel returns success.
-
-        Args:
-            args: {
-                "_from_minion_id": str,  # Injected by tool wrapper
-                "channel_name": str
-            }
-
-        Returns:
-            Tool result with success/error message
-        """
-        from_minion_id = args.get("_from_minion_id")
-        if not from_minion_id:
-            return {
-                "content": [{"type": "text", "text": "Error: Unable to determine minion ID"}],
-                "is_error": True
-            }
-
-        channel_name = args.get("channel_name", "").strip()
-        if not channel_name:
-            return {
-                "content": [{"type": "text", "text": "Error: 'channel_name' parameter is required"}],
-                "is_error": True
-            }
-
-        # Normalize channel name (strip leading # if present)
-        channel_name = normalize_channel_name(channel_name)
-
-        # Get minion's legion
-        minion_session = await self.system.session_coordinator.session_manager.get_session_info(from_minion_id)
-        if not minion_session:
-            return {
-                "content": [{"type": "text", "text": "Error: Unable to find minion session"}],
-                "is_error": True
-            }
-
-        legion_id = minion_session.project_id
-
-        # Find channel by name
-        channel = await self.system.legion_coordinator.get_channel_by_name(legion_id, channel_name)
-        if not channel:
-            return {
-                "content": [{"type": "text", "text": f"Error: Channel '{channel_name}' not found"}],
-                "is_error": True
-            }
-
-        # Check if already a member (for clear messaging)
-        already_member = from_minion_id in channel.member_minion_ids
-
-        # Add to channel (idempotent)
-        try:
-            await self.system.channel_manager.add_member(channel.channel_id, from_minion_id)
-
-            # Log system comm
-            await self._log_membership_change_comm(
-                legion_id=legion_id,
-                channel=channel,
-                minion_id=from_minion_id,
-                minion_name=minion_session.name,
-                action="joined",
-                actor_name=minion_session.name
-            )
-
-            if already_member:
-                return {
-                    "content": [{"type": "text", "text": f"Already a member of channel '{channel_name}'"}],
-                    "is_error": False
-                }
-            else:
-                member_count = len(channel.member_minion_ids)
-                return {
-                    "content": [{"type": "text", "text": f"Joined channel '{channel_name}' ({member_count} member{'s' if member_count != 1 else ''})"}],
-                    "is_error": False
-                }
-
-        except Exception as e:
-            return {
-                "content": [{"type": "text", "text": f"Error joining channel: {str(e)}"}],
-                "is_error": True
-            }
-
-    async def _handle_leave_channel(self, args: dict[str, Any]) -> dict[str, Any]:
-        """
-        Handle leave_channel tool call.
-
-        Minion leaves a channel by name. Idempotent - leaving an already-left
-        channel returns success.
-
-        Args:
-            args: {
-                "_from_minion_id": str,  # Injected by tool wrapper
-                "channel_name": str
-            }
-
-        Returns:
-            Tool result with success/error message
-        """
-        from_minion_id = args.get("_from_minion_id")
-        if not from_minion_id:
-            return {
-                "content": [{"type": "text", "text": "Error: Unable to determine minion ID"}],
-                "is_error": True
-            }
-
-        channel_name = args.get("channel_name", "").strip()
-        if not channel_name:
-            return {
-                "content": [{"type": "text", "text": "Error: 'channel_name' parameter is required"}],
-                "is_error": True
-            }
-
-        # Normalize channel name (strip leading # if present)
-        channel_name = normalize_channel_name(channel_name)
-
-        # Get minion's legion
-        minion_session = await self.system.session_coordinator.session_manager.get_session_info(from_minion_id)
-        if not minion_session:
-            return {
-                "content": [{"type": "text", "text": "Error: Unable to find minion session"}],
-                "is_error": True
-            }
-
-        legion_id = minion_session.project_id
-
-        # Find channel by name
-        channel = await self.system.legion_coordinator.get_channel_by_name(legion_id, channel_name)
-        if not channel:
-            return {
-                "content": [{"type": "text", "text": f"Error: Channel '{channel_name}' not found"}],
-                "is_error": True
-            }
-
-        # Check if was a member (for comm logging)
-        was_member = from_minion_id in channel.member_minion_ids
-
-        # Remove from channel (idempotent)
-        try:
-            await self.system.channel_manager.remove_member(channel.channel_id, from_minion_id)
-
-            # Log system comm only if was actually a member
-            if was_member:
-                await self._log_membership_change_comm(
-                    legion_id=legion_id,
-                    channel=channel,
-                    minion_id=from_minion_id,
-                    minion_name=minion_session.name,
-                    action="left",
-                    actor_name=minion_session.name
-                )
-
-            return {
-                "content": [{"type": "text", "text": f"Left channel '{channel_name}'"}],
-                "is_error": False
-            }
-
-        except Exception as e:
-            return {
-                "content": [{"type": "text", "text": f"Error leaving channel: {str(e)}"}],
-                "is_error": True
-            }
-
-    async def _handle_add_minion_to_channel(self, args: dict[str, Any]) -> dict[str, Any]:
-        """
-        Handle add_minion_to_channel tool call (overseer only).
-
-        Overseer adds a direct child minion to a channel. Can only manage
-        direct children (not grandchildren or unrelated minions).
-
-        Args:
-            args: {
-                "_parent_overseer_id": str,  # Injected by tool wrapper
-                "minion_name": str,
-                "channel_name": str
-            }
-
-        Returns:
-            Tool result with success/error message
-        """
-        overseer_id = args.get("_parent_overseer_id")
-        if not overseer_id:
-            return {
-                "content": [{"type": "text", "text": "Error: Unable to determine overseer ID"}],
-                "is_error": True
-            }
-
-        minion_name = args.get("minion_name", "").strip()
-        channel_name = args.get("channel_name", "").strip()
-
-        if not minion_name:
-            return {
-                "content": [{"type": "text", "text": "Error: 'minion_name' parameter is required"}],
-                "is_error": True
-            }
-
-        if not channel_name:
-            return {
-                "content": [{"type": "text", "text": "Error: 'channel_name' parameter is required"}],
-                "is_error": True
-            }
-
-        # Normalize channel name (strip leading # if present)
-        channel_name = normalize_channel_name(channel_name)
-
-        # Get overseer's legion
-        overseer_session = await self.system.session_coordinator.session_manager.get_session_info(overseer_id)
-        if not overseer_session:
-            return {
-                "content": [{"type": "text", "text": "Error: Unable to find overseer session"}],
-                "is_error": True
-            }
-
-        legion_id = overseer_session.project_id
-
-        # Legion-scoped lookup (only search within overseer's legion)
-        target_minion = await self.system.legion_coordinator.get_minion_by_name_in_legion(legion_id, minion_name)
-        if not target_minion:
-            return {
-                "content": [{"type": "text", "text": f"Error: Minion '{minion_name}' not found in legion {legion_id}"}],
-                "is_error": True
-            }
-
-        target_minion_id = target_minion.session_id
-
-        # Validate overseer owns this minion (direct child only)
-        if target_minion.parent_overseer_id != overseer_id:
-            return {
-                "content": [{"type": "text", "text": f"Error: Not authorized - '{minion_name}' is not your direct child"}],
-                "is_error": True
-            }
-
-        # Find channel by name
-        channel = await self.system.legion_coordinator.get_channel_by_name(legion_id, channel_name)
-        if not channel:
-            return {
-                "content": [{"type": "text", "text": f"Error: Channel '{channel_name}' not found"}],
-                "is_error": True
-            }
-
-        # Check if already a member (for clear messaging)
-        already_member = target_minion_id in channel.member_minion_ids
-
-        # Add to channel (idempotent)
-        try:
-            await self.system.channel_manager.add_member(channel.channel_id, target_minion_id)
-
-            # Log system comm
-            await self._log_membership_change_comm(
-                legion_id=legion_id,
-                channel=channel,
-                minion_id=target_minion_id,
-                minion_name=minion_name,
-                action="added to",
-                actor_name=overseer_session.name
-            )
-
-            if already_member:
-                return {
-                    "content": [{"type": "text", "text": f"'{minion_name}' is already a member of channel '{channel_name}'"}],
-                    "is_error": False
-                }
-            else:
-                return {
-                    "content": [{"type": "text", "text": f"Added '{minion_name}' to channel '{channel_name}'"}],
-                    "is_error": False
-                }
-
-        except Exception as e:
-            return {
-                "content": [{"type": "text", "text": f"Error adding minion to channel: {str(e)}"}],
-                "is_error": True
-            }
-
-    async def _handle_remove_minion_from_channel(self, args: dict[str, Any]) -> dict[str, Any]:
-        """
-        Handle remove_minion_from_channel tool call (overseer only).
-
-        Overseer removes a direct child minion from a channel. Can only manage
-        direct children (not grandchildren or unrelated minions).
-
-        Args:
-            args: {
-                "_parent_overseer_id": str,  # Injected by tool wrapper
-                "minion_name": str,
-                "channel_name": str
-            }
-
-        Returns:
-            Tool result with success/error message
-        """
-        overseer_id = args.get("_parent_overseer_id")
-        if not overseer_id:
-            return {
-                "content": [{"type": "text", "text": "Error: Unable to determine overseer ID"}],
-                "is_error": True
-            }
-
-        minion_name = args.get("minion_name", "").strip()
-        channel_name = args.get("channel_name", "").strip()
-
-        if not minion_name:
-            return {
-                "content": [{"type": "text", "text": "Error: 'minion_name' parameter is required"}],
-                "is_error": True
-            }
-
-        if not channel_name:
-            return {
-                "content": [{"type": "text", "text": "Error: 'channel_name' parameter is required"}],
-                "is_error": True
-            }
-
-        # Normalize channel name (strip leading # if present)
-        channel_name = normalize_channel_name(channel_name)
-
-        # Get overseer's legion
-        overseer_session = await self.system.session_coordinator.session_manager.get_session_info(overseer_id)
-        if not overseer_session:
-            return {
-                "content": [{"type": "text", "text": "Error: Unable to find overseer session"}],
-                "is_error": True
-            }
-
-        legion_id = overseer_session.project_id
-
-        # Legion-scoped lookup (only search within overseer's legion)
-        target_minion = await self.system.legion_coordinator.get_minion_by_name_in_legion(legion_id, minion_name)
-        if not target_minion:
-            return {
-                "content": [{"type": "text", "text": f"Error: Minion '{minion_name}' not found in legion {legion_id}"}],
-                "is_error": True
-            }
-
-        target_minion_id = target_minion.session_id
-
-        # Validate overseer owns this minion (direct child only)
-        if target_minion.parent_overseer_id != overseer_id:
-            return {
-                "content": [{"type": "text", "text": f"Error: Not authorized - '{minion_name}' is not your direct child"}],
-                "is_error": True
-            }
-
-        # Find channel by name
-        channel = await self.system.legion_coordinator.get_channel_by_name(legion_id, channel_name)
-        if not channel:
-            return {
-                "content": [{"type": "text", "text": f"Error: Channel '{channel_name}' not found"}],
-                "is_error": True
-            }
-
-        # Check if was a member (for comm logging)
-        was_member = target_minion_id in channel.member_minion_ids
-
-        # Remove from channel (idempotent)
-        try:
-            await self.system.channel_manager.remove_member(channel.channel_id, target_minion_id)
-
-            # Log system comm only if was actually a member
-            if was_member:
-                await self._log_membership_change_comm(
-                    legion_id=legion_id,
-                    channel=channel,
-                    minion_id=target_minion_id,
-                    minion_name=minion_name,
-                    action="removed from",
-                    actor_name=overseer_session.name
-                )
-
-            return {
-                "content": [{"type": "text", "text": f"Removed '{minion_name}' from channel '{channel_name}'"}],
-                "is_error": False
-            }
-
-        except Exception as e:
-            return {
-                "content": [{"type": "text", "text": f"Error removing minion from channel: {str(e)}"}],
-                "is_error": True
-            }
-
-    async def _handle_create_channel(self, args: dict[str, Any]) -> dict[str, Any]:
-        """
-        Handle create_channel tool call.
-
-        Creates a new channel and automatically adds creator as first member.
-        Optionally adds initial members by name.
-
-        Args:
-            args: {
-                "_from_minion_id": str,       # Injected by tool wrapper
-                "name": str,                  # Required: Channel name
-                "description": str,           # Required: Channel description
-                "purpose": str,               # Optional: One of coordination/planning/research/scene
-                "initial_members": list       # Optional: List of minion names to add
-            }
-
-        Returns:
-            Tool result with success message or error
-        """
-        # 1. Extract parameters
-        from_minion_id = args.get("_from_minion_id")
-        name = args.get("name", "").strip() if isinstance(args.get("name"), str) else ""
-        description = args.get("description", "").strip() if isinstance(args.get("description"), str) else ""
-        purpose = args.get("purpose", "coordination").strip() if isinstance(args.get("purpose"), str) else "coordination"
-
-        # Normalize channel name (strip leading # if present)
-        name = normalize_channel_name(name)
-
-        # Handle initial_members as both string (single member) and list (multiple members)
-        initial_members_param = args.get("initial_members", [])
-        if isinstance(initial_members_param, str):
-            # Convert single string to list
-            initial_members = [initial_members_param] if initial_members_param.strip() else []
-        elif isinstance(initial_members_param, list):
-            initial_members = initial_members_param
-        else:
-            initial_members = []
-
-        # 2. Validate context
-        if not from_minion_id:
-            return {
-                "content": [{
-                    "type": "text",
-                    "text": "❌ Error: Unable to determine minion ID"
-                }],
-                "is_error": True
-            }
-
-        # 3. Validate required parameters
-        if not name:
-            return {
-                "content": [{
-                    "type": "text",
-                    "text": "❌ Error: 'name' parameter is required and cannot be empty"
-                }],
-                "is_error": True
-            }
-
-        if not description:
-            return {
-                "content": [{
-                    "type": "text",
-                    "text": "❌ Error: 'description' parameter is required and cannot be empty"
-                }],
-                "is_error": True
-            }
-
-        # 4. Validate purpose
-        valid_purposes = ["coordination", "planning", "research", "scene"]
-        if purpose not in valid_purposes:
-            return {
-                "content": [{
-                    "type": "text",
-                    "text": f"❌ Error: Invalid purpose '{purpose}'. Must be one of: {', '.join(valid_purposes)}"
-                }],
-                "is_error": True
-            }
-
-        # 5. Get creator session and legion_id
-        creator_session = await self.system.session_coordinator.session_manager.get_session_info(from_minion_id)
-        if not creator_session:
-            return {
-                "content": [{
-                    "type": "text",
-                    "text": "❌ Error: Unable to find minion session"
-                }],
-                "is_error": True
-            }
-
-        legion_id = creator_session.project_id
-        if not legion_id:
-            return {
-                "content": [{
-                    "type": "text",
-                    "text": "❌ Error: Minion is not part of a legion"
-                }],
-                "is_error": True
-            }
-
-        # 6. Resolve initial member names to IDs
-        member_ids = [from_minion_id]  # Creator is first member
-        warnings = []
-
-        for member_name in initial_members:
-            if not isinstance(member_name, str):
-                continue
-
-            member_name = member_name.strip()
-            if not member_name:
-                continue
-
-            # Legion-scoped lookup (only search within creator's legion)
-            minion = await self.system.legion_coordinator.get_minion_by_name_in_legion(legion_id, member_name)
-            if minion:
-                # Don't add creator twice
-                if minion.session_id != from_minion_id:
-                    member_ids.append(minion.session_id)
-            else:
-                warnings.append(f"⚠️  Could not add '{member_name}': minion not found in legion")
-
-        # 7. Create channel via ChannelManager
-        try:
-            channel_id = await self.system.channel_manager.create_channel(
-                legion_id=legion_id,
-                name=name,
-                description=description,
-                purpose=purpose,
-                member_minion_ids=member_ids,
-                created_by_minion_id=from_minion_id
-            )
-        except ValueError as e:
-            # ChannelManager raises ValueError for duplicate names and invalid members
-            error_msg = str(e)
-            # Make error message more user-friendly
-            if "already exists" in error_msg.lower():
-                return {
-                    "content": [{
-                        "type": "text",
-                        "text": f"❌ Error: Channel '{name}' already exists in this legion"
-                    }],
-                    "is_error": True
-                }
-            else:
-                return {
-                    "content": [{
-                        "type": "text",
-                        "text": f"❌ Error: {error_msg}"
-                    }],
-                    "is_error": True
-                }
-        except Exception as e:
-            return {
-                "content": [{
-                    "type": "text",
-                    "text": f"❌ Error: Failed to create channel: {str(e)}"
-                }],
-                "is_error": True
-            }
-
-        # 8. Format success message
-        message_parts = [
-            f"✅ Successfully created channel '#{name}'",
-            f"Channel ID: {channel_id}",
-            f"Members: {len(member_ids)} (including you)"
-        ]
-
-        if warnings:
-            message_parts.append("")
-            message_parts.extend(warnings)
-
-        message_parts.append("")
-        message_parts.append(f"You can now send messages using: send_comm_to_channel(channel_name='{name}', ...)")
-
-        return {
-            "content": [{
-                "type": "text",
-                "text": "\n".join(message_parts)
-            }],
-            "is_error": False
-        }
-
-    async def _handle_list_channels(self, args: dict[str, Any]) -> dict[str, Any]:
-        """
-        Handle list_channels tool call.
-
-        Lists all channels in the minion's legion with details.
-
-        Args:
-            args: {
-                "_from_minion_id": str  # Injected by tool wrapper
-            }
-
-        Returns:
-            Tool result with formatted channel list
-        """
-        # Get minion context
-        from_minion_id = args.get("_from_minion_id")
-
-        if not from_minion_id:
-            return {
-                "content": [{
-                    "type": "text",
-                    "text": "Error: Unable to determine minion ID"
-                }],
-                "is_error": True
-            }
-
-        # Get minion's session info to find legion_id
-        minion_session = await self.system.session_coordinator.session_manager.get_session_info(from_minion_id)
-        if not minion_session:
-            return {
-                "content": [{
-                    "type": "text",
-                    "text": "Error: Unable to find minion session"
-                }],
-                "is_error": True
-            }
-
-        legion_id = minion_session.project_id
-        if not legion_id:
-            return {
-                "content": [{
-                    "type": "text",
-                    "text": "Error: Minion is not part of a legion"
-                }],
-                "is_error": True
-            }
-
-        # Get all channels in legion
-        try:
-            channels = await self.system.channel_manager.list_channels(legion_id)
-
-            # Handle empty case
-            if not channels:
-                return {
-                    "content": [{
-                        "type": "text",
-                        "text": (
-                            "No channels found in this legion.\n\n"
-                            "You can create a channel using: create_channel(name='...', description='...')"
-                        )
-                    }],
-                    "is_error": False
-                }
-
-            # Sort channels alphabetically by name
-            channels = sorted(channels, key=lambda ch: ch.name)
-
-            # Build formatted list
-            channel_lines = [f"**Channels in this Legion ({len(channels)}):**\n"]
-
-            for channel in channels:
-                # Check if this minion is a member
-                is_member = from_minion_id in channel.member_minion_ids
-                member_badge = " **(member)**" if is_member else ""
-
-                # Format channel entry
-                channel_lines.append(
-                    f"• **#{channel.name}**{member_badge}\n"
-                    f"  - Description: {channel.description}\n"
-                    f"  - Purpose: {channel.purpose}\n"
-                    f"  - Members: {len(channel.member_minion_ids)}"
-                )
-
-            return {
-                "content": [{
-                    "type": "text",
-                    "text": "\n\n".join(channel_lines)
-                }],
-                "is_error": False
-            }
-
-        except Exception as e:
-            return {
-                "content": [{
-                    "type": "text",
-                    "text": f"Error listing channels: {str(e)}"
-                }],
-                "is_error": True
-            }
 
     async def _handle_list_templates(self, args: dict[str, Any]) -> dict[str, Any]:
         """
@@ -2223,64 +1165,6 @@ class LegionMCPTools:
                 }],
                 "is_error": True
             }
-
-    async def _log_membership_change_comm(
-        self,
-        legion_id: str,
-        channel: 'Channel',
-        minion_id: str,
-        minion_name: str,
-        action: str,
-        actor_name: str
-    ) -> None:
-        """
-        Log a membership change as a SYSTEM comm.
-
-        Args:
-            legion_id: Legion UUID
-            channel: Channel instance
-            minion_id: ID of minion being added/removed
-            minion_name: Name of minion being added/removed
-            action: "joined", "left", "added to", or "removed from"
-            actor_name: Name of the actor (minion or overseer)
-        """
-        import uuid
-
-        from src.models.legion_models import (
-            SYSTEM_MINION_ID,
-            SYSTEM_MINION_NAME,
-            Comm,
-            CommType,
-            InterruptPriority,
-        )
-
-        # Format message based on action
-        if action in ["joined", "left"]:
-            # Self-action by minion
-            summary = f"{minion_name} {action} #{channel.name}"
-            content = f"Minion **{minion_name}** {action} channel **#{channel.name}**"
-        else:
-            # Overseer action
-            summary = f"{actor_name} {action} {minion_name} to #{channel.name}"
-            content = f"Overseer **{actor_name}** {action} minion **{minion_name}** {'to' if 'added' in action else 'from'} channel **#{channel.name}**"
-
-        # Create SYSTEM comm
-        comm = Comm(
-            comm_id=str(uuid.uuid4()),
-            from_minion_id=SYSTEM_MINION_ID,  # System-generated messages
-            from_minion_name=SYSTEM_MINION_NAME,
-            from_user=False,
-            summary=summary,
-            content=content,
-            comm_type=CommType.SYSTEM,
-            interrupt_priority=InterruptPriority.NONE,
-            visible_to_user=True,
-            to_channel_id=channel.channel_id,
-            to_channel_name=channel.name
-        )
-
-        # Route comm (logs to timeline and channel history)
-        await self.system.comm_router.route_comm(comm)
 
     async def _handle_update_expertise(self, args: dict[str, Any]) -> dict[str, Any]:
         """

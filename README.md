@@ -23,12 +23,11 @@ Claude WebUI transforms Claude Agent SDK into a powerful web-based development e
 **Multi-Agent Features (Legion):**
 - 🏛️ **Multi-agent orchestration** - Create teams of specialized AI agents (minions) working together
 - 📡 **Inter-agent communication** - Minions communicate via structured messages in real-time
-- 🌳 **Hierarchical organization** - Parent-child relationships (Hordes) for task decomposition
-- 📢 **Cross-team channels** - Purpose-driven groups for coordination across hierarchies
+- 🌳 **Hierarchical organization** - Parent-children relationships for task decomposition
 - 🤖 **Autonomous spawning** - Minions can dynamically create and dispose of child minions
 - 👁️ **Complete observability** - Timeline view shows all agent activity
-- 🔎 **Direct Minion Control** - Spy view inspects individual minions, interupt them, treat them as interactive sessions
-- 🎛️ **Fleet controls** (WIP) - Pause, resume, pivot, or emergency halt all agents instantly
+- 🔎 **Direct Minion Control** - Spy view inspects individual minions, interrupt them, treat them as interactive sessions
+- 🎛️ **Fleet controls** - Emergency halt and resume all agents instantly
 
 ## Quick Start
 
@@ -42,8 +41,8 @@ Claude WebUI transforms Claude Agent SDK into a powerful web-based development e
 
 **1. Clone the repository**:
 ```bash
-git clone https://github.com/EdanStarfire/claude-webui.git
-cd claude-webui
+git clone https://github.com/EdanStarfire/claudecode_webui.git
+cd claudecode_webui
 ```
 
 **2. Install dependencies**:
@@ -97,7 +96,7 @@ uv run ruff check --fix $(git diff --name-only --diff-filter=AM | grep '\.py$')
 uv run ruff check src/module_name.py
 ```
 
-**Important**: Only run Ruff on files you've modified, not the entire `src/` directory. Running `--fix` on the whole codebase will auto-fix 684+ unrelated violations.
+**Important**: Only run Ruff on files you've modified, not the entire `src/` directory. Running `--fix` on the whole codebase will auto-fix unrelated violations.
 
 **Progressive Strictness Strategy**: The codebase currently has existing linting violations that are being addressed incrementally. New code must not introduce violations, and violations should be fixed when modifying existing files.
 
@@ -147,21 +146,17 @@ Legion enables teams of AI agents (minions) to collaborate on complex tasks:
 - **Inter-agent communication** - Minions send structured Comms (TASK, QUESTION, REPORT, etc.) to each other
 - **Timeline view** - Unified chronological display of all agent communications across the legion
 - **Spy view** - Inspect individual minion sessions and message history
-- **Horde hierarchy** - Parent-child relationships visualized in tree structure
+- **Minion hierarchy** - Parent-child relationships visualized in tree structure
 - **MCP tools integration** - Minions have access to Legion tools: send_comm, spawn_minion, list_minions, etc.
 - **Real-time updates** - WebSocket broadcasting for instant comm delivery
 - **Capability tracking** - Minions register expertise for discoverability
 
 #### 🚧 In Development
-- **Autonomous spawning** - Minions can develop custom specialization and expertise context for their children (MCP handlers implemented, system prompt handling needed)
-- **Channel collaboration** - Purpose-driven cross-horde groups for coordination (data models ready, UI pending)
-- **Fleet controls** - Emergency halt, resume all, pivot (backend stubs ready, UI pending)
+- **Autonomous spawning enhancements** - Minions can develop custom specialization and expertise context for their children (MCP handlers implemented, system prompt handling needed)
 
 __Longer-term Goals__
 - **Memory & learning** - Distillation, reinforcement, knowledge transfer (architecture designed, implementation pending)
 - **Minion forking** - Duplicate agents with identical memory for A/B testing (planned)
-
-**Status**: Core infrastructure (Phases 1-4) complete. Advanced orchestration (Phases 5-6) in progress. Observability and learning features (Phases 7-9) planned.
 
 ### 📊 Developer Experience
 - **Vue 3 + Pinia** - Modern reactive frontend with centralized state management
@@ -216,21 +211,9 @@ Access Claude WebUI from any device on your network:
 
 ## Documentation
 
-### User Guides
-- **[run_guide.md](./run_guide.md)** - Setup, usage, and troubleshooting
-
 ### Technical Documentation
 - **[CLAUDE.md](./CLAUDE.md)** - Complete architecture, backend internals, API reference
 - **[frontend/README.md](./frontend/README.md)** - Vue 3 frontend architecture and development guide
-- **[frontend/MIGRATION_PLAN.md](./frontend/MIGRATION_PLAN.md)** - Vue 3 migration progress and roadmap
-
-### Legion Multi-Agent System
-- **[legion_proposal/](./legion_proposal/)** - Design documents for multi-agent features
-- **[legion_proposal/LEGION_PROPOSAL.md](./legion_proposal/LEGION_PROPOSAL.md)** - Core Legion architecture and capabilities
-- **[legion_proposal/MCP_TOOLS_ARCHITECTURE.md](./legion_proposal/MCP_TOOLS_ARCHITECTURE.md)** - Inter-agent communication via MCP tools
-
-### Development
-- **[DEVELOPMENT_PLAN.md](./DEVELOPMENT_PLAN.md)** - Project roadmap and development history
 
 ## Architecture Overview
 
@@ -278,8 +261,6 @@ data/
 │   └── messages.jsonl              # Append-only message log
 └── legions/{uuid}/                 # Multi-agent legions
     ├── timeline.jsonl              # Unified comm log
-    ├── hordes/{uuid}/              # Hierarchical groups
-    └── channels/{uuid}/            # Communication groups
 ```
 
 **Key Technologies:**
@@ -336,5 +317,5 @@ Built on [Claude Agent SDK](https://github.com/anthropics/claude-agent-sdk) by A
 
 ## Support
 
-- **Issues**: Report bugs at [GitHub Issues](https://github.com/EdanStarfire/claude-webui/issues)
+- **Issues**: Report bugs at [GitHub Issues](https://github.com/EdanStarfire/claudecode_webui/issues)
 - **Discussions**: Share ideas in GitHub Discussions

@@ -2,8 +2,6 @@
 Tests for Legion memory models.
 """
 
-import pytest
-from datetime import datetime
 from src.models.memory_models import (
     MemoryEntry,
     MemoryType,

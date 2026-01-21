@@ -36,7 +36,6 @@ class ProjectInfo:
     is_multi_agent: bool = False  # True if this is a Legion (multi-agent project)
 
     # Legion-specific fields (only used when is_multi_agent=True)
-    channel_ids: list[str] = None  # All channels in this legion
     minion_ids: list[str] = None  # All minions (alias for session_ids when is_multi_agent=True)
     max_concurrent_minions: int = 20  # Max concurrent minions
     active_minion_count: int = 0  # Currently active minions
@@ -49,8 +48,6 @@ class ProjectInfo:
         if self.session_ids is None:
             self.session_ids = []
         # Initialize legion-specific fields
-        if self.channel_ids is None:
-            self.channel_ids = []
         if self.minion_ids is None:
             self.minion_ids = []
 
@@ -72,15 +69,13 @@ class ProjectInfo:
         if 'is_multi_agent' not in data:
             data['is_multi_agent'] = False
         # Migration: Add legion fields if missing
-        if 'channel_ids' not in data:
-            data['channel_ids'] = []
         if 'minion_ids' not in data:
             data['minion_ids'] = []
         if 'max_concurrent_minions' not in data:
             data['max_concurrent_minions'] = 20
         if 'active_minion_count' not in data:
             data['active_minion_count'] = 0
-        # Migration: Remove deprecated horde_ids field (backward compatibility)
+        # Migration: Add horde fields if missing
         data.pop('horde_ids', None)
         return cls(**data)
 

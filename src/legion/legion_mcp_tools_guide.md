@@ -66,9 +66,9 @@ Your area: Database layer performance.
 
 ## MCP Tools
 
-**Comm:** `send_comm`, `send_comm_to_channel`, `list_minions`, `get_minion_info`
+**Comm:** `send_comm`, `list_minions`, `get_minion_info`
 **Hierarchy:** `spawn_minion`, `dispose_minion`
-**Discovery:** `search_capability`, `list_channels`, `join_channel`, `create_channel`
+**Discovery:** `search_capability`
 
 Tool descriptions provide usage details. Use them to enact principles above.
 

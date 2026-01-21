@@ -129,7 +129,6 @@ class OverseerController:
         role: str,
         system_prompt: str,
         capabilities: list[str] | None = None,
-        channels: list[str] | None = None,
         permission_mode: str | None = None,
         allowed_tools: list[str] | None = None,
         working_directory: str | None = None
@@ -145,16 +144,13 @@ class OverseerController:
             role: Role description for child
             system_prompt: System prompt/instructions for child (appended to Claude Code preset)
             capabilities: Capability keywords for discovery
-            channels: Channel IDs to join immediately
             permission_mode: Permission mode (from template or safe default)
             allowed_tools: List of allowed tools (from template or safe default)
             working_directory: Optional custom working directory (defaults to parent's directory)
 
         Returns:
             dict: {
-                "minion_id": str,  # Child minion's session_id
-                "channels_joined": list[str],  # Channel IDs successfully joined
-                "channels_failed": list[dict]  # Failed channels with reasons
+                "minion_id": str  # Child minion's session_id
             }
 
         Raises:
@@ -243,38 +239,7 @@ class OverseerController:
                     # Log error but don't fail spawn if capability format is invalid
                     coord_logger.warning(f"Failed to register capability '{capability}' for spawned minion {child_minion_id}: {e}")
 
-        # 10. Join channels if specified - collect results
-        channels_joined = []
-        channels_failed = []
-
-        if channels and self.system.channel_manager:
-            for channel_id in channels:
-                try:
-                    await self.system.channel_manager.add_member(channel_id, child_minion_id)
-                    channels_joined.append(channel_id)
-                except KeyError:
-                    # Channel does not exist
-                    channels_failed.append({
-                        "channel_id": channel_id,
-                        "reason": "Channel does not exist"
-                    })
-                    coord_logger.warning(f"Failed to add {name} to channel {channel_id}: Channel does not exist")
-                except ValueError as e:
-                    # Minion doesn't exist (shouldn't happen) or other validation error
-                    channels_failed.append({
-                        "channel_id": channel_id,
-                        "reason": str(e)
-                    })
-                    coord_logger.warning(f"Failed to add {name} to channel {channel_id}: {e}")
-                except Exception as e:
-                    # Unexpected error
-                    channels_failed.append({
-                        "channel_id": channel_id,
-                        "reason": f"Unexpected error: {str(e)}"
-                    })
-                    coord_logger.warning(f"Failed to add {name} to channel {channel_id}: {e}")
-
-        # 11. Send SPAWN notification to user
+        # 10. Send SPAWN notification to user
         spawn_comm = Comm(
             comm_id=str(uuid.uuid4()),
             from_minion_id=parent_overseer_id,
@@ -323,9 +288,7 @@ class OverseerController:
         coord_logger.info(f"Minion {name} spawned by {parent_session.name} (parent={parent_overseer_id}, child={child_minion_id})")
 
         return {
-            "minion_id": child_minion_id,
-            "channels_joined": channels_joined,
-            "channels_failed": channels_failed
+            "minion_id": child_minion_id
         }
 
     async def dispose_minion(

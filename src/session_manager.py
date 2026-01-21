@@ -79,7 +79,6 @@ class SessionInfo:
     overseer_level: int = 0  # 0=user-created, 1=child, 2=grandchild
     parent_overseer_id: str | None = None  # None if user-created
     child_minion_ids: list[str] = None  # Child minion session IDs
-    channel_ids: list[str] = None  # Communication channels
     capabilities: list[str] = None  # Capability tags for discovery
     expertise_score: float = 0.5  # Expertise level (0.0-1.0, default 0.5 for MVP)
 
@@ -88,8 +87,6 @@ class SessionInfo:
             self.allowed_tools = ["bash", "edit", "read"]
         if self.child_minion_ids is None:
             self.child_minion_ids = []
-        if self.channel_ids is None:
-            self.channel_ids = []
         if self.capabilities is None:
             self.capabilities = []
 
@@ -107,6 +104,25 @@ class SessionInfo:
         data['state'] = SessionState(data['state'])
         data['created_at'] = datetime.fromisoformat(data['created_at'])
         data['updated_at'] = datetime.fromisoformat(data['updated_at'])
+        # Migration: Add minion fields if missing (backward compatibility)
+        if 'is_minion' not in data:
+            data['is_minion'] = False
+        if 'child_minion_ids' not in data:
+            data['child_minion_ids'] = []
+        if 'capabilities' not in data:
+            data['capabilities'] = []
+        if 'is_overseer' not in data:
+            data['is_overseer'] = False
+        if 'overseer_level' not in data:
+            data['overseer_level'] = 0
+        # Migration: Add override_system_prompt if missing (backward compatibility)
+        if 'override_system_prompt' not in data:
+            data['override_system_prompt'] = False
+        # Migration: Rename tools to allowed_tools for backward compatibility
+        if 'allowed_tools' not in data and 'tools' in data:
+            data['allowed_tools'] = data.pop('tools')
+        elif 'allowed_tools' not in data:
+            data['allowed_tools'] = []
         # Migration: Remove deprecated horde_id field (backward compatibility with PR #281)
         data.pop('horde_id', None)
         return cls(**data)

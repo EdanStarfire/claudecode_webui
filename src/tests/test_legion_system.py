@@ -27,7 +27,6 @@ def test_legion_system_initialization():
 
     # Verify all Legion components were created
     assert system.comm_router is not None
-    assert system.channel_manager is not None
     assert system.memory_manager is not None
     assert system.overseer_controller is not None
     assert system.legion_coordinator is not None
@@ -45,7 +44,6 @@ def test_legion_components_have_system_reference():
 
     # Verify each component has system reference
     assert system.comm_router.system == system
-    assert system.channel_manager.system == system
     assert system.memory_manager.system == system
     assert system.overseer_controller.system == system
     assert system.legion_coordinator.system == system
@@ -76,6 +74,4 @@ def test_legion_coordinator_has_state_dicts():
     # Verify Legion-specific state dictionaries exist and are empty
     # Note: legions/minions are managed in ProjectManager/SessionManager
     assert hasattr(system.legion_coordinator, 'hordes')
-    assert hasattr(system.legion_coordinator, 'channels')
     assert system.legion_coordinator.hordes == {}
-    assert system.legion_coordinator.channels == {}

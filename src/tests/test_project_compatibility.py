@@ -2,8 +2,6 @@
 Tests for ProjectInfo backward compatibility with is_multi_agent flag.
 """
 
-import pytest
-from datetime import datetime, timezone
 from src.project_manager import ProjectInfo
 
 

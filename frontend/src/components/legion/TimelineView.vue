@@ -95,7 +95,7 @@ function getSenderName(comm) {
 }
 
 /**
- * Get recipient name (to minion, user, or channel)
+ * Get recipient name (to minion or user)
  */
 function getRecipientName(comm) {
   if (comm.to_user) {
@@ -104,20 +104,6 @@ function getRecipientName(comm) {
   if (comm.to_minion_id) {
     const minion = sessionStore.sessions.get(comm.to_minion_id)
     return minion?.name || 'Unknown'
-  }
-  if (comm.to_channel_id) {
-    // 1. Prioritize channel name from comm (survives channel deletion)
-    if (comm.to_channel_name) {
-      return `#${comm.to_channel_name}`
-    }
-    // 2. Fallback to channel lookup by ID
-    const channel = legionStore.channelsByLegion.get(props.legionId)
-      ?.find(ch => ch.channel_id === comm.to_channel_id)
-    if (channel?.name) {
-      return `#${channel.name}`
-    }
-    // 3. Final fallback to UUID
-    return comm.to_channel_id
   }
   return 'All'
 }

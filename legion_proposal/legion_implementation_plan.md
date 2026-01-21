@@ -1,5 +1,7 @@
 # Legion Multi-Agent System - Implementation Plan
 
+> **NOTE**: This document is historical. The channel system described in sections throughout this document has been removed in issue #268 in favor of direct minion-to-minion communication. References to channel_manager.py, ChannelManager class, and channel-related MCP tools (create_channel, join_channel, list_channels, send_comm_to_channel) are no longer applicable. See the main CLAUDE.md for current architecture.
+
 ## 1. Overview
 
 ### 1.1 Implementation Strategy

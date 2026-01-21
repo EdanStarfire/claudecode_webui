@@ -1,7 +1,7 @@
 """
 Core data models for Legion multi-agent system.
 
-This module defines data structures for Legion grouping mechanisms (channels, communications).
+This module defines data structures for Legion communications.
 
 NOTE: Legion and Minion data models have been consolidated:
 - Legions are now ProjectInfo with is_multi_agent=True (see src/project_manager.py)
@@ -56,61 +56,6 @@ class InterruptPriority(Enum):
 # Core Data Models
 # NOTE: LegionInfo and MinionInfo have been removed - use ProjectInfo and SessionInfo instead
 
-@dataclass
-class Channel:
-    """
-    Purpose-driven communication group for cross-horde collaboration.
-    """
-    channel_id: str             # UUID
-    legion_id: str              # Parent legion
-    name: str                   # "Implementation Planning"
-    description: str            # Purpose description
-    purpose: str                # "coordination" | "planning" | "scene" | "research"
-
-    # Membership
-    member_minion_ids: list[str] = field(default_factory=list)
-    created_by_minion_id: str | None = None  # None if user-created
-
-    # Metadata
-    created_at: datetime = field(default_factory=datetime.now)
-    updated_at: datetime = field(default_factory=datetime.now)
-
-    def get_comm_log_path(self, data_dir: 'Path') -> 'Path':
-        """
-        Get the path to the channel's comm log file.
-
-        Args:
-            data_dir: Base data directory path
-
-        Returns:
-            Absolute path to comms.jsonl for this channel
-        """
-        return data_dir / "legions" / self.legion_id / "channels" / self.channel_id / "comms.jsonl"
-
-    def to_dict(self) -> dict[str, Any]:
-        """Convert to dictionary for serialization."""
-        return {
-            "channel_id": self.channel_id,
-            "legion_id": self.legion_id,
-            "name": self.name,
-            "description": self.description,
-            "purpose": self.purpose,
-            "member_minion_ids": self.member_minion_ids,
-            "created_by_minion_id": self.created_by_minion_id,
-            "created_at": self.created_at.isoformat(),
-            "updated_at": self.updated_at.isoformat(),
-        }
-
-    @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> 'Channel':
-        """Create from dictionary."""
-        data = data.copy()
-        data["created_at"] = datetime.fromisoformat(data["created_at"])
-        data["updated_at"] = datetime.fromisoformat(data["updated_at"])
-        # Remove deprecated comm_log_path if present (backward compatibility)
-        data.pop("comm_log_path", None)
-        return cls(**data)
-
 
 @dataclass
 class Comm:
@@ -126,10 +71,8 @@ class Comm:
 
     # Destination
     to_minion_id: str | None = None    # Direct to minion
-    to_channel_id: str | None = None   # Broadcast to channel
     to_user: bool = False
     to_minion_name: str | None = None  # Captured name (for historical display)
-    to_channel_name: str | None = None  # Captured name (for historical display)
 
     # Content
     summary: str = ""  # Brief one-line description (~50 chars, shown collapsed)
@@ -152,11 +95,10 @@ class Comm:
         """Ensure Comm has valid routing."""
         destinations = sum([
             self.to_minion_id is not None,
-            self.to_channel_id is not None,
             self.to_user
         ])
         if destinations != 1:
-            raise ValueError("Comm must have exactly one destination")
+            raise ValueError("Comm must have exactly one destination (minion or user)")
 
         sources = sum([
             self.from_minion_id is not None,
@@ -175,10 +117,8 @@ class Comm:
             "from_user": self.from_user,
             "from_minion_name": self.from_minion_name,
             "to_minion_id": self.to_minion_id,
-            "to_channel_id": self.to_channel_id,
             "to_user": self.to_user,
             "to_minion_name": self.to_minion_name,
-            "to_channel_name": self.to_channel_name,
             "summary": self.summary,
             "content": self.content,
             "comm_type": self.comm_type.value,

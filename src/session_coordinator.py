@@ -102,12 +102,8 @@ class SessionCoordinator:
             await self.template_manager.create_default_templates()
             coord_logger.info("Loaded minion templates")
 
-            # Load channels for all legions (if LegionSystem is initialized)
+            # Rebuild capability registry from persisted session data (if LegionSystem is initialized)
             if hasattr(self, 'legion_system') and self.legion_system is not None:
-                await self.legion_system.legion_coordinator._load_all_channels()
-                coord_logger.info("Loaded channels for all legions")
-
-                # Rebuild capability registry from persisted session data
                 await self.legion_system.legion_coordinator.rebuild_capability_registry()
 
             # Register callback to receive session manager state changes
@@ -603,19 +599,6 @@ class SessionCoordinator:
                         coord_logger.error(f"Failed to delete Legion minion directory {minion_dir}: {e}")
                 else:
                     coord_logger.debug(f"Legion minion directory does not exist (already cleaned): {minion_dir}")
-
-                # 1.7b: Remove from all channel memberships
-                if self.legion_system.channel_manager:
-                    try:
-                        removed_channels = await self.legion_system.channel_manager.remove_member_from_all_channels(
-                            legion_id, session_id
-                        )
-                        if removed_channels:
-                            coord_logger.info(f"Removed minion {session_id} from {len(removed_channels)} channels: {removed_channels}")
-                        else:
-                            coord_logger.debug(f"Minion {session_id} was not a member of any channels")
-                    except Exception as e:
-                        coord_logger.error(f"Failed to remove minion {session_id} from channels: {e}")
 
             # Step 2: Terminate the SDK if it's running
             sdk = self._active_sdks.get(session_id)

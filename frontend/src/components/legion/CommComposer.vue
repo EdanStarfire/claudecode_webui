@@ -15,15 +15,6 @@
               {{ getStateIcon(minion) }} {{ getMinionLabel(minion) }}
             </option>
           </optgroup>
-          <optgroup v-if="channels.length > 0" label="Channels">
-            <option
-              v-for="channel in channels"
-              :key="channel.channel_id"
-              :value="`channel:${channel.channel_id}`"
-            >
-              #️⃣ {{ channel.name }}
-            </option>
-          </optgroup>
         </select>
       </div>
 
@@ -102,10 +93,6 @@ const props = defineProps({
     type: String,
     required: true
   },
-  defaultChannelId: {
-    type: String,
-    default: ''
-  },
   hideRecipientSelector: {
     type: Boolean,
     default: false
@@ -141,11 +128,6 @@ const minions = computed(() => {
   return project.session_ids
     .map(sid => sessionStore.sessions.get(sid))
     .filter(s => s && s.is_minion)
-})
-
-// Get channels (placeholder for future)
-const channels = computed(() => {
-  return legionStore.currentChannels || []
 })
 
 // Can send if recipient and content are provided
@@ -368,8 +350,6 @@ async function sendComm() {
     // Add recipient based on type
     if (recipientType === 'minion') {
       commData.to_minion_id = recipientId
-    } else if (recipientType === 'channel') {
-      commData.to_channel_id = recipientId
     }
 
     // Send via legion store
@@ -400,13 +380,6 @@ onMounted(() => {
 onUnmounted(() => {
   window.removeEventListener('resize', handleResize)
 })
-
-// Auto-select default channel if provided
-watch(() => props.defaultChannelId, (newChannelId) => {
-  if (newChannelId) {
-    recipient.value = `channel:${newChannelId}`
-  }
-}, { immediate: true })
 
 // Close autocomplete when clicking outside
 watch(showAutocomplete, (show) => {

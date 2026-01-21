@@ -711,14 +711,6 @@ export const useWebSocketStore = defineStore('websocket', () => {
           }
           break
 
-        case 'channel_created':
-          // New channel added to legion - update channel list
-          if (payload.channel) {
-            console.log('Legion WebSocket: Channel created, updating list', payload.channel)
-            legionStore.addChannel(legionId, payload.channel)
-          }
-          break
-
         case 'connection_established':
           console.log(`Legion WebSocket: Connection established for ${legionId}`)
           break

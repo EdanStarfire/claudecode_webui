@@ -1,5 +1,7 @@
 # Legion Multi-Agent System - UX Design Document
 
+> **NOTE**: This document is historical. Channel-related UI components, views, and interactions described throughout this document have been removed in issue #268. The system now uses only direct minion-to-minion communication. Channel creation modals, channel views, channel filters, and channel member management features are no longer part of the UI. See the current frontend components for implemented features.
+
 ## 1. Design Principles
 
 ### 1.1 Core UX Principles

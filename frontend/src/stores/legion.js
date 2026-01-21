@@ -8,7 +8,6 @@ import { api } from '../utils/api'
  * Handles:
  * - Comms (communications between minions/user)
  * - Minions (agent sessions within a legion)
- * - Channels (communication groups)
  */
 export const useLegionStore = defineStore('legion', () => {
   // ========== STATE ==========
@@ -18,15 +17,6 @@ export const useLegionStore = defineStore('legion', () => {
 
   // Minions per legion (legionId -> Minion[])
   const minionsByLegion = ref(new Map())
-
-  // Channels per legion (legionId -> Channel[])
-  const channelsByLegion = ref(new Map())
-
-  // Channel details per channel (channelId -> ChannelDetails)
-  const channelDetailsByChannel = ref(new Map())
-
-  // Channel comms per channel (channelId -> Comm[])
-  const channelCommsByChannel = ref(new Map())
 
   // Currently selected legion
   const currentLegionId = ref(null)
@@ -41,11 +31,6 @@ export const useLegionStore = defineStore('legion', () => {
   // Current legion's minions
   const currentMinions = computed(() => {
     return minionsByLegion.value.get(currentLegionId.value) || []
-  })
-
-  // Current legion's channels
-  const currentChannels = computed(() => {
-    return channelsByLegion.value.get(currentLegionId.value) || []
   })
 
   // ========== ACTIONS ==========
@@ -109,34 +94,6 @@ export const useLegionStore = defineStore('legion', () => {
 
     // Trigger reactivity
     commsByLegion.value = new Map(commsByLegion.value)
-
-    // Also add to channel-specific list if this comm is for a channel
-    if (comm.to_channel_id) {
-      addChannelComm(comm.to_channel_id, comm)
-    }
-  }
-
-  /**
-   * Add a comm to a channel's comm list (from WebSocket or API)
-   */
-  function addChannelComm(channelId, comm) {
-    if (!channelCommsByChannel.value.has(channelId)) {
-      channelCommsByChannel.value.set(channelId, [])
-    }
-
-    const comms = channelCommsByChannel.value.get(channelId)
-
-    // Check if comm already exists (prevent duplicates from multiple WebSocket connections)
-    const exists = comms.some(c => c.comm_id === comm.comm_id)
-    if (exists) {
-      console.log(`Duplicate comm ${comm.comm_id} prevented in channel ${channelId}`)
-      return
-    }
-
-    comms.push(comm)
-
-    // Trigger reactivity
-    channelCommsByChannel.value = new Map(channelCommsByChannel.value)
   }
 
   /**
@@ -192,153 +149,6 @@ export const useLegionStore = defineStore('legion', () => {
   }
 
   /**
-   * Load channels for a legion
-   */
-  async function loadChannels(legionId) {
-    try {
-      const data = await api.get(`/api/legions/${legionId}/channels`)
-      const channels = data.channels || []
-
-      console.log(`Loaded ${channels.length} channels for legion ${legionId}`)
-
-      // Store channels
-      channelsByLegion.value.set(legionId, channels)
-
-      // Trigger reactivity
-      channelsByLegion.value = new Map(channelsByLegion.value)
-
-      return channels
-    } catch (error) {
-      console.error('Failed to load channels:', error)
-      throw error
-    }
-  }
-
-  /**
-   * Add a single channel to the legion's channel list (from WebSocket)
-   * Prevents duplicates and triggers reactivity
-   */
-  function addChannel(legionId, channel) {
-    if (!channelsByLegion.value.has(legionId)) {
-      channelsByLegion.value.set(legionId, [])
-    }
-
-    const channels = channelsByLegion.value.get(legionId)
-
-    // Check if channel already exists (prevent duplicates)
-    const exists = channels.some(ch => ch.channel_id === channel.channel_id)
-    if (exists) {
-      console.log(`Duplicate channel ${channel.channel_id} prevented`)
-      return
-    }
-
-    // Add to list
-    channels.push(channel)
-
-    // Trigger Vue reactivity
-    channelsByLegion.value = new Map(channelsByLegion.value)
-
-    console.log(`Added channel ${channel.name} to legion ${legionId}`)
-  }
-
-  /**
-   * Load channel details
-   */
-  async function loadChannelDetails(channelId) {
-    try {
-      const data = await api.get(`/api/channels/${channelId}`)
-      const channel = data.channel || data
-
-      console.log(`Loaded details for channel ${channelId}`)
-
-      // Store channel details
-      channelDetailsByChannel.value.set(channelId, channel)
-
-      // Trigger reactivity
-      channelDetailsByChannel.value = new Map(channelDetailsByChannel.value)
-
-      return channel
-    } catch (error) {
-      console.error('Failed to load channel details:', error)
-      throw error
-    }
-  }
-
-  /**
-   * Load channel comms (first 1000 messages, no pagination for MVP)
-   */
-  async function loadChannelComms(channelId, limit = 1000) {
-    try {
-      const data = await api.get(`/api/channels/${channelId}/comms?limit=${limit}`)
-      const comms = data.comms || []
-
-      console.log(`Loaded ${comms.length} comms for channel ${channelId}`)
-
-      // Sort comms by timestamp (oldest first, like a chat)
-      comms.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp))
-
-      // Store channel comms
-      channelCommsByChannel.value.set(channelId, comms)
-
-      // Trigger reactivity
-      channelCommsByChannel.value = new Map(channelCommsByChannel.value)
-
-      return comms
-    } catch (error) {
-      console.error('Failed to load channel comms:', error)
-      throw error
-    }
-  }
-
-  /**
-   * Add a member to a channel
-   * User (self_id: "00000000-0000-0000-0000-000000000000") can add any minion
-   */
-  async function addMemberToChannel(channelId, minionId) {
-    try {
-      const USER_MINION_ID = '00000000-0000-0000-0000-000000000000'
-
-      await api.post(`/api/channels/${channelId}/members`, {
-        action: 'add',
-        self_id: USER_MINION_ID,
-        member_id: minionId
-      })
-
-      console.log(`Added minion ${minionId} to channel ${channelId}`)
-
-      // Reload channel details to get updated member list
-      await loadChannelDetails(channelId)
-    } catch (error) {
-      console.error('Failed to add member to channel:', error)
-      throw error
-    }
-  }
-
-  /**
-   * Remove a member from a channel
-   * User (self_id: "00000000-0000-0000-0000-000000000000") can remove any minion
-   */
-  async function removeMemberFromChannel(channelId, minionId) {
-    try {
-      const USER_MINION_ID = '00000000-0000-0000-0000-000000000000'
-
-      await api.post(`/api/channels/${channelId}/members`, {
-        action: 'remove',
-        self_id: USER_MINION_ID,
-        member_id: minionId
-      })
-
-      console.log(`Removed minion ${minionId} from channel ${channelId}`)
-
-      // Reload channel details to get updated member list
-      await loadChannelDetails(channelId)
-    } catch (error) {
-      console.error('Failed to remove member from channel:', error)
-      throw error
-    }
-  }
-
-  /**
    * Emergency halt all minions in legion
    */
   async function haltAll(legionId) {
@@ -384,13 +194,10 @@ export const useLegionStore = defineStore('legion', () => {
   function clearLegionData(legionId) {
     commsByLegion.value.delete(legionId)
     minionsByLegion.value.delete(legionId)
-    hordesByLegion.value.delete(legionId)
-    channelsByLegion.value.delete(legionId)
 
     // Trigger reactivity
     commsByLegion.value = new Map(commsByLegion.value)
     minionsByLegion.value = new Map(minionsByLegion.value)
-    channelsByLegion.value = new Map(channelsByLegion.value)
   }
 
   // ========== RETURN ==========
@@ -398,30 +205,19 @@ export const useLegionStore = defineStore('legion', () => {
     // State
     commsByLegion,
     minionsByLegion,
-    channelsByLegion,
-    channelDetailsByChannel,
-    channelCommsByChannel,
     currentLegionId,
 
     // Computed
     currentComms,
     currentMinions,
-    currentChannels,
 
     // Actions
     setCurrentLegion,
     loadTimeline,
     addComm,
-    addChannelComm,
     sendComm,
     loadMinions,
     createMinion,
-    loadChannels,
-    addChannel,
-    loadChannelDetails,
-    loadChannelComms,
-    addMemberToChannel,
-    removeMemberFromChannel,
     haltAll,
     resumeAll,
     clearLegionData
