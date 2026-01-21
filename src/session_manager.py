@@ -123,7 +123,7 @@ class SessionInfo:
             data['allowed_tools'] = data.pop('tools')
         elif 'allowed_tools' not in data:
             data['allowed_tools'] = []
-        # Migration: Remove deprecated horde_id field (backward compatibility)
+        # Migration: Remove deprecated horde_id field (backward compatibility with PR #281)
         data.pop('horde_id', None)
         return cls(**data)
 
