@@ -75,8 +75,6 @@ class ProjectInfo:
             data['max_concurrent_minions'] = 20
         if 'active_minion_count' not in data:
             data['active_minion_count'] = 0
-        # Migration: Add horde fields if missing
-        data.pop('horde_ids', None)
         return cls(**data)
 
 

@@ -1,6 +1,10 @@
 # Legion Multi-Agent System - MCP Architecture Summary
 
-> **NOTE**: This document is historical. The channel system and related MCP tools (send_comm_to_channel, create_channel, join_channel, list_channels) described throughout this document have been removed in issue #268. The system now uses only direct minion-to-minion communication via the send_comm tool. See the main CLAUDE.md for current MCP tool definitions.
+> **ARCHIVED CONTENT**: This document is historical. Multiple systems described here have been removed:
+> - **Channels** (issue #268): Channel MCP tools and communication patterns removed
+> - **Hordes** (PR #281, issue #290): Horde-related structures and data models removed
+>
+> The system now uses only direct minion-to-minion communication via the send_comm tool and parent-child relationships. See the main CLAUDE.md for current MCP tool definitions.
 
 ## Executive Summary
 

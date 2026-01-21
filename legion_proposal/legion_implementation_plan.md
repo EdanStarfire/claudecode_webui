@@ -1,6 +1,10 @@
 # Legion Multi-Agent System - Implementation Plan
 
-> **NOTE**: This document is historical. The channel system described in sections throughout this document has been removed in issue #268 in favor of direct minion-to-minion communication. References to channel_manager.py, ChannelManager class, and channel-related MCP tools (create_channel, join_channel, list_channels, send_comm_to_channel) are no longer applicable. See the main CLAUDE.md for current architecture.
+> **ARCHIVED CONTENT**: This document is historical. Multiple systems described here have been removed:
+> - **Channels** (issue #268): Removed in favor of direct minion-to-minion communication
+> - **Hordes** (PR #281, issue #290): Hierarchical grouping removed, replaced by parent-child relationships
+>
+> References to channel_manager.py, ChannelManager class, channel-related MCP tools, horde structures, and horde-related endpoints are no longer applicable. See the main CLAUDE.md for current architecture.
 
 ## 1. Overview
 

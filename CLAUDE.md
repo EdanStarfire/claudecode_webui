@@ -142,7 +142,7 @@ The frontend migration to Vue 3 is **substantially complete** and in production 
 - ✅ **Phase 1 Complete**: All Pinia stores, Vue Router, base components
 - ✅ **Phase 2 Complete**: Project/Session components with full CRUD operations
 - ✅ **Phase 3 Complete**: Message display, tool handlers (13+ custom handlers), tool lifecycle tracking
-- ✅ **Phase 4 Complete**: Legion Timeline/Spy/Horde views, minion management, comm system
+- ✅ **Phase 4 Complete**: Legion Timeline/Spy views, minion management, comm system
 - ⏳ **Phase 5 In Progress**: Polish, orphaned tool detection, permission system refinements
 - ⏳ **Phase 6 Pending**: Production build optimization, cutover from dev server
 
@@ -158,7 +158,7 @@ frontend/
 │   │   ├── project.js             # Project hierarchy, ordering
 │   │   ├── message.js             # Messages, tool calls, orphaned detection
 │   │   ├── websocket.js           # 3 WebSocket connections (UI, session, legion)
-│   │   ├── legion.js              # Multi-agent: comms, minions, hordes
+│   │   ├── legion.js              # Multi-agent: comms, minions
 │   │   └── ui.js                  # Sidebar, modals, loading, responsive
 │   │
 │   ├── components/
@@ -167,10 +167,10 @@ frontend/
 │   │   ├── session/               # SessionView, SessionItem, SessionCreateModal, etc.
 │   │   ├── messages/              # MessageList, MessageItem, UserMessage, AssistantMessage, etc.
 │   │   ├── messages/tools/        # 13+ tool handlers (ReadToolHandler, EditToolHandler, etc.)
-│   │   ├── legion/                # TimelineView, SpyView, HordeView, CommComposer, etc.
+│   │   ├── legion/                # TimelineView, SpyView, CommComposer, etc.
 │   │   └── common/                # FolderBrowserModal, InputArea, etc.
 │   │
-│   ├── router/                    # Vue Router: /, /session/:id, /timeline/:id, /spy/:id, /horde/:id
+│   ├── router/                    # Vue Router: /, /session/:id, /timeline/:id, /spy/:id
 │   ├── composables/               # Reusable composition functions
 │   ├── utils/                     # API client, helpers
 │   └── assets/                    # CSS, images
@@ -277,18 +277,17 @@ npm run build  # Output: frontend/dist/
 - Automatic reconnection with exponential backoff (max 10 UI retries, 5 session/legion)
 
 ### 5. Legion Store (`stores/legion.js`)
-**Responsibility**: Multi-agent data (comms, minions, hordes)
+**Responsibility**: Multi-agent data (comms, minions)
 
 **State**:
 - `commsByLegion` (Map): Timeline communications per legion
 - `minionsByLegion` (Map): Minions per legion
-- `hordesByLegion` (Map): Hierarchical groups
 
 **Key Actions**:
 - `loadTimeline()`: Paginated comm loading (100/page)
 - `addComm()`: Real-time comm from WebSocket
 - `sendComm()`: User sends comm to minion
-- `createMinion()`, `loadHordes()`
+- `createMinion()`
 
 ### 6. UI Store (`stores/ui.js`)
 **Responsibility**: UI state (sidebar, modals, scroll, responsive)
@@ -336,16 +335,15 @@ npm run build  # Output: frontend/dist/
 - `TodoToolHandler.vue`, `TaskToolHandler.vue`, `ExitPlanModeToolHandler.vue`
 - `NotebookEditToolHandler.vue`
 
-### Legion Features (11)
+### Legion Features (7)
 - `TimelineView.vue`, `TimelineHeader.vue`, `TimelineStatusBar.vue`
 - `SpyView.vue`, `SpySelector.vue`
-- `HordeView.vue`, `HordeHeader.vue`, `HordeStatusBar.vue`, `HordeSelector.vue`
 - `MinionTreeNode.vue`, `CommComposer.vue`, `CreateMinionModal.vue`
 
 ### Common (3)
 - `FolderBrowserModal.vue`: Directory selection
 - `InputArea.vue`: Message textarea
-- Status bars: `SessionStatusBar.vue`, `TimelineStatusBar.vue`, `HordeStatusBar.vue`
+- Status bars: `SessionStatusBar.vue`, `TimelineStatusBar.vue`
 
 ## Naming Conventions
 
@@ -442,7 +440,7 @@ npm run build  # Output: frontend/dist/
 
 **SessionInfo Fields** (Extended for Legion):
 - Standard: `session_id`, `state`, `working_directory`, `current_permission_mode`, `tools`, `model`, `name`, `order`
-- Legion: `is_minion`, `role`, `is_overseer`, `parent_overseer_id`, `child_minion_ids`, `horde_id`, `capabilities`, `initialization_context`
+- Legion: `is_minion`, `role`, `is_overseer`, `parent_overseer_id`, `child_minion_ids`, `capabilities`, `initialization_context`
 
 **Key Methods**:
 - `create_session()`: Create directory, persist state.json
@@ -455,7 +453,7 @@ npm run build  # Output: frontend/dist/
 
 **ProjectInfo Fields** (Extended for Legion):
 - Standard: `project_id`, `name`, `working_directory`, `session_ids`, `is_expanded`, `order`
-- Legion: `is_multi_agent`, `horde_ids`, `minion_ids`, `max_concurrent_minions`, `active_minion_count`
+- Legion: `is_multi_agent`, `minion_ids`, `max_concurrent_minions`, `active_minion_count`
 
 **Key Methods**:
 - `create_project()`: Create with order shifting
@@ -519,7 +517,6 @@ npm run build  # Output: frontend/dist/
 - Legion creation and deletion
 - Fleet control (halt all, resume all, emergency halt)
 - Central capability registry (MVP: keyword search)
-- Horde tracking
 
 #### `src/legion/overseer_controller.py` - **Minion Management**
 **Main Class**: `OverseerController`
@@ -527,7 +524,6 @@ npm run build  # Output: frontend/dist/
 **Responsibilities**:
 - Minion lifecycle: create_minion_for_user(), spawn_minion(), dispose_minion()
 - Enforce parent authority (only parent can dispose children)
-- Horde creation and updates
 - Memory transfer on disposal
 - Capability registration
 
@@ -564,7 +560,6 @@ npm run build  # Output: frontend/dist/
 ### Legion Data Models (`src/legion/models.py`)
 
 **Core Entities**:
-- `Horde`: Tree structure with root overseer + members
 - `Comm`: High-level message with routing info
 - `CommType` enum: TASK, QUESTION, REPORT, INFO, HALT, PIVOT, THOUGHT, SPAWN, DISPOSE, SYSTEM
 - `MemoryEntry`, `MinionMemory`: Knowledge management (future)
@@ -590,8 +585,6 @@ data/
 │
 └── legions/{uuid}/                 # One folder per legion (multi-agent project)
     ├── timeline.jsonl              # Unified comm log
-    ├── hordes/{horde_id}/
-    │   └── horde_state.json
     └── minions/{minion_id}/
         ├── minion_state.json
         ├── session_messages.jsonl  # SDK messages
@@ -640,7 +633,6 @@ POST   /api/sessions/{id}/disconnect      # End SDK session, keep state
 GET    /api/legions/{id}/timeline?limit=100&offset=0  # Get comm timeline (paginated)
 POST   /api/legions/{id}/comms            # Send comm (user to minion)
 POST   /api/legions/{id}/minions          # Create minion
-GET    /api/legions/{id}/hordes           # Load hordes
 ```
 
 ### Utility Endpoints
@@ -962,9 +954,8 @@ Claude WebUI is a **production-ready web interface** for Claude Agent SDK with:
 **Multi-Agent Features (Legion)**:
 - Minion creation and management
 - Inter-agent communication (structured Comms)
-- Timeline, Spy, Horde views for observability
+- Timeline, Spy views for observability
 - MCP tools for explicit minion actions
-- Hierarchical organization (hordes)
 - Memory & learning system (future)
 
 **Developer Experience**:

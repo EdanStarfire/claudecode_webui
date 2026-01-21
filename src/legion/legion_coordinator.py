@@ -3,7 +3,6 @@ LegionCoordinator - Top-level orchestrator for Legion multi-agent system.
 
 Responsibilities:
 - Delegate legion/minion CRUD to ProjectManager/SessionManager
-- Track hordes (hierarchical grouping)
 - Coordinate emergency halt/resume
 - Provide fleet status
 - Maintain central capability registry (MVP approach)
@@ -30,9 +29,6 @@ class LegionCoordinator:
             system: LegionSystem instance for accessing other components
         """
         self.system = system
-
-        # Multi-agent grouping state (hordes are not duplicated elsewhere)
-        self.hordes: dict = {}   # Dict[str, Horde]
 
         # Central capability registry (MVP approach)
         # Format: {capability_keyword: [(minion_id, expertise_score), ...]}
@@ -147,11 +143,10 @@ class LegionCoordinator:
 
     async def _create_legion_directories(self, legion_id: str) -> None:
         """
-        Create directory structure for legion-specific data (hordes).
+        Create directory structure for legion-specific data.
 
         Creates:
         - data/legions/{legion_id}/
-        - data/legions/{legion_id}/hordes/
 
         Note: Minion data is stored in data/sessions/{session_id}/ via SessionManager
 
@@ -159,9 +154,7 @@ class LegionCoordinator:
             legion_id: Legion UUID (same as project_id)
         """
         base_path = self.system.session_coordinator.data_dir / "legions" / legion_id
-
-        # Create subdirectories for legion-specific grouping data
-        (base_path / "hordes").mkdir(parents=True, exist_ok=True)
+        base_path.mkdir(parents=True, exist_ok=True)
 
     async def assemble_minion_hierarchy(self, legion_id: str) -> dict:
         """
