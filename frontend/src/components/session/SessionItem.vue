@@ -127,7 +127,7 @@ function selectSession() {
 }
 
 function showManageModal() {
-  uiStore.showModal('edit-session', { session: props.session })
+  uiStore.showModal('manage-session', { session: props.session })
 }
 
 // Drag and Drop
