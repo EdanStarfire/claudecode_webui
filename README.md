@@ -24,11 +24,10 @@ Claude WebUI transforms Claude Agent SDK into a powerful web-based development e
 - 🏛️ **Multi-agent orchestration** - Create teams of specialized AI agents (minions) working together
 - 📡 **Inter-agent communication** - Minions communicate via structured messages in real-time
 - 🌳 **Hierarchical organization** - Parent-child relationships (Hordes) for task decomposition
-- 📢 **Cross-team channels** - Purpose-driven groups for coordination across hierarchies
 - 🤖 **Autonomous spawning** - Minions can dynamically create and dispose of child minions
 - 👁️ **Complete observability** - Timeline view shows all agent activity
-- 🔎 **Direct Minion Control** - Spy view inspects individual minions, interupt them, treat them as interactive sessions
-- 🎛️ **Fleet controls** (WIP) - Pause, resume, pivot, or emergency halt all agents instantly
+- 🔎 **Direct Minion Control** - Spy view inspects individual minions, interrupt them, treat them as interactive sessions
+- 🎛️ **Fleet controls** - Pause, resume, pivot, or emergency halt all agents instantly
 
 ## Quick Start
 
@@ -153,9 +152,7 @@ Legion enables teams of AI agents (minions) to collaborate on complex tasks:
 - **Capability tracking** - Minions register expertise for discoverability
 
 #### 🚧 In Development
-- **Autonomous spawning** - Minions can develop custom specialization and expertise context for their children (MCP handlers implemented, system prompt handling needed)
-- **Channel collaboration** - Purpose-driven cross-horde groups for coordination (data models ready, UI pending)
-- **Fleet controls** - Emergency halt, resume all, pivot (backend stubs ready, UI pending)
+- **Autonomous spawning enhancements** - Minions can develop custom specialization and expertise context for their children (MCP handlers implemented, system prompt handling needed)
 
 __Longer-term Goals__
 - **Memory & learning** - Distillation, reinforcement, knowledge transfer (architecture designed, implementation pending)
@@ -278,8 +275,7 @@ data/
 │   └── messages.jsonl              # Append-only message log
 └── legions/{uuid}/                 # Multi-agent legions
     ├── timeline.jsonl              # Unified comm log
-    ├── hordes/{uuid}/              # Hierarchical groups
-    └── channels/{uuid}/            # Communication groups
+    └── hordes/{uuid}/              # Hierarchical groups
 ```
 
 **Key Technologies:**

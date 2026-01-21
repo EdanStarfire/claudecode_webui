@@ -109,8 +109,6 @@ class SessionInfo:
             data['is_minion'] = False
         if 'child_minion_ids' not in data:
             data['child_minion_ids'] = []
-        # Remove deprecated channel_ids field if present (backward compatibility)
-        data.pop('channel_ids', None)
         if 'capabilities' not in data:
             data['capabilities'] = []
         if 'is_overseer' not in data:

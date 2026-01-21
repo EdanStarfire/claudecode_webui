@@ -139,10 +139,6 @@ class Comm:
         data["comm_type"] = CommType(data["comm_type"])
         data["interrupt_priority"] = InterruptPriority(data["interrupt_priority"])
 
-        # Remove deprecated channel fields if present (backward compatibility)
-        data.pop("to_channel_id", None)
-        data.pop("to_channel_name", None)
-
         # Normalize timestamp to handle mixed string/float formats (backwards compatibility)
         if "timestamp" in data:
             try:
