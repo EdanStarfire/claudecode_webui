@@ -104,27 +104,7 @@ class SessionInfo:
         data['state'] = SessionState(data['state'])
         data['created_at'] = datetime.fromisoformat(data['created_at'])
         data['updated_at'] = datetime.fromisoformat(data['updated_at'])
-        # Migration: Add minion fields if missing (backward compatibility)
-        if 'is_minion' not in data:
-            data['is_minion'] = False
-        if 'child_minion_ids' not in data:
-            data['child_minion_ids'] = []
-        if 'capabilities' not in data:
-            data['capabilities'] = []
-        if 'is_overseer' not in data:
-            data['is_overseer'] = False
-        if 'overseer_level' not in data:
-            data['overseer_level'] = 0
-        # Migration: Add override_system_prompt if missing (backward compatibility)
-        if 'override_system_prompt' not in data:
-            data['override_system_prompt'] = False
-        # Migration: Rename tools to allowed_tools for backward compatibility
-        if 'allowed_tools' not in data and 'tools' in data:
-            data['allowed_tools'] = data.pop('tools')
-        elif 'allowed_tools' not in data:
-            data['allowed_tools'] = []
-        # Migration: Remove deprecated horde_id field (backward compatibility with PR #281)
-        data.pop('horde_id', None)
+        data.pop('horde_id', None)  # Remove legacy horde_id if present
         return cls(**data)
 
 
