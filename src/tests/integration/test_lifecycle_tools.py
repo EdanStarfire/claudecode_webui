@@ -23,7 +23,6 @@ async def test_spawn_minion_minimal(legion_test_env):
     - Tool returns success with child_minion_id
     - Child session created with ACTIVE state
     - Parent marked as overseer with child in child_minion_ids
-    - Child added to horde
     - SPAWN comm logged to timeline
     - Default permissions applied
     """
@@ -94,11 +93,7 @@ async def test_spawn_minion_minimal(legion_test_env):
     assert parent_updated.is_overseer is True
     assert child_id in parent_updated.child_minion_ids
 
-    # SIDE EFFECT 3: Child added to horde (if hierarchies are being tracked)
-    # Note: Hordes are assembled on-demand via assemble_horde_hierarchy(), not stored separately
-    # The parent-child relationship is the source of truth (verified in SIDE EFFECT 2)
-
-    # SIDE EFFECT 4: SPAWN comm logged to timeline
+    # SIDE EFFECT 3: SPAWN comm logged to timeline
     timeline_file = data_dir / "legions" / legion_id / "timeline.jsonl"
     assert timeline_file.exists()
 
@@ -217,7 +212,6 @@ async def test_spawn_minion_with_capabilities(legion_test_env):
     """
     env = legion_test_env
     legion_system = env["legion_system"]
-    legion_id = env["legion_id"]
 
     # Create parent minion
     parent = await env["create_minion"]("parent", role="Parent")
@@ -355,7 +349,6 @@ async def test_dispose_minion_direct_child(legion_test_env):
     Verifies:
     - Child session terminated (TERMINATED state)
     - Parent's child_minion_ids updated (child removed)
-    - Child removed from horde
     - DISPOSE comm logged to timeline
     - Channel cleanup (child removed from channels)
     """
@@ -419,11 +412,7 @@ async def test_dispose_minion_direct_child(legion_test_env):
     parent_updated = await env["session_coordinator"].session_manager.get_session_info(parent.session_id)
     assert child_id not in parent_updated.child_minion_ids
 
-    # SIDE EFFECT 3: Child removed from horde
-    # Note: Hordes are assembled on-demand, not stored separately
-    # Parent-child relationship is cleared in SIDE EFFECT 2
-
-    # SIDE EFFECT 4: DISPOSE comm logged to timeline
+    # SIDE EFFECT 3: DISPOSE comm logged to timeline
     timeline_file = data_dir / "legions" / legion_id / "timeline.jsonl"
     assert timeline_file.exists()
 

@@ -73,5 +73,5 @@ def test_legion_coordinator_has_state_dicts():
 
     # Verify Legion-specific state dictionaries exist and are empty
     # Note: legions/minions are managed in ProjectManager/SessionManager
-    assert hasattr(system.legion_coordinator, 'hordes')
-    assert system.legion_coordinator.hordes == {}
+    assert hasattr(system.legion_coordinator, 'capability_registry')
+    assert system.legion_coordinator.capability_registry == {}

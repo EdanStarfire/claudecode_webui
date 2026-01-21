@@ -1,6 +1,10 @@
 # Legion Multi-Agent System - Technical Design Document
 
-> **NOTE**: This document is historical. The channel system and ChannelManager described throughout this document have been removed in issue #268. Channel-related components, storage structures, API endpoints, and MCP tools are no longer part of the architecture. The system now uses only direct minion-to-minion communication. See the main CLAUDE.md for current technical design.
+> **ARCHIVED CONTENT**: This document is historical. Multiple systems described here have been removed:
+> - **Channels** (issue #268): Removed in favor of direct minion-to-minion communication
+> - **Hordes** (PR #281, issue #290): Hierarchical grouping removed, replaced by parent-child relationships
+>
+> Channel-related and horde-related components, storage structures, API endpoints, and MCP tools are no longer part of the architecture. See the main CLAUDE.md for current technical design.
 
 ## 1. System Architecture Overview
 

@@ -18,7 +18,7 @@ Migrate to Vue 3 + Pinia + Vite:
 - **Vue 3 Composition API**: Component-based architecture with automatic reactivity
 - **Pinia**: Centralized state management with single source of truth
 - **Vite**: Modern build tool with instant Hot Module Replacement (HMR)
-- **Vue Router**: Client-side routing for session/timeline/spy/horde views
+- **Vue Router**: Client-side routing for session/timeline/spy views
 
 ## Timeline
 
@@ -272,7 +272,6 @@ VITE_BACKEND_PORT=8001
 **Remaining Tasks:**
 - Implement TimelineView (Legion communication timeline)
 - Implement SpyView (individual minion inspection)
-- Implement HordeView (minion hierarchy tree)
 - Build CommComposer component
 - Implement tag autocomplete for mentions
 - Connect Legion WebSocket

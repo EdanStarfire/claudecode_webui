@@ -1,6 +1,10 @@
 # Legion Multi-Agent System - UX Design Document
 
-> **NOTE**: This document is historical. Channel-related UI components, views, and interactions described throughout this document have been removed in issue #268. The system now uses only direct minion-to-minion communication. Channel creation modals, channel views, channel filters, and channel member management features are no longer part of the UI. See the current frontend components for implemented features.
+> **ARCHIVED CONTENT**: This document is historical. Multiple systems described here have been removed:
+> - **Channels** (issue #268): Channel UI components, views, and interactions removed
+> - **Hordes** (PR #281, issue #290): Horde views (HordeView, HordeSelector, etc.) removed
+>
+> The system now uses only direct minion-to-minion communication and parent-child relationships. See the current frontend components for implemented features.
 
 ## 1. Design Principles
 

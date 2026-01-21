@@ -242,14 +242,6 @@ This document maps all current icon usage across the Vue 3 frontend to proposed 
 **Where Used**:
 - `ProjectItem.vue:92` - Timeline navigation item
 
-### Horde
-
-**Current**: 🌳 (emoji)
-**Proposed**: 🌳
-**Use Case**: Minion hierarchy view
-**Where Used**:
-- `ProjectItem.vue:108` - Horde navigation item
-
 ---
 
 ## Status Bar Actions
@@ -323,7 +315,6 @@ This document maps all current icon usage across the Vue 3 frontend to proposed 
 **Legion**:
 - 🏛 Legion Project
 - 📊 Timeline
-- 🌳 Horde
 
 **Permission Modes**:
 - 🔒 Default

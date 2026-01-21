@@ -1,6 +1,10 @@
 # Legion Multi-Agent System - Requirements Document
 
-> **NOTE**: This document is historical. The channel system features (FR-CH1 through FR-CH4, FR-D2, and related sections) described in this document have been removed in issue #268. The system now uses only direct minion-to-minion communication. Channel-related functionality including ChannelManager, channel endpoints, and channel MCP tools are no longer part of the architecture. See the main CLAUDE.md for current requirements.
+> **ARCHIVED CONTENT**: This document is historical. Multiple systems described here have been removed:
+> - **Channels** (issue #268): Channel features, ChannelManager, channel endpoints and MCP tools removed
+> - **Hordes** (PR #281, issue #290): Horde features and hierarchical grouping removed
+>
+> The system now uses only direct minion-to-minion communication and parent-child relationships. See the main CLAUDE.md for current requirements.
 
 ## 1. Executive Summary
 
