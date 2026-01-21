@@ -790,25 +790,28 @@ class SessionCoordinator:
         try:
             coord_logger.info(f"Restarting session {session_id}")
 
-            # Get current SDK
+            # Get current SDK if it exists
             sdk = self._active_sdks.get(session_id)
-            if not sdk:
-                logger.warning(f"No active SDK for session {session_id}, cannot restart")
-                return False
+            if sdk:
+                # Disconnect existing SDK gracefully
+                coord_logger.debug(f"Disconnecting existing SDK for session {session_id}")
+                disconnect_result = await sdk.disconnect()
+                if not disconnect_result:
+                    logger.warning(f"SDK disconnect returned False for session {session_id}")
 
-            # Disconnect SDK gracefully
-            disconnect_result = await sdk.disconnect()
-            if not disconnect_result:
-                logger.warning(f"SDK disconnect returned False for session {session_id}")
+                # Update session state to TERMINATED after disconnect
+                await self.session_manager.update_session_state(session_id, SessionState.TERMINATED)
 
-            # Update session state to TERMINATED after disconnect
-            await self.session_manager.update_session_state(session_id, SessionState.TERMINATED)
+                # Wait a moment for cleanup
+                await asyncio.sleep(0.5)
 
-            # Wait a moment for cleanup
-            await asyncio.sleep(0.5)
-
-            # Remove old SDK reference
-            del self._active_sdks[session_id]
+                # Remove old SDK reference
+                del self._active_sdks[session_id]
+            else:
+                # No active SDK - restart will act like a fresh start
+                coord_logger.debug(f"No existing SDK for session {session_id}, will create new one")
+                # Ensure session state is TERMINATED before starting
+                await self.session_manager.update_session_state(session_id, SessionState.TERMINATED)
 
             # Start session again (will automatically resume using claude_code_session_id)
             success = await self.start_session(session_id, permission_callback)
@@ -849,6 +852,15 @@ class SessionCoordinator:
 
             # Clear message history
             storage = self._storage_managers.get(session_id)
+            if not storage:
+                # Create storage manager on-demand for inactive sessions
+                coord_logger.debug(f"Creating storage manager for inactive session {session_id}")
+                session_dir = await self.session_manager.get_session_directory(session_id)
+                storage = DataStorageManager(session_dir)
+                await storage.initialize()
+                self._storage_managers[session_id] = storage
+
+            # Clear messages (storage now guaranteed to exist)
             if storage:
                 await storage.clear_messages()
                 coord_logger.info(f"Cleared message history for session {session_id}")
