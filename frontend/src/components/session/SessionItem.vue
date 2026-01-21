@@ -19,13 +19,20 @@
       <span v-if="session.is_minion && session.role" class="text-muted small ms-1">({{ session.role }})</span>
     </div>
 
-    <!-- Actions Button -->
+    <!-- Action Buttons -->
+    <button
+      class="btn btn-sm btn-outline-secondary me-1"
+      title="Edit session"
+      @click.stop="showEditModal"
+    >
+      ✏️
+    </button>
     <button
       class="btn btn-sm btn-outline-secondary"
       title="Manage session"
       @click.stop="showManageModal"
     >
-      ✏️
+      ⚙️
     </button>
   </div>
 </template>
@@ -124,6 +131,10 @@ const statusDotStyle = computed(() => {
 function selectSession() {
   sessionStore.selectSession(props.session.session_id)
   router.push(`/session/${props.session.session_id}`)
+}
+
+function showEditModal() {
+  uiStore.showModal('edit-session', { session: props.session })
 }
 
 function showManageModal() {
