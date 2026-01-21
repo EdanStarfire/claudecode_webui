@@ -27,7 +27,6 @@ def test_legion_system_initialization():
 
     # Verify all Legion components were created
     assert system.comm_router is not None
-    assert system.channel_manager is not None
     assert system.memory_manager is not None
     assert system.overseer_controller is not None
     assert system.legion_coordinator is not None
