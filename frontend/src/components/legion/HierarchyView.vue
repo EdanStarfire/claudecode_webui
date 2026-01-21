@@ -66,6 +66,7 @@
             :key="minion.id"
             :minion-data="minion"
             :level="1"
+            @minion-click="handleMinionClick"
           />
         </div>
       </div>
@@ -81,6 +82,7 @@
 
 <script setup>
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import { useProjectStore } from '../../stores/project'
 import { useSessionStore } from '../../stores/session'
 import { useWebSocketStore } from '../../stores/websocket'
@@ -98,6 +100,7 @@ const props = defineProps({
   }
 })
 
+const router = useRouter()
 const projectStore = useProjectStore()
 const sessionStore = useSessionStore()
 const websocketStore = useWebSocketStore()
@@ -131,6 +134,11 @@ async function loadHierarchy() {
   } finally {
     loading.value = false
   }
+}
+
+// Handle minion click - navigate to Spy View
+function handleMinionClick(minionId) {
+  router.push(`/spy/${props.legionId}/${minionId}`)
 }
 
 // Load on mount
