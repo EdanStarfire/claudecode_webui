@@ -454,10 +454,9 @@ class LegionMCPTools:
         initialization_context = args.get("initialization_context", "").strip()
         template_name = args.get("template_name", "").strip()
         capabilities = args.get("capabilities", [])
-        channels = args.get("channels", [])
         working_directory_raw = args.get("working_directory")
 
-        # Get parent session to determine legion_id for channel name resolution
+        # Get parent session to determine legion_id
         parent_session = await self.system.session_coordinator.session_manager.get_session_info(parent_overseer_id)
         if not parent_session:
             return {
