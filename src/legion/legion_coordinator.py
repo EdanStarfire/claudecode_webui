@@ -255,7 +255,6 @@ class LegionCoordinator:
             {
                 "to_user": bool,
                 "to_minion_name": str or None,
-                "to_channel_name": str or None,
                 "content": str (truncated to 150 chars),
                 "comm_type": str,
                 "timestamp": str (ISO format)

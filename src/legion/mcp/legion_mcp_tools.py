@@ -24,7 +24,7 @@ except ImportError:
 
 if TYPE_CHECKING:
     from src.legion_system import LegionSystem
-    
+
 
 class LegionMCPTools:
     """
@@ -162,7 +162,7 @@ class LegionMCPTools:
         @tool(
             "get_minion_info",
             "Get detailed information about a specific minion in your legion, including their role, capabilities, "
-            "current task, parent/children, and channels.",
+            "current task, and parent/children hierarchy.",
             {
                 "minion_name": str  # Name of minion to query
             }
@@ -427,8 +427,7 @@ class LegionMCPTools:
                 "role": str,
                 "initialization_context": str,
                 "template_name": str,  # Optional - if provided, enforces template permissions
-                "capabilities": List[str],  # Optional
-                "channels": List[str]  # Optional
+                "capabilities": List[str]  # Optional
             }
 
         Returns:
@@ -949,7 +948,7 @@ class LegionMCPTools:
         Handle get_minion_info tool call.
 
         Returns detailed profile of a minion including name, role, state, capabilities,
-        hierarchy relationships, channels, and legion membership.
+        hierarchy relationships, and legion membership.
 
         Args:
             args: {

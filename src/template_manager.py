@@ -4,15 +4,14 @@ Template Manager for Claude Code WebUI
 Manages minion templates storage and retrieval with full CRUD operations.
 """
 
-import uuid
 import json
 import logging
+import uuid
+from datetime import UTC, datetime
 from pathlib import Path
-from datetime import datetime, timezone
-from typing import List, Optional, Dict
 
-from .models.minion_template import MinionTemplate
 from .logging_config import get_logger
+from .models.minion_template import MinionTemplate
 
 # Get specialized logger for template operations
 template_logger = get_logger('template_manager', category='TEMPLATE_MANAGER')
@@ -28,7 +27,7 @@ class TemplateManager:
         self.templates_dir.mkdir(parents=True, exist_ok=True)
 
         # In-memory cache
-        self.templates: Dict[str, MinionTemplate] = {}
+        self.templates: dict[str, MinionTemplate] = {}
         template_logger.debug(f"TemplateManager initialized with data_dir: {data_dir}")
 
     async def load_templates(self):
@@ -38,7 +37,7 @@ class TemplateManager:
 
         for template_file in self.templates_dir.glob("*.json"):
             try:
-                with open(template_file, 'r') as f:
+                with open(template_file) as f:
                     data = json.load(f)
                     template = MinionTemplate.from_dict(data)
                     self.templates[template.template_id] = template
@@ -53,10 +52,10 @@ class TemplateManager:
         self,
         name: str,
         permission_mode: str,
-        allowed_tools: Optional[List[str]] = None,
-        default_role: Optional[str] = None,
-        default_system_prompt: Optional[str] = None,
-        description: Optional[str] = None
+        allowed_tools: list[str] | None = None,
+        default_role: str | None = None,
+        default_system_prompt: str | None = None,
+        description: str | None = None
     ) -> MinionTemplate:
         """Create a new template."""
         # Validate name is not empty
@@ -92,30 +91,30 @@ class TemplateManager:
         template_logger.info(f"Created template: {template.name} ({template.template_id})")
         return template
 
-    async def get_template(self, template_id: str) -> Optional[MinionTemplate]:
+    async def get_template(self, template_id: str) -> MinionTemplate | None:
         """Get template by ID."""
         return self.templates.get(template_id)
 
-    async def get_template_by_name(self, name: str) -> Optional[MinionTemplate]:
+    async def get_template_by_name(self, name: str) -> MinionTemplate | None:
         """Get template by name."""
         for template in self.templates.values():
             if template.name == name:
                 return template
         return None
 
-    async def list_templates(self) -> List[MinionTemplate]:
+    async def list_templates(self) -> list[MinionTemplate]:
         """List all templates."""
         return list(self.templates.values())
 
     async def update_template(
         self,
         template_id: str,
-        name: Optional[str] = None,
-        permission_mode: Optional[str] = None,
-        allowed_tools: Optional[List[str]] = None,
-        default_role: Optional[str] = None,
-        default_system_prompt: Optional[str] = None,
-        description: Optional[str] = None
+        name: str | None = None,
+        permission_mode: str | None = None,
+        allowed_tools: list[str] | None = None,
+        default_role: str | None = None,
+        default_system_prompt: str | None = None,
+        description: str | None = None
     ) -> MinionTemplate:
         """Update existing template."""
         template = self.templates.get(template_id)
@@ -132,7 +131,7 @@ class TemplateManager:
         if permission_mode:
             valid_modes = ["default", "acceptEdits", "plan", "bypassPermissions"]
             if permission_mode not in valid_modes:
-                raise ValueError(f"Invalid permission_mode")
+                raise ValueError("Invalid permission_mode")
             template.permission_mode = permission_mode
 
         if allowed_tools is not None:
@@ -148,7 +147,7 @@ class TemplateManager:
             template.description = description
 
         # Update timestamp
-        template.updated_at = datetime.now(timezone.utc)
+        template.updated_at = datetime.now(UTC)
 
         # Save to disk
         await self._save_template(template)
@@ -209,7 +208,7 @@ class TemplateManager:
             {
                 "name": "Project Manager",
                 "permission_mode": "acceptEdits",
-                "allowed_tools": ["bash", "edit", "read", "send_comm", "spawn_minion", "create_channel"],
+                "allowed_tools": ["bash", "edit", "read", "send_comm", "spawn_minion"],
                 "default_role": "Overseer for delegation and coordination",
                 "description": "Can manage project structure and delegate tasks"
             },
