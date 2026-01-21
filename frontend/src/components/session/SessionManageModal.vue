@@ -189,20 +189,24 @@ async function handleRestart() {
 
   try {
     const sessionId = session.value.session_id
+    const isCurrentSession = sessionStore.currentSessionId === sessionId
     const response = await api.post(`/api/sessions/${sessionId}/restart`)
 
     if (response.success) {
-      console.log('Session restarted successfully, reconnecting')
+      console.log('Session restarted successfully')
 
-      // Disconnect WebSocket to force reconnection (await to ensure old socket is fully closed)
-      await wsStore.disconnectSession()
+      // Only reconnect if this is the currently selected session
+      if (isCurrentSession) {
+        // Disconnect WebSocket to force reconnection (await to ensure old socket is fully closed)
+        await wsStore.disconnectSession()
 
-      // Clear current session to force selectSession to re-run (bypass early return)
-      // This is CRITICAL - without it, selectSession() returns early and doesn't reconnect
-      sessionStore.currentSessionId = null
+        // Clear current session to force selectSession to re-run (bypass early return)
+        // This is CRITICAL - without it, selectSession() returns early and doesn't reconnect
+        sessionStore.currentSessionId = null
 
-      // Reconnect to session (will fetch fresh data and reconnect WebSocket)
-      await sessionStore.selectSession(sessionId)
+        // Reconnect to session (will fetch fresh data and reconnect WebSocket)
+        await sessionStore.selectSession(sessionId)
+      }
 
       // Close modal
       if (modalInstance) {
@@ -239,27 +243,25 @@ async function handleEndSession() {
     // Call terminate endpoint
     await api.post(`/api/sessions/${sessionId}/terminate`)
 
-    // Disconnect WebSocket (await to ensure proper cleanup)
-    await wsStore.disconnectSession()
-
-    // Deselect the session in the store
+    // Only disconnect WebSocket if ending the currently selected session
     if (sessionStore.currentSessionId === sessionId) {
+      await wsStore.disconnectSession()
       sessionStore.currentSessionId = null
+      // Navigate to home only if we ended the currently selected session
+      router.push('/')
     }
-
-    // Navigate to home
-    router.push('/')
+    // If ending a different session, stay on current route
   } catch (error) {
     console.error('Error ending session:', error)
     // Still navigate away even if terminate fails
-    await wsStore.disconnectSession()
-
-    // Deselect the session
+    // Only disconnect WebSocket if ending the currently selected session
     if (sessionStore.currentSessionId === session.value?.session_id) {
+      await wsStore.disconnectSession()
       sessionStore.currentSessionId = null
+      // Navigate to home only if we ended the currently selected session
+      router.push('/')
     }
-
-    router.push('/')
+    // If ending a different session, stay on current route
   }
 }
 
@@ -272,20 +274,24 @@ async function confirmResetSession() {
 
   try {
     const sessionId = session.value.session_id
+    const isCurrentSession = sessionStore.currentSessionId === sessionId
     const response = await api.post(`/api/sessions/${sessionId}/reset`)
 
     if (response.success) {
-      console.log('Session reset successfully, reconnecting')
+      console.log('Session reset successfully')
 
-      // Disconnect WebSocket to force reconnection (await to ensure old socket is fully closed)
-      await wsStore.disconnectSession()
+      // Only reconnect if this is the currently selected session
+      if (isCurrentSession) {
+        // Disconnect WebSocket to force reconnection (await to ensure old socket is fully closed)
+        await wsStore.disconnectSession()
 
-      // Clear current session to force selectSession to re-run (bypass early return)
-      sessionStore.currentSessionId = null
+        // Clear current session to force selectSession to re-run (bypass early return)
+        sessionStore.currentSessionId = null
 
-      // Reconnect to session (will fetch fresh data and reconnect WebSocket)
-      // Use selectSession to match restart behavior - this properly handles reconnection
-      await sessionStore.selectSession(sessionId)
+        // Reconnect to session (will fetch fresh data and reconnect WebSocket)
+        // Use selectSession to match restart behavior - this properly handles reconnection
+        await sessionStore.selectSession(sessionId)
+      }
 
       // Close modal
       if (modalInstance) {
