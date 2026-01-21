@@ -1,6 +1,6 @@
 <template>
   <div v-if="minionData" class="minion-tree-node" :style="{ marginLeft: `${indent}px` }">
-    <div class="minion-card border-start border-2 mb-2">
+    <div class="minion-card minion-card-clickable border-start border-2 mb-2" @click="handleClick">
       <div class="node-row">
         <!-- Left Column: Status + Name (30%) -->
         <div class="node-left">
@@ -46,6 +46,7 @@
         :key="child.id"
         :minion-data="child"
         :level="level + 1"
+        @minion-click="$emit('minion-click', $event)"
       />
     </div>
   </div>
@@ -69,6 +70,8 @@ const props = defineProps({
     default: 0
   }
 })
+
+const emit = defineEmits(['minion-click'])
 
 // Indentation (24px per level)
 const indent = computed(() => props.level * 24)
@@ -158,6 +161,11 @@ function getCommSummary(comm) {
     return text.substring(0, 150) + '...'
   }
   return text
+}
+
+// Handle minion card click - emit event to parent
+function handleClick() {
+  emit('minion-click', props.minionData.id)
 }
 </script>
 
@@ -255,5 +263,15 @@ function getCommSummary(comm) {
   50% {
     opacity: 0.3;
   }
+}
+
+/* Clickable minion card styles */
+.minion-card-clickable {
+  cursor: pointer;
+  transition: background-color 0.2s ease;
+}
+
+.minion-card-clickable:hover {
+  background-color: rgba(13, 110, 253, 0.1);
 }
 </style>
