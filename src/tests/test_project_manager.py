@@ -2,15 +2,14 @@
 Tests for Project Manager
 """
 
-import pytest
-import asyncio
-import json
-from pathlib import Path
-from datetime import datetime, timezone
-import tempfile
 import shutil
+import tempfile
+from datetime import datetime
+from pathlib import Path
 
-from src.project_manager import ProjectManager, ProjectInfo
+import pytest
+
+from src.project_manager import ProjectInfo, ProjectManager
 
 
 @pytest.fixture

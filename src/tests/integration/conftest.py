@@ -11,9 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from src.project_manager import ProjectManager
 from src.session_coordinator import SessionCoordinator
-from src.template_manager import TemplateManager
 
 
 @pytest.fixture
@@ -75,6 +73,7 @@ async def legion_test_env(request):
         """
         import asyncio
         import uuid
+
         from src.session_manager import SessionState
 
         # Generate session_id

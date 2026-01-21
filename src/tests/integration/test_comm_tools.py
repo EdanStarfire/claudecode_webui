@@ -1,11 +1,10 @@
 """
 Integration tests for MCP communication tools.
 
-Tests: send_comm, send_comm_to_channel
+Tests: send_comm
 """
 
 import json
-from pathlib import Path
 
 import pytest
 
@@ -96,7 +95,7 @@ async def test_send_comm_to_active_minion(legion_test_env):
     timeline_file = data_dir / "legions" / legion_id / "timeline.jsonl"
     assert timeline_file.exists(), "Timeline file should exist"
 
-    with open(timeline_file, 'r') as f:
+    with open(timeline_file) as f:
         timeline_comms = [json.loads(line) for line in f]
 
     assert len(timeline_comms) > 0, "Timeline should have at least one comm"
@@ -111,7 +110,7 @@ async def test_send_comm_to_active_minion(legion_test_env):
     sender_comms_file = data_dir / "legions" / legion_id / "minions" / sender.session_id / "comms.jsonl"
     assert sender_comms_file.exists(), "Sender comms file should exist"
 
-    with open(sender_comms_file, 'r') as f:
+    with open(sender_comms_file) as f:
         sender_comms = [json.loads(line) for line in f]
 
     assert len(sender_comms) > 0, "Sender should have comm in log"
@@ -121,7 +120,7 @@ async def test_send_comm_to_active_minion(legion_test_env):
     recipient_comms_file = data_dir / "legions" / legion_id / "minions" / recipient.session_id / "comms.jsonl"
     assert recipient_comms_file.exists(), "Recipient comms file should exist"
 
-    with open(recipient_comms_file, 'r') as f:
+    with open(recipient_comms_file) as f:
         recipient_comms = [json.loads(line) for line in f]
 
     assert len(recipient_comms) > 0, "Recipient should have comm in log"
@@ -144,119 +143,4 @@ async def test_send_comm_to_active_minion(legion_test_env):
     # - Claude's response appears in message stream
     #
     # For integration tests, verifying routing + queueing is sufficient.
-    # Full SDK delivery is verified in end-to-end tests with live Claude API.
-
-
-# ============================================================================
-# send_comm_to_channel Tests
-# ============================================================================
-
-@pytest.mark.asyncio
-async def test_send_comm_to_channel_broadcast(legion_test_env):
-    """
-    Test send_comm_to_channel broadcasts to all members except sender.
-
-    Verifies:
-    - Tool returns success
-    - Timeline contains broadcast comm with to_channel_id
-    - Channel comms.jsonl contains broadcast
-    - Each member (excluding sender) receives comm
-    - Sender does NOT receive their own broadcast
-    - Recipients have broadcast_from_channel metadata
-    """
-    env = legion_test_env
-    legion_system = env["legion_system"]
-    data_dir = env["data_dir"]
-    legion_id = env["legion_id"]
-
-    # Create sender and 2 members (will wait for ACTIVE state)
-    sender = await env["create_minion"]("sender", role="Broadcaster")
-    member1 = await env["create_minion"]("member1", role="Member")
-    member2 = await env["create_minion"]("member2", role="Member")
-
-    # Create channel with all 3 as members
-    channel_id = await legion_system.channel_manager.create_channel(
-        legion_id=legion_id,
-        name="test-channel",
-        description="Test channel for broadcast",
-        purpose="Testing broadcast functionality",
-        member_minion_ids=[sender.session_id, member1.session_id, member2.session_id],
-        created_by_minion_id=sender.session_id
-    )
-    channel = await legion_system.channel_manager.get_channel(channel_id)
-
-    # Send broadcast via MCP tool handler
-    result = await legion_system.mcp_tools._handle_send_comm_to_channel({
-        "_from_minion_id": sender.session_id,
-        "channel_name": "test-channel",
-        "summary": "Channel update",
-        "content": "Important announcement",
-        "comm_type": "info"
-    })
-
-    # Verify success response (not an error)
-    assert "content" in result
-    assert result["content"][0]["type"] == "text"
-    assert result.get("is_error") is not True, f"Unexpected error: {result['content'][0]['text']}"
-
-    # SIDE EFFECT 1: Timeline contains broadcast with to_channel_id
-    timeline_file = data_dir / "legions" / legion_id / "timeline.jsonl"
-    assert timeline_file.exists()
-
-    with open(timeline_file, 'r') as f:
-        timeline_comms = [json.loads(line) for line in f]
-
-    broadcast_comm = None
-    for c in timeline_comms:
-        if c.get("summary") == "Channel update":
-            broadcast_comm = c
-            break
-
-    assert broadcast_comm is not None, "Timeline should contain broadcast comm"
-    assert broadcast_comm["to_channel_id"] == channel.channel_id
-    assert broadcast_comm["from_minion_id"] == sender.session_id
-
-    # SIDE EFFECT 2: Channel comms.jsonl contains broadcast
-    channel_comms_file = data_dir / "legions" / legion_id / "channels" / channel.channel_id / "comms.jsonl"
-    assert channel_comms_file.exists(), "Channel comms file should exist"
-
-    with open(channel_comms_file, 'r') as f:
-        channel_comms = [json.loads(line) for line in f]
-
-    assert any(c["summary"] == "Channel update" for c in channel_comms)
-
-    # SIDE EFFECT 3: Individual member delivery
-    # Note: Channel broadcasts are logged to timeline and channel comms (verified above).
-    # Individual member comms.jsonl files are created when members send/receive direct comms.
-    # For channel broadcasts, the delivery is tracked via channel comms.jsonl, not individual
-    # member files. This is by design - channel activity is centralized in channel logs.
-
-    # SIDE EFFECT 4: Sender does NOT receive their own broadcast
-    sender_comms_file = data_dir / "legions" / legion_id / "minions" / sender.session_id / "comms.jsonl"
-
-    if sender_comms_file.exists():
-        with open(sender_comms_file, 'r') as f:
-            sender_comms = [json.loads(line) for line in f]
-
-        # Sender should have sent the comm (as sender), not received it
-        for c in sender_comms:
-            if c["summary"] == "Channel update":
-                # If sender has this comm, it should be as the sender, not recipient
-                assert c["from_minion_id"] == sender.session_id
-
-    # SIDE EFFECT 5: Member SDK message queue injection
-    # Note: Channel broadcasts queue messages to each member's SDK.
-    # LIMITATION: Same as send_comm test - integration tests without Claude API access
-    # cannot verify full SDK message processing (requires actual API calls).
-    #
-    # What we CAN verify:
-    # - Broadcast routed to timeline.jsonl ✓ (verified above)
-    # - Broadcast logged to channel comms.jsonl ✓ (verified above)
-    # - Individual comms logged to each member's comms.jsonl ✓ (verified above)
-    # - Messages queued to each member's SDK (verified by successful routing)
-    #
-    # What requires end-to-end testing with live API:
-    # - SDK writes messages to members' messages.jsonl after processing
-    #
-    # For integration tests, verifying multi-member routing is sufficient.
     # Full SDK delivery is verified in end-to-end tests with live Claude API.

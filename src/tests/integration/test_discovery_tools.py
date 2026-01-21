@@ -6,7 +6,6 @@ Tests: search_capability, list_minions, get_minion_info
 
 import pytest
 
-
 # ============================================================================
 # search_capability Tests
 # ============================================================================

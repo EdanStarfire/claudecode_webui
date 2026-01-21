@@ -52,15 +52,11 @@ def test_tool_handler_methods_exist(mcp_tools):
     """Test that all tool handler methods are defined."""
     handler_methods = [
         '_handle_send_comm',
-        '_handle_send_comm_to_channel',
         '_handle_spawn_minion',
         '_handle_dispose_minion',
         '_handle_search_capability',
         '_handle_list_minions',
         '_handle_get_minion_info',
-        '_handle_join_channel',
-        '_handle_create_channel',
-        '_handle_list_channels',
     ]
 
     for method_name in handler_methods:
@@ -88,32 +84,13 @@ async def test_send_comm_handler_requires_sender_id(mcp_tools):
 
 
 @pytest.mark.asyncio
-async def test_send_comm_to_channel_handler_requires_sender_id(mcp_tools):
-    """Test send_comm_to_channel handler requires sender minion ID."""
-    # Missing _from_minion_id should return error
-    result = await mcp_tools._handle_send_comm_to_channel({
-        "channel_name": "TestChannel",
-        "summary": "Test report",
-        "content": "Test broadcast",
-        "comm_type": "report"
-    })
-
-    assert "content" in result
-    assert result["content"][0]["type"] == "text"
-    # Expect error about missing sender ID
-    assert "sender minion id" in result["content"][0]["text"].lower()
-    assert result.get("is_error") is True
-
-
-@pytest.mark.asyncio
 async def test_spawn_minion_handler_requires_parent_id(mcp_tools):
     """Test spawn_minion handler requires parent overseer ID."""
     # Missing _parent_overseer_id should return error
     result = await mcp_tools._handle_spawn_minion({
         "name": "NewMinion",
         "role": "Test Role",
-        "initialization_context": "Test context",
-        "channels": []
+        "initialization_context": "Test context"
     })
 
     assert "content" in result

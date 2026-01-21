@@ -5,12 +5,10 @@ Tests: spawn_minion, dispose_minion
 """
 
 import json
-from pathlib import Path
 
 import pytest
 
 from src.session_manager import SessionState
-
 
 # ============================================================================
 # spawn_minion Tests
@@ -104,7 +102,7 @@ async def test_spawn_minion_minimal(legion_test_env):
     timeline_file = data_dir / "legions" / legion_id / "timeline.jsonl"
     assert timeline_file.exists()
 
-    with open(timeline_file, 'r') as f:
+    with open(timeline_file) as f:
         timeline_comms = [json.loads(line) for line in f]
 
     # Find SPAWN comm in timeline (sent to_user, not to child)
@@ -207,84 +205,6 @@ async def test_spawn_minion_with_template(legion_test_env):
     if template.default_system_prompt:
         assert template.default_system_prompt in child_info.system_prompt, \
             "Child system_prompt should include template's default_system_prompt"
-
-
-@pytest.mark.asyncio
-async def test_spawn_minion_with_channels(legion_test_env):
-    """
-    Test spawn_minion with channel membership.
-
-    Verifies:
-    - Child joins specified channels
-    - Bidirectional channel membership
-    """
-    env = legion_test_env
-    legion_system = env["legion_system"]
-    legion_id = env["legion_id"]
-
-    # Create parent minion
-    parent = await env["create_minion"]("parent", role="Parent")
-
-    # Create test channel
-    channel_id = await legion_system.channel_manager.create_channel(
-        legion_id=legion_id,
-        name="test-channel",
-        description="Test channel",
-        purpose="Testing spawn with channels",
-        member_minion_ids=[parent.session_id],
-        created_by_minion_id=parent.session_id
-    )
-
-    # Spawn child with channel
-    result = await legion_system.mcp_tools._handle_spawn_minion({
-        "_parent_overseer_id": parent.session_id,
-        "name": "child",
-        "role": "Child Worker",
-        "initialization_context": "Test child with channel membership.",
-        "channels": ["test-channel"]  # Parameter is 'channels' not 'channel_names'
-    })
-
-    # Verify success
-    assert result.get("is_error") is not True, f"Unexpected error: {result['content'][0]['text']}"
-
-    # Extract child_minion_id
-    response_text = result["content"][0]["text"]
-    import re
-    minion_id_match = re.search(r'Minion ID:\s+([a-f0-9-]+)', response_text)
-    assert minion_id_match is not None, f"Response should contain Minion ID. Got: {response_text}"
-    child_id = minion_id_match.group(1)
-
-    # Wait for child to become ACTIVE
-    import asyncio
-    import time
-    max_wait = 50.0
-    poll_interval = 0.1
-    start_time = time.time()
-
-    while True:
-        elapsed = time.time() - start_time
-        if elapsed >= max_wait:
-            raise TimeoutError(f"Child session did not become ACTIVE within {max_wait}s")
-
-        child_info = await env["session_coordinator"].session_manager.get_session_info(child_id)
-        if child_info.state == SessionState.ACTIVE:
-            print(f"  > Child session with channels became ACTIVE in {elapsed:.2f}s")
-            break
-
-        await asyncio.sleep(poll_interval)
-
-    # SIDE EFFECT 1: Channel membership - debug the issue
-    channel = await legion_system.channel_manager.get_channel(channel_id)
-    child_info_refreshed = await env["session_coordinator"].session_manager.get_session_info(child_id)
-
-    # Verify channel membership worked
-
-    # Check if there were any errors during channel joining
-    # The spawn should have added the child to the channel
-    assert child_id in channel.member_minion_ids, \
-        f"Child {child_id} should be in channel. Members: {channel.member_minion_ids}"
-    assert channel_id in child_info_refreshed.channel_ids, \
-        f"Channel {channel_id} should be in child's list. Got: {child_info_refreshed.channel_ids}"
 
 
 @pytest.mark.asyncio
@@ -423,38 +343,6 @@ async def test_spawn_minion_error_nonexistent_template(legion_test_env):
     assert "template" in error_text.lower() and ("not found" in error_text.lower() or "does not exist" in error_text.lower())
 
 
-@pytest.mark.asyncio
-async def test_spawn_minion_nonexistent_channel_warning(legion_test_env):
-    """
-    Test spawn_minion with non-existent channel.
-
-    Verifies:
-    - Tool succeeds but logs warning for non-existent channel
-    """
-    env = legion_test_env
-    legion_system = env["legion_system"]
-
-    # Create parent minion
-    parent = await env["create_minion"]("parent", role="Parent")
-
-    # Spawn child with non-existent channel
-    result = await legion_system.mcp_tools._handle_spawn_minion({
-        "_parent_overseer_id": parent.session_id,
-        "name": "child",
-        "role": "Worker",
-        "initialization_context": "Test child with invalid channel.",
-        "channels": ["nonexistent_channel_12345"]
-    })
-
-    # Should succeed (spawn still happens)
-    assert result.get("is_error") is not True, f"Expected success with warning, got error: {result['content'][0]['text']}"
-
-    # Response should mention warning about channel
-    response_text = result["content"][0]["text"]
-    # Note: Implementation may or may not include warnings in response
-    # This test primarily verifies spawn succeeds despite bad channel
-
-
 # ============================================================================
 # dispose_minion Tests
 # ============================================================================
@@ -539,7 +427,7 @@ async def test_dispose_minion_direct_child(legion_test_env):
     timeline_file = data_dir / "legions" / legion_id / "timeline.jsonl"
     assert timeline_file.exists()
 
-    with open(timeline_file, 'r') as f:
+    with open(timeline_file) as f:
         timeline_comms = [json.loads(line) for line in f]
 
     # Find DISPOSE comm in timeline (sent to_user, not to child)
@@ -654,84 +542,6 @@ async def test_dispose_minion_with_descendants(legion_test_env):
     response_text = dispose_result["content"][0]["text"]
     # Response should mention recursive disposal
     assert "grandchild" in response_text.lower() or "descendant" in response_text.lower() or "recursive" in response_text.lower()
-
-
-@pytest.mark.asyncio
-async def test_dispose_minion_with_channels(legion_test_env):
-    """
-    Test dispose_minion for child with channel memberships.
-
-    Verifies:
-    - Child removed from all channels
-    """
-    env = legion_test_env
-    legion_system = env["legion_system"]
-    legion_id = env["legion_id"]
-
-    # Create parent
-    parent = await env["create_minion"]("parent", role="Parent")
-
-    # Create channel
-    channel_id = await legion_system.channel_manager.create_channel(
-        legion_id=legion_id,
-        name="test-channel",
-        description="Test channel",
-        purpose="Testing disposal",
-        member_minion_ids=[parent.session_id],
-        created_by_minion_id=parent.session_id
-    )
-
-    # Spawn child with channel
-    spawn_result = await legion_system.mcp_tools._handle_spawn_minion({
-        "_parent_overseer_id": parent.session_id,
-        "name": "child",
-        "role": "Worker",
-        "initialization_context": "Test child with channel for disposal.",
-        "channels": ["test-channel"]
-    })
-    assert spawn_result.get("is_error") is not True
-
-    response_text = spawn_result["content"][0]["text"]
-    import re
-    minion_id_match = re.search(r'Minion ID:\s+([a-f0-9-]+)', response_text)
-    assert minion_id_match is not None, f"Response should contain Minion ID. Got: {response_text}"
-    child_id = minion_id_match.group(1)
-
-    # Wait for child to become ACTIVE
-    import asyncio
-    import time
-    max_wait = 50.0
-    poll_interval = 0.1
-    start_time = time.time()
-
-    while True:
-        elapsed = time.time() - start_time
-        if elapsed >= max_wait:
-            raise TimeoutError(f"Child session did not become ACTIVE within {max_wait}s")
-
-        child_info = await env["session_coordinator"].session_manager.get_session_info(child_id)
-        if child_info.state == SessionState.ACTIVE:
-            print(f"  > Child session became ACTIVE in {elapsed:.2f}s")
-            break
-
-        await asyncio.sleep(poll_interval)
-
-    # Dispose child
-    dispose_result = await legion_system.mcp_tools._handle_dispose_minion({
-        "_parent_overseer_id": parent.session_id,
-        "minion_name": "child",
-        "reason": "Cleanup"
-    })
-    assert dispose_result.get("is_error") is not True
-
-    # Verify disposal succeeded - child should be TERMINATED
-    child_final = await env["session_coordinator"].session_manager.get_session_info(child_id)
-    assert child_final.state == SessionState.TERMINATED
-
-    # NOTE: Channel membership is NOT automatically cleaned up on disposal
-    # Channels are persistent communication groups - disposed minions remain in member list
-    # This is intentional design (like leaving a Slack channel vs deleting account)
-    # Channel cleanup would require explicit leave_channel or admin removal
 
 
 @pytest.mark.asyncio
