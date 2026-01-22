@@ -13,10 +13,18 @@
     <!-- Status Indicator Dot -->
     <div class="status-dot me-2" :class="statusDotClass" :style="statusDotStyle"></div>
 
-    <!-- Session Name -->
-    <div class="flex-grow-1">
-      <span>{{ session.name || session.session_id }}</span>
-      <span v-if="session.is_minion && session.role" class="text-muted small ms-1">({{ session.role }})</span>
+    <!-- Session Info (Name + Latest Activity) -->
+    <div class="session-info flex-grow-1">
+      <div class="session-name">
+        <span>{{ session.name || session.session_id }}</span>
+        <span v-if="session.is_minion && session.role" class="text-muted small ms-1">({{ session.role }})</span>
+      </div>
+      <!-- Latest Activity below name - Issue #291 -->
+      <div v-if="session.latest_message" class="latest-activity text-muted">
+        <span v-if="activityPrefix" class="activity-prefix">{{ activityPrefix }} </span>
+        <span class="activity-content">{{ truncatedMessage }}</span>
+        <span v-if="relativeTime" class="activity-time ms-1">({{ relativeTime }})</span>
+      </div>
     </div>
 
     <!-- Action Buttons -->
@@ -126,6 +134,37 @@ const statusDotStyle = computed(() => {
     backgroundColor: bgColorMap[state] || '#d3d3d3',
     borderColor: borderColorMap[state] || '#6c757d'
   }
+})
+
+// Latest activity display (issue #291)
+const activityPrefix = computed(() => {
+  const type = props.session.latest_message_type
+  if (type === 'user') return 'User -->:'
+  if (type === 'system') return 'System:'
+  return ''  // Assistant messages have no prefix
+})
+
+const truncatedMessage = computed(() => {
+  const msg = props.session.latest_message || ''
+  const maxLen = 100  // Desktop length
+  return msg.length > maxLen ? msg.slice(0, maxLen) + '...' : msg
+})
+
+const relativeTime = computed(() => {
+  if (!props.session.latest_message_time) return ''
+
+  const now = Date.now()
+  const msgTime = new Date(props.session.latest_message_time).getTime()
+  const diffMs = now - msgTime
+
+  const minutes = Math.floor(diffMs / 60000)
+  const hours = Math.floor(minutes / 60)
+  const days = Math.floor(hours / 24)
+
+  if (days > 0) return `${days}d ago`
+  if (hours > 0) return `${hours}h ago`
+  if (minutes > 0) return `${minutes}m ago`
+  return 'just now'
 })
 
 function selectSession() {
@@ -257,6 +296,50 @@ function onDrop(event) {
   border-radius: 50%;
   border: 2px solid;
   flex-shrink: 0;
+}
+
+/* Session info container - vertical layout */
+.session-info {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;  /* Allow text truncation */
+}
+
+.session-name {
+  /* Name keeps its default size */
+}
+
+/* Latest activity display (issue #291) - below name, 1pt smaller */
+.latest-activity {
+  font-size: calc(1em - 1pt);  /* 1pt smaller than name */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-top: 2px;  /* Small space between name and message */
+}
+
+.activity-prefix {
+  font-weight: 500;
+}
+
+.activity-content {
+  font-style: italic;
+}
+
+.activity-time {
+  opacity: 0.7;
+  font-size: 0.9em;  /* Slightly smaller than activity text */
+}
+
+/* Responsive design for mobile */
+@media (max-width: 768px) {
+  .latest-activity {
+    max-width: 200px;  /* Limit width on mobile */
+  }
+
+  .latest-activity .activity-time {
+    display: none;  /* Hide timestamp on mobile to save space */
+  }
 }
 
 .status-dot-grey {

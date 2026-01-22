@@ -1099,6 +1099,27 @@ class SessionCoordinator:
                 # Process message using unified MessageProcessor
                 parsed_message = self.message_processor.process_message(message_data, source="sdk")
 
+                # Track latest meaningful message (issue #291)
+                # Only track user, assistant, system messages (not tool_use, tool_result, permission, etc.)
+                if parsed_message.type.value in ['user', 'assistant', 'system']:
+                    # Get message content
+                    content = parsed_message.content or ""
+
+                    # Truncate to 200 chars (stored), will be truncated further in frontend (100 chars displayed)
+                    truncated_content = content[:200] if len(content) > 200 else content
+
+                    # Replace newlines with spaces for single-line display
+                    truncated_content = truncated_content.replace('\n', ' ').strip()
+
+                    # Update session's latest message tracking
+                    if truncated_content:  # Only update if there's actual content
+                        await self.session_manager.update_latest_message(
+                            session_id,
+                            truncated_content,
+                            parsed_message.type.value,
+                            datetime.now(UTC)
+                        )
+
                 # Track tool uses from assistant messages for ExitPlanMode detection
                 if parsed_message.type.value == 'assistant' and parsed_message.metadata:
                     tool_uses = parsed_message.metadata.get('tool_uses', [])

@@ -82,6 +82,11 @@ class SessionInfo:
     capabilities: list[str] = None  # Capability tags for discovery
     expertise_score: float = 0.5  # Expertise level (0.0-1.0, default 0.5 for MVP)
 
+    # Latest message tracking (issue #291) - for hierarchy view visibility
+    latest_message: str | None = None  # Last user/assistant/system message (truncated to 200 chars)
+    latest_message_type: str | None = None  # "user", "assistant", "system"
+    latest_message_time: datetime | None = None  # When the message was received
+
     def __post_init__(self):
         if self.allowed_tools is None:
             self.allowed_tools = ["bash", "edit", "read"]
@@ -96,6 +101,9 @@ class SessionInfo:
         data['state'] = self.state.value
         data['created_at'] = self.created_at.isoformat()
         data['updated_at'] = self.updated_at.isoformat()
+        # Convert latest_message_time if present (issue #291)
+        if self.latest_message_time:
+            data['latest_message_time'] = self.latest_message_time.isoformat()
         return data
 
     @classmethod
@@ -522,6 +530,39 @@ class SessionManager:
                 return True
             except Exception as e:
                 logger.error(f"Failed to update session {session_id} permission mode: {e}")
+                return False
+
+    async def update_latest_message(
+        self,
+        session_id: str,
+        content: str,
+        message_type: str,
+        timestamp: datetime
+    ) -> bool:
+        """Update latest message tracking for a session (issue #291)"""
+        async with self._get_session_lock(session_id):
+            try:
+                session = self._active_sessions.get(session_id)
+                if not session:
+                    logger.error(f"Session {session_id} not found")
+                    return False
+
+                # Update fields
+                session.latest_message = content
+                session.latest_message_type = message_type
+                session.latest_message_time = timestamp
+                session.updated_at = datetime.now(UTC)
+
+                # Persist to disk
+                await self._persist_session_state(session_id)
+
+                # Trigger state change callback
+                await self._notify_state_change_callbacks(session_id, session.state)
+
+                session_logger.debug(f"Updated latest message for session {session_id}: {message_type}")
+                return True
+            except Exception as e:
+                logger.error(f"Failed to update latest message for session {session_id}: {e}")
                 return False
 
     async def delete_session(self, session_id: str) -> bool:
