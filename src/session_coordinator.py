@@ -468,6 +468,33 @@ class SessionCoordinator:
 
         except Exception as e:
             logger.error(f"Failed to start integrated session {session_id}: {e}")
+
+            # Extract user-friendly error message
+            error_message = self._extract_claude_cli_error(str(e))
+
+            # Update session state to ERROR and reset processing state
+            try:
+                await self.session_manager.update_session_state(session_id, SessionState.ERROR, error_message)
+                await self.session_manager.update_processing_state(session_id, False)
+                await self._notify_state_change(session_id, SessionState.ERROR)
+                coord_logger.info(f"Updated session {session_id} state to ERROR after exception")
+            except Exception as state_error:
+                logger.error(f"Failed to update session state to ERROR: {state_error}")
+
+            # Send system message explaining the failure
+            await self._send_session_failure_message(session_id, error_message)
+
+            # Clean up any partially created SDK
+            if session_id in self._active_sdks:
+                try:
+                    sdk = self._active_sdks[session_id]
+                    if sdk:
+                        await sdk.terminate()
+                except Exception:
+                    pass  # Best effort cleanup
+                del self._active_sdks[session_id]
+                coord_logger.info(f"Cleaned up SDK for session {session_id} after exception")
+
             return False
 
     async def pause_session(self, session_id: str) -> bool:
