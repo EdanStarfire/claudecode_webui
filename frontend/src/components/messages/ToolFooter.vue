@@ -1,14 +1,5 @@
 <template>
   <div class="tool-footer-container">
-    <!-- Active Tools Area (conditional - only executing or permission_required) -->
-    <div v-if="activeTools.length > 0" class="active-tools-area">
-      <ToolCallCard
-        v-for="tool in activeTools"
-        :key="tool.id"
-        :toolCall="tool"
-      />
-    </div>
-
     <!-- Footer Summary Bar (always visible if tools exist) -->
     <div
       class="tool-footer-summary"
@@ -32,10 +23,19 @@
       </div>
     </div>
 
-    <!-- Expanded Footer (chronological ToolCallCards) -->
+    <!-- Expanded Footer (chronological ToolCallCards) - Completed tools shown first -->
     <div v-if="isExpanded" class="tool-footer-expanded">
       <ToolCallCard
         v-for="tool in completedTools"
+        :key="tool.id"
+        :toolCall="tool"
+      />
+    </div>
+
+    <!-- Active Tools Area (conditional - only executing or permission_required) - Shown last for chronological order -->
+    <div v-if="activeTools.length > 0" class="active-tools-area">
+      <ToolCallCard
+        v-for="tool in activeTools"
         :key="tool.id"
         :toolCall="tool"
       />
@@ -237,7 +237,7 @@ function toggleExpanded() {
 
 /* Active Tools Area (conditional) */
 .active-tools-area {
-  margin-bottom: 0.5em;
+  margin-top: 0.5em;
 }
 
 .active-tools-area .tool-call-card {
