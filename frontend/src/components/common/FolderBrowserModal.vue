@@ -123,7 +123,7 @@ const parentPath = computed(() => {
   const parts = currentPath.value.split(/[\\/]/).filter(Boolean)
   if (parts.length <= 1) return null
   parts.pop()
-  return parts.length > 0 ? parts.join('/') : '/'
+  return parts.length > 0 ? '/' + parts.join('/') : '/'
 })
 
 // Format path for display (show last 2 segments)
