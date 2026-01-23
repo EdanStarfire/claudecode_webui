@@ -323,6 +323,9 @@ class SessionCoordinator:
             if not await self.session_manager.start_session(session_id):
                 return False
 
+            # Defensively reset processing state on session start
+            await self.session_manager.update_processing_state(session_id, False)
+
             # Check if SDK exists and is running
             sdk = self._active_sdks.get(session_id)
             if sdk and sdk.is_running():
@@ -511,6 +514,9 @@ class SessionCoordinator:
     async def terminate_session(self, session_id: str) -> bool:
         """Terminate a session and cleanup resources"""
         try:
+            # Reset processing state before termination
+            await self.session_manager.update_processing_state(session_id, False)
+
             # Terminate SDK first
             sdk = self._active_sdks.get(session_id)
             if sdk:
