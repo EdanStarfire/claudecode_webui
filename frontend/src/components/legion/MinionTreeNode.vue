@@ -49,6 +49,24 @@
             No activity yet
           </div>
         </div>
+
+        <!-- Action Buttons (Issue #296) -->
+        <div class="node-actions">
+          <button
+            class="btn btn-sm btn-outline-secondary me-1"
+            title="Edit minion"
+            @click.stop="showEditModal"
+          >
+            ✏️
+          </button>
+          <button
+            class="btn btn-sm btn-outline-secondary"
+            title="Manage minion"
+            @click.stop="showManageModal"
+          >
+            ⚙️
+          </button>
+        </div>
       </div>
     </div>
 
@@ -72,6 +90,8 @@
 
 <script setup>
 import { computed } from 'vue'
+import { useSessionStore } from '@/stores/session'
+import { useUIStore } from '@/stores/ui'
 
 const props = defineProps({
   minionData: {
@@ -85,6 +105,9 @@ const props = defineProps({
 })
 
 const emit = defineEmits(['minion-click'])
+
+const sessionStore = useSessionStore()
+const uiStore = useUIStore()
 
 // Indentation (24px per level)
 const indent = computed(() => props.level * 24)
@@ -213,6 +236,21 @@ function getCommSummary(comm) {
 function handleClick() {
   emit('minion-click', props.minionData.id)
 }
+
+// Action button handlers (Issue #296)
+function showEditModal() {
+  const session = sessionStore.sessions.get(props.minionData.id)
+  if (session) {
+    uiStore.showModal('edit-session', { session })
+  }
+}
+
+function showManageModal() {
+  const session = sessionStore.sessions.get(props.minionData.id)
+  if (session) {
+    uiStore.showModal('manage-session', { session })
+  }
+}
 </script>
 
 <style scoped>
@@ -226,7 +264,7 @@ function handleClick() {
   transition: margin-left 0.2s ease;
 }
 
-/* Two-column layout: 30% left, 70% right */
+/* Three-column layout: 30% left, flex middle, auto right (buttons) */
 .node-row {
   display: flex;
   gap: 1rem;
@@ -246,6 +284,14 @@ function handleClick() {
   min-width: 0; /* Allow text truncation */
   padding-left: 1rem;
   border-left: 1px solid #dee2e6;
+}
+
+.node-actions {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 0.25rem;
+  align-items: flex-start;
+  margin-left: 0.5rem;
 }
 
 /* Latest message preview (issue #291) - similar to comm preview */
