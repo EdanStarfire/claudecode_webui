@@ -197,6 +197,10 @@ class LegionCoordinator:
                 "is_overseer": minion.is_overseer or False,
                 "is_processing": minion.is_processing or False,
                 "last_comm": await self._get_last_outgoing_comm(legion_id, from_minion_id=minion.session_id),
+                # Latest message tracking (issue #291)
+                "latest_message": minion.latest_message,
+                "latest_message_type": minion.latest_message_type,
+                "latest_message_time": minion.latest_message_time.isoformat() if minion.latest_message_time else None,
                 "children": []
             }
             minion_map[minion.session_id] = minion_data

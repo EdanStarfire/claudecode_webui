@@ -19,9 +19,21 @@
           </span>
         </div>
 
-        <!-- Right Column: Last Comm (70%) -->
+        <!-- Right Column: Latest Message or Last Comm (70%) - Issue #291 -->
         <div class="node-right">
-          <div v-if="minionData.last_comm" class="last-comm-preview">
+          <!-- Show latest_message if available (priority over comm) -->
+          <div v-if="minionData.latest_message" class="latest-message-preview">
+            <span v-if="messagePrefix" class="message-prefix">{{ messagePrefix }}</span>
+            <span
+              class="message-content"
+              :title="minionData.latest_message"
+            >
+              {{ truncatedMessage }}
+            </span>
+            <span v-if="relativeTime" class="message-time ms-1">({{ relativeTime }})</span>
+          </div>
+          <!-- Fallback to last_comm if no latest_message -->
+          <div v-else-if="minionData.last_comm" class="last-comm-preview">
             <span class="comm-direction">
               → <strong>{{ getCommRecipient(minionData.last_comm) }}</strong>:
             </span>
@@ -32,8 +44,9 @@
               {{ getCommSummary(minionData.last_comm) }}
             </span>
           </div>
+          <!-- Empty state -->
           <div v-else class="text-muted fst-italic small">
-            No communications yet
+            No activity yet
           </div>
         </div>
       </div>
@@ -144,6 +157,39 @@ const statusDotStyle = computed(() => {
   }
 })
 
+// Latest message display (issue #291)
+const messagePrefix = computed(() => {
+  if (!props.minionData || !props.minionData.latest_message_type) return ''
+  const type = props.minionData.latest_message_type
+  if (type === 'user') return 'User -->:'
+  if (type === 'system') return 'System:'
+  return ''  // Assistant messages have no prefix
+})
+
+const truncatedMessage = computed(() => {
+  if (!props.minionData || !props.minionData.latest_message) return ''
+  const msg = props.minionData.latest_message
+  const maxLen = 150  // Same as comm summary length
+  return msg.length > maxLen ? msg.slice(0, maxLen) + '...' : msg
+})
+
+const relativeTime = computed(() => {
+  if (!props.minionData || !props.minionData.latest_message_time) return ''
+
+  const now = Date.now()
+  const msgTime = new Date(props.minionData.latest_message_time).getTime()
+  const diffMs = now - msgTime
+
+  const minutes = Math.floor(diffMs / 60000)
+  const hours = Math.floor(minutes / 60)
+  const days = Math.floor(hours / 24)
+
+  if (days > 0) return `${days}d ago`
+  if (hours > 0) return `${hours}h ago`
+  if (minutes > 0) return `${minutes}m ago`
+  return 'just now'
+})
+
 // Helper: Get comm recipient name
 function getCommRecipient(comm) {
   if (comm.to_user) {
@@ -202,6 +248,32 @@ function handleClick() {
   border-left: 1px solid #dee2e6;
 }
 
+/* Latest message preview (issue #291) - similar to comm preview */
+.latest-message-preview {
+  font-size: 0.9rem;
+  line-height: 1.4;
+}
+
+.message-prefix {
+  color: #6c757d;
+  font-size: 0.85rem;
+  font-weight: 500;
+}
+
+.message-content {
+  color: #212529;
+  word-wrap: break-word;
+  font-style: italic;
+  cursor: help; /* Show help cursor on hover to indicate full message */
+}
+
+.message-time {
+  color: #6c757d;
+  font-size: 0.8rem;
+  opacity: 0.8;
+}
+
+/* Comm preview styles (kept for fallback) */
 .last-comm-preview {
   font-size: 0.9rem;
   line-height: 1.4;
