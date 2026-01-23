@@ -1102,19 +1102,22 @@ class SessionCoordinator:
                 # Track latest meaningful message (issue #291)
                 # Only track user, assistant, system messages (not tool_use, tool_result, permission, etc.)
                 if parsed_message.type.value in ['user', 'assistant', 'system']:
-                    # Skip user messages that only contain tool_results (no actual user text)
+                    content = parsed_message.content or ""
+
+                    # Skip messages that are just internal SDK placeholders or tool execution artifacts
                     has_tool_results = parsed_message.metadata.get('has_tool_results', False) if parsed_message.metadata else False
-                    is_user_with_only_tool_results = (
-                        parsed_message.type.value == 'user' and
-                        has_tool_results and
-                        parsed_message.content and
-                        parsed_message.content.startswith('Tool results:')
+                    has_tool_uses = parsed_message.metadata.get('has_tool_uses', False) if parsed_message.metadata else False
+
+                    skip_message = (
+                        # User messages with only tool_results (no actual user text)
+                        (parsed_message.type.value == 'user' and has_tool_results and content.startswith('Tool results:')) or
+                        # Assistant messages with only tool_uses (no actual text response)
+                        (parsed_message.type.value == 'assistant' and has_tool_uses and content == 'Assistant response') or
+                        # System messages with generic placeholder content
+                        (parsed_message.type.value == 'system' and content == 'System message')
                     )
 
-                    if not is_user_with_only_tool_results:
-                        # Get message content
-                        content = parsed_message.content or ""
-
+                    if not skip_message:
                         # Truncate to 200 chars (stored), will be truncated further in frontend (100 chars displayed)
                         truncated_content = content[:200] if len(content) > 200 else content
 
