@@ -234,7 +234,7 @@ onMounted(() => {
     (sessions) => {
       if (!hierarchy.value) return
 
-      // Update all minion states and is_processing in our hierarchy
+      // Update all minion states, is_processing, and latest_message in our hierarchy
       for (const [sessionId, session] of sessions) {
         if (session.is_minion && session.project_id === props.legionId) {
           const minion = findMinionInTree(hierarchy.value, sessionId)
@@ -248,6 +248,13 @@ onMounted(() => {
             if (minion.is_processing !== session.is_processing) {
               minion.is_processing = session.is_processing
               console.log(`Updated minion ${minion.name} is_processing to ${session.is_processing}`)
+            }
+            // Update latest_message fields if changed (issue #291)
+            if (minion.latest_message !== session.latest_message) {
+              minion.latest_message = session.latest_message
+              minion.latest_message_type = session.latest_message_type
+              minion.latest_message_time = session.latest_message_time
+              console.log(`Updated minion ${minion.name} latest_message`)
             }
           }
         }
