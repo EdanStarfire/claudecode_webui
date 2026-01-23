@@ -29,8 +29,8 @@ description: Create, view, and merge GitHub pull requests with validation. Use w
 
 3. **Merge Pull Request**
    - Squash merge with single commit
-   - Auto-delete remote branch
    - Validate before merging
+   - Branch cleanup handled externally
 
 ### Standard Workflows
 
@@ -88,77 +88,15 @@ description: Create, view, and merge GitHub pull requests with validation. Use w
    - Verify mergeable is "MERGEABLE"
    - Extract branch name for cleanup
 
-2. **Detect Environment and Perform Squash Merge**
-
-   **Check if in worktree:**
+2. **Perform Squash Merge**
    ```bash
-   # Worktrees have .git as a file, main repos have .git as a directory
-   if [ -f .git ]; then
-     echo "📍 Worktree detected"
-     IN_WORKTREE=true
-   else
-     echo "📍 Main repository detected"
-     IN_WORKTREE=false
-   fi
+   gh pr merge <pr_number> --squash
    ```
+   This will:
+   - Squash all commits into one
+   - Merge to main/master
 
-   **Merge with conditional branch deletion:**
-   ```bash
-   if [ "$IN_WORKTREE" = "true" ]; then
-     # In worktree: merge without --delete-branch (would fail trying to checkout main)
-     gh pr merge <pr_number> --squash
-     echo "Note: Remote branch NOT auto-deleted (worktree limitation)"
-   else
-     # In main repo: merge with automatic branch deletion
-     gh pr merge <pr_number> --squash --delete-branch
-   fi
-   ```
-
-   **Why different approaches:**
-   - `--delete-branch` flag attempts to checkout main after deletion
-   - This fails in worktrees where main is already checked out in root
-   - Manual cleanup is safer and more explicit in worktree workflows
-
-3. **Update Local Repository**
-
-   **Switch to main (if not in worktree):**
-   ```bash
-   if [ "$IN_WORKTREE" = "false" ]; then
-     git checkout main
-   fi
-   ```
-
-   **Pull latest changes:**
-   ```bash
-   git pull origin main
-   ```
-
-   **Note**: In worktree environments:
-   - Main is checked out in the root repository
-   - Cannot checkout a branch that's active elsewhere
-   - Worktree cleanup is handled by orchestrator or worktree-manager skill
-
-4. **Clean Up Branches**
-
-   **Delete remote branch (if in worktree and not already deleted):**
-   ```bash
-   if [ "$IN_WORKTREE" = "true" ]; then
-     # Manually delete remote branch
-     git push origin --delete <branch-name>
-   fi
-   ```
-
-   **Delete local branch** (if still exists)
-   ```bash
-   # Check if branch still exists
-   git branch --list <branch-name>
-
-   # Delete only if exists
-   if git branch --list <branch-name> | grep -q <branch-name>; then
-     git branch -d <branch-name>
-   fi
-   ```
-   **Note**: The `--delete-branch` flag usually handles this, but verify to ensure cleanup
+   **Important**: Do NOT use `--delete-branch` flag and do NOT switch back to main. Branch cleanup and worktree disposal are handled by the orchestrator after the PR is merged.
 
 ### Error Handling
 
@@ -171,20 +109,11 @@ description: Create, view, and merge GitHub pull requests with validation. Use w
 - Check for failing CI: Wait for checks to pass
 - Check for required reviews: Request reviews from team
 
-**Branch Deletion Fails:**
-- Branch may be protected
-- User may have the branch checked out
-- Branch may not exist locally (already deleted or never checked out)
-- Always check branch existence before deletion
-- Ignore "branch not found" errors - treat as already cleaned up
-
 **Worktree Environment:**
-- In git worktrees, `.git` is a file (not directory) pointing to actual git dir
-- Cannot checkout main because it's active in root repository
-- Skill automatically detects worktrees and skips checkout step
-- Branch deletion still works normally from worktrees
-- Pull operation fetches latest changes without switching branches
-- Worktree cleanup should be handled separately (use worktree-manager skill)
+- Workers operate in isolated git worktrees
+- Do NOT attempt to delete branches or switch to main after merging
+- Worktree cleanup is handled by the orchestrator after PR merge
+- Focus only on the merge operation itself
 
 ### PR Title and Body Standards
 
@@ -240,35 +169,7 @@ Output: "PR #123 is ready to merge" or list blockers
 ```
 User: "Merge PR #123"
 Action:
-1. Validate PR state and extract branch name
-2. Squash merge with branch deletion
-3. Switch to main and pull
-4. Verify local branch cleanup (check existence first)
-Output: "PR #123 merged successfully, branch cleaned up"
-```
-### Example 4: Merge PR from worktree
-```
-User: "Merge PR #789"
-Context: Working in worktree at worktrees/issue-275/
-Action:
-1. Validate PR state (gh pr view 789 --json headRefName,state,mergeable)
-2. Extract branch name: fix/issue-275
-3. Detect worktree environment (test -f .git returns true)
-4. Squash merge WITHOUT --delete-branch (gh pr merge 789 --squash)
-5. Skip checkout to main (would fail in worktree)
-6. Pull latest changes (git pull origin main)
-7. Manually delete remote branch (git push origin --delete fix/issue-275)
-8. Verify local branch cleanup
-
-Output:
-"📍 Worktree detected
-Merging PR #789...
-Note: Remote branch NOT auto-deleted (worktree limitation)
-PR #789 merged successfully
-Pulled latest changes from main
-Deleting remote branch fix/issue-275...
-Remote branch deleted
-Ready for worktree cleanup"
-
-Note: The worktree itself should be cleaned up using worktree-manager skill after merge
+1. Validate PR state (gh pr view 123 --json headRefName,state,mergeable)
+2. Squash merge (gh pr merge 123 --squash)
+Output: "PR #123 merged successfully. Worktree cleanup will be handled by orchestrator."
 ```
