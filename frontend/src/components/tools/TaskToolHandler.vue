@@ -22,6 +22,19 @@
       </div>
     </div>
 
+    <!-- Nested Subagent Activities (Issue #195) -->
+    <div v-if="hasNestedActivities" class="tool-section nested-activities-section">
+      <div class="nested-header" @click="toggleExpanded">
+        <span class="toggle-icon">{{ isExpanded ? '▼' : '▶' }}</span>
+        <strong>Subagent Activity:</strong>
+        <span class="activity-badge">{{ nestedActivityCount }} {{ nestedActivityCount === 1 ? 'message' : 'messages' }}</span>
+      </div>
+
+      <div v-if="isExpanded" class="nested-content">
+        <NestedMessageList :parentToolUseId="toolCall.id" />
+      </div>
+    </div>
+
     <!-- Result Section -->
     <div v-if="hasResult" class="tool-section">
       <div v-if="isError" class="tool-result tool-result-error">
@@ -43,7 +56,10 @@
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
+import { useMessageStore } from '@/stores/message'
+import { useSessionStore } from '@/stores/session'
+import NestedMessageList from '../messages/NestedMessageList.vue'
 
 const props = defineProps({
   toolCall: {
@@ -51,6 +67,16 @@ const props = defineProps({
     required: true
   }
 })
+
+const messageStore = useMessageStore()
+const sessionStore = useSessionStore()
+
+// Nested activities state
+const isExpanded = ref(false)
+
+function toggleExpanded() {
+  isExpanded.value = !isExpanded.value
+}
 
 // Parameters
 const description = computed(() => {
@@ -63,6 +89,21 @@ const prompt = computed(() => {
 
 const subagentType = computed(() => {
   return props.toolCall.input?.subagent_type || null
+})
+
+// Nested activities (Issue #195)
+const hasNestedActivities = computed(() => {
+  const sessionId = sessionStore.currentSessionId
+  if (!sessionId || !props.toolCall.id) return false
+
+  return messageStore.getNestedMessageCount(sessionId, props.toolCall.id) > 0
+})
+
+const nestedActivityCount = computed(() => {
+  const sessionId = sessionStore.currentSessionId
+  if (!sessionId || !props.toolCall.id) return 0
+
+  return messageStore.getNestedMessageCount(sessionId, props.toolCall.id)
 })
 
 // Result
@@ -260,5 +301,50 @@ const resultLines = computed(() => {
   max-height: 400px;
   overflow-y: auto;
   line-height: 1.4;
+}
+
+/* Nested Activities Section (Issue #195) */
+.nested-activities-section {
+  margin-top: 0.5rem;
+  border-left: 3px solid #6f42c1;
+  background: #f8f9fa;
+  border-radius: 0.25rem;
+  overflow: hidden;
+}
+
+.nested-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.75rem;
+  cursor: pointer;
+  user-select: none;
+  background: #e9ecef;
+  transition: background 0.2s;
+}
+
+.nested-header:hover {
+  background: #dee2e6;
+}
+
+.toggle-icon {
+  font-size: 0.8rem;
+  color: #6c757d;
+  width: 1rem;
+  display: inline-block;
+}
+
+.activity-badge {
+  background: #6f42c1;
+  color: white;
+  padding: 0.2rem 0.5rem;
+  border-radius: 0.25rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  margin-left: auto;
+}
+
+.nested-content {
+  border-top: 1px solid #dee2e6;
 }
 </style>

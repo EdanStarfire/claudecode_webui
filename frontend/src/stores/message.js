@@ -40,6 +40,52 @@ export const useMessageStore = defineStore('message', () => {
     return toolCallsBySession.value.get(sessionStore.currentSessionId) || []
   })
 
+  // ========== NESTED MESSAGE HELPERS (Issue #195) ==========
+
+  /**
+   * Get nested messages for a specific parent tool use
+   * @param {string} sessionId - Session ID
+   * @param {string} parentToolUseId - Parent Task tool use ID
+   * @returns {Array} - Messages with matching parent_tool_use_id
+   */
+  function getNestedMessages(sessionId, parentToolUseId) {
+    if (!parentToolUseId) return []
+
+    const messages = messagesBySession.value.get(sessionId) || []
+    return messages.filter(msg =>
+      msg.metadata?.parent_tool_use_id === parentToolUseId
+    )
+  }
+
+  /**
+   * Check if message is nested (has parent tool use ID)
+   * @param {Object} message - Message object
+   * @returns {boolean} - True if message has parent_tool_use_id
+   */
+  function isNestedMessage(message) {
+    return message?.metadata?.parent_tool_use_id != null
+  }
+
+  /**
+   * Get top-level messages (exclude nested messages)
+   * @param {string} sessionId - Session ID
+   * @returns {Array} - Messages without parent_tool_use_id
+   */
+  function getTopLevelMessages(sessionId) {
+    const messages = messagesBySession.value.get(sessionId) || []
+    return messages.filter(msg => !isNestedMessage(msg))
+  }
+
+  /**
+   * Get count of nested messages for a parent tool use
+   * @param {string} sessionId - Session ID
+   * @param {string} parentToolUseId - Parent Task tool use ID
+   * @returns {number} - Count of nested messages
+   */
+  function getNestedMessageCount(sessionId, parentToolUseId) {
+    return getNestedMessages(sessionId, parentToolUseId).length
+  }
+
   // ========== ACTIONS ==========
 
   /**
@@ -688,6 +734,12 @@ export const useMessageStore = defineStore('message', () => {
     // Computed
     currentMessages,
     currentToolCalls,
+
+    // Nested message helpers (Issue #195)
+    getNestedMessages,
+    isNestedMessage,
+    getTopLevelMessages,
+    getNestedMessageCount,
 
     // Actions
     loadMessages,

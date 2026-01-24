@@ -26,11 +26,13 @@
 <script setup>
 import { computed, ref, watch, nextTick, onMounted } from 'vue'
 import { useMessageStore } from '@/stores/message'
+import { useSessionStore } from '@/stores/session'
 import { useUIStore } from '@/stores/ui'
 import MessageItem from './MessageItem.vue'
 import CompactionEventGroup from './CompactionEventGroup.vue'
 
 const messageStore = useMessageStore()
+const sessionStore = useSessionStore()
 const uiStore = useUIStore()
 
 const messagesArea = ref(null)
@@ -43,7 +45,10 @@ const messagesArea = ref(null)
  * - Compaction events: { type: 'compaction', messages: [{...}, {...}, {...}, {...}] }
  */
 const displayableItems = computed(() => {
-  const messages = messageStore.currentMessages
+  // Filter out nested messages (Issue #195) - only show top-level messages
+  const sessionStore = useSessionStore()
+  const sessionId = sessionStore.currentSessionId
+  const messages = sessionId ? messageStore.getTopLevelMessages(sessionId) : []
   const items = []
   let i = 0
 
