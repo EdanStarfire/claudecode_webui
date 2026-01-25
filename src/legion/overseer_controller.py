@@ -57,14 +57,13 @@ class OverseerController:
             str: The created minion's session_id
 
         Raises:
-            ValueError: If name is not unique or legion doesn't exist or is at capacity or invalid permission mode
+            ValueError: If name is not unique or project doesn't exist or is at capacity or invalid permission mode
         """
-        # Validate legion exists and is multi-agent
+        # Issue #313: All projects support minions - validate project exists
         project = await self.system.session_coordinator.project_manager.get_project(legion_id)
         if not project:
-            raise ValueError(f"Legion {legion_id} not found")
-        if not project.is_multi_agent:
-            raise ValueError(f"Project {legion_id} is not a legion (is_multi_agent=False)")
+            raise ValueError(f"Project {legion_id} not found")
+        # Note: is_multi_agent check removed - all projects can have minions
 
         # Validate permission_mode
         valid_modes = ["default", "acceptEdits", "plan", "bypassPermissions"]
@@ -85,7 +84,7 @@ class OverseerController:
         # Generate session ID for the minion
         minion_id = str(uuid.uuid4())
 
-        # Create session via SessionCoordinator (which will auto-detect minion from parent project)
+        # Create session via SessionCoordinator
         # Convert None to empty list for allowed_tools (safe default: no pre-authorized tools)
         await self.system.session_coordinator.create_session(
             session_id=minion_id,
@@ -96,9 +95,11 @@ class OverseerController:
             system_prompt=system_prompt,
             override_system_prompt=override_system_prompt,
             working_directory=working_directory,
-            # Minion-specific fields
+            # Multi-agent fields (issue #313)
+            is_minion=True,  # Explicitly mark as minion
             role=role,
-            capabilities=capabilities or []
+            capabilities=capabilities or [],
+            can_spawn_minions=True  # User-created minion can spawn by default
         )
 
         # Register capabilities in capability registry
@@ -167,14 +168,17 @@ class OverseerController:
         if not parent_session:
             raise ValueError(f"Parent overseer {parent_overseer_id} not found")
 
-        if not parent_session.is_minion:
-            raise PermissionError(f"Session {parent_overseer_id} is not a minion")
+        # Issue #313: Allow any session with can_spawn_minions to spawn children
+        # Check if parent can spawn minions
+        if not parent_session.can_spawn_minions:
+            raise PermissionError(f"Session {parent_overseer_id} cannot spawn minions (can_spawn_minions=False)")
 
-        # 2. Get legion (parent's project)
+        # 2. Get project
         legion_id = parent_session.project_id
         project = await self.system.session_coordinator.project_manager.get_project(legion_id)
-        if not project or not project.is_multi_agent:
-            raise ValueError(f"Legion {legion_id} not found or not multi-agent")
+        if not project:
+            raise ValueError(f"Project {legion_id} not found")
+        # Note: is_multi_agent check removed - all projects support minions
 
         # 3. Validate name uniqueness within legion
         existing_sessions = await self.system.session_coordinator.session_manager.list_sessions()
@@ -203,12 +207,13 @@ class OverseerController:
             allowed_tools=allowed_tools,  # Now uses consistent parameter name
             system_prompt=system_prompt,
             working_directory=working_directory,  # Custom working directory for git worktrees/multi-repo
-            # Minion-specific fields
+            # Multi-agent fields (issue #313)
+            is_minion=True,  # Explicitly mark as minion
             role=role,
             capabilities=capabilities or [],
-            # Hierarchy fields
             parent_overseer_id=parent_overseer_id,
-            overseer_level=overseer_level
+            overseer_level=overseer_level,
+            can_spawn_minions=True  # Child can spawn by default
         )
 
         # 8. Update parent: mark as overseer, add child to child_minion_ids

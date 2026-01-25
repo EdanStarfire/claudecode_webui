@@ -72,8 +72,8 @@ class SessionInfo:
     order: int | None = None
     project_id: str | None = None
 
-    # Minion-specific fields (only used when is_minion=True)
-    is_minion: bool = False  # True if this is a minion in a legion
+    # Multi-agent fields (universal Legion capabilities - issue #313)
+    is_minion: bool = False  # True if this is a minion in a project
     role: str | None = None  # Minion role description
     is_overseer: bool = False  # True if has spawned children
     overseer_level: int = 0  # 0=user-created, 1=child, 2=grandchild
@@ -81,6 +81,7 @@ class SessionInfo:
     child_minion_ids: list[str] = None  # Child minion session IDs
     capabilities: list[str] = None  # Capability tags for discovery
     expertise_score: float = 0.5  # Expertise level (0.0-1.0, default 0.5 for MVP)
+    can_spawn_minions: bool = True  # If False, Legion MCP tools not attached (leaf minion)
 
     # Latest message tracking (issue #291) - for hierarchy view visibility
     latest_message: str | None = None  # Last user/assistant/system message (truncated to 200 chars)
@@ -208,13 +209,13 @@ class SessionManager:
         name: str | None = None,
         order: int | None = None,
         project_id: str | None = None,
-        # Minion-specific fields
+        # Multi-agent fields (universal Legion - issue #313)
         is_minion: bool = False,
         role: str | None = None,
         capabilities: list[str] = None,
-        # Hierarchy fields (Phase 5)
         parent_overseer_id: str | None = None,
-        overseer_level: int = 0
+        overseer_level: int = 0,
+        can_spawn_minions: bool = True  # If False, no MCP spawn tools attached
     ) -> None:
         """Create a new session with provided ID (or minion if is_minion=True)"""
         # Validate session_id is not reserved
@@ -247,13 +248,13 @@ class SessionManager:
             name=name,
             order=order,
             project_id=project_id,
-            # Minion-specific fields
+            # Multi-agent fields (universal Legion - issue #313)
             is_minion=is_minion,
             role=role,
             capabilities=capabilities if capabilities is not None else [],
-            # Hierarchy fields (Phase 5)
             parent_overseer_id=parent_overseer_id,
-            overseer_level=overseer_level
+            overseer_level=overseer_level,
+            can_spawn_minions=can_spawn_minions
         )
 
         try:

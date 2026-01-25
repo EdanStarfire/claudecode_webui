@@ -153,12 +153,13 @@ class SessionCoordinator:
         name: str | None = None,
         permission_callback: Callable[[str, dict[str, Any]], bool | dict[str, Any]] | None = None,
         working_directory: str | None = None,  # Custom working directory (defaults to project directory)
-        # Minion-specific fields
+        # Multi-agent fields (universal Legion - issue #313)
         role: str | None = None,
         capabilities: list[str] = None,
-        # Hierarchy fields (Phase 5)
         parent_overseer_id: str | None = None,
         overseer_level: int = 0,
+        can_spawn_minions: bool = True,  # If False, no MCP spawn tools attached
+        is_minion: bool = False,  # Explicit minion flag (for spawned minions)
     ) -> str:
         """Create a new Claude Code session with integrated components (within a project)"""
         try:
@@ -173,8 +174,11 @@ class SessionCoordinator:
             # Calculate order based on existing sessions in project
             order = len(project.session_ids)
 
-            # Detect if this session should be a minion (parent project is a legion)
-            is_minion = project.is_multi_agent
+            # Issue #313: Universal Legion - is_minion determined by:
+            # 1. Explicit is_minion=True parameter (for spawned minions)
+            # 2. Having a parent_overseer_id (spawned by another session)
+            # 3. Legacy: project.is_multi_agent for backward compatibility
+            session_is_minion = is_minion or parent_overseer_id is not None or project.is_multi_agent
 
             # Create session through session manager
             # Store raw system_prompt (guide will be prepended later in start_session)
@@ -189,13 +193,13 @@ class SessionCoordinator:
                 name=name,
                 order=order,
                 project_id=project_id,
-                # Minion fields (auto-populated if parent is legion)
-                is_minion=is_minion,
+                # Multi-agent fields (universal Legion - issue #313)
+                is_minion=session_is_minion,
                 role=role,
                 capabilities=capabilities,
-                # Hierarchy fields (Phase 5)
                 parent_overseer_id=parent_overseer_id,
-                overseer_level=overseer_level
+                overseer_level=overseer_level,
+                can_spawn_minions=can_spawn_minions
             )
 
             # Add session to project
@@ -207,11 +211,12 @@ class SessionCoordinator:
             await storage_manager.initialize()
             self._storage_managers[session_id] = storage_manager
 
-            # Attach MCP tools for minion sessions (multi-agent)
+            # Issue #313: Attach MCP tools based on can_spawn_minions flag (universal Legion)
+            # All sessions can have Legion MCP tools if can_spawn_minions=True
             mcp_servers = None
             legion_tools = []
-            coord_logger.debug(f"MCP attachment check for session {session_id}: is_minion={is_minion}, legion_system={self.legion_system is not None}, mcp_tools={self.legion_system.mcp_tools if self.legion_system else None}")
-            if is_minion and self.legion_system and self.legion_system.mcp_tools:
+            coord_logger.debug(f"MCP attachment check for session {session_id}: can_spawn_minions={can_spawn_minions}, is_minion={session_is_minion}, legion_system={self.legion_system is not None}")
+            if can_spawn_minions and self.legion_system and self.legion_system.mcp_tools:
                 # Create session-specific MCP server (injects session_id into tool calls)
                 mcp_server = self.legion_system.mcp_tools.create_mcp_server_for_session(session_id)
                 coord_logger.debug(f"Created session-specific MCP server for {session_id}: {mcp_server}")
@@ -220,12 +225,12 @@ class SessionCoordinator:
                     mcp_servers = {"legion": mcp_server}
                     # Allow all legion MCP tools (reduces command-line length)
                     legion_tools = ["mcp__legion"]
-                    coord_logger.info(f"Attaching Legion MCP tools to minion session {session_id}: {legion_tools}")
+                    coord_logger.info(f"Attaching Legion MCP tools to session {session_id}: {legion_tools}")
                 else:
-                    coord_logger.warning(f"MCP server creation failed for minion session {session_id}")
+                    coord_logger.warning(f"MCP server creation failed for session {session_id}")
             else:
-                if not is_minion:
-                    coord_logger.debug(f"Session {session_id} is not a minion - skipping MCP tools")
+                if not can_spawn_minions:
+                    coord_logger.debug(f"Session {session_id} has can_spawn_minions=False - skipping MCP spawn tools")
                 elif not self.legion_system:
                     coord_logger.warning(f"Legion system is None for session {session_id}")
                 elif not self.legion_system.mcp_tools:
@@ -364,10 +369,11 @@ class SessionCoordinator:
             if session_info.claude_code_session_id:
                 resume_sdk_session = session_id  # Use WebUI session ID as resume identifier
 
-            # Attach MCP tools for minion sessions (multi-agent)
+            # Issue #313: Attach MCP tools based on can_spawn_minions flag (universal Legion)
+            # All sessions with can_spawn_minions=True get Legion MCP tools
             mcp_servers = None
             legion_tools = []
-            if session_info.is_minion and self.legion_system and self.legion_system.mcp_tools:
+            if session_info.can_spawn_minions and self.legion_system and self.legion_system.mcp_tools:
                 # Create session-specific MCP server (injects session_id into tool calls)
                 mcp_server = self.legion_system.mcp_tools.create_mcp_server_for_session(session_id)
                 if mcp_server:
@@ -375,7 +381,7 @@ class SessionCoordinator:
                     mcp_servers = {"legion": mcp_server}
                     # Allow all legion MCP tools (reduces command-line length)
                     legion_tools = ["mcp__legion"]
-                    coord_logger.info(f"Attaching Legion MCP tools to minion session {session_id} (on start): {legion_tools}")
+                    coord_logger.info(f"Attaching Legion MCP tools to session {session_id} (can_spawn_minions=True): {legion_tools}")
 
             # Merge Legion tools with session's stored allowed_tools
             all_tools = session_info.allowed_tools if session_info.allowed_tools else []

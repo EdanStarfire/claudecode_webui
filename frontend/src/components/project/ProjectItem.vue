@@ -26,7 +26,8 @@
           <!-- Top row: Project name AND action buttons -->
           <div class="d-flex align-items-center mb-1" style="gap: 0.5rem;">
             <div class="fw-semibold" style="flex-shrink: 0;">
-              <span v-if="project.is_multi_agent" class="legion-icon" style="font-size: 1rem; margin-right: 0.25rem;">🏛</span>
+              <!-- Issue #313: Show icon when project has minions (progressive disclosure) -->
+              <span v-if="hasMinions" class="legion-icon" style="font-size: 1rem; margin-right: 0.25rem;">🏛</span>
               {{ project.name }}
             </div>
 
@@ -42,10 +43,10 @@
                 ✏️
               </button>
 
-              <!-- Add Session/Minion Button -->
+              <!-- Add Session/Minion Button (issue #313: always available) -->
               <button
                 class="btn btn-sm btn-outline-primary"
-                :title="project.is_multi_agent ? 'Create minion' : 'Add session to project'"
+                :title="hasMinions ? 'Create minion' : 'Add session or minion'"
                 type="button"
                 @click.stop="showCreateSessionModal"
               >
@@ -80,9 +81,10 @@
     >
       <div class="accordion-body p-0">
         <div class="list-group list-group-flush">
-          <!-- Timeline for Legion projects -->
+          <!-- Issue #313: Progressive disclosure - Show Timeline/Hierarchy when minions exist -->
+          <!-- Timeline (shown when project has minions) -->
           <div
-            v-if="project.is_multi_agent"
+            v-if="hasMinions"
             class="list-group-item list-group-item-action timeline-item d-flex align-items-center p-2"
             :class="{ active: isTimelineActive }"
             style="cursor: pointer"
@@ -91,12 +93,12 @@
             <div class="flex-grow-1">
               <span style="font-size: 1rem; margin-right: 0.5rem;">📊</span>
               <span class="fw-semibold">Timeline</span>
-              <small class="text-muted ms-2">(Legion Comms)</small>
+              <small class="text-muted ms-2">(Comms)</small>
             </div>
           </div>
 
-          <!-- Hierarchy View for Legion projects -->
-          <template v-if="project.is_multi_agent">
+          <!-- Hierarchy View (shown when project has minions) -->
+          <template v-if="hasMinions">
             <!-- Hierarchy View link (for full-page view) -->
             <div
               class="list-group-item list-group-item-action hierarchy-item d-flex align-items-center p-2"
@@ -139,7 +141,7 @@
             </div>
           </template>
 
-          <!-- Regular Sessions for non-Legion projects -->
+          <!-- Regular Sessions (shown when project has no minions) -->
           <template v-else>
             <SessionItem
               v-for="session in projectSessions"
@@ -197,6 +199,12 @@ const projectSessions = computed(() => {
   return props.project.session_ids
     .map(sessionId => sessionStore.getSession(sessionId))
     .filter(session => session !== null && session !== undefined) // Remove any null/undefined values if session not found
+})
+
+// Issue #313: Progressive disclosure - check if project has any minions
+const hasMinions = computed(() => {
+  // Check if any session in this project is a minion
+  return projectSessions.value.some(session => session.is_minion)
 })
 
 const isTimelineActive = computed(() => {
@@ -259,9 +267,12 @@ function showEditModal() {
 }
 
 function showCreateSessionModal() {
-  if (props.project.is_multi_agent) {
+  // Issue #313: Show minion modal if project has minions, otherwise session modal
+  // This allows any project to create minions once it has one
+  if (hasMinions.value) {
     uiStore.showModal('create-minion', { project: props.project })
   } else {
+    // For projects without minions, show session modal (which could offer minion creation too)
     uiStore.showModal('create-session', { project: props.project })
   }
 }
@@ -276,9 +287,10 @@ function viewHierarchy() {
   router.push(`/hierarchy/${props.project.project_id}`)
 }
 
-// Load minion hierarchy for Legion projects
+// Load minion hierarchy (issue #313: available for all projects with minions)
 async function loadMinionHierarchy() {
-  if (!props.project.is_multi_agent) return
+  // Only load if project has minions (progressive disclosure)
+  if (!hasMinions.value) return
 
   loadingHierarchy.value = true
   try {
@@ -311,96 +323,94 @@ function findMinionInTree(node, minionId) {
   return null
 }
 
-// Load hierarchy when project is expanded (for Legion projects)
+// Load hierarchy when project is expanded (issue #313: for projects with minions)
 watch(isExpanded, (newVal) => {
-  if (newVal && props.project.is_multi_agent) {
+  if (newVal && hasMinions.value) {
     // Reload hierarchy to get latest data
     loadMinionHierarchy()
   }
 })
 
-// Watch session store changes and update hierarchy (always watching)
+// Issue #313: Watch session store changes for all projects (minions can appear in any project)
 onMounted(() => {
-  if (props.project.is_multi_agent) {
-    sessionWatchStop = watch(
-      () => sessionStore.sessions,
-      (sessions) => {
-        if (!minionHierarchy.value || !isExpanded.value) return
+  // Always set up watchers - minions can be created in any project
+  sessionWatchStop = watch(
+    () => sessionStore.sessions,
+    (sessions) => {
+      if (!minionHierarchy.value || !isExpanded.value) return
 
-        // Update all minion states, is_processing, and latest_message in our hierarchy
-        for (const [sessionId, session] of sessions) {
-          if (session.is_minion && session.project_id === props.project.project_id) {
-            const minion = findMinionInTree(minionHierarchy.value, sessionId)
-            if (minion && minion.type === 'minion') {
-              // Update state if changed
-              if (minion.state !== session.state) {
-                minion.state = session.state
-              }
-              // Update is_processing if changed
-              if (minion.is_processing !== session.is_processing) {
-                minion.is_processing = session.is_processing
-              }
-              // Update latest_message fields if changed
-              if (minion.latest_message !== session.latest_message) {
-                minion.latest_message = session.latest_message
-                minion.latest_message_type = session.latest_message_type
-                minion.latest_message_time = session.latest_message_time
-              }
+      // Update all minion states, is_processing, and latest_message in our hierarchy
+      for (const [sessionId, session] of sessions) {
+        if (session.is_minion && session.project_id === props.project.project_id) {
+          const minion = findMinionInTree(minionHierarchy.value, sessionId)
+          if (minion && minion.type === 'minion') {
+            // Update state if changed
+            if (minion.state !== session.state) {
+              minion.state = session.state
             }
-          }
-        }
-      },
-      { deep: true }
-    )
-
-    // Watch for minions being created or deleted (reload hierarchy)
-    watch(
-      () => sessionStore.sessions.size,
-      (newSize, oldSize) => {
-        // Only reload if project is expanded
-        if (!isExpanded.value) return
-
-        // Check for new minion creation (size increased)
-        if (newSize > oldSize) {
-          const sessions = Array.from(sessionStore.sessions.values())
-          const hasNewMinion = sessions.some(s =>
-            s.is_minion &&
-            s.project_id === props.project.project_id &&
-            minionHierarchy.value &&
-            !findMinionInTree(minionHierarchy.value, s.session_id)
-          )
-
-          if (hasNewMinion) {
-            console.log('New minion detected, reloading hierarchy')
-            loadMinionHierarchy()
-          }
-        }
-
-        // Check for minion deletion (size decreased)
-        if (newSize < oldSize && minionHierarchy.value) {
-          // Check if a minion in our hierarchy no longer exists in session store
-          const sessions = sessionStore.sessions
-          const checkMinion = (node) => {
-            if (node.type === 'minion' && !sessions.has(node.id)) {
-              return true // Minion was deleted
+            // Update is_processing if changed
+            if (minion.is_processing !== session.is_processing) {
+              minion.is_processing = session.is_processing
             }
-            if (node.children) {
-              return node.children.some(child => checkMinion(child))
+            // Update latest_message fields if changed
+            if (minion.latest_message !== session.latest_message) {
+              minion.latest_message = session.latest_message
+              minion.latest_message_type = session.latest_message_type
+              minion.latest_message_time = session.latest_message_time
             }
-            return false
-          }
-
-          if (checkMinion(minionHierarchy.value)) {
-            console.log('Minion deletion detected, reloading hierarchy')
-            loadMinionHierarchy()
           }
         }
       }
-    )
-  }
+    },
+    { deep: true }
+  )
 
-  // Load hierarchy immediately if already expanded
-  if (isExpanded.value && props.project.is_multi_agent) {
+  // Watch for minions being created or deleted (reload hierarchy)
+  watch(
+    () => sessionStore.sessions.size,
+    (newSize, oldSize) => {
+      // Only reload if project is expanded
+      if (!isExpanded.value) return
+
+      // Check for new minion creation (size increased)
+      if (newSize > oldSize) {
+        const sessions = Array.from(sessionStore.sessions.values())
+        const hasNewMinion = sessions.some(s =>
+          s.is_minion &&
+          s.project_id === props.project.project_id &&
+          (!minionHierarchy.value || !findMinionInTree(minionHierarchy.value, s.session_id))
+        )
+
+        if (hasNewMinion) {
+          console.log('New minion detected, reloading hierarchy')
+          loadMinionHierarchy()
+        }
+      }
+
+      // Check for minion deletion (size decreased)
+      if (newSize < oldSize && minionHierarchy.value) {
+        // Check if a minion in our hierarchy no longer exists in session store
+        const sessions = sessionStore.sessions
+        const checkMinion = (node) => {
+          if (node.type === 'minion' && !sessions.has(node.id)) {
+            return true // Minion was deleted
+          }
+          if (node.children) {
+            return node.children.some(child => checkMinion(child))
+          }
+          return false
+        }
+
+        if (checkMinion(minionHierarchy.value)) {
+          console.log('Minion deletion detected, reloading hierarchy')
+          loadMinionHierarchy()
+        }
+      }
+    }
+  )
+
+  // Load hierarchy immediately if already expanded and has minions
+  if (isExpanded.value && hasMinions.value) {
     loadMinionHierarchy()
   }
 })

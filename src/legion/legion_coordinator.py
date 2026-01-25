@@ -118,28 +118,29 @@ class LegionCoordinator:
 
     async def get_legion(self, legion_id: str) -> Optional['ProjectInfo']:
         """
-        Get legion (project with is_multi_agent=True) by ID.
+        Get project by ID (issue #313: all projects support Legion capabilities).
 
         Args:
             legion_id: Project UUID
 
         Returns:
-            ProjectInfo if found and is_multi_agent=True, None otherwise
+            ProjectInfo if found, None otherwise
         """
-        project = await self.project_manager.get_project(legion_id)
-        if project and project.is_multi_agent:
-            return project
-        return None
+        # Issue #313: All projects support Legion - no is_multi_agent check
+        return await self.project_manager.get_project(legion_id)
 
     async def list_legions(self) -> list['ProjectInfo']:
         """
-        List all legions (projects with is_multi_agent=True).
+        List all projects (issue #313: all projects support Legion capabilities).
+
+        Note: For backward compatibility, this method still exists but returns
+        all projects. Use project_manager.list_projects() directly for clarity.
 
         Returns:
-            List of all ProjectInfo objects where is_multi_agent=True
+            List of all ProjectInfo objects
         """
-        all_projects = await self.project_manager.list_projects()
-        return [p for p in all_projects if p.is_multi_agent]
+        # Issue #313: All projects are Legion-capable
+        return await self.project_manager.list_projects()
 
     async def _create_legion_directories(self, legion_id: str) -> None:
         """
@@ -179,45 +180,55 @@ class LegionCoordinator:
                 "children": [<minion nodes>]
             }
         """
-        # Get all minions for this legion
+        # Get all sessions for this legion/project
         all_sessions = await self.session_manager.list_sessions()
-        minions = [s for s in all_sessions if s.is_minion and s.project_id == legion_id]
+        project_sessions = [s for s in all_sessions if s.project_id == legion_id]
 
         # Get user's last outgoing comm
         user_last_comm = await self._get_last_outgoing_comm(legion_id, from_user=True)
 
-        # Build minion tree structure
-        minion_map = {}
-        for minion in minions:
-            minion_data = {
-                "id": minion.session_id,
-                "type": "minion",
-                "name": minion.name,
-                "state": minion.state.value if hasattr(minion.state, 'value') else str(minion.state),
-                "is_overseer": minion.is_overseer or False,
-                "is_processing": minion.is_processing or False,
-                "last_comm": await self._get_last_outgoing_comm(legion_id, from_minion_id=minion.session_id),
+        # Issue #313: Build hierarchy including both minions and regular sessions that are overseers
+        # This supports universal Legion where any session can spawn minions
+        session_map = {}
+        for session in project_sessions:
+            # Determine type: minion or session (regular session that may be overseer)
+            session_type = "minion" if session.is_minion else "session"
+
+            session_data = {
+                "id": session.session_id,
+                "type": session_type,
+                "name": session.name,
+                "state": session.state.value if hasattr(session.state, 'value') else str(session.state),
+                "is_overseer": session.is_overseer or False,
+                "is_processing": session.is_processing or False,
+                "last_comm": await self._get_last_outgoing_comm(legion_id, from_minion_id=session.session_id) if session.is_minion else None,
                 # Latest message tracking (issue #291)
-                "latest_message": minion.latest_message,
-                "latest_message_type": minion.latest_message_type,
-                "latest_message_time": minion.latest_message_time.isoformat() if minion.latest_message_time else None,
+                "latest_message": session.latest_message,
+                "latest_message_type": session.latest_message_type,
+                "latest_message_time": session.latest_message_time.isoformat() if session.latest_message_time else None,
                 "children": []
             }
-            minion_map[minion.session_id] = minion_data
+            session_map[session.session_id] = session_data
 
         # Build tree by linking children to parents
-        root_minions = []
-        for minion in minions:
-            minion_data = minion_map[minion.session_id]
+        root_sessions = []
+        for session in project_sessions:
+            session_data = session_map[session.session_id]
 
-            if minion.parent_overseer_id is None:
-                # User-spawned minion (root level)
-                root_minions.append(minion_data)
+            if session.parent_overseer_id is None:
+                # User-created session (root level) - only include if:
+                # 1. It's a minion (explicitly marked)
+                # 2. It's an overseer (has spawned children)
+                if session.is_minion or session.is_overseer:
+                    root_sessions.append(session_data)
             else:
-                # Child minion - add to parent's children
-                parent = minion_map.get(minion.parent_overseer_id)
+                # Child session - add to parent's children
+                parent = session_map.get(session.parent_overseer_id)
                 if parent:
-                    parent["children"].append(minion_data)
+                    parent["children"].append(session_data)
+                else:
+                    # Parent not in project (shouldn't happen) - add as root
+                    root_sessions.append(session_data)
 
         # Build user entry with children
         user_entry = {
@@ -225,7 +236,7 @@ class LegionCoordinator:
             "type": "user",
             "name": "User (you)",
             "last_comm": user_last_comm,
-            "children": root_minions
+            "children": root_sessions
         }
 
         return user_entry
