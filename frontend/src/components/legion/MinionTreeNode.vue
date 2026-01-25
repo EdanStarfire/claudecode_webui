@@ -1,10 +1,65 @@
 <template>
   <div v-if="minionData" class="minion-tree-node" :style="{ marginLeft: `${indent}px` }">
-    <div class="minion-card minion-card-clickable border-start border-2 mb-2" @click="handleClick">
+    <!-- Sidebar Layout (vertical, single column) -->
+    <div v-if="layout === 'sidebar'" class="minion-card minion-card-clickable border-start border-2 mb-2 d-flex align-items-center p-2" :class="{ active: isSelected }" @click="handleClick">
+      <!-- Status Indicator Dot -->
+      <div class="status-dot me-2" :class="statusDotClass" :style="statusDotStyle"></div>
+
+      <!-- Minion Info (Name + Latest Activity) -->
+      <div class="minion-info flex-grow-1">
+        <div class="minion-name">
+          <!-- Overseer Icon -->
+          <span v-if="isOverseerWithChildren" class="me-1">👑</span>
+
+          <!-- Minion Name -->
+          <strong>{{ minionData.name }}</strong>
+
+          <!-- Children Count Badge -->
+          <span v-if="isOverseerWithChildren" class="badge bg-secondary ms-2">
+            {{ minionData.children.length }} {{ minionData.children.length === 1 ? 'child' : 'children' }}
+          </span>
+        </div>
+
+        <!-- Latest Activity below name - Issue #291 -->
+        <div v-if="minionData.latest_message" class="latest-activity text-muted">
+          <span v-if="messagePrefix" class="activity-prefix">{{ messagePrefix }} </span>
+          <span class="activity-content" :title="minionData.latest_message">{{ truncatedMessage }}</span>
+          <span v-if="relativeTime" class="activity-time ms-1">({{ relativeTime }})</span>
+        </div>
+        <!-- Fallback to last_comm if no latest_message -->
+        <div v-else-if="minionData.last_comm" class="latest-activity text-muted">
+          <span class="activity-prefix">→ <strong>{{ getCommRecipient(minionData.last_comm) }}</strong>: </span>
+          <span class="activity-content" :title="minionData.last_comm.content || ''">{{ getCommSummary(minionData.last_comm) }}</span>
+        </div>
+        <!-- Empty state -->
+        <div v-else class="latest-activity text-muted fst-italic small">
+          No activity yet
+        </div>
+      </div>
+
+      <!-- Action Buttons (Issue #296) -->
+      <button
+        class="btn btn-sm btn-outline-secondary me-1"
+        title="Edit minion"
+        @click.stop="showEditModal"
+      >
+        ✏️
+      </button>
+      <button
+        class="btn btn-sm btn-outline-secondary"
+        title="Manage minion"
+        @click.stop="showManageModal"
+      >
+        ⚙️
+      </button>
+    </div>
+
+    <!-- Two-Column Layout (for HierarchyView) -->
+    <div v-else class="minion-card minion-card-clickable border-start border-2 mb-2" :class="{ active: isSelected }" @click="handleClick">
       <div class="node-row">
         <!-- Left Column: Status + Name (30%) -->
         <div class="node-left">
-          <!-- Status Dot (reuses SessionItem styles) -->
+          <!-- Status Dot -->
           <div class="status-dot me-2" :class="statusDotClass" :style="statusDotStyle"></div>
 
           <!-- Overseer Icon -->
@@ -19,30 +74,18 @@
           </span>
         </div>
 
-        <!-- Right Column: Latest Message or Last Comm (70%) - Issue #291 -->
+        <!-- Right Column: Latest Message or Last Comm (70%) -->
         <div class="node-right">
           <!-- Show latest_message if available (priority over comm) -->
           <div v-if="minionData.latest_message" class="latest-message-preview">
             <span v-if="messagePrefix" class="message-prefix">{{ messagePrefix }}</span>
-            <span
-              class="message-content"
-              :title="minionData.latest_message"
-            >
-              {{ truncatedMessage }}
-            </span>
+            <span class="message-content" :title="minionData.latest_message">{{ truncatedMessage }}</span>
             <span v-if="relativeTime" class="message-time ms-1">({{ relativeTime }})</span>
           </div>
           <!-- Fallback to last_comm if no latest_message -->
           <div v-else-if="minionData.last_comm" class="last-comm-preview">
-            <span class="comm-direction">
-              → <strong>{{ getCommRecipient(minionData.last_comm) }}</strong>:
-            </span>
-            <span
-              class="comm-content"
-              :title="minionData.last_comm.content || ''"
-            >
-              {{ getCommSummary(minionData.last_comm) }}
-            </span>
+            <span class="comm-direction">→ <strong>{{ getCommRecipient(minionData.last_comm) }}</strong>:</span>
+            <span class="comm-content" :title="minionData.last_comm.content || ''">{{ getCommSummary(minionData.last_comm) }}</span>
           </div>
           <!-- Empty state -->
           <div v-else class="text-muted fst-italic small">
@@ -50,7 +93,7 @@
           </div>
         </div>
 
-        <!-- Action Buttons (Issue #296) -->
+        <!-- Action Buttons -->
         <div class="node-actions">
           <button
             class="btn btn-sm btn-outline-secondary me-1"
@@ -77,6 +120,7 @@
         :key="child.id"
         :minion-data="child"
         :level="level + 1"
+        :layout="layout"
         @minion-click="$emit('minion-click', $event)"
       />
     </div>
@@ -91,6 +135,7 @@
 <script setup>
 import { computed } from 'vue'
 import { useSessionStore } from '@/stores/session'
+import { useMessageStore } from '@/stores/message'
 import { useUIStore } from '@/stores/ui'
 
 const props = defineProps({
@@ -101,16 +146,95 @@ const props = defineProps({
   level: {
     type: Number,
     default: 0
+  },
+  layout: {
+    type: String,
+    default: 'two-column', // 'two-column' for HierarchyView, 'sidebar' for ProjectItem sidebar
+    validator: (value) => ['two-column', 'sidebar'].includes(value)
   }
 })
 
 const emit = defineEmits(['minion-click'])
 
 const sessionStore = useSessionStore()
+const messageStore = useMessageStore()
 const uiStore = useUIStore()
+
+// Get live session data for this minion
+const liveSession = computed(() => {
+  if (!props.minionData || !props.minionData.id) return null
+  return sessionStore.getSession(props.minionData.id)
+})
+
+// Get latest message from message store (only for active session)
+const latestMessageFromStore = computed(() => {
+  if (!props.minionData || !props.minionData.id) return null
+
+  const messages = messageStore.messagesBySession.get(props.minionData.id)
+  if (!messages || messages.length === 0) return null
+
+  // Find the last meaningful message (apply same filtering as backend)
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i]
+
+    // Skip result messages (tool results)
+    if (msg.type === 'result') continue
+
+    // Skip user messages with only tool results (no actual user text)
+    if (msg.type === 'user' && msg.content && msg.content.startsWith('Tool results:')) continue
+
+    // Skip system messages with generic placeholder content
+    if (msg.type === 'system' && msg.content === 'System message') continue
+
+    // Skip assistant messages with only tool uses (no actual text)
+    if (msg.type === 'assistant' && msg.content === 'Assistant response') continue
+
+    // Accept user, assistant (with content), or system (with content) messages
+    if (msg.type === 'user' || msg.type === 'assistant' || msg.type === 'system') {
+      return {
+        content: msg.content,
+        type: msg.type,
+        timestamp: msg.timestamp
+      }
+    }
+  }
+
+  return null
+})
+
+// Merge live session data with hierarchy data
+const minionWithLiveData = computed(() => {
+  if (!props.minionData) return null
+
+  const merged = { ...props.minionData }
+
+  // Merge live session state if available
+  if (liveSession.value) {
+    merged.state = liveSession.value.state
+    merged.is_processing = liveSession.value.is_processing
+  }
+
+  // Merge latest message if available from message store (for active session)
+  if (latestMessageFromStore.value) {
+    merged.latest_message = latestMessageFromStore.value.content
+    merged.latest_message_type = latestMessageFromStore.value.type
+    merged.latest_message_time = latestMessageFromStore.value.timestamp
+  }
+  // Otherwise keep hierarchy data for latest_message (contains cached data from backend)
+  // Note: For non-active sessions, we rely on hierarchy API data which should be
+  // periodically refreshed or updated via WebSocket broadcasts
+
+  return merged
+})
 
 // Indentation (24px per level)
 const indent = computed(() => props.level * 24)
+
+// Check if this minion is currently selected
+const isSelected = computed(() => {
+  if (!props.minionData || !props.minionData.id) return false
+  return sessionStore.currentSessionId === props.minionData.id
+})
 
 // Check if minion has children
 const hasChildren = computed(() => {
@@ -130,16 +254,17 @@ const isOverseerWithChildren = computed(() => {
   )
 })
 
-// Display state (matches SessionItem logic)
+// Display state (matches SessionItem logic) - now uses live data
 const displayState = computed(() => {
-  if (!props.minionData) return 'created'
+  const data = minionWithLiveData.value
+  if (!data) return 'created'
 
   // Special case: PAUSED + processing = waiting for permission response (yellow blinking)
-  if (props.minionData.state === 'paused' && props.minionData.is_processing) {
+  if (data.state === 'paused' && data.is_processing) {
     return 'pending-prompt'
   }
   // Normal case: processing overrides state (purple blinking)
-  return props.minionData.is_processing ? 'processing' : (props.minionData.state || 'created')
+  return data.is_processing ? 'processing' : (data.state || 'created')
 })
 
 // Status dot CSS classes (matches SessionItem)
@@ -180,37 +305,66 @@ const statusDotStyle = computed(() => {
   }
 })
 
-// Latest message display (issue #291)
+// Latest message display (issue #291) - now uses live data
 const messagePrefix = computed(() => {
-  if (!props.minionData || !props.minionData.latest_message_type) return ''
-  const type = props.minionData.latest_message_type
+  const data = minionWithLiveData.value
+  if (!data || !data.latest_message_type) return ''
+  const type = data.latest_message_type
   if (type === 'user') return 'User -->:'
   if (type === 'system') return 'System:'
   return ''  // Assistant messages have no prefix
 })
 
 const truncatedMessage = computed(() => {
-  if (!props.minionData || !props.minionData.latest_message) return ''
-  const msg = props.minionData.latest_message
+  const data = minionWithLiveData.value
+  if (!data || !data.latest_message) return ''
+  const msg = data.latest_message
   const maxLen = 150  // Same as comm summary length
   return msg.length > maxLen ? msg.slice(0, maxLen) + '...' : msg
 })
 
 const relativeTime = computed(() => {
-  if (!props.minionData || !props.minionData.latest_message_time) return ''
+  const data = minionWithLiveData.value
+  if (!data || !data.latest_message_time) return ''
 
-  const now = Date.now()
-  const msgTime = new Date(props.minionData.latest_message_time).getTime()
-  const diffMs = now - msgTime
+  try {
+    const now = Date.now()
+    let msgTime
 
-  const minutes = Math.floor(diffMs / 60000)
-  const hours = Math.floor(minutes / 60)
-  const days = Math.floor(hours / 24)
+    // Handle both ISO string and numeric timestamp formats
+    if (typeof data.latest_message_time === 'number') {
+      // If timestamp is in seconds (< year 3000 in milliseconds), convert to milliseconds
+      msgTime = data.latest_message_time < 32503680000
+        ? data.latest_message_time * 1000
+        : data.latest_message_time
+    } else {
+      // Backend sends ISO string, parse it
+      msgTime = new Date(data.latest_message_time).getTime()
+    }
 
-  if (days > 0) return `${days}d ago`
-  if (hours > 0) return `${hours}h ago`
-  if (minutes > 0) return `${minutes}m ago`
-  return 'just now'
+    // Validate the parsed time is reasonable (not from 1970 and not in future)
+    if (isNaN(msgTime) || msgTime < 946684800000 || msgTime > now + 60000) { // Jan 1, 2000 to 1 min in future
+      console.warn('Invalid timestamp for relative time calculation:', data.latest_message_time, 'parsed to:', msgTime)
+      return ''
+    }
+
+    const diffMs = now - msgTime
+
+    // If negative (future time), treat as "just now"
+    if (diffMs < 0) return 'just now'
+
+    const minutes = Math.floor(diffMs / 60000)
+    const hours = Math.floor(minutes / 60)
+    const days = Math.floor(hours / 24)
+
+    if (days > 0) return `${days}d ago`
+    if (hours > 0) return `${hours}h ago`
+    if (minutes > 0) return `${minutes}m ago`
+    return 'just now'
+  } catch (e) {
+    console.error('Error calculating relative time:', e, data.latest_message_time)
+    return ''
+  }
 })
 
 // Helper: Get comm recipient name
@@ -257,18 +411,56 @@ function showManageModal() {
 .minion-card {
   background-color: white;
   border-color: #dee2e6;
-  padding: 0.5rem 0.75rem;
 }
 
 .minion-tree-node {
   transition: margin-left 0.2s ease;
 }
 
-/* Three-column layout: 30% left, flex middle, auto right (buttons) */
+/* Sidebar Layout Styles */
+.minion-info {
+  min-width: 0; /* Allow text truncation */
+  overflow: hidden;
+}
+
+.minion-name {
+  font-size: 0.95rem;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.latest-activity {
+  font-size: 0.85rem;
+  line-height: 1.3;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-top: 0.25rem;
+}
+
+.activity-prefix {
+  color: #6c757d;
+  font-size: 0.8rem;
+}
+
+.activity-content {
+  font-style: italic;
+}
+
+.activity-time {
+  color: #6c757d;
+  font-size: 0.75rem;
+  opacity: 0.8;
+}
+
+/* Two-Column Layout Styles (for HierarchyView) */
 .node-row {
   display: flex;
   gap: 1rem;
   align-items: flex-start;
+  padding: 0.5rem 0.75rem;
 }
 
 .node-left {
@@ -294,7 +486,7 @@ function showManageModal() {
   margin-left: 0.5rem;
 }
 
-/* Latest message preview (issue #291) - similar to comm preview */
+/* Latest message preview (two-column layout) */
 .latest-message-preview {
   font-size: 0.9rem;
   line-height: 1.4;
@@ -310,7 +502,7 @@ function showManageModal() {
   color: #212529;
   word-wrap: break-word;
   font-style: italic;
-  cursor: help; /* Show help cursor on hover to indicate full message */
+  cursor: help;
 }
 
 .message-time {
@@ -319,7 +511,7 @@ function showManageModal() {
   opacity: 0.8;
 }
 
-/* Comm preview styles (kept for fallback) */
+/* Comm preview (two-column layout) */
 .last-comm-preview {
   font-size: 0.9rem;
   line-height: 1.4;
@@ -333,7 +525,7 @@ function showManageModal() {
 .comm-content {
   color: #212529;
   word-wrap: break-word;
-  cursor: help; /* Show help cursor on hover to indicate tooltip */
+  cursor: help;
 }
 
 /* Status dot styles - matches SessionItem.vue */
@@ -391,5 +583,22 @@ function showManageModal() {
 
 .minion-card-clickable:hover {
   background-color: rgba(13, 110, 253, 0.1);
+}
+
+.minion-card-clickable.active {
+  background-color: #0d6efd;
+  color: white;
+}
+
+.minion-card-clickable.active .activity-prefix,
+.minion-card-clickable.active .activity-time,
+.minion-card-clickable.active .message-prefix,
+.minion-card-clickable.active .message-time {
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.minion-card-clickable.active .activity-content,
+.minion-card-clickable.active .message-content {
+  color: white;
 }
 </style>

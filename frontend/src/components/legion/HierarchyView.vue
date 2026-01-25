@@ -136,9 +136,9 @@ async function loadHierarchy() {
   }
 }
 
-// Handle minion click - navigate to Spy View
+// Handle minion click - navigate to session view
 function handleMinionClick(minionId) {
-  router.push(`/spy/${props.legionId}/${minionId}`)
+  router.push(`/session/${minionId}`)
 }
 
 // Load on mount
@@ -221,6 +221,9 @@ function handleNewComm(comm) {
 
 // Subscribe to WebSocket events on mount
 onMounted(() => {
+  // Clear current session selection when viewing hierarchy
+  sessionStore.currentSessionId = null
+
   loadHierarchy()
 
   // Connect to legion WebSocket for comm updates
