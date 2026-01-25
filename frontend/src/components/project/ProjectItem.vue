@@ -97,59 +97,53 @@
             </div>
           </div>
 
-          <!-- Hierarchy View (shown when project has minions) -->
-          <template v-if="hasMinions">
-            <!-- Hierarchy View link (for full-page view) -->
-            <div
-              class="list-group-item list-group-item-action hierarchy-item d-flex align-items-center p-2"
-              :class="{ active: isHierarchyActive }"
-              style="cursor: pointer"
-              @click="viewHierarchy"
-            >
-              <div class="flex-grow-1">
-                <span style="font-size: 1rem; margin-right: 0.5rem;">🌳</span>
-                <span class="fw-semibold">Hierarchy</span>
-                <small class="text-muted ms-2">(Minion Tree)</small>
+          <!-- Hierarchy View link (shown when project has minions) -->
+          <div
+            v-if="hasMinions"
+            class="list-group-item list-group-item-action hierarchy-item d-flex align-items-center p-2"
+            :class="{ active: isHierarchyActive }"
+            style="cursor: pointer"
+            @click="viewHierarchy"
+          >
+            <div class="flex-grow-1">
+              <span style="font-size: 1rem; margin-right: 0.5rem;">🌳</span>
+              <span class="fw-semibold">Hierarchy</span>
+              <small class="text-muted ms-2">(Minion Tree)</small>
+            </div>
+          </div>
+
+          <!-- Issue #313: Always show session/minion hierarchy (universal Legion) -->
+          <!-- Minion Hierarchy (inline in sidebar) -->
+          <div class="minion-hierarchy-container">
+            <!-- Loading state -->
+            <div v-if="loadingHierarchy" class="text-center py-2">
+              <div class="spinner-border spinner-border-sm" role="status">
+                <span class="visually-hidden">Loading...</span>
               </div>
             </div>
 
-            <!-- Minion Hierarchy (inline in sidebar) -->
-            <div class="minion-hierarchy-container">
-              <!-- Loading state -->
-              <div v-if="loadingHierarchy" class="text-center py-2">
-                <div class="spinner-border spinner-border-sm" role="status">
-                  <span class="visually-hidden">Loading...</span>
-                </div>
-              </div>
-
-              <!-- Minion tree -->
-              <div v-else-if="minionHierarchy && minionHierarchy.children && minionHierarchy.children.length > 0">
-                <MinionTreeNode
-                  v-for="minion in minionHierarchy.children"
-                  :key="minion.id"
-                  :minion-data="minion"
-                  :level="0"
-                  layout="sidebar"
-                  @minion-click="handleMinionClick"
-                />
-              </div>
-
-              <!-- Empty state -->
-              <div v-else class="text-muted fst-italic small p-2">
-                No minions yet
-              </div>
+            <!-- Minion tree (includes both sessions and minions) -->
+            <div v-else-if="minionHierarchy && minionHierarchy.children && minionHierarchy.children.length > 0">
+              <MinionTreeNode
+                v-for="minion in minionHierarchy.children"
+                :key="minion.id"
+                :minion-data="minion"
+                :level="0"
+                layout="sidebar"
+                @minion-click="handleMinionClick"
+              />
             </div>
-          </template>
 
-          <!-- Regular Sessions (shown when project has no minions) -->
-          <template v-else>
-            <SessionItem
-              v-for="session in projectSessions"
-              :key="session.session_id"
-              :session="session"
-              :project-id="project.project_id"
-            />
-          </template>
+            <!-- Empty state - show regular sessions if no hierarchy -->
+            <template v-else>
+              <SessionItem
+                v-for="session in projectSessions"
+                :key="session.session_id"
+                :session="session"
+                :project-id="project.project_id"
+              />
+            </template>
+          </div>
         </div>
       </div>
     </div>
@@ -267,14 +261,9 @@ function showEditModal() {
 }
 
 function showCreateSessionModal() {
-  // Issue #313: Show minion modal if project has minions, otherwise session modal
-  // This allows any project to create minions once it has one
-  if (hasMinions.value) {
-    uiStore.showModal('create-minion', { project: props.project })
-  } else {
-    // For projects without minions, show session modal (which could offer minion creation too)
-    uiStore.showModal('create-session', { project: props.project })
-  }
+  // Issue #313: Always use CreateMinionModal for universal Legion support
+  // SessionCreateModal is deprecated - CreateMinionModal now has all features
+  uiStore.showModal('create-minion', { project: props.project })
 }
 
 // Timeline view
@@ -287,11 +276,8 @@ function viewHierarchy() {
   router.push(`/hierarchy/${props.project.project_id}`)
 }
 
-// Load minion hierarchy (issue #313: available for all projects with minions)
+// Load minion hierarchy (issue #313: universal Legion - always load hierarchy)
 async function loadMinionHierarchy() {
-  // Only load if project has minions (progressive disclosure)
-  if (!hasMinions.value) return
-
   loadingHierarchy.value = true
   try {
     const response = await api.get(`/api/legions/${props.project.project_id}/hierarchy`)
@@ -323,9 +309,9 @@ function findMinionInTree(node, minionId) {
   return null
 }
 
-// Load hierarchy when project is expanded (issue #313: for projects with minions)
+// Load hierarchy when project is expanded (issue #313: universal Legion)
 watch(isExpanded, (newVal) => {
-  if (newVal && hasMinions.value) {
+  if (newVal) {
     // Reload hierarchy to get latest data
     loadMinionHierarchy()
   }
@@ -409,8 +395,8 @@ onMounted(() => {
     }
   )
 
-  // Load hierarchy immediately if already expanded and has minions
-  if (isExpanded.value && hasMinions.value) {
+  // Load hierarchy immediately if already expanded (issue #313: universal Legion)
+  if (isExpanded.value) {
     loadMinionHierarchy()
   }
 })

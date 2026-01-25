@@ -37,7 +37,8 @@ class OverseerController:
         capabilities: list[str] | None = None,
         permission_mode: str = "default",
         allowed_tools: list[str] | None = None,
-        working_directory: str | None = None
+        working_directory: str | None = None,
+        model: str | None = None
     ) -> str:
         """
         Create a minion for the user (root overseer).
@@ -52,6 +53,7 @@ class OverseerController:
             permission_mode: Permission mode (default, acceptEdits, plan, bypassPermissions)
             allowed_tools: List of pre-authorized tools (e.g., ["edit", "read", "bash"])
             working_directory: Optional custom working directory (defaults to project directory)
+            model: Model selection (sonnet, opus, haiku, opusplan)
 
         Returns:
             str: The created minion's session_id
@@ -95,6 +97,7 @@ class OverseerController:
             system_prompt=system_prompt,
             override_system_prompt=override_system_prompt,
             working_directory=working_directory,
+            model=model,  # Model selection (sonnet, opus, haiku, opusplan)
             # Multi-agent fields (issue #313)
             is_minion=True,  # Explicitly mark as minion
             role=role,

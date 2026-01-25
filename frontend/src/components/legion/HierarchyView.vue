@@ -279,13 +279,12 @@ onMounted(() => {
     { deep: true }
   )
 
-  // Watch for new minions being created (reload hierarchy)
+  // Watch for minions being created or deleted (reload hierarchy)
   watch(
     () => sessionStore.sessions.size,
     (newSize, oldSize) => {
-      // Only reload if sessions increased (new minion created)
       if (newSize > oldSize) {
-        // Check if a new minion for this legion was created
+        // Sessions increased - check if a new minion for this legion was created
         const sessions = Array.from(sessionStore.sessions.values())
         const hasNewMinion = sessions.some(s =>
           s.is_minion &&
@@ -297,6 +296,10 @@ onMounted(() => {
           console.log('New minion detected, reloading hierarchy')
           loadHierarchy()
         }
+      } else if (newSize < oldSize) {
+        // Sessions decreased - minion was deleted, reload hierarchy
+        console.log('Minion deletion detected, reloading hierarchy')
+        loadHierarchy()
       }
     }
   )

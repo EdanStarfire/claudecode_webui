@@ -474,6 +474,8 @@ export const useWebSocketStore = defineStore('websocket', () => {
         if (payload.data && payload.data.project) {
           const project = payload.data.project
           projectStore.updateProjectLocal(project.project_id, project)
+          // Reload sessions when project is updated (minion spawn/dispose changes session list)
+          sessionStore.fetchSessions()
         }
         break
 

@@ -129,6 +129,7 @@ class CommSendRequest(BaseModel):
 
 class MinionCreateRequest(BaseModel):
     name: str
+    model: str | None = None  # Model selection (sonnet, opus, haiku, opusplan)
     role: str | None = ""
     initialization_context: str | None = ""
     override_system_prompt: bool = False
@@ -1074,7 +1075,8 @@ class ClaudeWebUI:
                     capabilities=request.capabilities,
                     permission_mode=request.permission_mode,
                     allowed_tools=request.allowed_tools,
-                    working_directory=str(working_dir)
+                    working_directory=str(working_dir),
+                    model=request.model
                 )
 
                 # Get the created minion info
