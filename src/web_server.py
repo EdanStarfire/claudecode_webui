@@ -79,8 +79,10 @@ def validate_and_normalize_working_directory(
 class ProjectCreateRequest(BaseModel):
     name: str
     working_directory: str
-    is_multi_agent: bool = False  # True to create as legion
-    max_concurrent_minions: int = 20  # Only used if is_multi_agent=True
+    # DEPRECATED (issue #313): is_multi_agent is ignored - all projects support minions.
+    # Retained for API backward compatibility only.
+    is_multi_agent: bool = False
+    max_concurrent_minions: int = 20  # Max concurrent minions per project
 
 
 class ProjectUpdateRequest(BaseModel):
@@ -127,6 +129,7 @@ class CommSendRequest(BaseModel):
 
 class MinionCreateRequest(BaseModel):
     name: str
+    model: str | None = None  # Model selection (sonnet, opus, haiku, opusplan)
     role: str | None = ""
     initialization_context: str | None = ""
     override_system_prompt: bool = False
@@ -975,19 +978,19 @@ class ClaudeWebUI:
 
         @self.app.get("/api/legions/{legion_id}/hierarchy")
         async def get_legion_hierarchy(legion_id: str):
-            """Get complete minion hierarchy with user at root"""
+            """Get complete minion hierarchy with user at root (issue #313: universal Legion)"""
             try:
-                # Verify legion exists
+                # Issue #313: All projects support hierarchy - verify project exists
                 project = await self.coordinator.project_manager.get_project(legion_id)
-                if not project or not project.is_multi_agent:
-                    raise HTTPException(status_code=404, detail="Legion not found")
+                if not project:
+                    raise HTTPException(status_code=404, detail="Project not found")
 
                 # Get legion coordinator
                 legion_coord = self.coordinator.legion_system.legion_coordinator
                 if not legion_coord:
                     raise HTTPException(status_code=500, detail="Legion coordinator not available")
 
-                # Assemble hierarchy
+                # Assemble hierarchy (returns empty children if no minions)
                 hierarchy = await legion_coord.assemble_minion_hierarchy(legion_id)
 
                 return hierarchy
@@ -1044,14 +1047,13 @@ class ClaudeWebUI:
 
         @self.app.post("/api/legions/{legion_id}/minions")
         async def create_minion(legion_id: str, request: MinionCreateRequest):
-            """Create a new minion in the legion"""
+            """Create a new minion in the project (issue #313: universal Legion)"""
             try:
-                # Validate legion exists
+                # Issue #313: All projects can have minions - verify project exists
                 project = await self.coordinator.project_manager.get_project(legion_id)
                 if not project:
-                    raise HTTPException(status_code=404, detail="Legion not found")
-                if not project.is_multi_agent:
-                    raise HTTPException(status_code=400, detail="Project is not a legion")
+                    raise HTTPException(status_code=404, detail="Project not found")
+                # Note: is_multi_agent check removed - all projects support minions
 
                 # Validate and normalize working directory
                 try:
@@ -1073,7 +1075,8 @@ class ClaudeWebUI:
                     capabilities=request.capabilities,
                     permission_mode=request.permission_mode,
                     allowed_tools=request.allowed_tools,
-                    working_directory=str(working_dir)
+                    working_directory=str(working_dir),
+                    model=request.model
                 )
 
                 # Get the created minion info
@@ -1099,14 +1102,13 @@ class ClaudeWebUI:
 
         @self.app.post("/api/legions/{legion_id}/halt-all")
         async def emergency_halt_all(legion_id: str):
-            """Emergency halt all minions in the legion"""
+            """Emergency halt all minions in the project (issue #313: universal Legion)"""
             try:
-                # Validate legion exists
+                # Issue #313: All projects support halt-all - verify project exists
                 project = await self.coordinator.project_manager.get_project(legion_id)
                 if not project:
-                    raise HTTPException(status_code=404, detail="Legion not found")
-                if not project.is_multi_agent:
-                    raise HTTPException(status_code=400, detail="Project is not a legion")
+                    raise HTTPException(status_code=404, detail="Project not found")
+                # Note: is_multi_agent check removed - no-op if no minions
 
                 # Call LegionCoordinator.emergency_halt_all()
                 result = await self.coordinator.legion_system.legion_coordinator.emergency_halt_all(legion_id)
@@ -1126,14 +1128,13 @@ class ClaudeWebUI:
 
         @self.app.post("/api/legions/{legion_id}/resume-all")
         async def resume_all(legion_id: str):
-            """Resume all minions in the legion"""
+            """Resume all minions in the project (issue #313: universal Legion)"""
             try:
-                # Validate legion exists
+                # Issue #313: All projects support resume-all - verify project exists
                 project = await self.coordinator.project_manager.get_project(legion_id)
                 if not project:
-                    raise HTTPException(status_code=404, detail="Legion not found")
-                if not project.is_multi_agent:
-                    raise HTTPException(status_code=400, detail="Project is not a legion")
+                    raise HTTPException(status_code=404, detail="Project not found")
+                # Note: is_multi_agent check removed - no-op if no minions
 
                 # Call LegionCoordinator.resume_all()
                 result = await self.coordinator.legion_system.legion_coordinator.resume_all(legion_id)
@@ -1332,18 +1333,19 @@ class ClaudeWebUI:
 
         @self.app.websocket("/ws/legion/{legion_id}")
         async def legion_websocket_endpoint(websocket: WebSocket, legion_id: str):
-            """WebSocket endpoint for legion-specific real-time updates"""
-            logger.info(f"Legion WebSocket connection request for legion {legion_id}")
+            """WebSocket endpoint for project real-time updates (issue #313: universal Legion)"""
+            logger.info(f"Legion WebSocket connection request for project {legion_id}")
 
-            # Validate legion exists
+            # Issue #313: All projects support Legion WebSocket - verify project exists
             try:
                 project = await self.coordinator.project_manager.get_project(legion_id)
-                if not project or not project.is_multi_agent:
-                    logger.warning(f"Legion WebSocket connection rejected for non-legion project: {legion_id}")
+                if not project:
+                    logger.warning(f"Legion WebSocket connection rejected - project not found: {legion_id}")
                     await websocket.close(code=4404)
                     return
+                # Note: is_multi_agent check removed - all projects support Legion WebSocket
             except Exception as e:
-                logger.error(f"Error validating legion {legion_id}: {e}")
+                logger.error(f"Error validating project {legion_id}: {e}")
                 await websocket.close(code=4500)
                 return
 

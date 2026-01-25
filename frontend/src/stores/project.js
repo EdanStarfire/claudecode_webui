@@ -27,6 +27,9 @@ export const useProjectStore = defineStore('project', () => {
   )
 
   // Check if project is multi-agent (Legion)
+  // Issue #313: DEPRECATED - all projects now support minions
+  // This helper remains for backward compatibility but always checks is_multi_agent flag
+  // Use hasMinions in components for progressive disclosure instead
   const isMultiAgent = (projectId) => {
     const project = projects.value.get(projectId)
     return project?.is_multi_agent || false

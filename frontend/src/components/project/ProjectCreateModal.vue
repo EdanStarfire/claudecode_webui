@@ -57,21 +57,7 @@
               </div>
             </div>
 
-            <div class="mb-3 form-check">
-              <input
-                type="checkbox"
-                class="form-check-input"
-                id="isMultiAgent"
-                v-model="formData.isMultiAgent"
-              />
-              <label class="form-check-label" for="isMultiAgent">
-                🏛 Multi-Agent Project (Legion)
-              </label>
-              <div class="form-text">
-                Legion projects support hierarchical multi-agent coordination
-              </div>
-            </div>
-
+            <!-- Issue #313: Removed multi-agent checkbox - all projects support minions -->
             <div class="mb-3 form-check">
               <input
                 type="checkbox"
@@ -80,13 +66,16 @@
                 v-model="formData.createSession"
               />
               <label class="form-check-label" for="createSession">
-                Create initial {{ formData.isMultiAgent ? 'minion' : 'session' }}
+                Create initial session
               </label>
+              <div class="form-text">
+                You can add minions later from the project sidebar
+              </div>
             </div>
 
             <div v-if="formData.createSession" class="mb-3 ms-4">
               <label for="sessionName" class="form-label">
-                Initial {{ formData.isMultiAgent ? 'Minion' : 'Session' }} Name
+                Initial Session Name
               </label>
               <input
                 type="text"
@@ -129,11 +118,10 @@ const projectStore = useProjectStore()
 const sessionStore = useSessionStore()
 const uiStore = useUIStore()
 
-// Form data
+// Form data (issue #313: removed isMultiAgent - all projects support minions)
 const formData = ref({
   name: '',
   workingDirectory: '',
-  isMultiAgent: false,
   createSession: true,
   sessionName: 'main'
 })
@@ -189,11 +177,11 @@ async function handleSubmit() {
   errorMessage.value = ''
 
   try {
-    // Create project
+    // Create project (issue #313: is_multi_agent always false - minions can be added later)
     const project = await projectStore.createProject(
       formData.value.name,
       formData.value.workingDirectory,
-      formData.value.isMultiAgent
+      false  // is_multi_agent deprecated - all projects support minions
     )
 
     // Create initial session/minion if requested
@@ -226,7 +214,6 @@ function resetForm() {
   formData.value = {
     name: '',
     workingDirectory: '',
-    isMultiAgent: false,
     createSession: true,
     sessionName: 'main'
   }

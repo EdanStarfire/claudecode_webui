@@ -55,6 +55,32 @@
               <div class="form-text">Must be a single word (no spaces) for #nametag matching</div>
             </div>
 
+            <!-- Model Selection -->
+            <div class="mb-3">
+              <label for="model" class="form-label">Model</label>
+              <select
+                class="form-select"
+                id="model"
+                v-model="formData.model"
+              >
+                <option value="sonnet">
+                  Sonnet 4.5 (Recommended) - Coding & complex agents
+                </option>
+                <option value="opus">
+                  Opus 4.5 - Complex reasoning tasks
+                </option>
+                <option value="haiku">
+                  Haiku 4.5 - Fastest for simple tasks
+                </option>
+                <option value="opusplan">
+                  OpusPlan - Opus planning + Sonnet execution
+                </option>
+              </select>
+              <small class="form-text text-muted" v-if="selectedModelInfo">
+                {{ selectedModelInfo.description }}
+              </small>
+            </div>
+
             <div class="mb-3">
               <label for="minion-role" class="form-label">
                 Role
@@ -219,6 +245,19 @@
               </div>
             </div>
 
+            <!-- Start Immediately -->
+            <div class="mb-3 form-check">
+              <input
+                type="checkbox"
+                class="form-check-input"
+                id="startImmediately"
+                v-model="formData.startImmediately"
+              />
+              <label class="form-check-label" for="startImmediately">
+                Start session immediately after creation
+              </label>
+            </div>
+
             <div v-if="errorMessage" class="alert alert-danger">
               {{ errorMessage }}
             </div>
@@ -281,14 +320,32 @@ const fieldStates = ref({
 
 const formData = ref({
   name: '',
+  model: 'sonnet',
   role: '',
   initialization_context: '',
   override_system_prompt: false,
   capabilities: [],
   permission_mode: 'default',
   allowed_tools: '',
-  working_directory: ''
+  working_directory: '',
+  startImmediately: true
 })
+
+// Model information for descriptions
+const modelInfo = {
+  'sonnet': {
+    description: 'Smart model for coding and complex agents - best balance of speed & capability'
+  },
+  'opus': {
+    description: 'Most capable model for complex reasoning, advanced analysis, and sophisticated tasks'
+  },
+  'haiku': {
+    description: 'Optimized for speed and cost-efficiency on straightforward tasks'
+  },
+  'opusplan': {
+    description: 'Uses Opus for planning phase, Sonnet for execution - best of both worlds'
+  }
+}
 const capabilitiesInput = ref('')
 const errorMessage = ref('')
 const isCreating = ref(false)
@@ -308,6 +365,11 @@ const allowedTools = computed(() => {
     .split(',')
     .map(t => t.trim())
     .filter(t => t.length > 0)
+})
+
+// Computed - Selected model info
+const selectedModelInfo = computed(() => {
+  return modelInfo[formData.value.model] || null
 })
 
 // Computed - Initialization context character limits
@@ -494,13 +556,15 @@ function openFolderBrowser() {
 function resetForm() {
   formData.value = {
     name: '',
+    model: 'sonnet',
     role: '',
     initialization_context: '',
     override_system_prompt: false,
     capabilities: [],
     permission_mode: 'default',
     allowed_tools: '',
-    working_directory: ''
+    working_directory: '',
+    startImmediately: true
   }
   capabilitiesInput.value = ''
   selectedTemplateId.value = null
@@ -560,6 +624,7 @@ async function createMinion() {
   try {
     const payload = {
       name: formData.value.name.trim(),
+      model: formData.value.model,
       role: formData.value.role.trim(),
       initialization_context: formData.value.initialization_context.trim(),
       override_system_prompt: formData.value.override_system_prompt,
@@ -575,6 +640,11 @@ async function createMinion() {
       // Refresh projects to get updated session list
       await projectStore.fetchProjects()
       await sessionStore.fetchSessions()
+
+      // Start session if requested
+      if (formData.value.startImmediately) {
+        await sessionStore.startSession(response.minion_id)
+      }
 
       // Close modal
       if (modalInstance) {

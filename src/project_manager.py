@@ -24,20 +24,27 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class ProjectInfo:
-    """Project metadata and state information (also serves as Legion when is_multi_agent=True)"""
+    """Project metadata and state information.
+
+    Issue #313: All projects now support Legion (multi-agent) capabilities.
+    The is_multi_agent flag is DEPRECATED but retained for backward compatibility.
+    Use session.is_minion to check if a session is a minion, not project.is_multi_agent.
+    """
     project_id: str
     name: str
     working_directory: str  # Absolute path (IMMUTABLE)
-    session_ids: list[str]  # Ordered list of child session IDs (or minion IDs if is_multi_agent)
+    session_ids: list[str]  # Ordered list of child session IDs
     is_expanded: bool = True  # Expansion state (persisted)
     created_at: datetime = None
     updated_at: datetime = None
     order: int = 0  # Display order among projects
-    is_multi_agent: bool = False  # True if this is a Legion (multi-agent project)
+    # DEPRECATED (issue #313): is_multi_agent is retained for backward compatibility only.
+    # All projects now support minions - use session.is_minion to check minion status.
+    is_multi_agent: bool = False
 
-    # Legion-specific fields (only used when is_multi_agent=True)
-    minion_ids: list[str] = None  # All minions (alias for session_ids when is_multi_agent=True)
-    max_concurrent_minions: int = 20  # Max concurrent minions
+    # Legion fields (available for all projects - issue #313)
+    minion_ids: list[str] = None  # Alias for session_ids (deprecated distinction)
+    max_concurrent_minions: int = 20  # Max concurrent minions per project
     active_minion_count: int = 0  # Currently active minions
 
     def __post_init__(self):
