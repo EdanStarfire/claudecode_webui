@@ -179,6 +179,9 @@ watch(() => comms.value.length, () => {
 
 // Lifecycle
 onMounted(() => {
+  // Clear current session selection when viewing timeline
+  sessionStore.currentSessionId = null
+
   loadTimeline()
   connectWebSocket()
 

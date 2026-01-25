@@ -581,8 +581,8 @@ async function createMinion() {
         modalInstance.hide()
       }
 
-      // Navigate to the new minion in spy mode
-      router.push(`/spy/${legionId.value}/${response.minion_id}`)
+      // Navigate to the new minion session
+      router.push(`/session/${response.minion_id}`)
     } else {
       errorMessage.value = 'Failed to create minion'
     }

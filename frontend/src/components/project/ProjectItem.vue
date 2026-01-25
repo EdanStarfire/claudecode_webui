@@ -95,9 +95,9 @@
             </div>
           </div>
 
-          <!-- Hierarchy and Spy for Legion projects -->
+          <!-- Hierarchy View for Legion projects -->
           <template v-if="project.is_multi_agent">
-            <!-- Hierarchy View (direct navigation, no dropdown) -->
+            <!-- Hierarchy View link (for full-page view) -->
             <div
               class="list-group-item list-group-item-action hierarchy-item d-flex align-items-center p-2"
               :class="{ active: isHierarchyActive }"
@@ -111,7 +111,32 @@
               </div>
             </div>
 
-            <SpySelector :project="project" :sessions="projectSessions" />
+            <!-- Minion Hierarchy (inline in sidebar) -->
+            <div class="minion-hierarchy-container">
+              <!-- Loading state -->
+              <div v-if="loadingHierarchy" class="text-center py-2">
+                <div class="spinner-border spinner-border-sm" role="status">
+                  <span class="visually-hidden">Loading...</span>
+                </div>
+              </div>
+
+              <!-- Minion tree -->
+              <div v-else-if="minionHierarchy && minionHierarchy.children && minionHierarchy.children.length > 0">
+                <MinionTreeNode
+                  v-for="minion in minionHierarchy.children"
+                  :key="minion.id"
+                  :minion-data="minion"
+                  :level="0"
+                  layout="sidebar"
+                  @minion-click="handleMinionClick"
+                />
+              </div>
+
+              <!-- Empty state -->
+              <div v-else class="text-muted fst-italic small p-2">
+                No minions yet
+              </div>
+            </div>
           </template>
 
           <!-- Regular Sessions for non-Legion projects -->
@@ -130,14 +155,15 @@
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useProjectStore } from '@/stores/project'
 import { useSessionStore } from '@/stores/session'
 import { useUIStore } from '@/stores/ui'
+import { api } from '@/utils/api'
 import ProjectStatusLine from './ProjectStatusLine.vue'
 import SessionItem from '../session/SessionItem.vue'
-import SpySelector from '../legion/SpySelector.vue'
+import MinionTreeNode from '../legion/MinionTreeNode.vue'
 
 const props = defineProps({
   project: {
@@ -152,6 +178,9 @@ const sessionStore = useSessionStore()
 const uiStore = useUIStore()
 
 const isExpanded = ref(props.project.is_expanded || false)
+const minionHierarchy = ref(null)
+const loadingHierarchy = ref(false)
+let sessionWatchStop = null
 
 // Computed
 const formattedPath = computed(() =>
@@ -247,6 +276,142 @@ function viewHierarchy() {
   router.push(`/hierarchy/${props.project.project_id}`)
 }
 
+// Load minion hierarchy for Legion projects
+async function loadMinionHierarchy() {
+  if (!props.project.is_multi_agent) return
+
+  loadingHierarchy.value = true
+  try {
+    const response = await api.get(`/api/legions/${props.project.project_id}/hierarchy`)
+    minionHierarchy.value = response
+  } catch (error) {
+    console.error('Failed to load minion hierarchy:', error)
+    minionHierarchy.value = null
+  } finally {
+    loadingHierarchy.value = false
+  }
+}
+
+// Handle minion click - navigate to session view
+function handleMinionClick(minionId) {
+  router.push(`/session/${minionId}`)
+}
+
+// Helper: Find minion node in hierarchy tree recursively
+function findMinionInTree(node, minionId) {
+  if (node && node.id === minionId) {
+    return node
+  }
+  if (node && node.children) {
+    for (const child of node.children) {
+      const found = findMinionInTree(child, minionId)
+      if (found) return found
+    }
+  }
+  return null
+}
+
+// Load hierarchy when project is expanded (for Legion projects)
+watch(isExpanded, (newVal) => {
+  if (newVal && props.project.is_multi_agent) {
+    // Reload hierarchy to get latest data
+    loadMinionHierarchy()
+  }
+})
+
+// Watch session store changes and update hierarchy (always watching)
+onMounted(() => {
+  if (props.project.is_multi_agent) {
+    sessionWatchStop = watch(
+      () => sessionStore.sessions,
+      (sessions) => {
+        if (!minionHierarchy.value || !isExpanded.value) return
+
+        // Update all minion states, is_processing, and latest_message in our hierarchy
+        for (const [sessionId, session] of sessions) {
+          if (session.is_minion && session.project_id === props.project.project_id) {
+            const minion = findMinionInTree(minionHierarchy.value, sessionId)
+            if (minion && minion.type === 'minion') {
+              // Update state if changed
+              if (minion.state !== session.state) {
+                minion.state = session.state
+              }
+              // Update is_processing if changed
+              if (minion.is_processing !== session.is_processing) {
+                minion.is_processing = session.is_processing
+              }
+              // Update latest_message fields if changed
+              if (minion.latest_message !== session.latest_message) {
+                minion.latest_message = session.latest_message
+                minion.latest_message_type = session.latest_message_type
+                minion.latest_message_time = session.latest_message_time
+              }
+            }
+          }
+        }
+      },
+      { deep: true }
+    )
+
+    // Watch for minions being created or deleted (reload hierarchy)
+    watch(
+      () => sessionStore.sessions.size,
+      (newSize, oldSize) => {
+        // Only reload if project is expanded
+        if (!isExpanded.value) return
+
+        // Check for new minion creation (size increased)
+        if (newSize > oldSize) {
+          const sessions = Array.from(sessionStore.sessions.values())
+          const hasNewMinion = sessions.some(s =>
+            s.is_minion &&
+            s.project_id === props.project.project_id &&
+            minionHierarchy.value &&
+            !findMinionInTree(minionHierarchy.value, s.session_id)
+          )
+
+          if (hasNewMinion) {
+            console.log('New minion detected, reloading hierarchy')
+            loadMinionHierarchy()
+          }
+        }
+
+        // Check for minion deletion (size decreased)
+        if (newSize < oldSize && minionHierarchy.value) {
+          // Check if a minion in our hierarchy no longer exists in session store
+          const sessions = sessionStore.sessions
+          const checkMinion = (node) => {
+            if (node.type === 'minion' && !sessions.has(node.id)) {
+              return true // Minion was deleted
+            }
+            if (node.children) {
+              return node.children.some(child => checkMinion(child))
+            }
+            return false
+          }
+
+          if (checkMinion(minionHierarchy.value)) {
+            console.log('Minion deletion detected, reloading hierarchy')
+            loadMinionHierarchy()
+          }
+        }
+      }
+    )
+  }
+
+  // Load hierarchy immediately if already expanded
+  if (isExpanded.value && props.project.is_multi_agent) {
+    loadMinionHierarchy()
+  }
+})
+
+// Cleanup watcher on unmount
+onUnmounted(() => {
+  if (sessionWatchStop) {
+    sessionWatchStop()
+  }
+})
+
 // Drag and Drop
 function onDragStart(event) {
   event.dataTransfer.effectAllowed = 'move'
@@ -332,5 +497,10 @@ function onDrop(event) {
 
 .legion-icon {
   display: inline-block;
+}
+
+.minion-hierarchy-container {
+  padding: 0.5rem;
+  background-color: #f8f9fa;
 }
 </style>
