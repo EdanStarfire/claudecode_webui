@@ -1,5 +1,10 @@
 """
-Data models for Legion multi-agent system.
+Data models for Claude WebUI.
+
+Includes:
+- Message models for unified SDK and WebUI message handling
+- Legion models for multi-agent communication
+- Memory models for knowledge management
 
 NOTE: LegionInfo and MinionInfo have been consolidated:
 - Legions are now ProjectInfo with is_multi_agent=True (see src/project_manager.py)
@@ -17,8 +22,27 @@ from src.models.memory_models import (
     MinionMemory,
     TaskMilestone,
 )
+from src.models.messages import (
+    DisplayMetadata,
+    DisplayProjection,
+    PermissionRequestMessage,
+    PermissionResponseMessage,
+    PermissionSuggestion,
+    StoredMessage,
+    ToolDisplayInfo,
+    ToolState,
+)
 
 __all__ = [
+    # Message models (Issue #310)
+    "StoredMessage",
+    "PermissionRequestMessage",
+    "PermissionResponseMessage",
+    "PermissionSuggestion",
+    "DisplayMetadata",
+    "DisplayProjection",
+    "ToolDisplayInfo",
+    "ToolState",
     # Legion communication models
     "Comm",
     "CommType",

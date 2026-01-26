@@ -5,6 +5,11 @@ import { useSessionStore } from './session'
 
 /**
  * Message Store - Manages messages and tool calls per session
+ *
+ * Issue #310: Backend-driven display metadata
+ * When messages contain display metadata from the backend (DisplayProjection),
+ * the store uses that instead of computing tool states locally. This reduces
+ * frontend complexity and ensures consistent state across reconnections.
  */
 export const useMessageStore = defineStore('message', () => {
   // ========== STATE ==========
@@ -25,6 +30,10 @@ export const useMessageStore = defineStore('message', () => {
 
   // Message sequence tracking for reconnection sync (sessionId -> ISO timestamp)
   const lastReceivedTimestamp = ref(new Map())
+
+  // Issue #310: Backend display metadata cache (sessionId -> Map<tool_use_id -> ToolDisplayInfo>)
+  // When backend provides display metadata, we store it here for quick lookup
+  const backendToolStates = ref(new Map())
 
   // ========== COMPUTED ==========
 
@@ -215,6 +224,8 @@ export const useMessageStore = defineStore('message', () => {
   /**
    * Add a message to a session (from WebSocket)
    * Now with deduplication to prevent duplicate messages on reconnection
+   *
+   * Issue #310: Also applies backend display metadata if present
    */
   function addMessage(sessionId, message) {
     if (!messagesBySession.value.has(sessionId)) {
@@ -239,7 +250,11 @@ export const useMessageStore = defineStore('message', () => {
       lastReceivedTimestamp.value.set(sessionId, message.timestamp)
     }
 
-    // Track tool use lifecycle for orphaned detection
+    // Issue #310: Apply backend display metadata if present
+    // This updates tool states from the backend projection, reducing frontend computation
+    applyDisplayMetadata(sessionId, message)
+
+    // Track tool use lifecycle for orphaned detection (fallback if no backend metadata)
     handleRealtimeToolTracking(sessionId, message)
 
     // Trigger reactivity
@@ -417,6 +432,96 @@ export const useMessageStore = defineStore('message', () => {
   }
 
   /**
+   * Issue #310: Extract and apply display metadata from message
+   *
+   * When the backend provides display metadata, we cache it and use it
+   * to update tool call states, replacing local state computation.
+   */
+  function applyDisplayMetadata(sessionId, message) {
+    const display = message.metadata?.display || message.display
+    if (!display) return
+
+    // Get or create backend tool states cache for this session
+    if (!backendToolStates.value.has(sessionId)) {
+      backendToolStates.value.set(sessionId, new Map())
+    }
+    const toolStatesCache = backendToolStates.value.get(sessionId)
+
+    // Update cached tool states from backend
+    if (display.tool_states) {
+      for (const [toolId, info] of Object.entries(display.tool_states)) {
+        toolStatesCache.set(toolId, info)
+
+        // Also update the tool call if it exists
+        const toolCalls = toolCallsBySession.value.get(sessionId)
+        if (toolCalls) {
+          const toolCall = toolCalls.find(tc => tc.id === toolId)
+          if (toolCall) {
+            // Map backend state to frontend status
+            const stateToStatus = {
+              'pending': 'pending',
+              'permission_required': 'permission_required',
+              'executing': 'executing',
+              'completed': 'completed',
+              'failed': 'error',
+              'orphaned': 'completed'  // Orphaned shows as completed with special styling
+            }
+            toolCall.status = stateToStatus[info.state] || info.state
+            toolCall.backendState = info  // Store full backend state for reference
+          }
+        }
+      }
+    }
+
+    // Update orphaned tools from backend
+    if (display.orphaned_tools && display.orphaned_tools.length > 0) {
+      const orphaned = orphanedToolUses.value.get(sessionId) || new Map()
+      for (const toolId of display.orphaned_tools) {
+        if (!orphaned.has(toolId)) {
+          orphaned.set(toolId, {
+            reason: 'denied',
+            message: 'Session was interrupted'  // Default message
+          })
+        }
+      }
+      orphanedToolUses.value.set(sessionId, orphaned)
+    }
+
+    // Update permission-to-tool mapping from backend
+    if (display.linked_permissions) {
+      for (const [requestId, toolId] of Object.entries(display.linked_permissions)) {
+        permissionToToolMap.value.set(requestId, toolId)
+      }
+    }
+
+    // Trigger reactivity if we updated tool calls
+    if (display.tool_states && Object.keys(display.tool_states).length > 0) {
+      toolCallsBySession.value = new Map(toolCallsBySession.value)
+    }
+
+    console.log(`Applied backend display metadata for session ${sessionId}:`, {
+      toolStates: Object.keys(display.tool_states || {}).length,
+      orphanedTools: (display.orphaned_tools || []).length,
+      linkedPermissions: Object.keys(display.linked_permissions || {}).length
+    })
+  }
+
+  /**
+   * Issue #310: Get backend-provided tool state if available
+   */
+  function getBackendToolState(sessionId, toolUseId) {
+    return backendToolStates.value.get(sessionId)?.get(toolUseId)
+  }
+
+  /**
+   * Issue #310: Check if we have backend display metadata for a session
+   */
+  function hasBackendDisplayMetadata(sessionId) {
+    const cache = backendToolStates.value.get(sessionId)
+    return cache && cache.size > 0
+  }
+
+  /**
    * Mark a tool use as orphaned (denied due to session restart/interrupt/termination)
    */
   function markToolUseOrphaned(sessionId, toolUseId, message) {
@@ -443,15 +548,37 @@ export const useMessageStore = defineStore('message', () => {
 
   /**
    * Check if a tool use is orphaned
+   *
+   * Issue #310: First checks backend-provided state, then falls back to local tracking
    */
   function isToolUseOrphaned(sessionId, toolUseId) {
+    // Check backend state first (Issue #310)
+    const backendState = getBackendToolState(sessionId, toolUseId)
+    if (backendState && backendState.state === 'orphaned') {
+      return true
+    }
+
+    // Fall back to local tracking
     return orphanedToolUses.value.get(sessionId)?.has(toolUseId) || false
   }
 
   /**
    * Get orphaned tool information
+   *
+   * Issue #310: Returns backend-provided info if available
    */
   function getOrphanedInfo(sessionId, toolUseId) {
+    // Check backend state first (Issue #310)
+    const backendState = getBackendToolState(sessionId, toolUseId)
+    if (backendState && backendState.state === 'orphaned') {
+      return {
+        reason: 'denied',
+        message: 'Session was interrupted',
+        backendState: backendState
+      }
+    }
+
+    // Fall back to local tracking
     return orphanedToolUses.value.get(sessionId)?.get(toolUseId)
   }
 
@@ -709,6 +836,11 @@ export const useMessageStore = defineStore('message', () => {
 
     // Reconnection sync
     getLastReceivedTimestamp,
-    syncMessages
+    syncMessages,
+
+    // Issue #310: Backend display metadata
+    getBackendToolState,
+    hasBackendDisplayMetadata,
+    backendToolStates: readonly(backendToolStates)
   }
 })

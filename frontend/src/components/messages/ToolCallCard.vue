@@ -35,7 +35,8 @@
       <component :is="toolHandlerComponent" :toolCall="toolCall" />
 
       <!-- Permission Prompt (if applicable and not orphaned) -->
-      <div v-if="toolCall.status === 'permission_required' && !isOrphaned" class="permission-prompt mt-3">
+      <!-- Issue #310: Use effectiveStatus which prefers backend state -->
+      <div v-if="effectiveStatus === 'permission_required' && !isOrphaned" class="permission-prompt mt-3">
         <div class="alert alert-warning mb-3">
           <p class="mb-2"><strong>🔐 Permission Required</strong></p>
           <p class="mb-0">Claude wants to use the <code class="tool-name">{{ toolCall.name }}</code> tool.</p>
@@ -118,7 +119,8 @@
       </div>
 
       <!-- Orphaned Permission Message (when permission was pending but session ended) -->
-      <div v-if="toolCall.status === 'permission_required' && isOrphaned" class="mt-3">
+      <!-- Issue #310: Use effectiveStatus which prefers backend state -->
+      <div v-if="effectiveStatus === 'permission_required' && isOrphaned" class="mt-3">
         <div class="alert alert-warning mb-0">
           <div class="d-flex align-items-center">
             <span class="me-2" style="font-size: 1.2rem;">🚧</span>
@@ -180,12 +182,38 @@ const permissionAction = ref(null)
 const guidanceMessage = ref('')
 
 // Orphaned tool detection
+// Issue #310: First checks backend-provided state, then falls back to local tracking
 const isOrphaned = computed(() => {
   return messageStore.isToolUseOrphaned(sessionStore.currentSessionId, props.toolCall.id)
 })
 
 const orphanedInfo = computed(() => {
   return messageStore.getOrphanedInfo(sessionStore.currentSessionId, props.toolCall.id)
+})
+
+// Issue #310: Backend-provided tool state (for display projection)
+const backendToolState = computed(() => {
+  return messageStore.getBackendToolState(sessionStore.currentSessionId, props.toolCall.id)
+})
+
+// Issue #310: Effective status - prefer backend state if available
+const effectiveStatus = computed(() => {
+  // Check backend state first
+  if (backendToolState.value) {
+    const backendState = backendToolState.value.state
+    // Map backend state to frontend status
+    const stateToStatus = {
+      'pending': 'pending',
+      'permission_required': 'permission_required',
+      'executing': 'executing',
+      'completed': 'completed',
+      'failed': 'error',
+      'orphaned': 'completed'  // Orphaned shows as completed with special styling
+    }
+    return stateToStatus[backendState] || backendState
+  }
+  // Fall back to local status
+  return props.toolCall.status
 })
 
 // Tool handler component registry
@@ -222,10 +250,17 @@ const toolHandlerComponent = computed(() => {
 })
 
 // Computed properties
+// Issue #310: Use effectiveStatus which prefers backend state
 const cardClass = computed(() => {
   const classes = []
 
-  switch (props.toolCall.status) {
+  // Check for orphaned state first (highest priority)
+  if (isOrphaned.value) {
+    classes.push('border-warning')
+    return classes.join(' ')
+  }
+
+  switch (effectiveStatus.value) {
     case 'pending':
       classes.push('border-secondary')
       break
@@ -252,8 +287,14 @@ const cardClass = computed(() => {
   return classes.join(' ')
 })
 
+// Issue #310: Use effectiveStatus which prefers backend state
 const statusIcon = computed(() => {
-  switch (props.toolCall.status) {
+  // Check for orphaned state first
+  if (isOrphaned.value) {
+    return '⏹️'
+  }
+
+  switch (effectiveStatus.value) {
     case 'pending':
       return '🔄'
     case 'permission_required':
@@ -332,11 +373,12 @@ function countDiffLines(oldStr, newStr) {
 }
 
 // Tool summary computed property
+// Issue #310: Use effectiveStatus which prefers backend state
 const toolSummary = computed(() => {
   const toolName = props.toolCall.name
   const input = props.toolCall.input || {}
   const result = props.toolCall.result
-  const status = props.toolCall.status
+  const status = effectiveStatus.value
 
   switch (toolName) {
     case 'Bash':
