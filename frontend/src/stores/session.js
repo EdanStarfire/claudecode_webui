@@ -284,29 +284,35 @@ export const useSessionStore = defineStore('session', () => {
   }
 
   /**
-   * Delete a session
+   * Delete a session (handles cascading deletes for child sessions)
    */
   async function deleteSession(sessionId) {
     deletingSessions.value.add(sessionId)
 
     try {
-      await api.delete(`/api/sessions/${sessionId}`)
+      const response = await api.delete(`/api/sessions/${sessionId}`)
 
-      // Remove from maps
-      sessions.value.delete(sessionId)
-      inputCache.value.delete(sessionId)
-      initData.value.delete(sessionId)
+      // Get list of all deleted session IDs (includes cascaded children)
+      const deletedIds = response.deleted_session_ids || [sessionId]
+
+      // Remove all deleted sessions from maps
+      for (const deletedId of deletedIds) {
+        sessions.value.delete(deletedId)
+        inputCache.value.delete(deletedId)
+        initData.value.delete(deletedId)
+      }
 
       // Trigger reactivity
       sessions.value = new Map(sessions.value)
 
-      // If deleted current session, clear selection
-      if (currentSessionId.value === sessionId) {
+      // If deleted current session (or it was a cascaded child), clear selection
+      if (deletedIds.includes(currentSessionId.value)) {
         currentSessionId.value = null
         // Navigation is handled by the component calling this function
       }
 
-      console.log(`Deleted session ${sessionId}`)
+      console.log(`Deleted ${deletedIds.length} session(s): ${deletedIds.join(', ')}`)
+      return deletedIds
     } catch (error) {
       console.error('Failed to delete session:', error)
       throw error

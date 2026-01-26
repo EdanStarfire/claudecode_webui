@@ -39,6 +39,23 @@
             </div>
             <p class="text-muted">This will permanently delete session <strong>{{ session?.name }}</strong>.</p>
             <p class="text-muted">All messages, conversation history, settings, and configuration will be completely destroyed. This is more destructive than Reset Session.</p>
+
+            <!-- Cascading deletion warning for sessions with children -->
+            <div v-if="isLoadingDescendants" class="text-center py-2">
+              <div class="spinner-border spinner-border-sm text-secondary" role="status">
+                <span class="visually-hidden">Checking for child sessions...</span>
+              </div>
+              <span class="ms-2 text-muted small">Checking for child sessions...</span>
+            </div>
+            <div v-else-if="descendants.length > 0" class="alert alert-warning mt-3">
+              <strong>Cascading Deletion:</strong> This session has <strong>{{ descendants.length }}</strong> child session{{ descendants.length === 1 ? '' : 's' }} that will also be deleted:
+              <ul class="mb-0 mt-2">
+                <li v-for="child in descendants" :key="child.session_id" class="small">
+                  <strong>{{ child.name || child.session_id }}</strong>
+                  <span v-if="child.role" class="text-muted"> ({{ child.role }})</span>
+                </li>
+              </ul>
+            </div>
           </div>
 
           <!-- Main Action List -->
@@ -149,6 +166,10 @@ const confirmationView = ref(null) // 'reset', 'delete', or null
 const modalElement = ref(null)
 let modalInstance = null
 
+// Descendant tracking for cascading deletion warning
+const descendants = ref([])
+const isLoadingDescendants = ref(false)
+
 // Computed
 const confirmationTitle = computed(() => {
   if (confirmationView.value === 'reset') return 'Reset Session'
@@ -161,9 +182,25 @@ function showResetConfirmation() {
   confirmationView.value = 'reset'
 }
 
-// Show delete confirmation
-function showDeleteConfirmation() {
+// Show delete confirmation with descendant check
+async function showDeleteConfirmation() {
   confirmationView.value = 'delete'
+  descendants.value = []
+
+  if (!session.value) return
+
+  // Fetch descendants to show cascading deletion warning
+  isLoadingDescendants.value = true
+  try {
+    const response = await api.get(`/api/sessions/${session.value.session_id}/descendants`)
+    descendants.value = response.descendants || []
+  } catch (error) {
+    console.error('Failed to fetch descendants:', error)
+    // Continue without descendants - not critical for deletion
+    descendants.value = []
+  } finally {
+    isLoadingDescendants.value = false
+  }
 }
 
 // Cancel confirmation and return to main view
@@ -351,6 +388,8 @@ function resetState() {
   isPerformingAction.value = false
   loadingMessage.value = ''
   errorMessage.value = ''
+  descendants.value = []
+  isLoadingDescendants.value = false
 }
 
 // Handle modal hidden event

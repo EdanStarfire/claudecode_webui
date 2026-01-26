@@ -723,6 +723,20 @@ class ClaudeWebUI:
                 logger.error(f"Failed to get session info: {e}")
                 raise HTTPException(status_code=500, detail=str(e))
 
+        @self.app.get("/api/sessions/{session_id}/descendants")
+        async def get_session_descendants(session_id: str):
+            """Get all descendant sessions (children, grandchildren, etc.) of a session"""
+            try:
+                descendants = await self.coordinator.get_descendants(session_id)
+                return {
+                    "session_id": session_id,
+                    "descendants": descendants,
+                    "count": len(descendants)
+                }
+            except Exception as e:
+                logger.error(f"Failed to get descendants for session {session_id}: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
         @self.app.post("/api/sessions/{session_id}/start")
         async def start_session(session_id: str):
             """Start a session"""
@@ -782,7 +796,7 @@ class ClaudeWebUI:
 
         @self.app.delete("/api/sessions/{session_id}")
         async def delete_session(session_id: str):
-            """Delete a session and all its data"""
+            """Delete a session and all its data (including cascaded child sessions)"""
             try:
                 # Find the project before deletion (so we can check if it gets auto-deleted)
                 project = await self.coordinator._find_project_for_session(session_id)
@@ -795,9 +809,18 @@ class ClaudeWebUI:
                 self._cleanup_pending_permissions_for_session(session_id)
 
                 # Delete the session (may also delete the project if it was the last session)
-                success = await self.coordinator.delete_session(session_id)
-                if not success:
+                # Returns dict with success and deleted_session_ids (for cascading deletes)
+                result = await self.coordinator.delete_session(session_id)
+                if not result.get("success"):
                     raise HTTPException(status_code=404, detail="Session not found")
+
+                deleted_ids = result.get("deleted_session_ids", [])
+
+                # Force disconnect WebSocket connections for any cascaded child sessions
+                for deleted_id in deleted_ids:
+                    if deleted_id != session_id:  # Already disconnected the primary session
+                        await self.websocket_manager.force_disconnect_session(deleted_id)
+                        self._cleanup_pending_permissions_for_session(deleted_id)
 
                 # Check if the project still exists - if not, it was auto-deleted
                 if project_id:
@@ -817,7 +840,10 @@ class ClaudeWebUI:
                         })
                         logger.debug(f"Broadcasted project_updated for project {project_id} after session deletion")
 
-                return {"success": success}
+                return {
+                    "success": result.get("success"),
+                    "deleted_session_ids": deleted_ids
+                }
             except HTTPException:
                 raise
             except Exception as e:
