@@ -901,11 +901,13 @@ class LegionMCPTools:
                 }
 
             # Get minions in this legion (project_id matches legion_id)
+            # Include both is_minion=True AND is_overseer=True sessions
+            # This allows children to see and communicate with parent overseers
             session_manager = self.system.session_coordinator.session_manager
             minions = []
             for session_id in legion.session_ids:
                 session = await session_manager.get_session_info(session_id)
-                if session and session.is_minion:
+                if session and (session.is_minion or session.is_overseer):
                     minions.append(session)
 
             # Format minion list

@@ -109,9 +109,11 @@ class LegionCoordinator:
             return None
 
         # Search through legion's sessions for matching minion name
+        # Include both is_minion=True AND is_overseer=True sessions
+        # This allows children to send comms to parent overseers
         for session_id in legion.session_ids:
             session = await self.session_manager.get_session_info(session_id)
-            if session and session.is_minion and session.name == name:
+            if session and (session.is_minion or session.is_overseer) and session.name == name:
                 return session
 
         return None
