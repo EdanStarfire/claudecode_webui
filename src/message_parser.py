@@ -8,7 +8,7 @@ import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Type
+from typing import Any
 
 from claude_agent_sdk import (
     AssistantMessage,
@@ -71,32 +71,32 @@ class ParsedMessage:
     """Structured representation of a parsed SDK message."""
     type: MessageType
     timestamp: float
-    session_id: Optional[str] = None
-    raw_data: Dict[str, Any] = field(default_factory=dict)
-    content: Optional[str] = None
-    metadata: Dict[str, Any] = field(default_factory=dict)
-    error_message: Optional[str] = None
+    session_id: str | None = None
+    raw_data: dict[str, Any] = field(default_factory=dict)
+    content: str | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+    error_message: str | None = None
 
 
 class MessageHandler(ABC):
     """Abstract base class for SDK message type handlers."""
 
     @abstractmethod
-    def can_handle(self, message_data: Dict[str, Any]) -> bool:
+    def can_handle(self, message_data: dict[str, Any]) -> bool:
         """Check if this handler can process the message."""
         pass
 
     @abstractmethod
-    def parse(self, message_data: Dict[str, Any]) -> ParsedMessage:
+    def parse(self, message_data: dict[str, Any]) -> ParsedMessage:
         """Parse the message data into structured format."""
         pass
 
     @abstractmethod
-    def _extract_business_data(self, message_data: Dict[str, Any]) -> Dict[str, Any]:
+    def _extract_business_data(self, message_data: dict[str, Any]) -> dict[str, Any]:
         """Extract business-relevant data from message, preserving raw SDK data."""
         pass
 
-    def _get_raw_sdk_data(self, message_data: Dict[str, Any]) -> Any:
+    def _get_raw_sdk_data(self, message_data: dict[str, Any]) -> Any:
         """Get raw SDK data with migration support for field naming consistency."""
         # Priority order: sdk_message (live object) > raw_sdk_message (standardized)
         if "sdk_message" in message_data:
@@ -112,27 +112,27 @@ class MessageHandler(ABC):
             return raw_data
         return None
 
-    def _standardize_metadata_fields(self, metadata: Dict[str, Any], message_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Ensure metadata has standardized raw SDK message field."""
-        # Always use the standardized field name in metadata output
-        raw_sdk_data = self._get_raw_sdk_data(message_data)
-        if raw_sdk_data is not None:
-            metadata["raw_sdk_message"] = raw_sdk_data
+    def _standardize_metadata_fields(self, metadata: dict[str, Any], message_data: dict[str, Any]) -> dict[str, Any]:
+        """Standardize metadata fields.
 
+        Note: raw_sdk_message is no longer written to storage (see issue #325).
+        The _get_raw_sdk_data() method is retained for backward compatibility
+        when reading old messages that may contain the field.
+        """
         return metadata
 
 
 class SystemMessageHandler(MessageHandler):
     """Handler for SDK system messages."""
 
-    def can_handle(self, message_data: Dict[str, Any]) -> bool:
+    def can_handle(self, message_data: dict[str, Any]) -> bool:
         # Check if it's an SDK SystemMessage object
         if "sdk_message" in message_data:
             return isinstance(message_data["sdk_message"], SystemMessage)
         # Fallback to type field check
         return message_data.get("type") == "system"
 
-    def _extract_business_data(self, message_data: Dict[str, Any]) -> Dict[str, Any]:
+    def _extract_business_data(self, message_data: dict[str, Any]) -> dict[str, Any]:
         """Extract business-relevant data from system message."""
         extracted = {
             "type": "system",
@@ -201,7 +201,7 @@ class SystemMessageHandler(MessageHandler):
 
         return extracted
 
-    def parse(self, message_data: Dict[str, Any]) -> ParsedMessage:
+    def parse(self, message_data: dict[str, Any]) -> ParsedMessage:
         # Extract all business data upfront
         business_data = self._extract_business_data(message_data)
 
@@ -218,14 +218,14 @@ class SystemMessageHandler(MessageHandler):
 class AssistantMessageHandler(MessageHandler):
     """Handler for SDK assistant messages."""
 
-    def can_handle(self, message_data: Dict[str, Any]) -> bool:
+    def can_handle(self, message_data: dict[str, Any]) -> bool:
         # Check if it's an SDK AssistantMessage object
         if "sdk_message" in message_data:
             return isinstance(message_data["sdk_message"], AssistantMessage)
         # Fallback to type field check
         return message_data.get("type") == "assistant"
 
-    def _extract_business_data(self, message_data: Dict[str, Any]) -> Dict[str, Any]:
+    def _extract_business_data(self, message_data: dict[str, Any]) -> dict[str, Any]:
         """Extract business-relevant data from assistant message."""
         extracted = {
             "type": "assistant",
@@ -298,7 +298,7 @@ class AssistantMessageHandler(MessageHandler):
         return extracted
 
 
-    def _parse_structured_content_string(self, content_str: str, message_data: Dict[str, Any]) -> List[Tuple[str, Any]]:
+    def _parse_structured_content_string(self, content_str: str, message_data: dict[str, Any]) -> list[tuple[str, Any]]:
         """Parse structured content string into typed blocks without regex."""
         blocks = []
 
@@ -339,7 +339,7 @@ class AssistantMessageHandler(MessageHandler):
 
         return blocks
 
-    def _parse_sdk_object_list(self, content_str: str) -> List[Tuple[str, Any]]:
+    def _parse_sdk_object_list(self, content_str: str) -> list[tuple[str, Any]]:
         """Parse SDK object list representation more safely."""
         blocks = []
 
@@ -397,7 +397,7 @@ class AssistantMessageHandler(MessageHandler):
 
         return blocks
 
-    def _extract_thinking_content_safely(self, content_str: str) -> Optional[str]:
+    def _extract_thinking_content_safely(self, content_str: str) -> str | None:
         """Safely extract thinking content without fragile regex."""
         try:
             # Look for ThinkingBlock pattern and extract content more robustly
@@ -426,7 +426,7 @@ class AssistantMessageHandler(MessageHandler):
             logger.warning(f"Failed to extract thinking content safely: {e}")
             return None
 
-    def _extract_text_content_safely(self, content_str: str) -> Optional[str]:
+    def _extract_text_content_safely(self, content_str: str) -> str | None:
         """Safely extract text content without fragile regex."""
         try:
             start_marker = "TextBlock(text='"
@@ -452,7 +452,7 @@ class AssistantMessageHandler(MessageHandler):
             logger.warning(f"Failed to extract text content safely: {e}")
             return None
 
-    def _extract_tool_use_safely(self, content_str: str) -> Optional[Dict[str, Any]]:
+    def _extract_tool_use_safely(self, content_str: str) -> dict[str, Any] | None:
         """Safely extract tool use information without fragile regex."""
         try:
             start_marker = "ToolUseBlock(id='"
@@ -521,7 +521,7 @@ class AssistantMessageHandler(MessageHandler):
             return None
 
 
-    def _extract_from_legacy_format(self, message_data: Dict[str, Any], text_parts: List[str]):
+    def _extract_from_legacy_format(self, message_data: dict[str, Any], text_parts: list[str]):
         """Extract data from legacy nested message format."""
         message = message_data.get("message", {})
         content_parts = message.get("content", [])
@@ -530,7 +530,7 @@ class AssistantMessageHandler(MessageHandler):
         elif isinstance(content_parts, str):
             text_parts.append(content_parts)
 
-    def parse(self, message_data: Dict[str, Any]) -> ParsedMessage:
+    def parse(self, message_data: dict[str, Any]) -> ParsedMessage:
         # Extract all business data upfront
         business_data = self._extract_business_data(message_data)
 
@@ -547,14 +547,14 @@ class AssistantMessageHandler(MessageHandler):
 class UserMessageHandler(MessageHandler):
     """Handler for SDK user messages."""
 
-    def can_handle(self, message_data: Dict[str, Any]) -> bool:
+    def can_handle(self, message_data: dict[str, Any]) -> bool:
         # Check if it's an SDK UserMessage object
         if "sdk_message" in message_data:
             return isinstance(message_data["sdk_message"], UserMessage)
         # Fallback to type field check
         return message_data.get("type") == "user"
 
-    def _extract_business_data(self, message_data: Dict[str, Any]) -> Dict[str, Any]:
+    def _extract_business_data(self, message_data: dict[str, Any]) -> dict[str, Any]:
         """Extract business-relevant data from user message."""
         extracted = {
             "type": "user",
@@ -661,8 +661,8 @@ class UserMessageHandler(MessageHandler):
         return extracted
 
 
-    def _extract_from_dict_format(self, message_data: Dict[str, Any], text_parts: List[str],
-                                tool_results: List[Dict], tool_uses: List[Dict]):
+    def _extract_from_dict_format(self, message_data: dict[str, Any], text_parts: list[str],
+                                tool_results: list[dict], tool_uses: list[dict]):
         """Extract data from legacy dictionary format."""
         # First check for direct content field (for simple user messages)
         direct_content = message_data.get("content", "")
@@ -694,7 +694,7 @@ class UserMessageHandler(MessageHandler):
             elif isinstance(content_parts, str):
                 text_parts.append(content_parts)
 
-    def parse(self, message_data: Dict[str, Any]) -> ParsedMessage:
+    def parse(self, message_data: dict[str, Any]) -> ParsedMessage:
         # Extract all business data upfront
         business_data = self._extract_business_data(message_data)
 
@@ -711,14 +711,14 @@ class UserMessageHandler(MessageHandler):
 class ResultMessageHandler(MessageHandler):
     """Handler for SDK result/completion messages."""
 
-    def can_handle(self, message_data: Dict[str, Any]) -> bool:
+    def can_handle(self, message_data: dict[str, Any]) -> bool:
         # Check if it's an SDK ResultMessage object
         if "sdk_message" in message_data:
             return isinstance(message_data["sdk_message"], ResultMessage)
         # Fallback to type field check
         return message_data.get("type") == "result"
 
-    def _extract_business_data(self, message_data: Dict[str, Any]) -> Dict[str, Any]:
+    def _extract_business_data(self, message_data: dict[str, Any]) -> dict[str, Any]:
         """Extract business-relevant data from result message."""
         subtype = message_data.get("subtype", "unknown")
         is_error = message_data.get("is_error", False)
@@ -749,7 +749,7 @@ class ResultMessageHandler(MessageHandler):
 
         return extracted
 
-    def parse(self, message_data: Dict[str, Any]) -> ParsedMessage:
+    def parse(self, message_data: dict[str, Any]) -> ParsedMessage:
         # Extract all business data upfront
         business_data = self._extract_business_data(message_data)
         is_error = business_data["metadata"]["is_error"]
@@ -768,7 +768,7 @@ class ResultMessageHandler(MessageHandler):
 class ThinkingBlockHandler(MessageHandler):
     """Handler for thinking block content."""
 
-    def can_handle(self, message_data: Dict[str, Any]) -> bool:
+    def can_handle(self, message_data: dict[str, Any]) -> bool:
         # Check for SDK ThinkingBlock
         if "sdk_message" in message_data:
             sdk_msg = message_data["sdk_message"]
@@ -776,7 +776,7 @@ class ThinkingBlockHandler(MessageHandler):
                 return any(isinstance(block, ThinkingBlock) for block in sdk_msg.content)
         return message_data.get("type") == "thinking"
 
-    def _extract_business_data(self, message_data: Dict[str, Any]) -> Dict[str, Any]:
+    def _extract_business_data(self, message_data: dict[str, Any]) -> dict[str, Any]:
         """Extract business-relevant data from thinking block message."""
         content = ""
         if "sdk_message" in message_data:
@@ -803,7 +803,7 @@ class ThinkingBlockHandler(MessageHandler):
             }
         }
 
-    def parse(self, message_data: Dict[str, Any]) -> ParsedMessage:
+    def parse(self, message_data: dict[str, Any]) -> ParsedMessage:
         # Extract all business data upfront
         business_data = self._extract_business_data(message_data)
 
@@ -820,7 +820,7 @@ class ThinkingBlockHandler(MessageHandler):
 class ToolUseHandler(MessageHandler):
     """Handler for tool use messages (if SDK supports them)."""
 
-    def can_handle(self, message_data: Dict[str, Any]) -> bool:
+    def can_handle(self, message_data: dict[str, Any]) -> bool:
         # Check for SDK ToolUseBlock
         if "sdk_message" in message_data:
             sdk_msg = message_data["sdk_message"]
@@ -828,7 +828,7 @@ class ToolUseHandler(MessageHandler):
                 return any(isinstance(block, ToolUseBlock) for block in sdk_msg.content)
         return message_data.get("type") in ["tool_use", "tool_call"]
 
-    def _extract_business_data(self, message_data: Dict[str, Any]) -> Dict[str, Any]:
+    def _extract_business_data(self, message_data: dict[str, Any]) -> dict[str, Any]:
         """Extract business-relevant data from tool use message."""
         tool_name = "unknown"
         tool_id = ""
@@ -864,7 +864,7 @@ class ToolUseHandler(MessageHandler):
             }
         }
 
-    def parse(self, message_data: Dict[str, Any]) -> ParsedMessage:
+    def parse(self, message_data: dict[str, Any]) -> ParsedMessage:
         # Extract all business data upfront
         business_data = self._extract_business_data(message_data)
 
@@ -881,7 +881,7 @@ class ToolUseHandler(MessageHandler):
 class ToolResultHandler(MessageHandler):
     """Handler for tool result messages."""
 
-    def can_handle(self, message_data: Dict[str, Any]) -> bool:
+    def can_handle(self, message_data: dict[str, Any]) -> bool:
         # Check for SDK ToolResultBlock
         if "sdk_message" in message_data:
             sdk_msg = message_data["sdk_message"]
@@ -889,7 +889,7 @@ class ToolResultHandler(MessageHandler):
                 return any(isinstance(block, ToolResultBlock) for block in sdk_msg.content)
         return message_data.get("type") == "tool_result"
 
-    def _extract_business_data(self, message_data: Dict[str, Any]) -> Dict[str, Any]:
+    def _extract_business_data(self, message_data: dict[str, Any]) -> dict[str, Any]:
         """Extract business-relevant data from tool result message."""
         tool_use_id = ""
         content = ""
@@ -924,7 +924,7 @@ class ToolResultHandler(MessageHandler):
             }
         }
 
-    def parse(self, message_data: Dict[str, Any]) -> ParsedMessage:
+    def parse(self, message_data: dict[str, Any]) -> ParsedMessage:
         # Extract all business data upfront
         business_data = self._extract_business_data(message_data)
         is_error = business_data["metadata"]["is_error"]
@@ -943,10 +943,10 @@ class ToolResultHandler(MessageHandler):
 class ErrorHandler(MessageHandler):
     """Handler for error messages."""
 
-    def can_handle(self, message_data: Dict[str, Any]) -> bool:
+    def can_handle(self, message_data: dict[str, Any]) -> bool:
         return message_data.get("type") in ["error", "exception", "warning"]
 
-    def _extract_business_data(self, message_data: Dict[str, Any]) -> Dict[str, Any]:
+    def _extract_business_data(self, message_data: dict[str, Any]) -> dict[str, Any]:
         """Extract business-relevant data from error message."""
         error_type = message_data.get("type", "error")
         content = message_data.get("message", message_data.get("error", ""))
@@ -968,7 +968,7 @@ class ErrorHandler(MessageHandler):
             }
         }
 
-    def parse(self, message_data: Dict[str, Any]) -> ParsedMessage:
+    def parse(self, message_data: dict[str, Any]) -> ParsedMessage:
         # Extract all business data upfront
         business_data = self._extract_business_data(message_data)
         error_type = business_data["metadata"]["error_type"]
@@ -988,10 +988,10 @@ class ErrorHandler(MessageHandler):
 class PermissionRequestHandler(MessageHandler):
     """Handler for permission request messages."""
 
-    def can_handle(self, message_data: Dict[str, Any]) -> bool:
+    def can_handle(self, message_data: dict[str, Any]) -> bool:
         return message_data.get("type") == "permission_request"
 
-    def _extract_business_data(self, message_data: Dict[str, Any]) -> Dict[str, Any]:
+    def _extract_business_data(self, message_data: dict[str, Any]) -> dict[str, Any]:
         """Extract business-relevant data from permission request message."""
         tool_name = message_data.get("tool_name", "unknown")
         suggestions = message_data.get("suggestions", [])
@@ -1016,7 +1016,7 @@ class PermissionRequestHandler(MessageHandler):
 
         return extracted
 
-    def parse(self, message_data: Dict[str, Any]) -> ParsedMessage:
+    def parse(self, message_data: dict[str, Any]) -> ParsedMessage:
         # Extract all business data upfront
         business_data = self._extract_business_data(message_data)
 
@@ -1033,10 +1033,10 @@ class PermissionRequestHandler(MessageHandler):
 class PermissionResponseHandler(MessageHandler):
     """Handler for permission response messages."""
 
-    def can_handle(self, message_data: Dict[str, Any]) -> bool:
+    def can_handle(self, message_data: dict[str, Any]) -> bool:
         return message_data.get("type") == "permission_response"
 
-    def _extract_business_data(self, message_data: Dict[str, Any]) -> Dict[str, Any]:
+    def _extract_business_data(self, message_data: dict[str, Any]) -> dict[str, Any]:
         """Extract business-relevant data from permission response message."""
         decision = message_data.get("decision", "unknown")
         tool_name = message_data.get("tool_name", "unknown")
@@ -1067,7 +1067,7 @@ class PermissionResponseHandler(MessageHandler):
 
         return extracted
 
-    def parse(self, message_data: Dict[str, Any]) -> ParsedMessage:
+    def parse(self, message_data: dict[str, Any]) -> ParsedMessage:
         # Extract all business data upfront
         business_data = self._extract_business_data(message_data)
 
@@ -1084,10 +1084,10 @@ class PermissionResponseHandler(MessageHandler):
 class UnknownMessageHandler(MessageHandler):
     """Handler for unknown message types - always handles as fallback."""
 
-    def can_handle(self, message_data: Dict[str, Any]) -> bool:
+    def can_handle(self, message_data: dict[str, Any]) -> bool:
         return True  # Always handles as fallback
 
-    def _extract_business_data(self, message_data: Dict[str, Any]) -> Dict[str, Any]:
+    def _extract_business_data(self, message_data: dict[str, Any]) -> dict[str, Any]:
         """Extract business-relevant data from unknown message."""
         message_type = message_data.get("type", "unknown")
         content = str(message_data)
@@ -1108,7 +1108,7 @@ class UnknownMessageHandler(MessageHandler):
             }
         }
 
-    def parse(self, message_data: Dict[str, Any]) -> ParsedMessage:
+    def parse(self, message_data: dict[str, Any]) -> ParsedMessage:
         # Extract all business data upfront
         business_data = self._extract_business_data(message_data)
 
@@ -1132,14 +1132,14 @@ class MessageParser:
 
     def __init__(self):
         """Initialize the message parser with default handlers."""
-        self.handlers: List[MessageHandler] = []
+        self.handlers: list[MessageHandler] = []
         self.stats = {
             "total_parsed": 0,
             "unknown_types": 0,
             "parse_errors": 0,
             "type_counts": {}
         }
-        self.unknown_types: Set[str] = set()
+        self.unknown_types: set[str] = set()
 
         # Register default handlers
         self._register_default_handlers()
@@ -1187,7 +1187,7 @@ class MessageParser:
 
         parser_logger.debug(f"Registered handler: {handler.__class__.__name__}")
 
-    def parse_message(self, message_data: Dict[str, Any]) -> ParsedMessage:
+    def parse_message(self, message_data: dict[str, Any]) -> ParsedMessage:
         """
         Parse a message using the appropriate handler.
 
@@ -1228,7 +1228,7 @@ class MessageParser:
             self.stats["parse_errors"] += 1
             return self._create_error_message(message_data, str(e))
 
-    def _create_error_message(self, message_data: Dict[str, Any], error_msg: str) -> ParsedMessage:
+    def _create_error_message(self, message_data: dict[str, Any], error_msg: str) -> ParsedMessage:
         """Create an error message for parsing failures."""
         # Handle None or invalid message_data
         safe_message_data = message_data if message_data is not None else {}
@@ -1246,7 +1246,7 @@ class MessageParser:
             }
         )
 
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         """Get parsing statistics."""
         return {
             **self.stats,
@@ -1265,7 +1265,7 @@ class MessageParser:
         self.unknown_types.clear()
         parser_logger.debug("MessageParser stats reset")
 
-    def get_unknown_types(self) -> List[str]:
+    def get_unknown_types(self) -> list[str]:
         """Get list of unknown message types encountered."""
         return list(self.unknown_types)
 
@@ -1278,7 +1278,7 @@ class MessageProcessor:
         self.parser = message_parser
         self.logger = parser_logger  # Use specialized parser logger
 
-    def process_message(self, message_data: Dict[str, Any], source: str = "sdk") -> ParsedMessage:
+    def process_message(self, message_data: dict[str, Any], source: str = "sdk") -> ParsedMessage:
         """
         Process message from any source (SDK, storage) consistently.
 
@@ -1319,7 +1319,7 @@ class MessageProcessor:
                 }
             )
 
-    def prepare_for_storage(self, parsed_message: ParsedMessage) -> Dict[str, Any]:
+    def prepare_for_storage(self, parsed_message: ParsedMessage) -> dict[str, Any]:
         """
         Prepare message for storage with all metadata.
 
@@ -1376,7 +1376,7 @@ class MessageProcessor:
                 "metadata": {"storage_error": True}
             }
 
-    def prepare_for_websocket(self, parsed_message: ParsedMessage) -> Dict[str, Any]:
+    def prepare_for_websocket(self, parsed_message: ParsedMessage) -> dict[str, Any]:
         """
         Prepare message for WebSocket transmission.
 
@@ -1432,7 +1432,7 @@ class MessageProcessor:
                 "timestamp": time.time()
             }
 
-    def process_batch(self, messages: List[Dict[str, Any]], source: str = "storage") -> List[ParsedMessage]:
+    def process_batch(self, messages: list[dict[str, Any]], source: str = "storage") -> list[ParsedMessage]:
         """
         Process multiple messages efficiently.
 
