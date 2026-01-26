@@ -1,33 +1,34 @@
 """Claude Code SDK integration and session management."""
 
 import asyncio
-import time
-import logging
 import contextlib
-from datetime import datetime, timezone
-from pathlib import Path
-from typing import Dict, List, Optional, Callable, Any, Union
+import logging
+import time
+from collections.abc import Callable
+from dataclasses import asdict, dataclass
+from datetime import UTC, datetime
 from enum import Enum
-from dataclasses import dataclass, asdict
+from pathlib import Path
+from typing import Any
 
-from .logging_config import get_logger
 from .data_storage import DataStorageManager
-from .message_parser import MessageProcessor, MessageParser
+from .logging_config import get_logger
+from .message_parser import MessageParser, MessageProcessor
 from .models.messages import sdk_message_to_stored
 
 # Import SDK components
 try:
     from claude_agent_sdk import (
-        ClaudeSDKClient,
+        AssistantMessage,
         ClaudeAgentOptions,
+        ClaudeSDKClient,
         PermissionResultAllow,
         PermissionResultDeny,
-        ToolPermissionContext,
-        AssistantMessage,
-        UserMessage,
-        SystemMessage,
         ResultMessage,
-        TextBlock
+        SystemMessage,
+        TextBlock,
+        ToolPermissionContext,
+        UserMessage,
     )
 except ImportError:
     # Fallback for development/testing environments
@@ -63,7 +64,7 @@ class SessionState(Enum):
 class SDKErrorDetectionHandler(logging.Handler):
     """Custom log handler to detect immediate SDK CLI failures."""
 
-    def __init__(self, session_id: str, error_callback: Optional[Callable] = None):
+    def __init__(self, session_id: str, error_callback: Callable | None = None):
         super().__init__()
         self.session_id = session_id
         self.error_callback = error_callback
@@ -83,7 +84,7 @@ class SDKErrorDetectionHandler(logging.Handler):
                         loop.create_task(self._trigger_error_callback(record.getMessage()))
                     else:
                         asyncio.run(self._trigger_error_callback(record.getMessage()))
-        except Exception as e:
+        except Exception:
             # Prevent logging errors from breaking the handler
             pass
 
@@ -105,10 +106,10 @@ class SessionInfo:
     session_id: str
     working_directory: str
     state: SessionState = SessionState.CREATED
-    start_time: Optional[float] = None
-    last_activity: Optional[float] = None
+    start_time: float | None = None
+    last_activity: float | None = None
     message_count: int = 0
-    error_message: Optional[str] = None
+    error_message: str | None = None
 
 
 class ClaudeSDK:
@@ -123,18 +124,18 @@ class ClaudeSDK:
         self,
         session_id: str,
         working_directory: str,
-        storage_manager: Optional[DataStorageManager] = None,
-        session_manager: Optional[Any] = None,
-        message_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
-        error_callback: Optional[Callable[[str, Exception], None]] = None,
-        permission_callback: Optional[Callable[[str, Dict[str, Any]], Union[bool, Dict[str, Any]]]] = None,
+        storage_manager: DataStorageManager | None = None,
+        session_manager: Any | None = None,
+        message_callback: Callable[[dict[str, Any]], None] | None = None,
+        error_callback: Callable[[str, Exception], None] | None = None,
+        permission_callback: Callable[[str, dict[str, Any]], bool | dict[str, Any]] | None = None,
         permissions: str = "acceptEdits",
-        system_prompt: Optional[str] = None,
+        system_prompt: str | None = None,
         override_system_prompt: bool = False,
-        tools: List[str] = None,
-        model: Optional[str] = None,
-        resume_session_id: Optional[str] = None,
-        mcp_servers: Optional[List[Any]] = None
+        tools: list[str] = None,
+        model: str | None = None,
+        resume_session_id: str | None = None,
+        mcp_servers: list[Any] | None = None
     ):
         """
         Initialize enhanced Claude Code SDK wrapper.
@@ -176,18 +177,18 @@ class ClaudeSDK:
         self.info = SessionInfo(session_id=session_id, working_directory=str(self.working_directory))
 
         # New SDK client pattern
-        self._sdk_client: Optional[ClaudeSDKClient] = None
-        self._sdk_options: Optional[ClaudeAgentOptions] = None
+        self._sdk_client: ClaudeSDKClient | None = None
+        self._sdk_options: ClaudeAgentOptions | None = None
 
         # Interactive conversation support
         self._message_queue = asyncio.Queue()
-        self._conversation_task: Optional[asyncio.Task] = None
+        self._conversation_task: asyncio.Task | None = None
 
         # Control
         self._shutdown_event = asyncio.Event()
 
         # Claude Code's actual session ID (captured from init message)
-        self._claude_code_session_id: Optional[str] = None
+        self._claude_code_session_id: str | None = None
 
         # Initialize MessageProcessor for unified message handling
         self._message_parser = MessageParser()
@@ -291,7 +292,7 @@ class ClaudeSDK:
 
             # Keep session in STARTING state until context manager is ready
             # State will be changed to RUNNING in _message_processing_loop when SDK is ready
-            sdk_logger.info(f"Claude Code SDK session task started - waiting for context manager initialization")
+            sdk_logger.info("Claude Code SDK session task started - waiting for context manager initialization")
             return True
 
         except Exception as e:
@@ -326,7 +327,7 @@ class ClaudeSDK:
                 "timestamp": time.time()
             })
 
-            sdk_logger.debug(f"Message queued successfully")
+            sdk_logger.debug("Message queued successfully")
             return True
 
         except Exception as e:
@@ -442,7 +443,7 @@ class ClaudeSDK:
                 try:
                     await asyncio.wait_for(self._conversation_task, timeout=5.0)
                     sdk_logger.info(f"Conversation task completed for session {self.session_id}")
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     sdk_logger.warning(f"Conversation task did not complete within timeout for {self.session_id}")
                     self._conversation_task.cancel()
 
@@ -516,7 +517,7 @@ class ClaudeSDK:
                                 "type": "user",
                                 "content": content,
                                 "session_id": self.session_id,
-                                "timestamp": datetime.now(timezone.utc).timestamp()
+                                "timestamp": datetime.now(UTC).timestamp()
                             }
 
                             # Store user message if storage available
@@ -526,7 +527,7 @@ class ClaudeSDK:
                             # Broadcast user message via callback for real-time display
                             if self.message_callback:
                                 await self._safe_callback(self.message_callback, user_message)
-                                sdk_logger.debug(f"Broadcasted user message via callback")
+                                sdk_logger.debug("Broadcasted user message via callback")
 
                             self.info.message_count += 1
                             self.info.last_activity = time.time()
@@ -535,7 +536,7 @@ class ClaudeSDK:
                             await client.query(content)
                             self._session_health_checks["total_queries_sent"] += 1
                             self._session_health_checks["last_successful_query"] = time.time()
-                            sdk_logger.debug(f"Query sent to SDK, responses will be handled by global consumer")
+                            sdk_logger.debug("Query sent to SDK, responses will be handled by global consumer")
 
                         elif message_type == "interrupt_request":
                             # Handle interrupt request directly
@@ -559,11 +560,11 @@ class ClaudeSDK:
 
                         self._message_queue.task_done()
 
-                    except asyncio.TimeoutError:
+                    except TimeoutError:
                         # No message in queue, continue loop
                         continue
                     except asyncio.CancelledError:
-                        sdk_logger.info(f"Message processing loop cancelled")
+                        sdk_logger.info("Message processing loop cancelled")
                         break
                     except Exception as e:
                         logger.error(f"Error processing message: {e}")
@@ -595,11 +596,11 @@ class ClaudeSDK:
 
             # Comprehensive fatal error tracking
             import traceback
-            logger.error(f"FATAL ERROR - Full exception traceback:")
+            logger.error("FATAL ERROR - Full exception traceback:")
             for line in traceback.format_exception(type(e), e, e.__traceback__):
                 logger.error(f"{line.rstrip()}")
 
-            logger.error(f"Fatal error context:")
+            logger.error("Fatal error context:")
             logger.error(f"- Session ID: {self.session_id}")
             logger.error(f"- Working directory: {self.working_directory}")
             logger.error(f"- Session state: {self.info.state}")
@@ -629,7 +630,7 @@ class ClaudeSDK:
             self._sdk_client = None
             sdk_logger.info(f"Message processing loop cleanup at {cleanup_time}")
             sdk_logger.info(f"Total loop runtime: {cleanup_time - loop_start_time:.3f}s")
-            sdk_logger.info(f"Message processing loop ENDED")
+            sdk_logger.info("Message processing loop ENDED")
 
 
     def _get_sdk_options(self):
@@ -638,9 +639,9 @@ class ClaudeSDK:
         # Create callback function with new PermissionResult return types
         async def can_use_tool_wrapper(
             tool_name: str,
-            input_params: Dict[str, Any],
+            input_params: dict[str, Any],
             context: ToolPermissionContext
-        ) -> Union[PermissionResultAllow, PermissionResultDeny]:
+        ) -> PermissionResultAllow | PermissionResultDeny:
             return await self._can_use_tool_callback(tool_name, input_params, context)
 
         # Configure system prompt based on override flag
@@ -648,7 +649,7 @@ class ClaudeSDK:
             # Override mode: use custom prompt only (no Claude Code preset)
             # SDK accepts plain string for custom-only system prompts
             system_prompt_config = self.system_prompt
-            sdk_logger.info(f"Using OVERRIDE mode - custom system prompt only (no Claude Code preset)")
+            sdk_logger.info("Using OVERRIDE mode - custom system prompt only (no Claude Code preset)")
         else:
             # Append mode (default): use Claude Code preset with optional custom append
             system_prompt_config = {
@@ -657,9 +658,9 @@ class ClaudeSDK:
             }
             if self.system_prompt:
                 system_prompt_config["append"] = self.system_prompt
-                sdk_logger.info(f"Using APPEND mode - Claude Code preset + custom append")
+                sdk_logger.info("Using APPEND mode - Claude Code preset + custom append")
             else:
-                sdk_logger.info(f"Using DEFAULT mode - Claude Code preset only")
+                sdk_logger.info("Using DEFAULT mode - Claude Code preset only")
 
         options_kwargs = {
             "cwd": str(self.working_directory),
@@ -671,7 +672,7 @@ class ClaudeSDK:
         }
 
         # Only add can_use_tool callback if permission callback is provided and SDK classes are available
-        perm_logger.debug(f"Callback registration check:")
+        perm_logger.debug("Callback registration check:")
         perm_logger.debug(f"- permission_callback exists: {self.permission_callback is not None}")
         perm_logger.debug(f"- PermissionResultAllow available: {PermissionResultAllow is not None}")
         perm_logger.debug(f"- PermissionResultDeny available: {PermissionResultDeny is not None}")
@@ -726,7 +727,7 @@ class ClaudeSDK:
 
                     # Trigger immediate error callback to update session state
                     if self.error_callback:
-                        sdk_logger.debug(f"Triggering immediate error callback")
+                        sdk_logger.debug("Triggering immediate error callback")
                         await self._safe_callback(self.error_callback, "immediate_cli_failure", Exception(fatal_error))
 
                     return  # Don't process this error message further
@@ -767,8 +768,8 @@ class ClaudeSDK:
             logger.error(f"Failed to process SDK message: {e}")
             if self.error_callback:
                 await self._safe_callback(self.error_callback, "sdk_message_processing_failed", e)
-    
-    async def _store_sdk_message(self, converted_message: Dict[str, Any], raw_sdk_message: Any = None):
+
+    async def _store_sdk_message(self, converted_message: dict[str, Any], raw_sdk_message: Any = None):
         """
         Store the SDK message using unified StoredMessage format (Phase 0, Issue #310).
 
@@ -789,11 +790,6 @@ class ClaudeSDK:
                 )
                 storage_data = stored_msg.to_dict()
 
-                # Add raw SDK data for debugging (still useful during migration)
-                raw_sdk_data = self._capture_raw_sdk_data(sdk_msg)
-                if raw_sdk_data:
-                    storage_data["raw_sdk_message"] = raw_sdk_data
-
                 sdk_logger.debug(f"Storing SDK message with new StoredMessage format: {stored_msg._type}")
                 await self.storage_manager.append_message(storage_data)
                 return
@@ -802,11 +798,6 @@ class ClaudeSDK:
             # This handles dict messages, unknown types, and transition period
             parsed_message = self._message_processor.process_message(converted_message, source="sdk")
             storage_data = self._message_processor.prepare_for_storage(parsed_message)
-
-            # Preserve raw SDK data for debugging
-            raw_sdk_data = self._capture_raw_sdk_data(sdk_msg)
-            if raw_sdk_data:
-                storage_data["raw_sdk_message"] = raw_sdk_data
 
             if converted_message.get("sdk_message"):
                 storage_data["sdk_message_type"] = converted_message.get("sdk_message").__class__.__name__
@@ -826,7 +817,7 @@ class ClaudeSDK:
             }
             await self.storage_manager.append_message(storage_message)
 
-    def _capture_raw_sdk_data(self, sdk_message: Any) -> Optional[str]:
+    def _capture_raw_sdk_data(self, sdk_message: Any) -> str | None:
         """Capture raw SDK message data in a standardized, serializable format."""
         if sdk_message is None:
             return None
@@ -867,9 +858,9 @@ class ClaudeSDK:
     async def _can_use_tool_callback(
         self,
         tool_name: str,
-        input_params: Dict[str, Any],
+        input_params: dict[str, Any],
         context: ToolPermissionContext
-    ) -> Union[PermissionResultAllow, PermissionResultDeny]:
+    ) -> PermissionResultAllow | PermissionResultDeny:
         """
         Callback to decide if a tool can be used using new PermissionResult types.
         Delegates the decision to an external callback if provided.
@@ -877,12 +868,12 @@ class ClaudeSDK:
         Returns:
             PermissionResultAllow or PermissionResultDeny object
         """
-        perm_logger.info(f"=======================================")
-        perm_logger.info(f"Permission callback triggered")
+        perm_logger.info("=======================================")
+        perm_logger.info("Permission callback triggered")
         perm_logger.info(f"Tool: {tool_name}")
         perm_logger.info(f"Input: {input_params}")
         perm_logger.info(f"Context: {context}")
-        perm_logger.info(f"=======================================")
+        perm_logger.info("=======================================")
 
         if self.permission_callback:
             perm_logger.debug(f"Delegating permission check for tool '{tool_name}' to external callback")
@@ -928,7 +919,7 @@ class ClaudeSDK:
         perm_logger.debug(f"No permission_callback provided. Denying tool use: '{tool_name}'")
         return PermissionResultDeny(message="No permission callback configured")
 
-    
+
 
     async def _safe_callback(self, callback: Callable, *args, **kwargs):
         """Safely execute callback with error handling"""
@@ -940,7 +931,7 @@ class ClaudeSDK:
         except Exception as e:
             logger.error(f"Error in callback execution: {e}")
 
-    def _convert_sdk_message(self, sdk_message: Any) -> Dict[str, Any]:
+    def _convert_sdk_message(self, sdk_message: Any) -> dict[str, Any]:
         """Convert SDK message to a serializable format while preserving type information."""
         try:
             # Handle dict-like objects (for backward compatibility)
@@ -1052,7 +1043,7 @@ class ClaudeSDK:
                 self._conversation_task.cancel()
                 try:
                     await asyncio.wait_for(self._conversation_task, timeout=timeout)
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     logger.warning("Message processing task did not terminate within timeout")
                 except asyncio.CancelledError:
                     sdk_logger.debug("Message processing task cancelled successfully")
@@ -1086,9 +1077,9 @@ class ClaudeSDK:
         """Get current message queue size"""
         return self._message_queue.qsize()
 
-    
 
-    def get_info(self) -> Dict[str, Any]:
+
+    def get_info(self) -> dict[str, Any]:
         """Get current session information."""
         info_dict = asdict(self.info)
         # Convert enum to string value for JSON serialization
@@ -1099,7 +1090,7 @@ class ClaudeSDK:
         """Check if the session is currently running."""
         return self.info.state in [SessionState.RUNNING, SessionState.PROCESSING]
 
-    def _perform_session_health_check(self, client: Optional[ClaudeSDKClient] = None) -> Dict[str, Any]:
+    def _perform_session_health_check(self, client: ClaudeSDKClient | None = None) -> dict[str, Any]:
         """
         Perform comprehensive session health check.
 
@@ -1154,7 +1145,7 @@ class ClaudeSDK:
 
         return health_status
 
-    def _log_session_health(self, client: Optional[ClaudeSDKClient] = None, context: str = "general"):
+    def _log_session_health(self, client: ClaudeSDKClient | None = None, context: str = "general"):
         """Log detailed session health information."""
         health_status = self._perform_session_health_check(client)
 
