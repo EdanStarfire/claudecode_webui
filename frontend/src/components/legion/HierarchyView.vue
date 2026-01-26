@@ -280,25 +280,18 @@ onMounted(() => {
   )
 
   // Watch for minions being created or deleted (reload hierarchy)
+  // FIX for issue #318: Watch the project's session_ids array length instead of sessions.size
+  // because fetchSessions() clears and rebuilds the Map (size goes 0 → N), which doesn't
+  // reliably trigger the watcher. The project's session_ids is updated atomically by
+  // the project_updated WebSocket event when minions are spawned or disposed.
   watch(
-    () => sessionStore.sessions.size,
-    (newSize, oldSize) => {
-      if (newSize > oldSize) {
-        // Sessions increased - check if a new minion for this legion was created
-        const sessions = Array.from(sessionStore.sessions.values())
-        const hasNewMinion = sessions.some(s =>
-          s.is_minion &&
-          s.project_id === props.legionId &&
-          !findMinionInTree(hierarchy.value, s.session_id)
-        )
-
-        if (hasNewMinion) {
-          console.log('New minion detected, reloading hierarchy')
-          loadHierarchy()
-        }
-      } else if (newSize < oldSize) {
-        // Sessions decreased - minion was deleted, reload hierarchy
-        console.log('Minion deletion detected, reloading hierarchy')
+    () => {
+      const project = projectStore.projects.get(props.legionId)
+      return project?.session_ids?.length || 0
+    },
+    (newLength, oldLength) => {
+      if (newLength !== oldLength) {
+        console.log(`Project session_ids changed (${oldLength} → ${newLength}), reloading hierarchy`)
         loadHierarchy()
       }
     }
