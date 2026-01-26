@@ -21,6 +21,7 @@ from .claude_sdk import ClaudeSDK
 from .data_storage import DataStorageManager
 from .logging_config import get_logger
 from .message_parser import MessageParser, MessageProcessor
+from .models.messages import DisplayProjection, legacy_to_stored
 from .project_manager import ProjectInfo, ProjectManager
 from .session_manager import SessionManager, SessionState
 from .timestamp_utils import get_unix_timestamp
@@ -68,6 +69,10 @@ class SessionCoordinator:
 
         # Track applied permission updates for state management
         self._permission_updates: dict[str, list[dict]] = {}  # session_id -> list of applied updates
+
+        # Display projections per session (Issue #310)
+        # Tracks tool lifecycle state and computes display metadata for frontend
+        self._display_projections: dict[str, DisplayProjection] = {}
 
         # Track ExitPlanMode that had setMode suggestions applied (to prevent auto-reset)
         self._exitplanmode_with_setmode: dict[str, bool] = {}  # session_id -> bool
@@ -523,6 +528,9 @@ class SessionCoordinator:
             # Reset processing state before termination
             await self.session_manager.update_processing_state(session_id, False)
 
+            # Issue #310: Mark active tools as orphaned before termination
+            self._mark_tools_orphaned(session_id)
+
             # Terminate SDK first
             sdk = self._active_sdks.get(session_id)
             if sdk:
@@ -539,6 +547,9 @@ class SessionCoordinator:
                 del self._message_callbacks[session_id]
             if session_id in self._error_callbacks:
                 del self._error_callbacks[session_id]
+            # Issue #310: Cleanup display projection
+            if session_id in self._display_projections:
+                del self._display_projections[session_id]
 
             if success:
                 await self._notify_state_change(session_id, SessionState.TERMINATED)
@@ -761,6 +772,9 @@ class SessionCoordinator:
             if result:
                 coord_logger.info(f"Session {session_id} interrupted")
 
+                # Issue #310: Mark active tools as orphaned on interrupt
+                self._mark_tools_orphaned(session_id)
+
                 # Send interrupt system message via callback system (following client_launched pattern)
                 await self._send_interrupt_message(session_id)
 
@@ -904,6 +918,9 @@ class SessionCoordinator:
                 await storage.clear_messages()
                 coord_logger.info(f"Cleared message history for session {session_id}")
 
+            # Issue #310: Reset DisplayProjection state (clears tool tracking)
+            self._reset_display_projection(session_id)
+
             # Start fresh session (will create new Claude Code session)
             success = await self.start_session(session_id, permission_callback)
 
@@ -962,6 +979,147 @@ class SessionCoordinator:
             logger.error(f"Failed to list sessions: {e}")
             return []
 
+    def _convert_stored_message_to_websocket(self, stored_msg: dict[str, Any]) -> dict[str, Any] | None:
+        """
+        Convert new StoredMessage format (_type discriminator) to WebSocket format.
+
+        Issue #310: The new dataclass-based StoredMessage uses _type as discriminator
+        and stores message data in the 'data' field. This method converts it to the
+        legacy format expected by the frontend.
+        """
+        try:
+            _type = stored_msg.get("_type", "")
+            data = stored_msg.get("data", {})
+            timestamp = stored_msg.get("timestamp")
+            session_id = stored_msg.get("session_id")
+            display = stored_msg.get("display")
+
+            # Map _type to legacy type string
+            type_mapping = {
+                "AssistantMessage": "assistant",
+                "UserMessage": "user",
+                "SystemMessage": "system",
+                "ResultMessage": "result",
+                "PermissionRequestMessage": "permission_request",
+                "PermissionResponseMessage": "permission_response",
+            }
+            legacy_type = type_mapping.get(_type, "system")
+
+            # Extract content from data
+            content = ""
+            if "content" in data:
+                raw_content = data["content"]
+                if isinstance(raw_content, str):
+                    content = raw_content
+                elif isinstance(raw_content, list):
+                    # Extract text from content blocks
+                    # For AssistantMessages, only include actual text - NOT tool_use blocks
+                    # Tool uses should be suppressed from content display (handled via metadata)
+                    texts = []
+                    for block in raw_content:
+                        if isinstance(block, dict):
+                            if "text" in block:
+                                texts.append(block["text"])
+                            elif "thinking" in block:
+                                texts.append(f"[Thinking: {block['thinking'][:100]}...]")
+                            # Explicitly skip tool_use blocks - they go into metadata.tool_uses
+                            # and should not contribute to content string
+                    content = " ".join(texts) if texts else ""
+
+            # Build metadata
+            metadata = {}
+
+            # Extract tool uses from AssistantMessage
+            tool_uses = []
+            if _type == "AssistantMessage" and isinstance(data.get("content"), list):
+                for block in data["content"]:
+                    if isinstance(block, dict) and "id" in block and "name" in block:
+                        tool_uses.append(block)
+            if tool_uses:
+                metadata["has_tool_uses"] = True
+                metadata["tool_uses"] = tool_uses
+
+            # Extract tool results from UserMessage
+            tool_results = []
+            if _type == "UserMessage" and isinstance(data.get("content"), list):
+                for block in data["content"]:
+                    if isinstance(block, dict) and "tool_use_id" in block:
+                        tool_results.append(block)
+            if tool_results:
+                metadata["has_tool_results"] = True
+                metadata["tool_results"] = tool_results
+
+            # Extract thinking blocks
+            thinking_blocks = []
+            if _type == "AssistantMessage" and isinstance(data.get("content"), list):
+                for block in data["content"]:
+                    if isinstance(block, dict) and "thinking" in block:
+                        thinking_blocks.append({
+                            "content": block["thinking"],
+                            "timestamp": timestamp,
+                        })
+            if thinking_blocks:
+                metadata["has_thinking"] = True
+                metadata["thinking_blocks"] = thinking_blocks
+
+            # Handle SystemMessage subtypes
+            if _type == "SystemMessage":
+                subtype = data.get("subtype")
+                if subtype:
+                    metadata["subtype"] = subtype
+                # Extract init_data if present
+                if data.get("data"):
+                    metadata["init_data"] = data["data"]
+
+            # Handle ResultMessage
+            if _type == "ResultMessage":
+                subtype = data.get("subtype")
+                if subtype:
+                    metadata["subtype"] = subtype
+                # Copy usage data
+                for key in ["usage", "duration_ms", "duration_api_ms", "total_cost_usd", "num_turns"]:
+                    if key in data:
+                        metadata[key] = data[key]
+
+            # Handle PermissionRequestMessage
+            if _type == "PermissionRequestMessage":
+                metadata["request_id"] = data.get("request_id")
+                metadata["tool_name"] = data.get("tool_name")
+                metadata["input_params"] = data.get("input_params", {})
+                metadata["suggestions"] = data.get("suggestions", [])
+                metadata["has_permission_requests"] = True
+
+            # Handle PermissionResponseMessage
+            if _type == "PermissionResponseMessage":
+                metadata["request_id"] = data.get("request_id")
+                metadata["decision"] = data.get("decision")
+                metadata["tool_name"] = data.get("tool_name")
+                metadata["reasoning"] = data.get("reasoning")
+                metadata["applied_updates"] = data.get("applied_updates", [])
+
+            # Add display metadata if present (Issue #310)
+            if display:
+                metadata["display"] = display
+
+            # Build websocket message
+            websocket_data = {
+                "type": legacy_type,
+                "content": content,
+                "timestamp": timestamp,
+                "session_id": session_id,
+                "metadata": metadata,
+            }
+
+            # Add subtype at root level for backward compatibility
+            if metadata.get("subtype"):
+                websocket_data["subtype"] = metadata["subtype"]
+
+            return websocket_data
+
+        except Exception as e:
+            coord_logger.warning(f"Failed to convert StoredMessage to WebSocket format: {e}")
+            return None
+
     async def get_session_messages(
         self,
         session_id: str,
@@ -989,6 +1147,13 @@ class SessionCoordinator:
             parsed_messages = []
             for raw_message in raw_messages:
                 try:
+                    # Issue #310: Handle new StoredMessage format with _type discriminator
+                    if raw_message.get("_type"):
+                        websocket_data = self._convert_stored_message_to_websocket(raw_message)
+                        if websocket_data:
+                            parsed_messages.append(websocket_data)
+                            continue
+
                     # Check if message is already fully processed (has metadata)
                     if isinstance(raw_message.get("metadata"), dict) and raw_message.get("type") and raw_message.get("content") is not None:
                         # Message is already processed, prepare for WebSocket
@@ -1080,6 +1245,39 @@ class SessionCoordinator:
         """Add callback for session state changes"""
         self._state_change_callbacks.append(callback)
 
+    def _get_display_projection(self, session_id: str) -> DisplayProjection:
+        """
+        Get or create DisplayProjection for a session (Issue #310).
+
+        Each session has its own projection instance to track tool lifecycle
+        state independently.
+        """
+        if session_id not in self._display_projections:
+            self._display_projections[session_id] = DisplayProjection()
+            coord_logger.debug(f"Created DisplayProjection for session {session_id}")
+        return self._display_projections[session_id]
+
+    def _reset_display_projection(self, session_id: str) -> None:
+        """Reset DisplayProjection for a session (e.g., on session reset)."""
+        if session_id in self._display_projections:
+            self._display_projections[session_id].reset()
+            coord_logger.debug(f"Reset DisplayProjection for session {session_id}")
+
+    def _mark_tools_orphaned(self, session_id: str) -> list[str]:
+        """
+        Mark all active tools as orphaned for a session (Issue #310).
+
+        Called when a session is interrupted or terminated to mark pending
+        tools as abandoned. Returns list of orphaned tool IDs.
+        """
+        projection = self._display_projections.get(session_id)
+        if projection:
+            orphaned = projection.mark_tools_orphaned()
+            if orphaned:
+                coord_logger.info(f"Marked {len(orphaned)} tools as orphaned for session {session_id}")
+            return orphaned
+        return []
+
     async def _store_processed_message(self, session_id: str, message_data: dict[str, Any]):
         """Store message using unified MessageProcessor for consistent format."""
         try:
@@ -1110,6 +1308,25 @@ class SessionCoordinator:
             try:
                 # Process message using unified MessageProcessor
                 parsed_message = self.message_processor.process_message(message_data, source="sdk")
+
+                # Issue #310: Process through DisplayProjection for tool lifecycle tracking
+                display_metadata = None
+                try:
+                    projection = self._get_display_projection(session_id)
+                    # Convert to StoredMessage format for projection processing
+                    legacy_dict = {
+                        'type': parsed_message.type.value,
+                        'timestamp': parsed_message.timestamp,
+                        'session_id': session_id,
+                        'content': parsed_message.content,
+                    }
+                    if parsed_message.metadata:
+                        legacy_dict.update(parsed_message.metadata)
+                    stored_msg = legacy_to_stored(legacy_dict)
+                    display_metadata = projection.process_message(stored_msg)
+                except Exception as proj_error:
+                    coord_logger.debug(f"DisplayProjection processing failed: {proj_error}")
+                    # Non-fatal - continue without display metadata
 
                 # Track latest meaningful message (issue #291)
                 # Only track user, assistant, system messages (not tool_use, tool_result, permission, etc.)
@@ -1233,6 +1450,12 @@ class SessionCoordinator:
                 # Call registered callbacks with processed message (maintain backward compatibility)
                 callbacks = self._message_callbacks.get(session_id, [])
                 # logger.info(f"Processing message for session {session_id}, found {len(callbacks)} callbacks")
+
+                # Issue #310: Attach display metadata to parsed message for WebSocket broadcast
+                if display_metadata:
+                    if parsed_message.metadata is None:
+                        parsed_message.metadata = {}
+                    parsed_message.metadata['display'] = display_metadata.to_dict()
 
                 for cb in callbacks:
                     try:

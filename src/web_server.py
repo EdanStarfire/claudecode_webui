@@ -22,6 +22,12 @@ from pydantic import BaseModel
 
 from .logging_config import get_logger
 from .message_parser import MessageParser, MessageProcessor
+from .models.messages import (
+    PermissionRequestMessage,
+    PermissionResponseMessage,
+    PermissionSuggestion,
+    StoredMessage,
+)
 from .session_coordinator import SessionCoordinator
 from .session_manager import SessionState
 from .timestamp_utils import normalize_timestamp
@@ -1766,61 +1772,56 @@ class ClaudeWebUI:
                 except Exception as inject_error:
                     logger.error(f"Failed to inject setMode suggestion for ExitPlanMode: {inject_error}")
 
-            # Store permission request message
+            # Store permission request message using dataclass (Phase 0, Issue #310)
             try:
-                permission_request = {
-                    "type": "permission_request",
-                    "content": f"Permission requested for tool: {tool_name}",
-                    "session_id": session_id,
-                    "timestamp": request_time,
-                    "tool_name": tool_name,
-                    "input_params": input_params,
-                    "request_id": request_id,
-                    "suggestions": suggestions
-                }
+                # Convert suggestions to dataclass format
+                suggestion_objects = [
+                    PermissionSuggestion.from_dict(s) if isinstance(s, dict) else s
+                    for s in suggestions
+                ]
 
-                # Store using unified MessageProcessor for consistency
+                # Create permission request dataclass
+                permission_request = PermissionRequestMessage(
+                    request_id=request_id,
+                    tool_name=tool_name,
+                    input_params=input_params,
+                    suggestions=suggestion_objects,
+                    timestamp=request_time,
+                    session_id=session_id,
+                )
+
+                # Wrap in StoredMessage for unified storage
+                stored_msg = StoredMessage.from_permission_request(permission_request)
+                storage_data = stored_msg.to_dict()
+
+                storage_manager = await self.coordinator.get_session_storage(session_id)
+                if storage_manager:
+                    await storage_manager.append_message(storage_data)
+                    logger.debug(f"Stored permission request message for session {session_id}")
+
+                # Broadcast permission request to WebSocket clients
+                # Use legacy format for WebSocket to maintain frontend compatibility during migration
                 try:
-                    processed_message = self._message_processor.process_message(permission_request, source="permission")
-                    storage_data = self._message_processor.prepare_for_storage(processed_message)
-
-                    storage_manager = await self.coordinator.get_session_storage(session_id)
-                    if storage_manager:
-                        await storage_manager.append_message(storage_data)
-                        logger.debug(f"Stored processed permission request message for session {session_id}")
-
-                    # Broadcast permission request to WebSocket clients
-                    try:
-                        websocket_data = self._message_processor.prepare_for_websocket(processed_message)
-                        websocket_message = {
-                            "type": "message",
-                            "session_id": session_id,
-                            "data": websocket_data,
-                            "timestamp": datetime.now(UTC).isoformat()
-                        }
-                        await self.websocket_manager.send_message(session_id, websocket_message)
-                        logger.info(f"Broadcasted permission request to WebSocket for session {session_id}")
-                    except Exception as ws_error:
-                        logger.error(f"Failed to broadcast permission request to WebSocket: {ws_error}")
-                except Exception as storage_error:
-                    logger.error(f"Failed to store permission request with MessageProcessor: {storage_error}")
-                    # Fallback to direct storage
-                    storage_manager = await self.coordinator.get_session_storage(session_id)
-                    if storage_manager:
-                        await storage_manager.append_message(permission_request)
-
-                    # Broadcast permission request to WebSocket clients
-                    try:
-                        websocket_message = {
-                            "type": "message",
-                            "session_id": session_id,
-                            "data": permission_request,
-                            "timestamp": datetime.now(UTC).isoformat()
-                        }
-                        await self.websocket_manager.send_message(session_id, websocket_message)
-                        logger.info(f"Broadcasted permission request to WebSocket for session {session_id}")
-                    except Exception as ws_error:
-                        logger.error(f"Failed to broadcast permission request to WebSocket: {ws_error}")
+                    websocket_data = {
+                        "type": "permission_request",
+                        "content": permission_request.content,
+                        "session_id": session_id,
+                        "timestamp": request_time,
+                        "tool_name": tool_name,
+                        "input_params": input_params,
+                        "request_id": request_id,
+                        "suggestions": [s.to_dict() for s in suggestion_objects]
+                    }
+                    websocket_message = {
+                        "type": "message",
+                        "session_id": session_id,
+                        "data": websocket_data,
+                        "timestamp": datetime.now(UTC).isoformat()
+                    }
+                    await self.websocket_manager.send_message(session_id, websocket_message)
+                    logger.info(f"Broadcasted permission request to WebSocket for session {session_id}")
+                except Exception as ws_error:
+                    logger.error(f"Failed to broadcast permission request to WebSocket: {ws_error}")
 
             except Exception as e:
                 logger.error(f"Failed to store permission request message: {e}")
@@ -1920,61 +1921,78 @@ class ClaudeWebUI:
                 if request_id in self.pending_permissions:
                     del self.pending_permissions[request_id]
 
-            # Store permission response message
+            # Store permission response message using dataclass (Phase 0, Issue #310)
             decision_time = time.time()
             try:
                 # Extract clarification message if it was provided
                 clarification_msg = response.get("message") if decision == "deny" and not response.get("interrupt", True) else None
+                interrupt_flag = response.get("interrupt", True)
 
-                permission_response = {
-                    "type": "permission_response",
-                    "content": f"Permission {decision} for tool: {tool_name} - {reasoning}",
-                    "session_id": session_id,
-                    "timestamp": decision_time,
-                    "request_id": request_id,
-                    "decision": decision,
-                    "reasoning": reasoning,
-                    "tool_name": tool_name,
-                    "response_time_ms": int((decision_time - request_time) * 1000)
-                }
-
-                # Include clarification message if provided (for deny with clarification)
-                if clarification_msg:
-                    permission_response["clarification_message"] = clarification_msg
-                    permission_response["interrupt"] = False
-                    logger.info(f"Stored permission denial with clarification for session {session_id}")
-
-                # Include applied updates if any were applied (use the dict version we saved)
+                # Convert applied updates to PermissionSuggestion objects
+                applied_update_objects = []
                 if decision == "allow" and response.get("applied_updates_for_storage"):
-                    permission_response["applied_updates"] = response["applied_updates_for_storage"]
-                    logger.info(f"Permission response includes {len(response['applied_updates_for_storage'])} applied updates")
+                    applied_update_objects = [
+                        PermissionSuggestion.from_dict(u) if isinstance(u, dict) else u
+                        for u in response["applied_updates_for_storage"]
+                    ]
 
-                # Store using unified MessageProcessor for consistency
+                # Create permission response dataclass
+                permission_response_msg = PermissionResponseMessage(
+                    request_id=request_id,
+                    decision=decision,
+                    tool_name=tool_name,
+                    reasoning=reasoning,
+                    response_time_ms=int((decision_time - request_time) * 1000),
+                    applied_updates=applied_update_objects,
+                    clarification_message=clarification_msg,
+                    interrupt=interrupt_flag,
+                    timestamp=decision_time,
+                    session_id=session_id,
+                )
+
+                # Wrap in StoredMessage for unified storage
+                stored_msg = StoredMessage.from_permission_response(permission_response_msg)
+                storage_data = stored_msg.to_dict()
+
+                if storage_manager:
+                    await storage_manager.append_message(storage_data)
+                    logger.debug(f"Stored permission response message for session {session_id}")
+
+                if clarification_msg:
+                    logger.info(f"Stored permission denial with clarification for session {session_id}")
+                if applied_update_objects:
+                    logger.info(f"Permission response includes {len(applied_update_objects)} applied updates")
+
+                # Broadcast permission response to WebSocket clients
+                # Use legacy format for WebSocket to maintain frontend compatibility during migration
                 try:
-                    processed_message = self._message_processor.process_message(permission_response, source="permission")
-                    storage_data = self._message_processor.prepare_for_storage(processed_message)
+                    websocket_data = {
+                        "type": "permission_response",
+                        "content": permission_response_msg.content,
+                        "session_id": session_id,
+                        "timestamp": decision_time,
+                        "request_id": request_id,
+                        "decision": decision,
+                        "reasoning": reasoning,
+                        "tool_name": tool_name,
+                        "response_time_ms": int((decision_time - request_time) * 1000),
+                    }
+                    if clarification_msg:
+                        websocket_data["clarification_message"] = clarification_msg
+                        websocket_data["interrupt"] = False
+                    if applied_update_objects:
+                        websocket_data["applied_updates"] = [u.to_dict() for u in applied_update_objects]
 
-                    if storage_manager:
-                        await storage_manager.append_message(storage_data)
-                        logger.debug(f"Stored processed permission response message for session {session_id}")
-                except Exception as storage_error:
-                    logger.error(f"Failed to store permission response with MessageProcessor: {storage_error}")
-                    # Fallback to direct storage
-                    if storage_manager:
-                        await storage_manager.append_message(permission_response)
-
-                    # Broadcast permission response to WebSocket clients
-                    try:
-                        websocket_message = {
-                            "type": "message",
-                            "session_id": session_id,
-                            "data": permission_response,
-                            "timestamp": datetime.now(UTC).isoformat()
-                        }
-                        await self.websocket_manager.send_message(session_id, websocket_message)
-                        logger.info(f"Broadcasted permission response to WebSocket for session {session_id}")
-                    except Exception as ws_error:
-                        logger.error(f"Failed to broadcast permission response to WebSocket: {ws_error}")
+                    websocket_message = {
+                        "type": "message",
+                        "session_id": session_id,
+                        "data": websocket_data,
+                        "timestamp": datetime.now(UTC).isoformat()
+                    }
+                    await self.websocket_manager.send_message(session_id, websocket_message)
+                    logger.info(f"Broadcasted permission response to WebSocket for session {session_id}")
+                except Exception as ws_error:
+                    logger.error(f"Failed to broadcast permission response to WebSocket: {ws_error}")
 
             except Exception as e:
                 logger.error(f"Failed to store permission response message: {e}")

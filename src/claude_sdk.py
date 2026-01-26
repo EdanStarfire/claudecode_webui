@@ -13,6 +13,7 @@ from dataclasses import dataclass, asdict
 from .logging_config import get_logger
 from .data_storage import DataStorageManager
 from .message_parser import MessageProcessor, MessageParser
+from .models.messages import sdk_message_to_stored
 
 # Import SDK components
 try:
@@ -768,36 +769,60 @@ class ClaudeSDK:
                 await self._safe_callback(self.error_callback, "sdk_message_processing_failed", e)
     
     async def _store_sdk_message(self, converted_message: Dict[str, Any], raw_sdk_message: Any = None):
-        """Store the SDK message using unified MessageProcessor for consistent format."""
-        try:
-            # Process the message through MessageProcessor to get standardized metadata
-            parsed_message = self._message_processor.process_message(converted_message, source="sdk")
+        """
+        Store the SDK message using unified StoredMessage format (Phase 0, Issue #310).
 
-            # Prepare for storage using MessageProcessor
+        Uses the new dataclass-based StoredMessage for clean serialization, with fallback
+        to legacy MessageProcessor format for backward compatibility during migration.
+        """
+        try:
+            # Get the raw SDK message object
+            sdk_msg = raw_sdk_message or converted_message.get("sdk_message")
+
+            # Try to use new StoredMessage format if we have an SDK message object
+            if sdk_msg is not None and hasattr(sdk_msg, '__dataclass_fields__'):
+                # SDK message is a dataclass - use new format
+                stored_msg = sdk_message_to_stored(
+                    sdk_msg,
+                    session_id=self.session_id,
+                    timestamp=converted_message.get("timestamp"),
+                )
+                storage_data = stored_msg.to_dict()
+
+                # Add raw SDK data for debugging (still useful during migration)
+                raw_sdk_data = self._capture_raw_sdk_data(sdk_msg)
+                if raw_sdk_data:
+                    storage_data["raw_sdk_message"] = raw_sdk_data
+
+                sdk_logger.debug(f"Storing SDK message with new StoredMessage format: {stored_msg._type}")
+                await self.storage_manager.append_message(storage_data)
+                return
+
+            # Fallback: Use legacy MessageProcessor format for non-dataclass messages
+            # This handles dict messages, unknown types, and transition period
+            parsed_message = self._message_processor.process_message(converted_message, source="sdk")
             storage_data = self._message_processor.prepare_for_storage(parsed_message)
 
-            # Ensure raw SDK data is preserved for debugging
-            raw_sdk_data = self._capture_raw_sdk_data(raw_sdk_message or converted_message.get("sdk_message"))
+            # Preserve raw SDK data for debugging
+            raw_sdk_data = self._capture_raw_sdk_data(sdk_msg)
             if raw_sdk_data:
-                # Store only the standardized field name
                 storage_data["raw_sdk_message"] = raw_sdk_data
 
-            # Add SDK-specific metadata
             if converted_message.get("sdk_message"):
                 storage_data["sdk_message_type"] = converted_message.get("sdk_message").__class__.__name__
 
-            sdk_logger.debug(f"Storing processed SDK message: {storage_data.get('type', 'unknown')}")
+            sdk_logger.debug(f"Storing SDK message with legacy format: {storage_data.get('type', 'unknown')}")
             await self.storage_manager.append_message(storage_data)
 
         except Exception as e:
-            logger.error(f"Failed to store SDK message through MessageProcessor: {e}")
-            # Fallback to original storage format if processing fails
+            logger.error(f"Failed to store SDK message: {e}")
+            # Ultimate fallback - minimal storage format
             storage_message = {
                 "type": converted_message.get("type", "unknown"),
                 "content": converted_message.get("content", ""),
                 "session_id": converted_message.get("session_id"),
                 "timestamp": converted_message.get("timestamp"),
-                "error": f"MessageProcessor storage failed: {str(e)}"
+                "error": f"Storage failed: {str(e)}"
             }
             await self.storage_manager.append_message(storage_message)
 
