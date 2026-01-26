@@ -576,21 +576,33 @@ class SessionCoordinator:
             logger.error(f"Failed to update session {session_id} name: {e}")
             return False
 
-    async def delete_session(self, session_id: str) -> bool:
-        """Delete a session and cleanup all resources (with cascading deletion for child minions)"""
+    async def delete_session(self, session_id: str) -> dict:
+        """
+        Delete a session and cleanup all resources (with cascading deletion for child minions).
+
+        Returns a dict with:
+            - success: bool indicating if deletion succeeded
+            - deleted_session_ids: list of all session IDs deleted (including cascaded children)
+        """
+        deleted_ids = []
+
         try:
-            # Step 0: If this is a parent overseer, recursively delete all children first (cascading)
+            # Step 0: If this session has children, recursively delete all children first (cascading)
+            # Check child_minion_ids regardless of is_minion/is_overseer flags - any session with
+            # children should cascade the deletion
             session_info = await self.session_manager.get_session_info(session_id)
-            if session_info and session_info.is_minion and session_info.is_overseer and session_info.child_minion_ids:
+            if session_info and session_info.child_minion_ids:
                 child_ids = list(session_info.child_minion_ids)  # Make a copy
-                coord_logger.info(f"Parent overseer {session_id} has {len(child_ids)} children - cascading deletion")
+                coord_logger.info(f"Session {session_id} has {len(child_ids)} children - cascading deletion")
 
                 for child_id in child_ids:
                     coord_logger.info(f"Cascading: deleting child minion {child_id} of parent {session_id}")
                     # Recursively delete child (which may have its own children)
-                    await self.delete_session(child_id)
+                    result = await self.delete_session(child_id)
+                    if result.get("success"):
+                        deleted_ids.extend(result.get("deleted_session_ids", []))
 
-                coord_logger.info(f"Cascading deletion complete for parent {session_id} - all {len(child_ids)} children deleted")
+                coord_logger.info(f"Cascading deletion complete for {session_id} - all {len(child_ids)} children deleted")
 
             # Step 1: Find and remove session from its project
             project = await self._find_project_for_session(session_id)
@@ -695,12 +707,14 @@ class SessionCoordinator:
                 coord_logger.info(f"Session {session_id} deleted")
                 # Notify about session deletion (using a special state change)
                 await self._notify_state_change(session_id, "deleted")
+                # Add this session to the deleted list
+                deleted_ids.append(session_id)
 
-            return success
+            return {"success": success, "deleted_session_ids": deleted_ids}
 
         except Exception as e:
             logger.error(f"Failed to delete integrated session {session_id}: {e}")
-            return False
+            return {"success": False, "deleted_session_ids": deleted_ids}
 
     async def _find_project_for_session(self, session_id: str) -> ProjectInfo | None:
         """Find the project that contains a given session"""
@@ -709,6 +723,50 @@ class SessionCoordinator:
             if session_id in project.session_ids:
                 return project
         return None
+
+    async def get_descendants(self, session_id: str) -> list[dict]:
+        """
+        Get all descendant sessions (children, grandchildren, etc.) of a session.
+
+        Returns a list of session info dicts for all descendants, or empty list
+        if the session has no children or doesn't exist.
+        """
+        descendants = []
+
+        session_info = await self.session_manager.get_session_info(session_id)
+        if not session_info:
+            return descendants
+
+        # Check if session has any children - any session with child_minion_ids
+        # can have descendants, regardless of is_minion/is_overseer flags
+        if not session_info.child_minion_ids:
+            return descendants
+
+        # Process each child
+        for child_id in session_info.child_minion_ids:
+            child_info = await self.session_manager.get_session_info(child_id)
+            if child_info:
+                descendants.append({
+                    "session_id": child_id,
+                    "name": child_info.name,
+                    "role": child_info.role,
+                    "state": child_info.state.value if hasattr(child_info.state, 'value') else str(child_info.state),
+                    "parent_id": session_id
+                })
+                # Recursively get grandchildren
+                grandchildren = await self.get_descendants(child_id)
+                descendants.extend(grandchildren)
+
+        return descendants
+
+    async def count_descendants(self, session_id: str) -> int:
+        """
+        Count total number of descendants (children, grandchildren, etc.).
+
+        Returns count of all descendant sessions.
+        """
+        descendants = await self.get_descendants(session_id)
+        return len(descendants)
 
     async def send_message(self, session_id: str, message: str) -> bool:
         """Send a message through the integrated pipeline"""
