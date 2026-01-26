@@ -93,6 +93,12 @@ class LegionMCPTools:
             "Create a new child minion to delegate specialized work. You become the overseer "
             "of this minion and can later dispose of it when done. The child minion will be a "
             "full Claude agent with access to tools."
+            "\n\n**IMPORTANT - Starting Your Minion:**"
+            "\nAfter spawning, you MUST send a comm message to the minion to start them working. "
+            "The minion will NOT begin work automatically - they wait for explicit task instructions."
+            "\n\nWorkflow:"
+            "\n1. spawn_minion(name='Helper', template_name='Code Expert', initialization_context='Review auth code')"
+            "\n2. send_comm(to_minion_name='Helper', summary='Begin task', content='Task details...', comm_type='task')"
             "\n\n**Using Templates (Recommended):**"
             "\nUse a template to spawn with specific permissions:"
             "\n- First, use list_templates() to see available templates"
@@ -611,6 +617,8 @@ class LegionMCPTools:
             if working_directory:
                 wd_info = f"\nWorking Directory: {working_directory}\n"
 
+            next_step_msg = f"Send a comm to '{name}' to start them working on their task"
+
             return {
                 "content": [{
                     "type": "text",
@@ -621,9 +629,11 @@ class LegionMCPTools:
                         f"{perm_info}\n"
                         f"The child minion is now active and ready to receive comms. "
                         f"You can communicate with them using send_comm(to_minion_name='{name}', ...)."
+                        f"\n\n**Next Step:** {next_step_msg}"
                     )
                 }],
-                "is_error": False
+                "is_error": False,
+                "next_step": next_step_msg
             }
 
         except ValueError as e:
