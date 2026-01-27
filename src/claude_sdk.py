@@ -135,7 +135,9 @@ class ClaudeSDK:
         tools: list[str] = None,
         model: str | None = None,
         resume_session_id: str | None = None,
-        mcp_servers: list[Any] | None = None
+        mcp_servers: list[Any] | None = None,
+        sandbox_enabled: bool = False,
+        sandbox_config: dict | None = None
     ):
         """
         Initialize enhanced Claude Code SDK wrapper.
@@ -153,6 +155,8 @@ class ClaudeSDK:
             tools: List of allowed tools
             model: Model to use
             mcp_servers: List of MCP servers to attach (for multi-agent)
+            sandbox_enabled: Enable OS-level sandboxing (issue #319)
+            sandbox_config: Optional SandboxSettings configuration dict
         """
         self.session_id = session_id
         self.working_directory = Path(working_directory)
@@ -173,6 +177,8 @@ class ClaudeSDK:
         self.model = model
         self.resume_session_id = resume_session_id
         self.mcp_servers = mcp_servers if mcp_servers is not None else []
+        self.sandbox_enabled = sandbox_enabled
+        self.sandbox_config = sandbox_config
 
         self.info = SessionInfo(session_id=session_id, working_directory=str(self.working_directory))
 
@@ -695,6 +701,15 @@ class ClaudeSDK:
             options_kwargs["mcp_servers"] = self.mcp_servers
             sdk_logger.info(f"Attaching MCP servers to session {self.session_id}: {list(self.mcp_servers.keys()) if isinstance(self.mcp_servers, dict) else 'unknown format'}")
 
+        # Add sandbox configuration (issue #319)
+        if self.sandbox_enabled:
+            sandbox_settings = {"enabled": True}
+            # Merge custom sandbox config if provided
+            if self.sandbox_config:
+                sandbox_settings.update(self.sandbox_config)
+            options_kwargs["sandbox"] = sandbox_settings
+            sdk_logger.info(f"Sandbox enabled for session {self.session_id}: {sandbox_settings}")
+
         # Add stderr callback to capture SDK CLI errors
         def stderr_handler(output: str) -> None:
             """Capture and log stderr output from Claude Code CLI."""
@@ -705,6 +720,7 @@ class ClaudeSDK:
         sdk_logger.debug(f"Final SDK options keys: {list(options_kwargs.keys())}")
         sdk_logger.debug(f"can_use_tool included: {'can_use_tool' in options_kwargs}")
         sdk_logger.debug(f"mcp_servers included: {'mcp_servers' in options_kwargs}")
+        sdk_logger.debug(f"sandbox included: {'sandbox' in options_kwargs}")
         sdk_logger.debug(f"stderr callback included: {'stderr' in options_kwargs}")
         sdk_logger.debug(f"ClaudeAgentOptions: {options_kwargs}")
         return ClaudeAgentOptions(**options_kwargs)

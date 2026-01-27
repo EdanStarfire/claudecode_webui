@@ -143,6 +143,7 @@ class MinionCreateRequest(BaseModel):
     permission_mode: str = "default"
     allowed_tools: list[str] | None = None  # None or empty list means no pre-authorized tools
     working_directory: str | None = None  # Optional custom working directory for this minion
+    sandbox_enabled: bool = False  # Enable OS-level sandboxing (issue #319)
 
 
 
@@ -1108,7 +1109,8 @@ class ClaudeWebUI:
                     permission_mode=request.permission_mode,
                     allowed_tools=request.allowed_tools,
                     working_directory=str(working_dir),
-                    model=request.model
+                    model=request.model,
+                    sandbox_enabled=request.sandbox_enabled
                 )
 
                 # Get the created minion info

@@ -245,6 +245,25 @@
               </div>
             </div>
 
+            <!-- Sandbox Mode (issue #319) -->
+            <div class="mb-3 form-check">
+              <input
+                type="checkbox"
+                class="form-check-input"
+                id="sandboxEnabled"
+                v-model="formData.sandbox_enabled"
+              />
+              <label class="form-check-label" for="sandboxEnabled">
+                🔒 Enable Sandbox Mode
+              </label>
+              <div class="form-text text-muted" v-if="!formData.sandbox_enabled">
+                <small>Sandbox mode restricts file system and network access for added security.</small>
+              </div>
+              <div class="form-text text-info" v-if="formData.sandbox_enabled">
+                <small>🔒 Sandbox enabled: Minion will have OS-level isolation restricting file system and network access.</small>
+              </div>
+            </div>
+
             <!-- Start Immediately -->
             <div class="mb-3 form-check">
               <input
@@ -328,6 +347,7 @@ const formData = ref({
   permission_mode: 'default',
   allowed_tools: '',
   working_directory: '',
+  sandbox_enabled: false,
   startImmediately: true
 })
 
@@ -564,6 +584,7 @@ function resetForm() {
     permission_mode: 'default',
     allowed_tools: '',
     working_directory: '',
+    sandbox_enabled: false,
     startImmediately: true
   }
   capabilitiesInput.value = ''
@@ -631,7 +652,8 @@ async function createMinion() {
       capabilities: capabilities.value,
       permission_mode: formData.value.permission_mode,
       allowed_tools: allowedTools.value,
-      working_directory: formData.value.working_directory.trim() || null
+      working_directory: formData.value.working_directory.trim() || null,
+      sandbox_enabled: formData.value.sandbox_enabled
     }
 
     const response = await api.post(`/api/legions/${legionId.value}/minions`, payload)

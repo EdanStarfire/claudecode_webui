@@ -38,7 +38,8 @@ class OverseerController:
         permission_mode: str = "default",
         allowed_tools: list[str] | None = None,
         working_directory: str | None = None,
-        model: str | None = None
+        model: str | None = None,
+        sandbox_enabled: bool = False
     ) -> str:
         """
         Create a minion for the user (root overseer).
@@ -54,6 +55,7 @@ class OverseerController:
             allowed_tools: List of pre-authorized tools (e.g., ["edit", "read", "bash"])
             working_directory: Optional custom working directory (defaults to project directory)
             model: Model selection (sonnet, opus, haiku, opusplan)
+            sandbox_enabled: Enable OS-level sandboxing (issue #319)
 
         Returns:
             str: The created minion's session_id
@@ -102,7 +104,9 @@ class OverseerController:
             is_minion=True,  # Explicitly mark as minion
             role=role,
             capabilities=capabilities or [],
-            can_spawn_minions=True  # User-created minion can spawn by default
+            can_spawn_minions=True,  # User-created minion can spawn by default
+            # Sandbox mode (issue #319)
+            sandbox_enabled=sandbox_enabled
         )
 
         # Register capabilities in capability registry
@@ -135,7 +139,8 @@ class OverseerController:
         capabilities: list[str] | None = None,
         permission_mode: str | None = None,
         allowed_tools: list[str] | None = None,
-        working_directory: str | None = None
+        working_directory: str | None = None,
+        sandbox_enabled: bool = False
     ) -> dict[str, any]:
         """
         Spawn a child minion autonomously by a parent overseer.
@@ -151,6 +156,7 @@ class OverseerController:
             permission_mode: Permission mode (from template or safe default)
             allowed_tools: List of allowed tools (from template or safe default)
             working_directory: Optional custom working directory (defaults to parent's directory)
+            sandbox_enabled: Enable OS-level sandboxing (issue #319)
 
         Returns:
             dict: {
@@ -216,7 +222,9 @@ class OverseerController:
             capabilities=capabilities or [],
             parent_overseer_id=parent_overseer_id,
             overseer_level=overseer_level,
-            can_spawn_minions=True  # Child can spawn by default
+            can_spawn_minions=True,  # Child can spawn by default
+            # Sandbox mode (issue #319)
+            sandbox_enabled=sandbox_enabled
         )
 
         # 8. Update parent: mark as overseer, add child to child_minion_ids
