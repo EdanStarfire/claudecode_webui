@@ -20,14 +20,14 @@
           </span>
         </div>
 
-        <!-- Latest Activity below name - Issue #291 -->
-        <div v-if="minionData.latest_message" class="latest-activity text-muted">
+        <!-- Latest Activity below name - Issue #291, #340: use live data for real-time updates -->
+        <div v-if="minionWithLiveData?.latest_message" class="latest-activity text-muted">
           <span v-if="messagePrefix" class="activity-prefix">{{ messagePrefix }} </span>
-          <span class="activity-content" :title="minionData.latest_message">{{ truncatedMessage }}</span>
+          <span class="activity-content" :title="minionWithLiveData.latest_message">{{ truncatedMessage }}</span>
           <span v-if="relativeTime" class="activity-time ms-1">({{ relativeTime }})</span>
         </div>
         <!-- Fallback to last_comm if no latest_message -->
-        <div v-else-if="minionData.last_comm" class="latest-activity text-muted">
+        <div v-else-if="minionData?.last_comm" class="latest-activity text-muted">
           <span class="activity-prefix">→ <strong>{{ getCommRecipient(minionData.last_comm) }}</strong>: </span>
           <span class="activity-content" :title="minionData.last_comm.content || ''">{{ getCommSummary(minionData.last_comm) }}</span>
         </div>
@@ -76,14 +76,14 @@
 
         <!-- Right Column: Latest Message or Last Comm (70%) -->
         <div class="node-right">
-          <!-- Show latest_message if available (priority over comm) -->
-          <div v-if="minionData.latest_message" class="latest-message-preview">
+          <!-- Show latest_message if available (priority over comm) - #340: use live data -->
+          <div v-if="minionWithLiveData?.latest_message" class="latest-message-preview">
             <span v-if="messagePrefix" class="message-prefix">{{ messagePrefix }}</span>
-            <span class="message-content" :title="minionData.latest_message">{{ truncatedMessage }}</span>
+            <span class="message-content" :title="minionWithLiveData.latest_message">{{ truncatedMessage }}</span>
             <span v-if="relativeTime" class="message-time ms-1">({{ relativeTime }})</span>
           </div>
           <!-- Fallback to last_comm if no latest_message -->
-          <div v-else-if="minionData.last_comm" class="last-comm-preview">
+          <div v-else-if="minionData?.last_comm" class="last-comm-preview">
             <span class="comm-direction">→ <strong>{{ getCommRecipient(minionData.last_comm) }}</strong>:</span>
             <span class="comm-content" :title="minionData.last_comm.content || ''">{{ getCommSummary(minionData.last_comm) }}</span>
           </div>
@@ -212,6 +212,12 @@ const minionWithLiveData = computed(() => {
   if (liveSession.value) {
     merged.state = liveSession.value.state
     merged.is_processing = liveSession.value.is_processing
+    // Merge latest message from session store (updated via UI WebSocket broadcasts)
+    if (liveSession.value.latest_message) {
+      merged.latest_message = liveSession.value.latest_message
+      merged.latest_message_type = liveSession.value.latest_message_type
+      merged.latest_message_time = liveSession.value.latest_message_time
+    }
   }
 
   // Merge latest message if available from message store (for active session)
