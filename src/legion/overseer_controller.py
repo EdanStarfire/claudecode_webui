@@ -302,7 +302,8 @@ class OverseerController:
     async def dispose_minion(
         self,
         parent_overseer_id: str,
-        child_minion_name: str
+        child_minion_name: str,
+        delete_after_archive: bool = False
     ) -> dict[str, any]:
         """
         Dispose of a child minion (terminate with cleanup).
@@ -310,9 +311,13 @@ class OverseerController:
         Args:
             parent_overseer_id: Session ID of parent overseer
             child_minion_name: Name of child to dispose (NOT session_id)
+            delete_after_archive: If True, delete the session after archiving.
+                If False (default), terminate and archive but keep session and
+                relationships intact (minion can be restarted and re-disposed).
 
         Returns:
-            dict: {"success": bool, "disposed_minion_id": str, "descendants_count": int}
+            dict: {"success": bool, "disposed_minion_id": str, "descendants_count": int,
+                   "deleted": bool}
 
         Raises:
             ValueError: If child not found
@@ -354,12 +359,15 @@ class OverseerController:
             )
 
         # 3. Recursively dispose descendants first (depth-first disposal)
+        # Propagate delete_after_archive to ensure consistent behavior for entire subtree
         descendants_disposed = 0
         if child_session.child_minion_ids:
             for grandchild_id in list(child_session.child_minion_ids):
                 grandchild = await self.system.session_coordinator.session_manager.get_session_info(grandchild_id)
                 if grandchild:
-                    result = await self.dispose_minion(child_minion_id, grandchild.name)
+                    result = await self.dispose_minion(
+                        child_minion_id, grandchild.name, delete_after_archive=delete_after_archive
+                    )
                     descendants_disposed += result["descendants_count"] + 1
 
         # 4. Memory distillation (stub for now - Phase 7)
@@ -389,35 +397,54 @@ class OverseerController:
                 f"Failed to archive minion {child_minion_name}: {archive_result.error_message}"
             )
 
-        # 8. Update parent: remove child from child_minion_ids
-        parent_children = list(parent_session.child_minion_ids or [])
-        if child_minion_id in parent_children:
-            parent_children.remove(child_minion_id)
-            await self.system.session_coordinator.session_manager.update_session(
-                parent_overseer_id,
-                child_minion_ids=parent_children
-            )
+        # 8. Conditional cleanup based on delete_after_archive
+        deleted = False
+        if delete_after_archive:
+            # Full cleanup: remove relationships and delete session
+            # 8a. Update parent: remove child from child_minion_ids
+            parent_children = list(parent_session.child_minion_ids or [])
+            if child_minion_id in parent_children:
+                parent_children.remove(child_minion_id)
+                await self.system.session_coordinator.session_manager.update_session(
+                    parent_overseer_id,
+                    child_minion_ids=parent_children
+                )
 
-        # If parent has no more children, mark as no longer overseer
-        if not parent_children:
-            await self.system.session_coordinator.session_manager.update_session(
-                parent_overseer_id,
-                is_overseer=False
-            )
+            # If parent has no more children, mark as no longer overseer
+            if not parent_children:
+                await self.system.session_coordinator.session_manager.update_session(
+                    parent_overseer_id,
+                    is_overseer=False
+                )
 
-        # 9. Deregister from capability registry
-        for _capability, minion_ids in self.system.legion_coordinator.capability_registry.items():
-            if child_minion_id in minion_ids:
-                minion_ids.remove(child_minion_id)
+            # 8b. Deregister from capability registry
+            for _capability, minion_ids in self.system.legion_coordinator.capability_registry.items():
+                if child_minion_id in minion_ids:
+                    minion_ids.remove(child_minion_id)
 
-        # 10. Send DISPOSE notification to user
+            # 8c. Delete the session completely
+            try:
+                await self.system.session_coordinator.delete_session(child_minion_id)
+                deleted = True
+                coord_logger.info(f"Deleted minion session {child_minion_name} ({child_minion_id})")
+            except Exception as e:
+                coord_logger.warning(f"Failed to delete minion session {child_minion_id}: {e}")
+        else:
+            # Soft dispose: keep relationships intact, minion can be restarted
+            # Only deregister from capability registry (capabilities are session-specific)
+            for _capability, minion_ids in self.system.legion_coordinator.capability_registry.items():
+                if child_minion_id in minion_ids:
+                    minion_ids.remove(child_minion_id)
+
+        # 9. Send DISPOSE notification to user
+        action_word = "deleted" if deleted else "disposed"
         dispose_comm = Comm(
             comm_id=str(uuid.uuid4()),
             from_minion_id=parent_overseer_id,
             from_minion_name=parent_session.name,
             to_user=True,
-            summary=f"Disposed {child_minion_name}",
-            content=f"**{parent_session.name}** disposed of minion **{child_minion_name}**" + (
+            summary=f"{'Deleted' if deleted else 'Disposed'} {child_minion_name}",
+            content=f"**{parent_session.name}** {action_word} minion **{child_minion_name}**" + (
                 f" (and {descendants_disposed} descendants)" if descendants_disposed > 0 else ""
             ),
             comm_type=CommType.DISPOSE,
@@ -426,7 +453,7 @@ class OverseerController:
         )
         await self.system.comm_router.route_comm(dispose_comm)
 
-        # 12. Broadcast project update to UI WebSocket (session removed)
+        # 10. Broadcast project update to UI WebSocket (session state changed or removed)
         legion_id = parent_session.project_id
         if self.system.ui_websocket_manager:
             project = await self.system.session_coordinator.project_manager.get_project(legion_id)
@@ -437,13 +464,17 @@ class OverseerController:
                 })
                 coord_logger.debug(f"Broadcasted project_updated for legion {legion_id} after minion disposal")
 
-        coord_logger.info(f"Minion {child_minion_name} disposed by {parent_session.name} (disposed_id={child_minion_id}, descendants={descendants_disposed})")
+        coord_logger.info(
+            f"Minion {child_minion_name} {action_word} by {parent_session.name} "
+            f"(disposed_id={child_minion_id}, descendants={descendants_disposed}, deleted={deleted})"
+        )
 
         return {
             "success": True,
             "disposed_minion_id": child_minion_id,
             "disposed_minion_name": child_minion_name,
-            "descendants_count": descendants_disposed
+            "descendants_count": descendants_disposed,
+            "deleted": deleted
         }
 
     # TODO: Implement in Phase 5

@@ -132,7 +132,8 @@ class LegionMCPTools:
             "dispose minions you spawned (your children). Their knowledge will be transferred "
             "to you before termination.",
             {
-                "minion_name": str  # Name of child minion to dispose
+                "minion_name": str,  # Name of child minion to dispose
+                "delete": bool       # If True, fully delete after archive (default: False = soft dispose)
             }
         )
         async def dispose_minion_tool(args: dict[str, Any]) -> dict[str, Any]:
@@ -674,7 +675,8 @@ class LegionMCPTools:
         Args:
             args: {
                 "_parent_overseer_id": str,  # Injected by tool wrapper (session_id)
-                "minion_name": str
+                "minion_name": str,
+                "delete": bool  # If True, fully delete session after archive (default: False)
             }
 
         Returns:
@@ -696,6 +698,7 @@ class LegionMCPTools:
 
         # Extract parameters
         minion_name = args.get("minion_name", "").strip()
+        delete_after_archive = args.get("delete", False)
 
         # Validate required field
         if not minion_name:
@@ -711,18 +714,21 @@ class LegionMCPTools:
         try:
             result = await self.system.overseer_controller.dispose_minion(
                 parent_overseer_id=parent_overseer_id,
-                child_minion_name=minion_name
+                child_minion_name=minion_name,
+                delete_after_archive=delete_after_archive
             )
 
             descendants_msg = ""
             if result["descendants_count"] > 0:
-                descendants_msg = f"\n\n⚠️  Also disposed {result['descendants_count']} descendant minion(s) (children of {minion_name})."
+                action = "deleted" if result.get("deleted") else "disposed"
+                descendants_msg = f"\n\n⚠️  Also {action} {result['descendants_count']} descendant minion(s) (children of {minion_name})."
 
+            action_word = "deleted" if result.get("deleted") else "disposed of"
             return {
                 "content": [{
                     "type": "text",
                     "text": (
-                        f"✅ Successfully disposed of minion '{minion_name}'."
+                        f"✅ Successfully {action_word} minion '{minion_name}'."
                         f"{descendants_msg}\n\n"
                         f"Their knowledge has been preserved and will be available to you."
                     )
