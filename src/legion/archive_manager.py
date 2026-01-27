@@ -53,7 +53,8 @@ class ArchiveManager:
         reason: str,
         parent_overseer_id: str | None,
         parent_overseer_name: str | None,
-        descendants_count: int = 0
+        descendants_count: int = 0,
+        will_be_deleted: bool = False
     ) -> ArchiveResult:
         """
         Archive a minion's session data before disposal.
@@ -70,6 +71,7 @@ class ArchiveManager:
             parent_overseer_id: Parent who initiated disposal
             parent_overseer_name: Captured parent name
             descendants_count: Number of descendants disposed in cascade
+            will_be_deleted: If True, session will be deleted after archive (affects final_state)
 
         Returns:
             ArchiveResult with success status and archive path
@@ -113,13 +115,15 @@ class ArchiveManager:
                 archive_logger.debug(f"Archived state.json for minion {minion_id}")
 
             # Create disposal metadata
+            # Use "deleted" as final_state if session will be deleted after archive
+            final_state = "deleted" if will_be_deleted else session_info.state.value
             metadata = DisposalMetadata(
                 disposed_at=datetime.now(UTC).timestamp(),
                 reason=reason,
                 parent_overseer_id=parent_overseer_id,
                 parent_overseer_name=parent_overseer_name,
                 legion_id=session_info.project_id or "",
-                final_state=session_info.state.value,
+                final_state=final_state,
                 minion_id=minion_id,
                 minion_name=session_info.name or "unknown",
                 minion_role=session_info.role,

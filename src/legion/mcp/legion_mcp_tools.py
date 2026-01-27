@@ -129,8 +129,9 @@ class LegionMCPTools:
         @tool(
             "dispose_minion",
             "Terminate a child minion you created when their task is complete. You can only "
-            "dispose minions you spawned (your children). Their knowledge will be transferred "
-            "to you before termination.",
+            "dispose minions you spawned (your children). Use delete=True to permanently remove "
+            "the minion (their data is archived first). Use delete=False (default) for soft "
+            "dispose - the minion can be restarted later by sending it a comm.",
             {
                 "minion_name": str,  # Name of child minion to dispose
                 "delete": bool       # If True, fully delete after archive (default: False = soft dispose)
@@ -724,13 +725,19 @@ class LegionMCPTools:
                 descendants_msg = f"\n\n⚠️  Also {action} {result['descendants_count']} descendant minion(s) (children of {minion_name})."
 
             action_word = "deleted" if result.get("deleted") else "disposed of"
+            if result.get("deleted"):
+                # Hard delete - data archived
+                status_msg = "Their session data has been archived before deletion."
+            else:
+                # Soft dispose - can restart
+                status_msg = "You can restart this minion later by sending it a comm."
             return {
                 "content": [{
                     "type": "text",
                     "text": (
                         f"✅ Successfully {action_word} minion '{minion_name}'."
                         f"{descendants_msg}\n\n"
-                        f"Their knowledge has been preserved and will be available to you."
+                        f"{status_msg}"
                     )
                 }],
                 "is_error": False

@@ -576,9 +576,13 @@ class SessionCoordinator:
             logger.error(f"Failed to update session {session_id} name: {e}")
             return False
 
-    async def delete_session(self, session_id: str) -> dict:
+    async def delete_session(self, session_id: str, archive_reason: str = "user_deleted") -> dict:
         """
         Delete a session and cleanup all resources (with cascading deletion for child minions).
+
+        Args:
+            session_id: ID of session to delete
+            archive_reason: Reason for archival (default: "user_deleted", use "parent_initiated" for dispose_minion)
 
         Returns a dict with:
             - success: bool indicating if deletion succeeded
@@ -598,7 +602,8 @@ class SessionCoordinator:
                 for child_id in child_ids:
                     coord_logger.info(f"Cascading: deleting child minion {child_id} of parent {session_id}")
                     # Recursively delete child (which may have its own children)
-                    result = await self.delete_session(child_id)
+                    # Pass archive_reason through to children
+                    result = await self.delete_session(child_id, archive_reason=archive_reason)
                     if result.get("success"):
                         deleted_ids.extend(result.get("deleted_session_ids", []))
 
@@ -640,17 +645,55 @@ class SessionCoordinator:
 
             # Step 1.6: If this is a minion with capabilities, clean up capability registry
             if session_info and session_info.is_minion and session_info.capabilities:
-                # Clean up capability registry (project check ensures this is a legion minion)
-                if project and project.is_multi_agent and self.legion_system:
+                # Clean up capability registry
+                if project and self.legion_system:
                     self.legion_system.legion_coordinator.unregister_minion_capabilities(session_id)
                     coord_logger.info(f"Cleaned up {len(session_info.capabilities)} capabilities from registry for minion {session_id}")
 
-            # Step 1.7: Legion-specific cleanup for minions
-            if session_info and session_info.is_minion and project and project.is_multi_agent and self.legion_system:
+            # Step 1.65: Terminate SDK and update state BEFORE archive (Issue #236)
+            # This ensures archive captures final "terminated" state (same pattern as dispose_minion)
+            sdk = self._active_sdks.get(session_id)
+            if sdk:
+                await sdk.terminate()
+                del self._active_sdks[session_id]
+                await asyncio.sleep(0.2)  # Give SDK time to fully close
+
+            # Update session state to terminated (so archive captures correct final_state)
+            if session_info and session_info.state != SessionState.TERMINATED:
+                await self.session_manager.terminate_session(session_id)
+                coord_logger.info(f"Terminated session {session_id} before archive/deletion")
+
+            # Step 1.7: Archive session before deletion (Issue #236)
+            # Archive any session in a project before deletion
+            if session_info and project and self.legion_system:
+                try:
+                    # Get parent info for archive metadata
+                    parent_name = None
+                    if session_info.parent_overseer_id:
+                        parent_info = await self.session_manager.get_session_info(session_info.parent_overseer_id)
+                        parent_name = parent_info.name if parent_info else None
+
+                    archive_result = await self.legion_system.archive_manager.archive_minion(
+                        minion_id=session_id,
+                        reason=archive_reason,
+                        parent_overseer_id=session_info.parent_overseer_id,
+                        parent_overseer_name=parent_name,
+                        descendants_count=len(deleted_ids),  # Children already deleted in cascade
+                        will_be_deleted=True  # This is a hard delete
+                    )
+                    if archive_result.success:
+                        coord_logger.info(f"Archived session {session_id} to {archive_result.archive_path} before deletion")
+                    else:
+                        coord_logger.warning(f"Failed to archive session {session_id}: {archive_result.error_message}")
+                except Exception as e:
+                    coord_logger.error(f"Error archiving session {session_id} before deletion: {e}")
+
+            # Step 1.8: Legion-specific cleanup for minions
+            if session_info and session_info.is_minion and project and self.legion_system:
                 legion_id = project.project_id
                 coord_logger.info(f"Starting Legion-specific cleanup for minion {session_id} in legion {legion_id}")
 
-                # 1.7a: Delete minion directory in legions/{legion_id}/minions/{minion_id}/
+                # 1.8a: Delete minion directory in legions/{legion_id}/minions/{minion_id}/
                 minion_dir = self.data_dir / "legions" / legion_id / "minions" / session_id
                 if minion_dir.exists():
                     try:
@@ -662,16 +705,7 @@ class SessionCoordinator:
                 else:
                     coord_logger.debug(f"Legion minion directory does not exist (already cleaned): {minion_dir}")
 
-            # Step 2: Terminate the SDK if it's running
-            sdk = self._active_sdks.get(session_id)
-            if sdk:
-                # logger.info(f"Terminating SDK for session {session_id} before deletion")
-                await sdk.terminate()
-                del self._active_sdks[session_id]
-                # Give SDK time to fully close
-                await asyncio.sleep(0.2)
-
-            # Step 3: Clean up storage manager and ensure all files are closed
+            # Step 2: Clean up storage manager and ensure all files are closed
             if session_id in self._storage_managers:
                 storage_manager = self._storage_managers[session_id]
                 # logger.info(f"Cleaning up storage manager for session {session_id}")
@@ -680,26 +714,26 @@ class SessionCoordinator:
                 # Give storage manager time to close all file handles
                 await asyncio.sleep(0.2)
 
-            # Step 4: Clean up callbacks
+            # Step 3: Clean up callbacks
             if session_id in self._message_callbacks:
                 del self._message_callbacks[session_id]
             if session_id in self._error_callbacks:
                 del self._error_callbacks[session_id]
 
-            # Step 5: Force multiple garbage collections to ensure all handles are released
+            # Step 4: Force multiple garbage collections to ensure all handles are released
             gc.collect()
             await asyncio.sleep(0.1)
             gc.collect()
             await asyncio.sleep(0.1)
 
-            # Step 6: Additional Windows-specific cleanup
+            # Step 5: Additional Windows-specific cleanup
             if os.name == 'nt':  # Windows
                 # logger.info(f"Performing Windows-specific cleanup for session {session_id}")
                 # Force close any remaining handles that might be held by the system
                 gc.collect()
                 await asyncio.sleep(0.3)
 
-            # Step 7: Delete through session manager (this removes from active sessions and deletes files)
+            # Step 6: Delete through session manager (this removes from active sessions and deletes files)
             # logger.info(f"Deleting session files for session {session_id}")
             success = await self.session_manager.delete_session(session_id)
 
