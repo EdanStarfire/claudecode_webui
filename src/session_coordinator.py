@@ -165,6 +165,9 @@ class SessionCoordinator:
         overseer_level: int = 0,
         can_spawn_minions: bool = True,  # If False, no MCP spawn tools attached
         is_minion: bool = False,  # Explicit minion flag (for spawned minions)
+        # Sandbox mode (issue #319)
+        sandbox_enabled: bool = False,
+        sandbox_config: dict | None = None,
     ) -> str:
         """Create a new Claude Code session with integrated components (within a project)"""
         try:
@@ -204,7 +207,10 @@ class SessionCoordinator:
                 capabilities=capabilities,
                 parent_overseer_id=parent_overseer_id,
                 overseer_level=overseer_level,
-                can_spawn_minions=can_spawn_minions
+                can_spawn_minions=can_spawn_minions,
+                # Sandbox mode (issue #319)
+                sandbox_enabled=sandbox_enabled,
+                sandbox_config=sandbox_config
             )
 
             # Add session to project
@@ -269,7 +275,9 @@ class SessionCoordinator:
                 override_system_prompt=override_system_prompt,
                 tools=all_tools,
                 model=model,
-                mcp_servers=mcp_servers
+                mcp_servers=mcp_servers,
+                sandbox_enabled=sandbox_enabled,
+                sandbox_config=sandbox_config
             )
             self._active_sdks[session_id] = sdk
 
@@ -429,7 +437,9 @@ class SessionCoordinator:
                 tools=all_tools,
                 model=session_info.model,
                 resume_session_id=resume_sdk_session,  # Only resume if we have a Claude Code session ID
-                mcp_servers=mcp_servers
+                mcp_servers=mcp_servers,
+                sandbox_enabled=session_info.sandbox_enabled,
+                sandbox_config=session_info.sandbox_config
             )
             self._active_sdks[session_id] = sdk
 

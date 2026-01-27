@@ -88,6 +88,10 @@ class SessionInfo:
     latest_message_type: str | None = None  # "user", "assistant", "system"
     latest_message_time: datetime | None = None  # When the message was received
 
+    # Sandbox mode support (issue #319)
+    sandbox_enabled: bool = False  # If True, enable OS-level sandboxing via SDK
+    sandbox_config: dict | None = None  # Optional SandboxSettings config (auto_allow_bash, excluded_commands, etc.)
+
     def __post_init__(self):
         if self.allowed_tools is None:
             self.allowed_tools = ["bash", "edit", "read"]
@@ -215,7 +219,10 @@ class SessionManager:
         capabilities: list[str] = None,
         parent_overseer_id: str | None = None,
         overseer_level: int = 0,
-        can_spawn_minions: bool = True  # If False, no MCP spawn tools attached
+        can_spawn_minions: bool = True,  # If False, no MCP spawn tools attached
+        # Sandbox mode (issue #319)
+        sandbox_enabled: bool = False,
+        sandbox_config: dict | None = None
     ) -> None:
         """Create a new session with provided ID (or minion if is_minion=True)"""
         # Validate session_id is not reserved
@@ -254,7 +261,10 @@ class SessionManager:
             capabilities=capabilities if capabilities is not None else [],
             parent_overseer_id=parent_overseer_id,
             overseer_level=overseer_level,
-            can_spawn_minions=can_spawn_minions
+            can_spawn_minions=can_spawn_minions,
+            # Sandbox mode (issue #319)
+            sandbox_enabled=sandbox_enabled,
+            sandbox_config=sandbox_config
         )
 
         try:

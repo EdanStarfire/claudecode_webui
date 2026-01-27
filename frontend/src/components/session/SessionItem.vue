@@ -17,6 +17,7 @@
     <div class="session-info flex-grow-1">
       <div class="session-name">
         <span>{{ session.name || session.session_id }}</span>
+        <span v-if="session.sandbox_enabled" class="sandbox-indicator ms-1" title="Sandboxed">🔒</span>
         <span v-if="session.is_minion && session.role" class="text-muted small ms-1">({{ session.role }})</span>
       </div>
       <!-- Latest Activity below name - Issue #291 -->
@@ -307,6 +308,11 @@ function onDrop(event) {
 
 .session-name {
   /* Name keeps its default size */
+}
+
+.sandbox-indicator {
+  font-size: 0.9em;
+  cursor: help;
 }
 
 /* Latest activity display (issue #291) - below name, 1pt smaller */

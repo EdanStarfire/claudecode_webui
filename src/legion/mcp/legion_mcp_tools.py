@@ -111,13 +111,18 @@ class LegionMCPTools:
             "\n\n**Working Directory (Optional):**"
             "\nSpecify a custom working directory for git worktrees or multi-repo workflows:"
             "\n- working_directory='/path/to/worktree' - Use absolute or relative path"
-            "\n- If not specified, child inherits parent's working directory",
+            "\n- If not specified, child inherits parent's working directory"
+            "\n\n**Sandbox Mode (Optional):**"
+            "\nEnable OS-level sandboxing to restrict file system and network access:"
+            "\n- sandbox_enabled=True - Enable sandboxing (default: False)"
+            "\n- Sandboxed minions have restricted access to files and network",
             {
                 "name": str,                           # Unique name for new minion
                 "role": str,                           # Human-readable role description
                 "initialization_context": str,         # System prompt defining expertise
                 "template_name": str,                  # Template to apply for permissions (optional)
-                "working_directory": str               # Custom working directory (optional)
+                "working_directory": str,              # Custom working directory (optional)
+                "sandbox_enabled": bool                # Enable OS-level sandboxing (optional, default: False)
             }
         )
         async def spawn_minion_tool(args: dict[str, Any]) -> dict[str, Any]:
@@ -460,6 +465,7 @@ class LegionMCPTools:
         template_name = args.get("template_name", "").strip()
         capabilities = args.get("capabilities", [])
         working_directory_raw = args.get("working_directory")
+        sandbox_enabled = args.get("sandbox_enabled", False)
 
         # Get parent session to determine legion_id
         parent_session = await self.system.session_coordinator.session_manager.get_session_info(parent_overseer_id)
@@ -591,7 +597,8 @@ class LegionMCPTools:
                 capabilities=capabilities,
                 permission_mode=permission_mode,
                 allowed_tools=allowed_tools,
-                working_directory=working_directory
+                working_directory=working_directory,
+                sandbox_enabled=sandbox_enabled
             )
 
             child_minion_id = spawn_result["minion_id"]
@@ -617,6 +624,11 @@ class LegionMCPTools:
             if working_directory:
                 wd_info = f"\nWorking Directory: {working_directory}\n"
 
+            # Add sandbox info
+            sandbox_info = ""
+            if sandbox_enabled:
+                sandbox_info = "\n**Sandbox:** Enabled (OS-level isolation)\n"
+
             next_step_msg = f"Send a comm to '{name}' to start them working on their task"
 
             return {
@@ -626,6 +638,7 @@ class LegionMCPTools:
                         f"✅ Successfully spawned minion '{name}' with role '{role}'.\n\n"
                         f"Minion ID: {child_minion_id}\n"
                         f"{wd_info}"
+                        f"{sandbox_info}"
                         f"{perm_info}\n"
                         f"The child minion is now active and ready to receive comms. "
                         f"You can communicate with them using send_comm(to_minion_name='{name}', ...)."
