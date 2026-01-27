@@ -222,6 +222,24 @@ class LegionMCPTools:
             args["_from_minion_id"] = session_id
             return await self._handle_update_expertise(args)
 
+        @tool(
+            "whoami",
+            "Get your own identity and metadata. Returns comprehensive information about "
+            "the calling minion including basic identity (name, role), hierarchy position "
+            "(parent, children, is_overseer), capabilities, and configuration."
+            "\n\nThis tool enables self-aware minion behavior for:"
+            "\n- Self-aware logging (include name/role in log messages)"
+            "\n- Role-based decisions (check role before attempting operations)"
+            "\n- Hierarchy navigation (discover parent/children for coordination)"
+            "\n- Capability discovery (query own capabilities to report expertise)"
+            "\n\nReturns a structured dictionary with all identity fields.",
+            {}  # No parameters required - returns caller's identity
+        )
+        async def whoami_tool(args: dict[str, Any]) -> dict[str, Any]:
+            """Get calling minion's identity and metadata."""
+            args["_from_minion_id"] = session_id
+            return await self._handle_whoami(args)
+
         # Create and return MCP server with all tools
         return create_sdk_mcp_server(
             name="legion",
@@ -234,7 +252,8 @@ class LegionMCPTools:
                 list_minions_tool,
                 get_minion_info_tool,
                 list_templates_tool,
-                update_expertise_tool
+                update_expertise_tool,
+                whoami_tool
             ]
         )
 
@@ -1319,3 +1338,104 @@ class LegionMCPTools:
                 }],
                 "is_error": True
             }
+
+    async def _handle_whoami(self, args: dict[str, Any]) -> dict[str, Any]:
+        """
+        Handle whoami tool call.
+
+        Returns comprehensive identity and metadata for the calling minion.
+
+        Args:
+            args: {
+                "_from_minion_id": str  # Injected by tool wrapper
+            }
+
+        Returns:
+            Tool result with structured identity data
+        """
+        from_minion_id = args.get("_from_minion_id")
+
+        if not from_minion_id:
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": "Error: Unable to determine minion ID"
+                }],
+                "is_error": True
+            }
+
+        # Get session info for the calling minion
+        session = await self.system.session_coordinator.session_manager.get_session_info(
+            from_minion_id
+        )
+        if not session:
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": f"Error: Session {from_minion_id} not found"
+                }],
+                "is_error": True
+            }
+
+        # Resolve parent name if exists
+        parent_name = None
+        if session.parent_overseer_id:
+            parent_session = await self.system.session_coordinator.session_manager.get_session_info(
+                session.parent_overseer_id
+            )
+            if parent_session:
+                parent_name = parent_session.name
+
+        # Resolve child names
+        child_names = []
+        for child_id in session.child_minion_ids or []:
+            child_session = await self.system.session_coordinator.session_manager.get_session_info(
+                child_id
+            )
+            if child_session:
+                child_names.append(child_session.name or child_id[:8])
+            else:
+                child_names.append(child_id[:8])
+
+        # Format creation timestamp
+        creation_timestamp = None
+        if session.created_at:
+            creation_timestamp = session.created_at.isoformat()
+
+        # Build comprehensive identity response (Option B from issue #320)
+        identity = {
+            # Basic identity
+            "minion_id": session.session_id,
+            "minion_name": session.name,
+            "role": session.role or "",
+            # Hierarchy info
+            "is_minion": session.is_minion,
+            "is_overseer": session.is_overseer,
+            "overseer_level": session.overseer_level,
+            "parent_overseer_id": session.parent_overseer_id,
+            "parent_overseer_name": parent_name,
+            "child_minion_ids": session.child_minion_ids or [],
+            "child_minion_names": child_names,
+            # Capabilities
+            "capabilities": session.capabilities or [],
+            "expertise_score": session.expertise_score,
+            # Timestamps and location
+            "creation_timestamp": creation_timestamp,
+            "working_directory": session.working_directory,
+            # Legion/Project
+            "legion_id": session.project_id,
+            "session_id": session.session_id,
+            # Configuration
+            "permission_mode": session.current_permission_mode,
+            "model": session.model,
+            "can_spawn_minions": session.can_spawn_minions,
+        }
+
+        return {
+            "content": [{
+                "type": "text",
+                "text": str(identity)
+            }],
+            "is_error": False,
+            "identity": identity  # Also include as structured data for programmatic access
+        }
