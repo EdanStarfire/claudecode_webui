@@ -182,11 +182,10 @@ class SessionCoordinator:
             # Calculate order based on existing sessions in project
             order = len(project.session_ids)
 
-            # Issue #313: Universal Legion - is_minion determined by:
-            # 1. Explicit is_minion=True parameter (for spawned minions)
-            # 2. Having a parent_overseer_id (spawned by another session)
-            # 3. Legacy: project.is_multi_agent for backward compatibility
-            session_is_minion = is_minion or parent_overseer_id is not None or project.is_multi_agent
+            # Issue #313: Universal Legion - ALL sessions are minions
+            # Issue #338: Unconditionally set is_minion=True so auto-created
+            # first sessions in new projects are classified as minions
+            session_is_minion = True
 
             # Create session through session manager
             # Store raw system_prompt (guide will be prepended later in start_session)
@@ -201,9 +200,9 @@ class SessionCoordinator:
                 name=name,
                 order=order,
                 project_id=project_id,
-                # Multi-agent fields (universal Legion - issue #313)
+                # Multi-agent fields (universal Legion - issue #313, #338)
                 is_minion=session_is_minion,
-                role=role,
+                role=role or "assistant",
                 capabilities=capabilities,
                 parent_overseer_id=parent_overseer_id,
                 overseer_level=overseer_level,
@@ -365,6 +364,14 @@ class SessionCoordinator:
             if not session_info:
                 logger.error(f"No session info found for {session_id}")
                 return False
+
+            # Issue #338: Lazy migration for existing non-minion sessions
+            if not session_info.is_minion:
+                session_info.is_minion = True
+                if not session_info.role:
+                    session_info.role = "assistant"
+                await self.session_manager._persist_session_state(session_id)
+                logger.info(f"Migrated session {session_id} to minion (is_minion=True, role={session_info.role})")
 
             # Create storage manager
             session_dir = await self.session_manager.get_session_directory(session_id)
