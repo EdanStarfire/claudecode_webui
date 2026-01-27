@@ -220,6 +220,20 @@ export const useProjectStore = defineStore('project', () => {
   }
 
   /**
+   * Select a project (for Project Overview navigation)
+   */
+  function selectProject(projectId) {
+    currentProjectId.value = projectId
+  }
+
+  /**
+   * Clear project selection
+   */
+  function clearProjectSelection() {
+    currentProjectId.value = null
+  }
+
+  /**
    * Format project path for display (show last 2 segments)
    */
   function formatPath(absolutePath) {
@@ -256,6 +270,8 @@ export const useProjectStore = defineStore('project', () => {
     reorderProjects,
     reorderSessionsInProject,
     getProject,
+    selectProject,
+    clearProjectSelection,
     formatPath
   }
 })
