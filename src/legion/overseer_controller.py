@@ -368,10 +368,28 @@ class OverseerController:
         # 5. Knowledge transfer to parent (stub for now - Phase 7)
         # await self.system.memory_manager.transfer_knowledge(child_minion_id, parent_overseer_id)
 
-        # 6. Terminate SDK session
+        # 6. Terminate SDK session (before archive to ensure no more activity)
         await self.system.session_coordinator.terminate_session(child_minion_id)
 
-        # 7. Update parent: remove child from child_minion_ids
+        # 7. Archive minion data after termination (issue #236)
+        # Archive after terminate to capture final state and ensure no race conditions
+        archive_result = await self.system.archive_manager.archive_minion(
+            minion_id=child_minion_id,
+            reason="parent_initiated",
+            parent_overseer_id=parent_overseer_id,
+            parent_overseer_name=parent_session.name,
+            descendants_count=descendants_disposed
+        )
+        if archive_result.success:
+            coord_logger.info(
+                f"Archived minion {child_minion_name} to {archive_result.archive_path}"
+            )
+        else:
+            coord_logger.warning(
+                f"Failed to archive minion {child_minion_name}: {archive_result.error_message}"
+            )
+
+        # 8. Update parent: remove child from child_minion_ids
         parent_children = list(parent_session.child_minion_ids or [])
         if child_minion_id in parent_children:
             parent_children.remove(child_minion_id)
@@ -387,12 +405,12 @@ class OverseerController:
                 is_overseer=False
             )
 
-        # 8. Deregister from capability registry
+        # 9. Deregister from capability registry
         for _capability, minion_ids in self.system.legion_coordinator.capability_registry.items():
             if child_minion_id in minion_ids:
                 minion_ids.remove(child_minion_id)
 
-        # 9. Send DISPOSE notification to user
+        # 10. Send DISPOSE notification to user
         dispose_comm = Comm(
             comm_id=str(uuid.uuid4()),
             from_minion_id=parent_overseer_id,
@@ -408,7 +426,7 @@ class OverseerController:
         )
         await self.system.comm_router.route_comm(dispose_comm)
 
-        # 11. Broadcast project update to UI WebSocket (session removed)
+        # 12. Broadcast project update to UI WebSocket (session removed)
         legion_id = parent_session.project_id
         if self.system.ui_websocket_manager:
             project = await self.system.session_coordinator.project_manager.get_project(legion_id)

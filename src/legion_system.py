@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from src.data_storage import DataStorageManager
+    from src.legion.archive_manager import ArchiveManager
     from src.legion.comm_router import CommRouter
     from src.legion.legion_coordinator import LegionCoordinator
     from src.legion.mcp.legion_mcp_tools import LegionMCPTools
@@ -64,6 +65,7 @@ class LegionSystem:
     overseer_controller: 'OverseerController' = field(init=False)
     comm_router: 'CommRouter' = field(init=False)
     memory_manager: 'MemoryManager' = field(init=False)
+    archive_manager: 'ArchiveManager' = field(init=False)
     mcp_tools: 'LegionMCPTools' = field(init=False)
 
     def __post_init__(self):
@@ -73,6 +75,7 @@ class LegionSystem:
         Order matters: components with fewer dependencies first.
         """
         # Import here to avoid circular imports at module level
+        from src.legion.archive_manager import ArchiveManager
         from src.legion.comm_router import CommRouter
         from src.legion.legion_coordinator import LegionCoordinator
         from src.legion.mcp.legion_mcp_tools import LegionMCPTools
@@ -83,6 +86,7 @@ class LegionSystem:
         # Lower-level components first (fewer dependencies)
         self.comm_router = CommRouter(self)
         self.memory_manager = MemoryManager(self)
+        self.archive_manager = ArchiveManager(self)
         self.overseer_controller = OverseerController(self)
 
         # Higher-level components (depend on above)
