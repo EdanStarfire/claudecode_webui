@@ -10,19 +10,45 @@
   >
     <!-- Accordion Header -->
     <h2 class="accordion-header" :id="`heading-${project.project_id}`">
-      <!-- Accordion Button (changed to div to allow nested buttons) -->
+      <!-- Issue #312: Split header into chevron and clickable project name -->
       <div
-        class="accordion-button bg-white p-2"
-        :class="{ collapsed: !isExpanded }"
-        role="button"
-        tabindex="0"
-        :aria-expanded="isExpanded"
-        :aria-controls="`collapse-${project.project_id}`"
-        @click="onAccordionClick"
-        @keydown.enter.prevent="onAccordionClick"
-        @keydown.space.prevent="onAccordionClick"
+        class="accordion-button bg-white p-2 project-header-split"
+        :class="{ collapsed: !isExpanded, 'project-selected': isProjectOverviewActive }"
       >
-        <div class="flex-grow-1 d-flex flex-column" style="min-width: 0;">
+        <!-- Chevron toggle (independent expand/collapse) -->
+        <button
+          class="chevron-toggle btn btn-link p-0 me-2"
+          type="button"
+          :aria-expanded="isExpanded"
+          :aria-controls="`collapse-${project.project_id}`"
+          :aria-label="isExpanded ? 'Collapse session list' : 'Expand session list'"
+          @click.stop="onChevronClick"
+          @keydown.enter.prevent="onChevronClick"
+          @keydown.space.prevent="onChevronClick"
+        >
+          <svg
+            class="chevron-icon"
+            :class="{ expanded: isExpanded }"
+            width="12"
+            height="12"
+            viewBox="0 0 12 12"
+            fill="currentColor"
+          >
+            <path d="M4.5 2L8.5 6L4.5 10" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+          </svg>
+        </button>
+
+        <!-- Clickable project name area (navigates to overview) -->
+        <div
+          class="flex-grow-1 d-flex flex-column project-name-area"
+          style="min-width: 0; cursor: pointer;"
+          role="button"
+          tabindex="0"
+          :aria-label="`View ${project.name} overview`"
+          @click="navigateToOverview"
+          @keydown.enter.prevent="navigateToOverview"
+          @keydown.space.prevent="navigateToOverview"
+        >
           <!-- Top row: Project name AND action buttons -->
           <div class="d-flex align-items-center mb-1" style="gap: 0.5rem;">
             <div class="fw-semibold" style="flex-shrink: 0;">
@@ -211,10 +237,14 @@ const isHierarchyActive = computed(() => {
   return route.name === 'hierarchy' && route.params.legionId === props.project.project_id
 })
 
-// Accordion click handler (manually toggle since we changed button to div)
-function onAccordionClick(event) {
-  // Only toggle if clicking the accordion itself, not nested buttons
-  // The @click.stop on nested buttons will prevent this from being called
+// Issue #312: Check if this project's overview is active
+const isProjectOverviewActive = computed(() => {
+  const route = router.currentRoute.value
+  return route.name === 'project' && route.params.projectId === props.project.project_id
+})
+
+// Issue #312: Chevron click handler (toggles session list expansion)
+function onChevronClick(event) {
   const bootstrap = window.bootstrap
   if (!bootstrap) return
 
@@ -223,6 +253,16 @@ function onAccordionClick(event) {
 
   const bsCollapse = bootstrap.Collapse.getOrCreateInstance(collapseElement)
   bsCollapse.toggle()
+
+  // Update isExpanded immediately for chevron rotation
+  // The onExpand/onCollapse handlers will sync with backend
+  isExpanded.value = !isExpanded.value
+}
+
+// Issue #312: Navigate to project overview when clicking project name
+function navigateToOverview() {
+  projectStore.selectProject(props.project.project_id)
+  router.push(`/project/${props.project.project_id}`)
 }
 
 // Collapse event handlers
@@ -498,5 +538,67 @@ function onDrop(event) {
 .minion-hierarchy-container {
   padding: 0.5rem;
   background-color: #f8f9fa;
+}
+
+/* Issue #312: Chevron toggle styling */
+.project-header-split {
+  /* Remove default accordion arrow */
+  &::after {
+    display: none;
+  }
+}
+
+.chevron-toggle {
+  border: none;
+  background: none;
+  color: #6c757d;
+  font-size: 0.75rem;
+  line-height: 1;
+  min-width: 1rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.chevron-toggle:hover {
+  color: #0d6efd;
+}
+
+.chevron-toggle:focus {
+  outline: 2px solid #0d6efd;
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+.chevron-icon {
+  display: inline-block;
+  transition: transform 0.15s ease-out;
+  transform: rotate(0deg);
+}
+
+.chevron-icon.expanded {
+  transform: rotate(90deg);
+}
+
+/* Issue #312: Project name area hover effect */
+.project-name-area:hover {
+  background-color: rgba(13, 110, 253, 0.05);
+  border-radius: 4px;
+}
+
+.project-name-area:focus {
+  outline: 2px solid #0d6efd;
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* Issue #312: Selection highlighting for project overview */
+.project-selected {
+  background-color: #e7f1ff !important;
+  border-left: 3px solid #0d6efd;
+}
+
+.project-selected .fw-semibold {
+  color: #0d6efd;
 }
 </style>
