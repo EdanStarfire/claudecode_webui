@@ -80,8 +80,8 @@ class CommRouter:
             if parent and parent.child_minion_ids:
                 visible.update(parent.child_minion_ids)
 
-        # Exclude self
-        visible.discard(caller_id)
+        # Include self (minions should see themselves in list_minions/search_capability)
+        visible.add(caller_id)
 
         return list(visible)
 

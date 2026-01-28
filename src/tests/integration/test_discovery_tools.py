@@ -269,8 +269,8 @@ async def test_list_minions_empty_legion(legion_test_env):
     # Verify user is present
     assert "user" in response_text
 
-    # Verify count (1 total: just user, no hierarchy peers)
-    assert "Active Minions (1)" in response_text
+    # Verify count (2 total: user + self, no hierarchy peers)
+    assert "Active Minions (2)" in response_text
 
 
 @pytest.mark.asyncio

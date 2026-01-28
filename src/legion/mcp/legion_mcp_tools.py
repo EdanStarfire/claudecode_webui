@@ -386,6 +386,16 @@ class LegionMCPTools:
                 }
             to_minion_id = to_minion.session_id  # session_id IS the minion_id
 
+        # Block self-comms (would cause LLM loop)
+        if not sending_to_user and to_minion_id and to_minion_id == from_minion_id:
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": "Error: Cannot send comm to yourself."
+                }],
+                "is_error": True
+            }
+
         # Validate comm target is within sender's immediate hierarchy group
         if not sending_to_user and to_minion_id:
             is_allowed = await self.system.comm_router.validate_comm_target(
