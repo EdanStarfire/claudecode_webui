@@ -1,0 +1,7 @@
+{
+  "name": "Web Researcher",
+  "permission_mode": "default",
+  "allowed_tools": ["webfetch", "websearch", "read"],
+  "default_role": "Documentation and research specialist",
+  "description": "Can search web and read docs, requires permission for edits"
+}

@@ -1,0 +1,7 @@
+{
+  "name": "Safe Sandbox",
+  "permission_mode": "default",
+  "allowed_tools": ["read"],
+  "default_role": "Read-only analyst",
+  "description": "Highly restricted for safe experimentation"
+}
