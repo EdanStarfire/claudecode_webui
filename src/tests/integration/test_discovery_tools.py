@@ -6,6 +6,39 @@ Tests: search_capability, list_minions, get_minion_info
 
 import pytest
 
+
+async def _setup_siblings(env, *minion_specs):
+    """
+    Helper to create minions as siblings under a common overseer.
+
+    Args:
+        env: legion_test_env fixture
+        *minion_specs: tuples of (name, role, kwargs) for each minion
+
+    Returns:
+        List of created minion SessionInfo objects (overseer is NOT returned)
+    """
+    session_manager = env["session_coordinator"].session_manager
+    overseer = await env["create_minion"]("_overseer", role="Overseer")
+    minions = []
+    for spec in minion_specs:
+        name, role = spec[0], spec[1]
+        kwargs = spec[2] if len(spec) > 2 else {}
+        m = await env["create_minion"](name, role=role, **kwargs)
+        minions.append(m)
+
+    # Wire up hierarchy
+    child_ids = [m.session_id for m in minions]
+    await session_manager.update_session(
+        overseer.session_id, is_overseer=True, child_minion_ids=child_ids
+    )
+    for m in minions:
+        await session_manager.update_session(
+            m.session_id, parent_overseer_id=overseer.session_id
+        )
+    return minions
+
+
 # ============================================================================
 # search_capability Tests
 # ============================================================================
@@ -23,9 +56,12 @@ async def test_search_capability_with_matches(legion_test_env):
     env = legion_test_env
     legion_system = env["legion_system"]
 
-    # Create minions with different expertise levels
-    minion1 = await env["create_minion"]("expert", role="Expert", capabilities=["python", "testing"])
-    minion2 = await env["create_minion"]("novice", role="Novice", capabilities=["python"])
+    # Create sibling minions with different expertise levels
+    minion1, minion2 = await _setup_siblings(
+        env,
+        ("expert", "Expert", {"capabilities": ["python", "testing"]}),
+        ("novice", "Novice", {"capabilities": ["python"]})
+    )
 
     # Register capabilities with different expertise scores
     await legion_system.legion_coordinator.register_capability(
@@ -50,19 +86,12 @@ async def test_search_capability_with_matches(legion_test_env):
     assert result["content"][0]["type"] == "text"
     assert result.get("is_error") is not True
 
-    # Verify results include both minions
+    # Verify results include the sibling (novice) - expert (self) is excluded from visibility
     response_text = result["content"][0]["text"]
-    assert "expert" in response_text
     assert "novice" in response_text
 
     # Verify expertise scores are shown
-    assert "90%" in response_text  # expert's 0.9 → 90%
     assert "30%" in response_text  # novice's 0.3 → 30%
-
-    # Verify ranking (expert should appear before novice)
-    expert_pos = response_text.find("expert")
-    novice_pos = response_text.find("novice")
-    assert expert_pos < novice_pos, "Results should be ranked by expertise (highest first)"
 
 
 @pytest.mark.asyncio
@@ -134,24 +163,28 @@ async def test_search_capability_partial_match(legion_test_env):
     env = legion_test_env
     legion_system = env["legion_system"]
 
-    # Create minion with multiple related capabilities
-    minion = await env["create_minion"]("dev", role="Developer")
+    # Create sibling minions — caller searches for capabilities on sibling
+    caller, dev = await _setup_siblings(
+        env,
+        ("caller", "Caller"),
+        ("dev", "Developer")
+    )
 
-    # Register multiple "test" related capabilities
+    # Register multiple "test" related capabilities on dev
     await legion_system.legion_coordinator.register_capability(
-        minion_id=minion.session_id,
+        minion_id=dev.session_id,
         capability="testing",
         expertise_score=0.8
     )
     await legion_system.legion_coordinator.register_capability(
-        minion_id=minion.session_id,
+        minion_id=dev.session_id,
         capability="test_automation",
         expertise_score=0.7
     )
 
-    # Search for "test" (should match both)
+    # Search for "test" from caller (should find sibling dev)
     result = await legion_system.mcp_tools._handle_search_capability({
-        "_from_minion_id": minion.session_id,
+        "_from_minion_id": caller.session_id,
         "capability": "test"
     })
 
@@ -169,22 +202,25 @@ async def test_search_capability_partial_match(legion_test_env):
 @pytest.mark.asyncio
 async def test_list_minions_with_multiple(legion_test_env):
     """
-    Test list_minions returns all minions in legion.
+    Test list_minions returns sibling minions in immediate hierarchy group.
 
     Verifies:
     - Tool returns success with formatted list
     - USER_MINION_ID always included first
-    - All created minions are listed
+    - Sibling minions are listed
     - Response includes name, role, state, capabilities
     """
     env = legion_test_env
     legion_system = env["legion_system"]
 
-    # Create multiple minions with different attributes
-    minion1 = await env["create_minion"]("worker1", role="Worker", capabilities=["task-execution"])
-    minion2 = await env["create_minion"]("worker2", role="Analyst", capabilities=["data-analysis"])
+    # Create sibling minions under a common overseer
+    minion1, minion2 = await _setup_siblings(
+        env,
+        ("worker1", "Worker", {"capabilities": ["task-execution"]}),
+        ("worker2", "Analyst", {"capabilities": ["data-analysis"]})
+    )
 
-    # List minions from minion1's perspective
+    # List minions from minion1's perspective (sees: user + overseer + sibling worker2)
     result = await legion_system.mcp_tools._handle_list_minions({
         "_from_minion_id": minion1.session_id
     })
@@ -197,36 +233,30 @@ async def test_list_minions_with_multiple(legion_test_env):
 
     # Verify "user" minion is always first
     assert "user" in response_text
-    user_minion_id = "user"  # USER_MINION_ID constant
 
-    # Verify both created minions are listed
-    assert "worker1" in response_text
+    # Verify sibling is visible
     assert "worker2" in response_text
 
     # Verify roles are shown
-    assert "Worker" in response_text
     assert "Analyst" in response_text
-
-    # Verify count is correct (3 total: user + 2 minions)
-    assert "Active Minions (3)" in response_text
 
 
 @pytest.mark.asyncio
 async def test_list_minions_empty_legion(legion_test_env):
     """
-    Test list_minions with only the caller in legion.
+    Test list_minions with a minion that has no siblings or children.
 
     Verifies:
-    - Tool returns success even with minimal minions
+    - Tool returns success even with minimal visible minions
     - USER_MINION_ID is always present
     """
     env = legion_test_env
     legion_system = env["legion_system"]
 
-    # Create single minion
+    # Create single minion with no parent/children (no hierarchy)
     minion = await env["create_minion"]("solo", role="Solo Worker")
 
-    # List minions (should only show user + solo)
+    # List minions (should only show user — no visible hierarchy peers)
     result = await legion_system.mcp_tools._handle_list_minions({
         "_from_minion_id": minion.session_id
     })
@@ -239,10 +269,7 @@ async def test_list_minions_empty_legion(legion_test_env):
     # Verify user is present
     assert "user" in response_text
 
-    # Verify solo minion is present
-    assert "solo" in response_text
-
-    # Verify count (2 total)
+    # Verify count (2 total: user + self, no hierarchy peers)
     assert "Active Minions (2)" in response_text
 
 

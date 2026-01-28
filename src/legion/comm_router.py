@@ -45,6 +45,66 @@ class CommRouter:
         # Per-minion FIFO buffer for comms received while minion is processing
         self._comm_buffer: dict[str, list[Comm]] = {}
 
+    async def get_visible_minions(self, caller_id: str) -> list[str]:
+        """
+        Return minion IDs visible to the caller based on immediate hierarchy group.
+
+        A minion can see:
+        1. Direct children (if overseer)
+        2. Direct parent (overseer that spawned it)
+        3. Direct siblings (other children of same parent)
+
+        The user always sees all minions (handled separately).
+
+        Args:
+            caller_id: Session ID of the calling minion
+
+        Returns:
+            List of visible minion session IDs
+        """
+        session_manager = self.system.session_coordinator.session_manager
+        caller = await session_manager.get_session_info(caller_id)
+        if not caller:
+            return []
+
+        visible = set()
+
+        # Direct children
+        if caller.child_minion_ids:
+            visible.update(caller.child_minion_ids)
+
+        # Parent overseer + siblings
+        if caller.parent_overseer_id:
+            visible.add(caller.parent_overseer_id)
+
+            # Siblings: other children of the same parent
+            parent = await session_manager.get_session_info(caller.parent_overseer_id)
+            if parent and parent.child_minion_ids:
+                visible.update(parent.child_minion_ids)
+
+        # Include self (minions should see themselves in list_minions/search_capability)
+        visible.add(caller_id)
+
+        return list(visible)
+
+    async def validate_comm_target(self, sender_id: str, recipient_id: str) -> bool:
+        """
+        Check if sender can directly communicate with recipient.
+
+        User (sender_id=None or "user") can always reach anyone.
+        Minions can only reach their immediate hierarchy group.
+
+        Args:
+            sender_id: Session ID of sender (None for user)
+            recipient_id: Session ID of recipient
+
+        Returns:
+            True if sender can comm recipient
+        """
+        if not sender_id or sender_id == "user":
+            return True
+        return recipient_id in await self.get_visible_minions(sender_id)
+
     def set_comm_broadcast_callback(self, callback):
         """
         Set callback for broadcasting new comms to WebSocket clients.

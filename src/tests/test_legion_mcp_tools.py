@@ -211,10 +211,18 @@ async def test_list_minions_includes_overseer_sessions():
     session_coordinator = MagicMock()
     session_coordinator.session_manager = session_manager
 
+    # Create mock comm_router with hierarchy-scoped visibility
+    comm_router = MagicMock()
+    # Child can see parent and non-minion overseer (its immediate hierarchy group)
+    comm_router.get_visible_minions = AsyncMock(
+        return_value=["parent-session-id", "non-minion-overseer-id"]
+    )
+
     # Create mock system
     mock_system = MagicMock()
     mock_system.session_coordinator = session_coordinator
     mock_system.legion_coordinator = legion_coordinator
+    mock_system.comm_router = comm_router
 
     # Create MCP tools with mock system
     from src.legion.mcp.legion_mcp_tools import LegionMCPTools
@@ -231,12 +239,11 @@ async def test_list_minions_includes_overseer_sessions():
     # Parse result text
     result_text = result["content"][0]["text"]
 
-    # Verify parent overseer is visible (is_minion=True AND is_overseer=True)
+    # Verify parent overseer is visible (in child's hierarchy group)
     assert "ParentOverseer" in result_text, \
         f"Parent overseer should be visible to child. Result: {result_text}"
 
-    # Verify non-minion overseer is visible (is_minion=False BUT is_overseer=True)
-    # This is the key fix from issue #323
+    # Verify non-minion overseer is visible (in child's hierarchy group)
     assert "RegularOverseer" in result_text, \
         f"Non-minion overseer should be visible to child. Result: {result_text}"
 
