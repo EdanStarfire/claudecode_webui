@@ -3,8 +3,12 @@ Template Manager for Claude Code WebUI
 
 Manages minion templates storage and retrieval with full CRUD operations.
 Templates are stored as JSON+MD file pairs in data/templates/:
-  - <template_id>.json: Configuration (name, permission_mode, allowed_tools, etc.)
-  - <template_id>.md: System prompt (optional, loaded as default_system_prompt)
+  - <slug>.json: Configuration (name, permission_mode, allowed_tools, etc.)
+  - <slug>.md: System prompt (optional, loaded as default_system_prompt)
+
+File names are derived from the template name (e.g., "Coding Minion" ->
+"coding_minion.json" / "coding_minion.md") so users can easily identify
+and directly edit template files.
 
 Default templates are shipped as source files in src/default_templates/ and
 seeded into data/templates/ on first run (or when new defaults are added).
@@ -13,6 +17,7 @@ seeded into data/templates/ on first run (or when new defaults are added).
 import importlib.resources
 import json
 import logging
+import re
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
@@ -26,9 +31,19 @@ template_logger = get_logger('template_manager', category='TEMPLATE_MANAGER')
 logger = logging.getLogger(__name__)
 
 
+def _slugify(name: str) -> str:
+    """Convert template name to a filesystem-safe slug.
+
+    "Coding Minion" -> "coding_minion"
+    "Code Expert" -> "code_expert"
+    """
+    slug = name.strip().lower()
+    slug = re.sub(r'[^a-z0-9]+', '_', slug)
+    return slug.strip('_')
+
+
 def _get_default_templates_dir() -> Path:
     """Get the path to bundled default template source files."""
-    # Use importlib.resources for package-relative path resolution
     return Path(importlib.resources.files("src") / "default_templates")
 
 
@@ -36,8 +51,10 @@ class TemplateManager:
     """Manages minion templates storage and retrieval.
 
     Templates are stored as file pairs in data/templates/:
-      - <template_id>.json for configuration
-      - <template_id>.md for system prompt (optional)
+      - <slug>.json for configuration
+      - <slug>.md for system prompt (optional)
+
+    Slugs are derived from the template name for human readability.
     """
 
     def __init__(self, data_dir: Path):
@@ -65,7 +82,9 @@ class TemplateManager:
                 # Load companion .md file as default_system_prompt
                 md_file = template_file.with_suffix(".md")
                 if md_file.exists():
-                    data["default_system_prompt"] = md_file.read_text(encoding="utf-8").strip()
+                    data["default_system_prompt"] = md_file.read_text(
+                        encoding="utf-8"
+                    ).strip()
                 elif "default_system_prompt" not in data:
                     data["default_system_prompt"] = None
 
@@ -80,6 +99,50 @@ class TemplateManager:
 
         template_logger.info(f"Loaded {loaded_count} templates from disk")
 
+        # Migrate UUID-named files to slug-based names
+        await self._migrate_legacy_filenames()
+
+    async def _migrate_legacy_filenames(self):
+        """Rename UUID-based template files to slug-based names.
+
+        Handles upgrade from old format (template_id.json) to new format
+        (slug.json). Only renames files that match UUID pattern.
+        """
+        uuid_pattern = re.compile(
+            r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.json$'
+        )
+        migrated = 0
+        for json_file in list(self.templates_dir.glob("*.json")):
+            if not uuid_pattern.match(json_file.name):
+                continue
+
+            # Find the template loaded from this file by matching template_id
+            file_id = json_file.stem
+            template = self.templates.get(file_id)
+            if not template:
+                continue
+
+            slug = _slugify(template.name)
+            new_json = self.templates_dir / f"{slug}.json"
+            new_md = self.templates_dir / f"{slug}.md"
+            old_md = json_file.with_suffix(".md")
+
+            # Skip if slug file already exists (avoid collision)
+            if new_json.exists():
+                continue
+
+            json_file.rename(new_json)
+            if old_md.exists():
+                old_md.rename(new_md)
+
+            migrated += 1
+            template_logger.debug(
+                f"Migrated template files: {file_id} -> {slug} ({template.name})"
+            )
+
+        if migrated > 0:
+            template_logger.info(f"Migrated {migrated} template files to slug-based names")
+
     async def create_template(
         self,
         name: str,
@@ -90,22 +153,18 @@ class TemplateManager:
         description: str | None = None
     ) -> MinionTemplate:
         """Create a new template."""
-        # Validate name is not empty
         if not name or not name.strip():
             raise ValueError("Template name cannot be empty")
 
-        # Validate name uniqueness
         if any(t.name == name for t in self.templates.values()):
             raise ValueError(f"Template with name '{name}' already exists")
 
-        # Validate permission_mode
         valid_modes = ["default", "acceptEdits", "plan", "bypassPermissions"]
         if permission_mode not in valid_modes:
             raise ValueError(
                 f"Invalid permission_mode. Must be one of: {', '.join(valid_modes)}"
             )
 
-        # Create template
         template = MinionTemplate(
             template_id=str(uuid.uuid4()),
             name=name.strip(),
@@ -116,10 +175,7 @@ class TemplateManager:
             description=description
         )
 
-        # Save to disk
         await self._save_template(template)
-
-        # Cache in memory
         self.templates[template.template_id] = template
 
         template_logger.info(f"Created template: {template.name} ({template.template_id})")
@@ -155,13 +211,14 @@ class TemplateManager:
         if not template:
             raise ValueError(f"Template {template_id} not found")
 
+        old_name = template.name
+
         # Check name uniqueness if changing name
         if name and name.strip() != template.name:
             if any(t.name == name.strip() for t in self.templates.values()):
                 raise ValueError(f"Template with name '{name}' already exists")
             template.name = name.strip()
 
-        # Update fields if provided
         if permission_mode:
             valid_modes = ["default", "acceptEdits", "plan", "bypassPermissions"]
             if permission_mode not in valid_modes:
@@ -180,10 +237,12 @@ class TemplateManager:
         if description is not None:
             template.description = description
 
-        # Update timestamp
         template.updated_at = datetime.now(UTC)
 
-        # Save to disk
+        # If name changed, remove old files before saving with new slug
+        if template.name != old_name:
+            self._remove_files_by_slug(_slugify(old_name))
+
         await self._save_template(template)
 
         template_logger.info(f"Updated template: {template.name} ({template.template_id})")
@@ -195,40 +254,41 @@ class TemplateManager:
             return False
 
         template = self.templates[template_id]
+        slug = _slugify(template.name)
+        self._remove_files_by_slug(slug)
 
-        # Delete JSON file
-        template_file = self.templates_dir / f"{template_id}.json"
-        if template_file.exists():
-            template_file.unlink()
-
-        # Delete companion .md file
-        md_file = self.templates_dir / f"{template_id}.md"
-        if md_file.exists():
-            md_file.unlink()
-
-        # Remove from cache
         del self.templates[template_id]
 
         template_logger.info(f"Deleted template: {template.name} ({template_id})")
         return True
 
+    def _remove_files_by_slug(self, slug: str):
+        """Remove .json and .md files for a given slug."""
+        for ext in (".json", ".md"):
+            f = self.templates_dir / f"{slug}{ext}"
+            if f.exists():
+                f.unlink()
+
     async def _save_template(self, template: MinionTemplate):
         """Save template to disk as JSON + optional MD file pair.
 
+        Files are named using the slugified template name for readability.
         The JSON file contains all config fields except default_system_prompt.
         The .md file contains the system prompt separately for easy editing.
         """
+        slug = _slugify(template.name)
+
         # Build dict for JSON, excluding default_system_prompt
         data = template.to_dict()
         system_prompt = data.pop("default_system_prompt", None)
 
         # Write JSON config
-        template_file = self.templates_dir / f"{template.template_id}.json"
+        template_file = self.templates_dir / f"{slug}.json"
         with open(template_file, 'w') as f:
             json.dump(data, f, indent=2)
 
         # Write .md system prompt (create/update/delete as needed)
-        md_file = self.templates_dir / f"{template.template_id}.md"
+        md_file = self.templates_dir / f"{slug}.md"
         if system_prompt:
             md_file.write_text(system_prompt, encoding="utf-8")
         elif md_file.exists():
@@ -278,7 +338,8 @@ class TemplateManager:
                 if existing:
                     # Template exists — seed .md prompt file if missing
                     if source_prompt and not existing.default_system_prompt:
-                        runtime_md = self.templates_dir / f"{existing.template_id}.md"
+                        slug = _slugify(existing.name)
+                        runtime_md = self.templates_dir / f"{slug}.md"
                         if not runtime_md.exists():
                             runtime_md.write_text(source_prompt, encoding="utf-8")
                             existing.default_system_prompt = source_prompt
