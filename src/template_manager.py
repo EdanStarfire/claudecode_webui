@@ -239,9 +239,13 @@ class TemplateManager:
     async def create_default_templates(self):
         """Seed default templates from source files into data/templates/.
 
-        Reads JSON+MD pairs from src/default_templates/ and creates any
-        templates whose names don't already exist in the runtime directory.
-        This is idempotent: existing templates are never overwritten.
+        Reads JSON+MD pairs from src/default_templates/ and:
+        1. Creates any templates whose names don't already exist
+        2. For existing templates, seeds missing .md system prompt files
+           from source defaults (upgrade path for pre-existing installs)
+
+        This is idempotent: existing config is never overwritten, but
+        missing .md prompt files are added from source defaults.
         """
         defaults_dir = _get_default_templates_dir()
         if not defaults_dir.exists():
@@ -250,34 +254,49 @@ class TemplateManager:
             )
             return
 
-        # Collect existing template names for dedup
-        existing_names = {t.name for t in self.templates.values()}
+        # Build name->template lookup for existing templates
+        existing_by_name = {t.name: t for t in self.templates.values()}
 
         created_count = 0
+        prompt_seeded_count = 0
         for json_file in sorted(defaults_dir.glob("*.json")):
             try:
                 with open(json_file) as f:
                     data = json.load(f)
 
                 name = data.get("name", "")
-                if not name or name in existing_names:
+                if not name:
                     continue
 
-                # Load companion .md system prompt if present
-                md_file = json_file.with_suffix(".md")
-                system_prompt = None
-                if md_file.exists():
-                    system_prompt = md_file.read_text(encoding="utf-8").strip()
+                # Load companion .md system prompt from source if present
+                source_md = json_file.with_suffix(".md")
+                source_prompt = None
+                if source_md.exists():
+                    source_prompt = source_md.read_text(encoding="utf-8").strip()
+
+                existing = existing_by_name.get(name)
+                if existing:
+                    # Template exists — seed .md prompt file if missing
+                    if source_prompt and not existing.default_system_prompt:
+                        runtime_md = self.templates_dir / f"{existing.template_id}.md"
+                        if not runtime_md.exists():
+                            runtime_md.write_text(source_prompt, encoding="utf-8")
+                            existing.default_system_prompt = source_prompt
+                            prompt_seeded_count += 1
+                            template_logger.info(
+                                f"Seeded system prompt for existing template: {name}"
+                            )
+                    continue
 
                 await self.create_template(
                     name=data["name"],
                     permission_mode=data["permission_mode"],
                     allowed_tools=data.get("allowed_tools"),
                     default_role=data.get("default_role"),
-                    default_system_prompt=system_prompt,
+                    default_system_prompt=source_prompt,
                     description=data.get("description"),
                 )
-                existing_names.add(name)
+                existing_by_name[name] = await self.get_template_by_name(name)
                 created_count += 1
 
             except Exception as e:
@@ -285,5 +304,9 @@ class TemplateManager:
 
         if created_count > 0:
             template_logger.info(f"Created {created_count} default templates")
-        else:
+        if prompt_seeded_count > 0:
+            template_logger.info(
+                f"Seeded {prompt_seeded_count} system prompts for existing templates"
+            )
+        if created_count == 0 and prompt_seeded_count == 0:
             template_logger.debug("All default templates already exist")
