@@ -71,9 +71,26 @@ async def test_send_comm_to_active_minion(legion_test_env):
     data_dir = env["data_dir"]
     legion_id = env["legion_id"]
 
-    # Create sender and recipient minions (will wait for ACTIVE state)
+    # Create overseer and sibling minions (sender + recipient share a parent)
+    session_manager = env["session_coordinator"].session_manager
+    overseer = await env["create_minion"]("overseer", role="Overseer")
     sender = await env["create_minion"]("sender", role="Sender")
     recipient = await env["create_minion"]("recipient", role="Recipient")
+
+    # Set up hierarchy: overseer is parent of sender and recipient
+    await session_manager.update_session(
+        overseer.session_id,
+        is_overseer=True,
+        child_minion_ids=[sender.session_id, recipient.session_id]
+    )
+    await session_manager.update_session(
+        sender.session_id,
+        parent_overseer_id=overseer.session_id
+    )
+    await session_manager.update_session(
+        recipient.session_id,
+        parent_overseer_id=overseer.session_id
+    )
 
     # Send comm via MCP tool handler
     result = await legion_system.mcp_tools._handle_send_comm({

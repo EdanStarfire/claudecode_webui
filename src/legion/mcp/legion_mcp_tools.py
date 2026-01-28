@@ -73,7 +73,9 @@ class LegionMCPTools:
             "\n- 'pivot': Interrupt target and redirect work (message must include explicit 'cease prior work' instructions)"
             "\n\nUse HALT when: critical error/blocker discovered, time-sensitive question needing immediate answer"
             "\nUse PIVOT when: requirements changed, discovered target working on wrong task, need to completely change direction"
-            "\nUse NONE when: normal coordination, non-urgent updates, FYI messages (task completion notification)",
+            "\nUse NONE when: normal coordination, non-urgent updates, FYI messages (task completion notification)"
+            "\n\n**Visibility Scope:** You can only send comms to minions in your immediate hierarchy group "
+            "(parent, siblings, children). To reach minions outside your group, ask your overseer to relay.",
             {
                 "to_minion_name": str,       # Exact name of target minion (case-sensitive)
                 "summary": str,              # Specific one-sentence update (actionable)
@@ -152,19 +154,25 @@ class LegionMCPTools:
             "search_capability",
             "Find minions with a specific capability by searching the central capability registry. "
             "Returns ranked list of matching minions sorted by expertise scores. Use keywords like "
-            "'database', 'oauth', 'authentication', 'payment_processing', etc.",
+            "'database', 'oauth', 'authentication', 'payment_processing', etc."
+            "\n\n**Visibility Scope:** Results are filtered to your immediate hierarchy group "
+            "(parent, siblings, children). If the needed capability exists outside your group, "
+            "ask your overseer to locate it.",
             {
                 "capability": str  # Capability keyword to search for
             }
         )
         async def search_capability_tool(args: dict[str, Any]) -> dict[str, Any]:
             """Search for minions by capability."""
+            args["_from_minion_id"] = session_id
             return await self._handle_search_capability(args)
 
         @tool(
             "list_minions",
             "Get a list of all active minions in your legion with their names, roles, and "
-            "current states. Useful for understanding who's available to collaborate with.",
+            "current states. Useful for understanding who's available to collaborate with."
+            "\n\n**Visibility Scope:** Returns only minions in your immediate hierarchy group "
+            "(parent, siblings, children). Use your overseer to discover minions outside your group.",
             {}  # No parameters required
         )
         async def list_minions_tool(args: dict[str, Any]) -> dict[str, Any]:
@@ -377,6 +385,33 @@ class LegionMCPTools:
                     "is_error": True
                 }
             to_minion_id = to_minion.session_id  # session_id IS the minion_id
+
+        # Validate comm target is within sender's immediate hierarchy group
+        if not sending_to_user and to_minion_id:
+            is_allowed = await self.system.comm_router.validate_comm_target(
+                sender_id=from_minion_id,
+                recipient_id=to_minion_id
+            )
+            if not is_allowed:
+                # Build list of reachable minions for helpful error
+                visible_ids = await self.system.comm_router.get_visible_minions(from_minion_id)
+                visible_names = []
+                for vid in visible_ids:
+                    vs = await self.system.session_coordinator.session_manager.get_session_info(vid)
+                    if vs:
+                        visible_names.append(vs.name or vid[:8])
+                reachable = ", ".join(visible_names) if visible_names else "none"
+                return {
+                    "content": [{
+                        "type": "text",
+                        "text": (
+                            f"Error: Minion '{to_minion_name}' is not in your immediate hierarchy group. "
+                            f"You can reach: [{reachable}]. "
+                            f"Ask your overseer to relay the message, or coordinate through your shared hierarchy."
+                        )
+                    }],
+                    "is_error": True
+                }
 
         # Extract summary and content with fallback
         content = args.get("content", "")
@@ -811,10 +846,10 @@ class LegionMCPTools:
         Handle search_capability tool call.
 
         Searches the central capability registry for minions with matching capabilities.
-        Returns formatted text list of ranked results.
+        Results are filtered to the caller's immediate hierarchy group.
 
         Args:
-            args: Tool arguments with 'capability' keyword
+            args: Tool arguments with 'capability' keyword and '_from_minion_id'
 
         Returns:
             Tool result with formatted minion list or error message
@@ -845,6 +880,16 @@ class LegionMCPTools:
                     }],
                     "is_error": True
                 }
+
+            # Filter results to caller's immediate hierarchy group
+            from_minion_id = args.get("_from_minion_id")
+            if from_minion_id:
+                visible_ids = await self.system.comm_router.get_visible_minions(from_minion_id)
+                visible_set = set(visible_ids)
+                results = [
+                    (mid, score, cap) for mid, score, cap in results
+                    if mid in visible_set
+                ]
 
             # Handle empty results
             if not results:
@@ -945,13 +990,12 @@ class LegionMCPTools:
                     "is_error": True
                 }
 
-            # Get minions in this legion (project_id matches legion_id)
-            # Include both is_minion=True AND is_overseer=True sessions
-            # This allows children to see and communicate with parent overseers
+            # Scope to caller's immediate hierarchy group
             session_manager = self.system.session_coordinator.session_manager
+            visible_ids = await self.system.comm_router.get_visible_minions(from_minion_id)
             minions = []
-            for session_id in legion.session_ids:
-                session = await session_manager.get_session_info(session_id)
+            for vid in visible_ids:
+                session = await session_manager.get_session_info(vid)
                 if session and (session.is_minion or session.is_overseer):
                     minions.append(session)
 
