@@ -148,8 +148,8 @@
               </div>
             </div>
 
-            <!-- Minion tree (includes both sessions and minions) -->
-            <div v-else-if="minionHierarchy && minionHierarchy.children && minionHierarchy.children.length > 0">
+            <!-- Minion tree - Universal Legion (#313): all projects use hierarchy view -->
+            <template v-else-if="minionHierarchy && minionHierarchy.children && minionHierarchy.children.length > 0">
               <MinionTreeNode
                 v-for="minion in minionHierarchy.children"
                 :key="minion.id"
@@ -158,17 +158,12 @@
                 layout="sidebar"
                 @minion-click="handleMinionClick"
               />
-            </div>
-
-            <!-- Empty state - show regular sessions if no hierarchy -->
-            <template v-else>
-              <SessionItem
-                v-for="session in projectSessions"
-                :key="session.session_id"
-                :session="session"
-                :project-id="project.project_id"
-              />
             </template>
+
+            <!-- Empty state -->
+            <div v-else class="text-muted text-center py-2 small">
+              No sessions
+            </div>
           </div>
         </div>
       </div>
@@ -184,7 +179,6 @@ import { useSessionStore } from '@/stores/session'
 import { useUIStore } from '@/stores/ui'
 import { api } from '@/utils/api'
 import ProjectStatusLine from './ProjectStatusLine.vue'
-import SessionItem from '../session/SessionItem.vue'
 import MinionTreeNode from '../legion/MinionTreeNode.vue'
 
 const props = defineProps({
