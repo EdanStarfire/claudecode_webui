@@ -710,6 +710,9 @@ class ClaudeSDK:
             options_kwargs["sandbox"] = sandbox_settings
             sdk_logger.info(f"Sandbox enabled for session {self.session_id}: {sandbox_settings}")
 
+        # Enable native Tasks system (Claude Code 2.1+)
+        options_kwargs["env"] = {"CLAUDE_CODE_ENABLE_TASKS": "true"}
+
         # Add stderr callback to capture SDK CLI errors
         def stderr_handler(output: str) -> None:
             """Capture and log stderr output from Claude Code CLI."""
