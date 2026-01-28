@@ -92,3 +92,8 @@ class LegionSystem:
         # Higher-level components (depend on above)
         self.legion_coordinator = LegionCoordinator(self)
         self.mcp_tools = LegionMCPTools(self)
+
+        # Register comm buffer flush on processing completion
+        self.session_coordinator.session_manager.add_processing_complete_callback(
+            self.comm_router.flush_buffered_comms
+        )
