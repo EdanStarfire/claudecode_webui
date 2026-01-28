@@ -181,15 +181,7 @@ class TemplateManager:
         template_logger.debug(f"Saved template to disk: {template_file}")
 
     async def create_default_templates(self):
-        """Create default example templates on first run."""
-        # Check if any templates exist
-        if self.templates:
-            template_logger.debug("Templates already exist, skipping default template creation")
-            return
-
-        template_logger.info("Creating default templates")
-
-        # Create default templates
+        """Create default templates, adding any missing ones idempotently."""
         defaults = [
             {
                 "name": "Code Expert",
@@ -218,10 +210,50 @@ class TemplateManager:
                 "allowed_tools": ["read"],
                 "default_role": "Read-only analyst",
                 "description": "Highly restricted for safe experimentation"
+            },
+            {
+                "name": "Coding Minion",
+                "permission_mode": "acceptEdits",
+                "allowed_tools": [
+                    "bash", "edit", "read", "write", "glob", "grep", "task",
+                    "send_comm", "list_minions", "get_minion_info",
+                    "search_capability", "update_expertise"
+                ],
+                "default_role": "Autonomous implementation specialist for coding tasks",
+                "description": (
+                    "Full code modification access with test execution. "
+                    "No spawning capabilities (leaf node). "
+                    "Skills: codebase-explorer, change-impact-analyzer, "
+                    "backend-tester, requirement-validator"
+                )
+            },
+            {
+                "name": "Orchestrator",
+                "permission_mode": "default",
+                "allowed_tools": [
+                    "read", "grep", "glob", "task",
+                    "spawn_minion", "dispose_minion", "send_comm",
+                    "list_minions", "get_minion_info", "search_capability"
+                ],
+                "default_role": "Coordinates complex workflows by delegating to specialist minions",
+                "description": (
+                    "Read-only code access with full delegation capabilities. "
+                    "No direct code modification. "
+                    "Skills: implementation-planner, requirement-validator, "
+                    "codebase-explorer, git-branch-manager, github-issue-reader, "
+                    "github-pr-manager"
+                )
             }
         ]
 
+        created_count = 0
         for default in defaults:
-            await self.create_template(**default)
+            existing = await self.get_template_by_name(default["name"])
+            if not existing:
+                await self.create_template(**default)
+                created_count += 1
 
-        template_logger.info(f"Created {len(defaults)} default templates")
+        if created_count > 0:
+            template_logger.info(f"Created {created_count} default templates")
+        else:
+            template_logger.debug("All default templates already exist")
