@@ -1,0 +1,11 @@
+{
+  "name": "Orchestrator",
+  "permission_mode": "default",
+  "allowed_tools": [
+    "read", "grep", "glob", "task",
+    "spawn_minion", "dispose_minion", "send_comm",
+    "list_minions", "get_minion_info", "search_capability"
+  ],
+  "default_role": "Coordinates complex workflows by delegating to specialist minions",
+  "description": "Read-only code access with full delegation capabilities. No direct code modification. Skills: implementation-planner, requirement-validator, codebase-explorer, git-branch-manager, github-issue-reader, github-pr-manager"
+}

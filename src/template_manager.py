@@ -2,8 +2,15 @@
 Template Manager for Claude Code WebUI
 
 Manages minion templates storage and retrieval with full CRUD operations.
+Templates are stored as JSON+MD file pairs in data/templates/:
+  - <template_id>.json: Configuration (name, permission_mode, allowed_tools, etc.)
+  - <template_id>.md: System prompt (optional, loaded as default_system_prompt)
+
+Default templates are shipped as source files in src/default_templates/ and
+seeded into data/templates/ on first run (or when new defaults are added).
 """
 
+import importlib.resources
 import json
 import logging
 import uuid
@@ -18,121 +25,20 @@ template_logger = get_logger('template_manager', category='TEMPLATE_MANAGER')
 # Keep standard logger for errors
 logger = logging.getLogger(__name__)
 
-# --- Default system prompts for built-in templates ---
 
-CODING_MINION_SYSTEM_PROMPT = """\
-You are an autonomous coding minion responsible for implementing a specific task.
-
-Your mission workflow:
-1. SPAWN CLARIFICATION SUBMINION to analyze requirements
-   - Spawn child minion with template "Code Expert" in same worktree
-   - Name: "Clarifier-<task_id>"
-   - Child should:
-     a. Use github-issue-reader skill to fetch issue details (if working on an issue)
-     b. Use codebase-explorer skill to understand current implementation
-     c. Identify ANY ambiguities, assumptions, or unclear requirements
-     d. If ambiguous: Return specific clarifying questions (DO NOT guess or assume)
-     e. If clear: Analyze intended behavior vs current behavior
-     f. Create detailed implementation plan with clear acceptance criteria
-     g. Post plan as GitHub comment on the issue (use gh cli)
-     h. Return finalized plan to parent
-   - WAIT for child to complete analysis before proceeding
-   - DISPOSE CHILD immediately after receiving plan
-
-2. Review the finalized plan from clarification subminion (child is now disposed)
-3. SEND COMM: "Task - Plan finalized and posted, starting implementation"
-4. Implement the required changes according to finalized plan
-
-5. BUILD AND VERIFY (BEFORE committing):
-   a. If frontend code changed: Build frontend (npm run build or appropriate command)
-   b. Start test server on assigned port
-      - Do NOT use --data-dir flag (use default data/)
-      - DO use --port flag for testing
-   c. VERIFY changes work:
-      - Server starts without errors
-      - Check logs for relevant changes
-      - Test affected API endpoints (use curl/requests if needed)
-      - Run unit tests if components were modified
-      - Verify observable changes match plan
-   d. Fix any issues found during verification
-   e. ONLY proceed to commit once ALL verification passes
-
-6. SEND COMM: "Task - Testing complete, all verification passed"
-7. Commit changes with semantic commit message (use git-commit-composer skill)
-   - Commit should represent a working, tested change
-   - Do NOT commit broken or untested code
-8. Push branch and create PR (use github-pr-manager skill)
-9. SEND COMM (REQUIRED): "Task complete - PR #<number>" with details
-
-CRITICAL Communication Requirements:
-- MUST send comm if clarification subminion identifies ambiguities needing user input
-- MUST send comm after plan is finalized and posted
-- MUST send comm if blocked (use comm_type="question")
-- MUST send comm after testing and verification complete (before committing)
-- MUST send comm when PR is created (REQUIRED)
-
-Use mcp__legion__send_comm tool:
-- to_minion_name: "Orchestrator"
-- summary: "<specific, actionable summary>"
-- content: "<detailed information>"
-- comm_type: "report" (or "question" if blocked/needs help)
-- interrupt_priority: "none" (always use "none")
-
-CRITICAL Testing and Commit Requirements:
-- NEVER commit before testing and verification
-- Build frontend if frontend code changed (before testing)
-- Verify server starts, check logs, test API endpoints
-- Run unit tests for modified components
-- Fix any issues found during testing
-- ONLY commit once all verification passes
-- Every commit must represent working, tested code
-- Use backend-tester skill for automated testing
-- Do NOT use --data-dir flag when testing"""
-
-ORCHESTRATOR_SYSTEM_PROMPT = """\
-You are an Orchestrator minion that coordinates complex workflows by delegating \
-to specialist minions working in isolated git worktrees.
-
-You do NOT implement issues yourself. You spawn workers to do the work.
-
-Your workflow:
-1. Receive task assignments (issue numbers or feature requests)
-2. For each task, spawn a dedicated worker minion:
-   - Use worktree-manager skill to create isolated git worktree
-   - Worktree location: worktrees/<task-id>/
-   - Branch: feature/<task-id> based on latest main
-   - Calculate test port: 8000 + task_number (e.g., issue #123 -> port 8123)
-   - Spawn worker with "Coding Minion" template in the worktree directory
-   - Provide initialization_context with task-specific details:
-     working directory, test port, issue number, any special instructions
-   - Send initial task comm to the worker to begin work
-3. Monitor worker progress via comms
-4. Report results back (PR numbers, completion status)
-5. Clean up after merge:
-   - Dispose worker minion (use dispose_minion)
-   - Remove worktree (use worktree-manager skill)
-
-Key principles:
-- Each task gets its own isolated worktree (no conflicts between workers)
-- Workers operate independently in parallel
-- Test ports are unique per task (8000 + task_number)
-- Workers must test and verify before committing
-- You review worker output and relay results to the user
-
-Communication:
-- Workers report to you via send_comm
-- Forward relevant status to user
-- Escalate blockers or ambiguities that workers cannot resolve
-- Use comm_type="question" when you need user input
-
-Worker lifecycle: Spawn -> Work -> Report -> Review -> Merge -> Cleanup
-- Don't delete worktrees manually; use cleanup workflows
-- Dispose workers after their PRs are merged
-- Sync main branch before spawning new workers (/sync_main)"""
+def _get_default_templates_dir() -> Path:
+    """Get the path to bundled default template source files."""
+    # Use importlib.resources for package-relative path resolution
+    return Path(importlib.resources.files("src") / "default_templates")
 
 
 class TemplateManager:
-    """Manages minion templates storage and retrieval."""
+    """Manages minion templates storage and retrieval.
+
+    Templates are stored as file pairs in data/templates/:
+      - <template_id>.json for configuration
+      - <template_id>.md for system prompt (optional)
+    """
 
     def __init__(self, data_dir: Path):
         self.templates_dir = data_dir / "templates"
@@ -143,7 +49,11 @@ class TemplateManager:
         template_logger.debug(f"TemplateManager initialized with data_dir: {data_dir}")
 
     async def load_templates(self):
-        """Load all templates from disk on startup."""
+        """Load all templates from disk on startup.
+
+        For each .json file in templates_dir, loads config and checks for
+        a matching .md file to use as default_system_prompt.
+        """
         self.templates.clear()
         loaded_count = 0
 
@@ -151,10 +61,20 @@ class TemplateManager:
             try:
                 with open(template_file) as f:
                     data = json.load(f)
-                    template = MinionTemplate.from_dict(data)
-                    self.templates[template.template_id] = template
-                    loaded_count += 1
-                    template_logger.debug(f"Loaded template: {template.name} ({template.template_id})")
+
+                # Load companion .md file as default_system_prompt
+                md_file = template_file.with_suffix(".md")
+                if md_file.exists():
+                    data["default_system_prompt"] = md_file.read_text(encoding="utf-8").strip()
+                elif "default_system_prompt" not in data:
+                    data["default_system_prompt"] = None
+
+                template = MinionTemplate.from_dict(data)
+                self.templates[template.template_id] = template
+                loaded_count += 1
+                template_logger.debug(
+                    f"Loaded template: {template.name} ({template.template_id})"
+                )
             except Exception as e:
                 logger.error(f"Error loading template {template_file}: {e}")
 
@@ -181,7 +101,9 @@ class TemplateManager:
         # Validate permission_mode
         valid_modes = ["default", "acceptEdits", "plan", "bypassPermissions"]
         if permission_mode not in valid_modes:
-            raise ValueError(f"Invalid permission_mode. Must be one of: {', '.join(valid_modes)}")
+            raise ValueError(
+                f"Invalid permission_mode. Must be one of: {', '.join(valid_modes)}"
+            )
 
         # Create template
         template = MinionTemplate(
@@ -268,16 +190,21 @@ class TemplateManager:
         return template
 
     async def delete_template(self, template_id: str) -> bool:
-        """Delete template."""
+        """Delete template (both .json and .md files)."""
         if template_id not in self.templates:
             return False
 
         template = self.templates[template_id]
 
-        # Delete from disk
+        # Delete JSON file
         template_file = self.templates_dir / f"{template_id}.json"
         if template_file.exists():
             template_file.unlink()
+
+        # Delete companion .md file
+        md_file = self.templates_dir / f"{template_id}.md"
+        if md_file.exists():
+            md_file.unlink()
 
         # Remove from cache
         del self.templates[template_id]
@@ -286,86 +213,75 @@ class TemplateManager:
         return True
 
     async def _save_template(self, template: MinionTemplate):
-        """Save template to disk."""
+        """Save template to disk as JSON + optional MD file pair.
+
+        The JSON file contains all config fields except default_system_prompt.
+        The .md file contains the system prompt separately for easy editing.
+        """
+        # Build dict for JSON, excluding default_system_prompt
+        data = template.to_dict()
+        system_prompt = data.pop("default_system_prompt", None)
+
+        # Write JSON config
         template_file = self.templates_dir / f"{template.template_id}.json"
         with open(template_file, 'w') as f:
-            json.dump(template.to_dict(), f, indent=2)
+            json.dump(data, f, indent=2)
+
+        # Write .md system prompt (create/update/delete as needed)
+        md_file = self.templates_dir / f"{template.template_id}.md"
+        if system_prompt:
+            md_file.write_text(system_prompt, encoding="utf-8")
+        elif md_file.exists():
+            md_file.unlink()
+
         template_logger.debug(f"Saved template to disk: {template_file}")
 
     async def create_default_templates(self):
-        """Create default templates, adding any missing ones idempotently."""
-        defaults = [
-            {
-                "name": "Code Expert",
-                "permission_mode": "acceptEdits",
-                "allowed_tools": ["bash", "edit", "read", "write", "glob", "grep"],
-                "default_role": "Code review and refactoring specialist",
-                "description": "Can freely edit code and run tests"
-            },
-            {
-                "name": "Web Researcher",
-                "permission_mode": "default",
-                "allowed_tools": ["webfetch", "websearch", "read"],
-                "default_role": "Documentation and research specialist",
-                "description": "Can search web and read docs, requires permission for edits"
-            },
-            {
-                "name": "Project Manager",
-                "permission_mode": "acceptEdits",
-                "allowed_tools": ["bash", "edit", "read", "send_comm", "spawn_minion"],
-                "default_role": "Overseer for delegation and coordination",
-                "description": "Can manage project structure and delegate tasks"
-            },
-            {
-                "name": "Safe Sandbox",
-                "permission_mode": "default",
-                "allowed_tools": ["read"],
-                "default_role": "Read-only analyst",
-                "description": "Highly restricted for safe experimentation"
-            },
-            {
-                "name": "Coding Minion",
-                "permission_mode": "acceptEdits",
-                "allowed_tools": [
-                    "bash", "edit", "read", "write", "glob", "grep", "task",
-                    "send_comm", "list_minions", "get_minion_info",
-                    "search_capability", "update_expertise"
-                ],
-                "default_role": "Autonomous implementation specialist for coding tasks",
-                "description": (
-                    "Full code modification access with test execution. "
-                    "No spawning capabilities (leaf node). "
-                    "Skills: codebase-explorer, change-impact-analyzer, "
-                    "backend-tester, requirement-validator"
-                ),
-                "default_system_prompt": CODING_MINION_SYSTEM_PROMPT
-            },
-            {
-                "name": "Orchestrator",
-                "permission_mode": "default",
-                "allowed_tools": [
-                    "read", "grep", "glob", "task",
-                    "spawn_minion", "dispose_minion", "send_comm",
-                    "list_minions", "get_minion_info", "search_capability"
-                ],
-                "default_role": "Coordinates complex workflows by delegating to specialist minions",
-                "description": (
-                    "Read-only code access with full delegation capabilities. "
-                    "No direct code modification. "
-                    "Skills: implementation-planner, requirement-validator, "
-                    "codebase-explorer, git-branch-manager, github-issue-reader, "
-                    "github-pr-manager"
-                ),
-                "default_system_prompt": ORCHESTRATOR_SYSTEM_PROMPT
-            }
-        ]
+        """Seed default templates from source files into data/templates/.
+
+        Reads JSON+MD pairs from src/default_templates/ and creates any
+        templates whose names don't already exist in the runtime directory.
+        This is idempotent: existing templates are never overwritten.
+        """
+        defaults_dir = _get_default_templates_dir()
+        if not defaults_dir.exists():
+            template_logger.warning(
+                f"Default templates directory not found: {defaults_dir}"
+            )
+            return
+
+        # Collect existing template names for dedup
+        existing_names = {t.name for t in self.templates.values()}
 
         created_count = 0
-        for default in defaults:
-            existing = await self.get_template_by_name(default["name"])
-            if not existing:
-                await self.create_template(**default)
+        for json_file in sorted(defaults_dir.glob("*.json")):
+            try:
+                with open(json_file) as f:
+                    data = json.load(f)
+
+                name = data.get("name", "")
+                if not name or name in existing_names:
+                    continue
+
+                # Load companion .md system prompt if present
+                md_file = json_file.with_suffix(".md")
+                system_prompt = None
+                if md_file.exists():
+                    system_prompt = md_file.read_text(encoding="utf-8").strip()
+
+                await self.create_template(
+                    name=data["name"],
+                    permission_mode=data["permission_mode"],
+                    allowed_tools=data.get("allowed_tools"),
+                    default_role=data.get("default_role"),
+                    default_system_prompt=system_prompt,
+                    description=data.get("description"),
+                )
+                existing_names.add(name)
                 created_count += 1
+
+            except Exception as e:
+                logger.error(f"Error seeding default template {json_file.name}: {e}")
 
         if created_count > 0:
             template_logger.info(f"Created {created_count} default templates")

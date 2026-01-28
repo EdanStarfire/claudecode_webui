@@ -1,0 +1,7 @@
+{
+  "name": "Project Manager",
+  "permission_mode": "acceptEdits",
+  "allowed_tools": ["bash", "edit", "read", "send_comm", "spawn_minion"],
+  "default_role": "Overseer for delegation and coordination",
+  "description": "Can manage project structure and delegate tasks"
+}
