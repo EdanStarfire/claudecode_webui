@@ -238,8 +238,9 @@ onMounted(() => {
       if (!hierarchy.value) return
 
       // Update all minion states, is_processing, and latest_message in our hierarchy
+      // Issue #349: All sessions are minions
       for (const [sessionId, session] of sessions) {
-        if (session.is_minion && session.project_id === props.legionId) {
+        if (session.project_id === props.legionId) {
           const minion = findMinionInTree(hierarchy.value, sessionId)
           if (minion && minion.type === 'minion') {
             // Update state if changed

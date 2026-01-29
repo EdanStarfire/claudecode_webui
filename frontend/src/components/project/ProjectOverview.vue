@@ -63,15 +63,7 @@
               </div>
             </div>
           </div>
-          <div v-if="hasMinions" class="col-md-4">
-            <div class="card h-100">
-              <div class="card-body">
-                <h6 class="card-subtitle mb-2 text-muted">Minions</h6>
-                <h3 class="card-title mb-0">{{ minionCount }}</h3>
-                <small class="text-muted">{{ activeMinionCount }} active</small>
-              </div>
-            </div>
-          </div>
+          <!-- Issue #349: Removed redundant Minions card - all sessions are minions -->
           <div class="col-md-4">
             <div class="card h-100">
               <div class="card-body">
@@ -122,8 +114,8 @@
               >
                 <div class="flex-grow-1">
                   <div class="d-flex align-items-center">
-                    <span v-if="session.is_minion" class="me-2">🤖</span>
-                    <span v-else class="me-2">💬</span>
+                    <!-- Issue #349: All sessions are minions, always show robot icon -->
+                    <span class="me-2">🤖</span>
                     <strong>{{ session.name || 'Unnamed Session' }}</strong>
                     <span
                       class="badge ms-2"
@@ -214,9 +206,9 @@ const projectSessions = computed(() => {
     .filter(s => s !== null && s !== undefined)
 })
 
-// Check if project has minions
+// Issue #349: All sessions are minions - check if project has any sessions
 const hasMinions = computed(() =>
-  projectSessions.value.some(s => s.is_minion)
+  projectSessions.value.length > 0
 )
 
 // Stats
@@ -226,13 +218,8 @@ const activeSessionCount = computed(() =>
   projectSessions.value.filter(s => s.state === 'ACTIVE').length
 )
 
-const minionCount = computed(() =>
-  projectSessions.value.filter(s => s.is_minion).length
-)
-
-const activeMinionCount = computed(() =>
-  projectSessions.value.filter(s => s.is_minion && s.state === 'ACTIVE').length
-)
+// Issue #349: minionCount and activeMinionCount removed - all sessions are minions
+// Use sessionCount and activeSessionCount instead
 
 // Overall status
 const overallStatus = computed(() => {

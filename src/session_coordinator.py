@@ -158,13 +158,12 @@ class SessionCoordinator:
         name: str | None = None,
         permission_callback: Callable[[str, dict[str, Any]], bool | dict[str, Any]] | None = None,
         working_directory: str | None = None,  # Custom working directory (defaults to project directory)
-        # Multi-agent fields (universal Legion - issue #313)
+        # Multi-agent fields (universal Legion - issue #313, #349)
         role: str | None = None,
         capabilities: list[str] = None,
         parent_overseer_id: str | None = None,
         overseer_level: int = 0,
         can_spawn_minions: bool = True,  # If False, no MCP spawn tools attached
-        is_minion: bool = False,  # Explicit minion flag (for spawned minions)
         # Sandbox mode (issue #319)
         sandbox_enabled: bool = False,
         sandbox_config: dict | None = None,
@@ -182,10 +181,7 @@ class SessionCoordinator:
             # Calculate order based on existing sessions in project
             order = len(project.session_ids)
 
-            # Issue #313: Universal Legion - ALL sessions are minions
-            # Issue #338: Unconditionally set is_minion=True so auto-created
-            # first sessions in new projects are classified as minions
-            session_is_minion = True
+            # Issue #349: All sessions are minions (is_minion field removed)
 
             # Create session through session manager
             # Store raw system_prompt (guide will be prepended later in start_session)
@@ -200,8 +196,7 @@ class SessionCoordinator:
                 name=name,
                 order=order,
                 project_id=project_id,
-                # Multi-agent fields (universal Legion - issue #313, #338)
-                is_minion=session_is_minion,
+                # Multi-agent fields (universal Legion - issue #313, #349)
                 role=role or "assistant",
                 capabilities=capabilities,
                 parent_overseer_id=parent_overseer_id,
@@ -225,7 +220,7 @@ class SessionCoordinator:
             # All sessions can have Legion MCP tools if can_spawn_minions=True
             mcp_servers = None
             legion_tools = []
-            coord_logger.debug(f"MCP attachment check for session {session_id}: can_spawn_minions={can_spawn_minions}, is_minion={session_is_minion}, legion_system={self.legion_system is not None}")
+            coord_logger.debug(f"MCP attachment check for session {session_id}: can_spawn_minions={can_spawn_minions}, legion_system={self.legion_system is not None}")
             if can_spawn_minions and self.legion_system and self.legion_system.mcp_tools:
                 # Create session-specific MCP server (injects session_id into tool calls)
                 mcp_server = self.legion_system.mcp_tools.create_mcp_server_for_session(session_id)
@@ -365,13 +360,12 @@ class SessionCoordinator:
                 logger.error(f"No session info found for {session_id}")
                 return False
 
-            # Issue #338: Lazy migration for existing non-minion sessions
-            if not session_info.is_minion:
-                session_info.is_minion = True
-                if not session_info.role:
-                    session_info.role = "assistant"
+            # Issue #349: is_minion field removed - all sessions are minions
+            # Ensure role is set for sessions without one
+            if not session_info.role:
+                session_info.role = "assistant"
                 await self.session_manager._persist_session_state(session_id)
-                logger.info(f"Migrated session {session_id} to minion (is_minion=True, role={session_info.role})")
+                logger.info(f"Set default role for session {session_id}: {session_info.role}")
 
             # Create storage manager
             session_dir = await self.session_manager.get_session_directory(session_id)
@@ -407,16 +401,13 @@ class SessionCoordinator:
             all_tools = session_info.allowed_tools if session_info.allowed_tools else []
             all_tools = list(set(all_tools + legion_tools))  # Deduplicate
 
-            # Build minion system prompt by prepending legion guide to stored system_prompt
-            if session_info.is_minion:
-                legion_guide = get_legion_guide_only()
-                if session_info.system_prompt:
-                    minion_system_prompt = f"{legion_guide}\n\n---\n\n{session_info.system_prompt}"
-                else:
-                    minion_system_prompt = legion_guide
-                coord_logger.info(f"Built minion system prompt for start (guide + context): {len(minion_system_prompt)} chars")
+            # Issue #349: All sessions are minions - always prepend legion guide
+            legion_guide = get_legion_guide_only()
+            if session_info.system_prompt:
+                minion_system_prompt = f"{legion_guide}\n\n---\n\n{session_info.system_prompt}"
             else:
-                minion_system_prompt = session_info.system_prompt
+                minion_system_prompt = legion_guide
+            coord_logger.info(f"Built minion system prompt for start (guide + context): {len(minion_system_prompt)} chars")
 
             # Escape special characters in system_prompt for subprocess command-line safety
             # CRITICAL: Newlines break subprocess argument parsing on Windows
@@ -646,7 +637,8 @@ class SessionCoordinator:
             if not session_info:
                 session_info = await self.session_manager.get_session_info(session_id)
 
-            if session_info and session_info.is_minion and session_info.parent_overseer_id:
+            # Issue #349: All sessions are minions - check parent relationship directly
+            if session_info and session_info.parent_overseer_id:
                 parent_id = session_info.parent_overseer_id
                 parent_info = await self.session_manager.get_session_info(parent_id)
 
@@ -660,8 +652,8 @@ class SessionCoordinator:
                 else:
                     coord_logger.warning(f"Parent overseer {parent_id} not found for minion {session_id}")
 
-            # Step 1.6: If this is a minion with capabilities, clean up capability registry
-            if session_info and session_info.is_minion and session_info.capabilities:
+            # Step 1.6: Clean up capability registry if session has capabilities (issue #349: all sessions are minions)
+            if session_info and session_info.capabilities:
                 # Clean up capability registry
                 if project and self.legion_system:
                     self.legion_system.legion_coordinator.unregister_minion_capabilities(session_id)
@@ -705,8 +697,8 @@ class SessionCoordinator:
                 except Exception as e:
                     coord_logger.error(f"Error archiving session {session_id} before deletion: {e}")
 
-            # Step 1.8: Legion-specific cleanup for minions
-            if session_info and session_info.is_minion and project and self.legion_system:
+            # Step 1.8: Legion-specific cleanup (issue #349: all sessions are minions)
+            if session_info and project and self.legion_system:
                 legion_id = project.project_id
                 coord_logger.info(f"Starting Legion-specific cleanup for minion {session_id} in legion {legion_id}")
 
@@ -1821,7 +1813,8 @@ class SessionCoordinator:
             child_cleanup_count = 0
 
             for session in sessions:
-                if session.is_minion and session.is_overseer and session.child_minion_ids:
+                # Issue #349: All sessions are minions - just check is_overseer and child_minion_ids
+                if session.is_overseer and session.child_minion_ids:
                     # This is a parent overseer - validate its children
                     valid_children = []
                     children_before = list(session.child_minion_ids)

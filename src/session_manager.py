@@ -53,7 +53,7 @@ class SessionState(Enum):
 
 @dataclass
 class SessionInfo:
-    """Session metadata and state information (also serves as Minion when is_minion=True)"""
+    """Session metadata and state information (all sessions are minions - issue #349)"""
     session_id: str
     state: SessionState
     created_at: datetime
@@ -73,7 +73,7 @@ class SessionInfo:
     project_id: str | None = None
 
     # Multi-agent fields (universal Legion capabilities - issue #313)
-    is_minion: bool = False  # True if this is a minion in a project
+    # Note: is_minion field removed in issue #349 - all sessions are minions
     role: str | None = None  # Minion role description
     is_overseer: bool = False  # True if has spawned children
     overseer_level: int = 0  # 0=user-created, 1=child, 2=grandchild
@@ -120,6 +120,8 @@ class SessionInfo:
         # Convert latest_message_time if present (issue #291)
         if 'latest_message_time' in data and data['latest_message_time']:
             data['latest_message_time'] = datetime.fromisoformat(data['latest_message_time'])
+        # Issue #349: Silently ignore deprecated is_minion field from old data
+        data.pop('is_minion', None)
         return cls(**data)
 
 
@@ -212,8 +214,7 @@ class SessionManager:
         name: str | None = None,
         order: int | None = None,
         project_id: str | None = None,
-        # Multi-agent fields (universal Legion - issue #313)
-        is_minion: bool = False,
+        # Multi-agent fields (universal Legion - issue #313, #349)
         role: str | None = None,
         capabilities: list[str] = None,
         parent_overseer_id: str | None = None,
@@ -223,7 +224,7 @@ class SessionManager:
         sandbox_enabled: bool = False,
         sandbox_config: dict | None = None
     ) -> None:
-        """Create a new session with provided ID (or minion if is_minion=True)"""
+        """Create a new session (all sessions are minions - issue #349)"""
         # Validate session_id is not reserved
         from src.models.legion_models import RESERVED_MINION_IDS
         if session_id in RESERVED_MINION_IDS:
@@ -254,8 +255,7 @@ class SessionManager:
             name=name,
             order=order,
             project_id=project_id,
-            # Multi-agent fields (universal Legion - issue #313)
-            is_minion=is_minion,
+            # Multi-agent fields (universal Legion - issue #313, #349)
             role=role,
             capabilities=capabilities if capabilities is not None else [],
             parent_overseer_id=parent_overseer_id,

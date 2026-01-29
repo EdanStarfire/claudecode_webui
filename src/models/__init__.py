@@ -9,7 +9,7 @@ Includes:
 
 NOTE: LegionInfo and MinionInfo have been consolidated:
 - Legions are ProjectInfo (all projects support minions - issue #313)
-- Minions are SessionInfo with is_minion=True (see src/session_manager.py)
+- All sessions are minions (is_minion field removed - issue #349)
 """
 
 from src.models.archive_models import (

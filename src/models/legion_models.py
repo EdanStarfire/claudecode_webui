@@ -5,7 +5,7 @@ This module defines data structures for Legion communications.
 
 NOTE: Legion and Minion data models have been consolidated:
 - Legions are ProjectInfo (all projects support minions - issue #313)
-- Minions are SessionInfo with is_minion=True (see src/session_manager.py)
+- All sessions are minions (is_minion field removed - issue #349)
 """
 
 from dataclasses import dataclass, field

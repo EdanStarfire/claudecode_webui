@@ -49,10 +49,10 @@ const uiStore = useUIStore()
 const legion = computed(() => projectStore.projects.get(props.legionId))
 const legionName = computed(() => legion.value?.name || 'Legion')
 
-// Get all minions for this legion
+// Get all minions for this legion (issue #349: all sessions are minions)
 const legionMinions = computed(() => {
   const sessions = Array.from(sessionStore.sessions.values())
-  return sessions.filter(s => s.is_minion && s.project_id === props.legionId)
+  return sessions.filter(s => s.project_id === props.legionId)
 })
 
 // Count active minions

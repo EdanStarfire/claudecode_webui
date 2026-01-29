@@ -76,7 +76,8 @@ function getTooltip(session) {
   const state = getDisplayState(session)
   const stateLabel = state.charAt(0).toUpperCase() + state.slice(1)
   const nameLabel = session.name || 'Unnamed Session'
-  const roleLabel = session.is_minion && session.role ? ` (${session.role})` : ''
+  // Issue #349: All sessions are minions - always show role if present
+  const roleLabel = session.role ? ` (${session.role})` : ''
   return `${nameLabel}${roleLabel}: ${stateLabel}`
 }
 </script>

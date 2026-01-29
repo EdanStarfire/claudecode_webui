@@ -22,13 +22,12 @@ from src.session_manager import SessionInfo, SessionState
 
 @pytest.fixture
 def sample_minion_1():
-    """Create a sample minion SessionInfo (DatabaseExpert)."""
+    """Create a sample minion SessionInfo (DatabaseExpert). Issue #349: is_minion removed."""
     mock = Mock(spec=SessionInfo)
     mock.session_id = "minion-db-123"
     mock.name = "DatabaseExpert"
     mock.project_id = "legion-456"
     mock.role = "Database architecture and schema design"
-    mock.is_minion = True
     mock.state = SessionState.ACTIVE
     mock.capabilities = ["postgresql", "database_design", "sql_optimization"]
     mock.expertise_score = 0.9
@@ -37,13 +36,12 @@ def sample_minion_1():
 
 @pytest.fixture
 def sample_minion_2():
-    """Create a sample minion SessionInfo (BackendDev)."""
+    """Create a sample minion SessionInfo (BackendDev). Issue #349: is_minion removed."""
     mock = Mock(spec=SessionInfo)
     mock.session_id = "minion-backend-456"
     mock.name = "BackendDev"
     mock.project_id = "legion-456"
     mock.role = "Python backend development"
-    mock.is_minion = True
     mock.state = SessionState.ACTIVE
     mock.capabilities = ["python", "fastapi", "database"]
     mock.expertise_score = 0.6
@@ -52,13 +50,12 @@ def sample_minion_2():
 
 @pytest.fixture
 def sample_minion_3():
-    """Create a sample minion SessionInfo (FrontendDev)."""
+    """Create a sample minion SessionInfo (FrontendDev). Issue #349: is_minion removed."""
     mock = Mock(spec=SessionInfo)
     mock.session_id = "minion-frontend-789"
     mock.name = "FrontendDev"
     mock.project_id = "legion-456"
     mock.role = "Vue.js frontend development"
-    mock.is_minion = True
     mock.state = SessionState.ACTIVE
     mock.capabilities = ["vue", "javascript", "frontend"]
     mock.expertise_score = 0.7
@@ -67,13 +64,12 @@ def sample_minion_3():
 
 @pytest.fixture
 def sample_minion_zero_score():
-    """Create a sample minion with zero expertise score."""
+    """Create a sample minion with zero expertise score. Issue #349: is_minion removed."""
     mock = Mock(spec=SessionInfo)
     mock.session_id = "minion-zero-999"
     mock.name = "ZeroScoreMinion"
     mock.project_id = "legion-456"
     mock.role = "Unproven minion"
-    mock.is_minion = True
     mock.state = SessionState.ACTIVE
     mock.capabilities = ["python"]
     mock.expertise_score = 0.0
@@ -107,12 +103,9 @@ def legion_coordinator(mock_legion_system):
     """Create LegionCoordinator with mocked dependencies."""
     coordinator = LegionCoordinator(mock_legion_system)
 
-    # Mock get_minion_info to delegate to session_manager
+    # Mock get_minion_info to delegate to session_manager (issue #349: all sessions are minions)
     async def mock_get_minion_info(minion_id):
-        session = await mock_legion_system.session_coordinator.session_manager.get_session_info(minion_id)
-        if session and session.is_minion:
-            return session
-        return None
+        return await mock_legion_system.session_coordinator.session_manager.get_session_info(minion_id)
 
     coordinator.get_minion_info = AsyncMock(side_effect=mock_get_minion_info)
 

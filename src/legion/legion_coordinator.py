@@ -57,18 +57,17 @@ class LegionCoordinator:
 
     async def get_minion_info(self, minion_id: str) -> Optional['SessionInfo']:
         """
-        Get minion (session with is_minion=True) by ID.
+        Get minion (session) by ID.
+
+        Issue #349: All sessions are minions, so this just returns the session.
 
         Args:
             minion_id: Session UUID
 
         Returns:
-            SessionInfo if found and is_minion=True, None otherwise
+            SessionInfo if found, None otherwise
         """
-        session = await self.session_manager.get_session_info(minion_id)
-        if session and session.is_minion:
-            return session
-        return None
+        return await self.session_manager.get_session_info(minion_id)
 
     async def get_minion_by_name(self, name: str) -> Optional['SessionInfo']:
         """
@@ -77,15 +76,17 @@ class LegionCoordinator:
         WARNING: This method searches globally and may return minions from other legions.
         For legion-scoped lookups, use get_minion_by_name_in_legion() instead.
 
+        Issue #349: All sessions are minions.
+
         Args:
             name: Minion name
 
         Returns:
-            SessionInfo if found and is_minion=True, None otherwise
+            SessionInfo if found, None otherwise
         """
         sessions = await self.session_manager.list_sessions()
         for session in sessions:
-            if session.is_minion and session.name == name:
+            if session.name == name:
                 return session
         return None
 
@@ -93,27 +94,27 @@ class LegionCoordinator:
         """
         Get minion by name within a specific legion (case-sensitive).
 
-        This method enforces legion boundaries by only searching minions
+        This method enforces legion boundaries by only searching sessions
         that belong to the specified legion (where project_id == legion_id).
+
+        Issue #349: All sessions are minions.
 
         Args:
             legion_id: Legion UUID (project_id)
             name: Minion name
 
         Returns:
-            SessionInfo if found within legion and is_minion=True, None otherwise
+            SessionInfo if found within legion, None otherwise
         """
         # Get all sessions in this legion (project_id == legion_id)
         legion = await self.get_legion(legion_id)
         if not legion:
             return None
 
-        # Search through legion's sessions for matching minion name
-        # Include both is_minion=True AND is_overseer=True sessions
-        # This allows children to send comms to parent overseers
+        # Search through legion's sessions for matching name
         for session_id in legion.session_ids:
             session = await self.session_manager.get_session_info(session_id)
-            if session and (session.is_minion or session.is_overseer) and session.name == name:
+            if session and session.name == name:
                 return session
 
         return None
@@ -187,12 +188,11 @@ class LegionCoordinator:
         # Get user's last outgoing comm
         user_last_comm = await self._get_last_outgoing_comm(legion_id, from_user=True)
 
-        # Issue #313: Build hierarchy including both minions and regular sessions that are overseers
-        # This supports universal Legion where any session can spawn minions
+        # Issue #349: All sessions are minions - build full hierarchy
         session_map = {}
         for session in project_sessions:
-            # Determine type: minion or session (regular session that may be overseer)
-            session_type = "minion" if session.is_minion else "session"
+            # Issue #349: All sessions are minions
+            session_type = "minion"
 
             session_data = {
                 "id": session.session_id,
@@ -201,7 +201,7 @@ class LegionCoordinator:
                 "state": session.state.value if hasattr(session.state, 'value') else str(session.state),
                 "is_overseer": session.is_overseer or False,
                 "is_processing": session.is_processing or False,
-                "last_comm": await self._get_last_outgoing_comm(legion_id, from_minion_id=session.session_id) if session.is_minion else None,
+                "last_comm": await self._get_last_outgoing_comm(legion_id, from_minion_id=session.session_id),
                 # Latest message tracking (issue #291)
                 "latest_message": session.latest_message,
                 "latest_message_type": session.latest_message_type,
@@ -216,11 +216,8 @@ class LegionCoordinator:
             session_data = session_map[session.session_id]
 
             if session.parent_overseer_id is None:
-                # User-created session (root level) - only include if:
-                # 1. It's a minion (explicitly marked)
-                # 2. It's an overseer (has spawned children)
-                if session.is_minion or session.is_overseer:
-                    root_sessions.append(session_data)
+                # User-created session (root level) - always include (all sessions are minions)
+                root_sessions.append(session_data)
             else:
                 # Child session - add to parent's children
                 parent = session_map.get(session.parent_overseer_id)
@@ -420,9 +417,10 @@ class LegionCoordinator:
         all_sessions = await self.session_manager.list_sessions()
 
         # Filter to minions with capabilities
+        # Issue #349: All sessions are minions - just check for capabilities
         minions_with_capabilities = [
             session for session in all_sessions
-            if session.is_minion and session.capabilities
+            if session.capabilities
         ]
 
         # Rebuild registry from persisted capabilities
@@ -536,9 +534,9 @@ class LegionCoordinator:
         self.halted_comm_queues[legion_id] = {}
 
         try:
-            # Step 2: Get all minions
+            # Step 2: Get all minions (issue #349: all sessions are minions)
             all_sessions = await self.session_manager.list_sessions()
-            minions = [s for s in all_sessions if s.is_minion and s.project_id == legion_id]
+            minions = [s for s in all_sessions if s.project_id == legion_id]
 
             # Step 3: Parallel halt (minimize window)
             active_minions = [m for m in minions if m.state.value == "active"]
@@ -598,9 +596,9 @@ class LegionCoordinator:
         # Get queued comms (if any)
         queued_comms = self.halted_comm_queues.pop(legion_id, {})
 
-        # Get all minions
+        # Get all minions (issue #349: all sessions are minions)
         all_sessions = await self.session_manager.list_sessions()
-        minions = [s for s in all_sessions if s.is_minion and s.project_id == legion_id]
+        minions = [s for s in all_sessions if s.project_id == legion_id]
 
         resumed_count = 0
         failed_minions = []
