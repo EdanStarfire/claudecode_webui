@@ -610,7 +610,7 @@ export const useWebSocketStore = defineStore('websocket', () => {
         break
 
       default:
-        console.warn('Unknown Session WebSocket message type:', data.type)
+        console.warn('Unknown Session WebSocket message type:', payload.type)
     }
   }
 
