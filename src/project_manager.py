@@ -27,8 +27,7 @@ class ProjectInfo:
     """Project metadata and state information.
 
     Issue #313: All projects now support Legion (multi-agent) capabilities.
-    The is_multi_agent flag is DEPRECATED but retained for backward compatibility.
-    Use session.is_minion to check if a session is a minion, not project.is_multi_agent.
+    Use session.is_minion to check if a session is a minion.
     """
     project_id: str
     name: str
@@ -38,9 +37,6 @@ class ProjectInfo:
     created_at: datetime = None
     updated_at: datetime = None
     order: int = 0  # Display order among projects
-    # DEPRECATED (issue #313): is_multi_agent is retained for backward compatibility only.
-    # All projects now support minions - use session.is_minion to check minion status.
-    is_multi_agent: bool = False
 
     # Legion fields (available for all projects - issue #313)
     minion_ids: list[str] = None  # Alias for session_ids (deprecated distinction)
@@ -72,9 +68,8 @@ class ProjectInfo:
         data['updated_at'] = datetime.fromisoformat(data['updated_at'])
         if 'session_ids' not in data:
             data['session_ids'] = []
-        # Migration: Add is_multi_agent if missing (backward compatibility)
-        if 'is_multi_agent' not in data:
-            data['is_multi_agent'] = False
+        # Migration: Silently discard is_multi_agent from old state.json files (issue #359)
+        data.pop('is_multi_agent', None)
         # Migration: Add legion fields if missing
         if 'minion_ids' not in data:
             data['minion_ids'] = []
@@ -129,10 +124,9 @@ class ProjectManager:
         name: str,
         working_directory: str,
         order: int | None = None,
-        is_multi_agent: bool = False,
         max_concurrent_minions: int = 20
     ) -> ProjectInfo:
-        """Create a new project with unique ID (or legion if is_multi_agent=True)"""
+        """Create a new project with unique ID."""
         project_id = str(uuid.uuid4())
         now = datetime.now(UTC)
 
@@ -153,8 +147,7 @@ class ProjectManager:
             created_at=now,
             updated_at=now,
             order=order,
-            is_multi_agent=is_multi_agent,
-            max_concurrent_minions=max_concurrent_minions if is_multi_agent else 20
+            max_concurrent_minions=max_concurrent_minions
         )
 
         try:

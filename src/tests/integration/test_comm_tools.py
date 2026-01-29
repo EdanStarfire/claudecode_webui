@@ -23,7 +23,6 @@ async def test_fixture_creates_legion(legion_test_env):
     assert "data_dir" in env
 
     # Verify legion project was created
-    assert env["project"].is_multi_agent is True
     assert env["project"].name == "Test Legion"
 
     # Verify data directory exists

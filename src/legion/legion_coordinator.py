@@ -120,7 +120,7 @@ class LegionCoordinator:
 
     async def get_legion(self, legion_id: str) -> Optional['ProjectInfo']:
         """
-        Get project by ID (issue #313: all projects support Legion capabilities).
+        Get project by ID (all projects support Legion capabilities).
 
         Args:
             legion_id: Project UUID
@@ -128,12 +128,11 @@ class LegionCoordinator:
         Returns:
             ProjectInfo if found, None otherwise
         """
-        # Issue #313: All projects support Legion - no is_multi_agent check
         return await self.project_manager.get_project(legion_id)
 
     async def list_legions(self) -> list['ProjectInfo']:
         """
-        List all projects (issue #313: all projects support Legion capabilities).
+        List all projects (all projects support Legion capabilities).
 
         Note: For backward compatibility, this method still exists but returns
         all projects. Use project_manager.list_projects() directly for clarity.
@@ -141,7 +140,6 @@ class LegionCoordinator:
         Returns:
             List of all ProjectInfo objects
         """
-        # Issue #313: All projects are Legion-capable
         return await self.project_manager.list_projects()
 
     async def _create_legion_directories(self, legion_id: str) -> None:

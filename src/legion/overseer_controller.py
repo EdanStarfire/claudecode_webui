@@ -63,11 +63,10 @@ class OverseerController:
         Raises:
             ValueError: If name is not unique or project doesn't exist or is at capacity or invalid permission mode
         """
-        # Issue #313: All projects support minions - validate project exists
+        # Validate project exists (all projects support minions - issue #313)
         project = await self.system.session_coordinator.project_manager.get_project(legion_id)
         if not project:
             raise ValueError(f"Project {legion_id} not found")
-        # Note: is_multi_agent check removed - all projects can have minions
 
         # Validate permission_mode
         valid_modes = ["default", "acceptEdits", "plan", "bypassPermissions"]
@@ -182,12 +181,11 @@ class OverseerController:
         if not parent_session.can_spawn_minions:
             raise PermissionError(f"Session {parent_overseer_id} cannot spawn minions (can_spawn_minions=False)")
 
-        # 2. Get project
+        # 2. Get project (all projects support minions - issue #313)
         legion_id = parent_session.project_id
         project = await self.system.session_coordinator.project_manager.get_project(legion_id)
         if not project:
             raise ValueError(f"Project {legion_id} not found")
-        # Note: is_multi_agent check removed - all projects support minions
 
         # 3. Validate name uniqueness within legion
         existing_sessions = await self.system.session_coordinator.session_manager.list_sessions()
