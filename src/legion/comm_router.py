@@ -42,8 +42,6 @@ class CommRouter:
         """
         self.system = system
         self._comm_broadcast_callback = None  # Callback for broadcasting new comms via WebSocket
-        # Per-minion FIFO buffer for comms received while minion is processing
-        self._comm_buffer: dict[str, list[Comm]] = {}
 
     async def get_visible_minions(self, caller_id: str) -> list[str]:
         """
@@ -248,20 +246,6 @@ class CommRouter:
                         )
                     return False
 
-            # Buffer non-urgent comms if target minion is currently processing
-            if (
-                comm.interrupt_priority not in [InterruptPriority.HALT, InterruptPriority.PIVOT]
-                and target_minion.is_processing
-            ):
-                if comm.to_minion_id not in self._comm_buffer:
-                    self._comm_buffer[comm.to_minion_id] = []
-                self._comm_buffer[comm.to_minion_id].append(comm)
-                legion_logger.info(
-                    f"Buffered comm {comm.comm_id} for minion {comm.to_minion_id} "
-                    f"(processing, buffer size: {len(self._comm_buffer[comm.to_minion_id])})"
-                )
-                return True
-
             # Get sender name for formatting
             # Use "Minion #user" to signal that replies should use send_comm MCP tool
             from_name = "Minion #user"
@@ -322,31 +306,6 @@ class CommRouter:
                     original_comm_id=comm.comm_id
                 )
             return False
-
-    async def flush_buffered_comms(self, session_id: str) -> None:
-        """
-        Flush buffered comms for a minion that has finished processing.
-
-        Called automatically when a session's is_processing transitions True→False.
-        Only flushes if the session is a minion with buffered comms.
-
-        Args:
-            session_id: Session ID that finished processing
-        """
-        buffered = self._comm_buffer.pop(session_id, [])
-        if not buffered:
-            return
-
-        legion_logger.info(
-            f"Flushing {len(buffered)} buffered comms for minion {session_id}"
-        )
-        for comm in buffered:
-            try:
-                await self._send_to_minion(comm)
-            except Exception as e:
-                legion_logger.error(
-                    f"Failed to flush buffered comm {comm.comm_id} to {session_id}: {e}"
-                )
 
     async def _send_to_user(self, comm: Comm) -> bool:
         """
