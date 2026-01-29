@@ -123,21 +123,6 @@
             </div>
           </div>
 
-          <!-- Hierarchy View link (shown when project has minions) -->
-          <div
-            v-if="hasMinions"
-            class="list-group-item list-group-item-action hierarchy-item d-flex align-items-center p-2"
-            :class="{ active: isHierarchyActive }"
-            style="cursor: pointer"
-            @click="viewHierarchy"
-          >
-            <div class="flex-grow-1">
-              <span style="font-size: 1rem; margin-right: 0.5rem;">🌳</span>
-              <span class="fw-semibold">Hierarchy</span>
-              <small class="text-muted ms-2">(Minion Tree)</small>
-            </div>
-          </div>
-
           <!-- Issue #313: Always show session/minion hierarchy (universal Legion) -->
           <!-- Minion Hierarchy (inline in sidebar) -->
           <div class="minion-hierarchy-container">
@@ -225,11 +210,6 @@ const isTimelineActive = computed(() => {
   return route.name === 'timeline' && route.params.legionId === props.project.project_id
 })
 
-const isHierarchyActive = computed(() => {
-  const route = router.currentRoute.value
-  return route.name === 'hierarchy' && route.params.legionId === props.project.project_id
-})
-
 // Issue #312: Check if this project's overview is active
 const isProjectOverviewActive = computed(() => {
   const route = router.currentRoute.value
@@ -302,11 +282,6 @@ function showCreateSessionModal() {
 // Timeline view
 function viewTimeline() {
   router.push(`/timeline/${props.project.project_id}`)
-}
-
-// Hierarchy view
-function viewHierarchy() {
-  router.push(`/hierarchy/${props.project.project_id}`)
 }
 
 // Load minion hierarchy (issue #313: universal Legion - always load hierarchy)
