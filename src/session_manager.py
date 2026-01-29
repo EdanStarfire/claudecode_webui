@@ -133,7 +133,6 @@ class SessionManager:
         self._active_sessions: dict[str, SessionInfo] = {}
         self._session_locks: dict[str, asyncio.Lock] = {}
         self._state_change_callbacks: list[Callable] = []
-        self._processing_complete_callbacks: list[Callable] = []
 
     async def initialize(self):
         """Initialize session manager and load existing sessions"""
@@ -404,21 +403,11 @@ class SessionManager:
                     logger.error(f"Session {session_id} not found")
                     return False
 
-                was_processing = session.is_processing
                 session.is_processing = is_processing
                 session.updated_at = datetime.now(UTC)
                 await self._persist_session_state(session_id)
                 await self._notify_state_change_callbacks(session_id, session.state)
                 session_logger.info(f"Updated session {session_id} processing state to {is_processing}")
-
-                # Fire processing-complete callbacks on True→False transition
-                if was_processing and not is_processing:
-                    for callback in self._processing_complete_callbacks:
-                        try:
-                            await callback(session_id)
-                        except Exception as e:
-                            logger.error(f"Error in processing complete callback for {session_id}: {e}")
-
                 return True
             except Exception as e:
                 logger.error(f"Failed to update session {session_id} processing state: {e}")
@@ -754,10 +743,6 @@ class SessionManager:
     def add_state_change_callback(self, callback: Callable):
         """Add callback for session state changes"""
         self._state_change_callbacks.append(callback)
-
-    def add_processing_complete_callback(self, callback: Callable):
-        """Add callback for when a session finishes processing (is_processing True→False)."""
-        self._processing_complete_callbacks.append(callback)
 
     async def _notify_state_change_callbacks(self, session_id: str, new_state: SessionState):
         """Notify registered callbacks about state changes"""
