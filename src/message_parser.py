@@ -96,29 +96,8 @@ class MessageHandler(ABC):
         """Extract business-relevant data from message, preserving raw SDK data."""
         pass
 
-    def _get_raw_sdk_data(self, message_data: dict[str, Any]) -> Any:
-        """Get raw SDK data with migration support for field naming consistency."""
-        # Priority order: sdk_message (live object) > raw_sdk_message (standardized)
-        if "sdk_message" in message_data:
-            return message_data["sdk_message"]
-        elif "raw_sdk_message" in message_data:
-            # Parse standardized raw SDK data if stored as JSON string
-            raw_data = message_data["raw_sdk_message"]
-            if isinstance(raw_data, str):
-                try:
-                    return json.loads(raw_data)
-                except json.JSONDecodeError:
-                    return raw_data
-            return raw_data
-        return None
-
     def _standardize_metadata_fields(self, metadata: dict[str, Any], message_data: dict[str, Any]) -> dict[str, Any]:
-        """Standardize metadata fields.
-
-        Note: raw_sdk_message is no longer written to storage (see issue #325).
-        The _get_raw_sdk_data() method is retained for backward compatibility
-        when reading old messages that may contain the field.
-        """
+        """Standardize metadata fields."""
         return metadata
 
 
@@ -1345,8 +1324,8 @@ class MessageProcessor:
                         json.dumps(value)
                         serializable_metadata[key] = value
                     except (TypeError, ValueError):
-                        if key in ('raw_sdk_message', 'sdk_message'):
-                            # For raw SDK data, convert to string representation
+                        if key == 'sdk_message':
+                            # For SDK message objects, convert to string representation
                             serializable_metadata[key] = str(value)
                         else:
                             # For other non-serializable data, convert to string
@@ -1397,8 +1376,8 @@ class MessageProcessor:
             if parsed_message.metadata:
                 serializable_metadata = {}
                 for key, value in parsed_message.metadata.items():
-                    # Skip raw SDK data fields
-                    if key in ('sdk_message', 'raw_sdk_message'):
+                    # Skip SDK message objects (not serializable for WebSocket)
+                    if key == 'sdk_message':
                         continue
 
                     # Test serializability

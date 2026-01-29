@@ -1268,24 +1268,6 @@ class SessionCoordinator:
                         # Message is already processed, prepare for WebSocket
                         metadata = raw_message["metadata"].copy()
 
-                        # For init messages: extract init_data from raw_sdk_message string if present
-                        if metadata.get("subtype") == "init" and "raw_sdk_message" in metadata and "init_data" not in metadata:
-                            import re
-                            raw_sdk_str = metadata.get("raw_sdk_message", "")
-                            if isinstance(raw_sdk_str, str) and "data=" in raw_sdk_str:
-                                # Extract the data dict from the string representation
-                                try:
-                                    # Match: data={'key': 'value', ...}
-                                    data_match = re.search(r"data=(\{[^}]+(?:\{[^}]*\}[^}]*)*\})", raw_sdk_str)
-                                    if data_match:
-                                        import ast
-                                        data_str = data_match.group(1)
-                                        init_data = ast.literal_eval(data_str)
-                                        metadata["init_data"] = init_data
-                                        logger.debug("Extracted init_data from historical raw_sdk_message")
-                                except Exception as parse_error:
-                                    logger.warning(f"Failed to parse init_data from raw_sdk_message: {parse_error}")
-
                         websocket_data = {
                             "type": raw_message["type"],
                             "content": raw_message["content"],
