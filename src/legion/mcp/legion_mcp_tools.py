@@ -1000,13 +1000,13 @@ class LegionMCPTools:
                     "is_error": True
                 }
 
-            # Scope to caller's immediate hierarchy group
+            # Scope to caller's immediate hierarchy group (issue #349: all sessions are minions)
             session_manager = self.system.session_coordinator.session_manager
             visible_ids = await self.system.comm_router.get_visible_minions(from_minion_id)
             minions = []
             for vid in visible_ids:
                 session = await session_manager.get_session_info(vid)
-                if session and (session.is_minion or session.is_overseer):
+                if session:
                     minions.append(session)
 
             # Format minion list
@@ -1457,13 +1457,13 @@ class LegionMCPTools:
             creation_timestamp = session.created_at.isoformat()
 
         # Build comprehensive identity response (Option B from issue #320)
+        # Issue #349: is_minion removed - all sessions are minions
         identity = {
             # Basic identity
             "minion_id": session.session_id,
             "minion_name": session.name,
             "role": session.role or "",
             # Hierarchy info
-            "is_minion": session.is_minion,
             "is_overseer": session.is_overseer,
             "overseer_level": session.overseer_level,
             "parent_overseer_id": session.parent_overseer_id,

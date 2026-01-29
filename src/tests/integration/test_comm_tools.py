@@ -38,10 +38,9 @@ async def test_create_minion_helper(legion_test_env):
     # Create test minion
     minion = await env["create_minion"]("test_minion", role="Test Role")
 
-    # Verify minion was created
+    # Verify minion was created (issue #349: is_minion removed - all sessions are minions)
     assert minion.name == "test_minion"
     assert minion.role == "Test Role"
-    assert minion.is_minion is True
     assert minion.project_id == env["legion_id"]
 
     # Verify minion session directory exists

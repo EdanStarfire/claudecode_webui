@@ -93,8 +93,9 @@
               <div v-if="session.parent_overseer_id" class="font-monospace small">
                 {{ session.parent_overseer_id }}
               </div>
+              <!-- Issue #349: All sessions are minions -->
               <div v-else class="text-muted small">
-                {{ session.is_minion ? 'Root overseer (user-created)' : 'N/A' }}
+                Root overseer (user-created)
               </div>
             </div>
 

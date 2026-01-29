@@ -27,7 +27,7 @@ class ProjectInfo:
     """Project metadata and state information.
 
     Issue #313: All projects now support Legion (multi-agent) capabilities.
-    Use session.is_minion to check if a session is a minion.
+    Issue #349: All sessions are minions (is_minion field removed).
     """
     project_id: str
     name: str

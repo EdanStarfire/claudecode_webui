@@ -78,13 +78,12 @@ async def legion_test_env(request):
         # Generate session_id
         session_id = str(uuid.uuid4())
 
-        # Create session as minion (returns None)
+        # Create session (issue #349: is_minion removed - all sessions are minions)
         await session_coordinator.session_manager.create_session(
             session_id=session_id,
             working_directory=str(Path.cwd()),
             name=name,
             role=role,
-            is_minion=True,
             project_id=legion_id,
             **kwargs
         )

@@ -81,10 +81,10 @@ async def test_spawn_minion_minimal(legion_test_env):
 
         await asyncio.sleep(poll_interval)
 
+    # Issue #349: is_minion removed - all sessions are minions
     assert child_info is not None
     assert child_info.name == "child"
     assert child_info.role == "Child Worker"
-    assert child_info.is_minion is True
     assert child_info.project_id == legion_id
     assert child_info.parent_overseer_id == parent.session_id
 

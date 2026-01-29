@@ -37,6 +37,7 @@ def sample_session_info():
     """Create sample SessionInfo for testing."""
     from datetime import UTC, datetime
 
+    # Issue #349: is_minion field removed - all sessions are minions
     return SessionInfo(
         session_id="test-minion-123",
         state=SessionState.ACTIVE,
@@ -45,7 +46,6 @@ def sample_session_info():
         name="TestMinion",
         role="Test Role",
         project_id="test-legion-456",
-        is_minion=True,
         overseer_level=1,
         child_minion_ids=["child-1", "child-2"]
     )

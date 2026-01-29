@@ -74,8 +74,9 @@ class OverseerController:
             raise ValueError(f"Invalid permission_mode '{permission_mode}'. Must be one of: {', '.join(valid_modes)}")
 
         # Check minion limit (max 20 concurrent minions per legion)
+        # Issue #349: All sessions are minions
         existing_sessions = await self.system.session_coordinator.session_manager.list_sessions()
-        legion_minions = [s for s in existing_sessions if s.is_minion and self._belongs_to_legion(s, legion_id)]
+        legion_minions = [s for s in existing_sessions if self._belongs_to_legion(s, legion_id)]
 
         if len(legion_minions) >= (project.max_concurrent_minions or 20):
             raise ValueError(f"Legion {legion_id} has reached maximum concurrent minions ({project.max_concurrent_minions or 20})")
@@ -99,8 +100,7 @@ class OverseerController:
             override_system_prompt=override_system_prompt,
             working_directory=working_directory,
             model=model,  # Model selection (sonnet, opus, haiku, opusplan)
-            # Multi-agent fields (issue #313)
-            is_minion=True,  # Explicitly mark as minion
+            # Multi-agent fields (issue #313, #349)
             role=role,
             capabilities=capabilities or [],
             can_spawn_minions=True,  # User-created minion can spawn by default
@@ -187,9 +187,9 @@ class OverseerController:
         if not project:
             raise ValueError(f"Project {legion_id} not found")
 
-        # 3. Validate name uniqueness within legion
+        # 3. Validate name uniqueness within legion (issue #349: all sessions are minions)
         existing_sessions = await self.system.session_coordinator.session_manager.list_sessions()
-        legion_minions = [s for s in existing_sessions if s.is_minion and self._belongs_to_legion(s, legion_id)]
+        legion_minions = [s for s in existing_sessions if self._belongs_to_legion(s, legion_id)]
 
         if any(m.name == name for m in legion_minions):
             raise ValueError(f"Minion name '{name}' already exists in this legion. Choose a different name.")
@@ -214,8 +214,7 @@ class OverseerController:
             allowed_tools=allowed_tools,  # Now uses consistent parameter name
             system_prompt=system_prompt,
             working_directory=working_directory,  # Custom working directory for git worktrees/multi-repo
-            # Multi-agent fields (issue #313)
-            is_minion=True,  # Explicitly mark as minion
+            # Multi-agent fields (issue #313, #349)
             role=role,
             capabilities=capabilities or [],
             parent_overseer_id=parent_overseer_id,

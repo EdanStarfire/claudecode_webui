@@ -152,14 +152,13 @@ async def test_list_minions_includes_overseer_sessions():
     # Create mock session manager
     session_manager = MagicMock()
 
-    # Create mock sessions:
+    # Create mock sessions (issue #349: is_minion removed - all sessions are minions):
     # - caller_session: the child minion calling list_minions
-    # - parent_session: parent overseer (is_overseer=True, but may not have is_minion=True)
-    # - sibling_session: another minion
+    # - parent_session: parent overseer (is_overseer=True)
+    # - another_overseer: another overseer session
     caller_session = MagicMock()
     caller_session.session_id = "child-session-id"
     caller_session.project_id = "legion-123"
-    caller_session.is_minion = True
     caller_session.is_overseer = False
     caller_session.name = "ChildMinion"
     caller_session.role = "Test Role"
@@ -169,31 +168,28 @@ async def test_list_minions_includes_overseer_sessions():
     parent_session = MagicMock()
     parent_session.session_id = "parent-session-id"
     parent_session.project_id = "legion-123"
-    parent_session.is_minion = True  # Parent is also a minion (was spawned by user/another minion)
     parent_session.is_overseer = True  # Parent has spawned children
     parent_session.name = "ParentOverseer"
     parent_session.role = "Parent Role"
     parent_session.state = SessionState.ACTIVE
     parent_session.capabilities = []
 
-    # Case where parent is NOT marked as minion but IS overseer
-    # This can happen when a regular session spawns a minion
-    non_minion_overseer = MagicMock()
-    non_minion_overseer.session_id = "non-minion-overseer-id"
-    non_minion_overseer.project_id = "legion-123"
-    non_minion_overseer.is_minion = False  # Not marked as minion
-    non_minion_overseer.is_overseer = True  # But is an overseer (has children)
-    non_minion_overseer.name = "RegularOverseer"
-    non_minion_overseer.role = "Overseer Role"
-    non_minion_overseer.state = SessionState.ACTIVE
-    non_minion_overseer.capabilities = []
+    # Another overseer session
+    another_overseer = MagicMock()
+    another_overseer.session_id = "another-overseer-id"
+    another_overseer.project_id = "legion-123"
+    another_overseer.is_overseer = True  # An overseer (has children)
+    another_overseer.name = "AnotherOverseer"
+    another_overseer.role = "Overseer Role"
+    another_overseer.state = SessionState.ACTIVE
+    another_overseer.capabilities = []
 
     # Mock get_session_info to return appropriate session based on ID
     async def mock_get_session_info(session_id):
         sessions = {
             "child-session-id": caller_session,
             "parent-session-id": parent_session,
-            "non-minion-overseer-id": non_minion_overseer,
+            "another-overseer-id": another_overseer,
         }
         return sessions.get(session_id)
 
@@ -201,7 +197,7 @@ async def test_list_minions_includes_overseer_sessions():
 
     # Create mock legion/project
     mock_legion = MagicMock()
-    mock_legion.session_ids = ["child-session-id", "parent-session-id", "non-minion-overseer-id"]
+    mock_legion.session_ids = ["child-session-id", "parent-session-id", "another-overseer-id"]
 
     # Create mock legion coordinator
     legion_coordinator = MagicMock()
@@ -215,7 +211,7 @@ async def test_list_minions_includes_overseer_sessions():
     comm_router = MagicMock()
     # Child can see parent and non-minion overseer (its immediate hierarchy group)
     comm_router.get_visible_minions = AsyncMock(
-        return_value=["parent-session-id", "non-minion-overseer-id"]
+        return_value=["parent-session-id", "another-overseer-id"]
     )
 
     # Create mock system
@@ -243,18 +239,18 @@ async def test_list_minions_includes_overseer_sessions():
     assert "ParentOverseer" in result_text, \
         f"Parent overseer should be visible to child. Result: {result_text}"
 
-    # Verify non-minion overseer is visible (in child's hierarchy group)
-    assert "RegularOverseer" in result_text, \
-        f"Non-minion overseer should be visible to child. Result: {result_text}"
+    # Verify another overseer is visible (in child's hierarchy group)
+    # Issue #349: All sessions are minions
+    assert "AnotherOverseer" in result_text, \
+        f"Overseer should be visible to child. Result: {result_text}"
 
 
 @pytest.mark.asyncio
 async def test_get_minion_by_name_includes_overseer():
     """
-    Issue #323 regression test: get_minion_by_name_in_legion should find overseers.
+    Issue #323 regression test: get_minion_by_name_in_legion should find sessions.
 
-    When a child tries to send_comm to parent, the lookup should find the parent
-    even if is_minion=False but is_overseer=True.
+    Issue #349: All sessions are minions, so this test now verifies basic lookup.
     """
     from unittest.mock import AsyncMock, MagicMock
 
@@ -263,12 +259,11 @@ async def test_get_minion_by_name_includes_overseer():
     # Create mock session manager
     session_manager = MagicMock()
 
-    # Non-minion overseer (regular session that spawned a child)
+    # Overseer session
     overseer_session = MagicMock()
     overseer_session.session_id = "overseer-session-id"
     overseer_session.project_id = "legion-123"
-    overseer_session.is_minion = False  # Not marked as minion
-    overseer_session.is_overseer = True  # But is an overseer
+    overseer_session.is_overseer = True  # Is an overseer
     overseer_session.name = "MyOverseer"
     overseer_session.role = "Overseer Role"
     overseer_session.state = SessionState.ACTIVE
@@ -304,8 +299,8 @@ async def test_get_minion_by_name_includes_overseer():
     # Try to find overseer by name
     result = await legion_coord.get_minion_by_name_in_legion("legion-123", "MyOverseer")
 
-    # Should find the overseer even though is_minion=False
+    # Should find the session (issue #349: all sessions are minions)
     assert result is not None, \
-        "get_minion_by_name_in_legion should find overseer sessions (is_overseer=True)"
+        "get_minion_by_name_in_legion should find sessions by name"
     assert result.session_id == "overseer-session-id"
     assert result.name == "MyOverseer"

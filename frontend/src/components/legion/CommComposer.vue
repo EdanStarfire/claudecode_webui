@@ -122,12 +122,13 @@ const isMobile = computed(() => windowWidth.value < 768)
 
 // Get minions for this legion
 const minions = computed(() => {
+  // Issue #349: All sessions are minions
   const project = projectStore.projects.get(props.legionId)
   if (!project || !project.session_ids) return []
 
   return project.session_ids
     .map(sid => sessionStore.sessions.get(sid))
-    .filter(s => s && s.is_minion)
+    .filter(s => s)
 })
 
 // Can send if recipient and content are provided
@@ -153,9 +154,10 @@ function getStateIcon(session) {
 
 /**
  * Get minion label with role (matching sidebar minion tree)
+ * Issue #349: All sessions are minions - always show role if present
  */
 function getMinionLabel(session) {
-  if (session.is_minion && session.role) {
+  if (session.role) {
     return `${session.name} (${session.role})`
   }
   return session.name

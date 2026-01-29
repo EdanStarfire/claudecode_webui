@@ -91,7 +91,8 @@ const statusTooltip = computed(() => {
   const state = displayState.value
   const stateLabel = state.charAt(0).toUpperCase() + state.slice(1).replace('-', ' ')
   const nameLabel = session.value.name || 'Unnamed Session'
-  const roleLabel = session.value.is_minion && session.value.role ? ` (${session.value.role})` : ''
+  // Issue #349: All sessions are minions - always show role if present
+  const roleLabel = session.value.role ? ` (${session.value.role})` : ''
 
   return `${nameLabel}${roleLabel}: ${stateLabel}`
 })

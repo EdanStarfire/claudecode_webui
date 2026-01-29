@@ -215,10 +215,9 @@ const projectSessions = computed(() => {
     .filter(session => session !== null && session !== undefined) // Remove any null/undefined values if session not found
 })
 
-// Issue #313: Progressive disclosure - check if project has any minions
+// Issue #349: All sessions are minions - check if project has any sessions
 const hasMinions = computed(() => {
-  // Check if any session in this project is a minion
-  return projectSessions.value.some(session => session.is_minion)
+  return projectSessions.value.length > 0
 })
 
 const isTimelineActive = computed(() => {
@@ -360,8 +359,9 @@ onMounted(() => {
       if (!minionHierarchy.value || !isExpanded.value) return
 
       // Update all minion states, is_processing, and latest_message in our hierarchy
+      // Issue #349: All sessions are minions
       for (const [sessionId, session] of sessions) {
-        if (session.is_minion && session.project_id === props.project.project_id) {
+        if (session.project_id === props.project.project_id) {
           const minion = findMinionInTree(minionHierarchy.value, sessionId)
           if (minion && minion.type === 'minion') {
             // Update state if changed
@@ -393,10 +393,10 @@ onMounted(() => {
       if (!isExpanded.value) return
 
       // Check for new minion creation (size increased)
+      // Issue #349: All sessions are minions
       if (newSize > oldSize) {
         const sessions = Array.from(sessionStore.sessions.values())
         const hasNewMinion = sessions.some(s =>
-          s.is_minion &&
           s.project_id === props.project.project_id &&
           (!minionHierarchy.value || !findMinionInTree(minionHierarchy.value, s.session_id))
         )

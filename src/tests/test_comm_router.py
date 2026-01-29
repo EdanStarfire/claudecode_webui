@@ -18,12 +18,11 @@ def legion_system():
     """Create mock LegionSystem for testing."""
     from src.session_manager import SessionInfo, SessionState
 
-    # Create a default active minion for tests
+    # Create a default active minion for tests (issue #349: is_minion removed)
     default_minion = Mock(spec=SessionInfo)
     default_minion.session_id = "test-minion-123"
     default_minion.name = "TestMinion"
     default_minion.project_id = "test-legion-456"
-    default_minion.is_minion = True
     default_minion.state = SessionState.ACTIVE
 
     mock_session_coordinator = Mock()
@@ -53,13 +52,12 @@ def comm_router(legion_system):
 
 @pytest.fixture
 def sample_minion():
-    """Create a sample minion SessionInfo."""
+    """Create a sample minion SessionInfo (issue #349: is_minion removed)."""
     from src.session_manager import SessionInfo, SessionState
     mock = Mock(spec=SessionInfo)
     mock.session_id = "test-minion-123"
     mock.name = "TestMinion"
     mock.project_id = "test-legion-456"
-    mock.is_minion = True
     mock.state = SessionState.ACTIVE
     return mock
 
