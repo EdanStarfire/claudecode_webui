@@ -8,8 +8,8 @@ Includes:
 - Archive models for minion disposal archival
 
 NOTE: LegionInfo and MinionInfo have been consolidated:
-- Legions are now ProjectInfo with is_multi_agent=True (see src/project_manager.py)
-- Minions are now SessionInfo with is_minion=True (see src/session_manager.py)
+- Legions are ProjectInfo (all projects support minions - issue #313)
+- Minions are SessionInfo with is_minion=True (see src/session_manager.py)
 """
 
 from src.models.archive_models import (

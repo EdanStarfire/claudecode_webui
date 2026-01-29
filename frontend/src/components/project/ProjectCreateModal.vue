@@ -118,7 +118,7 @@ const projectStore = useProjectStore()
 const sessionStore = useSessionStore()
 const uiStore = useUIStore()
 
-// Form data (issue #313: removed isMultiAgent - all projects support minions)
+// Form data
 const formData = ref({
   name: '',
   workingDirectory: '',
@@ -177,11 +177,10 @@ async function handleSubmit() {
   errorMessage.value = ''
 
   try {
-    // Create project (issue #313: is_multi_agent always false - minions can be added later)
+    // Create project (all projects support minions - issue #313)
     const project = await projectStore.createProject(
       formData.value.name,
-      formData.value.workingDirectory,
-      false  // is_multi_agent deprecated - all projects support minions
+      formData.value.workingDirectory
     )
 
     // Create initial session/minion if requested

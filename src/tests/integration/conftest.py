@@ -50,11 +50,10 @@ async def legion_test_env(request):
     template_manager = session_coordinator.template_manager
     legion_system = session_coordinator.legion_system
 
-    # Create test legion project (multi-agent)
+    # Create test legion project (all projects support minions - issue #313)
     project = await project_manager.create_project(
         name="Test Legion",
-        working_directory=str(Path.cwd()),
-        is_multi_agent=True
+        working_directory=str(Path.cwd())
     )
     legion_id = project.project_id
 

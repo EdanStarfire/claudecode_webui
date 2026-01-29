@@ -4,8 +4,8 @@ Core data models for Legion multi-agent system.
 This module defines data structures for Legion communications.
 
 NOTE: Legion and Minion data models have been consolidated:
-- Legions are now ProjectInfo with is_multi_agent=True (see src/project_manager.py)
-- Minions are now SessionInfo with is_minion=True (see src/session_manager.py)
+- Legions are ProjectInfo (all projects support minions - issue #313)
+- Minions are SessionInfo with is_minion=True (see src/session_manager.py)
 """
 
 from dataclasses import dataclass, field

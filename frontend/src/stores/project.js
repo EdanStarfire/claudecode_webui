@@ -26,15 +26,6 @@ export const useProjectStore = defineStore('project', () => {
       .sort((a, b) => a.order - b.order)
   )
 
-  // Check if project is multi-agent (Legion)
-  // Issue #313: DEPRECATED - all projects now support minions
-  // This helper remains for backward compatibility but always checks is_multi_agent flag
-  // Use hasMinions in components for progressive disclosure instead
-  const isMultiAgent = (projectId) => {
-    const project = projects.value.get(projectId)
-    return project?.is_multi_agent || false
-  }
-
   // ========== ACTIONS ==========
 
   /**
@@ -61,12 +52,11 @@ export const useProjectStore = defineStore('project', () => {
   /**
    * Create a new project
    */
-  async function createProject(name, workingDirectory, isMultiAgent = false) {
+  async function createProject(name, workingDirectory) {
     try {
       const response = await api.post('/api/projects', {
         name,
-        working_directory: workingDirectory,
-        is_multi_agent: isMultiAgent
+        working_directory: workingDirectory
       })
 
       const project = response.project
@@ -258,7 +248,6 @@ export const useProjectStore = defineStore('project', () => {
     // Computed
     currentProject,
     orderedProjects,
-    isMultiAgent,
 
     // Actions
     fetchProjects,

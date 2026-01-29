@@ -85,10 +85,11 @@ def validate_and_normalize_working_directory(
 class ProjectCreateRequest(BaseModel):
     name: str
     working_directory: str
-    # DEPRECATED (issue #313): is_multi_agent is ignored - all projects support minions.
-    # Retained for API backward compatibility only.
-    is_multi_agent: bool = False
     max_concurrent_minions: int = 20  # Max concurrent minions per project
+
+    class Config:
+        # Silently ignore unknown fields like is_multi_agent for backward compatibility
+        extra = "ignore"
 
 
 class ProjectUpdateRequest(BaseModel):
@@ -481,12 +482,11 @@ class ClaudeWebUI:
 
         @self.app.post("/api/projects")
         async def create_project(request: ProjectCreateRequest):
-            """Create a new project (or legion if is_multi_agent=True)"""
+            """Create a new project."""
             try:
                 project = await self.coordinator.project_manager.create_project(
                     name=request.name,
                     working_directory=request.working_directory,
-                    is_multi_agent=request.is_multi_agent,
                     max_concurrent_minions=request.max_concurrent_minions
                 )
                 return {"project": project.to_dict()}
@@ -496,7 +496,7 @@ class ClaudeWebUI:
 
         @self.app.get("/api/projects")
         async def list_projects():
-            """List all projects (including legions with is_multi_agent=true)"""
+            """List all projects."""
             try:
                 projects = await self.coordinator.project_manager.list_projects()
                 return {"projects": [p.to_dict() for p in projects]}
@@ -940,8 +940,7 @@ class ClaudeWebUI:
                 raise HTTPException(status_code=500, detail=str(e))
 
         # ==================== LEGION ENDPOINTS ====================
-        # NOTE: Legion creation now uses POST /api/projects with is_multi_agent=true
-        # Timeline and comms endpoints remain for future multi-agent communication features
+        # All projects support Legion capabilities (issue #313)
 
         @self.app.get("/api/legions/{legion_id}/timeline")
         async def get_legion_timeline(legion_id: str, limit: int = 100, offset: int = 0):
@@ -1082,11 +1081,10 @@ class ClaudeWebUI:
         async def create_minion(legion_id: str, request: MinionCreateRequest):
             """Create a new minion in the project (issue #313: universal Legion)"""
             try:
-                # Issue #313: All projects can have minions - verify project exists
+                # Verify project exists (all projects support minions - issue #313)
                 project = await self.coordinator.project_manager.get_project(legion_id)
                 if not project:
                     raise HTTPException(status_code=404, detail="Project not found")
-                # Note: is_multi_agent check removed - all projects support minions
 
                 # Validate and normalize working directory
                 try:
@@ -1142,9 +1140,8 @@ class ClaudeWebUI:
                 project = await self.coordinator.project_manager.get_project(legion_id)
                 if not project:
                     raise HTTPException(status_code=404, detail="Project not found")
-                # Note: is_multi_agent check removed - no-op if no minions
 
-                # Call LegionCoordinator.emergency_halt_all()
+                # Call LegionCoordinator.emergency_halt_all() (no-op if no minions)
                 result = await self.coordinator.legion_system.legion_coordinator.emergency_halt_all(legion_id)
 
                 return {
@@ -1168,9 +1165,8 @@ class ClaudeWebUI:
                 project = await self.coordinator.project_manager.get_project(legion_id)
                 if not project:
                     raise HTTPException(status_code=404, detail="Project not found")
-                # Note: is_multi_agent check removed - no-op if no minions
 
-                # Call LegionCoordinator.resume_all()
+                # Call LegionCoordinator.resume_all() (no-op if no minions)
                 result = await self.coordinator.legion_system.legion_coordinator.resume_all(legion_id)
 
                 return {
@@ -1377,7 +1373,6 @@ class ClaudeWebUI:
                     logger.warning(f"Legion WebSocket connection rejected - project not found: {legion_id}")
                     await websocket.close(code=4404)
                     return
-                # Note: is_multi_agent check removed - all projects support Legion WebSocket
             except Exception as e:
                 logger.error(f"Error validating project {legion_id}: {e}")
                 await websocket.close(code=4500)
