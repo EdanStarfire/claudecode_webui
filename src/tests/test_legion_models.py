@@ -7,7 +7,7 @@ LegionInfo and MinionInfo were consolidated into ProjectInfo and SessionInfo res
 TODO: Rewrite tests to match current architecture:
 - Legion data is in ProjectInfo with is_multi_agent=True
 - Minion data is in SessionInfo with is_minion=True
-- Test Horde and Comm models from legion_models.py
+- Test Comm models from legion_models.py
 """
 
 import pytest

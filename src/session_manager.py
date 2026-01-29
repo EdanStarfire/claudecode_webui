@@ -120,7 +120,6 @@ class SessionInfo:
         # Convert latest_message_time if present (issue #291)
         if 'latest_message_time' in data and data['latest_message_time']:
             data['latest_message_time'] = datetime.fromisoformat(data['latest_message_time'])
-        data.pop('horde_id', None)  # Remove legacy horde_id if present
         return cls(**data)
 
 
