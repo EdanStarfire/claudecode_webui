@@ -2,7 +2,6 @@ import { createRouter, createWebHashHistory } from 'vue-router'
 import NoSessionSelected from '../components/session/NoSessionSelected.vue'
 import SessionView from '../components/session/SessionView.vue'
 import TimelineView from '../components/legion/TimelineView.vue'
-import HierarchyView from '../components/legion/HierarchyView.vue'
 import ProjectOverview from '../components/project/ProjectOverview.vue'
 
 const routes = [
@@ -27,12 +26,6 @@ const routes = [
     path: '/timeline/:legionId',
     name: 'timeline',
     component: TimelineView,
-    props: true
-  },
-  {
-    path: '/hierarchy/:legionId',
-    name: 'hierarchy',
-    component: HierarchyView,
     props: true
   }
 ]
