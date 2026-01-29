@@ -350,7 +350,6 @@ async def test_dispose_minion_direct_child(legion_test_env):
     - Child session terminated (TERMINATED state)
     - Parent's child_minion_ids updated (child removed)
     - DISPOSE comm logged to timeline
-    - Channel cleanup (child removed from channels)
     """
     env = legion_test_env
     legion_system = env["legion_system"]
