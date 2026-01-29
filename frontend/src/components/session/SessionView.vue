@@ -67,7 +67,7 @@ onMounted(async () => {
   }
 })
 
-// Watch for sessionId prop changes (e.g., when switching minions in Spy mode)
+// Watch for sessionId prop changes (e.g., when switching minions via sidebar)
 watch(() => props.sessionId, async (newSessionId, oldSessionId) => {
   if (newSessionId !== oldSessionId && newSessionId !== sessionStore.currentSessionId) {
     uiStore.showLoading('Loading session...')

@@ -136,7 +136,7 @@ const canSend = computed(() => {
 })
 
 /**
- * Get state icon for minion (matching SpySelector)
+ * Get state icon for minion (matching sidebar minion tree)
  */
 function getStateIcon(session) {
   const icons = {
@@ -152,7 +152,7 @@ function getStateIcon(session) {
 }
 
 /**
- * Get minion label with role (matching SpySelector)
+ * Get minion label with role (matching sidebar minion tree)
  */
 function getMinionLabel(session) {
   if (session.is_minion && session.role) {

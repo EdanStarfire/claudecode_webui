@@ -11,7 +11,7 @@ export const useProjectStore = defineStore('project', () => {
   // Projects map (projectId -> ProjectData)
   const projects = ref(new Map())
 
-  // Current project selection (for Legion timeline/spy views)
+  // Current project selection (for Legion timeline/hierarchy views)
   const currentProjectId = ref(null)
 
   // ========== COMPUTED ==========
