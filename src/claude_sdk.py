@@ -776,7 +776,7 @@ class ClaudeSDK:
             sdk_logger.debug(f"Raw SDK response: {sdk_message=}")
 
             if self.storage_manager:
-                await self._store_sdk_message(converted_message, sdk_message)
+                await self._store_sdk_message(converted_message)
 
             if self.message_callback:
                 await self._safe_callback(self.message_callback, converted_message)
@@ -788,7 +788,7 @@ class ClaudeSDK:
             if self.error_callback:
                 await self._safe_callback(self.error_callback, "sdk_message_processing_failed", e)
 
-    async def _store_sdk_message(self, converted_message: dict[str, Any], raw_sdk_message: Any = None):
+    async def _store_sdk_message(self, converted_message: dict[str, Any]):
         """
         Store the SDK message using unified StoredMessage format (Phase 0, Issue #310).
 
@@ -796,8 +796,8 @@ class ClaudeSDK:
         to legacy MessageProcessor format for backward compatibility during migration.
         """
         try:
-            # Get the raw SDK message object
-            sdk_msg = raw_sdk_message or converted_message.get("sdk_message")
+            # Get the SDK message object from converted message
+            sdk_msg = converted_message.get("sdk_message")
 
             # Try to use new StoredMessage format if we have an SDK message object
             if sdk_msg is not None and hasattr(sdk_msg, '__dataclass_fields__'):
