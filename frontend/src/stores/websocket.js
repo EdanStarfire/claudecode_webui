@@ -32,7 +32,7 @@ export const useWebSocketStore = defineStore('websocket', () => {
   // Reconnection tracking (detect if this is initial connection or reconnection)
   const sessionHadInitialConnection = ref(new Map()) // sessionId -> boolean
 
-  // Legion WebSocket (for timeline/spy views)
+  // Legion WebSocket (for timeline/hierarchy views)
   const legionSocket = ref(null)
   const legionConnected = ref(false)
   const legionRetryCount = ref(0)
@@ -615,7 +615,7 @@ export const useWebSocketStore = defineStore('websocket', () => {
   }
 
   /**
-   * Connect to Legion WebSocket (for timeline/spy views)
+   * Connect to Legion WebSocket (for timeline/hierarchy views)
    */
   function connectLegion(legionId) {
     disconnectLegion()

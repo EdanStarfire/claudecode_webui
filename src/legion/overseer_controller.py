@@ -270,7 +270,7 @@ class OverseerController:
         await self.system.comm_router.route_comm(spawn_comm)
 
         # 12. Register WebSocket message callback for child session
-        # This ensures messages from the spawned minion broadcast to WebSocket clients (Spy view)
+        # This ensures messages from the spawned minion broadcast to WebSocket clients
         if self.system.message_callback_registrar:
             self.system.message_callback_registrar(child_minion_id)
             coord_logger.info(f"Registered WebSocket message callback for spawned minion {child_minion_id} ({name})")
