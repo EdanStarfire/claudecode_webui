@@ -21,13 +21,10 @@
     <FolderBrowserModal />
     <ProjectCreateModal />
     <ProjectEditModal />
-    <SessionCreateModal />
-    <SessionEditModal />
+    <ConfigurationModal />
     <SessionManageModal />
     <SessionInfoModal />
-    <CreateMinionModal />
     <MinionViewModal />
-    <TemplateManagementModal />
   </div>
 </template>
 
@@ -39,13 +36,10 @@ import Sidebar from './components/layout/Sidebar.vue'
 import FolderBrowserModal from './components/common/FolderBrowserModal.vue'
 import ProjectCreateModal from './components/project/ProjectCreateModal.vue'
 import ProjectEditModal from './components/project/ProjectEditModal.vue'
-import SessionCreateModal from './components/session/SessionCreateModal.vue'
-import SessionEditModal from './components/session/SessionEditModal.vue'
+import ConfigurationModal from './components/configuration/ConfigurationModal.vue'
 import SessionManageModal from './components/session/SessionManageModal.vue'
 import SessionInfoModal from './components/session/SessionInfoModal.vue'
-import CreateMinionModal from './components/legion/CreateMinionModal.vue'
 import MinionViewModal from './components/legion/MinionViewModal.vue'
-import TemplateManagementModal from './components/legion/TemplateManagementModal.vue'
 import { useUIStore } from './stores/ui'
 import { useWebSocketStore } from './stores/websocket'
 import { useSessionStore } from './stores/session'

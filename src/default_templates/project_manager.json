@@ -1,7 +1,7 @@
 {
   "name": "Project Manager",
   "permission_mode": "acceptEdits",
-  "allowed_tools": ["bash", "edit", "read", "send_comm", "spawn_minion"],
+  "allowed_tools": ["Bash", "Edit", "Read", "mcp__legion__send_comm", "mcp__legion__spawn_minion"],
   "default_role": "Overseer for delegation and coordination",
   "description": "Can manage project structure and delegate tasks"
 }

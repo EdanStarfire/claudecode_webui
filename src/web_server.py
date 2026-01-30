@@ -119,6 +119,18 @@ class SessionNameUpdateRequest(BaseModel):
     name: str
 
 
+class SessionUpdateRequest(BaseModel):
+    """Generic session update request - all fields optional"""
+    name: str | None = None
+    model: str | None = None  # sonnet, opus, haiku, opusplan
+    allowed_tools: list[str] | None = None  # List of tool names to allow
+    role: str | None = None
+    system_prompt: str | None = None  # UI calls this "initialization_context"
+    override_system_prompt: bool | None = None
+    capabilities: list[str] | None = None
+    sandbox_enabled: bool | None = None
+
+
 class SessionReorderRequest(BaseModel):
     session_ids: list[str]
 
@@ -793,6 +805,69 @@ class ClaudeWebUI:
                 raise
             except Exception as e:
                 logger.error(f"Failed to update session name: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @self.app.patch("/api/sessions/{session_id}")
+        async def update_session(session_id: str, request: SessionUpdateRequest):
+            """Update session fields (generic endpoint)"""
+            try:
+                session = await self.coordinator.session_manager.get_session_info(session_id)
+                if not session:
+                    raise HTTPException(status_code=404, detail="Session not found")
+
+                is_active = session.state.value in ["active", "starting"]
+                updates = {}
+
+                # Handle name update
+                if request.name is not None:
+                    updates["name"] = request.name
+
+                # Handle model update (takes effect on next restart if session is active)
+                if request.model is not None:
+                    valid_models = ["sonnet", "opus", "haiku", "opusplan"]
+                    if request.model not in valid_models:
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"Invalid model. Must be one of: {', '.join(valid_models)}"
+                        )
+                    updates["model"] = request.model
+
+                # Handle allowed_tools update (takes effect on next restart if session is active)
+                if request.allowed_tools is not None:
+                    updates["allowed_tools"] = request.allowed_tools
+
+                # Handle role update
+                if request.role is not None:
+                    updates["role"] = request.role
+
+                # Handle system_prompt update (UI calls this "initialization_context")
+                if request.system_prompt is not None:
+                    updates["system_prompt"] = request.system_prompt
+
+                # Handle override_system_prompt update
+                if request.override_system_prompt is not None:
+                    updates["override_system_prompt"] = request.override_system_prompt
+
+                # Handle capabilities update
+                if request.capabilities is not None:
+                    updates["capabilities"] = request.capabilities
+
+                # Handle sandbox_enabled update
+                if request.sandbox_enabled is not None:
+                    updates["sandbox_enabled"] = request.sandbox_enabled
+
+                if not updates:
+                    return {"success": True, "message": "No fields to update"}
+
+                success = await self.coordinator.session_manager.update_session(session_id, **updates)
+                if not success:
+                    raise HTTPException(status_code=500, detail="Failed to update session")
+
+                return {"success": success}
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"Failed to update session: {e}")
                 raise HTTPException(status_code=500, detail=str(e))
 
         @self.app.delete("/api/sessions/{session_id}")

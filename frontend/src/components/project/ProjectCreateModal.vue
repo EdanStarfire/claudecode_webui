@@ -189,7 +189,7 @@ async function handleSubmit() {
         name: formData.value.sessionName || 'main',
         permission_mode: 'default',
         tools: [],
-        model: 'claude-sonnet-4-5-20250929'
+        model: 'sonnet'
       })
     }
 

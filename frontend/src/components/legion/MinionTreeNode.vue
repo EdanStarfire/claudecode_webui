@@ -12,7 +12,7 @@
           <span v-if="isOverseerWithChildren" class="me-1">👑</span>
 
           <!-- Minion Name -->
-          <strong>{{ minionData.name }}</strong>
+          <strong>{{ minionWithLiveData?.name || minionData.name }}</strong>
 
           <!-- Children Count Badge -->
           <span v-if="isOverseerWithChildren" class="badge bg-secondary ms-2">
@@ -66,7 +66,7 @@
           <span v-if="isOverseerWithChildren" class="me-2">👑</span>
 
           <!-- Minion Name -->
-          <strong>{{ minionData.name }}</strong>
+          <strong>{{ minionWithLiveData?.name || minionData.name }}</strong>
 
           <!-- Children Count Badge -->
           <span v-if="isOverseerWithChildren" class="badge bg-secondary ms-2">
@@ -212,6 +212,10 @@ const minionWithLiveData = computed(() => {
   if (liveSession.value) {
     merged.state = liveSession.value.state
     merged.is_processing = liveSession.value.is_processing
+    // Merge name from live session (updated via PATCH)
+    if (liveSession.value.name) {
+      merged.name = liveSession.value.name
+    }
     // Merge latest message from session store (updated via UI WebSocket broadcasts)
     if (liveSession.value.latest_message) {
       merged.latest_message = liveSession.value.latest_message
