@@ -2,9 +2,9 @@
   "name": "Coding Minion",
   "permission_mode": "acceptEdits",
   "allowed_tools": [
-    "bash", "edit", "read", "write", "glob", "grep", "task",
-    "send_comm", "list_minions", "get_minion_info",
-    "search_capability", "update_expertise"
+    "Bash", "Edit", "Read", "Write", "Glob", "Grep", "Task",
+    "mcp__legion__send_comm", "mcp__legion__list_minions", "mcp__legion__get_minion_info",
+    "mcp__legion__search_capability", "mcp__legion__update_expertise"
   ],
   "default_role": "Autonomous implementation specialist for coding tasks",
   "description": "Full code modification access with test execution. No spawning capabilities (leaf node). Skills: codebase-explorer, change-impact-analyzer, backend-tester, requirement-validator"

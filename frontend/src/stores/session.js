@@ -322,15 +322,17 @@ export const useSessionStore = defineStore('session', () => {
   }
 
   /**
-   * Update session name
+   * Generic session update via PATCH endpoint
+   * @param {string} sessionId - Session ID
+   * @param {Object} updates - Fields to update (name, model, etc.)
    */
-  async function updateSessionName(sessionId, name) {
+  async function patchSession(sessionId, updates) {
     try {
-      await api.put(`/api/sessions/${sessionId}/name`, { name })
-      updateSession(sessionId, { name })
-      console.log(`Updated session ${sessionId} name to "${name}"`)
+      await api.patch(`/api/sessions/${sessionId}`, updates)
+      updateSession(sessionId, updates)
+      console.log(`Updated session ${sessionId}:`, updates)
     } catch (error) {
-      console.error('Failed to update session name:', error)
+      console.error('Failed to update session:', error)
       throw error
     }
   }
@@ -438,7 +440,7 @@ export const useSessionStore = defineStore('session', () => {
     selectSession,
     updateSession,
     deleteSession,
-    updateSessionName,
+    patchSession,
     setPermissionMode,
     startSession,
     pauseSession,

@@ -110,6 +110,7 @@
                 :templates="templates"
                 :selected-template-id="selectedTemplateId"
                 :session="editSession"
+                :field-states="fieldStates"
                 @update:form-data="updateFormData"
                 @update:selected-template-id="updateSelectedTemplate"
                 @open-folder-browser="openFolderBrowser"
@@ -120,6 +121,8 @@
                 :mode="mode"
                 :form-data="formData"
                 :errors="errors"
+                :session="editSession"
+                :field-states="fieldStates"
                 @update:form-data="updateFormData"
               />
               <AdvancedTab
@@ -127,6 +130,8 @@
                 :mode="mode"
                 :form-data="formData"
                 :errors="errors"
+                :session="editSession"
+                :field-states="fieldStates"
                 @update:form-data="updateFormData"
               />
             </div>
@@ -191,6 +196,22 @@ const selectedTemplateId = ref(null)
 
 // Context for returning to session creation after template management
 const returnContext = ref(null)
+
+// Track original template values for modification detection
+const templateOriginalValues = ref({
+  default_role: null,
+  initialization_context: null,
+  permission_mode: null,
+  allowed_tools: null
+})
+
+// Track field states: 'normal', 'autofilled', or 'modified'
+const fieldStates = reactive({
+  default_role: 'normal',
+  initialization_context: 'normal',
+  permission_mode: 'normal',
+  allowed_tools: 'normal'
+})
 
 // Form data (shared across tabs)
 const formData = reactive({
@@ -301,18 +322,71 @@ function applyTemplate() {
     formData.initialization_context = ''
     formData.permission_mode = 'default'
     formData.allowed_tools = ''
+
+    // Reset all field states to normal
+    fieldStates.default_role = 'normal'
+    fieldStates.initialization_context = 'normal'
+    fieldStates.permission_mode = 'normal'
+    fieldStates.allowed_tools = 'normal'
+
+    // Clear template values
+    templateOriginalValues.value = {
+      default_role: null,
+      initialization_context: null,
+      permission_mode: null,
+      allowed_tools: null
+    }
     return
   }
 
   const template = templates.value.find(t => t.template_id === selectedTemplateId.value)
   if (!template) return
 
-  // Apply template values
-  if (template.default_role) formData.default_role = template.default_role
-  if (template.default_system_prompt) formData.initialization_context = template.default_system_prompt
-  if (template.permission_mode) formData.permission_mode = template.permission_mode
+  // Reset field states before applying new template
+  fieldStates.default_role = 'normal'
+  fieldStates.initialization_context = 'normal'
+  fieldStates.permission_mode = 'normal'
+  fieldStates.allowed_tools = 'normal'
+
+  // Apply and track role
+  if (template.default_role) {
+    formData.default_role = template.default_role
+    templateOriginalValues.value.default_role = template.default_role
+    fieldStates.default_role = 'autofilled'
+  } else {
+    formData.default_role = ''
+    templateOriginalValues.value.default_role = null
+  }
+
+  // Apply and track initialization context
+  if (template.default_system_prompt) {
+    formData.initialization_context = template.default_system_prompt
+    templateOriginalValues.value.initialization_context = template.default_system_prompt
+    fieldStates.initialization_context = 'autofilled'
+  } else {
+    formData.initialization_context = ''
+    templateOriginalValues.value.initialization_context = null
+  }
+
+  // Apply and track permission mode
+  if (template.permission_mode) {
+    formData.permission_mode = template.permission_mode
+    templateOriginalValues.value.permission_mode = template.permission_mode
+    fieldStates.permission_mode = 'autofilled'
+  } else {
+    formData.permission_mode = 'default'
+    templateOriginalValues.value.permission_mode = null
+  }
+
+  // Apply and track allowed tools
   if (template.allowed_tools && template.allowed_tools.length > 0) {
-    formData.allowed_tools = template.allowed_tools.join(', ')
+    const toolsStr = template.allowed_tools.join(', ')
+    formData.allowed_tools = toolsStr
+    templateOriginalValues.value.allowed_tools = toolsStr
+    fieldStates.allowed_tools = 'autofilled'
+  } else {
+    formData.allowed_tools = ''
+    templateOriginalValues.value.allowed_tools = null
   }
 }
 
@@ -461,7 +535,7 @@ async function createSession() {
 
   const payload = {
     name: formData.name.trim(),
-    model: formData.model,
+    model: formData.model || null,
     role: formData.default_role.trim() || null,
     initialization_context: formData.initialization_context.trim() || null,
     override_system_prompt: formData.override_system_prompt,
@@ -497,12 +571,37 @@ async function updateSession() {
   }
 
   const sessionId = editSession.value.session_id
-
-  // Update session name
-  await sessionStore.updateSessionName(sessionId, formData.name.trim())
-
-  // Update permission mode if changed and session is active
   const isActive = editSession.value.state === 'active' || editSession.value.state === 'starting'
+
+  // Parse allowed tools from input
+  const toolsList = formData.allowed_tools
+    .split(',')
+    .map(t => t.trim())
+    .filter(t => t.length > 0)
+
+  // Parse capabilities from input
+  const capsList = formData.capabilities
+    .split(',')
+    .map(c => c.trim())
+    .filter(c => c.length > 0)
+
+  // Build updates object with all changed fields
+  // Note: UI uses initialization_context, backend stores as system_prompt
+  const updates = {
+    name: formData.name.trim(),
+    model: formData.model,
+    role: formData.default_role.trim() || null,
+    system_prompt: formData.initialization_context.trim() || null,
+    override_system_prompt: formData.override_system_prompt,
+    allowed_tools: toolsList.length > 0 ? toolsList : null,
+    capabilities: capsList.length > 0 ? capsList : null,
+    sandbox_enabled: formData.sandbox_enabled
+  }
+
+  // Update session via PATCH (takes effect on next restart if session is active)
+  await sessionStore.patchSession(sessionId, updates)
+
+  // Update permission mode if changed and session is active (this goes through SDK)
   if (isActive && formData.permission_mode !== editSession.value.current_permission_mode) {
     await sessionStore.setPermissionMode(sessionId, formData.permission_mode)
   }
@@ -584,6 +683,20 @@ function resetForm() {
   errors.system_prompt = ''
   errors.initialization_context = ''
 
+  // Reset field states
+  fieldStates.default_role = 'normal'
+  fieldStates.initialization_context = 'normal'
+  fieldStates.permission_mode = 'normal'
+  fieldStates.allowed_tools = 'normal'
+
+  // Clear template original values
+  templateOriginalValues.value = {
+    default_role: null,
+    initialization_context: null,
+    permission_mode: null,
+    allowed_tools: null
+  }
+
   selectedTemplateId.value = null
   errorMessage.value = ''
   activeTab.value = 'general'
@@ -595,9 +708,10 @@ function populateFormFromSession(session) {
   formData.permission_mode = session.current_permission_mode || 'default'
   formData.working_directory = session.working_directory || ''
   formData.default_role = session.role || ''
-  formData.system_prompt = session.system_prompt || ''
+  // Backend stores the prompt as system_prompt, UI shows it as initialization_context
+  formData.initialization_context = session.system_prompt || ''
   formData.override_system_prompt = session.override_system_prompt || false
-  formData.initialization_context = session.initialization_context || ''
+  formData.system_prompt = ''  // Not used for sessions (only templates have separate additional instructions)
   formData.allowed_tools = session.allowed_tools?.join(', ') || ''
   formData.capabilities = session.capabilities?.join(', ') || ''
   formData.sandbox_enabled = session.sandbox_enabled || false
@@ -706,6 +820,31 @@ watch(
     }
   }
 )
+
+// Watch for modifications to auto-filled fields
+watch(() => formData.default_role, (newVal) => {
+  if (templateOriginalValues.value.default_role !== null) {
+    fieldStates.default_role = newVal === templateOriginalValues.value.default_role ? 'autofilled' : 'modified'
+  }
+})
+
+watch(() => formData.initialization_context, (newVal) => {
+  if (templateOriginalValues.value.initialization_context !== null) {
+    fieldStates.initialization_context = newVal === templateOriginalValues.value.initialization_context ? 'autofilled' : 'modified'
+  }
+})
+
+watch(() => formData.permission_mode, (newVal) => {
+  if (templateOriginalValues.value.permission_mode !== null) {
+    fieldStates.permission_mode = newVal === templateOriginalValues.value.permission_mode ? 'autofilled' : 'modified'
+  }
+})
+
+watch(() => formData.allowed_tools, (newVal) => {
+  if (templateOriginalValues.value.allowed_tools !== null) {
+    fieldStates.allowed_tools = newVal === templateOriginalValues.value.allowed_tools ? 'autofilled' : 'modified'
+  }
+})
 
 // Initialize Bootstrap modal
 onMounted(() => {

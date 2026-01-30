@@ -2,8 +2,16 @@
   <div class="permissions-tab">
     <!-- Allowed Tools -->
     <div class="mb-3">
-      <label for="config-allowed-tools" class="form-label">Allowed Tools</label>
-      <div class="allowed-tools-editor">
+      <label for="config-allowed-tools" class="form-label">
+        Allowed Tools
+        <span v-if="fieldStates.allowed_tools === 'autofilled'" class="field-indicator autofilled" title="Auto-filled from template">
+          &lt;
+        </span>
+        <span v-if="fieldStates.allowed_tools === 'modified'" class="field-indicator modified" title="Modified from template">
+          *
+        </span>
+      </label>
+      <div class="allowed-tools-editor" :class="allowedToolsEditorClass">
         <!-- Current tools as tags -->
         <div class="tools-list mb-2" v-if="toolsList.length > 0">
           <span
@@ -28,7 +36,7 @@
             class="form-control"
             v-model="newTool"
             @keydown.enter.prevent="addTool"
-            placeholder="Add tool (e.g., bash, read, edit)"
+            placeholder="Add tool (e.g., Bash, Read, Edit)"
           />
           <button
             type="button"
@@ -56,7 +64,12 @@
         </div>
       </div>
       <div class="form-text">
-        {{ isTemplateMode ? 'Default tools allowed for sessions using this template' : 'Leave empty to allow all tools' }}
+        <span v-if="isEditSession && isSessionActive && allowedToolsChanged" class="text-warning">
+          Allowed tools change requires a <strong>reset</strong> (not restart) to take effect.
+        </span>
+        <span v-else>
+          {{ isTemplateMode ? 'Default tools allowed for sessions using this template' : 'Leave empty to allow all tools' }}
+        </span>
       </div>
     </div>
 
@@ -118,6 +131,7 @@
         <input
           type="text"
           class="form-control form-control-sm"
+          :class="allowedToolsFieldClass"
           :value="formData.allowed_tools"
           @input="$emit('update:form-data', 'allowed_tools', $event.target.value)"
           placeholder="bash, read, edit, write, glob, grep"
@@ -151,6 +165,16 @@ const props = defineProps({
   errors: {
     type: Object,
     required: true
+  },
+  session: {
+    type: Object,
+    default: null
+  },
+  fieldStates: {
+    type: Object,
+    default: () => ({
+      allowed_tools: 'normal'
+    })
   }
 })
 
@@ -162,10 +186,21 @@ const newCapability = ref('')
 const showRawInput = ref(false)
 
 // Common tools for quick add
-const commonTools = ['bash', 'read', 'edit', 'write', 'glob', 'grep', 'webfetch', 'websearch', 'task', 'todo']
+const commonTools = ['Bash', 'Read', 'Edit', 'Write', 'Glob', 'Grep', 'WebFetch', 'WebSearch', 'Task', 'TodoWrite']
 
 // Computed
 const isTemplateMode = computed(() => props.mode === 'create-template' || props.mode === 'edit-template')
+const isEditSession = computed(() => props.mode === 'edit-session')
+
+const isSessionActive = computed(() => {
+  return props.session?.state === 'active' || props.session?.state === 'starting'
+})
+
+const allowedToolsChanged = computed(() => {
+  if (!props.session) return false
+  const originalTools = props.session.allowed_tools?.join(', ') || ''
+  return props.formData.allowed_tools !== originalTools
+})
 
 const toolsList = computed(() => {
   if (!props.formData.allowed_tools || !props.formData.allowed_tools.trim()) return []
@@ -183,9 +218,20 @@ const capabilitiesList = computed(() => {
     .filter(c => c.length > 0)
 })
 
+// Field highlighting classes
+const allowedToolsFieldClass = computed(() => ({
+  'field-autofilled': props.fieldStates.allowed_tools === 'autofilled',
+  'field-modified': props.fieldStates.allowed_tools === 'modified'
+}))
+
+const allowedToolsEditorClass = computed(() => ({
+  'editor-autofilled': props.fieldStates.allowed_tools === 'autofilled',
+  'editor-modified': props.fieldStates.allowed_tools === 'modified'
+}))
+
 // Methods
 function addTool() {
-  const tool = newTool.value.trim().toLowerCase()
+  const tool = newTool.value.trim()
   if (!tool) return
 
   if (!toolsList.value.includes(tool)) {
@@ -249,10 +295,47 @@ function removeCapability(index) {
   background-color: var(--bs-gray-100);
   padding: 0.75rem;
   border-radius: 0.375rem;
+  transition: background-color 0.3s ease;
 }
 
 .tools-list,
 .capabilities-list {
   min-height: 1.5rem;
+}
+
+/* Editor highlighting states */
+.editor-autofilled {
+  background-color: #fffbea !important; /* Light yellow */
+}
+
+.editor-modified {
+  background-color: #ffe4cc !important; /* Darker orange */
+}
+
+/* Field highlighting states */
+.field-autofilled {
+  background-color: #fffbea !important;
+  transition: background-color 0.3s ease;
+}
+
+.field-modified {
+  background-color: #ffe4cc !important;
+  transition: background-color 0.3s ease;
+}
+
+/* Field indicators */
+.field-indicator {
+  margin-left: 0.5rem;
+  font-size: 0.75rem;
+  font-weight: bold;
+  cursor: help;
+}
+
+.field-indicator.autofilled {
+  color: #856404;
+}
+
+.field-indicator.modified {
+  color: #cc5500;
 }
 </style>

@@ -1,14 +1,25 @@
 <template>
   <div class="advanced-tab">
+    <!-- Reset warning banner for active sessions -->
+    <div v-if="isEditSession && isSessionActive && hasAnyChanges" class="alert alert-warning mb-3" role="alert">
+      <small>Changes to these settings require a <strong>reset</strong> (not restart) to take effect.</small>
+    </div>
+
     <!-- System Prompt / Initialization Context -->
     <div class="mb-3">
       <label for="config-system-prompt" class="form-label">
         {{ isTemplateMode ? 'Default System Prompt' : 'Initialization Context' }}
+        <span v-if="fieldStates.initialization_context === 'autofilled'" class="field-indicator autofilled" title="Auto-filled from template">
+          &lt;
+        </span>
+        <span v-if="fieldStates.initialization_context === 'modified'" class="field-indicator modified" title="Modified from template">
+          *
+        </span>
       </label>
       <textarea
         id="config-system-prompt"
         class="form-control"
-        :class="{ 'is-invalid': hasCharLimitError }"
+        :class="initContextFieldClass"
         :value="promptValue"
         @input="handlePromptInput"
         :rows="isTemplateMode ? 4 : 5"
@@ -45,32 +56,6 @@
       </div>
     </div>
 
-    <!-- Additional System Prompt for sessions (appended to initialization context) -->
-    <div v-if="isSessionMode" class="mb-3">
-      <label for="config-additional-prompt" class="form-label">
-        Additional Instructions
-      </label>
-      <textarea
-        id="config-additional-prompt"
-        class="form-control"
-        :class="{ 'is-invalid': additionalPromptExceedsLimit }"
-        :value="formData.system_prompt"
-        @input="$emit('update:form-data', 'system_prompt', $event.target.value)"
-        rows="3"
-        :maxlength="6000"
-        placeholder="Additional instructions to append to the system prompt..."
-      ></textarea>
-      <div class="form-text d-flex justify-content-between">
-        <span>{{ formData.override_system_prompt ? 'These instructions will be used as the system prompt' : 'These instructions will be appended to the system prompt' }}</span>
-        <span :class="{ 'text-danger': additionalPromptExceedsLimit, 'text-warning': additionalPromptNearLimit }">
-          {{ additionalPromptCharCount }} / 6000 chars
-        </span>
-      </div>
-      <div class="invalid-feedback" v-if="additionalPromptExceedsLimit">
-        Additional instructions exceed 6000 character limit
-      </div>
-    </div>
-
     <!-- Sandbox Mode (session only) -->
     <div v-if="isSessionMode" class="mb-3 form-check">
       <input
@@ -92,33 +77,6 @@
         </small>
       </div>
     </div>
-
-    <!-- Read-only display of system prompt config (edit-session) -->
-    <div v-if="isEditSession && (formData.system_prompt || formData.override_system_prompt)" class="mb-3">
-      <label class="form-label">System Prompt Configuration</label>
-      <div class="card">
-        <div class="card-body">
-          <div v-if="formData.override_system_prompt" class="mb-2">
-            <span class="badge bg-warning text-dark">Override Mode</span>
-            <div class="form-text text-warning mt-1">
-              Using custom prompt only (no Claude Code preset)
-            </div>
-          </div>
-          <div v-else class="mb-2">
-            <span class="badge bg-info">Append Mode</span>
-            <div class="form-text mt-1">
-              Custom instructions appended to Claude Code preset
-            </div>
-          </div>
-          <div v-if="formData.system_prompt" class="mt-2">
-            <strong class="small">Custom Instructions:</strong>
-            <div class="form-control bg-light" style="height: auto; min-height: 60px; white-space: pre-wrap;" readonly>
-              {{ formData.system_prompt }}
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
   </div>
 </template>
 
@@ -137,6 +95,16 @@ const props = defineProps({
   errors: {
     type: Object,
     required: true
+  },
+  session: {
+    type: Object,
+    default: null
+  },
+  fieldStates: {
+    type: Object,
+    default: () => ({
+      initialization_context: 'normal'
+    })
   }
 })
 
@@ -146,6 +114,21 @@ const emit = defineEmits(['update:form-data'])
 const isSessionMode = computed(() => props.mode === 'create-session' || props.mode === 'edit-session')
 const isTemplateMode = computed(() => props.mode === 'create-template' || props.mode === 'edit-template')
 const isEditSession = computed(() => props.mode === 'edit-session')
+
+const isSessionActive = computed(() => {
+  return props.session?.state === 'active' || props.session?.state === 'starting'
+})
+
+const hasAnyChanges = computed(() => {
+  if (!props.session) return false
+
+  // UI uses initialization_context, backend stores as system_prompt
+  const initContextChanged = (props.formData.initialization_context || '') !== (props.session.system_prompt || '')
+  const overrideChanged = (props.formData.override_system_prompt || false) !== (props.session.override_system_prompt || false)
+  const sandboxChanged = (props.formData.sandbox_enabled || false) !== (props.session.sandbox_enabled || false)
+
+  return initContextChanged || overrideChanged || sandboxChanged
+})
 
 // Character limits
 const charLimit = computed(() => isTemplateMode.value ? 6000 : 2000)
@@ -181,11 +164,19 @@ const promptHelpText = computed(() => {
     : 'This context will be appended to legion guide and Claude Code\'s preset'
 })
 
-// Additional prompt (session only) validation
-const additionalPromptCharCount = computed(() => props.formData.system_prompt?.length || 0)
-const additionalPromptExceedsLimit = computed(() => additionalPromptCharCount.value > 6000)
-const additionalPromptNearLimit = computed(() => {
-  return additionalPromptCharCount.value > 5500 && additionalPromptCharCount.value <= 6000
+// Field highlighting classes
+const initContextFieldClass = computed(() => {
+  const classes = {}
+  if (hasCharLimitError.value) {
+    classes['is-invalid'] = true
+  }
+  if (props.fieldStates.initialization_context === 'autofilled') {
+    classes['field-autofilled'] = true
+  }
+  if (props.fieldStates.initialization_context === 'modified') {
+    classes['field-modified'] = true
+  }
+  return classes
 })
 
 // Methods
@@ -199,5 +190,56 @@ function handlePromptInput(event) {
 <style scoped>
 .card {
   background-color: var(--bs-gray-100);
+}
+
+/* Field highlighting states */
+.field-autofilled {
+  background-color: #fffbea !important;
+  transition: background-color 0.3s ease;
+}
+
+.field-modified {
+  background-color: #ffe4cc !important;
+  transition: background-color 0.3s ease;
+}
+
+/* Ensure text readability */
+.field-autofilled,
+.field-modified {
+  color: #212529;
+}
+
+/* Ensure borders remain visible */
+.form-control.field-autofilled,
+.form-control.field-modified {
+  border: 1px solid #dee2e6;
+}
+
+/* Focus states */
+.form-control.field-autofilled:focus,
+.form-control.field-modified:focus {
+  border-color: #0d6efd;
+  box-shadow: 0 0 0 0.25rem rgba(13, 110, 253, 0.25);
+}
+
+/* Field indicators */
+.field-indicator {
+  margin-left: 0.5rem;
+  font-size: 0.75rem;
+  font-weight: bold;
+  cursor: help;
+}
+
+.field-indicator.autofilled {
+  color: #856404;
+}
+
+.field-indicator.modified {
+  color: #cc5500;
+}
+
+/* Smooth transitions */
+.form-control {
+  transition: background-color 0.3s ease, border-color 0.3s ease;
 }
 </style>

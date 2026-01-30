@@ -130,11 +130,23 @@ export async function apiDelete(endpoint, options = {}) {
 }
 
 /**
+ * PATCH request
+ */
+export async function apiPatch(endpoint, data, options = {}) {
+  return apiRequest(endpoint, {
+    ...options,
+    method: 'PATCH',
+    body: JSON.stringify(data)
+  })
+}
+
+/**
  * Export named functions for convenience
  */
 export const api = {
   get: apiGet,
   post: apiPost,
   put: apiPut,
-  delete: apiDelete
+  delete: apiDelete,
+  patch: apiPatch
 }

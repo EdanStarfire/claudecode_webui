@@ -73,17 +73,31 @@
         <option value="haiku">Haiku 4.5 - Fastest for simple tasks</option>
         <option value="opusplan">OpusPlan - Opus planning + Sonnet execution</option>
       </select>
-      <div v-if="selectedModelInfo" class="form-text">
-        {{ selectedModelInfo.description }}
+      <div class="form-text">
+        <span v-if="isEditSession && isSessionActive && modelChanged" class="text-warning">
+          Model change requires a <strong>reset</strong> (not restart) to take effect.
+        </span>
+        <span v-else-if="selectedModelInfo">
+          {{ selectedModelInfo.description }}
+        </span>
       </div>
     </div>
 
     <!-- Permission Mode -->
     <div class="mb-3">
-      <label for="config-permission-mode" class="form-label">Permission Mode</label>
+      <label for="config-permission-mode" class="form-label">
+        Permission Mode
+        <span v-if="fieldStates.permission_mode === 'autofilled'" class="field-indicator autofilled" title="Auto-filled from template">
+          &lt;
+        </span>
+        <span v-if="fieldStates.permission_mode === 'modified'" class="field-indicator modified" title="Modified from template">
+          *
+        </span>
+      </label>
       <select
         id="config-permission-mode"
         class="form-select"
+        :class="permissionModeFieldClass"
         :value="formData.permission_mode"
         @change="$emit('update:form-data', 'permission_mode', $event.target.value)"
         :disabled="isEditSession && !isSessionActive"
@@ -105,11 +119,20 @@
 
     <!-- Default Role (template and session) -->
     <div class="mb-3">
-      <label for="config-role" class="form-label">{{ isTemplateMode ? 'Default Role' : 'Role' }}</label>
+      <label for="config-role" class="form-label">
+        {{ isTemplateMode ? 'Default Role' : 'Role' }}
+        <span v-if="fieldStates.default_role === 'autofilled'" class="field-indicator autofilled" title="Auto-filled from template">
+          &lt;
+        </span>
+        <span v-if="fieldStates.default_role === 'modified'" class="field-indicator modified" title="Modified from template">
+          *
+        </span>
+      </label>
       <input
         id="config-role"
         type="text"
         class="form-control"
+        :class="roleFieldClass"
         :value="formData.default_role"
         @input="$emit('update:form-data', 'default_role', $event.target.value)"
         :placeholder="isTemplateMode ? 'e.g., Code review and refactoring specialist' : 'Optional role description'"
@@ -198,6 +221,13 @@ const props = defineProps({
   session: {
     type: Object,
     default: null
+  },
+  fieldStates: {
+    type: Object,
+    default: () => ({
+      default_role: 'normal',
+      permission_mode: 'normal'
+    })
   }
 })
 
@@ -216,6 +246,12 @@ const isEditSession = computed(() => props.mode === 'edit-session')
 
 const isSessionActive = computed(() => {
   return props.session?.state === 'active' || props.session?.state === 'starting'
+})
+
+const modelChanged = computed(() => {
+  if (!props.session) return false
+  const originalModel = props.session.model || 'sonnet'
+  return props.formData.model !== originalModel
 })
 
 const canUseBypassPermissions = computed(() => {
@@ -238,6 +274,17 @@ const selectedModelInfo = computed(() => {
   return modelInfo[props.formData.model] || null
 })
 
+// Field highlighting classes
+const roleFieldClass = computed(() => ({
+  'field-autofilled': props.fieldStates.default_role === 'autofilled',
+  'field-modified': props.fieldStates.default_role === 'modified'
+}))
+
+const permissionModeFieldClass = computed(() => ({
+  'field-autofilled': props.fieldStates.permission_mode === 'autofilled',
+  'field-modified': props.fieldStates.permission_mode === 'modified'
+}))
+
 // Methods
 function getStateBadgeClass(state) {
   const classMap = {
@@ -257,5 +304,61 @@ function getStateBadgeClass(state) {
 .form-control-plaintext {
   padding-top: 0.375rem;
   padding-bottom: 0.375rem;
+}
+
+/* Field highlighting states */
+.field-autofilled {
+  background-color: #fffbea !important; /* Light yellow */
+  transition: background-color 0.3s ease;
+}
+
+.field-modified {
+  background-color: #ffe4cc !important; /* Darker orange */
+  transition: background-color 0.3s ease;
+}
+
+/* Ensure text readability */
+.field-autofilled,
+.field-modified {
+  color: #212529;
+}
+
+/* Ensure borders remain visible */
+.form-control.field-autofilled,
+.form-control.field-modified,
+.form-select.field-autofilled,
+.form-select.field-modified {
+  border: 1px solid #dee2e6;
+}
+
+/* Focus states */
+.form-control.field-autofilled:focus,
+.form-control.field-modified:focus,
+.form-select.field-autofilled:focus,
+.form-select.field-modified:focus {
+  border-color: #0d6efd;
+  box-shadow: 0 0 0 0.25rem rgba(13, 110, 253, 0.25);
+}
+
+/* Field indicators */
+.field-indicator {
+  margin-left: 0.5rem;
+  font-size: 0.75rem;
+  font-weight: bold;
+  cursor: help;
+}
+
+.field-indicator.autofilled {
+  color: #856404; /* Dark yellow */
+}
+
+.field-indicator.modified {
+  color: #cc5500; /* Dark orange */
+}
+
+/* Smooth transitions */
+.form-control,
+.form-select {
+  transition: background-color 0.3s ease, border-color 0.3s ease;
 }
 </style>
