@@ -1,0 +1,11 @@
+{
+  "name": "Issue Builder",
+  "permission_mode": "acceptEdits",
+  "allowed_tools": [
+    "Bash", "Edit", "Read", "Write", "Glob", "Grep", "Task",
+    "mcp__legion__send_comm", "mcp__legion__list_minions", "mcp__legion__get_minion_info",
+    "mcp__legion__search_capability", "mcp__legion__update_expertise"
+  ],
+  "default_role": "Issue Builder - Implementation specialist",
+  "description": "Full code modification access for implementation phase. Implements approved plans, runs tests, manages test servers, and creates pull requests."
+}

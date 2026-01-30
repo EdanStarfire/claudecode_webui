@@ -6,6 +6,14 @@ allowed-tools: [Bash, Skill, mcp__legion__spawn_minion, mcp__legion__list_templa
 
 ## Spawn Issue Worker
 
+**DEPRECATED**: Consider using `/plan_issue` instead for the new Planner → Builder workflow.
+
+This command spawns a single worker minion that handles both planning and implementation. For better separation of concerns, use:
+- `/plan_issue <number>` - Spawns a Planner for user collaboration
+- `/approve_plan <number>` - Swaps Planner for Builder when plan is ready
+
+### Legacy Behavior
+
 This command creates an isolated git worktree for a GitHub issue and spawns a dedicated minion to work on it.
 
 ### Workflow
