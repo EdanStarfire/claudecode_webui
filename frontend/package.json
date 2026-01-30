@@ -12,7 +12,7 @@
     "@popperjs/core": "^2.11.8",
     "@vueuse/core": "^10.9.0",
     "bootstrap": "^5.3.3",
-    "diff": "^5.2.0",
+    "diff": "^8.0.3",
     "diff2html": "^3.4.52",
     "dompurify": "^3.3.0",
     "marked": "^11.2.0",
