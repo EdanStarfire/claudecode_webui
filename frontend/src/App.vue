@@ -7,7 +7,7 @@
     <div id="sidebar-backdrop" :class="{ 'show': !sidebarCollapsed && isMobile }" @click="toggleSidebar"></div>
 
     <!-- Mobile backdrop for right sidebar overlay -->
-    <div id="right-sidebar-backdrop" :class="{ 'show': !rightSidebarCollapsed && isMobile && showRightSidebar }" @click="toggleRightSidebar"></div>
+    <div id="right-sidebar-backdrop" :class="{ 'show': !rightSidebarCollapsed && isMobile }" @click="toggleRightSidebar"></div>
 
     <!-- Main Content -->
     <div class="d-flex flex-grow-1 overflow-hidden position-relative">
@@ -19,8 +19,8 @@
         <router-view />
       </main>
 
-      <!-- Right Sidebar (Task Panel) - Only shown when tasks exist -->
-      <RightSidebar v-if="showRightSidebar" />
+      <!-- Right Sidebar (Task Panel and future panels) -->
+      <RightSidebar />
     </div>
 
     <!-- Global Modals -->
@@ -64,11 +64,6 @@ const router = useRouter()
 const sidebarCollapsed = computed(() => uiStore.sidebarCollapsed)
 const rightSidebarCollapsed = computed(() => uiStore.rightSidebarCollapsed)
 const isMobile = computed(() => uiStore.isMobile)
-
-// Show right sidebar when current session has tasks
-const showRightSidebar = computed(() => {
-  return taskStore.currentHasTasks
-})
 
 // Auto-expand right sidebar when tasks first appear
 watch(() => taskStore.currentHasTasks, (hasTasks, hadTasks) => {
