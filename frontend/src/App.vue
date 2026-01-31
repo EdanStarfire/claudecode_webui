@@ -6,6 +6,9 @@
     <!-- Mobile backdrop for sidebar overlay -->
     <div id="sidebar-backdrop" :class="{ 'show': !sidebarCollapsed && isMobile }" @click="toggleSidebar"></div>
 
+    <!-- Mobile backdrop for right sidebar overlay -->
+    <div id="right-sidebar-backdrop" :class="{ 'show': !rightSidebarCollapsed && isMobile }" @click="toggleRightSidebar"></div>
+
     <!-- Main Content -->
     <div class="d-flex flex-grow-1 overflow-hidden position-relative">
       <!-- Sidebar -->
@@ -15,6 +18,9 @@
       <main class="flex-grow-1 d-flex flex-column overflow-hidden">
         <router-view />
       </main>
+
+      <!-- Right Sidebar (Task Panel and future panels) -->
+      <RightSidebar />
     </div>
 
     <!-- Global Modals -->
@@ -29,10 +35,11 @@
 </template>
 
 <script setup>
-import { computed, onMounted, onUnmounted } from 'vue'
+import { computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import AppHeader from './components/layout/AppHeader.vue'
 import Sidebar from './components/layout/Sidebar.vue'
+import RightSidebar from './components/layout/RightSidebar.vue'
 import FolderBrowserModal from './components/common/FolderBrowserModal.vue'
 import ProjectCreateModal from './components/project/ProjectCreateModal.vue'
 import ProjectEditModal from './components/project/ProjectEditModal.vue'
@@ -44,16 +51,27 @@ import { useUIStore } from './stores/ui'
 import { useWebSocketStore } from './stores/websocket'
 import { useSessionStore } from './stores/session'
 import { useProjectStore } from './stores/project'
+import { useTaskStore } from './stores/task'
 
 const uiStore = useUIStore()
 const wsStore = useWebSocketStore()
 const sessionStore = useSessionStore()
 const projectStore = useProjectStore()
+const taskStore = useTaskStore()
 const router = useRouter()
 
 // Computed properties from UI store
 const sidebarCollapsed = computed(() => uiStore.sidebarCollapsed)
+const rightSidebarCollapsed = computed(() => uiStore.rightSidebarCollapsed)
 const isMobile = computed(() => uiStore.isMobile)
+
+// Auto-expand right sidebar when tasks first appear
+watch(() => taskStore.currentHasTasks, (hasTasks, hadTasks) => {
+  if (hasTasks && !hadTasks) {
+    // Tasks appeared for the first time - auto-expand sidebar
+    uiStore.setRightSidebarCollapsed(false)
+  }
+})
 
 // Initialize app on mount
 onMounted(async () => {
@@ -114,11 +132,16 @@ function handlePopState() {
 function toggleSidebar() {
   uiStore.toggleSidebar()
 }
+
+function toggleRightSidebar() {
+  uiStore.toggleRightSidebar()
+}
 </script>
 
 <style>
 /* Mobile backdrop for sidebar */
-#sidebar-backdrop {
+#sidebar-backdrop,
+#right-sidebar-backdrop {
   display: none;
   position: fixed;
   top: 0;
@@ -129,12 +152,14 @@ function toggleSidebar() {
   z-index: 1040;
 }
 
-#sidebar-backdrop.show {
+#sidebar-backdrop.show,
+#right-sidebar-backdrop.show {
   display: block;
 }
 
 @media (max-width: 768px) {
-  #sidebar-backdrop.show {
+  #sidebar-backdrop.show,
+  #right-sidebar-backdrop.show {
     display: block;
   }
 }
