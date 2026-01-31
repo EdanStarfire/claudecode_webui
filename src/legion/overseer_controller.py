@@ -39,7 +39,8 @@ class OverseerController:
         allowed_tools: list[str] | None = None,
         working_directory: str | None = None,
         model: str | None = None,
-        sandbox_enabled: bool = False
+        sandbox_enabled: bool = False,
+        setting_sources: list[str] | None = None
     ) -> str:
         """
         Create a minion for the user (root overseer).
@@ -56,6 +57,7 @@ class OverseerController:
             working_directory: Optional custom working directory (defaults to project directory)
             model: Model selection (sonnet, opus, haiku, opusplan)
             sandbox_enabled: Enable OS-level sandboxing (issue #319)
+            setting_sources: Which settings files to load (issue #36)
 
         Returns:
             str: The created minion's session_id
@@ -105,7 +107,9 @@ class OverseerController:
             capabilities=capabilities or [],
             can_spawn_minions=True,  # User-created minion can spawn by default
             # Sandbox mode (issue #319)
-            sandbox_enabled=sandbox_enabled
+            sandbox_enabled=sandbox_enabled,
+            # Settings sources (issue #36)
+            setting_sources=setting_sources
         )
 
         # Register capabilities in capability registry

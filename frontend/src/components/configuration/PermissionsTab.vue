@@ -116,6 +116,68 @@
       <div class="form-text">Comma-separated list of capability keywords for discovery</div>
     </div>
 
+    <!-- Settings Sources (Issue #36) -->
+    <div class="mb-3" v-if="isSessionMode">
+      <label class="form-label">Settings Sources</label>
+      <div class="settings-sources-editor">
+        <div class="form-check">
+          <input
+            type="checkbox"
+            class="form-check-input"
+            id="setting-source-user"
+            :checked="settingSourcesArray.includes('user')"
+            @change="toggleSettingSource('user')"
+          />
+          <label class="form-check-label" for="setting-source-user">
+            User <code class="small">~/.claude/settings.json</code>
+          </label>
+        </div>
+        <div class="form-check">
+          <input
+            type="checkbox"
+            class="form-check-input"
+            id="setting-source-project"
+            :checked="settingSourcesArray.includes('project')"
+            @change="toggleSettingSource('project')"
+          />
+          <label class="form-check-label" for="setting-source-project">
+            Project <code class="small">.claude/settings.json</code>
+          </label>
+        </div>
+        <div class="form-check">
+          <input
+            type="checkbox"
+            class="form-check-input"
+            id="setting-source-local"
+            :checked="settingSourcesArray.includes('local')"
+            @change="toggleSettingSource('local')"
+          />
+          <label class="form-check-label" for="setting-source-local">
+            Local <code class="small">.claude/settings.local.json</code>
+          </label>
+        </div>
+      </div>
+      <div class="form-text">
+        <span v-if="isEditSession && isSessionActive && settingSourcesChanged" class="text-warning">
+          Settings sources change requires a <strong>restart</strong> to take effect.
+        </span>
+        <span v-else>
+          Select which settings files to load permissions from
+        </span>
+      </div>
+    </div>
+
+    <!-- Permission Preview Button (Issue #36) -->
+    <div class="mb-3" v-if="isSessionMode">
+      <button
+        type="button"
+        class="btn btn-outline-secondary btn-sm"
+        @click="$emit('preview-permissions')"
+      >
+        Preview Effective Permissions
+      </button>
+    </div>
+
     <!-- Raw input for advanced editing -->
     <div class="mb-3">
       <a
@@ -178,7 +240,7 @@ const props = defineProps({
   }
 })
 
-const emit = defineEmits(['update:form-data'])
+const emit = defineEmits(['update:form-data', 'preview-permissions'])
 
 // Local state
 const newTool = ref('')
@@ -190,6 +252,7 @@ const commonTools = ['Bash', 'Read', 'Edit', 'Write', 'Glob', 'Grep', 'WebFetch'
 
 // Computed
 const isTemplateMode = computed(() => props.mode === 'create-template' || props.mode === 'edit-template')
+const isSessionMode = computed(() => props.mode === 'create-session' || props.mode === 'edit-session')
 const isEditSession = computed(() => props.mode === 'edit-session')
 
 const isSessionActive = computed(() => {
@@ -200,6 +263,18 @@ const allowedToolsChanged = computed(() => {
   if (!props.session) return false
   const originalTools = props.session.allowed_tools?.join(', ') || ''
   return props.formData.allowed_tools !== originalTools
+})
+
+// Issue #36: Setting sources computed
+const settingSourcesArray = computed(() => {
+  return props.formData.setting_sources || ['user', 'project', 'local']
+})
+
+const settingSourcesChanged = computed(() => {
+  if (!props.session) return false
+  const originalSources = props.session.setting_sources || ['user', 'project', 'local']
+  const currentSources = props.formData.setting_sources || ['user', 'project', 'local']
+  return JSON.stringify(originalSources.sort()) !== JSON.stringify(currentSources.sort())
 })
 
 const toolsList = computed(() => {
@@ -273,6 +348,20 @@ function removeCapability(index) {
   newList.splice(index, 1)
   emit('update:form-data', 'capabilities', newList.join(', '))
 }
+
+// Issue #36: Toggle setting source
+function toggleSettingSource(source) {
+  const current = [...settingSourcesArray.value]
+  const index = current.indexOf(source)
+
+  if (index >= 0) {
+    current.splice(index, 1)
+  } else {
+    current.push(source)
+  }
+
+  emit('update:form-data', 'setting_sources', current)
+}
 </script>
 
 <style scoped>
@@ -291,7 +380,8 @@ function removeCapability(index) {
 }
 
 .allowed-tools-editor,
-.capabilities-editor {
+.capabilities-editor,
+.settings-sources-editor {
   background-color: var(--bs-gray-100);
   padding: 0.75rem;
   border-radius: 0.375rem;

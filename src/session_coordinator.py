@@ -167,6 +167,8 @@ class SessionCoordinator:
         # Sandbox mode (issue #319)
         sandbox_enabled: bool = False,
         sandbox_config: dict | None = None,
+        # Settings sources (issue #36)
+        setting_sources: list[str] | None = None,
     ) -> str:
         """Create a new Claude Code session with integrated components (within a project)"""
         try:
@@ -204,7 +206,9 @@ class SessionCoordinator:
                 can_spawn_minions=can_spawn_minions,
                 # Sandbox mode (issue #319)
                 sandbox_enabled=sandbox_enabled,
-                sandbox_config=sandbox_config
+                sandbox_config=sandbox_config,
+                # Settings sources (issue #36)
+                setting_sources=setting_sources
             )
 
             # Add session to project
@@ -437,7 +441,8 @@ class SessionCoordinator:
                 resume_session_id=resume_sdk_session,  # Only resume if we have a Claude Code session ID
                 mcp_servers=mcp_servers,
                 sandbox_enabled=session_info.sandbox_enabled,
-                sandbox_config=session_info.sandbox_config
+                sandbox_config=session_info.sandbox_config,
+                setting_sources=session_info.setting_sources  # Issue #36
             )
             self._active_sdks[session_id] = sdk
 

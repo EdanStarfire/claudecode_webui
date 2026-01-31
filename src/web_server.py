@@ -28,6 +28,7 @@ from .models.messages import (
     PermissionSuggestion,
     StoredMessage,
 )
+from .permission_resolver import resolve_effective_permissions
 from .session_coordinator import SessionCoordinator
 from .session_manager import SessionState
 from .timestamp_utils import normalize_timestamp
@@ -92,6 +93,13 @@ class ProjectCreateRequest(BaseModel):
         extra = "ignore"
 
 
+class PermissionPreviewRequest(BaseModel):
+    """Request to preview effective permissions (issue #36)"""
+    working_directory: str
+    setting_sources: list[str] | None = None  # Default: ["user", "project", "local"]
+    session_allowed_tools: list[str] | None = None  # Session-level allowed tools
+
+
 class ProjectUpdateRequest(BaseModel):
     name: str | None = None
     is_expanded: bool | None = None
@@ -109,6 +117,7 @@ class SessionCreateRequest(BaseModel):
     allowed_tools: list[str] | None = None
     model: str | None = None
     name: str | None = None
+    setting_sources: list[str] | None = None  # Issue #36: which settings files to load
 
 
 class MessageRequest(BaseModel):
@@ -129,6 +138,7 @@ class SessionUpdateRequest(BaseModel):
     override_system_prompt: bool | None = None
     capabilities: list[str] | None = None
     sandbox_enabled: bool | None = None
+    setting_sources: list[str] | None = None  # Issue #36: which settings files to load
 
 
 class SessionReorderRequest(BaseModel):
@@ -157,6 +167,7 @@ class MinionCreateRequest(BaseModel):
     allowed_tools: list[str] | None = None  # None or empty list means no pre-authorized tools
     working_directory: str | None = None  # Optional custom working directory for this minion
     sandbox_enabled: bool = False  # Enable OS-level sandboxing (issue #319)
+    setting_sources: list[str] | None = None  # Issue #36: which settings files to load
 
 
 
@@ -676,7 +687,8 @@ class ClaudeWebUI:
                     allowed_tools=request.allowed_tools,
                     model=request.model,
                     name=request.name,
-                    permission_callback=self._create_permission_callback(session_id)
+                    permission_callback=self._create_permission_callback(session_id),
+                    setting_sources=request.setting_sources  # Issue #36
                 )
 
                 # Broadcast session creation to all UI clients
@@ -855,6 +867,10 @@ class ClaudeWebUI:
                 # Handle sandbox_enabled update
                 if request.sandbox_enabled is not None:
                     updates["sandbox_enabled"] = request.sandbox_enabled
+
+                # Handle setting_sources update (issue #36)
+                if request.setting_sources is not None:
+                    updates["setting_sources"] = request.setting_sources
 
                 if not updates:
                     return {"success": True, "message": "No fields to update"}
@@ -1183,7 +1199,8 @@ class ClaudeWebUI:
                     allowed_tools=request.allowed_tools,
                     working_directory=str(working_dir),
                     model=request.model,
-                    sandbox_enabled=request.sandbox_enabled
+                    sandbox_enabled=request.sandbox_enabled,
+                    setting_sources=request.setting_sources  # Issue #36
                 )
 
                 # Get the created minion info
@@ -1255,6 +1272,26 @@ class ClaudeWebUI:
                 raise
             except Exception as e:
                 logger.error(f"Failed to resume all minions: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+        # ==================== PERMISSION PREVIEW ENDPOINT (Issue #36) ====================
+
+        @self.app.post("/api/permissions/preview")
+        async def preview_permissions(request: PermissionPreviewRequest):
+            """
+            Preview effective permissions from settings files.
+
+            Returns a list of permissions with their source annotations.
+            """
+            try:
+                permissions = resolve_effective_permissions(
+                    working_directory=request.working_directory,
+                    setting_sources=request.setting_sources,
+                    session_allowed_tools=request.session_allowed_tools
+                )
+                return {"permissions": permissions}
+            except Exception as e:
+                logger.error(f"Failed to preview permissions: {e}")
                 raise HTTPException(status_code=500, detail=str(e))
 
         # ==================== FILESYSTEM ENDPOINTS ====================
