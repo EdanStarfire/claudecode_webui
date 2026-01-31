@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { ref, computed, readonly, watch } from 'vue'
 import { api } from '../utils/api'
 import { useSessionStore } from './session'
+import { useTaskStore } from './task'
 
 /**
  * Message Store - Manages messages and tool calls per session
@@ -175,6 +176,14 @@ export const useMessageStore = defineStore('message', () => {
 
       // Trigger reactivity
       messagesBySession.value = new Map(messagesBySession.value)
+
+      // Reconstruct task state from message history
+      try {
+        const taskStore = useTaskStore()
+        taskStore.reconstructFromMessages(sessionId, messages)
+      } catch (e) {
+        console.warn('Failed to reconstruct task state:', e)
+      }
 
       // Warn if there are more messages we didn't load
       if (hasMore) {
@@ -418,6 +427,23 @@ export const useMessageStore = defineStore('message', () => {
     // Note: ExitPlanMode mode reset logic is handled by backend to prevent race conditions
     // with multiple connected frontends. Backend tracks setMode suggestions and makes the
     // decision to reset or not.
+
+    // Handle task tool results - update task store
+    const toolCalls = toolCallsBySession.value.get(sessionId)
+    if (toolCalls) {
+      const toolCall = toolCalls.find(tc => tc.id === toolUseId)
+      if (toolCall && ['TaskCreate', 'TaskUpdate', 'TaskList', 'TaskGet'].includes(toolCall.name)) {
+        try {
+          const taskStore = useTaskStore()
+          taskStore.handleTaskToolResult(sessionId, toolCall.name, toolCall.input, {
+            error: toolResultBlock.is_error,
+            content: toolResultBlock.content
+          })
+        } catch (e) {
+          console.warn('Failed to update task store:', e)
+        }
+      }
+    }
   }
 
   /**
