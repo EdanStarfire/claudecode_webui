@@ -1,5 +1,11 @@
 <template>
   <div class="tool-footer-container">
+    <!-- Tool Timeline Bar (visual status overview) -->
+    <ToolTimelineBar
+      :tools="tools"
+      @segment-click="handleTimelineClick"
+    />
+
     <!-- Footer Summary Bar (always visible if tools exist) -->
     <div
       class="tool-footer-summary"
@@ -29,6 +35,7 @@
         v-for="tool in completedTools"
         :key="tool.id"
         :toolCall="tool"
+        :data-tool-id="tool.id"
       />
     </div>
 
@@ -38,16 +45,18 @@
         v-for="tool in activeTools"
         :key="tool.id"
         :toolCall="tool"
+        :data-tool-id="tool.id"
       />
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, nextTick } from 'vue'
 import { useMessageStore } from '@/stores/message'
 import { useSessionStore } from '@/stores/session'
 import ToolCallCard from './ToolCallCard.vue'
+import ToolTimelineBar from './ToolTimelineBar.vue'
 
 const props = defineProps({
   tools: {
@@ -226,6 +235,31 @@ const footerClass = computed(() => {
 
 function toggleExpanded() {
   isExpanded.value = !isExpanded.value
+}
+
+/**
+ * Handle timeline segment click - expand footer and scroll to/expand specific tool
+ */
+async function handleTimelineClick({ tool }) {
+  const sessionId = sessionStore.currentSessionId
+  if (!sessionId) return
+
+  // Expand footer if not already expanded
+  if (!isExpanded.value) {
+    isExpanded.value = true
+    // Wait for DOM to update
+    await nextTick()
+  }
+
+  // Toggle the clicked tool's expansion in the message store
+  messageStore.toggleToolExpansion(sessionId, tool.id)
+
+  // Scroll to the tool card after a brief delay for DOM update
+  await nextTick()
+  const toolCard = document.querySelector(`[data-tool-id="${tool.id}"]`)
+  if (toolCard) {
+    toolCard.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+  }
 }
 </script>
 
