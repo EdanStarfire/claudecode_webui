@@ -153,6 +153,7 @@ class PermissionResponseMessage:
     interrupt: bool = True  # Whether to interrupt on deny
     timestamp: float = 0.0
     session_id: str | None = None
+    updated_input: dict | None = None  # For AskUserQuestion answers
 
     @property
     def content(self) -> str:
@@ -178,6 +179,8 @@ class PermissionResponseMessage:
             result['applied_updates'] = [u.to_dict() for u in self.applied_updates]
         if self.clarification_message is not None:
             result['clarification_message'] = self.clarification_message
+        if self.updated_input is not None:
+            result['updated_input'] = self.updated_input
         return result
 
     @classmethod
@@ -198,6 +201,7 @@ class PermissionResponseMessage:
             interrupt=data.get('interrupt', True),
             timestamp=data.get('timestamp', 0.0),
             session_id=data.get('session_id'),
+            updated_input=data.get('updated_input'),
         )
 
 

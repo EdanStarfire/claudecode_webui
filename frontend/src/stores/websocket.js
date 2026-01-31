@@ -433,6 +433,27 @@ export const useWebSocketStore = defineStore('websocket', () => {
   }
 
   /**
+   * Send permission response with updated_input (for AskUserQuestion)
+   * @param {string} requestId - The permission request ID
+   * @param {string} decision - 'allow' or 'deny'
+   * @param {object} updatedInput - The updated input containing questions and answers
+   */
+  function sendPermissionResponseWithInput(requestId, decision, updatedInput) {
+    if (sessionSocket.value && sessionConnected.value) {
+      const payload = {
+        type: 'permission_response',
+        request_id: requestId,
+        decision: decision,
+        updated_input: updatedInput,
+        timestamp: new Date().toISOString()
+      }
+
+      sessionSocket.value.send(JSON.stringify(payload))
+      console.log(`Sent permission ${decision} with updated_input for request ${requestId}`, updatedInput)
+    }
+  }
+
+  /**
    * Interrupt session processing
    */
   function interruptSession() {
@@ -752,6 +773,7 @@ export const useWebSocketStore = defineStore('websocket', () => {
     disconnectSession,
     sendMessage,
     sendPermissionResponse,
+    sendPermissionResponseWithInput,
     interruptSession,
     connectLegion,
     disconnectLegion
