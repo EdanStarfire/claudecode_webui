@@ -198,6 +198,10 @@ import EditToolHandler from '@/components/tools/EditToolHandler.vue'
 import SearchToolHandler from '@/components/tools/SearchToolHandler.vue'
 import WebToolHandler from '@/components/tools/WebToolHandler.vue'
 import TaskToolHandler from '@/components/tools/TaskToolHandler.vue'
+import TaskCreateToolHandler from '@/components/tools/TaskCreateToolHandler.vue'
+import TaskUpdateToolHandler from '@/components/tools/TaskUpdateToolHandler.vue'
+import TaskListToolHandler from '@/components/tools/TaskListToolHandler.vue'
+import TaskGetToolHandler from '@/components/tools/TaskGetToolHandler.vue'
 import NotebookEditToolHandler from '@/components/tools/NotebookEditToolHandler.vue'
 import ShellToolHandler from '@/components/tools/ShellToolHandler.vue'
 import CommandToolHandler from '@/components/tools/CommandToolHandler.vue'
@@ -338,6 +342,10 @@ const toolHandlers = {
   'WebFetch': WebToolHandler,
   'WebSearch': WebToolHandler,
   'Task': TaskToolHandler,
+  'TaskCreate': TaskCreateToolHandler,
+  'TaskUpdate': TaskUpdateToolHandler,
+  'TaskList': TaskListToolHandler,
+  'TaskGet': TaskGetToolHandler,
   'NotebookEdit': NotebookEditToolHandler,
   'BashOutput': ShellToolHandler,
   'KillShell': ShellToolHandler,
@@ -653,6 +661,39 @@ const toolSummary = computed(() => {
         return `AskUserQuestion: ${questionCount} question(s) awaiting response`
       }
       return `AskUserQuestion: ${questionCount} question(s)`
+    }
+
+    case 'TaskCreate': {
+      const subject = input.subject || ''
+      const truncatedSubject = subject.length > 40 ? subject.substring(0, 40) + '...' : subject
+      if (status === 'completed' && result && !result.error) {
+        return `TaskCreate: "${truncatedSubject}" (created)`
+      }
+      return `TaskCreate: "${truncatedSubject}"`
+    }
+
+    case 'TaskUpdate': {
+      const taskId = input.taskId || '?'
+      const newStatus = input.status || ''
+      if (newStatus) {
+        return `TaskUpdate: #${taskId} -> ${newStatus}`
+      }
+      return `TaskUpdate: #${taskId}`
+    }
+
+    case 'TaskList': {
+      if (status === 'completed' && result && !result.error) {
+        return 'TaskList: Retrieved task list'
+      }
+      return 'TaskList: Fetching tasks'
+    }
+
+    case 'TaskGet': {
+      const taskId = input.taskId || '?'
+      if (status === 'completed' && result && !result.error) {
+        return `TaskGet: #${taskId} (retrieved)`
+      }
+      return `TaskGet: #${taskId}`
     }
 
     default: {

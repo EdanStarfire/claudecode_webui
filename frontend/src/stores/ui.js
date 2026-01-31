@@ -7,10 +7,15 @@ import { ref, computed } from 'vue'
 export const useUIStore = defineStore('ui', () => {
   // ========== STATE ==========
 
-  // Sidebar state
+  // Left Sidebar state
   // Default: collapsed on mobile, visible on desktop
   const sidebarCollapsed = ref(window.innerWidth < 768)
   const sidebarWidth = ref(300)
+
+  // Right Sidebar state (for task panel)
+  // Default: collapsed, only shown when tasks exist
+  const rightSidebarCollapsed = ref(true)
+  const rightSidebarWidth = ref(300)
 
   // Mobile detection (reactive to window size)
   const windowWidth = ref(window.innerWidth)
@@ -48,6 +53,18 @@ export const useUIStore = defineStore('ui', () => {
 
   function setSidebarWidth(width) {
     sidebarWidth.value = Math.max(200, Math.min(width, window.innerWidth * 0.3))
+  }
+
+  function toggleRightSidebar() {
+    rightSidebarCollapsed.value = !rightSidebarCollapsed.value
+  }
+
+  function setRightSidebarCollapsed(collapsed) {
+    rightSidebarCollapsed.value = collapsed
+  }
+
+  function setRightSidebarWidth(width) {
+    rightSidebarWidth.value = Math.max(200, Math.min(width, window.innerWidth * 0.3))
   }
 
   function setAutoScroll(enabled) {
@@ -100,6 +117,8 @@ export const useUIStore = defineStore('ui', () => {
     // State
     sidebarCollapsed,
     sidebarWidth,
+    rightSidebarCollapsed,
+    rightSidebarWidth,
     isMobile,
     autoScrollEnabled,
     activeModal,
@@ -112,6 +131,9 @@ export const useUIStore = defineStore('ui', () => {
     toggleSidebar,
     setSidebarCollapsed,
     setSidebarWidth,
+    toggleRightSidebar,
+    setRightSidebarCollapsed,
+    setRightSidebarWidth,
     setAutoScroll,
     showModal,
     hideModal,
