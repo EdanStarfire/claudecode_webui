@@ -32,90 +32,130 @@
       </div>
 
       <!-- Tool-specific content (using specialized handler component) -->
-      <component :is="toolHandlerComponent" :toolCall="toolCall" />
+      <!-- Skip for AskUserQuestion in permission_required state - shown in permission prompt instead -->
+      <component
+        v-if="!(isAskUserQuestion && effectiveStatus === 'permission_required')"
+        :is="toolHandlerComponent"
+        :toolCall="toolCall"
+      />
 
       <!-- Permission Prompt (if applicable and not orphaned) -->
       <!-- Issue #310: Use effectiveStatus which prefers backend state -->
       <div v-if="effectiveStatus === 'permission_required' && !isOrphaned" class="permission-prompt mt-3">
-        <div class="alert alert-warning mb-3">
-          <p class="mb-2"><strong>🔐 Permission Required</strong></p>
-          <p class="mb-0">Claude wants to use the <code class="tool-name">{{ toolCall.name }}</code> tool.</p>
-        </div>
-
-        <!-- Suggestions (if any) -->
-        <div v-if="hasSuggestions" class="suggestions-section mb-3">
-          <div class="alert alert-info mb-0">
-            <h6 class="mb-2">
-              💾 Suggested Permission Update
-            </h6>
-            <p class="mb-2 small">Claude suggests updating your permissions:</p>
-            <div class="suggestion-details p-2 bg-white rounded">
-              <div v-for="(suggestion, index) in toolCall.suggestions" :key="index" class="suggestion-item">
-                <code>{{ formatSuggestion(suggestion) }}</code>
-              </div>
-            </div>
-            <small class="text-muted mt-2 d-block">
-              This will prevent future permission prompts for this action.
-            </small>
+        <!-- AskUserQuestion: Show question UI instead of standard permission buttons -->
+        <template v-if="isAskUserQuestion">
+          <div class="alert alert-info mb-3">
+            <p class="mb-0"><strong>❓ Claude is asking for your input</strong></p>
           </div>
-        </div>
 
-        <!-- Permission Buttons -->
-        <div class="permission-buttons d-flex gap-2 mb-3">
-          <!-- Approve & Apply (if suggestions exist) -->
-          <button
-            v-if="hasSuggestions"
-            class="btn btn-success"
-            @click="handlePermissionDecision('allow', true)"
-            :disabled="isSubmittingPermission"
-          >
-            {{ isSubmittingPermission && permissionAction === 'approve-apply' ? '⏳ Submitting...' : '✅ Approve & Apply' }}
-          </button>
+          <!-- Question Handler with interactive options -->
+          <AskUserQuestionToolHandler
+            ref="questionHandlerRef"
+            :toolCall="toolCall"
+            @answer="handleQuestionAnswer"
+          />
 
-          <!-- Approve Only (if suggestions exist) or regular Approve -->
-          <button
-            class="btn"
-            :class="hasSuggestions ? 'btn-outline-success' : 'btn-success'"
-            @click="handlePermissionDecision('allow', false)"
-            :disabled="isSubmittingPermission"
-          >
-            {{ isSubmittingPermission && permissionAction === 'approve' ? '⏳ Submitting...' : (hasSuggestions ? '✅ Approve Only' : '✅ Approve') }}
-          </button>
+          <!-- Submit Button -->
+          <div class="question-buttons d-flex gap-2 mt-3">
+            <button
+              class="btn btn-primary"
+              @click="submitQuestionAnswers"
+              :disabled="isSubmittingPermission || !hasValidAnswers"
+            >
+              {{ isSubmittingPermission ? '⏳ Submitting...' : '📤 Submit Answers' }}
+            </button>
+            <button
+              class="btn btn-outline-secondary"
+              @click="handlePermissionDecision('deny', false)"
+              :disabled="isSubmittingPermission"
+            >
+              Skip Question
+            </button>
+          </div>
+        </template>
 
-          <!-- Deny -->
-          <button
-            class="btn btn-danger"
-            @click="handlePermissionDecision('deny', false)"
-            :disabled="isSubmittingPermission"
-          >
-            🚫 {{ isSubmittingPermission && permissionAction === 'deny' ? 'Submitting...' : 'Deny' }}
-          </button>
-        </div>
+        <!-- Standard Permission UI for other tools -->
+        <template v-else>
+          <div class="alert alert-warning mb-3">
+            <p class="mb-2"><strong>🔐 Permission Required</strong></p>
+            <p class="mb-0">Claude wants to use the <code class="tool-name">{{ toolCall.name }}</code> tool.</p>
+          </div>
 
-        <!-- Provide Guidance -->
-        <div class="guidance-section mt-3">
-          <label class="form-label fw-bold">
-            Provide Guidance (Optional)
-          </label>
-          <p class="text-muted small mb-2">
-            Provide guidance to help Claude retry with better context. If provided, Claude will continue with your guidance instead of stopping.
-          </p>
-          <textarea
-            v-model="guidanceMessage"
-            class="form-control mb-2"
-            rows="3"
-            placeholder="e.g., 'Try using a different approach...' or 'Make sure to check the file exists first...'"
-            :disabled="isSubmittingPermission"
-          ></textarea>
-          <button
-            v-if="guidanceMessage.trim()"
-            class="btn btn-warning btn-sm"
-            @click="handlePermissionDecision('deny', false, guidanceMessage)"
-            :disabled="isSubmittingPermission"
-          >
-            {{ isSubmittingPermission && permissionAction === 'deny-guidance' ? '⏳ Submitting...' : '🔀 Provide Guidance & Continue' }}
-          </button>
-        </div>
+          <!-- Suggestions (if any) -->
+          <div v-if="hasSuggestions" class="suggestions-section mb-3">
+            <div class="alert alert-info mb-0">
+              <h6 class="mb-2">
+                💾 Suggested Permission Update
+              </h6>
+              <p class="mb-2 small">Claude suggests updating your permissions:</p>
+              <div class="suggestion-details p-2 bg-white rounded">
+                <div v-for="(suggestion, index) in toolCall.suggestions" :key="index" class="suggestion-item">
+                  <code>{{ formatSuggestion(suggestion) }}</code>
+                </div>
+              </div>
+              <small class="text-muted mt-2 d-block">
+                This will prevent future permission prompts for this action.
+              </small>
+            </div>
+          </div>
+
+          <!-- Permission Buttons -->
+          <div class="permission-buttons d-flex gap-2 mb-3">
+            <!-- Approve & Apply (if suggestions exist) -->
+            <button
+              v-if="hasSuggestions"
+              class="btn btn-success"
+              @click="handlePermissionDecision('allow', true)"
+              :disabled="isSubmittingPermission"
+            >
+              {{ isSubmittingPermission && permissionAction === 'approve-apply' ? '⏳ Submitting...' : '✅ Approve & Apply' }}
+            </button>
+
+            <!-- Approve Only (if suggestions exist) or regular Approve -->
+            <button
+              class="btn"
+              :class="hasSuggestions ? 'btn-outline-success' : 'btn-success'"
+              @click="handlePermissionDecision('allow', false)"
+              :disabled="isSubmittingPermission"
+            >
+              {{ isSubmittingPermission && permissionAction === 'approve' ? '⏳ Submitting...' : (hasSuggestions ? '✅ Approve Only' : '✅ Approve') }}
+            </button>
+
+            <!-- Deny -->
+            <button
+              class="btn btn-danger"
+              @click="handlePermissionDecision('deny', false)"
+              :disabled="isSubmittingPermission"
+            >
+              🚫 {{ isSubmittingPermission && permissionAction === 'deny' ? 'Submitting...' : 'Deny' }}
+            </button>
+          </div>
+
+          <!-- Provide Guidance -->
+          <div class="guidance-section mt-3">
+            <label class="form-label fw-bold">
+              Provide Guidance (Optional)
+            </label>
+            <p class="text-muted small mb-2">
+              Provide guidance to help Claude retry with better context. If provided, Claude will continue with your guidance instead of stopping.
+            </p>
+            <textarea
+              v-model="guidanceMessage"
+              class="form-control mb-2"
+              rows="3"
+              placeholder="e.g., 'Try using a different approach...' or 'Make sure to check the file exists first...'"
+              :disabled="isSubmittingPermission"
+            ></textarea>
+            <button
+              v-if="guidanceMessage.trim()"
+              class="btn btn-warning btn-sm"
+              @click="handlePermissionDecision('deny', false, guidanceMessage)"
+              :disabled="isSubmittingPermission"
+            >
+              {{ isSubmittingPermission && permissionAction === 'deny-guidance' ? '⏳ Submitting...' : '🔀 Provide Guidance & Continue' }}
+            </button>
+          </div>
+        </template>
       </div>
 
       <!-- Orphaned Permission Message (when permission was pending but session ended) -->
@@ -164,6 +204,7 @@ import CommandToolHandler from '@/components/tools/CommandToolHandler.vue'
 import SkillToolHandler from '@/components/tools/SkillToolHandler.vue'
 import SlashCommandToolHandler from '@/components/tools/SlashCommandToolHandler.vue'
 import ExitPlanModeToolHandler from '@/components/tools/ExitPlanModeToolHandler.vue'
+import AskUserQuestionToolHandler from '@/components/tools/AskUserQuestionToolHandler.vue'
 
 const props = defineProps({
   toolCall: {
@@ -180,6 +221,75 @@ const wsStore = useWebSocketStore()
 const isSubmittingPermission = ref(false)
 const permissionAction = ref(null)
 const guidanceMessage = ref('')
+
+// AskUserQuestion handling state
+const questionHandlerRef = ref(null)
+const currentAnswers = ref({})
+
+// Check if this is an AskUserQuestion tool
+const isAskUserQuestion = computed(() => {
+  return props.toolCall.name === 'AskUserQuestion'
+})
+
+// Check if we have valid answers for all questions
+const hasValidAnswers = computed(() => {
+  if (!isAskUserQuestion.value) return false
+  if (!questionHandlerRef.value) return false
+  return questionHandlerRef.value.allQuestionsAnswered
+})
+
+// Handle answer updates from question handler
+function handleQuestionAnswer(answers) {
+  currentAnswers.value = answers
+}
+
+// Submit question answers
+async function submitQuestionAnswers() {
+  if (isSubmittingPermission.value) return
+  if (!questionHandlerRef.value) return
+
+  isSubmittingPermission.value = true
+  permissionAction.value = 'submit-answers'
+
+  try {
+    const sessionId = sessionStore.currentSessionId
+    const answers = questionHandlerRef.value.getAnswers()
+
+    // Build updated_input with questions and answers per SDK format
+    const updatedInput = {
+      questions: props.toolCall.input?.questions || [],
+      answers: answers
+    }
+
+    // Update local store - include answers in the tool call input for display after completion
+    if (sessionId) {
+      // First update the tool call's input to include the answers
+      messageStore.updateToolCall(sessionId, props.toolCall.id, {
+        input: updatedInput
+      })
+
+      // Then handle the permission response
+      messageStore.handlePermissionResponse(sessionId, {
+        request_id: props.toolCall.permissionRequestId,
+        decision: 'allow',
+        reasoning: 'User answered questions',
+        applied_updates: []
+      })
+    }
+
+    // Send permission response with updated_input to backend
+    await wsStore.sendPermissionResponseWithInput(
+      props.toolCall.permissionRequestId,
+      'allow',
+      updatedInput
+    )
+  } catch (error) {
+    console.error('Failed to submit question answers:', error)
+  } finally {
+    isSubmittingPermission.value = false
+    permissionAction.value = null
+  }
+}
 
 // Orphaned tool detection
 // Issue #310: First checks backend-provided state, then falls back to local tracking
@@ -234,6 +344,7 @@ const toolHandlers = {
   'SlashCommand': SlashCommandToolHandler,
   'Skill': SkillToolHandler,
   'ExitPlanMode': ExitPlanModeToolHandler,
+  'AskUserQuestion': AskUserQuestionToolHandler,
 }
 
 // Select appropriate handler component based on tool name
@@ -530,6 +641,18 @@ const toolSummary = computed(() => {
     case 'KillShell': {
       const shellId = input.shell_id || 'unknown'
       return `KillShell: Terminate ${shellId}`
+    }
+
+    case 'AskUserQuestion': {
+      const questions = input.questions || []
+      const questionCount = questions.length
+      if (status === 'completed' && result && !result.error) {
+        return `AskUserQuestion: ${questionCount} question(s) answered`
+      }
+      if (status === 'permission_required') {
+        return `AskUserQuestion: ${questionCount} question(s) awaiting response`
+      }
+      return `AskUserQuestion: ${questionCount} question(s)`
     }
 
     default: {

@@ -140,6 +140,17 @@ export const useMessageStore = defineStore('message', () => {
           handlePermissionRequest(sessionId, message)
         }
 
+        // Extract permission responses (for restoring AskUserQuestion answers on page refresh)
+        if (message.type === 'permission_response') {
+          handlePermissionResponse(sessionId, {
+            request_id: message.metadata?.request_id,
+            decision: message.metadata?.decision,
+            updated_input: message.metadata?.updated_input,
+            reasoning: message.metadata?.reasoning,
+            applied_updates: message.metadata?.applied_updates
+          })
+        }
+
         // Capture init data for session info modal
         if (message.type === 'system' &&
             (message.subtype === 'init' || message.metadata?.subtype === 'init') &&
@@ -375,6 +386,11 @@ export const useMessageStore = defineStore('message', () => {
           message: permissionResponse.reasoning || 'Permission denied'
         }
         updates.isExpanded = false
+      }
+
+      // For AskUserQuestion, update the input with answers from updated_input
+      if (permissionResponse.updated_input) {
+        updates.input = permissionResponse.updated_input
       }
 
       updateToolCall(sessionId, toolUseId, updates)
@@ -745,6 +761,17 @@ export const useMessageStore = defineStore('message', () => {
         // Extract permission requests
         if (message.type === 'permission_request' || message.metadata?.has_permission_requests) {
           handlePermissionRequest(sessionId, message)
+        }
+
+        // Extract permission responses (for restoring AskUserQuestion answers)
+        if (message.type === 'permission_response') {
+          handlePermissionResponse(sessionId, {
+            request_id: message.metadata?.request_id,
+            decision: message.metadata?.decision,
+            updated_input: message.metadata?.updated_input,
+            reasoning: message.metadata?.reasoning,
+            applied_updates: message.metadata?.applied_updates
+          })
         }
 
         // Capture init data

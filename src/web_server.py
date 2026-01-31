@@ -1735,8 +1735,10 @@ class ClaudeWebUI:
                                     if decision == "allow":
                                         response = {"behavior": "allow"}
                                         # Only include updated_input if it was actually provided
+                                        # This is used by AskUserQuestion to pass user answers back to SDK
                                         if "updated_input" in message_data:
                                             response["updated_input"] = message_data["updated_input"]
+                                            ws_logger.info(f"Permission response includes updated_input for AskUserQuestion: {message_data['updated_input']}")
                                         # Include apply_suggestions flag if provided
                                         if "apply_suggestions" in message_data:
                                             response["apply_suggestions"] = message_data["apply_suggestions"]
@@ -2071,6 +2073,9 @@ class ClaudeWebUI:
                         for u in response["applied_updates_for_storage"]
                     ]
 
+                # Extract updated_input for AskUserQuestion (contains answers)
+                updated_input_data = response.get("updated_input")
+
                 # Create permission response dataclass
                 permission_response_msg = PermissionResponseMessage(
                     request_id=request_id,
@@ -2083,6 +2088,7 @@ class ClaudeWebUI:
                     interrupt=interrupt_flag,
                     timestamp=decision_time,
                     session_id=session_id,
+                    updated_input=updated_input_data,
                 )
 
                 # Wrap in StoredMessage for unified storage
@@ -2117,6 +2123,8 @@ class ClaudeWebUI:
                         websocket_data["interrupt"] = False
                     if applied_update_objects:
                         websocket_data["applied_updates"] = [u.to_dict() for u in applied_update_objects]
+                    if updated_input_data:
+                        websocket_data["updated_input"] = updated_input_data
 
                     websocket_message = {
                         "type": "message",

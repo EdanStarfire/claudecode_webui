@@ -1202,6 +1202,9 @@ class SessionCoordinator:
                 metadata["tool_name"] = data.get("tool_name")
                 metadata["reasoning"] = data.get("reasoning")
                 metadata["applied_updates"] = data.get("applied_updates", [])
+                # Include updated_input for AskUserQuestion answers
+                if data.get("updated_input"):
+                    metadata["updated_input"] = data["updated_input"]
 
             # Add display metadata if present (Issue #310)
             if display:
