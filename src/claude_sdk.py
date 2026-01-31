@@ -137,7 +137,8 @@ class ClaudeSDK:
         resume_session_id: str | None = None,
         mcp_servers: list[Any] | None = None,
         sandbox_enabled: bool = False,
-        sandbox_config: dict | None = None
+        sandbox_config: dict | None = None,
+        setting_sources: list[str] | None = None
     ):
         """
         Initialize enhanced Claude Code SDK wrapper.
@@ -157,6 +158,7 @@ class ClaudeSDK:
             mcp_servers: List of MCP servers to attach (for multi-agent)
             sandbox_enabled: Enable OS-level sandboxing (issue #319)
             sandbox_config: Optional SandboxSettings configuration dict
+            setting_sources: List of settings sources to load (issue #36)
         """
         self.session_id = session_id
         self.working_directory = Path(working_directory)
@@ -179,6 +181,7 @@ class ClaudeSDK:
         self.mcp_servers = mcp_servers if mcp_servers is not None else []
         self.sandbox_enabled = sandbox_enabled
         self.sandbox_config = sandbox_config
+        self.setting_sources = setting_sources  # Issue #36: which settings files to load
 
         self.info = SessionInfo(session_id=session_id, working_directory=str(self.working_directory))
 
@@ -673,8 +676,8 @@ class ClaudeSDK:
             "permission_mode": self.current_permission_mode,
             "system_prompt": system_prompt_config,
             "allowed_tools": self.tools,
-            # Restore default settings sources behavior (load from user, project, and local)
-            "setting_sources": ["user", "project", "local"]
+            # Issue #36: Use configurable setting_sources (default: load from user, project, and local)
+            "setting_sources": self.setting_sources if self.setting_sources else ["user", "project", "local"]
         }
 
         # Only add can_use_tool callback if permission callback is provided and SDK classes are available

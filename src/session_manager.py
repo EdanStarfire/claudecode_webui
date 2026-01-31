@@ -92,6 +92,9 @@ class SessionInfo:
     sandbox_enabled: bool = False  # If True, enable OS-level sandboxing via SDK
     sandbox_config: dict | None = None  # Optional SandboxSettings config (auto_allow_bash, excluded_commands, etc.)
 
+    # Settings sources (issue #36) - which settings files to load permissions from
+    setting_sources: list[str] | None = None  # Default: ["user", "project", "local"]
+
     def __post_init__(self):
         if self.allowed_tools is None:
             self.allowed_tools = ["bash", "edit", "read"]
@@ -222,7 +225,9 @@ class SessionManager:
         can_spawn_minions: bool = True,  # If False, no MCP spawn tools attached
         # Sandbox mode (issue #319)
         sandbox_enabled: bool = False,
-        sandbox_config: dict | None = None
+        sandbox_config: dict | None = None,
+        # Settings sources (issue #36)
+        setting_sources: list[str] | None = None
     ) -> None:
         """Create a new session (all sessions are minions - issue #349)"""
         # Validate session_id is not reserved
@@ -263,7 +268,9 @@ class SessionManager:
             can_spawn_minions=can_spawn_minions,
             # Sandbox mode (issue #319)
             sandbox_enabled=sandbox_enabled,
-            sandbox_config=sandbox_config
+            sandbox_config=sandbox_config,
+            # Settings sources (issue #36)
+            setting_sources=setting_sources
         )
 
         try:

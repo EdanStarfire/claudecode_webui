@@ -124,6 +124,7 @@
                 :session="editSession"
                 :field-states="fieldStates"
                 @update:form-data="updateFormData"
+                @preview-permissions="showPermissionPreview"
               />
               <AdvancedTab
                 v-show="activeTab === 'advanced'"
@@ -159,6 +160,14 @@
       </div>
     </div>
   </div>
+
+  <!-- Permission Preview Modal (Issue #36) -->
+  <PermissionPreviewModal
+    ref="permissionPreviewModal"
+    :working-directory="currentWorkingDirectory"
+    :setting-sources="formData.setting_sources"
+    :session-allowed-tools="currentAllowedTools"
+  />
 </template>
 
 <script setup>
@@ -171,6 +180,7 @@ import { api } from '@/utils/api'
 import GeneralTab from './GeneralTab.vue'
 import PermissionsTab from './PermissionsTab.vue'
 import AdvancedTab from './AdvancedTab.vue'
+import PermissionPreviewModal from './PermissionPreviewModal.vue'
 
 const router = useRouter()
 const projectStore = useProjectStore()
@@ -180,6 +190,7 @@ const uiStore = useUIStore()
 // Modal state
 const modalElement = ref(null)
 let modalInstance = null
+const permissionPreviewModal = ref(null)  // Issue #36
 
 // Mode: 'create-session', 'edit-session', 'create-template', 'edit-template'
 const mode = ref('create-session')
@@ -227,6 +238,7 @@ const formData = reactive({
   // Permissions tab
   allowed_tools: '',
   capabilities: '',  // template only
+  setting_sources: ['user', 'project', 'local'],  // Issue #36: settings sources to load
 
   // Advanced tab
   system_prompt: '',
@@ -290,7 +302,38 @@ const isFormValid = computed(() => {
   return true
 })
 
+// Issue #36: Permission preview helpers
+const currentWorkingDirectory = computed(() => {
+  // For edit session, use the session's working directory
+  if (editSession.value?.working_directory) {
+    return editSession.value.working_directory
+  }
+  // For create session, use the form's working directory or project's working directory
+  if (formData.working_directory) {
+    return formData.working_directory
+  }
+  // Fall back to project's working directory
+  const project = projectStore.projects.get(projectId.value)
+  return project?.working_directory || ''
+})
+
+const currentAllowedTools = computed(() => {
+  if (!formData.allowed_tools || !formData.allowed_tools.trim()) return []
+  return formData.allowed_tools
+    .split(',')
+    .map(t => t.trim())
+    .filter(t => t.length > 0)
+})
+
 // Methods
+
+// Issue #36: Show permission preview modal
+function showPermissionPreview() {
+  if (permissionPreviewModal.value) {
+    permissionPreviewModal.value.show()
+  }
+}
+
 function updateFormData(field, value) {
   formData[field] = value
 
@@ -543,7 +586,8 @@ async function createSession() {
     permission_mode: formData.permission_mode,
     allowed_tools: toolsList.length > 0 ? toolsList : null,
     working_directory: formData.working_directory.trim() || null,
-    sandbox_enabled: formData.sandbox_enabled
+    sandbox_enabled: formData.sandbox_enabled,
+    setting_sources: formData.setting_sources  // Issue #36
   }
 
   const response = await api.post(`/api/legions/${projectId.value}/minions`, payload)
@@ -595,7 +639,8 @@ async function updateSession() {
     override_system_prompt: formData.override_system_prompt,
     allowed_tools: toolsList.length > 0 ? toolsList : null,
     capabilities: capsList.length > 0 ? capsList : null,
-    sandbox_enabled: formData.sandbox_enabled
+    sandbox_enabled: formData.sandbox_enabled,
+    setting_sources: formData.setting_sources  // Issue #36
   }
 
   // Update session via PATCH (takes effect on next restart if session is active)
@@ -674,6 +719,7 @@ function resetForm() {
   formData.startImmediately = true
   formData.allowed_tools = ''
   formData.capabilities = ''
+  formData.setting_sources = ['user', 'project', 'local']  // Issue #36
   formData.system_prompt = ''
   formData.override_system_prompt = false
   formData.initialization_context = ''
@@ -715,6 +761,8 @@ function populateFormFromSession(session) {
   formData.allowed_tools = session.allowed_tools?.join(', ') || ''
   formData.capabilities = session.capabilities?.join(', ') || ''
   formData.sandbox_enabled = session.sandbox_enabled || false
+  // Issue #36: Load setting_sources, default to all enabled if not set
+  formData.setting_sources = session.setting_sources || ['user', 'project', 'local']
 }
 
 function populateFormFromTemplate(template) {
