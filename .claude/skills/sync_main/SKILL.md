@@ -1,11 +1,12 @@
 ---
+name: sync_main
 description: Pull latest changes from main branch in preparation for new issues
 allowed-tools: [Bash, Skill]
 ---
 
 ## Sync Main Branch
 
-This command updates the main branch with the latest changes from remote, preparing for new issue work.
+This skill updates the main branch with the latest changes from remote, preparing for new issue work.
 
 ### Workflow
 

@@ -1,12 +1,14 @@
 ---
+name: approve_plan
 description: Approve a plan and spawn a Builder to implement it
+disable-model-invocation: true
 argument-hint: <issue_number>
 allowed-tools: [Bash, Skill, mcp__legion__spawn_minion, mcp__legion__dispose_minion, mcp__legion__get_minion_info, mcp__legion__send_comm]
 ---
 
 ## Approve Plan
 
-This command is called when a Planner has finished and the user approves the plan. It disposes the Planner and spawns a Builder to implement the approved plan.
+This skill is called when a Planner has finished and the user approves the plan. It disposes the Planner and spawns a Builder to implement the approved plan.
 
 ### Workflow
 

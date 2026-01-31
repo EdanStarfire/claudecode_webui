@@ -1,12 +1,14 @@
 ---
+name: approve_issue
 description: Approve completed issue work, merge PR, and clean up resources
+disable-model-invocation: true
 argument-hint: <issue_number>
 allowed-tools: [Bash, Skill, mcp__legion__dispose_minion, mcp__legion__get_minion_info]
 ---
 
 ## Approve Issue
 
-This command is called when the user is satisfied with the completed work. It merges the PR, stops test servers, disposes the Builder, and removes the worktree.
+This skill is called when the user is satisfied with the completed work. It merges the PR, stops test servers, disposes the Builder, and removes the worktree.
 
 ### Workflow
 
@@ -55,11 +57,11 @@ lsof -i :${VITE_PORT} 2>/dev/null
 #### 4. Merge PR
 
 **Invoke the `github-pr-manager` skill** to merge:
-- Squash merge the PR
-- Delete the remote branch after merge
+- Squash merge the PR only
+- Do NOT use `--delete-branch` flag (branch cleanup happens with worktree removal)
 
 ```bash
-gh pr merge --squash --delete-branch
+gh pr merge --squash
 ```
 
 #### 5. Dispose Builder
@@ -108,7 +110,7 @@ Completed Actions:
 - Test servers stopped (ports ${BACKEND_PORT}/${VITE_PORT})
 - Builder disposed (knowledge archived)
 - Worktree removed: worktrees/issue-$1/
-- Branch deleted: feature/issue-$1
+- Branch cleaned up with worktree
 - Main branch updated
 
 Ready to start new issues with /plan_issue <number>
