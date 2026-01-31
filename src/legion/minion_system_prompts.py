@@ -10,17 +10,15 @@ Claude Code functionality.
 """
 
 from pathlib import Path
-from typing import Dict, Any, Optional
-
 
 # Path to the Legion MCP Tools Guide markdown file
 GUIDE_PATH = Path(__file__).parent / "legion_mcp_tools_guide.md"
 
-# Size limits - Windows command-line subprocess limits
-# Guide: 4000 chars, Initialization context: 2000 chars
-# Total: ~6000 chars + CLI overhead stays under ~7000 char Windows limit
+# Size limits
+# MAX_LEGION_GUIDE_SIZE: Truncate large guides to stay within reasonable memory limits
+# Note: Windows command-line limitations are no longer a concern as we use file-based
+# system prompt delivery (--append-system-prompt-file flag) to bypass CLI length limits.
 MAX_LEGION_GUIDE_SIZE = 4000  # characters
-MAX_INITIALIZATION_CONTEXT_SIZE = 2000  # characters
 
 
 def _load_legion_guide() -> str:
@@ -58,7 +56,7 @@ def _load_legion_guide() -> str:
 
         return content
     except Exception as e:
-        raise IOError(f"Failed to read Legion MCP Tools Guide: {e}")
+        raise OSError(f"Failed to read Legion MCP Tools Guide: {e}") from e
 
 def get_legion_guide_only() -> str:
     """
