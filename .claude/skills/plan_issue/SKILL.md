@@ -1,12 +1,14 @@
 ---
+name: plan_issue
 description: Start planning phase for a GitHub issue by spawning a Planner minion
+disable-model-invocation: true
 argument-hint: <issue_number>
-allowed-tools: [Bash, Skill, mcp__legion__spawn_minion, mcp__legion__list_templates, mcp__legion__send_comm]
+allowed-tools: [Bash, Skill, Task, mcp__legion__spawn_minion, mcp__legion__list_templates, mcp__legion__send_comm]
 ---
 
 ## Plan Issue
 
-This command creates an isolated git worktree for a GitHub issue and spawns a Planner minion to collaborate with the user on requirements and design.
+This skill creates an isolated git worktree for a GitHub issue and spawns a Planner minion to collaborate with the user on requirements and design.
 
 ### Workflow
 
@@ -60,7 +62,7 @@ The skill will:
 
   Your mission:
   1. Fetch issue details using github-issue-reader skill
-  2. Explore current implementation using codebase-explorer skill
+  2. Explore current implementation using Task tool with Explore subagent
   3. Build user stories from requirements
   4. Create design artifacts (diagrams, flows) as appropriate
   5. Present to user and iterate based on feedback
@@ -68,11 +70,26 @@ The skill will:
   7. Add `ready-to-build` label to issue
   8. Send comm to Orchestrator: "Plan ready for issue #$1"
 
+  CRITICAL - Codebase Exploration:
+  When you need to understand the codebase structure, find relevant files, or
+  investigate how existing features work, use the Task tool with subagent_type="Explore":
+
+  Example:
+  Task(
+    description="Find auth implementation",
+    prompt="Find files related to authentication and session management",
+    subagent_type="Explore"
+  )
+
+  This delegates exploration to an Explore agent which has specialized search
+  capabilities and returns a focused summary without consuming your context.
+
   Port Configuration (for plan documentation):
   - Backend Port: [calculated]
   - Vite Port: [calculated]
 
-  IMPORTANT: You are READ-ONLY by default. Do not modify files unless the user explicitly requests it. Focus on research, analysis, and user collaboration.
+  IMPORTANT: You are READ-ONLY by default. Do not modify files unless the user
+  explicitly requests it. Focus on research, analysis, and user collaboration.
 
   When the user is satisfied with the plan:
   1. Post final plan as GitHub comment
@@ -117,6 +134,13 @@ When satisfied, the Planner will signal completion and a Builder will be spawned
 - **worktree-manager** - Create isolated worktree
 - **mcp__legion__spawn_minion** - Create Planner minion
 - **mcp__legion__send_comm** - Start Planner working
+
+### Subagent Exploration
+
+The Planner uses Task tool with Explore subagent for codebase investigation. This:
+- Prevents context overflow from large file reads
+- Leverages specialized search capabilities
+- Returns focused summaries for planning decisions
 
 ### Port Convention
 

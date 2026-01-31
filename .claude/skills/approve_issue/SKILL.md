@@ -1,12 +1,14 @@
 ---
+name: approve_issue
 description: Approve completed issue work, merge PR, and clean up resources
+disable-model-invocation: true
 argument-hint: <issue_number>
 allowed-tools: [Bash, Skill, mcp__legion__dispose_minion, mcp__legion__get_minion_info]
 ---
 
 ## Approve Issue
 
-This command is called when the user is satisfied with the completed work. It merges the PR, stops test servers, disposes the Builder, and removes the worktree.
+This skill is called when the user is satisfied with the completed work. It merges the PR, stops test servers, disposes the Builder, and removes the worktree.
 
 ### Workflow
 

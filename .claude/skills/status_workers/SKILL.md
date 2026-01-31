@@ -1,11 +1,12 @@
 ---
+name: status_workers
 description: Show status of all active issue workers and their progress
 allowed-tools: [Bash, Skill, mcp__legion__list_minions, mcp__legion__get_minion_info]
 ---
 
 ## Status Workers
 
-This command displays the status of all active Planners, Builders, and their worktrees.
+This skill displays the status of all active Planners, Builders, and their worktrees.
 
 ### Workflow
 
