@@ -23,19 +23,10 @@
         :value="promptValue"
         @input="handlePromptInput"
         :rows="isTemplateMode ? 4 : 5"
-        :maxlength="charLimit"
         :placeholder="promptPlaceholder"
       ></textarea>
-      <div class="form-text d-flex justify-content-between">
-        <span>
-          {{ promptHelpText }}
-        </span>
-        <span :class="{ 'text-danger': hasCharLimitError, 'text-warning': nearCharLimit }">
-          {{ charCount }} / {{ charLimit }} chars
-        </span>
-      </div>
-      <div class="invalid-feedback" v-if="hasCharLimitError">
-        {{ isTemplateMode ? 'System prompt' : 'Initialization context' }} exceeds {{ charLimit }} character limit
+      <div class="form-text">
+        {{ promptHelpText }}
       </div>
     </div>
 
@@ -130,21 +121,9 @@ const hasAnyChanges = computed(() => {
   return initContextChanged || overrideChanged || sandboxChanged
 })
 
-// Character limits
-const charLimit = computed(() => isTemplateMode.value ? 6000 : 2000)
-
 // Get the correct prompt value based on mode
 const promptValue = computed(() => {
   return isTemplateMode.value ? props.formData.system_prompt : props.formData.initialization_context
-})
-
-const charCount = computed(() => promptValue.value?.length || 0)
-
-const hasCharLimitError = computed(() => charCount.value > charLimit.value)
-
-const nearCharLimit = computed(() => {
-  const threshold = charLimit.value * 0.9
-  return charCount.value > threshold && charCount.value <= charLimit.value
 })
 
 const promptPlaceholder = computed(() => {
@@ -167,9 +146,6 @@ const promptHelpText = computed(() => {
 // Field highlighting classes
 const initContextFieldClass = computed(() => {
   const classes = {}
-  if (hasCharLimitError.value) {
-    classes['is-invalid'] = true
-  }
   if (props.fieldStates.initialization_context === 'autofilled') {
     classes['field-autofilled'] = true
   }

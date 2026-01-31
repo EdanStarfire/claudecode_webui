@@ -3,6 +3,7 @@
 import asyncio
 import contextlib
 import logging
+import tempfile
 import time
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
@@ -198,6 +199,9 @@ class ClaudeSDK:
 
         # Claude Code's actual session ID (captured from init message)
         self._claude_code_session_id: str | None = None
+
+        # Temp file for system prompt (cleaned up after init message received)
+        self._system_prompt_temp_file: str | None = None
 
         # Initialize MessageProcessor for unified message handling
         self._message_parser = MessageParser()
@@ -653,32 +657,51 @@ class ClaudeSDK:
         ) -> PermissionResultAllow | PermissionResultDeny:
             return await self._can_use_tool_callback(tool_name, input_params, context)
 
-        # Configure system prompt based on override flag
+        # Configure system prompt using file-based delivery to bypass CLI length limits
+        # Issue #382: Use --append-system-prompt-file or --system-prompt-file flags via extra_args
+        # extra_args is a dict where keys are flag names (without --) and values are the flag values
+        extra_args = {}
+
         if self.override_system_prompt and self.system_prompt:
             # Override mode: use custom prompt only (no Claude Code preset)
-            # SDK accepts plain string for custom-only system prompts
-            system_prompt_config = self.system_prompt
-            sdk_logger.info("Using OVERRIDE mode - custom system prompt only (no Claude Code preset)")
-        else:
-            # Append mode (default): use Claude Code preset with optional custom append
+            # Write system prompt to temp file and use --system-prompt-file flag
+            self._system_prompt_temp_file = self._create_system_prompt_temp_file(self.system_prompt)
+            extra_args["system-prompt-file"] = self._system_prompt_temp_file
+            system_prompt_config = None  # Don't pass inline system_prompt
+            sdk_logger.info(f"Using OVERRIDE mode - custom system prompt from file: {self._system_prompt_temp_file}")
+        elif self.system_prompt:
+            # Append mode: use Claude Code preset with custom append from file
+            # Write system prompt to temp file and use --append-system-prompt-file flag
+            self._system_prompt_temp_file = self._create_system_prompt_temp_file(self.system_prompt)
+            extra_args["append-system-prompt-file"] = self._system_prompt_temp_file
             system_prompt_config = {
                 "type": "preset",
                 "preset": "claude_code"
             }
-            if self.system_prompt:
-                system_prompt_config["append"] = self.system_prompt
-                sdk_logger.info("Using APPEND mode - Claude Code preset + custom append")
-            else:
-                sdk_logger.info("Using DEFAULT mode - Claude Code preset only")
+            sdk_logger.info(f"Using APPEND mode - Claude Code preset + custom append from file: {self._system_prompt_temp_file}")
+        else:
+            # Default mode: Claude Code preset only, no temp file needed
+            system_prompt_config = {
+                "type": "preset",
+                "preset": "claude_code"
+            }
+            sdk_logger.info("Using DEFAULT mode - Claude Code preset only")
 
         options_kwargs = {
             "cwd": str(self.working_directory),
             "permission_mode": self.current_permission_mode,
-            "system_prompt": system_prompt_config,
             "allowed_tools": self.tools,
             # Issue #36: Use configurable setting_sources (default: load from user, project, and local)
             "setting_sources": self.setting_sources if self.setting_sources else ["user", "project", "local"]
         }
+
+        # Only add system_prompt if not using file-based override
+        if system_prompt_config is not None:
+            options_kwargs["system_prompt"] = system_prompt_config
+
+        # Add extra_args if any (for file-based system prompts)
+        if extra_args:
+            options_kwargs["extra_args"] = extra_args
 
         # Only add can_use_tool callback if permission callback is provided and SDK classes are available
         perm_logger.debug("Callback registration check:")
@@ -771,6 +794,9 @@ class ClaudeSDK:
                             else:
                                 sdk_logger.info(f"Resume created new cumulative session {session_id} (was attempting to resume {self.resume_session_id})")
                                 sdk_logger.info(f"Updated stored session ID to latest: {session_id}")
+
+                # Issue #382: Clean up temp system prompt file after init message received
+                self._cleanup_system_prompt_temp_file()
 
             converted_message = self._convert_sdk_message(sdk_message)
             self.info.last_activity = time.time()
@@ -1086,6 +1112,9 @@ class ClaudeSDK:
             # Cleanup SDK error detection handler
             self._cleanup_sdk_error_detection()
 
+            # Cleanup system prompt temp file (issue #382)
+            self._cleanup_system_prompt_temp_file()
+
             sdk_logger.info("Claude Code SDK session terminated successfully")
             return True
 
@@ -1188,4 +1217,47 @@ class ClaudeSDK:
             logger.warning(f"Consecutive health check failures: {health_status['consecutive_failures']}")
 
         return health_status
+
+    def _create_system_prompt_temp_file(self, content: str) -> str:
+        """
+        Create a temporary file containing the system prompt content.
+
+        Issue #382: Uses file-based system prompt delivery to bypass Windows
+        command-line length limitations.
+
+        Args:
+            content: The system prompt content to write to the temp file
+
+        Returns:
+            str: Path to the temporary file
+        """
+        try:
+            # Create temp file with descriptive prefix, don't delete automatically
+            fd, path = tempfile.mkstemp(prefix=f"claude_prompt_{self.session_id[:8]}_", suffix=".txt")
+            with Path(path).open("w", encoding="utf-8") as f:
+                f.write(content)
+            # Close the file descriptor
+            import os
+            os.close(fd)
+            sdk_logger.debug(f"Created system prompt temp file: {path} ({len(content)} chars)")
+            return path
+        except Exception as e:
+            logger.error(f"Failed to create system prompt temp file: {e}")
+            raise
+
+    def _cleanup_system_prompt_temp_file(self):
+        """
+        Clean up the temporary system prompt file after session initialization.
+
+        Issue #382: Called after init message is received to remove temp file.
+        """
+        if self._system_prompt_temp_file:
+            try:
+                temp_path = Path(self._system_prompt_temp_file)
+                if temp_path.exists():
+                    temp_path.unlink()
+                    sdk_logger.debug(f"Cleaned up system prompt temp file: {self._system_prompt_temp_file}")
+                self._system_prompt_temp_file = None
+            except Exception as e:
+                logger.warning(f"Failed to cleanup system prompt temp file: {e}")
 

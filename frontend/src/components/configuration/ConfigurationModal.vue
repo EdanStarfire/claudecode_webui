@@ -249,16 +249,14 @@ const formData = reactive({
 
 // Validation errors
 const errors = reactive({
-  name: '',
-  system_prompt: '',
-  initialization_context: ''
+  name: ''
 })
 
 // Track errors per tab
 const tabErrors = computed(() => ({
   general: !!errors.name,
   permissions: false,
-  advanced: !!errors.system_prompt || !!errors.initialization_context
+  advanced: false
 }))
 
 const isSubmitting = ref(false)
@@ -291,10 +289,6 @@ const submitButtonText = computed(() => {
 const isFormValid = computed(() => {
   // Name is required for all modes
   if (!formData.name.trim()) return false
-
-  // Check character limits
-  if (formData.system_prompt.length > 6000) return false
-  if (formData.initialization_context.length > 2000) return false
 
   // Session name validation - no spaces for sessions (for nametag matching)
   if (isSessionMode.value && formData.name.includes(' ')) return false
@@ -339,8 +333,6 @@ function updateFormData(field, value) {
 
   // Clear related errors
   if (field === 'name') errors.name = ''
-  if (field === 'system_prompt') errors.system_prompt = ''
-  if (field === 'initialization_context') errors.initialization_context = ''
 }
 
 function updateSelectedTemplate(templateId) {
@@ -492,8 +484,6 @@ async function deleteTemplate(template) {
 function validate() {
   let isValid = true
   errors.name = ''
-  errors.system_prompt = ''
-  errors.initialization_context = ''
 
   if (!formData.name.trim()) {
     errors.name = 'Name is required'
@@ -506,16 +496,6 @@ function validate() {
     isValid = false
   }
 
-  if (formData.system_prompt.length > 6000) {
-    errors.system_prompt = 'System prompt exceeds 6000 character limit'
-    isValid = false
-  }
-
-  if (formData.initialization_context.length > 2000) {
-    errors.initialization_context = 'Initialization context exceeds 2000 character limit'
-    isValid = false
-  }
-
   return isValid
 }
 
@@ -523,7 +503,6 @@ async function handleSubmit() {
   if (!validate()) {
     // Switch to tab with error
     if (errors.name) activeTab.value = 'general'
-    else if (errors.system_prompt || errors.initialization_context) activeTab.value = 'advanced'
     return
   }
 
@@ -726,8 +705,6 @@ function resetForm() {
   formData.sandbox_enabled = false
 
   errors.name = ''
-  errors.system_prompt = ''
-  errors.initialization_context = ''
 
   // Reset field states
   fieldStates.default_role = 'normal'
