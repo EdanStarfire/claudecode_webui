@@ -30,10 +30,12 @@ from src.models.memory_models import (
 from src.models.messages import (
     DisplayMetadata,
     DisplayProjection,
+    PermissionInfo,
     PermissionRequestMessage,
     PermissionResponseMessage,
     PermissionSuggestion,
     StoredMessage,
+    ToolCall,
     ToolDisplayInfo,
     ToolState,
 )
@@ -48,6 +50,9 @@ __all__ = [
     "DisplayProjection",
     "ToolDisplayInfo",
     "ToolState",
+    # Unified ToolCall (Issue #324)
+    "ToolCall",
+    "PermissionInfo",
     # Legion communication models
     "Comm",
     "CommType",

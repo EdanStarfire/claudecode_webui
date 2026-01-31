@@ -21,7 +21,14 @@ from .claude_sdk import ClaudeSDK
 from .data_storage import DataStorageManager
 from .logging_config import get_logger
 from .message_parser import MessageParser, MessageProcessor
-from .models.messages import DisplayProjection, legacy_to_stored
+from .models.messages import (
+    DisplayProjection,
+    PermissionInfo,
+    ToolCall,
+    ToolDisplayInfo,
+    ToolState,
+    legacy_to_stored,
+)
 from .project_manager import ProjectInfo, ProjectManager
 from .session_manager import SessionManager, SessionState
 from .timestamp_utils import get_unix_timestamp
@@ -76,6 +83,10 @@ class SessionCoordinator:
 
         # Track ExitPlanMode that had setMode suggestions applied (to prevent auto-reset)
         self._exitplanmode_with_setmode: dict[str, bool] = {}  # session_id -> bool
+
+        # Issue #324: Active tool calls per session for unified ToolCall lifecycle
+        # Maps session_id -> {tool_use_id: ToolCall}
+        self._active_tool_calls: dict[str, dict[str, ToolCall]] = {}
 
         # Permission callback factory (injected by web_server)
         # Allows legion components to create permission callbacks on-demand
@@ -1372,6 +1383,299 @@ class SessionCoordinator:
                 coord_logger.info(f"Marked {len(orphaned)} tools as orphaned for session {session_id}")
             return orphaned
         return []
+
+    # ============================================================
+    # Issue #324: Unified ToolCall Lifecycle Management
+    # ============================================================
+
+    def create_tool_call(
+        self,
+        session_id: str,
+        tool_use_id: str,
+        name: str,
+        input_params: dict[str, Any],
+        requires_permission: bool = False,
+    ) -> ToolCall:
+        """
+        Create a new ToolCall when tool_use is detected (Issue #324).
+
+        Called when an AssistantMessage contains a tool_use block.
+        Returns the created ToolCall for WebSocket broadcast.
+        """
+        import time
+
+        tool_call = ToolCall(
+            tool_use_id=tool_use_id,
+            session_id=session_id,
+            name=name,
+            input=input_params,
+            status=ToolState.PENDING,
+            created_at=time.time(),
+            requires_permission=requires_permission,
+            display=ToolDisplayInfo(
+                state=ToolState.PENDING,
+                visible=True,
+                collapsed=False,
+                style="default",
+            ),
+        )
+
+        # Track in active tool calls
+        if session_id not in self._active_tool_calls:
+            self._active_tool_calls[session_id] = {}
+        self._active_tool_calls[session_id][tool_use_id] = tool_call
+
+        coord_logger.debug(
+            f"Created ToolCall {tool_use_id} for {name} in session {session_id}"
+        )
+        return tool_call
+
+    def update_tool_call_permission_request(
+        self,
+        session_id: str,
+        tool_use_id: str,
+        permission_info: PermissionInfo,
+    ) -> ToolCall | None:
+        """
+        Update ToolCall to awaiting_permission status (Issue #324).
+
+        Called when a permission request is received for a tool.
+        Returns updated ToolCall for WebSocket broadcast, or None if not found.
+        """
+        tool_call = self._get_active_tool_call(session_id, tool_use_id)
+        if not tool_call:
+            coord_logger.warning(
+                f"ToolCall {tool_use_id} not found for permission request in session {session_id}"
+            )
+            return None
+
+        tool_call.status = ToolState.AWAITING_PERMISSION
+        tool_call.requires_permission = True
+        tool_call.permission = permission_info
+        if tool_call.display:
+            tool_call.display.state = ToolState.AWAITING_PERMISSION
+            tool_call.display.style = "warning"
+
+        coord_logger.debug(
+            f"Updated ToolCall {tool_use_id} to awaiting_permission in session {session_id}"
+        )
+        return tool_call
+
+    def update_tool_call_permission_response(
+        self,
+        session_id: str,
+        tool_use_id: str,
+        granted: bool,
+    ) -> ToolCall | None:
+        """
+        Update ToolCall after permission response (Issue #324).
+
+        Called when user grants or denies permission.
+        Returns updated ToolCall for WebSocket broadcast, or None if not found.
+        """
+        import time
+
+        tool_call = self._get_active_tool_call(session_id, tool_use_id)
+        if not tool_call:
+            coord_logger.warning(
+                f"ToolCall {tool_use_id} not found for permission response in session {session_id}"
+            )
+            return None
+
+        tool_call.permission_granted = granted
+        tool_call.permission_response_at = time.time()
+
+        if granted:
+            tool_call.status = ToolState.RUNNING
+            tool_call.started_at = time.time()
+            if tool_call.display:
+                tool_call.display.state = ToolState.RUNNING
+                tool_call.display.style = "default"
+        else:
+            tool_call.status = ToolState.DENIED
+            tool_call.completed_at = time.time()
+            if tool_call.display:
+                tool_call.display.state = ToolState.DENIED
+                tool_call.display.style = "error"
+            # Remove from active (denied tools are terminal)
+            self._remove_active_tool_call(session_id, tool_use_id)
+
+        coord_logger.debug(
+            f"Updated ToolCall {tool_use_id} permission_granted={granted} in session {session_id}"
+        )
+        return tool_call
+
+    def update_tool_call_running(
+        self,
+        session_id: str,
+        tool_use_id: str,
+    ) -> ToolCall | None:
+        """
+        Update ToolCall to running status (Issue #324).
+
+        Called when a tool starts executing (for tools that don't require permission).
+        Returns updated ToolCall for WebSocket broadcast, or None if not found.
+        """
+        import time
+
+        tool_call = self._get_active_tool_call(session_id, tool_use_id)
+        if not tool_call:
+            # Tool may not exist yet if tool_use and execution happen quickly
+            coord_logger.debug(
+                f"ToolCall {tool_use_id} not found for running update in session {session_id}"
+            )
+            return None
+
+        tool_call.status = ToolState.RUNNING
+        tool_call.started_at = time.time()
+        if tool_call.display:
+            tool_call.display.state = ToolState.RUNNING
+            tool_call.display.style = "default"
+
+        coord_logger.debug(
+            f"Updated ToolCall {tool_use_id} to running in session {session_id}"
+        )
+        return tool_call
+
+    def update_tool_call_result(
+        self,
+        session_id: str,
+        tool_use_id: str,
+        result: Any,
+        is_error: bool = False,
+    ) -> ToolCall | None:
+        """
+        Update ToolCall with result (Issue #324).
+
+        Called when a tool_result is received.
+        Returns updated ToolCall for WebSocket broadcast, or None if not found.
+        """
+        import time
+
+        tool_call = self._get_active_tool_call(session_id, tool_use_id)
+        if not tool_call:
+            coord_logger.warning(
+                f"ToolCall {tool_use_id} not found for result in session {session_id}"
+            )
+            return None
+
+        tool_call.completed_at = time.time()
+        tool_call.result = result
+
+        if is_error:
+            tool_call.status = ToolState.FAILED
+            tool_call.error = str(result) if result else "Tool execution failed"
+            if tool_call.display:
+                tool_call.display.state = ToolState.FAILED
+                tool_call.display.style = "error"
+        else:
+            tool_call.status = ToolState.COMPLETED
+            if tool_call.display:
+                tool_call.display.state = ToolState.COMPLETED
+                tool_call.display.style = "success"
+
+        # Remove from active (completed/failed tools are terminal)
+        self._remove_active_tool_call(session_id, tool_use_id)
+
+        coord_logger.debug(
+            f"Updated ToolCall {tool_use_id} to {'failed' if is_error else 'completed'} in session {session_id}"
+        )
+        return tool_call
+
+    def mark_session_tools_interrupted(self, session_id: str) -> list[ToolCall]:
+        """
+        Mark all active tools for a session as interrupted (Issue #324).
+
+        Called when session is terminated or interrupted.
+        Returns list of interrupted ToolCalls for WebSocket broadcast.
+        """
+        import time
+
+        interrupted = []
+        session_tools = self._active_tool_calls.get(session_id, {})
+
+        for _tool_use_id, tool_call in list(session_tools.items()):
+            tool_call.status = ToolState.INTERRUPTED
+            tool_call.completed_at = time.time()
+            if tool_call.display:
+                tool_call.display.state = ToolState.INTERRUPTED
+                tool_call.display.style = "orphaned"
+            interrupted.append(tool_call)
+
+        # Clear active tools for session
+        if session_id in self._active_tool_calls:
+            self._active_tool_calls[session_id].clear()
+
+        if interrupted:
+            coord_logger.info(
+                f"Marked {len(interrupted)} tools as interrupted for session {session_id}"
+            )
+
+        return interrupted
+
+    def get_active_tool_calls(self, session_id: str) -> list[ToolCall]:
+        """Get all active tool calls for a session."""
+        return list(self._active_tool_calls.get(session_id, {}).values())
+
+    def _get_active_tool_call(self, session_id: str, tool_use_id: str) -> ToolCall | None:
+        """Get a specific active tool call."""
+        session_tools = self._active_tool_calls.get(session_id, {})
+        return session_tools.get(tool_use_id)
+
+    def _remove_active_tool_call(self, session_id: str, tool_use_id: str) -> None:
+        """Remove a tool call from active tracking."""
+        session_tools = self._active_tool_calls.get(session_id, {})
+        if tool_use_id in session_tools:
+            del session_tools[tool_use_id]
+
+    def find_tool_call_by_signature(
+        self,
+        session_id: str,
+        tool_name: str,
+        input_params: dict[str, Any],
+    ) -> ToolCall | None:
+        """
+        Find a tool call by matching its signature (Issue #324).
+
+        Used to correlate permission requests with tool_use when tool_use_id
+        is not directly available. Creates a signature from tool name and
+        first significant input parameter.
+        """
+        import hashlib
+        import json
+
+        # Create signature similar to DisplayProjection._create_tool_signature
+        first_value = ""
+        for key, value in input_params.items():
+            if value and key not in ("_simulatedSedEdit",):
+                if isinstance(value, str):
+                    first_value = value[:100]
+                else:
+                    first_value = json.dumps(value)[:100]
+                break
+
+        param_hash = hashlib.md5(first_value.encode()).hexdigest()[:8]
+        target_signature = f"{tool_name}:{param_hash}"
+
+        # Search active tools for matching signature
+        session_tools = self._active_tool_calls.get(session_id, {})
+        for tool_call in session_tools.values():
+            # Compute signature for this tool
+            tc_first_value = ""
+            for key, value in tool_call.input.items():
+                if value and key not in ("_simulatedSedEdit",):
+                    if isinstance(value, str):
+                        tc_first_value = value[:100]
+                    else:
+                        tc_first_value = json.dumps(value)[:100]
+                    break
+            tc_hash = hashlib.md5(tc_first_value.encode()).hexdigest()[:8]
+            tc_signature = f"{tool_call.name}:{tc_hash}"
+
+            if tc_signature == target_signature and tool_call.status == ToolState.PENDING:
+                return tool_call
+
+        return None
 
     async def _store_processed_message(self, session_id: str, message_data: dict[str, Any]):
         """Store message using unified MessageProcessor for consistent format."""

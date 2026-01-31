@@ -408,6 +408,162 @@ export const useMessageStore = defineStore('message', () => {
   }
 
   /**
+   * Issue #324: Handle unified tool_call message from backend
+   *
+   * The backend now sends a single 'tool_call' message type that contains
+   * the complete tool lifecycle state. This replaces the need to correlate
+   * separate tool_use, permission_request, permission_response, and tool_result
+   * messages.
+   *
+   * The toolCall object contains:
+   * - tool_use_id: Unique identifier for this tool execution
+   * - name: Tool name (Edit, Bash, Read, etc.)
+   * - input: Tool input parameters
+   * - status: Current lifecycle state (pending, awaiting_permission, running, completed, failed, denied, interrupted)
+   * - permission: Embedded permission info (if applicable)
+   * - permission_granted: Whether permission was granted
+   * - result: Tool execution result (when completed/failed)
+   * - error: Error message (when failed)
+   * - display: Backend-computed display hints
+   */
+  function handleToolCall(sessionId, toolCall) {
+    console.log('handleToolCall received:', toolCall)
+
+    const toolUseId = toolCall.tool_use_id
+    if (!toolUseId) {
+      console.warn('Received tool_call without tool_use_id:', toolCall)
+      return
+    }
+
+    // Get or create tool calls array for this session
+    if (!toolCallsBySession.value.has(sessionId)) {
+      toolCallsBySession.value.set(sessionId, [])
+    }
+
+    const toolCalls = toolCallsBySession.value.get(sessionId)
+    const existingIndex = toolCalls.findIndex(tc => tc.id === toolUseId)
+
+    // Map backend status to frontend status
+    const statusMap = {
+      'pending': 'pending',
+      'awaiting_permission': 'permission_required',
+      'running': 'executing',
+      'completed': 'completed',
+      'failed': 'error',
+      'denied': 'completed',  // Denied shows as completed with special styling
+      'interrupted': 'completed'  // Interrupted shows as completed with orphaned styling
+    }
+    const frontendStatus = statusMap[toolCall.status] || toolCall.status
+
+    if (existingIndex !== -1) {
+      // Update existing tool call
+      const existing = toolCalls[existingIndex]
+      existing.status = frontendStatus
+      existing.backendStatus = toolCall.status
+
+      // Update permission fields
+      if (toolCall.permission) {
+        existing.suggestions = toolCall.permission.suggestions || []
+        existing.permissionRequestId = toolCall.request_id  // request_id is added by backend for correlation
+      }
+      if (toolCall.permission_granted !== null && toolCall.permission_granted !== undefined) {
+        existing.permissionDecision = toolCall.permission_granted ? 'allow' : 'deny'
+      }
+
+      // Update result fields
+      if (toolCall.result !== undefined) {
+        existing.result = {
+          error: toolCall.status === 'failed',
+          content: toolCall.result
+        }
+      }
+      if (toolCall.error) {
+        existing.result = {
+          error: true,
+          content: toolCall.error
+        }
+      }
+
+      // Handle special statuses
+      if (toolCall.status === 'denied') {
+        existing.result = {
+          error: true,
+          message: 'Permission denied'
+        }
+        existing.isExpanded = false
+      }
+      if (toolCall.status === 'interrupted') {
+        // Mark as orphaned
+        markToolUseOrphaned(sessionId, toolUseId, 'Session was interrupted')
+        existing.isExpanded = false
+      }
+      if (toolCall.status === 'completed' || toolCall.status === 'failed') {
+        existing.isExpanded = false  // Auto-collapse on completion
+      }
+
+      // Store backend display hints if provided
+      if (toolCall.display) {
+        existing.backendState = toolCall.display
+      }
+
+      console.log(`Updated tool call ${toolUseId} to status: ${frontendStatus} (backend: ${toolCall.status})`)
+    } else {
+      // Create new tool call entry
+      const signature = createToolSignature(toolCall.name, toolCall.input)
+      toolSignatureToId.value.set(signature, toolUseId)
+
+      const newToolCall = {
+        id: toolUseId,
+        name: toolCall.name,
+        input: toolCall.input,
+        signature: signature,
+        status: frontendStatus,
+        backendStatus: toolCall.status,
+        permissionRequestId: toolCall.request_id,
+        permissionDecision: toolCall.permission_granted !== undefined
+          ? (toolCall.permission_granted ? 'allow' : 'deny')
+          : null,
+        suggestions: toolCall.permission?.suggestions || [],
+        result: toolCall.result ? {
+          error: toolCall.status === 'failed',
+          content: toolCall.result
+        } : null,
+        explanation: null,
+        timestamp: toolCall.created_at || new Date().toISOString(),
+        isExpanded: !['completed', 'failed', 'denied', 'interrupted'].includes(toolCall.status),
+        backendState: toolCall.display
+      }
+
+      if (toolCall.error) {
+        newToolCall.result = {
+          error: true,
+          content: toolCall.error
+        }
+      }
+
+      toolCalls.push(newToolCall)
+      console.log(`Created new tool call ${toolUseId} for ${toolCall.name} with status: ${frontendStatus}`)
+    }
+
+    // Trigger reactivity
+    toolCallsBySession.value = new Map(toolCallsBySession.value)
+
+    // Handle task tool results
+    if (['completed', 'failed'].includes(toolCall.status) &&
+        ['TaskCreate', 'TaskUpdate', 'TaskList', 'TaskGet'].includes(toolCall.name)) {
+      try {
+        const taskStore = useTaskStore()
+        taskStore.handleTaskToolResult(sessionId, toolCall.name, toolCall.input, {
+          error: toolCall.status === 'failed',
+          content: toolCall.result
+        })
+      } catch (e) {
+        console.warn('Failed to update task store:', e)
+      }
+    }
+  }
+
+  /**
    * Handle tool result (completion)
    */
   function handleToolResult(sessionId, toolResultBlock) {
@@ -874,6 +1030,7 @@ export const useMessageStore = defineStore('message', () => {
     addMessage,
     addToolCall,
     updateToolCall,
+    handleToolCall,  // Issue #324: unified tool call handler
     handleToolUse,
     handlePermissionRequest,
     handlePermissionResponse,

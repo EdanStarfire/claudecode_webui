@@ -296,8 +296,13 @@ async function submitQuestionAnswers() {
 }
 
 // Orphaned tool detection
-// Issue #310: First checks backend-provided state, then falls back to local tracking
+// Issue #310 + #324: First checks backend-provided state, then falls back to local tracking
 const isOrphaned = computed(() => {
+  // Issue #324: Check unified tool_call backendStatus for interrupted/denied states
+  if (props.toolCall.backendStatus === 'interrupted') {
+    return true
+  }
+  // Issue #310: Check message store tracking
   return messageStore.isToolUseOrphaned(sessionStore.currentSessionId, props.toolCall.id)
 })
 
@@ -310,9 +315,25 @@ const backendToolState = computed(() => {
   return messageStore.getBackendToolState(sessionStore.currentSessionId, props.toolCall.id)
 })
 
-// Issue #310: Effective status - prefer backend state if available
+// Issue #310 + #324: Effective status - prefer backend state if available
 const effectiveStatus = computed(() => {
-  // Check backend state first
+  // Issue #324: Check unified tool_call backendStatus first (from handleToolCall)
+  if (props.toolCall.backendStatus) {
+    const backendState = props.toolCall.backendStatus
+    // Map backend status to frontend status
+    const stateToStatus = {
+      'pending': 'pending',
+      'awaiting_permission': 'permission_required',
+      'running': 'executing',
+      'completed': 'completed',
+      'failed': 'error',
+      'denied': 'completed',  // Denied shows as completed with special styling
+      'interrupted': 'completed'  // Interrupted shows as completed with orphaned styling
+    }
+    return stateToStatus[backendState] || backendState
+  }
+
+  // Issue #310: Check backend display projection state
   if (backendToolState.value) {
     const backendState = backendToolState.value.state
     // Map backend state to frontend status
@@ -326,6 +347,7 @@ const effectiveStatus = computed(() => {
     }
     return stateToStatus[backendState] || backendState
   }
+
   // Fall back to local status
   return props.toolCall.status
 })

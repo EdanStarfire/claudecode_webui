@@ -555,21 +555,29 @@ export const useWebSocketStore = defineStore('websocket', () => {
           break
         }
 
-        // Handle permission_request messages
+        // Issue #324: Handle unified tool_call messages
+        if (message.type === 'tool_call') {
+          messageStore.handleToolCall(sessionId, message)
+          // Don't add to message history - tool_call is its own display entity
+          break
+        }
+
+        // Handle permission_request messages (legacy - for backward compatibility)
         if (message.type === 'permission_request') {
           messageStore.handlePermissionRequest(sessionId, message)
           // Don't add to message history - it's handled by tool call
           break
         }
 
-        // Handle permission_response messages
+        // Handle permission_response messages (legacy - for backward compatibility)
         if (message.type === 'permission_response') {
           messageStore.handlePermissionResponse(sessionId, message)
           // Don't add to message history - it's handled by tool call
           break
         }
 
-        // Process tool-related messages
+        // Process tool-related messages (legacy - for backward compatibility)
+        // These are still emitted alongside tool_call for now
         if (message.metadata?.has_tool_uses) {
           // Extract and create tool call cards from assistant messages
           message.metadata.tool_uses.forEach(toolUse => {
