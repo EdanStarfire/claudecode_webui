@@ -167,21 +167,52 @@ const liveSession = computed(() => {
 })
 
 // Get latest message from message store (only for active session)
+// Filters are synchronized with MessageList.vue shouldDisplayMessage() for consistency
 const latestMessageFromStore = computed(() => {
   if (!props.minionData || !props.minionData.id) return null
 
   const messages = messageStore.messagesBySession.get(props.minionData.id)
   if (!messages || messages.length === 0) return null
 
-  // Find the last meaningful message (apply same filtering as backend)
+  // Find the last meaningful message (apply same filtering as MessageList.vue)
   for (let i = messages.length - 1; i >= 0; i--) {
     const msg = messages[i]
+    const subtype = msg.subtype || msg.metadata?.subtype
 
     // Skip result messages (tool results)
     if (msg.type === 'result') continue
 
-    // Skip user messages with only tool results (no actual user text)
-    if (msg.type === 'user' && msg.content && msg.content.startsWith('Tool results:')) continue
+    // Skip system init messages (synced with MessageList.vue)
+    if (msg.type === 'system' && subtype === 'init') continue
+
+    // Skip system task_notification messages (synced with MessageList.vue)
+    if (msg.type === 'system' && subtype === 'task_notification') continue
+
+    // Skip permission messages (synced with MessageList.vue)
+    if (msg.type === 'permission_request' || msg.type === 'permission_response') continue
+
+    // Skip user messages with only tool results (synced with MessageList.vue)
+    if (msg.type === 'user' && msg.metadata?.has_tool_results) {
+      const content = msg.content || ''
+      if (content.match(/^Tool results?: \d+ results?$/i) || content.trim() === '') continue
+    }
+
+    // Skip skill-related user messages (synced with MessageList.vue)
+    if (msg.type === 'user') {
+      const content = msg.content || ''
+      if (content.includes('<command-message>') && content.includes('skill is running')) continue
+      if (content.startsWith('Base directory for this skill:')) continue
+    }
+
+    // Skip slash command user messages (synced with MessageList.vue)
+    if (msg.type === 'user') {
+      const content = msg.content || ''
+      if (content.includes('<command-message>') &&
+          content.includes('<command-name>') &&
+          content.includes('<command-args>')) continue
+      if (content.includes('ARGUMENTS:') &&
+          (content.includes('<command-name>') || content.match(/\nARGUMENTS:/))) continue
+    }
 
     // Skip system messages with generic placeholder content
     if (msg.type === 'system' && msg.content === 'System message') continue
