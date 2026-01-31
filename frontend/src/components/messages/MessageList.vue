@@ -370,6 +370,16 @@ function shouldDisplayMessage(message) {
     }
   }
 
+  // Hide user messages that are task prompts sent to subagents
+  // These have parent_tool_use_id set but are not tool results
+  // The prompt content is already visible in the Task tool card
+  if (message.type === 'user') {
+    const metadata = message.metadata || {}
+    if (metadata.parent_tool_use_id && !metadata.has_tool_results) {
+      return false
+    }
+  }
+
   return true
 }
 

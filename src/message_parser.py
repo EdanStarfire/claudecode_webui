@@ -637,6 +637,15 @@ class UserMessageHandler(MessageHandler):
         extracted["metadata"]["has_tool_results"] = len(tool_results) > 0
         extracted["metadata"]["has_tool_uses"] = len(tool_uses) > 0
 
+        # Extract parent_tool_use_id for Task subagent prompt filtering
+        # Check multiple locations where this field might be stored
+        parent_tool_use_id = (
+            message_data.get("parent_tool_use_id") or
+            (message_data.get("data") or {}).get("parent_tool_use_id")
+        )
+        if parent_tool_use_id:
+            extracted["metadata"]["parent_tool_use_id"] = parent_tool_use_id
+
         return extracted
 
 

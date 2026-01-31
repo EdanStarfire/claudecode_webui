@@ -1155,6 +1155,10 @@ class SessionCoordinator:
                 metadata["has_tool_results"] = True
                 metadata["tool_results"] = tool_results
 
+            # Extract parent_tool_use_id for Task subagent prompt filtering (Issue #384)
+            if _type == "UserMessage" and data.get("parent_tool_use_id"):
+                metadata["parent_tool_use_id"] = data["parent_tool_use_id"]
+
             # Extract thinking blocks
             thinking_blocks = []
             if _type == "AssistantMessage" and isinstance(data.get("content"), list):
