@@ -4,7 +4,8 @@
     class="bg-light border-start d-flex flex-column overflow-auto"
     :class="{
       'collapsed': rightSidebarCollapsed,
-      'mobile-open': !rightSidebarCollapsed && isMobile
+      'mobile-open': !rightSidebarCollapsed && isMobile,
+      'resizing': isResizing
     }"
     :style="sidebarStyle"
   >
@@ -50,6 +51,7 @@ const sidebarStyle = computed(() => {
 const isResizing = ref(false)
 
 function startResize(event) {
+  event.preventDefault()
   isResizing.value = true
   document.addEventListener('mousemove', handleResize)
   document.addEventListener('mouseup', stopResize)
@@ -80,6 +82,10 @@ function stopResize() {
   width: 0 !important;
   min-width: 0 !important;
   overflow: hidden;
+}
+
+#right-sidebar.resizing {
+  transition: none;
 }
 
 .sidebar-resize-handle {
