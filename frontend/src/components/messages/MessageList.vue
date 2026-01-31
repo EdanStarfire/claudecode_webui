@@ -317,6 +317,9 @@ function shouldDisplayMessage(message) {
   // Hide system init messages (but NOT status or compact_boundary messages)
   if (message.type === 'system' && subtype === 'init') return false
 
+  // Hide system task_notification messages (background task completion)
+  if (message.type === 'system' && subtype === 'task_notification') return false
+
   // Note: We do NOT hide 'status' or 'compact_boundary' messages here
   // because they are handled by the compaction event grouping logic above
 

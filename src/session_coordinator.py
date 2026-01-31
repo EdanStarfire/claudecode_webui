@@ -1432,13 +1432,20 @@ class SessionCoordinator:
                     has_tool_results = parsed_message.metadata.get('has_tool_results', False) if parsed_message.metadata else False
                     has_tool_uses = parsed_message.metadata.get('has_tool_uses', False) if parsed_message.metadata else False
 
+                    # Get subtype for system message filtering
+                    subtype = parsed_message.metadata.get('subtype') if parsed_message.metadata else None
+
                     skip_message = (
                         # User messages with only tool_results (no actual user text)
                         (parsed_message.type.value == 'user' and has_tool_results and content.startswith('Tool results:')) or
                         # Assistant messages with only tool_uses (no actual text response)
                         (parsed_message.type.value == 'assistant' and has_tool_uses and content == 'Assistant response') or
                         # System messages with generic placeholder content
-                        (parsed_message.type.value == 'system' and content == 'System message')
+                        (parsed_message.type.value == 'system' and content == 'System message') or
+                        # System init messages (synced with frontend MessageList.vue filtering)
+                        (parsed_message.type.value == 'system' and subtype == 'init') or
+                        # System task_notification messages (synced with frontend MessageList.vue filtering)
+                        (parsed_message.type.value == 'system' and subtype == 'task_notification')
                     )
 
                     if not skip_message:
