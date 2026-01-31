@@ -10,11 +10,13 @@
         </span>
       </div>
       <button
-        class="btn btn-sm btn-outline-secondary"
+        class="chevron-toggle btn btn-link p-0"
         @click="togglePanel"
         :title="isCollapsed ? 'Expand' : 'Collapse'"
       >
-        {{ isCollapsed ? '◀' : '▶' }}
+        <svg class="chevron-icon" :class="{ expanded: !isCollapsed }" width="12" height="12" viewBox="0 0 12 12">
+          <path d="M4.5 2L8.5 6L4.5 10" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+        </svg>
       </button>
     </div>
 
@@ -91,6 +93,28 @@ function toggleTaskExpansion(taskId) {
 .panel-header {
   background-color: #f8f9fa;
   flex-shrink: 0;
+}
+
+.chevron-toggle {
+  color: #6c757d;
+  text-decoration: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+}
+
+.chevron-toggle:hover {
+  color: #495057;
+}
+
+.chevron-icon {
+  transition: transform 0.2s ease;
+}
+
+.chevron-icon.expanded {
+  transform: rotate(90deg);
 }
 
 .panel-icon {
