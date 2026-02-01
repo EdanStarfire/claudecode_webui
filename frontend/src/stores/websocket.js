@@ -581,7 +581,7 @@ export const useWebSocketStore = defineStore('websocket', () => {
         if (message.metadata?.has_tool_uses) {
           // Extract and create tool call cards from assistant messages
           message.metadata.tool_uses.forEach(toolUse => {
-            messageStore.handleToolUse(sessionId, toolUse)
+            messageStore.handleToolUse(sessionId, toolUse, message.timestamp)
           })
         }
 
