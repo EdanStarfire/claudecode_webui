@@ -1,26 +1,43 @@
 <template>
   <div
-    class="task-item mb-2 rounded border"
+    class="task-item"
     :class="statusClass"
     @click="$emit('toggle')"
   >
-    <!-- Task Header -->
-    <div class="task-header d-flex align-items-center gap-2 p-2">
-      <span class="status-icon">{{ statusIcon }}</span>
-      <span class="task-subject flex-grow-1" :title="task.subject">
-        {{ task.subject }}
+    <!-- Task Row -->
+    <div class="task-row d-flex align-items-center gap-2">
+      <!-- Status Icon or Spinner -->
+      <span v-if="showSpinner" class="status-icon">
+        <span class="spinner-border spinner-border-sm" role="status" aria-label="Task in progress"></span>
       </span>
-      <span class="expand-icon">{{ isExpanded ? '▾' : '▸' }}</span>
-    </div>
+      <span v-else class="status-icon">{{ statusIcon }}</span>
 
-    <!-- Active Form (for in_progress tasks) -->
-    <div v-if="task.status === 'in_progress' && task.activeForm" class="active-form px-2 pb-2">
-      <span class="spinner-border spinner-border-sm me-1" role="status"></span>
-      <span class="active-form-text">{{ task.activeForm }}</span>
+      <!-- Task Text (activeForm when in_progress, otherwise subject) -->
+      <span class="task-text flex-grow-1" :title="task.subject">
+        {{ displayText }}
+      </span>
+
+      <!-- Chevron -->
+      <svg
+        class="chevron-icon"
+        :class="{ expanded: isExpanded }"
+        width="12"
+        height="12"
+        viewBox="0 0 12 12"
+      >
+        <path
+          d="M4.5 2L8.5 6L4.5 10"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          fill="none"
+        />
+      </svg>
     </div>
 
     <!-- Expanded Details -->
-    <div v-if="isExpanded" class="task-details p-2 border-top">
+    <div v-if="isExpanded" class="task-details">
       <!-- Description -->
       <div v-if="task.description" class="task-description mb-2">
         <small class="text-muted d-block mb-1">Description:</small>
@@ -75,16 +92,25 @@ const props = defineProps({
 
 defineEmits(['toggle'])
 
+const showSpinner = computed(() => {
+  return props.task.status === 'in_progress'
+})
+
 const statusIcon = computed(() => {
   switch (props.task.status) {
     case 'completed':
       return '✅'
-    case 'in_progress':
-      return '🔄'
     case 'pending':
     default:
       return '⏳'
   }
+})
+
+const displayText = computed(() => {
+  if (props.task.status === 'in_progress' && props.task.activeForm) {
+    return props.task.activeForm
+  }
+  return props.task.subject
 })
 
 const statusClass = computed(() => {
@@ -103,47 +129,54 @@ const statusClass = computed(() => {
 <style scoped>
 .task-item {
   cursor: pointer;
-  transition: all 0.2s ease;
-  background: white;
+  transition: background-color 0.2s ease;
 }
 
 .task-item:hover {
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  background-color: #f8f9fa;
 }
 
-.task-header {
+.task-row {
+  padding: 0.5rem 0.75rem;
   font-size: 0.9rem;
 }
 
 .status-icon {
   font-size: 1rem;
   flex-shrink: 0;
+  width: 1.25rem;
+  text-align: center;
 }
 
-.task-subject {
+.spinner-border-sm {
+  width: 1rem;
+  height: 1rem;
+  border-width: 0.15em;
+}
+
+.task-text {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-weight: 500;
 }
 
-.expand-icon {
+.chevron-icon {
   color: #6c757d;
   flex-shrink: 0;
+  transition: transform 0.2s ease;
 }
 
-.active-form {
-  font-size: 0.85rem;
-  color: #0d6efd;
-}
-
-.active-form-text {
-  font-style: italic;
+.chevron-icon.expanded {
+  transform: rotate(90deg);
 }
 
 .task-details {
+  padding: 0.5rem 0.75rem 0.5rem 2.5rem;
   background: #f8f9fa;
   font-size: 0.85rem;
+  border-left: 3px solid #0d6efd;
+  margin-left: 0.75rem;
 }
 
 .description-content {
@@ -152,21 +185,24 @@ const statusClass = computed(() => {
 }
 
 /* Status-based styling */
-.status-pending {
-  border-color: #dee2e6 !important;
+.status-pending .task-text {
+  color: #495057;
 }
 
-.status-in-progress {
-  border-color: #0d6efd !important;
-  border-width: 2px !important;
+.status-in-progress .task-text {
+  color: #0d6efd;
+  font-style: italic;
+}
+
+.status-in-progress .spinner-border {
+  color: #0d6efd;
 }
 
 .status-completed {
-  border-color: #198754 !important;
-  opacity: 0.8;
+  opacity: 0.7;
 }
 
-.status-completed .task-subject {
+.status-completed .task-text {
   text-decoration: line-through;
   color: #6c757d;
 }

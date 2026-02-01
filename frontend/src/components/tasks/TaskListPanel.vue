@@ -20,14 +20,6 @@
       </button>
     </div>
 
-    <!-- Active Task Highlight (if any) -->
-    <div v-if="activeTask && !isCollapsed" class="active-task-banner p-2 bg-primary text-white">
-      <div class="d-flex align-items-center gap-2">
-        <span class="spinner-border spinner-border-sm" role="status"></span>
-        <span class="active-text">{{ activeTask.activeForm || activeTask.subject }}</span>
-      </div>
-    </div>
-
     <!-- Task List -->
     <div v-if="!isCollapsed" class="task-list p-2">
       <div v-if="tasks.length === 0" class="text-muted text-center py-4">
@@ -119,17 +111,6 @@ function toggleTaskExpansion(taskId) {
 
 .panel-icon {
   font-size: 1.2rem;
-}
-
-.active-task-banner {
-  flex-shrink: 0;
-  font-size: 0.9rem;
-}
-
-.active-text {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .task-list {
