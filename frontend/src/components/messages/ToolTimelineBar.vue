@@ -1,5 +1,5 @@
 <template>
-  <div class="tool-timeline-bar" v-if="sortedTools.length > 1">
+  <div class="tool-timeline-bar" v-if="sortedTools.length > 0">
     <div class="timeline-container">
       <div
         v-for="(tool, index) in sortedTools"
