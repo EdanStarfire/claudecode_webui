@@ -1069,6 +1069,62 @@ class PermissionResponseHandler(MessageHandler):
         )
 
 
+class ToolCallHandler(MessageHandler):
+    """Handler for unified ToolCall messages (Issue #324)."""
+
+    def can_handle(self, message_data: dict[str, Any]) -> bool:
+        return message_data.get("type") == "tool_call"
+
+    def _extract_business_data(self, message_data: dict[str, Any]) -> dict[str, Any]:
+        """Extract business-relevant data from ToolCall message."""
+        status = message_data.get("status", "pending")
+        name = message_data.get("name", "unknown")
+        tool_use_id = message_data.get("tool_use_id", "")
+
+        extracted = {
+            "type": "tool_call",
+            "content": f"Tool: {name} ({status})",
+            "metadata": {
+                "tool_use_id": tool_use_id,
+                "name": name,
+                "input": message_data.get("input", {}),
+                "status": status,
+                "created_at": message_data.get("created_at"),
+                "started_at": message_data.get("started_at"),
+                "completed_at": message_data.get("completed_at"),
+                "requires_permission": message_data.get("requires_permission", False),
+                "permission": message_data.get("permission"),
+                "permission_granted": message_data.get("permission_granted"),
+                "permission_response_at": message_data.get("permission_response_at"),
+                "result": message_data.get("result"),
+                "error": message_data.get("error"),
+                "display": message_data.get("display"),
+                "request_id": message_data.get("request_id"),  # For permission correlation
+                "session_id": message_data.get("session_id"),
+                "has_tool_uses": True,
+                "has_tool_results": status in ("completed", "failed"),
+                "has_thinking": False,
+                "has_permission_requests": status == "awaiting_permission",
+                "has_permission_responses": message_data.get("permission_granted") is not None,
+            }
+        }
+
+        return extracted
+
+    def parse(self, message_data: dict[str, Any]) -> ParsedMessage:
+        # Extract all business data upfront
+        business_data = self._extract_business_data(message_data)
+
+        return ParsedMessage(
+            type=MessageType.TOOL_USE,  # Use TOOL_USE for compatibility
+            timestamp=message_data.get("timestamp", message_data.get("created_at", time.time())),
+            session_id=message_data.get("session_id"),
+            content=business_data["content"],
+            raw_data=message_data,
+            metadata=self._standardize_metadata_fields(business_data["metadata"], message_data)
+        )
+
+
 class UnknownMessageHandler(MessageHandler):
     """Handler for unknown message types - always handles as fallback."""
 
@@ -1147,6 +1203,9 @@ class MessageParser:
             ThinkingBlockHandler(),
             ToolUseHandler(),
             ToolResultHandler(),
+
+            # Issue #324: Unified ToolCall handler (must be before Permission handlers)
+            ToolCallHandler(),
 
             # Permission handlers
             PermissionRequestHandler(),

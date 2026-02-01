@@ -33,13 +33,205 @@ from typing import Any, Literal
 # ============================================================
 
 class ToolState(Enum):
-    """Tool lifecycle states for display projection."""
+    """Tool lifecycle states for display projection.
+
+    Issue #324: Added DENIED and INTERRUPTED for unified ToolCall lifecycle.
+
+    Status lifecycle:
+        PENDING → AWAITING_PERMISSION → RUNNING → COMPLETED/FAILED
+                                      ↘ DENIED
+                        RUNNING → INTERRUPTED (session terminated)
+
+    Note: PERMISSION_REQUIRED, EXECUTING, ORPHANED kept for backward compatibility
+    with DisplayProjection. New code should use the #324 states.
+    """
     PENDING = "pending"
-    PERMISSION_REQUIRED = "permission_required"
-    EXECUTING = "executing"
+    PERMISSION_REQUIRED = "permission_required"  # Legacy (use AWAITING_PERMISSION)
+    AWAITING_PERMISSION = "awaiting_permission"  # Issue #324
+    EXECUTING = "executing"  # Legacy (use RUNNING)
+    RUNNING = "running"  # Issue #324
     COMPLETED = "completed"
     FAILED = "failed"
-    ORPHANED = "orphaned"
+    DENIED = "denied"  # Issue #324: Permission denied
+    INTERRUPTED = "interrupted"  # Issue #324: Session terminated before completion
+    ORPHANED = "orphaned"  # Legacy (use INTERRUPTED)
+
+
+# ============================================================
+# Unified ToolCall Types (Issue #324)
+# ============================================================
+
+@dataclass
+class PermissionInfo:
+    """
+    Permission request data embedded in ToolCall (Issue #324).
+
+    This replaces the separate PermissionRequestMessage for unified tool lifecycle.
+    All permission-related data is embedded directly in the ToolCall.
+    """
+    message: str  # "Allow Edit to modify file.py?"
+    suggestions: list[dict[str, Any]] = field(default_factory=list)
+    risk_level: str = "medium"  # "low", "medium", "high"
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize to dict for storage/WebSocket."""
+        return {
+            "message": self.message,
+            "suggestions": self.suggestions,
+            "risk_level": self.risk_level,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "PermissionInfo":
+        """Create from stored dict."""
+        return cls(
+            message=data.get("message", ""),
+            suggestions=data.get("suggestions", []),
+            risk_level=data.get("risk_level", "medium"),
+        )
+
+
+@dataclass
+class ToolCall:
+    """
+    Unified tool call with complete lifecycle state (Issue #324).
+
+    This dataclass consolidates the tool_use, permission_request, permission_response,
+    and tool_result message types into a single message type with stateful updates.
+
+    Frontend receives these messages keyed by tool_use_id and updates existing entries
+    when new status updates arrive - no correlation logic needed.
+
+    Status lifecycle:
+        PENDING → AWAITING_PERMISSION → RUNNING → COMPLETED
+                                      ↘ DENIED
+                        RUNNING → FAILED
+                        RUNNING → INTERRUPTED
+
+    WebSocket message format:
+        {
+            "type": "tool_call",
+            "tool_use_id": "abc123",
+            "status": "awaiting_permission",
+            "name": "Edit",
+            "input": {...},
+            "permission": {...},
+            ...
+        }
+    """
+    # Identity
+    tool_use_id: str
+    session_id: str
+
+    # Tool info
+    name: str  # "Edit", "Bash", "Read"
+    input: dict[str, Any] = field(default_factory=dict)
+
+    # Lifecycle status
+    status: ToolState = ToolState.PENDING
+
+    # Timing
+    created_at: float = 0.0
+    started_at: float | None = None  # When execution began (after permission)
+    completed_at: float | None = None  # When execution finished
+
+    # Permission (embedded)
+    requires_permission: bool = False
+    permission: PermissionInfo | None = None
+    permission_granted: bool | None = None
+    permission_response_at: float | None = None
+
+    # Result (when completed)
+    result: Any = None
+    error: str | None = None
+
+    # Display hints (backend-computed)
+    display: "ToolDisplayInfo | None" = None
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize to dict for storage/WebSocket."""
+        result = {
+            "tool_use_id": self.tool_use_id,
+            "session_id": self.session_id,
+            "name": self.name,
+            "input": self.input,
+            "status": self.status.value,
+            "created_at": self.created_at,
+            "requires_permission": self.requires_permission,
+        }
+
+        # Optional timing fields
+        if self.started_at is not None:
+            result["started_at"] = self.started_at
+        if self.completed_at is not None:
+            result["completed_at"] = self.completed_at
+
+        # Permission fields
+        if self.permission is not None:
+            result["permission"] = self.permission.to_dict()
+        if self.permission_granted is not None:
+            result["permission_granted"] = self.permission_granted
+        if self.permission_response_at is not None:
+            result["permission_response_at"] = self.permission_response_at
+
+        # Result fields
+        if self.result is not None:
+            result["result"] = self.result
+        if self.error is not None:
+            result["error"] = self.error
+
+        # Display hints
+        if self.display is not None:
+            result["display"] = self.display.to_dict()
+
+        return result
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "ToolCall":
+        """Create from stored dict."""
+        # Parse status
+        status_str = data.get("status", "pending")
+        try:
+            status = ToolState(status_str)
+        except ValueError:
+            status = ToolState.PENDING
+
+        # Parse permission if present
+        permission = None
+        if "permission" in data and data["permission"]:
+            permission = PermissionInfo.from_dict(data["permission"])
+
+        # Parse display if present
+        display = None
+        if "display" in data and data["display"]:
+            display = ToolDisplayInfo.from_dict(data["display"])
+
+        return cls(
+            tool_use_id=data.get("tool_use_id", ""),
+            session_id=data.get("session_id", ""),
+            name=data.get("name", ""),
+            input=data.get("input", {}),
+            status=status,
+            created_at=data.get("created_at", 0.0),
+            started_at=data.get("started_at"),
+            completed_at=data.get("completed_at"),
+            requires_permission=data.get("requires_permission", False),
+            permission=permission,
+            permission_granted=data.get("permission_granted"),
+            permission_response_at=data.get("permission_response_at"),
+            result=data.get("result"),
+            error=data.get("error"),
+            display=display,
+        )
+
+    def with_status_update(self, **updates: Any) -> "ToolCall":
+        """Create a new ToolCall with updated fields (immutable pattern)."""
+        data = self.to_dict()
+        data.update(updates)
+        # Handle status specially if provided as ToolState
+        if "status" in updates and isinstance(updates["status"], ToolState):
+            data["status"] = updates["status"].value
+        return ToolCall.from_dict(data)
 
 
 # ============================================================

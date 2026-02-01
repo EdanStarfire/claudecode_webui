@@ -23,6 +23,7 @@ from pydantic import BaseModel
 from .logging_config import get_logger
 from .message_parser import MessageParser, MessageProcessor
 from .models.messages import (
+    PermissionInfo,
     PermissionRequestMessage,
     PermissionResponseMessage,
     PermissionSuggestion,
@@ -1826,10 +1827,14 @@ class ClaudeWebUI:
                 if hasattr(message_data, '__dict__'):
                     # Handle ParsedMessage objects (from MessageProcessor)
                     websocket_data = self._message_processor.prepare_for_websocket(message_data)
+                    parsed_message = message_data
                 else:
                     # Handle raw dict messages - process them first
-                    processed_message = self._message_processor.process_message(message_data, source="websocket")
-                    websocket_data = self._message_processor.prepare_for_websocket(processed_message)
+                    parsed_message = self._message_processor.process_message(message_data, source="websocket")
+                    websocket_data = self._message_processor.prepare_for_websocket(parsed_message)
+
+                # Issue #324: Emit tool_call messages for tool lifecycle events
+                await self._emit_tool_call_updates(session_id, parsed_message)
 
                 # Wrap in standard WebSocket envelope
                 serialized = {
@@ -1847,6 +1852,88 @@ class ClaudeWebUI:
                 logger.error(f"Error in message callback: {e}")
 
         return callback
+
+    async def _emit_tool_call_updates(self, session_id: str, parsed_message: Any):
+        """
+        Issue #324: Emit unified tool_call messages for tool lifecycle events.
+
+        Detects tool_use blocks in assistant messages and tool_results in user messages,
+        creates/updates ToolCall objects, and broadcasts them to WebSocket.
+        """
+        try:
+            msg_type = getattr(parsed_message, 'type', None)
+            if msg_type:
+                msg_type = msg_type.value if hasattr(msg_type, 'value') else str(msg_type)
+
+            metadata = getattr(parsed_message, 'metadata', {}) or {}
+
+            # Handle tool_use in assistant messages
+            if msg_type == 'assistant':
+                tool_uses = metadata.get('tool_uses', [])
+                for tool_use in tool_uses:
+                    tool_id = tool_use.get('id')
+                    tool_name = tool_use.get('name')
+                    input_params = tool_use.get('input', {})
+
+                    if tool_id and tool_name:
+                        # Create new ToolCall with PENDING status
+                        tool_call = self.coordinator.create_tool_call(
+                            session_id=session_id,
+                            tool_use_id=tool_id,
+                            name=tool_name,
+                            input_params=input_params,
+                            requires_permission=False,  # Will be updated if permission is requested
+                        )
+
+                        # Emit tool_call message
+                        tool_call_data = tool_call.to_dict()
+                        tool_call_data["type"] = "tool_call"
+
+                        websocket_message = {
+                            "type": "message",
+                            "session_id": session_id,
+                            "data": tool_call_data,
+                            "timestamp": datetime.now(UTC).isoformat(),
+                        }
+                        await self.websocket_manager.send_message(session_id, websocket_message)
+                        logger.debug(f"Emitted tool_call pending for {tool_name} ({tool_id}) in session {session_id}")
+
+            # Handle tool_results in user messages
+            elif msg_type == 'user':
+                tool_results = metadata.get('tool_results', [])
+                for tool_result in tool_results:
+                    tool_use_id = tool_result.get('tool_use_id')
+                    result_content = tool_result.get('content')
+                    is_error = tool_result.get('is_error', False)
+
+                    if tool_use_id:
+                        # Update ToolCall with result
+                        updated_tool_call = self.coordinator.update_tool_call_result(
+                            session_id=session_id,
+                            tool_use_id=tool_use_id,
+                            result=result_content,
+                            is_error=is_error,
+                        )
+
+                        if updated_tool_call:
+                            # Emit tool_call message
+                            tool_call_data = updated_tool_call.to_dict()
+                            tool_call_data["type"] = "tool_call"
+
+                            websocket_message = {
+                                "type": "message",
+                                "session_id": session_id,
+                                "data": tool_call_data,
+                                "timestamp": datetime.now(UTC).isoformat(),
+                            }
+                            await self.websocket_manager.send_message(session_id, websocket_message)
+                            logger.debug(
+                                f"Emitted tool_call {'failed' if is_error else 'completed'} "
+                                f"for {tool_use_id} in session {session_id}"
+                            )
+
+        except Exception as e:
+            logger.error(f"Error emitting tool_call updates: {e}")
 
     async def _on_state_change(self, state_data: dict):
         """Handle session state changes"""
@@ -1936,9 +2023,46 @@ class ClaudeWebUI:
                     await storage_manager.append_message(storage_data)
                     logger.debug(f"Stored permission request message for session {session_id}")
 
-                # Broadcast permission request to WebSocket clients
-                # Use legacy format for WebSocket to maintain frontend compatibility during migration
+                # Issue #324: Update ToolCall to awaiting_permission and emit unified tool_call message
                 try:
+                    # Find the matching tool by signature
+                    tool_call = self.coordinator.find_tool_call_by_signature(
+                        session_id, tool_name, input_params
+                    )
+
+                    if tool_call:
+                        # Create PermissionInfo from suggestions
+                        permission_info = PermissionInfo(
+                            message=f"Allow {tool_name}?",
+                            suggestions=[s.to_dict() for s in suggestion_objects],
+                            risk_level="medium",
+                        )
+
+                        # Update tool call status
+                        updated_tool_call = self.coordinator.update_tool_call_permission_request(
+                            session_id,
+                            tool_call.tool_use_id,
+                            permission_info,
+                        )
+
+                        if updated_tool_call:
+                            # Emit unified tool_call message
+                            tool_call_data = updated_tool_call.to_dict()
+                            tool_call_data["type"] = "tool_call"
+                            tool_call_data["request_id"] = request_id  # For permission response correlation
+
+                            websocket_message = {
+                                "type": "message",
+                                "session_id": session_id,
+                                "data": tool_call_data,
+                                "timestamp": datetime.now(UTC).isoformat(),
+                            }
+                            await self.websocket_manager.send_message(session_id, websocket_message)
+                            logger.info(f"Broadcasted tool_call awaiting_permission for {tool_name} in session {session_id}")
+                    else:
+                        logger.warning(f"Could not find matching ToolCall for permission request: {tool_name}")
+
+                    # Also broadcast legacy permission_request for backward compatibility
                     websocket_data = {
                         "type": "permission_request",
                         "content": permission_request.content,
@@ -2104,8 +2228,42 @@ class ClaudeWebUI:
                 if applied_update_objects:
                     logger.info(f"Permission response includes {len(applied_update_objects)} applied updates")
 
-                # Broadcast permission response to WebSocket clients
-                # Use legacy format for WebSocket to maintain frontend compatibility during migration
+                # Issue #324: Update ToolCall after permission response and emit unified tool_call message
+                try:
+                    # Find the tool by signature and update status
+                    tool_call = self.coordinator.find_tool_call_by_signature(
+                        session_id, tool_name, input_params
+                    )
+
+                    if tool_call:
+                        # Update tool call with permission decision
+                        granted = decision == "allow"
+                        updated_tool_call = self.coordinator.update_tool_call_permission_response(
+                            session_id,
+                            tool_call.tool_use_id,
+                            granted,
+                        )
+
+                        if updated_tool_call:
+                            # Emit unified tool_call message
+                            tool_call_data = updated_tool_call.to_dict()
+                            tool_call_data["type"] = "tool_call"
+
+                            websocket_message = {
+                                "type": "message",
+                                "session_id": session_id,
+                                "data": tool_call_data,
+                                "timestamp": datetime.now(UTC).isoformat(),
+                            }
+                            await self.websocket_manager.send_message(session_id, websocket_message)
+                            logger.info(
+                                f"Broadcasted tool_call {'running' if granted else 'denied'} "
+                                f"for {tool_name} in session {session_id}"
+                            )
+                except Exception as tc_error:
+                    logger.error(f"Failed to update ToolCall for permission response: {tc_error}")
+
+                # Broadcast legacy permission response for backward compatibility
                 try:
                     websocket_data = {
                         "type": "permission_response",
