@@ -125,7 +125,7 @@ export const useMessageStore = defineStore('message', () => {
         // Extract tool uses from assistant messages
         if (message.metadata?.has_tool_uses && message.metadata.tool_uses) {
           message.metadata.tool_uses.forEach(toolUse => {
-            handleToolUse(sessionId, toolUse)
+            handleToolUse(sessionId, toolUse, message.timestamp)
           })
         }
 
@@ -314,8 +314,11 @@ export const useMessageStore = defineStore('message', () => {
 
   /**
    * Handle tool use message (create tool call)
+   * @param {string} sessionId - Session ID
+   * @param {Object} toolUseBlock - Tool use block from SDK
+   * @param {string|null} messageTimestamp - Backend message timestamp (for chronological ordering)
    */
-  function handleToolUse(sessionId, toolUseBlock) {
+  function handleToolUse(sessionId, toolUseBlock, messageTimestamp = null) {
     const signature = createToolSignature(toolUseBlock.name, toolUseBlock.input)
     toolSignatureToId.value.set(signature, toolUseBlock.id)
 
@@ -329,7 +332,7 @@ export const useMessageStore = defineStore('message', () => {
       permissionDecision: null,
       result: null,
       explanation: null,
-      timestamp: new Date().toISOString(),
+      timestamp: messageTimestamp || new Date().toISOString(),
       isExpanded: true
     }
 
@@ -929,7 +932,7 @@ export const useMessageStore = defineStore('message', () => {
         // Extract tool uses
         if (message.metadata?.has_tool_uses && message.metadata.tool_uses) {
           message.metadata.tool_uses.forEach(toolUse => {
-            handleToolUse(sessionId, toolUse)
+            handleToolUse(sessionId, toolUse, message.timestamp)
           })
         }
 
