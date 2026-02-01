@@ -496,7 +496,7 @@ button:focus {
     width: 100%;
     height: 100%;
     background: rgba(0, 0, 0, 0.5);
-    z-index: 1040;
+    z-index: 1044;
     opacity: 0;
     transition: opacity 0.3s ease;
     pointer-events: none;
@@ -534,7 +534,7 @@ button:focus {
         width: 85vw !important; /* Use 85% of viewport width */
         max-width: 350px !important;
         min-width: unset !important;
-        z-index: 1045;
+        z-index: 1046;
         transform: translateX(-100%);
         transition: transform 0.3s ease;
         box-shadow: 2px 0 8px rgba(0, 0, 0, 0.15);

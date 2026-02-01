@@ -110,7 +110,7 @@ function stopResize() {
     height: calc(100vh - 56px);
     width: 80vw !important;
     max-width: 300px !important;
-    z-index: 1050;
+    z-index: 1042;
     transform: translateX(100%);
   }
 
