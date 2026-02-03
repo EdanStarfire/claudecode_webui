@@ -88,6 +88,10 @@ class SessionCoordinator:
         # Maps session_id -> {tool_use_id: ToolCall}
         self._active_tool_calls: dict[str, dict[str, ToolCall]] = {}
 
+        # Issue #403: Uploaded file paths per session for auto-approve Read permissions
+        # Maps session_id -> set of absolute file paths
+        self._uploaded_file_paths: dict[str, set[str]] = {}
+
         # Permission callback factory (injected by web_server)
         # Allows legion components to create permission callbacks on-demand
         self._permission_callback_factory: Callable[[str], Callable] | None = None
@@ -2165,6 +2169,79 @@ class SessionCoordinator:
         except Exception as e:
             logger.error(f"Error during startup project validation: {e}")
             # Don't raise - this shouldn't block startup
+
+    # ==================== FILE UPLOAD TRACKING (Issue #403) ====================
+
+    async def register_uploaded_file(self, session_id: str, file_path: str) -> None:
+        """
+        Register an uploaded file path for auto-approve Read permissions.
+
+        When a user uploads a file, the path is registered so that subsequent
+        Read tool requests for that path can be auto-approved without prompting.
+
+        Args:
+            session_id: Session ID that owns the file
+            file_path: Absolute path to the uploaded file
+        """
+        if session_id not in self._uploaded_file_paths:
+            self._uploaded_file_paths[session_id] = set()
+        self._uploaded_file_paths[session_id].add(file_path)
+        coord_logger.debug(f"Registered uploaded file for session {session_id}: {file_path}")
+
+    async def unregister_uploaded_file(self, session_id: str, file_path: str) -> None:
+        """
+        Unregister an uploaded file path from auto-approve tracking.
+
+        Called when a file is deleted by the user.
+
+        Args:
+            session_id: Session ID that owns the file
+            file_path: Absolute path to the uploaded file
+        """
+        if session_id in self._uploaded_file_paths:
+            self._uploaded_file_paths[session_id].discard(file_path)
+            coord_logger.debug(f"Unregistered uploaded file for session {session_id}: {file_path}")
+
+    def is_uploaded_file(self, session_id: str, file_path: str) -> bool:
+        """
+        Check if a file path is an uploaded file for a session.
+
+        Used by permission callbacks to auto-approve Read requests for
+        user-uploaded files.
+
+        Args:
+            session_id: Session ID to check
+            file_path: Absolute path to check
+
+        Returns:
+            True if the file was uploaded by the user for this session
+        """
+        return file_path in self._uploaded_file_paths.get(session_id, set())
+
+    def get_uploaded_files(self, session_id: str) -> set[str]:
+        """
+        Get all uploaded file paths for a session.
+
+        Args:
+            session_id: Session ID
+
+        Returns:
+            Set of absolute file paths uploaded to this session
+        """
+        return self._uploaded_file_paths.get(session_id, set()).copy()
+
+    def clear_uploaded_files(self, session_id: str) -> None:
+        """
+        Clear all uploaded file tracking for a session.
+
+        Called when a session is deleted or reset.
+
+        Args:
+            session_id: Session ID to clear
+        """
+        if session_id in self._uploaded_file_paths:
+            del self._uploaded_file_paths[session_id]
+            coord_logger.debug(f"Cleared uploaded files tracking for session {session_id}")
 
     async def cleanup(self):
         """Cleanup all resources"""

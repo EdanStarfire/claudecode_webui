@@ -3,7 +3,7 @@
     <!-- Parameters Section -->
     <div class="tool-section">
       <div class="read-file-info">
-        <span class="file-icon">📄</span>
+        <span class="file-icon">{{ isImageFile ? '🖼️' : '📄' }}</span>
         <strong>Reading:</strong>
         <code class="file-path">{{ filePath }}</code>
         <span v-if="hasRange" class="read-range">Lines {{ startLine }}-{{ endLine }}</span>
@@ -16,6 +16,22 @@
         <pre class="tool-code">{{ resultContent }}</pre>
       </div>
 
+      <!-- Image Result -->
+      <div v-else-if="imageData" class="image-preview">
+        <div class="content-header">
+          <span class="content-label">Image Preview:</span>
+          <span class="image-badge">{{ imageMimeType }}</span>
+        </div>
+        <div class="image-container">
+          <img
+            :src="`data:${imageMimeType};base64,${imageData}`"
+            :alt="fileName"
+            class="preview-image"
+          />
+        </div>
+      </div>
+
+      <!-- Text Result -->
       <div v-else class="file-content-preview">
         <div class="content-header">
           <span class="content-label">Content Preview:</span>
@@ -44,6 +60,11 @@ const filePath = computed(() => {
   return props.toolCall.input?.file_path || 'Unknown'
 })
 
+const fileName = computed(() => {
+  const path = filePath.value
+  return path.split('/').pop() || path
+})
+
 const hasRange = computed(() => {
   const offset = props.toolCall.input?.offset
   const limit = props.toolCall.input?.limit
@@ -61,6 +82,12 @@ const endLine = computed(() => {
   return limit !== undefined ? offset + limit : '∞'
 })
 
+// Check if file path indicates an image
+const isImageFile = computed(() => {
+  const path = filePath.value.toLowerCase()
+  return /\.(png|jpg|jpeg|gif|webp|svg|bmp|ico)$/.test(path)
+})
+
 // Result
 const hasResult = computed(() => {
   return props.toolCall.result !== null && props.toolCall.result !== undefined
@@ -68,6 +95,43 @@ const hasResult = computed(() => {
 
 const isError = computed(() => {
   return props.toolCall.result?.error || props.toolCall.status === 'error'
+})
+
+// Extract image data from result if present
+// Structure: result.content = [{ type: 'image', source: { type: 'base64', data: '...' } }]
+const imageData = computed(() => {
+  if (!hasResult.value || isError.value) return null
+
+  const result = props.toolCall.result
+  const content = result?.content
+
+  // Check if content is an array with image blocks
+  if (Array.isArray(content)) {
+    for (const block of content) {
+      if (block?.type === 'image' && block?.source?.type === 'base64' && block?.source?.data) {
+        return block.source.data
+      }
+    }
+  }
+
+  return null
+})
+
+// Determine MIME type for image
+const imageMimeType = computed(() => {
+  if (!imageData.value) return ''
+
+  const path = filePath.value.toLowerCase()
+  if (path.endsWith('.png')) return 'image/png'
+  if (path.endsWith('.jpg') || path.endsWith('.jpeg')) return 'image/jpeg'
+  if (path.endsWith('.gif')) return 'image/gif'
+  if (path.endsWith('.webp')) return 'image/webp'
+  if (path.endsWith('.svg')) return 'image/svg+xml'
+  if (path.endsWith('.bmp')) return 'image/bmp'
+  if (path.endsWith('.ico')) return 'image/x-icon'
+
+  // Default to PNG if we can't determine
+  return 'image/png'
 })
 
 const resultContent = computed(() => {
@@ -90,7 +154,7 @@ const resultContent = computed(() => {
 
 const previewLimit = 100
 const lines = computed(() => {
-  if (isError.value || !resultContent.value) return []
+  if (isError.value || !resultContent.value || imageData.value) return []
   return resultContent.value.split('\n')
 })
 
@@ -98,7 +162,7 @@ const lineCount = computed(() => lines.value.length)
 const hasMore = computed(() => lineCount.value > previewLimit)
 
 const previewContent = computed(() => {
-  if (isError.value) return ''
+  if (isError.value || imageData.value) return ''
   const previewLines = lines.value.slice(0, previewLimit)
   return previewLines.join('\n')
 })
@@ -174,6 +238,13 @@ const previewContent = computed(() => {
   overflow: hidden;
 }
 
+.image-preview {
+  background: #f8f9fa;
+  border: 1px solid #dee2e6;
+  border-radius: 0.25rem;
+  overflow: hidden;
+}
+
 .content-header {
   display: flex;
   align-items: center;
@@ -198,10 +269,35 @@ const previewContent = computed(() => {
   font-weight: 600;
 }
 
+.image-badge {
+  background: #6f42c1;
+  color: white;
+  padding: 0.2rem 0.5rem;
+  border-radius: 0.25rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
 .preview-note {
   color: #6c757d;
   font-size: 0.85rem;
   font-style: italic;
+}
+
+.image-container {
+  padding: 0.75rem;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  background: #fff;
+}
+
+.preview-image {
+  max-width: 100%;
+  max-height: 400px;
+  object-fit: contain;
+  border-radius: 0.25rem;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
 }
 
 .content-display {

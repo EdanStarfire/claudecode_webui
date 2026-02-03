@@ -15,11 +15,12 @@ from typing import Any
 
 from claude_agent_sdk import PermissionUpdate
 from claude_agent_sdk.types import PermissionRuleValue
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, File, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from .file_upload import FileUploadError, FileUploadManager
 from .logging_config import get_logger
 from .message_parser import MessageParser, MessageProcessor
 from .models.messages import (
@@ -964,6 +965,106 @@ class ClaudeWebUI:
             except Exception as e:
                 logger.error(f"Failed to get messages: {e}")
                 raise HTTPException(status_code=500, detail=str(e))
+
+        # ==================== FILE UPLOAD ENDPOINTS ====================
+
+        @self.app.post("/api/sessions/{session_id}/files")
+        async def upload_file(session_id: str, file: UploadFile = File(...)):
+            """
+            Upload a file for a session.
+
+            Files are stored in data/sessions/{session_id}/attachments/
+            and paths are passed to Claude for reading via the Read tool.
+            """
+            try:
+                # Verify session exists
+                session_info = await self.coordinator.session_manager.get_session_info(session_id)
+                if not session_info:
+                    raise HTTPException(status_code=404, detail="Session not found")
+
+                # Initialize file upload manager if not already done
+                file_manager = FileUploadManager(self.coordinator.data_dir / "sessions")
+
+                # Read file content
+                file_content = await file.read()
+
+                # Upload file
+                file_info = await file_manager.upload_file(
+                    session_id=session_id,
+                    filename=file.filename,
+                    file_data=file_content,
+                    content_type=file.content_type
+                )
+
+                # Register path for auto-approve (via session coordinator)
+                await self.coordinator.register_uploaded_file(session_id, file_info.stored_path)
+
+                return {
+                    "success": True,
+                    "file": file_info.to_dict()
+                }
+
+            except FileUploadError as e:
+                logger.warning(f"File upload validation failed: {e.message}")
+                raise HTTPException(status_code=400, detail=e.message)
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"Failed to upload file: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @self.app.get("/api/sessions/{session_id}/files")
+        async def list_session_files(session_id: str):
+            """List all uploaded files for a session"""
+            try:
+                # Verify session exists
+                session_info = await self.coordinator.session_manager.get_session_info(session_id)
+                if not session_info:
+                    raise HTTPException(status_code=404, detail="Session not found")
+
+                file_manager = FileUploadManager(self.coordinator.data_dir / "sessions")
+                files = await file_manager.list_files(session_id)
+
+                return {
+                    "files": [f.to_dict() for f in files]
+                }
+
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"Failed to list files: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @self.app.delete("/api/sessions/{session_id}/files/{file_id}")
+        async def delete_file(session_id: str, file_id: str):
+            """Delete an uploaded file"""
+            try:
+                # Verify session exists
+                session_info = await self.coordinator.session_manager.get_session_info(session_id)
+                if not session_info:
+                    raise HTTPException(status_code=404, detail="Session not found")
+
+                file_manager = FileUploadManager(self.coordinator.data_dir / "sessions")
+
+                # Get file info before deleting (to unregister path)
+                file_info = await file_manager.get_file_info(session_id, file_id)
+                if file_info:
+                    # Unregister from auto-approve
+                    await self.coordinator.unregister_uploaded_file(session_id, file_info.stored_path)
+
+                success = await file_manager.delete_file(session_id, file_id)
+                if not success:
+                    raise HTTPException(status_code=404, detail="File not found")
+
+                return {"success": True}
+
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"Failed to delete file: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+        # ==================== PERMISSION MODE ENDPOINT ====================
 
         @self.app.post("/api/sessions/{session_id}/permission-mode")
         async def set_permission_mode(session_id: str, request: PermissionModeRequest):
@@ -1967,6 +2068,13 @@ class ClaudeWebUI:
 
             logger.info(f"PERMISSION CALLBACK TRIGGERED: tool={tool_name}, session={session_id}, request_id={request_id}")
             logger.info(f"Permission requested for tool: {tool_name} (request_id: {request_id})")
+
+            # Issue #403: Auto-approve Read tool for user-uploaded files
+            if tool_name == 'Read':
+                file_path = input_params.get('file_path', '')
+                if file_path and self.coordinator.is_uploaded_file(session_id, file_path):
+                    logger.info(f"Auto-approving Read for uploaded file: {file_path}")
+                    return {"behavior": "allow"}
 
             # Extract suggestions from context
             suggestions = []
