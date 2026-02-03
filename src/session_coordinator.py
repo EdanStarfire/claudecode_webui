@@ -2349,6 +2349,47 @@ class SessionCoordinator:
             del self._uploaded_file_paths[session_id]
             coord_logger.debug(f"Cleared uploaded files tracking for session {session_id}")
 
+    # ==================== IMAGE GALLERY INTEGRATION (Issue #404) ====================
+
+    async def register_uploaded_image(
+        self,
+        session_id: str,
+        file_path: str,
+        title: str | None = None,
+        description: str | None = None
+    ) -> None:
+        """
+        Register an uploaded image file to the image gallery.
+
+        When a user uploads an image file through the attachment system,
+        this automatically adds it to the task panel image gallery.
+
+        Args:
+            session_id: Session ID that owns the image
+            file_path: Absolute path to the uploaded image file
+            title: Optional title for the image (defaults to filename)
+            description: Optional description
+        """
+        if not self.image_viewer_mcp_tools:
+            coord_logger.warning("Image viewer MCP tools not available")
+            return
+
+        # Build args matching the MCP tool interface
+        args = {
+            "file_path": file_path,
+            "title": title or "",
+            "description": description or ""
+        }
+
+        # Use the MCP tool's internal handler directly
+        result = await self.image_viewer_mcp_tools._handle_register_image(session_id, args)
+
+        if result.get("is_error"):
+            error_text = result.get("content", [{}])[0].get("text", "Unknown error")
+            raise ValueError(f"Failed to register image: {error_text}")
+
+        coord_logger.info(f"Registered uploaded image to gallery for session {session_id}: {title}")
+
     async def cleanup(self):
         """Cleanup all resources"""
         try:

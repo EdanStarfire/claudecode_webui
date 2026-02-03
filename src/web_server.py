@@ -991,7 +991,6 @@ class ClaudeWebUI:
                 logger.error(f"Failed to get messages: {e}")
                 raise HTTPException(status_code=500, detail=str(e))
 
-<<<<<<< HEAD
         # ==================== FILE UPLOAD ENDPOINTS ====================
 
         @self.app.post("/api/sessions/{session_id}/files")
@@ -1024,6 +1023,25 @@ class ClaudeWebUI:
 
                 # Register path for auto-approve (via session coordinator)
                 await self.coordinator.register_uploaded_file(session_id, file_info.stored_path)
+
+                # Issue #404: Auto-register uploaded images to image gallery
+                if file_info.mime_type.startswith("image/"):
+                    try:
+                        await self.coordinator.register_uploaded_image(
+                            session_id=session_id,
+                            file_path=file_info.stored_path,
+                            title=file_info.original_name,
+                            description="Uploaded by user"
+                        )
+                        logger.info(
+                            f"Auto-registered uploaded image to gallery: "
+                            f"{file_info.original_name}"
+                        )
+                    except Exception as e:
+                        # Don't fail the upload if image registration fails
+                        logger.warning(
+                            f"Failed to register uploaded image to gallery: {e}"
+                        )
 
                 return {
                     "success": True,
