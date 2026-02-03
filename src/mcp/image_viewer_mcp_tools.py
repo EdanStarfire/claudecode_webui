@@ -83,8 +83,16 @@ Use this tool to show visual content such as:
 Images appear in the Task Panel where users can view thumbnails,
 click to expand full-size, and navigate between multiple images.
 
+USAGE: To register an image file, use Bash to base64 encode it and pass the
+result directly to this tool. Example:
+  1. Use Bash: base64 -w0 /path/to/image.png
+  2. Copy the output and pass it as image_data parameter
+
+For multiple images, register them one at a time. Do NOT batch encode images
+or store base64 in intermediate files.
+
 Supported formats: PNG, JPEG, WebP, GIF
-Maximum size: 5MB per image
+Maximum size: 5MB per image (recommend <500KB for best performance)
 Maximum images per session: 50""",
             {
                 "image_data": str,     # Base64-encoded image data (required)
