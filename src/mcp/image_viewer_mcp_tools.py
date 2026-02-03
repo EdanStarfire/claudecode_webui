@@ -10,9 +10,9 @@ Implementation uses Claude Agent SDK's @tool decorator and create_sdk_mcp_server
 Tools are exposed to agents with names like: mcp__images__register_image
 """
 
-import base64
 import logging
 import uuid
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 try:
@@ -28,9 +28,10 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # Constants
-MAX_IMAGE_SIZE_BYTES = 5 * 1024 * 1024  # 5MB limit per image
+MAX_IMAGE_SIZE_BYTES = 10 * 1024 * 1024  # 10MB limit per image
 MAX_IMAGES_PER_SESSION = 50  # Maximum images per session
-SUPPORTED_FORMATS = {"png", "jpeg", "jpg", "webp", "gif"}
+SUPPORTED_FORMATS = {"png", "jpeg", "jpg", "webp", "gif", "bmp", "tiff", "tif"}
+SUPPORTED_EXTENSIONS = {".png", ".jpeg", ".jpg", ".webp", ".gif", ".bmp", ".tiff", ".tif"}
 
 
 class ImageViewerMCPTools:
@@ -72,10 +73,10 @@ class ImageViewerMCPTools:
 
         @tool(
             "register_image",
-            """Display an image in the WebUI task panel for user review.
+            """Display an image file in the WebUI task panel for user review.
 
 Use this tool to show visual content such as:
-- Screenshots from browser automation
+- Screenshots from browser automation or the filesystem
 - Generated images or diagrams
 - Visual test results
 - UI state captures
@@ -83,20 +84,18 @@ Use this tool to show visual content such as:
 Images appear in the Task Panel where users can view thumbnails,
 click to expand full-size, and navigate between multiple images.
 
-USAGE: To register an image file, use Bash to base64 encode it and pass the
-result directly to this tool. Example:
-  1. Use Bash: base64 -w0 /path/to/image.png
-  2. Copy the output and pass it as image_data parameter
+USAGE: Simply provide the absolute path to an image file. The backend will
+read the file directly - no base64 encoding needed.
 
-For multiple images, register them one at a time. Do NOT batch encode images
-or store base64 in intermediate files.
+Example:
+  register_image(file_path="/home/user/screenshot.png", title="Login Page")
 
-Supported formats: PNG, JPEG, WebP, GIF
-Maximum size: 5MB per image (recommend <500KB for best performance)
+Supported formats: PNG, JPEG, WebP, GIF, BMP, TIFF
+Maximum size: 10MB per image
 Maximum images per session: 50""",
             {
-                "image_data": str,     # Base64-encoded image data (required)
-                "title": str,          # Short caption (optional, default: "Image")
+                "file_path": str,      # Absolute path to image file (required)
+                "title": str,          # Short caption (optional, default: filename)
                 "description": str     # Detailed description (optional)
             }
         )
@@ -122,7 +121,7 @@ Maximum images per session: 50""",
         Args:
             session_id: Session to register image for
             args: {
-                "image_data": str,      # Base64-encoded image
+                "file_path": str,       # Path to image file
                 "title": str,           # Optional title
                 "description": str      # Optional description
             }
@@ -132,64 +131,88 @@ Maximum images per session: 50""",
         """
         try:
             # Extract parameters
-            image_data_b64 = args.get("image_data", "").strip()
-            title = args.get("title", "Image").strip() or "Image"
+            file_path_str = args.get("file_path", "").strip()
+            title = args.get("title", "").strip()
             description = args.get("description", "").strip()
 
             # Validate required parameter
-            if not image_data_b64:
+            if not file_path_str:
                 return {
                     "content": [{
                         "type": "text",
-                        "text": "Error: 'image_data' parameter is required and cannot be empty"
+                        "text": "Error: 'file_path' parameter is required and cannot be empty"
                     }],
                     "is_error": True
                 }
 
-            # Handle data URL prefix if present (data:image/png;base64,...)
-            if image_data_b64.startswith("data:"):
-                # Extract base64 portion after comma
-                try:
-                    _, image_data_b64 = image_data_b64.split(",", 1)
-                except ValueError:
-                    return {
-                        "content": [{
-                            "type": "text",
-                            "text": "Error: Invalid data URL format"
-                        }],
-                        "is_error": True
-                    }
+            # Resolve and validate path
+            file_path = Path(file_path_str).expanduser().resolve()
 
-            # Decode and validate base64
-            try:
-                image_bytes = base64.b64decode(image_data_b64)
-            except Exception as e:
+            if not file_path.exists():
                 return {
                     "content": [{
                         "type": "text",
-                        "text": f"Error: Invalid base64 encoding: {str(e)}"
+                        "text": f"Error: File not found: {file_path}"
                     }],
                     "is_error": True
                 }
 
-            # Check size limit
-            if len(image_bytes) > MAX_IMAGE_SIZE_BYTES:
-                size_mb = len(image_bytes) / (1024 * 1024)
+            if not file_path.is_file():
                 return {
                     "content": [{
                         "type": "text",
-                        "text": f"Error: Image too large ({size_mb:.2f}MB). Maximum size is 5MB."
+                        "text": f"Error: Path is not a file: {file_path}"
                     }],
                     "is_error": True
                 }
 
-            # Detect image format from magic bytes
+            # Check file extension
+            ext = file_path.suffix.lower()
+            if ext not in SUPPORTED_EXTENSIONS:
+                return {
+                    "content": [{
+                        "type": "text",
+                        "text": (
+                            f"Error: Unsupported file extension '{ext}'. "
+                            f"Supported: {', '.join(sorted(SUPPORTED_EXTENSIONS))}"
+                        )
+                    }],
+                    "is_error": True
+                }
+
+            # Check file size
+            file_size = file_path.stat().st_size
+            if file_size > MAX_IMAGE_SIZE_BYTES:
+                size_mb = file_size / (1024 * 1024)
+                return {
+                    "content": [{
+                        "type": "text",
+                        "text": f"Error: Image too large ({size_mb:.2f}MB). Maximum size is 10MB."
+                    }],
+                    "is_error": True
+                }
+
+            if file_size == 0:
+                return {
+                    "content": [{
+                        "type": "text",
+                        "text": "Error: Image file is empty (0 bytes)"
+                    }],
+                    "is_error": True
+                }
+
+            # Read file and validate format
+            image_bytes = file_path.read_bytes()
             image_format = self._detect_image_format(image_bytes)
+
             if not image_format:
                 return {
                     "content": [{
                         "type": "text",
-                        "text": f"Error: Unsupported image format. Supported: {', '.join(SUPPORTED_FORMATS)}"
+                        "text": (
+                            f"Error: File does not appear to be a valid image. "
+                            f"Supported formats: {', '.join(sorted(SUPPORTED_FORMATS))}"
+                        )
                     }],
                     "is_error": True
                 }
@@ -210,6 +233,10 @@ Maximum images per session: 50""",
             # Generate unique image ID
             image_id = str(uuid.uuid4())
 
+            # Use filename as default title if not provided
+            if not title:
+                title = file_path.name
+
             # Create image metadata
             from src.timestamp_utils import get_unix_timestamp
             image_metadata = {
@@ -218,19 +245,23 @@ Maximum images per session: 50""",
                 "title": title,
                 "description": description,
                 "format": image_format,
-                "size_bytes": len(image_bytes),
+                "size_bytes": file_size,
+                "original_path": str(file_path),
                 "timestamp": get_unix_timestamp()
             }
 
             # Store image file and metadata
             if storage_manager:
-                # Save binary file
+                # Save binary file (copy to session storage)
                 await storage_manager.save_image_file(image_id, image_bytes)
 
                 # Append metadata to JSONL
                 await storage_manager.append_image(image_metadata)
 
-                logger.info(f"Registered image {image_id} for session {session_id}: {title}")
+                logger.info(
+                    f"Registered image {image_id} for session {session_id}: "
+                    f"{title} ({file_size / 1024:.1f}KB)"
+                )
             else:
                 logger.warning(f"No storage manager for session {session_id}, image not persisted")
 
@@ -249,13 +280,22 @@ Maximum images per session: 50""",
                         f"- ID: {image_id}\n"
                         f"- Title: {title}\n"
                         f"- Format: {image_format.upper()}\n"
-                        f"- Size: {len(image_bytes) / 1024:.1f}KB\n\n"
+                        f"- Size: {file_size / 1024:.1f}KB\n"
+                        f"- Source: {file_path}\n\n"
                         f"The image is now visible in the Task Panel."
                     )
                 }],
                 "is_error": False
             }
 
+        except PermissionError:
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": f"Error: Permission denied reading file: {file_path_str}"
+                }],
+                "is_error": True
+            }
         except Exception as e:
             logger.error(f"Error in register_image: {e}", exc_info=True)
             return {
@@ -274,7 +314,7 @@ Maximum images per session: 50""",
             image_bytes: Raw image bytes
 
         Returns:
-            Format string ('png', 'jpeg', 'webp', 'gif') or None if unsupported
+            Format string ('png', 'jpeg', 'webp', 'gif', 'bmp', 'tiff') or None if unsupported
         """
         if len(image_bytes) < 12:
             return None
@@ -294,6 +334,14 @@ Maximum images per session: 50""",
         # GIF: GIF87a or GIF89a
         if image_bytes[:6] in (b'GIF87a', b'GIF89a'):
             return "gif"
+
+        # BMP: BM
+        if image_bytes[:2] == b'BM':
+            return "bmp"
+
+        # TIFF: II (little-endian) or MM (big-endian)
+        if image_bytes[:4] in (b'II\x2a\x00', b'MM\x00\x2a'):
+            return "tiff"
 
         return None
 
