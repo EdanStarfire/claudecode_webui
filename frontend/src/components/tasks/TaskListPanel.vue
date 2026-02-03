@@ -77,9 +77,11 @@ function toggleTaskExpansion(taskId) {
 
 <style scoped>
 .task-list-panel {
-  height: 100%;
+  /* Flex item that shrinks when collapsed, grows with content */
+  flex-shrink: 0;
   display: flex;
   flex-direction: column;
+  border-bottom: 1px solid #dee2e6;
 }
 
 .panel-header {
@@ -114,7 +116,8 @@ function toggleTaskExpansion(taskId) {
 }
 
 .task-list {
-  flex-grow: 1;
+  /* Allow content to scroll if it gets too long */
+  max-height: 50vh;
   overflow-y: auto;
 }
 

@@ -91,9 +91,12 @@ function handleImageError(event) {
 
 <style scoped>
 .image-gallery-panel {
-  height: 100%;
+  /* Flex item that takes remaining space after TaskListPanel */
+  flex: 1 1 auto;
+  min-height: 0; /* Allow shrinking below content size */
   display: flex;
   flex-direction: column;
+  border-top: 1px solid #dee2e6;
 }
 
 .panel-header {
@@ -128,7 +131,8 @@ function handleImageError(event) {
 }
 
 .image-grid-container {
-  flex-grow: 1;
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
 }
 
