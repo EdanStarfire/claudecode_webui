@@ -15,7 +15,7 @@
       <TaskListPanel />
 
       <!-- Resource Gallery (Issue #404) -->
-      <ResourceGallery v-if="hasResources" />
+      <ResourceGallery />
     </div>
 
     <!-- Resize Handle -->
@@ -32,17 +32,14 @@
 <script setup>
 import { computed, ref } from 'vue'
 import { useUIStore } from '@/stores/ui'
-import { useResourceStore } from '@/stores/resource'
 import TaskListPanel from '../tasks/TaskListPanel.vue'
 import ResourceGallery from '../tasks/ResourceGallery.vue'
 import ImageFullView from '../common/ImageFullView.vue'
 
 const uiStore = useUIStore()
-const resourceStore = useResourceStore()
 
 const rightSidebarCollapsed = computed(() => uiStore.rightSidebarCollapsed)
 const isMobile = computed(() => uiStore.isMobile)
-const hasResources = computed(() => resourceStore.currentHasResources)
 
 const sidebarStyle = computed(() => {
   // On mobile, let CSS handle the transform via classes

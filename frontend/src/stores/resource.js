@@ -81,12 +81,24 @@ export const useResourceStore = defineStore('resource', () => {
    */
   function isImageResource(resource) {
     if (!resource) return false
+
+    // Check explicit is_image flag from backend
+    if (resource.is_image === true) return true
+
+    // Check mime_type field (e.g., "image/jpeg")
+    const mimeType = (resource.mime_type || '').toLowerCase()
+    if (mimeType.startsWith('image/')) return true
+
+    // Check format field - could be mime type or extension
     const format = (resource.format || '').toLowerCase()
-    // Check format field
     if (format.startsWith('image/')) return true
+    // Also check if format is just the extension (e.g., "jpeg", "png")
+    if (IMAGE_EXTENSIONS.has('.' + format)) return true
+
     // Check original filename extension
-    if (resource.original_filename) {
-      const ext = '.' + resource.original_filename.split('.').pop().toLowerCase()
+    const filename = resource.original_filename || resource.original_name || ''
+    if (filename) {
+      const ext = '.' + filename.split('.').pop().toLowerCase()
       return IMAGE_EXTENSIONS.has(ext)
     }
     return false
