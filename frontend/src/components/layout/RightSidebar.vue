@@ -9,9 +9,13 @@
     }"
     :style="sidebarStyle"
   >
-    <!-- Task List Panel -->
-    <div class="flex-grow-1 overflow-auto">
+    <!-- Stacked Panels Container -->
+    <div class="panels-container">
+      <!-- Task List Panel -->
       <TaskListPanel />
+
+      <!-- Resource Gallery (Issue #404) -->
+      <ResourceGallery />
     </div>
 
     <!-- Resize Handle -->
@@ -19,6 +23,9 @@
       class="sidebar-resize-handle"
       @mousedown="startResize"
     ></div>
+
+    <!-- Resource Full View Modal (teleported to body) -->
+    <ImageFullView />
   </aside>
 </template>
 
@@ -26,6 +33,8 @@
 import { computed, ref } from 'vue'
 import { useUIStore } from '@/stores/ui'
 import TaskListPanel from '../tasks/TaskListPanel.vue'
+import ResourceGallery from '../tasks/ResourceGallery.vue'
+import ImageFullView from '../common/ImageFullView.vue'
 
 const uiStore = useUIStore()
 
@@ -86,6 +95,15 @@ function stopResize() {
 
 #right-sidebar.resizing {
   transition: none;
+}
+
+/* Panels container - stacked collapsible panels */
+.panels-container {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 .sidebar-resize-handle {

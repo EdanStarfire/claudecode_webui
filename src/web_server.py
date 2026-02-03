@@ -380,6 +380,11 @@ class ClaudeWebUI:
         self.coordinator.set_message_callback_registrar(self._get_message_callback_registrar())
         logger.info("Message callback registrar injected into SessionCoordinator")
 
+        # Issue #404: Inject resource broadcast callback into SessionCoordinator
+        # This allows ResourceMCPTools to broadcast resource_registered events
+        self.coordinator.set_resource_broadcast_callback(self._broadcast_resource_registered)
+        logger.info("Resource broadcast callback injected into SessionCoordinator")
+
         # Setup static files (Vue 3 production build)
         static_dir = Path(__file__).parent.parent / "frontend" / "dist"
         if not static_dir.exists():
@@ -445,6 +450,26 @@ class ClaudeWebUI:
             logger.debug(f"Broadcast comm {comm.comm_id} to legion {legion_id} WebSocket clients")
         except Exception as e:
             logger.error(f"Error broadcasting comm to legion WebSocket: {e}")
+
+    async def _broadcast_resource_registered(self, session_id: str, resource_metadata: dict):
+        """
+        Broadcast resource_registered event to WebSocket clients watching this session.
+
+        Issue #404: Called by ResourceMCPTools when a resource is registered.
+
+        Args:
+            session_id: Session that registered the resource
+            resource_metadata: Resource metadata dict (resource_id, title, is_image, etc.)
+        """
+        try:
+            await self.websocket_manager.send_message(session_id, {
+                "type": "resource_registered",
+                "resource": resource_metadata,
+                "timestamp": datetime.now(UTC).isoformat()
+            })
+            logger.debug(f"Broadcast resource_registered for {resource_metadata.get('resource_id')} to session {session_id}")
+        except Exception as e:
+            logger.error(f"Error broadcasting resource_registered: {e}")
 
     def _cleanup_pending_permissions_for_session(self, session_id: str):
         """Clean up pending permissions for a specific session by auto-denying them"""
@@ -999,6 +1024,24 @@ class ClaudeWebUI:
                 # Register path for auto-approve (via session coordinator)
                 await self.coordinator.register_uploaded_file(session_id, file_info.stored_path)
 
+                # Issue #404: Auto-register all uploaded files to resource gallery
+                try:
+                    await self.coordinator.register_uploaded_resource(
+                        session_id=session_id,
+                        file_path=file_info.stored_path,
+                        title=file_info.original_name,
+                        description="Uploaded by user"
+                    )
+                    logger.info(
+                        f"Auto-registered uploaded file to gallery: "
+                        f"{file_info.original_name}"
+                    )
+                except Exception as e:
+                    # Don't fail the upload if resource registration fails
+                    logger.warning(
+                        f"Failed to register uploaded file to gallery: {e}"
+                    )
+
                 return {
                     "success": True,
                     "file": file_info.to_dict()
@@ -1062,6 +1105,138 @@ class ClaudeWebUI:
                 raise
             except Exception as e:
                 logger.error(f"Failed to delete file: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+        # Issue #404: Resource gallery endpoints
+        @self.app.get("/api/sessions/{session_id}/resources")
+        async def get_session_resources(session_id: str):
+            """Get all resource metadata for a session"""
+            try:
+                resources = await self.coordinator.get_session_resources(session_id)
+                return {"resources": resources, "count": len(resources)}
+            except Exception as e:
+                logger.error(f"Failed to get resources: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @self.app.get("/api/sessions/{session_id}/resources/{resource_id}")
+        async def get_session_resource(session_id: str, resource_id: str):
+            """Get raw file data for a specific resource"""
+            from fastapi.responses import Response
+
+            try:
+                # Get resource metadata to determine content type
+                resources = await self.coordinator.get_session_resources(session_id)
+                resource_meta = next((r for r in resources if r.get("resource_id") == resource_id), None)
+
+                if not resource_meta:
+                    raise HTTPException(status_code=404, detail="Resource not found")
+
+                # Get resource bytes
+                resource_bytes = await self.coordinator.get_session_resource_file(session_id, resource_id)
+                if not resource_bytes:
+                    raise HTTPException(status_code=404, detail="Resource file not found")
+
+                # Use mime_type from metadata, fallback to octet-stream
+                content_type = resource_meta.get("mime_type", "application/octet-stream")
+                original_name = resource_meta.get("original_name", f"{resource_id}.bin")
+
+                return Response(
+                    content=resource_bytes,
+                    media_type=content_type,
+                    headers={
+                        "Content-Disposition": f'inline; filename="{original_name}"'
+                    }
+                )
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"Failed to get resource: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @self.app.get("/api/sessions/{session_id}/resources/{resource_id}/download")
+        async def download_session_resource(session_id: str, resource_id: str):
+            """Download a resource file"""
+            from fastapi.responses import Response
+
+            try:
+                # Get resource metadata
+                resources = await self.coordinator.get_session_resources(session_id)
+                resource_meta = next((r for r in resources if r.get("resource_id") == resource_id), None)
+
+                if not resource_meta:
+                    raise HTTPException(status_code=404, detail="Resource not found")
+
+                # Get resource bytes
+                resource_bytes = await self.coordinator.get_session_resource_file(session_id, resource_id)
+                if not resource_bytes:
+                    raise HTTPException(status_code=404, detail="Resource file not found")
+
+                content_type = resource_meta.get("mime_type", "application/octet-stream")
+                original_name = resource_meta.get("original_name", f"{resource_id}.bin")
+
+                return Response(
+                    content=resource_bytes,
+                    media_type=content_type,
+                    headers={
+                        "Content-Disposition": f'attachment; filename="{original_name}"'
+                    }
+                )
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"Failed to download resource: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+        # Issue #404: Legacy image endpoints (backward compatibility)
+        @self.app.get("/api/sessions/{session_id}/images")
+        async def get_session_images(session_id: str):
+            """Get all image metadata for a session (deprecated, use /resources)"""
+            try:
+                images = await self.coordinator.get_session_images(session_id)
+                return {"images": images, "count": len(images)}
+            except Exception as e:
+                logger.error(f"Failed to get images: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @self.app.get("/api/sessions/{session_id}/images/{image_id}")
+        async def get_session_image(session_id: str, image_id: str):
+            """Get raw image data for a specific image (deprecated, use /resources)"""
+            from fastapi.responses import Response
+
+            try:
+                # Get image metadata to determine content type
+                images = await self.coordinator.get_session_images(session_id)
+                image_meta = next((img for img in images if img.get("image_id") == image_id), None)
+
+                if not image_meta:
+                    raise HTTPException(status_code=404, detail="Image not found")
+
+                # Get image bytes
+                image_bytes = await self.coordinator.get_session_image_file(session_id, image_id)
+                if not image_bytes:
+                    raise HTTPException(status_code=404, detail="Image file not found")
+
+                # Determine content type from format
+                format_to_mime = {
+                    "png": "image/png",
+                    "jpeg": "image/jpeg",
+                    "jpg": "image/jpeg",
+                    "webp": "image/webp",
+                    "gif": "image/gif"
+                }
+                content_type = format_to_mime.get(image_meta.get("format", "png"), "image/png")
+
+                return Response(
+                    content=image_bytes,
+                    media_type=content_type,
+                    headers={
+                        "Content-Disposition": f'inline; filename="{image_id}.{image_meta.get("format", "png")}"'
+                    }
+                )
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"Failed to get image: {e}")
                 raise HTTPException(status_code=500, detail=str(e))
 
         # ==================== PERMISSION MODE ENDPOINT ====================

@@ -247,6 +247,16 @@ export const useSessionStore = defineStore('session', () => {
         return
       }
 
+      // Issue #404: Load resources (images and files) for this session
+      const resourceStore = await import('./resource')
+      await resourceStore.useResourceStore().loadResources(sessionId)
+
+      // Check abort after resource load
+      if (abortController.signal.aborted) {
+        console.log(`Selection of ${sessionId} aborted after resource load`)
+        return
+      }
+
       // CRITICAL: Await websocket connection to prevent race conditions
       const wsStore = await import('./websocket')
       await wsStore.useWebSocketStore().connectSession(sessionId)
