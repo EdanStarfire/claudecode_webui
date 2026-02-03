@@ -37,7 +37,7 @@
         <div class="image-container" @click.stop>
           <img
             v-if="currentImage"
-            :src="getImageUrl(currentImage.image_id)"
+            :src="getImageUrl(currentImage.resource_id || currentImage.image_id)"
             :alt="currentImage.title || 'Image'"
             class="full-image"
             @error="handleImageError"
@@ -86,13 +86,13 @@
         <div v-if="totalImages > 1" class="thumbnail-strip">
           <div
             v-for="(image, index) in images"
-            :key="image.image_id"
+            :key="image.resource_id || image.image_id"
             class="strip-thumbnail"
             :class="{ active: index === currentIndex }"
             @click.stop="goToImage(index)"
           >
             <img
-              :src="getImageUrl(image.image_id)"
+              :src="getImageUrl(image.resource_id || image.image_id)"
               :alt="image.title || 'Thumbnail'"
               loading="lazy"
             />
@@ -105,19 +105,19 @@
 
 <script setup>
 import { computed, watch, ref, nextTick, onMounted, onUnmounted } from 'vue'
-import { useImageStore } from '@/stores/image'
+import { useResourceStore } from '@/stores/resource'
 
-const imageStore = useImageStore()
+const resourceStore = useResourceStore()
 const overlayRef = ref(null)
 
-// Computed properties
-const isOpen = computed(() => imageStore.fullViewOpen)
-const currentImage = computed(() => imageStore.currentFullViewImage)
-const currentIndex = computed(() => imageStore.currentImageIndex)
-const totalImages = computed(() => imageStore.fullViewTotalImages)
+// Computed properties - now using resource store (which has backward-compatible aliases)
+const isOpen = computed(() => resourceStore.fullViewOpen)
+const currentImage = computed(() => resourceStore.currentFullViewResource)
+const currentIndex = computed(() => resourceStore.currentResourceIndex)
+const totalImages = computed(() => resourceStore.fullViewTotalResources)
 const images = computed(() => {
-  if (!imageStore.fullViewSessionId) return []
-  return imageStore.imagesForSession(imageStore.fullViewSessionId)
+  if (!resourceStore.fullViewSessionId) return []
+  return resourceStore.resourcesForSession(resourceStore.fullViewSessionId)
 })
 
 // Focus overlay when opened for keyboard events
@@ -138,24 +138,24 @@ onUnmounted(() => {
   document.body.style.overflow = ''
 })
 
-function getImageUrl(imageId) {
-  return imageStore.getImageUrl(imageStore.fullViewSessionId, imageId)
+function getImageUrl(resourceId) {
+  return resourceStore.getResourceUrl(resourceStore.fullViewSessionId, resourceId)
 }
 
 function closeFullView() {
-  imageStore.closeFullView()
+  resourceStore.closeFullView()
 }
 
 function nextImage() {
-  imageStore.nextImage()
+  resourceStore.nextResource()
 }
 
 function prevImage() {
-  imageStore.prevImage()
+  resourceStore.prevResource()
 }
 
 function goToImage(index) {
-  imageStore.goToImage(index)
+  resourceStore.goToResource(index)
 }
 
 function handleOverlayClick(event) {

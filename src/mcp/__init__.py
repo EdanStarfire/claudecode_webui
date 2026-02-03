@@ -1,5 +1,5 @@
 """MCP tools for Claude WebUI."""
 
-from .image_viewer_mcp_tools import ImageViewerMCPTools
+from .resource_mcp_tools import ImageViewerMCPTools, ResourceMCPTools
 
-__all__ = ["ImageViewerMCPTools"]
+__all__ = ["ResourceMCPTools", "ImageViewerMCPTools"]

@@ -110,14 +110,16 @@ class SessionCoordinator:
             template_manager=self.template_manager
         )
 
-        # Issue #404: Image viewer MCP tools for displaying images in task panel
-        # Callback for broadcasting image_registered events will be set by web_server
-        from src.mcp.image_viewer_mcp_tools import ImageViewerMCPTools
-        self._image_broadcast_callback: Callable[[str, dict], None] | None = None
-        self.image_viewer_mcp_tools = ImageViewerMCPTools(
+        # Issue #404: Resource MCP tools for displaying resources in task panel
+        # Callback for broadcasting resource_registered events will be set by web_server
+        from src.mcp.resource_mcp_tools import ResourceMCPTools
+        self._resource_broadcast_callback: Callable[[str, dict], None] | None = None
+        self.resource_mcp_tools = ResourceMCPTools(
             session_coordinator=self,
-            broadcast_callback=self._broadcast_image_registered
+            broadcast_callback=self._broadcast_resource_registered
         )
+        # Backward compatibility alias
+        self.image_viewer_mcp_tools = self.resource_mcp_tools
 
     async def initialize(self):
         """Initialize the session coordinator"""
@@ -269,13 +271,13 @@ class SessionCoordinator:
                 elif not self.legion_system.mcp_tools:
                     coord_logger.warning(f"Legion system mcp_tools is None for session {session_id}")
 
-            # Issue #404: Attach image viewer MCP tools to all sessions
-            if self.image_viewer_mcp_tools:
-                image_mcp_server = self.image_viewer_mcp_tools.create_mcp_server_for_session(session_id)
-                if image_mcp_server:
-                    mcp_servers["images"] = image_mcp_server
-                    mcp_tools_list.append("mcp__images")
-                    coord_logger.info(f"Attaching Image Viewer MCP tools to session {session_id}")
+            # Issue #404: Attach resource MCP tools to all sessions
+            if self.resource_mcp_tools:
+                resource_mcp_server = self.resource_mcp_tools.create_mcp_server_for_session(session_id)
+                if resource_mcp_server:
+                    mcp_servers["resources"] = resource_mcp_server
+                    mcp_tools_list.append("mcp__resources")
+                    coord_logger.info(f"Attaching Resource MCP tools to session {session_id}")
 
             # Merge MCP tools with any provided allowed_tools
             all_tools = allowed_tools if allowed_tools else []
@@ -378,6 +380,56 @@ class SessionCoordinator:
 
         return None
 
+    async def get_session_resources(self, session_id: str) -> list[dict]:
+        """
+        Get all resource metadata for a session.
+
+        Issue #404: Used by REST endpoint to list session resources.
+
+        Args:
+            session_id: Session ID
+
+        Returns:
+            List of resource metadata dicts
+        """
+        storage_manager = self._storage_managers.get(session_id)
+        if not storage_manager:
+            # Try to get from session directory
+            session_dir = await self.session_manager.get_session_directory(session_id)
+            if session_dir:
+                storage_manager = DataStorageManager(session_dir)
+                await storage_manager.initialize()
+
+        if storage_manager:
+            return await storage_manager.read_resources()
+
+        return []
+
+    async def get_session_resource_file(self, session_id: str, resource_id: str) -> bytes | None:
+        """
+        Get raw file bytes for a specific resource.
+
+        Issue #404: Used by REST endpoint to serve resource files.
+
+        Args:
+            session_id: Session ID
+            resource_id: Resource ID
+
+        Returns:
+            Raw file bytes or None
+        """
+        storage_manager = self._storage_managers.get(session_id)
+        if not storage_manager:
+            session_dir = await self.session_manager.get_session_directory(session_id)
+            if session_dir:
+                storage_manager = DataStorageManager(session_dir)
+                await storage_manager.initialize()
+
+        if storage_manager:
+            return await storage_manager.get_resource_file(resource_id)
+
+        return None
+
     def set_permission_callback_factory(self, factory: Callable[[str], Callable]) -> None:
         """
         Set the permission callback factory for creating callbacks on demand.
@@ -414,36 +466,41 @@ class SessionCoordinator:
             self.legion_system.message_callback_registrar = registrar
             coord_logger.info("Message callback registrar propagated to LegionSystem")
 
+    def set_resource_broadcast_callback(self, callback: Callable[[str, dict], None]) -> None:
+        """
+        Set the callback for broadcasting resource_registered events to WebSocket.
+
+        Issue #404: Resource MCP tool integration.
+
+        Args:
+            callback: Async function(session_id, resource_metadata) for WebSocket broadcast
+        """
+        self._resource_broadcast_callback = callback
+        coord_logger.info("Resource broadcast callback registered in SessionCoordinator")
+
+    # Backward compatibility alias
     def set_image_broadcast_callback(self, callback: Callable[[str, dict], None]) -> None:
-        """
-        Set the callback for broadcasting image_registered events to WebSocket.
+        """Deprecated: Use set_resource_broadcast_callback instead."""
+        self.set_resource_broadcast_callback(callback)
 
-        Issue #404: Image viewer MCP tool integration.
+    async def _broadcast_resource_registered(self, session_id: str, resource_metadata: dict) -> None:
+        """
+        Broadcast resource_registered event via the injected callback.
+
+        Issue #404: Called by ResourceMCPTools when a resource is registered.
 
         Args:
-            callback: Async function(session_id, image_metadata) for WebSocket broadcast
+            session_id: Session that registered the resource
+            resource_metadata: Resource metadata dict (resource_id, title, is_image, etc.)
         """
-        self._image_broadcast_callback = callback
-        coord_logger.info("Image broadcast callback registered in SessionCoordinator")
-
-    async def _broadcast_image_registered(self, session_id: str, image_metadata: dict) -> None:
-        """
-        Broadcast image_registered event via the injected callback.
-
-        Issue #404: Called by ImageViewerMCPTools when an image is registered.
-
-        Args:
-            session_id: Session that registered the image
-            image_metadata: Image metadata dict (image_id, title, etc.)
-        """
-        if self._image_broadcast_callback:
+        if self._resource_broadcast_callback:
             try:
-                if asyncio.iscoroutinefunction(self._image_broadcast_callback):
-                    await self._image_broadcast_callback(session_id, image_metadata)
+                if asyncio.iscoroutinefunction(self._resource_broadcast_callback):
+                    await self._resource_broadcast_callback(session_id, resource_metadata)
                 else:
-                    self._image_broadcast_callback(session_id, image_metadata)
+                    self._resource_broadcast_callback(session_id, resource_metadata)
             except Exception as e:
-                logger.error(f"Failed to broadcast image_registered for {session_id}: {e}")
+                logger.error(f"Failed to broadcast resource_registered for {session_id}: {e}")
 
     async def start_session(self, session_id: str, permission_callback: Callable[[str, dict[str, Any]], bool | dict[str, Any]] | None = None) -> bool:
         """Start a session with SDK integration"""
@@ -514,13 +571,13 @@ class SessionCoordinator:
                     mcp_tools_list.append("mcp__legion")
                     coord_logger.info(f"Attaching Legion MCP tools to session {session_id} (can_spawn_minions=True)")
 
-            # Issue #404: Attach image viewer MCP tools to all sessions
-            if self.image_viewer_mcp_tools:
-                image_mcp_server = self.image_viewer_mcp_tools.create_mcp_server_for_session(session_id)
-                if image_mcp_server:
-                    mcp_servers["images"] = image_mcp_server
-                    mcp_tools_list.append("mcp__images")
-                    coord_logger.info(f"Attaching Image Viewer MCP tools to session {session_id}")
+            # Issue #404: Attach resource MCP tools to all sessions
+            if self.resource_mcp_tools:
+                resource_mcp_server = self.resource_mcp_tools.create_mcp_server_for_session(session_id)
+                if resource_mcp_server:
+                    mcp_servers["resources"] = resource_mcp_server
+                    mcp_tools_list.append("mcp__resources")
+                    coord_logger.info(f"Attaching Resource MCP tools to session {session_id}")
 
             # Merge MCP tools with session's stored allowed_tools
             all_tools = session_info.allowed_tools if session_info.allowed_tools else []
@@ -2349,9 +2406,9 @@ class SessionCoordinator:
             del self._uploaded_file_paths[session_id]
             coord_logger.debug(f"Cleared uploaded files tracking for session {session_id}")
 
-    # ==================== IMAGE GALLERY INTEGRATION (Issue #404) ====================
+    # ==================== RESOURCE GALLERY INTEGRATION (Issue #404) ====================
 
-    async def register_uploaded_image(
+    async def register_uploaded_resource(
         self,
         session_id: str,
         file_path: str,
@@ -2359,19 +2416,19 @@ class SessionCoordinator:
         description: str | None = None
     ) -> None:
         """
-        Register an uploaded image file to the image gallery.
+        Register an uploaded file to the resource gallery.
 
-        When a user uploads an image file through the attachment system,
-        this automatically adds it to the task panel image gallery.
+        When a user uploads a file through the attachment system,
+        this automatically adds it to the task panel resource gallery.
 
         Args:
-            session_id: Session ID that owns the image
-            file_path: Absolute path to the uploaded image file
-            title: Optional title for the image (defaults to filename)
+            session_id: Session ID that owns the resource
+            file_path: Absolute path to the uploaded file
+            title: Optional title for the resource (defaults to filename)
             description: Optional description
         """
-        if not self.image_viewer_mcp_tools:
-            coord_logger.warning("Image viewer MCP tools not available")
+        if not self.resource_mcp_tools:
+            coord_logger.warning("Resource MCP tools not available")
             return
 
         # Build args matching the MCP tool interface
@@ -2382,13 +2439,24 @@ class SessionCoordinator:
         }
 
         # Use the MCP tool's internal handler directly
-        result = await self.image_viewer_mcp_tools._handle_register_image(session_id, args)
+        result = await self.resource_mcp_tools._handle_register_resource(session_id, args)
 
         if result.get("is_error"):
             error_text = result.get("content", [{}])[0].get("text", "Unknown error")
-            raise ValueError(f"Failed to register image: {error_text}")
+            raise ValueError(f"Failed to register resource: {error_text}")
 
-        coord_logger.info(f"Registered uploaded image to gallery for session {session_id}: {title}")
+        coord_logger.info(f"Registered uploaded resource to gallery for session {session_id}: {title}")
+
+    # Backward compatibility alias
+    async def register_uploaded_image(
+        self,
+        session_id: str,
+        file_path: str,
+        title: str | None = None,
+        description: str | None = None
+    ) -> None:
+        """Deprecated: Use register_uploaded_resource instead."""
+        await self.register_uploaded_resource(session_id, file_path, title, description)
 
     async def cleanup(self):
         """Cleanup all resources"""

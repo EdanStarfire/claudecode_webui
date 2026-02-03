@@ -92,13 +92,18 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch, inject } from 'vue'
 import { useSessionStore } from '@/stores/session'
 import { useWebSocketStore } from '@/stores/websocket'
+import { useResourceStore } from '@/stores/resource'
 import AttachmentList from './AttachmentList.vue'
 
 const sessionStore = useSessionStore()
 const wsStore = useWebSocketStore()
+const resourceStore = useResourceStore()
+
+// Inject pending resource attachment from App.vue
+const pendingResourceAttachment = inject('pendingResourceAttachment', ref(null))
 
 const messageTextarea = ref(null)
 const fileInput = ref(null)
@@ -146,6 +151,15 @@ onMounted(() => {
 
 onUnmounted(() => {
   window.removeEventListener('resize', handleResize)
+})
+
+// Watch for resource attachments added from ResourceGallery
+watch(pendingResourceAttachment, (resource) => {
+  if (resource) {
+    addResourceAsAttachment(resource)
+    // Clear the pending resource
+    pendingResourceAttachment.value = null
+  }
 })
 
 /**
@@ -415,6 +429,63 @@ function clearAttachments() {
     }
   }
   attachments.value = []
+}
+
+/**
+ * Add a resource from the gallery as an attachment (already uploaded)
+ * Resources are already stored on the backend, so we just reference them
+ */
+function addResourceAsAttachment(resource) {
+  if (!resource || !resource.resource_id) {
+    console.warn('Invalid resource for attachment:', resource)
+    return
+  }
+
+  const sessionId = currentSessionId.value
+  if (!sessionId) {
+    console.warn('No current session for resource attachment')
+    return
+  }
+
+  // Check if already attached (by resource_id)
+  const existingIndex = attachments.value.findIndex(
+    a => a.resourceId === resource.resource_id
+  )
+  if (existingIndex >= 0) {
+    console.log('Resource already attached:', resource.resource_id)
+    return
+  }
+
+  // Determine if it's an image
+  const isImage = resourceStore.isImageResource(resource)
+  let preview = null
+  if (isImage) {
+    preview = resourceStore.getResourceUrl(sessionId, resource.resource_id)
+  }
+
+  // Add as pre-uploaded attachment
+  attachments.value.push({
+    id: generateId(),
+    resourceId: resource.resource_id,
+    name: resource.original_filename || resource.title || 'Resource',
+    size: resource.size_bytes || 0,
+    type: resource.format || 'application/octet-stream',
+    file: null, // No file object - already uploaded
+    preview: preview,
+    uploading: false,
+    progress: 100,
+    uploaded: true,
+    uploadedInfo: {
+      id: resource.resource_id,
+      original_name: resource.original_filename || resource.title,
+      stored_path: resource.file_path || `/api/sessions/${sessionId}/resources/${resource.resource_id}`,
+      size_bytes: resource.size_bytes || 0
+    },
+    error: null,
+    isResourceReference: true // Mark as resource reference
+  })
+
+  console.log('Added resource as attachment:', resource.resource_id)
 }
 
 function interruptSession() {

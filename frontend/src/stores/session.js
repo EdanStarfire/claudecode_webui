@@ -247,13 +247,13 @@ export const useSessionStore = defineStore('session', () => {
         return
       }
 
-      // Issue #404: Load images for this session
-      const imageStore = await import('./image')
-      await imageStore.useImageStore().loadImages(sessionId)
+      // Issue #404: Load resources (images and files) for this session
+      const resourceStore = await import('./resource')
+      await resourceStore.useResourceStore().loadResources(sessionId)
 
-      // Check abort after image load
+      // Check abort after resource load
       if (abortController.signal.aborted) {
-        console.log(`Selection of ${sessionId} aborted after image load`)
+        console.log(`Selection of ${sessionId} aborted after resource load`)
         return
       }
 

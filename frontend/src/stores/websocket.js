@@ -3,7 +3,7 @@ import { ref, computed } from 'vue'
 import { useSessionStore } from './session'
 import { useProjectStore } from './project'
 import { useMessageStore } from './message'
-import { useImageStore } from './image'
+import { useResourceStore } from './resource'
 
 /**
  * WebSocket Store - Manages WebSocket connections and message routing
@@ -639,12 +639,25 @@ export const useWebSocketStore = defineStore('websocket', () => {
         }
         break
 
-      // Issue #404: Handle image_registered from MCP tool
+      // Issue #404: Handle resource_registered from MCP tool
+      case 'resource_registered':
+        if (payload.resource) {
+          const resourceStore = useResourceStore()
+          resourceStore.addResource(sessionId, payload.resource)
+          console.log(`Resource registered for session ${sessionId}:`, payload.resource.resource_id)
+        }
+        break
+
+      // Backward compatibility: Handle image_registered from legacy MCP tool
       case 'image_registered':
         if (payload.image) {
-          const imageStore = useImageStore()
-          imageStore.addImage(sessionId, payload.image)
-          console.log(`Image registered for session ${sessionId}:`, payload.image.image_id)
+          const resourceStore = useResourceStore()
+          // Convert image payload to resource format
+          resourceStore.addResource(sessionId, {
+            ...payload.image,
+            resource_id: payload.image.image_id
+          })
+          console.log(`Image registered (legacy) for session ${sessionId}:`, payload.image.image_id)
         }
         break
 

@@ -35,7 +35,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, onUnmounted, watch } from 'vue'
+import { computed, onMounted, onUnmounted, watch, provide, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import AppHeader from './components/layout/AppHeader.vue'
 import Sidebar from './components/layout/Sidebar.vue'
@@ -52,13 +52,28 @@ import { useWebSocketStore } from './stores/websocket'
 import { useSessionStore } from './stores/session'
 import { useProjectStore } from './stores/project'
 import { useTaskStore } from './stores/task'
+import { useResourceStore } from './stores/resource'
 
 const uiStore = useUIStore()
 const wsStore = useWebSocketStore()
 const sessionStore = useSessionStore()
 const projectStore = useProjectStore()
 const taskStore = useTaskStore()
+const resourceStore = useResourceStore()
 const router = useRouter()
+
+// Provide function for adding resource to attachments
+// This will be implemented by InputArea and consumed by ResourceGallery
+const pendingResourceAttachment = ref(null)
+
+function addAttachmentFromResource(resource) {
+  // Set the pending resource attachment - InputArea will watch for this
+  pendingResourceAttachment.value = resource
+}
+
+// Provide to child components
+provide('addAttachmentFromResource', addAttachmentFromResource)
+provide('pendingResourceAttachment', pendingResourceAttachment)
 
 // Computed properties from UI store
 const sidebarCollapsed = computed(() => uiStore.sidebarCollapsed)
@@ -69,6 +84,14 @@ const isMobile = computed(() => uiStore.isMobile)
 watch(() => taskStore.currentHasTasks, (hasTasks, hadTasks) => {
   if (hasTasks && !hadTasks) {
     // Tasks appeared for the first time - auto-expand sidebar
+    uiStore.setRightSidebarCollapsed(false)
+  }
+})
+
+// Auto-expand right sidebar when resources first appear
+watch(() => resourceStore.currentHasResources, (hasResources, hadResources) => {
+  if (hasResources && !hadResources) {
+    // Resources appeared for the first time - auto-expand sidebar
     uiStore.setRightSidebarCollapsed(false)
   }
 })

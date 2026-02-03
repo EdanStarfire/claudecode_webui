@@ -14,8 +14,8 @@
       <!-- Task List Panel -->
       <TaskListPanel />
 
-      <!-- Image Gallery (Issue #404) -->
-      <ImageGallery v-if="hasImages" />
+      <!-- Resource Gallery (Issue #404) -->
+      <ResourceGallery v-if="hasResources" />
     </div>
 
     <!-- Resize Handle -->
@@ -24,7 +24,7 @@
       @mousedown="startResize"
     ></div>
 
-    <!-- Image Full View Modal (teleported to body) -->
+    <!-- Resource Full View Modal (teleported to body) -->
     <ImageFullView />
   </aside>
 </template>
@@ -32,17 +32,17 @@
 <script setup>
 import { computed, ref } from 'vue'
 import { useUIStore } from '@/stores/ui'
-import { useImageStore } from '@/stores/image'
+import { useResourceStore } from '@/stores/resource'
 import TaskListPanel from '../tasks/TaskListPanel.vue'
-import ImageGallery from '../tasks/ImageGallery.vue'
+import ResourceGallery from '../tasks/ResourceGallery.vue'
 import ImageFullView from '../common/ImageFullView.vue'
 
 const uiStore = useUIStore()
-const imageStore = useImageStore()
+const resourceStore = useResourceStore()
 
 const rightSidebarCollapsed = computed(() => uiStore.rightSidebarCollapsed)
 const isMobile = computed(() => uiStore.isMobile)
-const hasImages = computed(() => imageStore.currentHasImages)
+const hasResources = computed(() => resourceStore.currentHasResources)
 
 const sidebarStyle = computed(() => {
   // On mobile, let CSS handle the transform via classes
