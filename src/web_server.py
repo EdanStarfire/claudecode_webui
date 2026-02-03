@@ -380,6 +380,11 @@ class ClaudeWebUI:
         self.coordinator.set_message_callback_registrar(self._get_message_callback_registrar())
         logger.info("Message callback registrar injected into SessionCoordinator")
 
+        # Issue #404: Inject image broadcast callback into SessionCoordinator
+        # This allows ImageViewerMCPTools to broadcast image_registered events
+        self.coordinator.set_image_broadcast_callback(self._broadcast_image_registered)
+        logger.info("Image broadcast callback injected into SessionCoordinator")
+
         # Setup static files (Vue 3 production build)
         static_dir = Path(__file__).parent.parent / "frontend" / "dist"
         if not static_dir.exists():
@@ -445,6 +450,26 @@ class ClaudeWebUI:
             logger.debug(f"Broadcast comm {comm.comm_id} to legion {legion_id} WebSocket clients")
         except Exception as e:
             logger.error(f"Error broadcasting comm to legion WebSocket: {e}")
+
+    async def _broadcast_image_registered(self, session_id: str, image_metadata: dict):
+        """
+        Broadcast image_registered event to WebSocket clients watching this session.
+
+        Issue #404: Called by ImageViewerMCPTools when an image is registered.
+
+        Args:
+            session_id: Session that registered the image
+            image_metadata: Image metadata dict (image_id, title, format, etc.)
+        """
+        try:
+            await self.websocket_manager.send_message(session_id, {
+                "type": "image_registered",
+                "image": image_metadata,
+                "timestamp": datetime.now(UTC).isoformat()
+            })
+            logger.debug(f"Broadcast image_registered for {image_metadata.get('image_id')} to session {session_id}")
+        except Exception as e:
+            logger.error(f"Error broadcasting image_registered: {e}")
 
     def _cleanup_pending_permissions_for_session(self, session_id: str):
         """Clean up pending permissions for a specific session by auto-denying them"""
@@ -966,6 +991,7 @@ class ClaudeWebUI:
                 logger.error(f"Failed to get messages: {e}")
                 raise HTTPException(status_code=500, detail=str(e))
 
+<<<<<<< HEAD
         # ==================== FILE UPLOAD ENDPOINTS ====================
 
         @self.app.post("/api/sessions/{session_id}/files")
@@ -1062,6 +1088,58 @@ class ClaudeWebUI:
                 raise
             except Exception as e:
                 logger.error(f"Failed to delete file: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+        # Issue #404: Image viewer endpoints
+        @self.app.get("/api/sessions/{session_id}/images")
+        async def get_session_images(session_id: str):
+            """Get all image metadata for a session"""
+            try:
+                images = await self.coordinator.get_session_images(session_id)
+                return {"images": images, "count": len(images)}
+            except Exception as e:
+                logger.error(f"Failed to get images: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @self.app.get("/api/sessions/{session_id}/images/{image_id}")
+        async def get_session_image(session_id: str, image_id: str):
+            """Get raw image data for a specific image"""
+            from fastapi.responses import Response
+
+            try:
+                # Get image metadata to determine content type
+                images = await self.coordinator.get_session_images(session_id)
+                image_meta = next((img for img in images if img.get("image_id") == image_id), None)
+
+                if not image_meta:
+                    raise HTTPException(status_code=404, detail="Image not found")
+
+                # Get image bytes
+                image_bytes = await self.coordinator.get_session_image_file(session_id, image_id)
+                if not image_bytes:
+                    raise HTTPException(status_code=404, detail="Image file not found")
+
+                # Determine content type from format
+                format_to_mime = {
+                    "png": "image/png",
+                    "jpeg": "image/jpeg",
+                    "jpg": "image/jpeg",
+                    "webp": "image/webp",
+                    "gif": "image/gif"
+                }
+                content_type = format_to_mime.get(image_meta.get("format", "png"), "image/png")
+
+                return Response(
+                    content=image_bytes,
+                    media_type=content_type,
+                    headers={
+                        "Content-Disposition": f'inline; filename="{image_id}.{image_meta.get("format", "png")}"'
+                    }
+                )
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"Failed to get image: {e}")
                 raise HTTPException(status_code=500, detail=str(e))
 
         # ==================== PERMISSION MODE ENDPOINT ====================

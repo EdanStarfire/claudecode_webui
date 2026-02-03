@@ -3,6 +3,7 @@ import { ref, computed } from 'vue'
 import { useSessionStore } from './session'
 import { useProjectStore } from './project'
 import { useMessageStore } from './message'
+import { useImageStore } from './image'
 
 /**
  * WebSocket Store - Manages WebSocket connections and message routing
@@ -635,6 +636,15 @@ export const useWebSocketStore = defineStore('websocket', () => {
             type: 'pong',
             timestamp: new Date().toISOString()
           }))
+        }
+        break
+
+      // Issue #404: Handle image_registered from MCP tool
+      case 'image_registered':
+        if (payload.image) {
+          const imageStore = useImageStore()
+          imageStore.addImage(sessionId, payload.image)
+          console.log(`Image registered for session ${sessionId}:`, payload.image.image_id)
         }
         break
 

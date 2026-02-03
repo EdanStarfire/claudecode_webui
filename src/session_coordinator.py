@@ -110,6 +110,15 @@ class SessionCoordinator:
             template_manager=self.template_manager
         )
 
+        # Issue #404: Image viewer MCP tools for displaying images in task panel
+        # Callback for broadcasting image_registered events will be set by web_server
+        from src.mcp.image_viewer_mcp_tools import ImageViewerMCPTools
+        self._image_broadcast_callback: Callable[[str, dict], None] | None = None
+        self.image_viewer_mcp_tools = ImageViewerMCPTools(
+            session_coordinator=self,
+            broadcast_callback=self._broadcast_image_registered
+        )
+
     async def initialize(self):
         """Initialize the session coordinator"""
         try:
@@ -237,8 +246,8 @@ class SessionCoordinator:
 
             # Issue #313: Attach MCP tools based on can_spawn_minions flag (universal Legion)
             # All sessions can have Legion MCP tools if can_spawn_minions=True
-            mcp_servers = None
-            legion_tools = []
+            mcp_servers = {}
+            mcp_tools_list = []
             coord_logger.debug(f"MCP attachment check for session {session_id}: can_spawn_minions={can_spawn_minions}, legion_system={self.legion_system is not None}")
             if can_spawn_minions and self.legion_system and self.legion_system.mcp_tools:
                 # Create session-specific MCP server (injects session_id into tool calls)
@@ -246,10 +255,10 @@ class SessionCoordinator:
                 coord_logger.debug(f"Created session-specific MCP server for {session_id}: {mcp_server}")
                 if mcp_server:
                     # SDK expects dict mapping server name to config, not a list
-                    mcp_servers = {"legion": mcp_server}
+                    mcp_servers["legion"] = mcp_server
                     # Allow all legion MCP tools (reduces command-line length)
-                    legion_tools = ["mcp__legion"]
-                    coord_logger.info(f"Attaching Legion MCP tools to session {session_id}: {legion_tools}")
+                    mcp_tools_list.append("mcp__legion")
+                    coord_logger.info(f"Attaching Legion MCP tools to session {session_id}")
                 else:
                     coord_logger.warning(f"MCP server creation failed for session {session_id}")
             else:
@@ -260,9 +269,17 @@ class SessionCoordinator:
                 elif not self.legion_system.mcp_tools:
                     coord_logger.warning(f"Legion system mcp_tools is None for session {session_id}")
 
-            # Merge Legion tools with any provided allowed_tools
+            # Issue #404: Attach image viewer MCP tools to all sessions
+            if self.image_viewer_mcp_tools:
+                image_mcp_server = self.image_viewer_mcp_tools.create_mcp_server_for_session(session_id)
+                if image_mcp_server:
+                    mcp_servers["images"] = image_mcp_server
+                    mcp_tools_list.append("mcp__images")
+                    coord_logger.info(f"Attaching Image Viewer MCP tools to session {session_id}")
+
+            # Merge MCP tools with any provided allowed_tools
             all_tools = allowed_tools if allowed_tools else []
-            all_tools = list(set(all_tools + legion_tools))  # Deduplicate
+            all_tools = list(set(all_tools + mcp_tools_list))  # Deduplicate
 
             # Escape special characters in system_prompt for subprocess command-line safety
             # CRITICAL: Newlines break subprocess argument parsing on Windows
@@ -288,7 +305,7 @@ class SessionCoordinator:
                 override_system_prompt=override_system_prompt,
                 tools=all_tools,
                 model=model,
-                mcp_servers=mcp_servers,
+                mcp_servers=mcp_servers if mcp_servers else None,
                 sandbox_enabled=sandbox_enabled,
                 sandbox_config=sandbox_config
             )
@@ -310,6 +327,56 @@ class SessionCoordinator:
     async def get_session_storage(self, session_id: str):
         """Get storage manager for a session"""
         return self._storage_managers.get(session_id)
+
+    async def get_session_images(self, session_id: str) -> list[dict]:
+        """
+        Get all image metadata for a session.
+
+        Issue #404: Used by REST endpoint to list session images.
+
+        Args:
+            session_id: Session ID
+
+        Returns:
+            List of image metadata dicts
+        """
+        storage_manager = self._storage_managers.get(session_id)
+        if not storage_manager:
+            # Try to get from session directory
+            session_dir = await self.session_manager.get_session_directory(session_id)
+            if session_dir:
+                storage_manager = DataStorageManager(session_dir)
+                await storage_manager.initialize()
+
+        if storage_manager:
+            return await storage_manager.read_images()
+
+        return []
+
+    async def get_session_image_file(self, session_id: str, image_id: str) -> bytes | None:
+        """
+        Get raw image bytes for a specific image.
+
+        Issue #404: Used by REST endpoint to serve image files.
+
+        Args:
+            session_id: Session ID
+            image_id: Image ID
+
+        Returns:
+            Raw image bytes or None
+        """
+        storage_manager = self._storage_managers.get(session_id)
+        if not storage_manager:
+            session_dir = await self.session_manager.get_session_directory(session_id)
+            if session_dir:
+                storage_manager = DataStorageManager(session_dir)
+                await storage_manager.initialize()
+
+        if storage_manager:
+            return await storage_manager.get_image_file(image_id)
+
+        return None
 
     def set_permission_callback_factory(self, factory: Callable[[str], Callable]) -> None:
         """
@@ -346,6 +413,37 @@ class SessionCoordinator:
         if self.legion_system:
             self.legion_system.message_callback_registrar = registrar
             coord_logger.info("Message callback registrar propagated to LegionSystem")
+
+    def set_image_broadcast_callback(self, callback: Callable[[str, dict], None]) -> None:
+        """
+        Set the callback for broadcasting image_registered events to WebSocket.
+
+        Issue #404: Image viewer MCP tool integration.
+
+        Args:
+            callback: Async function(session_id, image_metadata) for WebSocket broadcast
+        """
+        self._image_broadcast_callback = callback
+        coord_logger.info("Image broadcast callback registered in SessionCoordinator")
+
+    async def _broadcast_image_registered(self, session_id: str, image_metadata: dict) -> None:
+        """
+        Broadcast image_registered event via the injected callback.
+
+        Issue #404: Called by ImageViewerMCPTools when an image is registered.
+
+        Args:
+            session_id: Session that registered the image
+            image_metadata: Image metadata dict (image_id, title, etc.)
+        """
+        if self._image_broadcast_callback:
+            try:
+                if asyncio.iscoroutinefunction(self._image_broadcast_callback):
+                    await self._image_broadcast_callback(session_id, image_metadata)
+                else:
+                    self._image_broadcast_callback(session_id, image_metadata)
+            except Exception as e:
+                logger.error(f"Failed to broadcast image_registered for {session_id}: {e}")
 
     async def start_session(self, session_id: str, permission_callback: Callable[[str, dict[str, Any]], bool | dict[str, Any]] | None = None) -> bool:
         """Start a session with SDK integration"""
@@ -404,21 +502,29 @@ class SessionCoordinator:
 
             # Issue #313: Attach MCP tools based on can_spawn_minions flag (universal Legion)
             # All sessions with can_spawn_minions=True get Legion MCP tools
-            mcp_servers = None
-            legion_tools = []
+            mcp_servers = {}
+            mcp_tools_list = []
             if session_info.can_spawn_minions and self.legion_system and self.legion_system.mcp_tools:
                 # Create session-specific MCP server (injects session_id into tool calls)
                 mcp_server = self.legion_system.mcp_tools.create_mcp_server_for_session(session_id)
                 if mcp_server:
                     # SDK expects dict mapping server name to config, not a list
-                    mcp_servers = {"legion": mcp_server}
+                    mcp_servers["legion"] = mcp_server
                     # Allow all legion MCP tools (reduces command-line length)
-                    legion_tools = ["mcp__legion"]
-                    coord_logger.info(f"Attaching Legion MCP tools to session {session_id} (can_spawn_minions=True): {legion_tools}")
+                    mcp_tools_list.append("mcp__legion")
+                    coord_logger.info(f"Attaching Legion MCP tools to session {session_id} (can_spawn_minions=True)")
 
-            # Merge Legion tools with session's stored allowed_tools
+            # Issue #404: Attach image viewer MCP tools to all sessions
+            if self.image_viewer_mcp_tools:
+                image_mcp_server = self.image_viewer_mcp_tools.create_mcp_server_for_session(session_id)
+                if image_mcp_server:
+                    mcp_servers["images"] = image_mcp_server
+                    mcp_tools_list.append("mcp__images")
+                    coord_logger.info(f"Attaching Image Viewer MCP tools to session {session_id}")
+
+            # Merge MCP tools with session's stored allowed_tools
             all_tools = session_info.allowed_tools if session_info.allowed_tools else []
-            all_tools = list(set(all_tools + legion_tools))  # Deduplicate
+            all_tools = list(set(all_tools + mcp_tools_list))  # Deduplicate
 
             # Issue #349: All sessions are minions - always prepend legion guide
             legion_guide = get_legion_guide_only()
@@ -454,7 +560,7 @@ class SessionCoordinator:
                 tools=all_tools,
                 model=session_info.model,
                 resume_session_id=resume_sdk_session,  # Only resume if we have a Claude Code session ID
-                mcp_servers=mcp_servers,
+                mcp_servers=mcp_servers if mcp_servers else None,
                 sandbox_enabled=session_info.sandbox_enabled,
                 sandbox_config=session_info.sandbox_config,
                 setting_sources=session_info.setting_sources  # Issue #36

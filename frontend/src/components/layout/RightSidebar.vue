@@ -12,6 +12,11 @@
     <!-- Task List Panel -->
     <div class="flex-grow-1 overflow-auto">
       <TaskListPanel />
+
+      <!-- Image Gallery (Issue #404) -->
+      <div v-if="hasImages" class="border-top">
+        <ImageGallery />
+      </div>
     </div>
 
     <!-- Resize Handle -->
@@ -19,18 +24,26 @@
       class="sidebar-resize-handle"
       @mousedown="startResize"
     ></div>
+
+    <!-- Image Full View Modal (teleported to body) -->
+    <ImageFullView />
   </aside>
 </template>
 
 <script setup>
 import { computed, ref } from 'vue'
 import { useUIStore } from '@/stores/ui'
+import { useImageStore } from '@/stores/image'
 import TaskListPanel from '../tasks/TaskListPanel.vue'
+import ImageGallery from '../tasks/ImageGallery.vue'
+import ImageFullView from '../common/ImageFullView.vue'
 
 const uiStore = useUIStore()
+const imageStore = useImageStore()
 
 const rightSidebarCollapsed = computed(() => uiStore.rightSidebarCollapsed)
 const isMobile = computed(() => uiStore.isMobile)
+const hasImages = computed(() => imageStore.currentHasImages)
 
 const sidebarStyle = computed(() => {
   // On mobile, let CSS handle the transform via classes

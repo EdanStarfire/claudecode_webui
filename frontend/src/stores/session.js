@@ -247,6 +247,16 @@ export const useSessionStore = defineStore('session', () => {
         return
       }
 
+      // Issue #404: Load images for this session
+      const imageStore = await import('./image')
+      await imageStore.useImageStore().loadImages(sessionId)
+
+      // Check abort after image load
+      if (abortController.signal.aborted) {
+        console.log(`Selection of ${sessionId} aborted after image load`)
+        return
+      }
+
       // CRITICAL: Await websocket connection to prevent race conditions
       const wsStore = await import('./websocket')
       await wsStore.useWebSocketStore().connectSession(sessionId)
