@@ -567,16 +567,24 @@ class UserMessageHandler(MessageHandler):
             if hasattr(sdk_msg, 'content') and isinstance(sdk_msg.content, list):
                 for block in sdk_msg.content:
                     if isinstance(block, ToolResultBlock):
-                        # Normalize content to always be a string
+                        # Preserve content structure for rich content (images, etc.)
                         content = block.content
                         if isinstance(content, list):
-                            # Handle structured content arrays (e.g., from Task tool)
-                            # Format: [{"type": "text", "text": "..."}, ...]
-                            text_parts_content = []
-                            for item in content:
-                                if isinstance(item, dict) and item.get("type") == "text":
-                                    text_parts_content.append(item.get("text", ""))
-                            content = "\n".join(text_parts_content) if text_parts_content else str(content)
+                            # Check if content contains non-text items (images, etc.)
+                            has_non_text = any(
+                                isinstance(item, dict) and item.get("type") != "text"
+                                for item in content
+                            )
+                            if has_non_text:
+                                # Preserve the full array for rich content display
+                                pass  # Keep content as-is (the list)
+                            else:
+                                # Text-only content: extract and join text parts
+                                text_parts_content = []
+                                for item in content:
+                                    if isinstance(item, dict) and item.get("type") == "text":
+                                        text_parts_content.append(item.get("text", ""))
+                                content = "\n".join(text_parts_content) if text_parts_content else str(content)
                         elif not isinstance(content, str):
                             # Fallback for any other non-string content
                             content = str(content)
