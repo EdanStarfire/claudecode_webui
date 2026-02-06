@@ -43,6 +43,10 @@ Debug Flags:
     parser.add_argument('--host', default='0.0.0.0', help='Host to bind to (default: 0.0.0.0)')
     parser.add_argument('--port', type=int, default=8000, help='Port to bind to (default: 8000)')
     parser.add_argument('--data-dir', default='./data', help='Data directory location (default: ./data)')
+    parser.add_argument(
+        '--lockdown-mode', action='store_true',
+        help='Restrict server to localhost only (127.0.0.1) for security'
+    )
 
     # Debug flags
     parser.add_argument('--debug-websocket', action='store_true', help='Enable WebSocket lifecycle debugging')
@@ -94,10 +98,18 @@ Debug Flags:
     app.add_event_handler("startup", startup_event)
     app.add_event_handler("shutdown", shutdown_event)
 
+    # Handle lockdown mode - restrict to localhost only
+    effective_host = args.host
+    if args.lockdown_mode:
+        if args.host != '0.0.0.0' and args.host != '127.0.0.1':
+            print(f"WARNING: Lockdown mode overriding --host {args.host} to 127.0.0.1")
+        effective_host = '127.0.0.1'
+        print("Running in lockdown mode - listening on 127.0.0.1 only")
+
     # Run the server
     uvicorn.run(
         app,
-        host=args.host,
+        host=effective_host,
         port=args.port,
         log_level="info",
         access_log=True
