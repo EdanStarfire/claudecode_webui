@@ -139,7 +139,8 @@ class ClaudeSDK:
         mcp_servers: list[Any] | None = None,
         sandbox_enabled: bool = False,
         sandbox_config: dict | None = None,
-        setting_sources: list[str] | None = None
+        setting_sources: list[str] | None = None,
+        experimental: bool = False
     ):
         """
         Initialize enhanced Claude Code SDK wrapper.
@@ -160,6 +161,7 @@ class ClaudeSDK:
             sandbox_enabled: Enable OS-level sandboxing (issue #319)
             sandbox_config: Optional SandboxSettings configuration dict
             setting_sources: List of settings sources to load (issue #36)
+            experimental: Enable experimental features like Agent Teams (issue #411)
         """
         self.session_id = session_id
         self.working_directory = Path(working_directory)
@@ -183,6 +185,7 @@ class ClaudeSDK:
         self.sandbox_enabled = sandbox_enabled
         self.sandbox_config = sandbox_config
         self.setting_sources = setting_sources  # Issue #36: which settings files to load
+        self.experimental = experimental  # Issue #411: Enable experimental features
 
         self.info = SessionInfo(session_id=session_id, working_directory=str(self.working_directory))
 
@@ -737,7 +740,12 @@ class ClaudeSDK:
             sdk_logger.info(f"Sandbox enabled for session {self.session_id}: {sandbox_settings}")
 
         # Enable native Tasks system (Claude Code 2.1+)
-        options_kwargs["env"] = {"CLAUDE_CODE_ENABLE_TASKS": "true"}
+        env_vars = {"CLAUDE_CODE_ENABLE_TASKS": "true"}
+        # Issue #411: Enable Agent Teams when experimental flag is set
+        if self.experimental:
+            env_vars["CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"] = "1"
+            sdk_logger.info(f"Experimental Agent Teams enabled for session {self.session_id}")
+        options_kwargs["env"] = env_vars
 
         # Add stderr callback to capture SDK CLI errors
         def stderr_handler(output: str) -> None:

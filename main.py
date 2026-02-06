@@ -60,6 +60,9 @@ Debug Flags:
     parser.add_argument('--debug-template-manager', action='store_true', help='Enable template manager debugging')
     parser.add_argument('--debug-all', action='store_true', help='Enable all debug logging (excludes ping/pong)')
 
+    # Experimental features
+    parser.add_argument('--experimental', action='store_true', help='Enable experimental features (Agent Teams)')
+
     args = parser.parse_args()
 
     # Validate and create data directory
@@ -88,7 +91,7 @@ Debug Flags:
     )
 
     # Create FastAPI app
-    app = create_app(data_dir=data_dir_path)
+    app = create_app(data_dir=data_dir_path, experimental=args.experimental)
 
     # Add startup/shutdown events
     app.add_event_handler("startup", startup_event)
