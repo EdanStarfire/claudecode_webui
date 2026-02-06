@@ -1,5 +1,5 @@
 <template>
-  <div class="session-status-bar border-top p-2 bg-light">
+  <div class="session-status-bar border-top p-2" :class="uiStore.isRedBackground ? 'theme-red-panel' : 'bg-light'">
     <div class="d-flex justify-content-between align-items-center gap-2">
       <!-- Left side: Mode, Info, Manage -->
       <div class="d-flex gap-2">

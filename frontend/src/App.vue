@@ -98,6 +98,9 @@ watch(() => resourceStore.currentHasResources, (hasResources, hadResources) => {
 
 // Initialize app on mount
 onMounted(async () => {
+  // Initialize background color from localStorage
+  uiStore.initBackgroundColor()
+
   // Initialize marked and DOMPurify if needed
   if (typeof marked !== 'undefined') {
     marked.setOptions({

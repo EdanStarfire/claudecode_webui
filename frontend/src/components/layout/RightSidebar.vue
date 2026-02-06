@@ -1,11 +1,13 @@
 <template>
   <aside
     id="right-sidebar"
-    class="bg-light border-start d-flex flex-column overflow-auto"
+    class="border-start d-flex flex-column overflow-auto"
     :class="{
       'collapsed': rightSidebarCollapsed,
       'mobile-open': !rightSidebarCollapsed && isMobile,
-      'resizing': isResizing
+      'resizing': isResizing,
+      'theme-red-panel': uiStore.isRedBackground,
+      'bg-light': !uiStore.isRedBackground
     }"
     :style="sidebarStyle"
   >

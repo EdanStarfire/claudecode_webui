@@ -3,6 +3,16 @@
 
 /* ========== GLOBAL OVERRIDES ========== */
 
+/* Instance differentiation theme colors */
+/* Applied to header, sidebars, and input area for visibility across all views */
+.theme-red-header {
+    background-color: #ffcdd2 !important; /* Slightly darker red for header contrast */
+}
+
+.theme-red-panel {
+    background-color: #ffebee !important; /* Light red for sidebars and input */
+}
+
 /* Reduce default font size */
 :root {
     --bs-body-font-size: 0.875rem; /* 14px if base is 16px */

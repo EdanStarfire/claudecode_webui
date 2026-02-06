@@ -24,6 +24,9 @@ export const useUIStore = defineStore('ui', () => {
   // Auto-scroll state
   const autoScrollEnabled = ref(true)
 
+  // Background color toggle state (for differentiating multiple instances)
+  const isRedBackground = ref(false)
+
   // Modal state
   const activeModal = ref(null) // 'create-project', 'create-session', 'edit-session', etc.
   const modalData = ref(null) // Data for the active modal
@@ -69,6 +72,16 @@ export const useUIStore = defineStore('ui', () => {
 
   function setAutoScroll(enabled) {
     autoScrollEnabled.value = enabled
+  }
+
+  function initBackgroundColor() {
+    const stored = localStorage.getItem('webui-background-color')
+    isRedBackground.value = stored === 'red'
+  }
+
+  function toggleBackgroundColor() {
+    isRedBackground.value = !isRedBackground.value
+    localStorage.setItem('webui-background-color', isRedBackground.value ? 'red' : 'gray')
   }
 
   function showModal(modalName, data = null) {
@@ -121,6 +134,7 @@ export const useUIStore = defineStore('ui', () => {
     rightSidebarWidth,
     isMobile,
     autoScrollEnabled,
+    isRedBackground,
     activeModal,
     modalData,
     currentModal,
@@ -135,6 +149,8 @@ export const useUIStore = defineStore('ui', () => {
     setRightSidebarCollapsed,
     setRightSidebarWidth,
     setAutoScroll,
+    initBackgroundColor,
+    toggleBackgroundColor,
     showModal,
     hideModal,
     showLoading,
