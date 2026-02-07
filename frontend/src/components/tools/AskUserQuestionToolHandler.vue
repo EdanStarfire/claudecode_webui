@@ -38,6 +38,7 @@
                 class="form-check-input"
                 :id="`q${qIndex}-opt${oIndex}`"
                 :checked="isSelected(qIndex, option.label)"
+                :disabled="disabled"
                 @change="toggleOption(qIndex, option.label)"
               >
               <!-- Single-select uses radio buttons -->
@@ -48,6 +49,7 @@
                 :id="`q${qIndex}-opt${oIndex}`"
                 :name="`question-${qIndex}`"
                 :checked="isSelected(qIndex, option.label)"
+                :disabled="disabled"
                 @change="selectOption(qIndex, option.label)"
               >
               <label class="form-check-label" :for="`q${qIndex}-opt${oIndex}`">
@@ -66,6 +68,7 @@
                 class="form-check-input"
                 :id="`q${qIndex}-other`"
                 :checked="hasOtherSelected(qIndex)"
+                :disabled="disabled"
                 @change="toggleOther(qIndex)"
               >
               <input
@@ -75,6 +78,7 @@
                 :id="`q${qIndex}-other`"
                 :name="`question-${qIndex}`"
                 :checked="hasOtherSelected(qIndex)"
+                :disabled="disabled"
                 @change="selectOther(qIndex)"
               >
               <label class="form-check-label" :for="`q${qIndex}-other`">
@@ -87,6 +91,7 @@
                   class="form-control form-control-sm"
                   v-model="otherTexts[qIndex]"
                   placeholder="Enter your custom answer..."
+                  :disabled="disabled"
                   @input="updateOtherText(qIndex)"
                 >
               </div>
@@ -110,6 +115,11 @@ const props = defineProps({
   toolCall: {
     type: Object,
     required: true
+  },
+  // Issue #412: Allow disabling all inputs during submission
+  disabled: {
+    type: Boolean,
+    default: false
   }
 })
 
