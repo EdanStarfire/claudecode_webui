@@ -554,6 +554,32 @@ button:focus {
         transform: translateX(0);
     }
 
+    /* Right sidebar mobile overlay - matches left sidebar pattern */
+    /* z-index: 1042 keeps task panel below session sidebar (1046) */
+    #right-sidebar {
+        position: fixed !important;
+        top: 0;
+        right: 0;
+        bottom: 0;
+        height: 100vh;
+        padding-top: calc(2rem + 2px); /* Header height: py-2 padding + border */
+        width: 80vw !important;
+        max-width: 300px !important;
+        min-width: unset !important;
+        z-index: 1042;
+        transform: translateX(100%);
+        transition: transform 0.3s ease;
+        box-shadow: -2px 0 8px rgba(0, 0, 0, 0.15);
+    }
+
+    #right-sidebar.mobile-open {
+        transform: translateX(0);
+    }
+
+    #right-sidebar.collapsed {
+        transform: translateX(100%);
+    }
+
     /* Hide resize handle on mobile */
     .sidebar-resize-handle {
         display: none !important;

@@ -122,24 +122,5 @@ function stopResize() {
   background-color: rgba(0, 0, 0, 0.1);
 }
 
-@media (max-width: 768px) {
-  #right-sidebar {
-    position: fixed;
-    right: 0;
-    top: 56px; /* Header height */
-    height: calc(100vh - 56px);
-    width: 80vw !important;
-    max-width: 300px !important;
-    z-index: 1042;
-    transform: translateX(100%);
-  }
-
-  #right-sidebar.mobile-open {
-    transform: translateX(0);
-  }
-
-  #right-sidebar.collapsed {
-    transform: translateX(100%);
-  }
-}
+/* Mobile styles moved to styles.css to match left sidebar pattern */
 </style>
