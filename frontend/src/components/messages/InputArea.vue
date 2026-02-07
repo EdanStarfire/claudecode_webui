@@ -70,8 +70,9 @@
         @paste="handlePaste"
       ></textarea>
 
+      <!-- Stop button: processing AND no input -->
       <button
-        v-if="isProcessing"
+        v-if="isProcessing && !hasContent"
         class="btn btn-warning"
         title="Stop current processing"
         @click="interruptSession"
@@ -79,10 +80,22 @@
         Stop
       </button>
 
+      <!-- Queue button: processing AND has input -->
+      <button
+        v-else-if="isProcessing && hasContent"
+        class="btn btn-info"
+        :disabled="!isConnected || isStarting || isUploading"
+        title="Send while processing (doesn't interrupt)"
+        @click="sendMessage"
+      >
+        {{ isUploading ? 'Uploading...' : 'Queue' }}
+      </button>
+
+      <!-- Send button: not processing -->
       <button
         v-else
         class="btn btn-primary"
-        :disabled="(!inputText.trim() && attachments.length === 0) || !isConnected || isStarting || isUploading"
+        :disabled="!hasContent || !isConnected || isStarting || isUploading"
         @click="sendMessage"
       >
         {{ isUploading ? 'Uploading...' : 'Send' }}
@@ -128,6 +141,9 @@ const isProcessing = computed(() => sessionStore.currentSession?.is_processing |
 const isConnected = computed(() => wsStore.sessionConnected)
 const isStarting = computed(() => sessionStore.currentSession?.state === 'starting')
 const currentSessionId = computed(() => sessionStore.currentSessionId)
+
+// Check if input has content (text or valid attachments)
+const hasContent = computed(() => !!inputText.value.trim() || attachments.value.filter(a => !a.error).length > 0)
 
 // Mobile detection based on viewport width
 const isMobile = computed(() => windowWidth.value < 768)
