@@ -49,9 +49,11 @@
           </div>
 
           <!-- Question Handler with interactive options -->
+          <!-- Issue #412: Pass disabled state to disable inputs during submission -->
           <AskUserQuestionToolHandler
             ref="questionHandlerRef"
             :toolCall="toolCall"
+            :disabled="isSubmittingPermission"
             @answer="handleQuestionAnswer"
           />
 

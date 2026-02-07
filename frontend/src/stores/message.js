@@ -391,8 +391,12 @@ export const useMessageStore = defineStore('message', () => {
 
       if (permissionResponse.decision === 'allow') {
         updates.status = 'executing'
+        // Issue #412: Also update backendStatus so effectiveStatus reflects the change immediately
+        updates.backendStatus = 'running'
       } else {
         updates.status = 'completed'
+        // Issue #412: Also update backendStatus so effectiveStatus reflects the change immediately
+        updates.backendStatus = 'denied'
         updates.result = {
           error: true,
           message: permissionResponse.reasoning || 'Permission denied'
