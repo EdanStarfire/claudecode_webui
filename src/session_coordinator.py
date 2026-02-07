@@ -51,8 +51,9 @@ class SessionCoordinator:
     - Real-time communication pipeline
     """
 
-    def __init__(self, data_dir: Path = None):
+    def __init__(self, data_dir: Path = None, experimental: bool = False):
         self.data_dir = data_dir or Path("data")
+        self.experimental = experimental
         self.session_manager = SessionManager(self.data_dir)
         self.project_manager = ProjectManager(self.data_dir)
         self.message_parser = MessageParser()
@@ -309,7 +310,8 @@ class SessionCoordinator:
                 model=model,
                 mcp_servers=mcp_servers if mcp_servers else None,
                 sandbox_enabled=sandbox_enabled,
-                sandbox_config=sandbox_config
+                sandbox_config=sandbox_config,
+                experimental=self.experimental
             )
             self._active_sdks[session_id] = sdk
 
@@ -620,7 +622,8 @@ class SessionCoordinator:
                 mcp_servers=mcp_servers if mcp_servers else None,
                 sandbox_enabled=session_info.sandbox_enabled,
                 sandbox_config=session_info.sandbox_config,
-                setting_sources=session_info.setting_sources  # Issue #36
+                setting_sources=session_info.setting_sources,  # Issue #36
+                experimental=self.experimental
             )
             self._active_sdks[session_id] = sdk
 

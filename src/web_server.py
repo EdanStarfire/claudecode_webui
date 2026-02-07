@@ -344,9 +344,9 @@ class LegionWebSocketManager:
 class ClaudeWebUI:
     """Main WebUI application class"""
 
-    def __init__(self, data_dir: Path = None):
+    def __init__(self, data_dir: Path = None, experimental: bool = False):
         self.app = FastAPI(title="Claude Code WebUI", version="1.0.0")
-        self.coordinator = SessionCoordinator(data_dir)
+        self.coordinator = SessionCoordinator(data_dir, experimental=experimental)
         self.websocket_manager = WebSocketManager()
         self.ui_websocket_manager = UIWebSocketManager()
         self.legion_websocket_manager = LegionWebSocketManager()
@@ -2615,10 +2615,10 @@ class ClaudeWebUI:
 # Global application instance
 webui_app = None
 
-def create_app(data_dir: Path = None) -> FastAPI:
+def create_app(data_dir: Path = None, experimental: bool = False) -> FastAPI:
     """Create and configure the FastAPI application"""
     global webui_app
-    webui_app = ClaudeWebUI(data_dir)
+    webui_app = ClaudeWebUI(data_dir, experimental=experimental)
     return webui_app.app
 
 async def startup_event():
