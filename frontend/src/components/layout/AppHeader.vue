@@ -24,6 +24,14 @@
         ></span>
       </button>
       <ConnectionIndicator />
+      <button
+        id="task-panel-toggle-btn"
+        class="btn btn-sm btn-outline-secondary"
+        title="Toggle task panel"
+        @click="toggleRightSidebar"
+      >
+        <span>▤</span>
+      </button>
     </div>
   </header>
 </template>
@@ -36,6 +44,10 @@ const uiStore = useUIStore()
 
 function toggleSidebar() {
   uiStore.toggleSidebar()
+}
+
+function toggleRightSidebar() {
+  uiStore.toggleRightSidebar()
 }
 </script>
 

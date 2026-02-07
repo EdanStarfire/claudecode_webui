@@ -50,6 +50,15 @@ button:focus {
     align-items: center;
 }
 
+/* Task panel toggle button styling - mirrors sidebar toggle */
+#task-panel-toggle-btn {
+    min-width: 40px;
+    padding: 0.25rem 0.5rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
 /* Sidebar: Make it resizable with handle */
 #sidebar {
     position: relative;
@@ -540,7 +549,7 @@ button:focus {
         left: 0;
         bottom: 0;
         height: 100vh;
-        padding-top: calc(2rem + 2px); /* Header height: py-2 padding + border */
+        padding-top: 4rem; /* Header height with buffer */
         width: 85vw !important; /* Use 85% of viewport width */
         max-width: 350px !important;
         min-width: unset !important;
@@ -562,7 +571,7 @@ button:focus {
         right: 0;
         bottom: 0;
         height: 100vh;
-        padding-top: calc(2rem + 2px); /* Header height: py-2 padding + border */
+        padding-top: 4rem; /* Header height with buffer */
         width: 80vw !important;
         max-width: 300px !important;
         min-width: unset !important;
@@ -595,7 +604,8 @@ button:focus {
         font-size: 1rem !important;
     }
 
-    #sidebar-toggle-btn {
+    #sidebar-toggle-btn,
+    #task-panel-toggle-btn {
         padding: 0.2rem 0.4rem;
     }
 
