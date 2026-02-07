@@ -1,5 +1,5 @@
 <template>
-  <div class="session-header border-bottom p-3 d-flex justify-content-between align-items-center">
+  <div class="session-header border-bottom p-3 d-flex justify-content-between align-items-center" :class="{ 'theme-red-panel': uiStore.isRedBackground }">
     <div>
       <div class="project-name">{{ projectName }}</div>
       <div class="session-name" :title="sessionId">{{ sessionName }}</div>
@@ -64,6 +64,10 @@ function toggleRightSidebar() {
 <style scoped>
 .session-header {
   background-color: #f8f9fa;
+}
+
+.session-header.theme-red-panel {
+  background-color: #ffebee;
 }
 
 .project-name {

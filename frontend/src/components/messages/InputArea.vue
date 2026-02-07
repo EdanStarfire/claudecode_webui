@@ -1,5 +1,5 @@
 <template>
-  <div class="border-top bg-light">
+  <div class="border-top" :class="uiStore.isRedBackground ? 'theme-red-panel' : 'bg-light'">
     <!-- Connection warning banner -->
     <div
       v-if="!isConnected"
@@ -96,11 +96,13 @@ import { ref, computed, onMounted, onUnmounted, watch, inject } from 'vue'
 import { useSessionStore } from '@/stores/session'
 import { useWebSocketStore } from '@/stores/websocket'
 import { useResourceStore } from '@/stores/resource'
+import { useUIStore } from '@/stores/ui'
 import AttachmentList from './AttachmentList.vue'
 
 const sessionStore = useSessionStore()
 const wsStore = useWebSocketStore()
 const resourceStore = useResourceStore()
+const uiStore = useUIStore()
 
 // Inject pending resource attachment from App.vue
 const pendingResourceAttachment = inject('pendingResourceAttachment', ref(null))
