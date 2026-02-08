@@ -7,5 +7,5 @@
     "mcp__legion__list_minions", "mcp__legion__get_minion_info", "mcp__legion__search_capability"
   ],
   "default_role": "Coordinates complex workflows by delegating to specialist minions",
-  "description": "Read-only code access with full delegation capabilities. No direct code modification. Skills: implementation-planner, requirement-validator, codebase-explorer, git-branch-manager, github-issue-reader, github-pr-manager"
+  "description": "Read-only code access with full delegation capabilities. No direct code modification. Skills: codebase-explorer, git-branch-manager, github-issue-reader, github-pr-manager, worktree-manager, process-manager"
 }

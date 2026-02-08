@@ -8,7 +8,7 @@ allowed-tools: [Bash, Skill, mcp__legion__dispose_minion, mcp__legion__get_minio
 
 ## Approve Issue
 
-This skill is called when the user is satisfied with the completed work. It merges the PR, stops test servers, disposes the Builder, and removes the worktree.
+This skill is called when the user is satisfied with the completed work. It merges the PR, runs project-specific cleanup, disposes the Builder, and removes the worktree.
 
 ### Workflow
 
@@ -35,24 +35,20 @@ If PR is not ready:
 - Ask user to resolve issues first
 - Exit without merging
 
-#### 3. Stop Test Servers
+#### 3. Run Project-Specific Cleanup (if custom skill exists)
 
-Calculate ports:
-- Backend Port = 8000 + ($1 % 1000)
-- Vite Port = 5000 + ($1 % 1000)
-
-**Invoke the `process-manager` skill** to stop servers:
+Check if `custom-cleanup-process` skill exists:
 ```bash
-# Find and kill processes on the ports
-lsof -ti :${BACKEND_PORT} | xargs -r kill 2>/dev/null
-lsof -ti :${VITE_PORT} | xargs -r kill 2>/dev/null
+ls .claude/skills/custom-cleanup-process/SKILL.md 2>/dev/null
 ```
 
-Verify servers are stopped:
-```bash
-lsof -i :${BACKEND_PORT} 2>/dev/null
-lsof -i :${VITE_PORT} 2>/dev/null
-```
+If it exists, **invoke the `custom-cleanup-process` skill** with issue_number=$1.
+The custom skill handles project-specific cleanup such as:
+- Stopping test servers
+- Cleaning up test data
+- Any other project-specific resource cleanup
+
+If it does not exist, skip project-specific cleanup and proceed with generic cleanup.
 
 #### 4. Merge PR
 
@@ -103,11 +99,11 @@ git pull origin main
 
 Inform user:
 ```
-✅ Issue #$1 approved and cleaned up!
+Issue #$1 approved and cleaned up!
 
 Completed Actions:
 - PR merged (squash merge)
-- Test servers stopped (ports ${BACKEND_PORT}/${VITE_PORT})
+- Project-specific cleanup completed (if configured)
 - Builder disposed (knowledge archived)
 - Worktree removed: worktrees/issue-$1/
 - Branch cleaned up with worktree
@@ -120,15 +116,9 @@ Ready to start new issues with /plan_issue <number>
 
 - **mcp__legion__get_minion_info** - Verify Builder status
 - **mcp__legion__dispose_minion** - Dispose Builder
+- **custom-cleanup-process** - Project-specific cleanup (if exists)
 - **github-pr-manager** - Check and merge PR
-- **process-manager** - Stop test servers
 - **worktree-manager** - Remove worktree
-- **git-branch-manager** - Clean up branches
-
-### Port Convention
-
-- Backend: 8000 + (issue_number % 1000)
-- Vite: 5000 + (issue_number % 1000)
 
 ### Error Handling
 
@@ -137,9 +127,9 @@ Ready to start new issues with /plan_issue <number>
 - Do NOT proceed with cleanup
 - Keep servers running for debugging
 
-**Servers not found:**
-- Warn but continue with cleanup
-- Servers may have already been stopped
+**Custom cleanup fails:**
+- Warn but continue with generic cleanup
+- Log the failure for debugging
 
 **Worktree not found:**
 - Warn but continue with cleanup
@@ -153,6 +143,7 @@ Ready to start new issues with /plan_issue <number>
 
 - This is a destructive operation - resources are permanently removed
 - PR is squash-merged for clean history
-- All servers and minions are stopped
+- Project-specific cleanup runs before merge (via custom-cleanup-process)
+- All minions are disposed
 - Worktree is permanently deleted
 - Main branch is updated with merged changes

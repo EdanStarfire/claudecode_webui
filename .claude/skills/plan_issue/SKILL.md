@@ -1,6 +1,6 @@
 ---
 name: plan_issue
-description: Start planning phase for a GitHub issue by spawning a Planner minion
+description: Start planning phase for an issue by spawning a Planner minion
 disable-model-invocation: true
 argument-hint: <issue_number>
 allowed-tools: [Bash, Skill, Task, mcp__legion__spawn_minion, mcp__legion__list_templates, mcp__legion__send_comm]
@@ -8,29 +8,37 @@ allowed-tools: [Bash, Skill, Task, mcp__legion__spawn_minion, mcp__legion__list_
 
 ## Plan Issue
 
-This skill creates an isolated git worktree for a GitHub issue and spawns a Planner minion to collaborate with the user on requirements and design.
+This skill creates an isolated git worktree for an issue and spawns a Planner minion to collaborate with the user on requirements and design.
 
 ### Workflow
 
-You are starting the planning phase for GitHub issue #$1. Follow these steps:
+You are starting the planning phase for issue #$1. Follow these steps:
 
-#### 1. Validate Issue Number
+#### 1. Fetch Issue Details
 
-Ensure the issue number is valid:
-- Must be a positive integer
-- Issue should exist in the repository
+Check if `custom-plan-manager` skill exists:
+```bash
+ls .claude/skills/custom-plan-manager/SKILL.md 2>/dev/null
+```
 
-**Invoke the `github-issue-reader` skill** to verify issue exists and fetch details.
+If it exists, **invoke the `custom-plan-manager` skill** with operation=`fetch-issue` and issue_number=$1.
 
-#### 2. Calculate Ports
+If it does not exist, **invoke the `github-issue-reader` skill** with issue number $1 to fetch details from GitHub.
 
-Calculate test ports for this issue:
-- Backend Port = 8000 + ($1 % 1000)
-- Vite Port = 5000 + ($1 % 1000)
+#### 2. Get Environment Configuration (if custom skill exists)
 
-Example: Issue #372 → Backend: 8372, Vite: 5372
+Check if `custom-environment-setup` skill exists:
+```bash
+ls .claude/skills/custom-environment-setup/SKILL.md 2>/dev/null
+```
 
-Store these for minion initialization context.
+If it exists, **invoke the `custom-environment-setup` skill** with issue_number=$1 to get:
+- Port configuration for plan documentation
+- Any project-specific initialization context
+
+Store the returned environment info for minion initialization context.
+
+If it does not exist, proceed without project-specific environment configuration.
 
 #### 3. Create Git Worktree
 
@@ -55,20 +63,19 @@ The skill will:
 - **role**: `Issue Planner for #$1 - User story and design specialist`
 - **initialization_context**:
   ```
-  You are Planner-$1, responsible for planning GitHub issue #$1.
+  You are Planner-$1, responsible for planning issue #$1.
 
   Working Directory: [worktree path]
   Issue: #$1
 
   Your mission:
-  1. Fetch issue details using github-issue-reader skill
+  1. Fetch issue details (use custom-plan-manager fetch-issue if available, else github-issue-reader)
   2. Explore current implementation using Task tool with Explore subagent
   3. Build user stories from requirements
   4. Create design artifacts (diagrams, flows) as appropriate
   5. Present to user and iterate based on feedback
-  6. When user approves, finalize and post plan to GitHub
-  7. Add `ready-to-build` label to issue
-  8. Send comm to Orchestrator: "Plan ready for issue #$1"
+  6. When user approves, post plan (use custom-plan-manager write-plan if available, else gh issue comment + ready-to-build label)
+  7. Send comm to Orchestrator: "Plan ready for issue #$1"
 
   CRITICAL - Codebase Exploration:
   When you need to understand the codebase structure, find relevant files, or
@@ -84,17 +91,15 @@ The skill will:
   This delegates exploration to an Explore agent which has specialized search
   capabilities and returns a focused summary without consuming your context.
 
-  Port Configuration (for plan documentation):
-  - Backend Port: [calculated]
-  - Vite Port: [calculated]
+  [Include environment info from custom-environment-setup if available]
 
   IMPORTANT: You are READ-ONLY by default. Do not modify files unless the user
   explicitly requests it. Focus on research, analysis, and user collaboration.
 
   When the user is satisfied with the plan:
-  1. Post final plan as GitHub comment
-  2. Add ready-to-build label
-  3. Send completion comm to Orchestrator
+  1. Post the approved plan (use custom-plan-manager write-plan if available,
+     else post as GitHub comment with gh issue comment and add ready-to-build label)
+  2. Send completion comm to Orchestrator
 
   The Orchestrator will then dispose you and spawn a Builder to implement the plan.
   ```
@@ -112,7 +117,7 @@ The skill will:
 
 Inform user:
 ```
-✅ Planning started for issue #$1
+Planning started for issue #$1
 - Planner: Planner-$1
 - Worktree: worktrees/issue-$1/
 - Branch: feature/issue-$1
@@ -122,7 +127,7 @@ The Planner will:
 2. Build user stories from requirements
 3. Create design artifacts as needed
 4. Collaborate with you on requirements
-5. Post approved plan to GitHub
+5. Post approved plan (via custom-plan-manager or GitHub)
 
 Speak directly with the Planner to refine the plan.
 When satisfied, the Planner will signal completion and a Builder will be spawned.
@@ -130,7 +135,9 @@ When satisfied, the Planner will signal completion and a Builder will be spawned
 
 ### Skills Used
 
-- **github-issue-reader** - Fetch and validate issue
+- **custom-plan-manager** - Fetch issue details (if exists, replaces github-issue-reader)
+- **github-issue-reader** - Fetch and validate issue (fallback when no custom-plan-manager)
+- **custom-environment-setup** - Get project-specific environment config (if exists)
 - **worktree-manager** - Create isolated worktree
 - **mcp__legion__spawn_minion** - Create Planner minion
 - **mcp__legion__send_comm** - Start Planner working
@@ -142,20 +149,12 @@ The Planner uses Task tool with Explore subagent for codebase investigation. Thi
 - Leverages specialized search capabilities
 - Returns focused summaries for planning decisions
 
-### Port Convention
-
-- Backend: 8000 + (issue_number % 1000)
-- Vite: 5000 + (issue_number % 1000)
-
-Examples:
-- Issue #42 → Backend: 8042, Vite: 5042
-- Issue #372 → Backend: 8372, Vite: 5372
-- Issue #1234 → Backend: 8234, Vite: 5234
-
 ### Important Notes
 
 - Each issue gets its own isolated worktree
 - Planner is READ-ONLY by default
 - User collaborates directly with Planner
-- Plan is posted to GitHub for Builder to consume
+- Plan is posted via custom-plan-manager or GitHub for Builder to consume
 - Worktree cleaned up after issue is merged
+- Environment configuration is project-specific via custom-environment-setup
+- Issue tracking is project-specific via custom-plan-manager (falls back to GitHub)

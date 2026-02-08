@@ -261,14 +261,12 @@ config|settings|\.env
 #### Typical Python Backend Structure
 ```
 src/
-├── web_server.py          # HTTP server, API endpoints
-├── session_coordinator.py  # Orchestration, coordination
-├── session_manager.py      # Session lifecycle
-├── project_manager.py      # Project management
-├── claude_sdk.py          # SDK wrapper
-├── message_parser.py      # Message processing
-├── data_storage.py        # Persistence
-└── tests/                 # Unit tests
+├── server.py             # HTTP server, API endpoints
+├── coordinator.py        # Orchestration, coordination
+├── models.py             # Data models, entities
+├── services/             # Business logic services
+├── storage.py            # Persistence layer
+└── tests/                # Unit tests
     ├── test_*.py
     └── conftest.py
 ```
@@ -276,12 +274,12 @@ src/
 #### Typical Frontend Structure
 ```
 frontend/src/
-├── components/            # Vue components
+├── components/            # UI components
 │   ├── layout/           # Layout components
-│   ├── session/          # Session-related
-│   └── messages/         # Message display
-├── stores/               # Pinia state management
-├── router/               # Vue Router config
+│   ├── views/            # Page-level views
+│   └── common/           # Reusable components
+├── stores/               # State management
+├── router/               # Route definitions
 ├── composables/          # Reusable composition functions
 └── utils/                # Helper functions
 ```
@@ -344,11 +342,11 @@ Reactive UI Update
 
 **Import Statements Tell Story:**
 ```python
-from .session_manager import SessionManager
-from .project_manager import ProjectManager
-from .claude_sdk import ClaudeSDK
+from .user_service import UserService
+from .project_service import ProjectService
+from .storage import Database
 ```
-This file coordinates multiple managers.
+This file coordinates multiple services.
 
 **Circular Dependencies:**
 If A imports B and B imports A, there's likely architectural issue.
@@ -375,38 +373,38 @@ If A imports B and B imports A, there's likely architectural issue.
 
 ## Examples
 
-### Example 1: Find session creation logic
+### Example 1: Find user creation logic
 ```
-1. Search for "create_session"
-   grep "def create_session" **/*.py
+1. Search for "create_user"
+   grep "def create_user" **/*.py
 
-2. Found in: src/session_coordinator.py and src/session_manager.py
+2. Found in: src/coordinator.py and src/services/user_service.py
 
-3. Read SessionCoordinator.create_session():
-   - Calls SessionManager to create session entity
-   - Initializes data storage
-   - Sets up SDK instance
+3. Read the create_user method:
+   - Validates input
+   - Calls service layer
+   - Persists to storage
 
 4. Understand flow:
-   API (web_server.py) → SessionCoordinator → SessionManager → DataStorage
+   API endpoint → Coordinator → Service → Storage
 ```
 
-### Example 2: Find Vue component for session list
+### Example 2: Find frontend component for item list
 ```
-1. Find session-related components:
-   frontend/src/components/session/**/*.vue
+1. Find related components:
+   frontend/src/components/**/*List*.vue
 
 2. Look for list-related:
-   SessionList.vue, SessionItem.vue
+   ItemList.vue, ItemCard.vue
 
-3. Read SessionList.vue:
-   - Uses Pinia session store
-   - Renders SessionItem for each session
-   - Handles selection
+3. Read ItemList.vue:
+   - Uses state store
+   - Renders ItemCard for each item
+   - Handles selection and filtering
 
 4. Check store:
-   frontend/src/stores/session.js
-   - Sessions stored in Map
+   frontend/src/stores/items.js
+   - Items stored in Map
    - CRUD operations defined
 ```
 
@@ -415,38 +413,36 @@ If A imports B and B imports A, there's likely architectural issue.
 1. Find WebSocket code:
    grep "websocket\|WebSocket" **/*.py
 
-2. Found: src/web_server.py has WebSocketManager classes
+2. Found: server.py has WebSocket handling
 
-3. Read WebSocketManager:
+3. Read WebSocket handler:
    - Manages connections
    - Routes messages
    - Broadcasts updates
 
 4. Find message handlers:
-   grep "handle.*message" src/web_server.py
+   grep "handle.*message" src/server.py
 
 5. Trace message flow:
    WebSocket → Handler → Store/Coordinator → Response
 ```
 
-### Example 4: Find how permissions work
+### Example 4: Find how authentication works
 ```
-1. Search for permission-related code:
-   grep -r "permission" **/*.py
+1. Search for auth-related code:
+   grep -r "auth" **/*.py
 
 2. Found in:
-   - src/session_coordinator.py (permission mode)
-   - src/web_server.py (permission callbacks)
-   - src/session_manager.py (permission state)
+   - src/middleware/auth.py (middleware)
+   - src/services/auth_service.py (logic)
+   - src/models.py (user model)
 
-3. Read web_server.py _create_permission_callback():
-   - Creates asyncio.Future
-   - Sends permission request to frontend
-   - Waits for user response
-   - Returns decision to SDK
+3. Read auth middleware:
+   - Extracts token from request
+   - Validates against service
+   - Sets user context
 
 4. Understand flow:
-   SDK needs permission → Callback → WebSocket to frontend →
-   User decides → WebSocket from frontend → Future resolved →
-   SDK receives decision
+   Request → Middleware → Token validation →
+   User lookup → Context set → Handler executes
 ```
