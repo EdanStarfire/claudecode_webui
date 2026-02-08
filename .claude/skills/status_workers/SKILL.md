@@ -37,22 +37,24 @@ For each worker, **invoke `mcp__legion__get_minion_info`**:
 - Check for orphaned worktrees (no minion)
 - Check for branch status
 
-#### 5. Check Running Servers
+#### 5. Check Running Servers (if custom skill exists)
 
-Check for test servers on expected ports:
+Check if `custom-environment-setup` skill exists:
 ```bash
-# Check backend ports (8xxx)
-lsof -i :8000-8999 2>/dev/null | grep LISTEN
-
-# Check vite ports (5xxx)
-lsof -i :5000-5999 2>/dev/null | grep LISTEN
+ls .claude/skills/custom-environment-setup/SKILL.md 2>/dev/null
 ```
+
+If it exists, **invoke the `custom-environment-setup` skill** to get environment info for each active issue, including:
+- Expected port numbers for each worker
+- How to check for running servers
+
+If it does not exist, skip server/port status display.
 
 #### 6. Display Summary
 
 Show formatted status:
 ```
-📊 Issue Worker Status
+Issue Worker Status
 ======================
 
 Active Workers: <count>
@@ -61,27 +63,20 @@ Issue #42 - Planner-42 (Planning Phase)
   Status: Collaborating with user
   Worktree: worktrees/issue-42/
   Branch: feature/issue-42
-  Ports: Backend 8042, Vite 5042 (not started - planning)
 
 Issue #123 - Builder-123 (Building Phase)
   Status: Implementing
   Worktree: worktrees/issue-123/
   Branch: feature/issue-123
-  Ports: Backend 8123 ✓, Vite 5123 ✓ (servers running)
-  PR: #789 (ready for review)
+  [Environment info from custom-environment-setup if available]
 
 Issue #456 - Builder-456 (Building Phase)
   Status: Testing
   Worktree: worktrees/issue-456/
   Branch: fix/issue-456
-  Ports: Backend 8456 ✓, Vite 5456 (not needed)
 
 Orphaned Worktrees: <count if any>
   - worktrees/issue-789/ (no minion found)
-
-Port Summary:
-  In Use: 8042, 8123, 8456, 5123
-  Available: 8000-8041, 8043-8122, ...
 ```
 
 ### Skills Used
@@ -89,11 +84,12 @@ Port Summary:
 - **mcp__legion__list_minions** - Get all active minions
 - **mcp__legion__get_minion_info** - Get detailed minion status
 - **worktree-manager** - List and check worktrees
+- **custom-environment-setup** - Get environment info per issue (if exists)
 
 ### Important Notes
 
 - Shows real-time status of all Planners and Builders
 - Identifies which phase each issue is in (Planning vs Building)
-- Shows running test servers and their ports
+- Shows running servers and ports if custom-environment-setup is available
 - Identifies orphaned resources for cleanup
 - Helps coordinate multiple parallel issues
