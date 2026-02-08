@@ -27,7 +27,7 @@
     ></div>
 
     <!-- Resource Full View Modal (teleported to body) -->
-    <ImageFullView />
+    <ResourceFullView />
   </aside>
 </template>
 
@@ -36,7 +36,7 @@ import { computed, ref } from 'vue'
 import { useUIStore } from '@/stores/ui'
 import TaskListPanel from '../tasks/TaskListPanel.vue'
 import ResourceGallery from '../tasks/ResourceGallery.vue'
-import ImageFullView from '../common/ImageFullView.vue'
+import ResourceFullView from '../common/ResourceFullView.vue'
 
 const uiStore = useUIStore()
 

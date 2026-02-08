@@ -53,7 +53,8 @@
           <div
             v-else
             class="resource-placeholder"
-            :title="resource.title || resource.original_filename || 'File'"
+            :title="resource.title || resource.original_filename || 'Click to view'"
+            @click="openFullView(index)"
           >
             <span class="file-icon">{{ getIcon(resource) }}</span>
             <span class="file-ext">{{ getExtension(resource) }}</span>
@@ -267,6 +268,11 @@ function addToAttachments(resource) {
   justify-content: center;
   background-color: #e9ecef;
   gap: 4px;
+  cursor: pointer;
+}
+
+.resource-placeholder:hover {
+  opacity: 0.9;
 }
 
 .file-icon {

@@ -74,6 +74,9 @@ export const useResourceStore = defineStore('resource', () => {
   // Loading state
   const loading = ref(false)
 
+  // Text content cache (resourceId -> { content, loading, error })
+  const textContentCache = ref(new Map())
+
   // ========== HELPER FUNCTIONS ==========
 
   /**
@@ -101,6 +104,34 @@ export const useResourceStore = defineStore('resource', () => {
       const ext = '.' + filename.split('.').pop().toLowerCase()
       return IMAGE_EXTENSIONS.has(ext)
     }
+    return false
+  }
+
+  /**
+   * Check if a resource is a text-based file that can be previewed as text
+   */
+  function isTextResource(resource) {
+    if (!resource) return false
+    if (isImageResource(resource)) return false
+
+    const textExtensions = new Set([
+      '.txt', '.log', '.md', '.json', '.xml', '.yaml', '.yml', '.csv',
+      '.py', '.js', '.ts', '.jsx', '.tsx', '.html', '.css', '.scss',
+      '.sh', '.bat', '.sql', '.toml', '.ini', '.cfg', '.conf',
+      '.env', '.gitignore', '.dockerfile', '.vue', '.svelte',
+      '.rs', '.go', '.java', '.c', '.cpp', '.h', '.hpp', '.rb', '.php'
+    ])
+
+    const filename = resource.original_filename || resource.original_name || ''
+    if (filename) {
+      const ext = '.' + filename.split('.').pop().toLowerCase()
+      if (textExtensions.has(ext)) return true
+    }
+
+    const mimeType = (resource.mime_type || resource.format || '').toLowerCase()
+    if (mimeType.startsWith('text/')) return true
+    if (mimeType === 'application/json' || mimeType === 'application/xml') return true
+
     return false
   }
 
@@ -399,6 +430,59 @@ export const useResourceStore = defineStore('resource', () => {
   const clearImages = clearResources
 
   /**
+   * Fetch text content for a resource and cache it
+   */
+  async function fetchTextContent(sessionId, resourceId) {
+    if (!sessionId || !resourceId) return null
+
+    // Return cached content if available
+    const cached = textContentCache.value.get(resourceId)
+    if (cached && !cached.error) return cached.content
+
+    // Mark as loading
+    textContentCache.value.set(resourceId, { content: null, loading: true, error: null })
+    textContentCache.value = new Map(textContentCache.value)
+
+    try {
+      const url = getResourceUrl(sessionId, resourceId)
+      const response = await fetch(url)
+      if (!response.ok) throw new Error(`HTTP ${response.status}`)
+
+      const text = await response.text()
+      textContentCache.value.set(resourceId, { content: text, loading: false, error: null })
+      textContentCache.value = new Map(textContentCache.value)
+      return text
+    } catch (error) {
+      console.error(`Failed to fetch text content for resource ${resourceId}:`, error)
+      textContentCache.value.set(resourceId, { content: null, loading: false, error: error.message })
+      textContentCache.value = new Map(textContentCache.value)
+      return null
+    }
+  }
+
+  /**
+   * Get cached text content for a resource
+   */
+  function getTextContent(resourceId) {
+    return textContentCache.value.get(resourceId) || null
+  }
+
+  /**
+   * Clear text content cache for a session's resources
+   */
+  function clearTextCache(sessionId) {
+    if (sessionId) {
+      const resources = resourcesBySession.value.get(sessionId)
+      if (resources) {
+        resources.forEach(r => textContentCache.value.delete(r.resource_id))
+        textContentCache.value = new Map(textContentCache.value)
+      }
+    } else {
+      textContentCache.value = new Map()
+    }
+  }
+
+  /**
    * Get a resource by ID
    */
   function getResourceById(sessionId, resourceId) {
@@ -415,6 +499,7 @@ export const useResourceStore = defineStore('resource', () => {
     currentResourceIndex,
     fullViewSessionId,
     loading,
+    textContentCache,
 
     // Computed - Resources
     currentResources,
@@ -440,9 +525,11 @@ export const useResourceStore = defineStore('resource', () => {
     getResourceUrl,
     getDownloadUrl,
     isImageResource,
+    isTextResource,
     getResourceIcon,
     getResourceExtension,
     getResourceById,
+    getTextContent,
 
     // Getters - Images (backward compatibility)
     imagesForSession,
@@ -459,6 +546,8 @@ export const useResourceStore = defineStore('resource', () => {
     prevResource,
     goToResource,
     clearResources,
+    fetchTextContent,
+    clearTextCache,
 
     // Actions - Backward compatibility
     loadImages,
