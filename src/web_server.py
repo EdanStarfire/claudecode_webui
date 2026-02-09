@@ -183,6 +183,10 @@ class TemplateCreateRequest(BaseModel):
     default_role: str | None = None
     default_system_prompt: str | None = None
     description: str | None = None
+    model: str | None = None
+    capabilities: list[str] | None = None
+    override_system_prompt: bool = False
+    sandbox_enabled: bool = False
 
 
 class TemplateUpdateRequest(BaseModel):
@@ -192,6 +196,10 @@ class TemplateUpdateRequest(BaseModel):
     default_role: str | None = None
     default_system_prompt: str | None = None
     description: str | None = None
+    model: str | None = None
+    capabilities: list[str] | None = None
+    override_system_prompt: bool | None = None
+    sandbox_enabled: bool | None = None
 
 
 class UIWebSocketManager:
@@ -1941,7 +1949,11 @@ class ClaudeWebUI:
                     allowed_tools=request.allowed_tools,
                     default_role=request.default_role,
                     default_system_prompt=request.default_system_prompt,
-                    description=request.description
+                    description=request.description,
+                    model=request.model,
+                    capabilities=request.capabilities,
+                    override_system_prompt=request.override_system_prompt,
+                    sandbox_enabled=request.sandbox_enabled,
                 )
                 return template.to_dict()
             except ValueError as e:
@@ -1961,7 +1973,11 @@ class ClaudeWebUI:
                     allowed_tools=request.allowed_tools,
                     default_role=request.default_role,
                     default_system_prompt=request.default_system_prompt,
-                    description=request.description
+                    description=request.description,
+                    model=request.model,
+                    capabilities=request.capabilities,
+                    override_system_prompt=request.override_system_prompt,
+                    sandbox_enabled=request.sandbox_enabled,
                 )
                 return template.to_dict()
             except ValueError as e:

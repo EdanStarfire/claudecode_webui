@@ -150,7 +150,11 @@ class TemplateManager:
         allowed_tools: list[str] | None = None,
         default_role: str | None = None,
         default_system_prompt: str | None = None,
-        description: str | None = None
+        description: str | None = None,
+        model: str | None = None,
+        capabilities: list[str] | None = None,
+        override_system_prompt: bool = False,
+        sandbox_enabled: bool = False,
     ) -> MinionTemplate:
         """Create a new template."""
         if not name or not name.strip():
@@ -172,7 +176,11 @@ class TemplateManager:
             allowed_tools=allowed_tools if allowed_tools is not None else [],
             default_role=default_role,
             default_system_prompt=default_system_prompt,
-            description=description
+            description=description,
+            model=model,
+            capabilities=capabilities if capabilities is not None else [],
+            override_system_prompt=override_system_prompt,
+            sandbox_enabled=sandbox_enabled,
         )
 
         await self._save_template(template)
@@ -204,7 +212,11 @@ class TemplateManager:
         allowed_tools: list[str] | None = None,
         default_role: str | None = None,
         default_system_prompt: str | None = None,
-        description: str | None = None
+        description: str | None = None,
+        model: str | None = None,
+        capabilities: list[str] | None = None,
+        override_system_prompt: bool | None = None,
+        sandbox_enabled: bool | None = None,
     ) -> MinionTemplate:
         """Update existing template."""
         template = self.templates.get(template_id)
@@ -236,6 +248,18 @@ class TemplateManager:
 
         if description is not None:
             template.description = description
+
+        if model is not None:
+            template.model = model
+
+        if capabilities is not None:
+            template.capabilities = capabilities
+
+        if override_system_prompt is not None:
+            template.override_system_prompt = override_system_prompt
+
+        if sandbox_enabled is not None:
+            template.sandbox_enabled = sandbox_enabled
 
         template.updated_at = datetime.now(UTC)
 

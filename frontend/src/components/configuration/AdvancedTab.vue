@@ -47,8 +47,8 @@
       </div>
     </div>
 
-    <!-- Sandbox Mode (session only) -->
-    <div v-if="isSessionMode" class="mb-3 form-check">
+    <!-- Sandbox Mode -->
+    <div class="mb-3 form-check">
       <input
         type="checkbox"
         class="form-check-input"
@@ -123,7 +123,7 @@ const hasAnyChanges = computed(() => {
 
 // Get the correct prompt value based on mode
 const promptValue = computed(() => {
-  return isTemplateMode.value ? props.formData.system_prompt : props.formData.initialization_context
+  return props.formData.initialization_context
 })
 
 const promptPlaceholder = computed(() => {
@@ -158,8 +158,7 @@ const initContextFieldClass = computed(() => {
 // Methods
 function handlePromptInput(event) {
   const value = event.target.value
-  const field = isTemplateMode.value ? 'system_prompt' : 'initialization_context'
-  emit('update:form-data', field, value)
+  emit('update:form-data', 'initialization_context', value)
 }
 </script>
 

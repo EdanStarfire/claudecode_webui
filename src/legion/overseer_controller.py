@@ -143,7 +143,9 @@ class OverseerController:
         permission_mode: str | None = None,
         allowed_tools: list[str] | None = None,
         working_directory: str | None = None,
-        sandbox_enabled: bool = False
+        sandbox_enabled: bool = False,
+        model: str | None = None,
+        override_system_prompt: bool = False,
     ) -> dict[str, any]:
         """
         Spawn a child minion autonomously by a parent overseer.
@@ -217,6 +219,8 @@ class OverseerController:
             permission_mode=permission_mode or "default",
             allowed_tools=allowed_tools,  # Now uses consistent parameter name
             system_prompt=system_prompt,
+            override_system_prompt=override_system_prompt,
+            model=model,
             working_directory=working_directory,  # Custom working directory for git worktrees/multi-repo
             # Multi-agent fields (issue #313, #349)
             role=role,

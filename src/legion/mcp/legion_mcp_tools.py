@@ -607,6 +607,27 @@ class LegionMCPTools:
                 if template.default_system_prompt:
                     initialization_context = f"{template.default_system_prompt}\n\n{initialization_context}"
 
+                # Apply model from template if set
+                if template.model:
+                    model = template.model
+                else:
+                    model = None
+
+                # Apply capabilities from template (merge with any provided)
+                if template.capabilities:
+                    template_caps = list(template.capabilities)
+                    for cap in capabilities:
+                        if cap not in template_caps:
+                            template_caps.append(cap)
+                    capabilities = template_caps
+
+                # Apply override_system_prompt from template
+                override_system_prompt = template.override_system_prompt
+
+                # Apply sandbox_enabled from template
+                if template.sandbox_enabled:
+                    sandbox_enabled = True
+
             except Exception as e:
                 coord_logger.error(f"Error applying template: {e}", exc_info=True)
                 return {
@@ -620,6 +641,8 @@ class LegionMCPTools:
             # No template - use safe default restricted permissions
             permission_mode = "default"  # Prompts for most actions
             allowed_tools = []  # No pre-authorized tools (user must approve each tool use)
+            model = None
+            override_system_prompt = False
 
         # Validate role is set (from parameter or template)
         if not role:
@@ -664,7 +687,9 @@ class LegionMCPTools:
                 permission_mode=permission_mode,
                 allowed_tools=allowed_tools,
                 working_directory=working_directory,
-                sandbox_enabled=sandbox_enabled
+                sandbox_enabled=sandbox_enabled,
+                model=model,
+                override_system_prompt=override_system_prompt,
             )
 
             child_minion_id = spawn_result["minion_id"]
