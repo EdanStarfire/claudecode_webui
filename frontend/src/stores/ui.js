@@ -17,6 +17,9 @@ export const useUIStore = defineStore('ui', () => {
   const rightSidebarCollapsed = ref(true)
   const rightSidebarWidth = ref(300)
 
+  // Right Sidebar active tab: 'tasks', 'diff', 'resources'
+  const rightSidebarActiveTab = ref('tasks')
+
   // Mobile detection (reactive to window size)
   const windowWidth = ref(window.innerWidth)
   const isMobile = computed(() => windowWidth.value < 768)
@@ -68,6 +71,10 @@ export const useUIStore = defineStore('ui', () => {
 
   function setRightSidebarWidth(width) {
     rightSidebarWidth.value = Math.max(200, Math.min(width, window.innerWidth * 0.3))
+  }
+
+  function setRightSidebarTab(tab) {
+    rightSidebarActiveTab.value = tab
   }
 
   function setAutoScroll(enabled) {
@@ -132,6 +139,7 @@ export const useUIStore = defineStore('ui', () => {
     sidebarWidth,
     rightSidebarCollapsed,
     rightSidebarWidth,
+    rightSidebarActiveTab,
     isMobile,
     autoScrollEnabled,
     isRedBackground,
@@ -148,6 +156,7 @@ export const useUIStore = defineStore('ui', () => {
     toggleRightSidebar,
     setRightSidebarCollapsed,
     setRightSidebarWidth,
+    setRightSidebarTab,
     setAutoScroll,
     initBackgroundColor,
     toggleBackgroundColor,
