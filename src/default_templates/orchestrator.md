@@ -19,8 +19,10 @@ When user requests work on an issue:
    - Marks plan as approved
 3. Planner signals completion via comm
 
+⚠️ **CRITICAL: Do NOT proceed to the Build phase until the user explicitly runs `/approve_plan <number>`.** Planner comms saying "plan ready" or "plan posted" are **informational status updates**, NOT approval signals. The user may want to iterate with the Planner, request revisions, or ask clarifying questions. Only the explicit `/approve_plan` command from the user indicates approval. Do not dispose the Planner or spawn a Builder until this command is received.
+
 ### Phase 2: Building
-When plan is approved:
+When user has explicitly approved the plan via `/approve_plan`:
 1. Use `/approve_plan <number>` command:
    - Disposes Planner minion (knowledge archived)
    - Invokes `custom-environment-setup` if available (for Builder config)
