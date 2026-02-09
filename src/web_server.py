@@ -7,6 +7,8 @@ import json
 import logging
 import os
 import platform
+import subprocess
+import sys
 import time
 import uuid
 from datetime import UTC, datetime
@@ -360,6 +362,9 @@ class ClaudeWebUI:
 
         # Track pending permission requests with asyncio.Future objects
         self.pending_permissions: dict[str, asyncio.Future] = {}
+
+        # Rate limiting for restart endpoint (issue #434)
+        self._last_restart_time: float = 0
 
         # Setup routes
         self._setup_routes()
@@ -1754,6 +1759,101 @@ class ClaudeWebUI:
             except Exception as e:
                 logger.error(f"Failed to preview permissions: {e}")
                 raise HTTPException(status_code=500, detail=str(e))
+
+        # ==================== SYSTEM ENDPOINTS (Issue #434) ====================
+
+        @self.app.get("/api/system/git-status")
+        async def get_git_status():
+            """Return current git branch, last commit, and dirty state."""
+            try:
+                project_root = str(Path(__file__).parent.parent)
+
+                branch = await self._run_git_command(
+                    ["git", "rev-parse", "--abbrev-ref", "HEAD"], project_root
+                )
+                commit_hash = await self._run_git_command(
+                    ["git", "log", "-1", "--format=%H"], project_root
+                )
+                commit_message = await self._run_git_command(
+                    ["git", "log", "-1", "--format=%s"], project_root
+                )
+                status = await self._run_git_command(
+                    ["git", "status", "--porcelain"], project_root
+                )
+
+                return {
+                    "branch": branch or "unknown",
+                    "last_commit_hash": commit_hash or "",
+                    "last_commit_message": commit_message or "",
+                    "has_uncommitted_changes": bool(status),
+                }
+            except Exception as e:
+                logger.error(f"Failed to get git status: {e}")
+                raise HTTPException(status_code=500, detail=str(e)) from e
+
+        @self.app.post("/api/system/restart", status_code=202)
+        async def restart_server():
+            """Pull latest code and restart the backend server via os.execv."""
+            # Rate limiting: 1 restart per 30 seconds
+            now = time.time()
+            if now - self._last_restart_time < 30:
+                remaining = int(30 - (now - self._last_restart_time))
+                raise HTTPException(
+                    status_code=429,
+                    detail=f"Rate limited. Try again in {remaining} seconds."
+                )
+            self._last_restart_time = now
+
+            project_root = Path(__file__).parent.parent
+
+            # Git pull current branch
+            try:
+                result = subprocess.run(
+                    ["git", "pull"],
+                    cwd=project_root, capture_output=True, text=True, timeout=60
+                )
+                if result.returncode != 0:
+                    raise HTTPException(
+                        status_code=500,
+                        detail=f"git pull failed: {result.stderr.strip()}"
+                    )
+                pull_output = result.stdout.strip()
+            except subprocess.TimeoutExpired as e:
+                raise HTTPException(status_code=504, detail="git pull timed out") from e
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"git pull failed: {e}")
+                raise HTTPException(status_code=500, detail=str(e)) from e
+
+            # Broadcast restart notice to all WebSocket connections
+            try:
+                await self.ui_websocket_manager.broadcast({
+                    "type": "server_restarting",
+                    "message": "Server is restarting...",
+                    "pull_output": pull_output,
+                    "timestamp": datetime.now(UTC).isoformat(),
+                })
+            except Exception as e:
+                logger.warning(f"Failed to broadcast restart notice: {e}")
+
+            # Schedule the actual restart after response is sent
+            async def _do_restart():
+                await asyncio.sleep(0.5)
+                logger.info("Executing os.execv restart...")
+                try:
+                    await self.coordinator.cleanup()
+                except Exception as e:
+                    logger.warning(f"Cleanup error during restart: {e}")
+                os.execv(sys.executable, [sys.executable] + sys.argv)
+
+            asyncio.get_event_loop().create_task(_do_restart())
+
+            return {
+                "status": "restarting",
+                "message": "Server is pulling latest code and restarting...",
+                "pull_output": pull_output,
+            }
 
         # ==================== FILESYSTEM ENDPOINTS ====================
 
