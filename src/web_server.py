@@ -2304,6 +2304,10 @@ class ClaudeWebUI:
                                         if "apply_suggestions" in message_data:
                                             response["apply_suggestions"] = message_data["apply_suggestions"]
                                             ws_logger.debug(f"Permission response includes apply_suggestions: {message_data['apply_suggestions']}")
+                                        # Include selected_suggestions for granular permission selection
+                                        if "selected_suggestions" in message_data:
+                                            response["selected_suggestions"] = message_data["selected_suggestions"]
+                                            ws_logger.debug(f"Permission response includes selected_suggestions: {len(message_data['selected_suggestions'])} items")
                                     else:
                                         # Check if this is a deny with clarification
                                         clarification_message = message_data.get("clarification_message")
@@ -2694,7 +2698,11 @@ class ClaudeWebUI:
                     updated_permissions = []
                     applied_updates_for_storage = []
 
-                    for suggestion in suggestions:
+                    # Use selected_suggestions if provided (granular selection),
+                    # otherwise fall back to full suggestions list (backward compatibility)
+                    suggestions_to_apply = response.get("selected_suggestions", suggestions)
+
+                    for suggestion in suggestions_to_apply:
                         # Force destination to 'session' as per requirements
                         suggestion_dict = dict(suggestion)
                         suggestion_dict['destination'] = 'session'
