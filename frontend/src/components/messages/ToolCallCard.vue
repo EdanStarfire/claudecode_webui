@@ -83,20 +83,36 @@
             <p class="mb-0">Claude wants to use the <code class="tool-name">{{ toolCall.name }}</code> tool.</p>
           </div>
 
-          <!-- Suggestions (if any) -->
+          <!-- Suggestions (if any) - shown as individual checkboxes -->
           <div v-if="hasSuggestions" class="suggestions-section mb-3">
             <div class="alert alert-info mb-0">
               <h6 class="mb-2">
-                💾 Suggested Permission Update
+                💾 Suggested Permission Updates
               </h6>
-              <p class="mb-2 small">Claude suggests updating your permissions:</p>
-              <div class="suggestion-details p-2 bg-white rounded">
-                <div v-for="(suggestion, index) in toolCall.suggestions" :key="index" class="suggestion-item">
-                  <code>{{ formatSuggestion(suggestion) }}</code>
+              <p class="mb-2 small">Select which permissions to apply:</p>
+              <div class="suggestion-checkboxes p-2 bg-white rounded">
+                <div
+                  v-for="(suggestion, index) in toolCall.suggestions"
+                  :key="index"
+                  class="form-check suggestion-check-item"
+                >
+                  <input
+                    class="form-check-input"
+                    type="checkbox"
+                    :id="`suggestion-${toolCall.id}-${index}`"
+                    v-model="checkedSuggestions[index]"
+                    :disabled="isSubmittingPermission"
+                  />
+                  <label
+                    class="form-check-label"
+                    :for="`suggestion-${toolCall.id}-${index}`"
+                  >
+                    <code>{{ formatSuggestion(suggestion) }}</code>
+                  </label>
                 </div>
               </div>
               <small class="text-muted mt-2 d-block">
-                This will prevent future permission prompts for this action.
+                Checked permissions will be applied to prevent future prompts.
               </small>
             </div>
           </div>
@@ -133,29 +149,41 @@
             </button>
           </div>
 
-          <!-- Provide Guidance -->
+          <!-- Provide Guidance (collapsed by default) -->
           <div class="guidance-section mt-3">
-            <label class="form-label fw-bold">
-              Provide Guidance (Optional)
-            </label>
-            <p class="text-muted small mb-2">
-              Provide guidance to help Claude retry with better context. If provided, Claude will continue with your guidance instead of stopping.
-            </p>
-            <textarea
-              v-model="guidanceMessage"
-              class="form-control mb-2"
-              rows="3"
-              placeholder="e.g., 'Try using a different approach...' or 'Make sure to check the file exists first...'"
-              :disabled="isSubmittingPermission"
-            ></textarea>
-            <button
-              v-if="guidanceMessage.trim()"
-              class="btn btn-warning btn-sm"
-              @click="handlePermissionDecision('deny', false, guidanceMessage)"
-              :disabled="isSubmittingPermission"
+            <a
+              v-if="!showGuidance"
+              href="#"
+              class="text-muted small"
+              @click.prevent="expandGuidance"
             >
-              {{ isSubmittingPermission && permissionAction === 'deny-guidance' ? '⏳ Submitting...' : '🔀 Provide Guidance & Continue' }}
-            </button>
+              Add guidance...
+            </a>
+            <template v-if="showGuidance">
+              <label class="form-label fw-bold">
+                Guidance (Optional)
+              </label>
+              <p class="text-muted small mb-2">
+                Provide guidance to help Claude retry with better context.
+              </p>
+              <textarea
+                ref="guidanceTextarea"
+                v-model="guidanceMessage"
+                class="form-control guidance-textarea mb-2"
+                rows="1"
+                placeholder="e.g., 'Try using a different approach...'"
+                :disabled="isSubmittingPermission"
+                @input="autoResizeGuidance"
+              ></textarea>
+              <button
+                v-if="guidanceMessage.trim()"
+                class="btn btn-warning btn-sm"
+                @click="handlePermissionDecision('deny', false, guidanceMessage)"
+                :disabled="isSubmittingPermission"
+              >
+                {{ isSubmittingPermission && permissionAction === 'deny-guidance' ? '⏳ Submitting...' : '🔀 Provide Guidance & Continue' }}
+              </button>
+            </template>
           </div>
         </template>
       </div>
@@ -186,7 +214,7 @@
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, watch, nextTick } from 'vue'
 import { useMessageStore } from '@/stores/message'
 import { useSessionStore } from '@/stores/session'
 import { useWebSocketStore } from '@/stores/websocket'
@@ -227,6 +255,28 @@ const wsStore = useWebSocketStore()
 const isSubmittingPermission = ref(false)
 const permissionAction = ref(null)
 const guidanceMessage = ref('')
+const showGuidance = ref(false)
+const guidanceTextarea = ref(null)
+
+// Suggestion checkbox state
+const checkedSuggestions = ref({})
+
+// Initialize checkboxes when suggestions appear
+watch(() => props.toolCall.suggestions, (suggestions) => {
+  if (suggestions && suggestions.length > 0) {
+    const checked = {}
+    suggestions.forEach((_, index) => {
+      checked[index] = true
+    })
+    checkedSuggestions.value = checked
+  }
+}, { immediate: true })
+
+// Compute filtered suggestions based on checkbox state
+const selectedSuggestions = computed(() => {
+  if (!props.toolCall.suggestions) return []
+  return props.toolCall.suggestions.filter((_, index) => checkedSuggestions.value[index])
+})
 
 // AskUserQuestion handling state
 const questionHandlerRef = ref(null)
@@ -754,11 +804,33 @@ function toggleExpansion() {
 
 function formatSuggestion(suggestion) {
   if (suggestion.type === 'setMode') {
-    return `Set permission mode to "${suggestion.mode}"`
-  } else if (suggestion.type === 'allow') {
-    return `Allow tool: ${suggestion.tool}`
+    return `Set mode: ${suggestion.mode}`
+  } else if (suggestion.type === 'addRules' && suggestion.rules?.length) {
+    const ruleStrs = suggestion.rules.map(r => {
+      return r.ruleContent ? `${r.toolName}(${r.ruleContent})` : r.toolName
+    })
+    return `Allow: ${ruleStrs.join(', ')}`
+  } else if (suggestion.type === 'addDirectories' && suggestion.directories?.length) {
+    return `Add directories: ${suggestion.directories.join(', ')}`
   }
   return JSON.stringify(suggestion)
+}
+
+function expandGuidance() {
+  showGuidance.value = true
+  nextTick(() => {
+    if (guidanceTextarea.value) {
+      guidanceTextarea.value.focus()
+    }
+  })
+}
+
+function autoResizeGuidance() {
+  const textarea = guidanceTextarea.value
+  if (!textarea) return
+  textarea.style.height = 'auto'
+  const maxHeight = parseFloat(getComputedStyle(textarea).lineHeight) * 6 + 10
+  textarea.style.height = Math.min(textarea.scrollHeight, maxHeight) + 'px'
 }
 
 async function handlePermissionDecision(decision, applySuggestions, guidance = null) {
@@ -766,8 +838,12 @@ async function handlePermissionDecision(decision, applySuggestions, guidance = n
 
   isSubmittingPermission.value = true
 
+  // Determine effective applySuggestions: if user checked none, treat as approve-only
+  const filtered = selectedSuggestions.value
+  const effectiveApply = applySuggestions && filtered.length > 0
+
   if (decision === 'allow') {
-    permissionAction.value = applySuggestions ? 'approve-apply' : 'approve'
+    permissionAction.value = effectiveApply ? 'approve-apply' : 'approve'
   } else if (guidance) {
     permissionAction.value = 'deny-guidance'
   } else {
@@ -779,7 +855,7 @@ async function handlePermissionDecision(decision, applySuggestions, guidance = n
     // This matches vanilla JS behavior from static/app.js:1930-1945
     const sessionId = sessionStore.currentSessionId
     if (sessionId) {
-      const appliedUpdates = applySuggestions && props.toolCall.suggestions ? props.toolCall.suggestions : []
+      const appliedUpdates = effectiveApply ? filtered : []
 
       messageStore.handlePermissionResponse(sessionId, {
         request_id: props.toolCall.permissionRequestId,
@@ -789,12 +865,13 @@ async function handlePermissionDecision(decision, applySuggestions, guidance = n
       })
     }
 
-    // Send apply_suggestions flag to backend
+    // Send permission response with selected suggestions to backend
     await wsStore.sendPermissionResponse(
       props.toolCall.permissionRequestId,
       decision,
-      applySuggestions,  // Boolean flag, not the suggestions array
-      guidance
+      effectiveApply,
+      guidance,
+      effectiveApply ? filtered : null
     )
   } catch (error) {
     console.error('Failed to send permission response:', error)
@@ -884,21 +961,35 @@ async function handlePermissionDecision(decision, applySuggestions, guidance = n
   color: #856404;
 }
 
-.suggestion-item {
-  padding: 0.25rem;
-  font-size: 0.9rem;
+.suggestion-check-item {
+  padding: 0.5rem 0.25rem 0.5rem 2rem;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
 }
 
-.suggestion-item code {
+.suggestion-check-item .form-check-input {
+  width: 1.2em;
+  height: 1.2em;
+  margin-top: 0;
+}
+
+.suggestion-check-item .form-check-label {
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
+.suggestion-check-item .form-check-label code {
   padding: 0.25rem 0.5rem;
   background: #f8f9fa;
   border-radius: 0.25rem;
   font-size: 0.85rem;
 }
 
-.guidance-section textarea {
-  resize: vertical;
-  min-height: 80px;
+.guidance-section .guidance-textarea {
+  resize: none;
+  overflow-y: auto;
+  min-height: calc(1.5em + 0.75rem + 2px);
   font-family: inherit;
 }
 

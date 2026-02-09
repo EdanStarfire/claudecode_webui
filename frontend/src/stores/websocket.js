@@ -412,8 +412,13 @@ export const useWebSocketStore = defineStore('websocket', () => {
 
   /**
    * Send permission response
+   * @param {string} requestId - Permission request ID
+   * @param {string} decision - 'allow' or 'deny'
+   * @param {boolean} applySuggestions - Whether to apply suggestions
+   * @param {string|null} clarification - Optional guidance message
+   * @param {Array|null} selectedSuggestions - Optional filtered suggestions array (only checked items)
    */
-  function sendPermissionResponse(requestId, decision, applySuggestions = false, clarification = null) {
+  function sendPermissionResponse(requestId, decision, applySuggestions = false, clarification = null, selectedSuggestions = null) {
     if (sessionSocket.value && sessionConnected.value) {
       const payload = {
         type: 'permission_response',
@@ -428,8 +433,13 @@ export const useWebSocketStore = defineStore('websocket', () => {
         payload.clarification_message = clarification
       }
 
+      // Add selected suggestions array if provided (for granular permission selection)
+      if (selectedSuggestions) {
+        payload.selected_suggestions = selectedSuggestions
+      }
+
       sessionSocket.value.send(JSON.stringify(payload))
-      console.log(`Sent permission ${decision} for request ${requestId}`, { applySuggestions, clarification })
+      console.log(`Sent permission ${decision} for request ${requestId}`, { applySuggestions, clarification, selectedSuggestions })
     }
   }
 
