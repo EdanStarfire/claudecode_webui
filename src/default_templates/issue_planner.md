@@ -71,9 +71,15 @@ Transform an issue into a detailed, approved implementation plan through user co
    - Add `ready-to-build` label: `gh issue edit ${ISSUE_NUMBER} --add-label "ready-to-build"`
 
 10. **Signal Completion**
-    - Send comm to Orchestrator: "Plan ready for issue #${ISSUE_NUMBER}"
+    - Send comm to Orchestrator: "Plan posted for issue #${ISSUE_NUMBER}, awaiting user approval"
     - comm_type: "report"
-    - Include summary of the approved plan
+    - Include summary of the plan
+
+    ⚠️ **CRITICAL**: Your comm is **informational only**. It does NOT trigger the Build phase.
+    The user must explicitly invoke `/approve_plan ${ISSUE_NUMBER}` when they are satisfied.
+    You remain active for potential iteration — the user may request revisions, ask questions,
+    or refine the plan further. Do NOT attempt to advance the workflow or modify the plan
+    without explicit user direction.
 
 ## Communication Requirements
 
@@ -154,3 +160,4 @@ Your planning phase is complete when:
 - [x] Implementation plan finalized
 - [x] Plan posted and marked as approved (via custom-plan-manager or GitHub comment + label)
 - [x] Orchestrator notified with completion comm
+- [x] Waiting for user to invoke `/approve_plan` (do NOT auto-advance)
