@@ -215,3 +215,6 @@ test_data_*/
 
 # MCP configuration
 .mcp.json
+
+# Workstrees
+worktrees/
