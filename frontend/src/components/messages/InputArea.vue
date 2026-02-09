@@ -37,6 +37,15 @@
       @dragover.prevent="isDragging = true"
       @dragenter.prevent="isDragging = true"
     >
+      <!-- Slash command dropdown -->
+      <SlashCommandDropdown
+        v-if="showSlashDropdown"
+        :commands="filteredSlashCommands"
+        :selected-index="selectedSlashIndex"
+        @select="selectSlashCommand"
+        @highlight="(index) => selectedSlashIndex = index"
+      />
+
       <!-- Hidden file input -->
       <input
         ref="fileInput"
@@ -65,6 +74,8 @@
         :placeholder="inputPlaceholder"
         :disabled="isStarting || !isConnected"
         rows="1"
+        :aria-expanded="showSlashDropdown || undefined"
+        :aria-activedescendant="showSlashDropdown ? `slash-cmd-${selectedSlashIndex}` : undefined"
         @input="autoResizeTextarea"
         @keydown="handleKeyPress"
         @paste="handlePaste"
@@ -111,6 +122,7 @@ import { useWebSocketStore } from '@/stores/websocket'
 import { useResourceStore } from '@/stores/resource'
 import { useUIStore } from '@/stores/ui'
 import AttachmentList from './AttachmentList.vue'
+import SlashCommandDropdown from './SlashCommandDropdown.vue'
 
 const sessionStore = useSessionStore()
 const wsStore = useWebSocketStore()
@@ -131,6 +143,11 @@ const isUploading = ref(false)
 
 // Maximum file size: 5MB
 const MAX_FILE_SIZE = 5 * 1024 * 1024
+
+// Slash command dropdown state
+const showSlashDropdown = ref(false)
+const slashFilter = ref('')
+const selectedSlashIndex = ref(0)
 
 const inputText = computed({
   get: () => sessionStore.currentInput,
@@ -156,6 +173,22 @@ const inputPlaceholder = computed(() => {
     return 'Waiting for connection...'
   }
   return 'Type your message to Claude Code...'
+})
+
+// Available slash commands from session init data
+const slashCommands = computed(() => {
+  const sid = currentSessionId.value
+  if (!sid) return []
+  const data = sessionStore.initData.get(sid)
+  return data?.slash_commands || []
+})
+
+// Filtered and sorted commands based on user typing
+const filteredSlashCommands = computed(() => {
+  const filter = slashFilter.value.toLowerCase()
+  return slashCommands.value
+    .filter(cmd => cmd.toLowerCase().includes(filter))
+    .sort((a, b) => a.localeCompare(b))
 })
 
 // Update window width on resize
@@ -184,14 +217,44 @@ watch(pendingResourceAttachment, (resource) => {
  * Handle Enter key press with mobile-specific behavior
  * Mobile (< 768px): Enter creates new line, Shift+Enter also creates new line
  * Desktop (>= 768px): Enter sends message, Shift+Enter creates new line
+ *
+ * When slash command dropdown is open, Arrow/Enter/Escape are intercepted.
  */
 function handleKeyPress(event) {
+  if (showSlashDropdown.value && filteredSlashCommands.value.length > 0) {
+    const count = filteredSlashCommands.value.length
+    if (event.key === 'ArrowDown') {
+      event.preventDefault()
+      selectedSlashIndex.value = (selectedSlashIndex.value + 1) % count
+      return
+    }
+    if (event.key === 'ArrowUp') {
+      event.preventDefault()
+      selectedSlashIndex.value = (selectedSlashIndex.value - 1 + count) % count
+      return
+    }
+    if (event.key === 'Enter') {
+      event.preventDefault()
+      selectSlashCommand(filteredSlashCommands.value[selectedSlashIndex.value])
+      return
+    }
+    if (event.key === 'Tab') {
+      event.preventDefault()
+      selectSlashCommand(filteredSlashCommands.value[selectedSlashIndex.value])
+      return
+    }
+  }
+
+  if (event.key === 'Escape' && showSlashDropdown.value) {
+    event.preventDefault()
+    showSlashDropdown.value = false
+    return
+  }
+
   if (event.key === 'Enter' && !event.shiftKey) {
     if (isMobile.value) {
-      // Mobile: allow new line (do nothing, default behavior)
       return
     } else {
-      // Desktop: send message
       event.preventDefault()
       sendMessage()
     }
@@ -211,6 +274,27 @@ function autoResizeTextarea() {
   // Set height based on scrollHeight, respecting min and max
   const newHeight = Math.min(textarea.scrollHeight, parseInt(getComputedStyle(textarea).maxHeight))
   textarea.style.height = newHeight + 'px'
+}
+
+// Watch input text for slash command trigger
+watch(inputText, (text) => {
+  if (text.startsWith('/') && slashCommands.value.length > 0) {
+    slashFilter.value = text.slice(1)
+    selectedSlashIndex.value = 0
+    showSlashDropdown.value = filteredSlashCommands.value.length > 0
+  } else {
+    showSlashDropdown.value = false
+  }
+})
+
+/**
+ * Insert selected slash command into input
+ */
+function selectSlashCommand(command) {
+  inputText.value = `/${command} `
+  showSlashDropdown.value = false
+  messageTextarea.value?.focus()
+  autoResizeTextarea()
 }
 
 /**
