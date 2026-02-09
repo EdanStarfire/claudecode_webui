@@ -47,6 +47,10 @@ export const useUIStore = defineStore('ui', () => {
   const isLoading = ref(false)
   const loadingMessage = ref('Loading...')
 
+  // Restart state (issue #434)
+  const restartInProgress = ref(false)
+  const restartStatus = ref('idle') // idle, confirming, pulling, restarting, reconnecting, error
+
   // ========== ACTIONS ==========
 
   function toggleSidebar() {
@@ -117,6 +121,11 @@ export const useUIStore = defineStore('ui', () => {
     isLoading.value = false
   }
 
+  // Restart modal (issue #434)
+  function showRestartModal() {
+    showModal('restart-server')
+  }
+
   // Handle window resize
   function handleResize() {
     const previousWidth = windowWidth.value
@@ -148,6 +157,8 @@ export const useUIStore = defineStore('ui', () => {
     currentModal,
     isLoading,
     loadingMessage,
+    restartInProgress,
+    restartStatus,
 
     // Actions
     toggleSidebar,
@@ -164,6 +175,7 @@ export const useUIStore = defineStore('ui', () => {
     hideModal,
     showLoading,
     hideLoading,
+    showRestartModal,
     handleResize
   }
 })

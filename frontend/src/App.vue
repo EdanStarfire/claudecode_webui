@@ -31,6 +31,7 @@
     <SessionManageModal />
     <SessionInfoModal />
     <MinionViewModal />
+    <RestartModal />
   </div>
 </template>
 
@@ -47,6 +48,7 @@ import ConfigurationModal from './components/configuration/ConfigurationModal.vu
 import SessionManageModal from './components/session/SessionManageModal.vue'
 import SessionInfoModal from './components/session/SessionInfoModal.vue'
 import MinionViewModal from './components/legion/MinionViewModal.vue'
+import RestartModal from './components/layout/RestartModal.vue'
 import { useUIStore } from './stores/ui'
 import { useWebSocketStore } from './stores/websocket'
 import { useSessionStore } from './stores/session'

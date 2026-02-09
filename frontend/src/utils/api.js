@@ -140,6 +140,16 @@ export async function apiPatch(endpoint, data, options = {}) {
   })
 }
 
+// ==================== System Endpoints (Issue #434) ====================
+
+export async function getGitStatus() {
+  return apiGet('/api/system/git-status')
+}
+
+export async function restartServer() {
+  return apiPost('/api/system/restart')
+}
+
 /**
  * Export named functions for convenience
  */

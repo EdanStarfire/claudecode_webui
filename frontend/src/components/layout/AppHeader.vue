@@ -23,6 +23,14 @@
           :style="{ backgroundColor: uiStore.isRedBackground ? '#ffebee' : '#f5f5f5' }"
         ></span>
       </button>
+      <button
+        class="btn btn-sm"
+        :class="uiStore.isRedBackground ? 'btn-outline-danger' : 'btn-outline-secondary'"
+        title="Restart server"
+        @click="uiStore.showRestartModal()"
+      >
+        <span>&#x21bb;</span>
+      </button>
       <ConnectionIndicator />
       <button
         id="task-panel-toggle-btn"
