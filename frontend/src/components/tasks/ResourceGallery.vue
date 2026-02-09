@@ -1,27 +1,7 @@
 <template>
   <div class="resource-gallery-panel">
-    <!-- Panel Header -->
-    <div class="panel-header d-flex align-items-center justify-content-between p-3 border-bottom">
-      <div class="d-flex align-items-center gap-2">
-        <span class="panel-icon">📁</span>
-        <h6 class="mb-0">Resources</h6>
-        <span v-if="resourceCount > 0" class="badge bg-secondary">
-          {{ resourceCount }}
-        </span>
-      </div>
-      <button
-        class="chevron-toggle btn btn-link p-0"
-        @click="togglePanel"
-        :title="isCollapsed ? 'Expand' : 'Collapse'"
-      >
-        <svg class="chevron-icon" :class="{ expanded: !isCollapsed }" width="12" height="12" viewBox="0 0 12 12">
-          <path d="M4.5 2L8.5 6L4.5 10" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
-        </svg>
-      </button>
-    </div>
-
     <!-- Resource Grid -->
-    <div v-if="!isCollapsed" class="resource-grid-container p-2">
+    <div class="resource-grid-container p-2">
       <div v-if="resources.length === 0" class="text-muted text-center py-4">
         <span class="empty-icon">📂</span>
         <p class="mb-0 small">No resources yet</p>
@@ -98,7 +78,7 @@
 </template>
 
 <script setup>
-import { ref, computed, inject } from 'vue'
+import { computed, inject } from 'vue'
 import { useResourceStore } from '@/stores/resource'
 import { useSessionStore } from '@/stores/session'
 
@@ -108,16 +88,9 @@ const sessionStore = useSessionStore()
 // Inject the addAttachmentFromResource function from parent
 const addAttachmentFromResource = inject('addAttachmentFromResource', null)
 
-// Panel collapse state
-const isCollapsed = ref(false)
-
 // Computed properties
 const resources = computed(() => resourceStore.currentResources)
 const resourceCount = computed(() => resourceStore.currentResourceCount)
-
-function togglePanel() {
-  isCollapsed.value = !isCollapsed.value
-}
 
 function isImage(resource) {
   return resourceStore.isImageResource(resource)
@@ -166,43 +139,9 @@ function addToAttachments(resource) {
 
 <style scoped>
 .resource-gallery-panel {
-  /* Flex item that takes remaining space after TaskListPanel */
-  flex: 1 1 auto;
-  min-height: 0; /* Allow shrinking below content size */
   display: flex;
   flex-direction: column;
-  border-top: 1px solid #dee2e6;
-}
-
-.panel-header {
-  background-color: #f8f9fa;
-  flex-shrink: 0;
-}
-
-.chevron-toggle {
-  color: #6c757d;
-  text-decoration: none;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-}
-
-.chevron-toggle:hover {
-  color: #495057;
-}
-
-.chevron-icon {
-  transition: transform 0.2s ease;
-}
-
-.chevron-icon.expanded {
-  transform: rotate(90deg);
-}
-
-.panel-icon {
-  font-size: 1.2rem;
+  height: 100%;
 }
 
 .resource-grid-container {

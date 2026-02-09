@@ -11,13 +11,54 @@
     }"
     :style="sidebarStyle"
   >
-    <!-- Stacked Panels Container -->
-    <div class="panels-container">
-      <!-- Task List Panel -->
-      <TaskListPanel />
+    <!-- Tab Navigation -->
+    <ul class="nav nav-tabs sidebar-tabs" role="tablist">
+      <li class="nav-item" role="presentation">
+        <button
+          class="nav-link"
+          :class="{ active: activeTab === 'tasks' }"
+          type="button"
+          @click="uiStore.setRightSidebarTab('tasks')"
+        >
+          Tasks
+          <span v-if="taskStats.total > 0" class="tab-badge">
+            {{ taskStats.completed }}/{{ taskStats.total }}
+          </span>
+        </button>
+      </li>
+      <li class="nav-item" role="presentation">
+        <button
+          class="nav-link"
+          :class="{ active: activeTab === 'diff' }"
+          type="button"
+          @click="uiStore.setRightSidebarTab('diff')"
+        >
+          Diff
+          <span v-if="diffFileCount > 0" class="tab-badge">
+            {{ diffFileCount }}
+          </span>
+        </button>
+      </li>
+      <li class="nav-item" role="presentation">
+        <button
+          class="nav-link"
+          :class="{ active: activeTab === 'resources' }"
+          type="button"
+          @click="uiStore.setRightSidebarTab('resources')"
+        >
+          Resources
+          <span v-if="resourceCount > 0" class="tab-badge">
+            {{ resourceCount }}
+          </span>
+        </button>
+      </li>
+    </ul>
 
-      <!-- Resource Gallery (Issue #404) -->
-      <ResourceGallery />
+    <!-- Tab Content -->
+    <div class="tab-content-container">
+      <TaskListPanel v-show="activeTab === 'tasks'" />
+      <DiffPanel v-show="activeTab === 'diff'" />
+      <ResourceGallery v-show="activeTab === 'resources'" />
     </div>
 
     <!-- Resize Handle -->
@@ -28,20 +69,37 @@
 
     <!-- Resource Full View Modal (teleported to body) -->
     <ResourceFullView />
+
+    <!-- Diff Full View Modal (teleported to body, Issue #435) -->
+    <DiffFullView />
   </aside>
 </template>
 
 <script setup>
 import { computed, ref } from 'vue'
 import { useUIStore } from '@/stores/ui'
+import { useTaskStore } from '@/stores/task'
+import { useResourceStore } from '@/stores/resource'
+import { useDiffStore } from '@/stores/diff'
 import TaskListPanel from '../tasks/TaskListPanel.vue'
 import ResourceGallery from '../tasks/ResourceGallery.vue'
 import ResourceFullView from '../common/ResourceFullView.vue'
+import DiffPanel from '../tasks/DiffPanel.vue'
+import DiffFullView from '../common/DiffFullView.vue'
 
 const uiStore = useUIStore()
+const taskStore = useTaskStore()
+const resourceStore = useResourceStore()
+const diffStore = useDiffStore()
 
 const rightSidebarCollapsed = computed(() => uiStore.rightSidebarCollapsed)
 const isMobile = computed(() => uiStore.isMobile)
+const activeTab = computed(() => uiStore.rightSidebarActiveTab)
+
+// Badge counts for tabs
+const taskStats = computed(() => taskStore.currentTaskStats)
+const resourceCount = computed(() => resourceStore.currentResourceCount)
+const diffFileCount = computed(() => diffStore.fileCount)
 
 const sidebarStyle = computed(() => {
   // On mobile, let CSS handle the transform via classes
@@ -99,11 +157,61 @@ function stopResize() {
   transition: none;
 }
 
-/* Panels container - stacked collapsible panels */
-.panels-container {
+/* Tab navigation */
+.sidebar-tabs {
+  flex-shrink: 0;
+  border-bottom: 1px solid #dee2e6;
+  padding: 0 4px;
+  background-color: #f8f9fa;
+}
+
+.sidebar-tabs .nav-item {
+  flex: 1;
+}
+
+.sidebar-tabs .nav-link {
+  font-size: 0.78rem;
+  padding: 8px 4px;
+  text-align: center;
+  white-space: nowrap;
+  color: #6c757d;
+  border: none;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
   display: flex;
-  flex-direction: column;
-  height: 100%;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+}
+
+.sidebar-tabs .nav-link:hover {
+  color: #495057;
+  border-bottom-color: #dee2e6;
+}
+
+.sidebar-tabs .nav-link.active {
+  color: #0d6efd;
+  border-bottom-color: #0d6efd;
+  background: transparent;
+}
+
+.tab-badge {
+  font-size: 0.65rem;
+  background: #6c757d;
+  color: white;
+  padding: 1px 5px;
+  border-radius: 10px;
+  line-height: 1.2;
+}
+
+.nav-link.active .tab-badge {
+  background: #0d6efd;
+}
+
+/* Tab content - fills remaining space and scrolls */
+.tab-content-container {
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
 }

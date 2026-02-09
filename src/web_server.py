@@ -1307,6 +1307,190 @@ class ClaudeWebUI:
                 logger.error(f"Failed to disconnect session: {e}")
                 raise HTTPException(status_code=500, detail=str(e))
 
+        # ==================== DIFF ENDPOINTS (Issue #435) ====================
+
+        @self.app.get("/api/sessions/{session_id}/diff")
+        async def get_session_diff(session_id: str):
+            """Get diff summary for a session's working directory vs origin/main."""
+            try:
+                session = await self.coordinator.session_manager.get_session_info(session_id)
+                if not session:
+                    raise HTTPException(status_code=404, detail="Session not found")
+
+                cwd = session.working_directory
+                if not cwd or not Path(cwd).exists():
+                    return {"is_git_repo": False}
+
+                # Check if it's a git repo
+                is_git = await self._run_git_command(
+                    ["git", "rev-parse", "--is-inside-work-tree"], cwd
+                )
+                if is_git is None:
+                    return {"is_git_repo": False}
+
+                # Get current branch
+                branch = await self._run_git_command(
+                    ["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd
+                )
+
+                # Find merge base with origin/main (fallback to origin/master)
+                merge_base = await self._run_git_command(
+                    ["git", "merge-base", "HEAD", "origin/main"], cwd
+                )
+                if merge_base is None:
+                    merge_base = await self._run_git_command(
+                        ["git", "merge-base", "HEAD", "origin/master"], cwd
+                    )
+                if merge_base is None:
+                    return {
+                        "is_git_repo": True,
+                        "branch": branch or "unknown",
+                        "error": "No remote tracking branch found (origin/main or origin/master)"
+                    }
+
+                # Get commit log since merge base
+                log_output = await self._run_git_command(
+                    ["git", "log", f"{merge_base}..HEAD",
+                     "--format=%H%n%h%n%s%n%an%n%aI%n---COMMIT_END---"],
+                    cwd
+                )
+                commits = []
+                if log_output:
+                    raw_commits = log_output.strip().split("---COMMIT_END---")
+                    for raw in raw_commits:
+                        lines = raw.strip().split("\n")
+                        if len(lines) >= 5:
+                            # Get files for this commit
+                            commit_files_output = await self._run_git_command(
+                                ["git", "diff-tree", "--no-commit-id", "-r",
+                                 "--name-only", lines[0]], cwd
+                            )
+                            commit_files = [
+                                f for f in (commit_files_output or "").strip().split("\n")
+                                if f
+                            ]
+                            commits.append({
+                                "hash": lines[0],
+                                "short_hash": lines[1],
+                                "message": lines[2],
+                                "author": lines[3],
+                                "date": lines[4],
+                                "files": commit_files
+                            })
+
+                # Get file change summary (numstat for insertions/deletions)
+                numstat_output = await self._run_git_command(
+                    ["git", "diff", "--numstat", f"{merge_base}...HEAD"], cwd
+                )
+                # Get file status (A/M/D)
+                name_status_output = await self._run_git_command(
+                    ["git", "diff", "--name-status", f"{merge_base}...HEAD"], cwd
+                )
+
+                files = {}
+                total_insertions = 0
+                total_deletions = 0
+
+                # Parse name-status for A/M/D
+                status_map = {}
+                if name_status_output:
+                    for line in name_status_output.strip().split("\n"):
+                        if line:
+                            parts = line.split("\t", 1)
+                            if len(parts) == 2:
+                                status_code = parts[0].strip()
+                                filepath = parts[1].strip()
+                                if status_code.startswith("A"):
+                                    status_map[filepath] = "added"
+                                elif status_code.startswith("D"):
+                                    status_map[filepath] = "deleted"
+                                elif status_code.startswith("R"):
+                                    status_map[filepath] = "renamed"
+                                else:
+                                    status_map[filepath] = "modified"
+
+                # Parse numstat for insertions/deletions
+                if numstat_output:
+                    for line in numstat_output.strip().split("\n"):
+                        if line:
+                            parts = line.split("\t")
+                            if len(parts) >= 3:
+                                ins = parts[0].strip()
+                                dels = parts[1].strip()
+                                filepath = parts[2].strip()
+                                # Binary files show '-' for insertions/deletions
+                                ins_count = int(ins) if ins != "-" else 0
+                                dels_count = int(dels) if dels != "-" else 0
+                                is_binary = ins == "-" and dels == "-"
+                                total_insertions += ins_count
+                                total_deletions += dels_count
+                                files[filepath] = {
+                                    "status": status_map.get(filepath, "modified"),
+                                    "insertions": ins_count,
+                                    "deletions": dels_count,
+                                    "is_binary": is_binary
+                                }
+
+                return {
+                    "is_git_repo": True,
+                    "merge_base": merge_base,
+                    "branch": branch or "unknown",
+                    "commits": commits,
+                    "files": files,
+                    "total_insertions": total_insertions,
+                    "total_deletions": total_deletions
+                }
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"Failed to get diff for session {session_id}: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @self.app.get("/api/sessions/{session_id}/diff/file")
+        async def get_session_diff_file(session_id: str, path: str = None):
+            """Get unified diff content for a specific file."""
+            if not path:
+                raise HTTPException(status_code=400, detail="path query parameter required")
+
+            try:
+                session = await self.coordinator.session_manager.get_session_info(session_id)
+                if not session:
+                    raise HTTPException(status_code=404, detail="Session not found")
+
+                cwd = session.working_directory
+                if not cwd or not Path(cwd).exists():
+                    raise HTTPException(status_code=400, detail="Invalid working directory")
+
+                # Find merge base
+                merge_base = await self._run_git_command(
+                    ["git", "merge-base", "HEAD", "origin/main"], cwd
+                )
+                if merge_base is None:
+                    merge_base = await self._run_git_command(
+                        ["git", "merge-base", "HEAD", "origin/master"], cwd
+                    )
+                if merge_base is None:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="No remote tracking branch found"
+                    )
+
+                # Get unified diff for this file
+                diff_output = await self._run_git_command(
+                    ["git", "diff", f"{merge_base}...HEAD", "--", path], cwd
+                )
+
+                return {
+                    "path": path,
+                    "merge_base": merge_base,
+                    "diff": diff_output or ""
+                }
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"Failed to get file diff for {path}: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
         # ==================== LEGION ENDPOINTS ====================
         # All projects support Legion capabilities (issue #313)
 
@@ -2587,6 +2771,23 @@ class ClaudeWebUI:
         return permission_callback
 
 # _serialize_message method removed - now using MessageProcessor.prepare_for_websocket() for unified formatting
+
+    async def _run_git_command(self, args: list[str], cwd: str) -> str | None:
+        """Run a git command via asyncio.create_subprocess_exec and return stdout, or None on error."""
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *args,
+                cwd=cwd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
+            if proc.returncode != 0:
+                return None
+            return stdout.decode().strip()
+        except (TimeoutError, FileNotFoundError, OSError) as e:
+            logger.debug(f"Git command failed: {args} - {e}")
+            return None
 
     def _default_html(self) -> str:
         """Default HTML content when no index.html exists"""
