@@ -82,10 +82,25 @@
                 </span>
               </div>
             </div>
+            <!-- Display Mode Toggle -->
+            <div class="display-mode-toggle" v-if="textContent">
+              <button
+                class="toggle-btn"
+                :class="{ active: displayMode === 'raw' }"
+                @click.stop="displayMode = 'raw'"
+                title="Raw text"
+              >Raw</button>
+              <button
+                class="toggle-btn"
+                :class="{ active: displayMode === 'markdown' }"
+                @click.stop="displayMode = 'markdown'"
+                title="Rendered markdown (M)"
+              >Markdown</button>
+            </div>
             <button
               class="copy-btn"
               @click.stop="copyToClipboard"
-              :title="copyFeedback ? 'Copied!' : 'Copy to clipboard'"
+              :title="copyFeedback ? 'Copied!' : (displayMode === 'markdown' ? 'Copy raw text' : 'Copy to clipboard')"
               :disabled="!textContent"
             >
               <!-- Checkmark icon when copied -->
@@ -97,7 +112,7 @@
                 <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
                 <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
               </svg>
-              <span class="copy-label">{{ copyFeedback ? 'Copied!' : 'Copy' }}</span>
+              <span class="copy-label">{{ copyFeedback ? 'Copied!' : (displayMode === 'markdown' ? 'Copy raw' : 'Copy') }}</span>
             </button>
           </div>
 
@@ -112,8 +127,10 @@
             <div v-else-if="textError" class="text-error">
               Failed to load content: {{ textError }}
             </div>
-            <!-- Content -->
-            <pre v-else-if="textContent" class="text-content">{{ textContent }}</pre>
+            <!-- Content: Raw -->
+            <pre v-else-if="textContent && displayMode === 'raw'" class="text-content">{{ textContent }}</pre>
+            <!-- Content: Markdown -->
+            <div v-else-if="textContent && displayMode === 'markdown'" class="markdown-content" v-html="renderedMarkdown"></div>
             <!-- No content / unsupported -->
             <div v-else class="text-unavailable">
               Preview not available for this file type.
@@ -167,10 +184,18 @@
 <script setup>
 import { computed, watch, ref, nextTick, onUnmounted } from 'vue'
 import { useResourceStore } from '@/stores/resource'
+import DOMPurify from 'dompurify'
+import { marked } from 'marked'
+
+marked.setOptions({
+  breaks: true,
+  gfm: true
+})
 
 const resourceStore = useResourceStore()
 const overlayRef = ref(null)
 const copyFeedback = ref(false)
+const displayMode = ref('raw')
 let copyTimeout = null
 
 // Computed properties
@@ -201,6 +226,14 @@ const textContent = computed(() => textCacheEntry.value?.content || null)
 const textLoading = computed(() => textCacheEntry.value?.loading || false)
 const textError = computed(() => textCacheEntry.value?.error || null)
 
+const renderedMarkdown = computed(() => {
+  if (!textContent.value) return ''
+  let html = marked.parse(textContent.value)
+  html = html.replace(/\n</g, '<')
+  html = html.replace(/\n+$/, '')
+  return DOMPurify.sanitize(html)
+})
+
 // Focus overlay when opened for keyboard events
 watch(isOpen, (open) => {
   if (open) {
@@ -211,6 +244,11 @@ watch(isOpen, (open) => {
   } else {
     document.body.style.overflow = ''
   }
+})
+
+// Reset display mode when navigating between resources
+watch(currentIndex, () => {
+  displayMode.value = 'raw'
 })
 
 // Fetch text content when navigating to a text resource
@@ -272,6 +310,11 @@ function handleKeydown(event) {
       break
     case 'End':
       goToResource(totalResources.value - 1)
+      break
+    case 'm':
+      if (!isCurrentImage.value && textContent.value) {
+        displayMode.value = displayMode.value === 'raw' ? 'markdown' : 'raw'
+      }
       break
   }
 }
@@ -537,6 +580,148 @@ function handleImageError(event) {
   font-style: italic;
 }
 
+/* ===== Display Mode Toggle ===== */
+
+.display-mode-toggle {
+  display: flex;
+  border: 1px solid #ced4da;
+  border-radius: 6px;
+  overflow: hidden;
+  flex-shrink: 0;
+  margin-left: 12px;
+}
+
+.toggle-btn {
+  padding: 5px 12px;
+  background: #e9ecef;
+  border: none;
+  color: #495057;
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: background-color 0.15s, color 0.15s;
+}
+
+.toggle-btn:first-child {
+  border-right: 1px solid #ced4da;
+}
+
+.toggle-btn:hover:not(.active) {
+  background: #dee2e6;
+}
+
+.toggle-btn.active {
+  background: #0d6efd;
+  color: #fff;
+}
+
+/* ===== Markdown Content ===== */
+
+.markdown-content {
+  font-size: 0.9rem;
+  line-height: 1.6;
+  color: #212529;
+  word-wrap: break-word;
+}
+
+.markdown-content :deep(h1),
+.markdown-content :deep(h2),
+.markdown-content :deep(h3),
+.markdown-content :deep(h4),
+.markdown-content :deep(h5),
+.markdown-content :deep(h6) {
+  margin-top: 1.2em;
+  margin-bottom: 0.6em;
+  font-weight: 600;
+  color: #1a1a1a;
+}
+
+.markdown-content :deep(h1) { font-size: 1.6rem; border-bottom: 1px solid #dee2e6; padding-bottom: 0.3em; }
+.markdown-content :deep(h2) { font-size: 1.35rem; border-bottom: 1px solid #dee2e6; padding-bottom: 0.3em; }
+.markdown-content :deep(h3) { font-size: 1.15rem; }
+
+.markdown-content :deep(p) {
+  margin-bottom: 0.8em;
+}
+
+.markdown-content :deep(ul),
+.markdown-content :deep(ol) {
+  padding-left: 2em;
+  margin-bottom: 0.8em;
+}
+
+.markdown-content :deep(li) {
+  margin-bottom: 0.3em;
+}
+
+.markdown-content :deep(code) {
+  background: #e9ecef;
+  padding: 0.15em 0.4em;
+  border-radius: 3px;
+  font-size: 0.85em;
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+}
+
+.markdown-content :deep(pre) {
+  background: #282c34;
+  color: #abb2bf;
+  padding: 12px 16px;
+  border-radius: 6px;
+  overflow-x: auto;
+  margin-bottom: 0.8em;
+}
+
+.markdown-content :deep(pre code) {
+  background: none;
+  padding: 0;
+  color: inherit;
+}
+
+.markdown-content :deep(blockquote) {
+  border-left: 3px solid #ced4da;
+  padding-left: 1em;
+  margin-left: 0;
+  margin-bottom: 0.8em;
+  color: #6c757d;
+}
+
+.markdown-content :deep(a) {
+  color: #0d6efd;
+  text-decoration: none;
+}
+
+.markdown-content :deep(a:hover) {
+  text-decoration: underline;
+}
+
+.markdown-content :deep(table) {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 0.8em;
+}
+
+.markdown-content :deep(th),
+.markdown-content :deep(td) {
+  border: 1px solid #dee2e6;
+  padding: 6px 12px;
+  text-align: left;
+}
+
+.markdown-content :deep(th) {
+  background: #f1f3f5;
+  font-weight: 600;
+}
+
+.markdown-content :deep(hr) {
+  border: none;
+  border-top: 1px solid #dee2e6;
+  margin: 1.2em 0;
+}
+
+.markdown-content :deep(img) {
+  max-width: 100%;
+  height: auto;
+}
+
 /* ===== Position Indicator ===== */
 
 .position-indicator {
@@ -660,6 +845,11 @@ function handleImageError(event) {
 
   .copy-label {
     display: none;
+  }
+
+  .toggle-btn {
+    padding: 5px 8px;
+    font-size: 0.75rem;
   }
 }
 </style>
