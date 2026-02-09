@@ -5,9 +5,9 @@ Defines reusable configuration templates for minion creation with
 pre-configured permissions, tools, and default settings.
 """
 
-from dataclasses import dataclass, asdict
-from datetime import datetime, timezone
-from typing import List, Optional, Dict, Any
+from dataclasses import asdict, dataclass
+from datetime import UTC, datetime
+from typing import Any
 
 
 @dataclass
@@ -21,23 +21,29 @@ class MinionTemplate:
     template_id: str
     name: str
     permission_mode: str  # default, acceptEdits, plan, bypassPermissions
-    allowed_tools: Optional[List[str]] = None
-    default_role: Optional[str] = None
-    default_system_prompt: Optional[str] = None
-    description: Optional[str] = None
-    created_at: Optional[datetime] = None
-    updated_at: Optional[datetime] = None
+    allowed_tools: list[str] | None = None
+    default_role: str | None = None
+    default_system_prompt: str | None = None
+    description: str | None = None
+    model: str | None = None
+    capabilities: list[str] | None = None
+    override_system_prompt: bool = False
+    sandbox_enabled: bool = False
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
 
     def __post_init__(self):
-        """Initialize timestamps and ensure allowed_tools is a list."""
+        """Initialize timestamps and ensure list fields are lists."""
         if self.created_at is None:
-            self.created_at = datetime.now(timezone.utc)
+            self.created_at = datetime.now(UTC)
         if self.updated_at is None:
-            self.updated_at = datetime.now(timezone.utc)
+            self.updated_at = datetime.now(UTC)
         if self.allowed_tools is None:
             self.allowed_tools = []
+        if self.capabilities is None:
+            self.capabilities = []
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
         data = asdict(self)
         data['created_at'] = self.created_at.isoformat()
@@ -45,7 +51,7 @@ class MinionTemplate:
         return data
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'MinionTemplate':
+    def from_dict(cls, data: dict[str, Any]) -> 'MinionTemplate':
         """Create from dictionary loaded from JSON."""
         data['created_at'] = datetime.fromisoformat(data['created_at'])
         data['updated_at'] = datetime.fromisoformat(data['updated_at'])
