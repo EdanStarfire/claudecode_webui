@@ -17,15 +17,6 @@
     >
       💬
     </div>
-
-    <!-- Legion WebSocket Indicator -->
-    <div
-      class="indicator"
-      :class="getIndicatorClass('legion')"
-      :title="getTooltip('legion')"
-    >
-      👥
-    </div>
   </div>
 </template>
 
@@ -37,14 +28,13 @@ const wsStore = useWebSocketStore()
 
 /**
  * Get indicator background class based on connection state
- * @param {string} type - 'ui', 'session', or 'legion'
+ * @param {string} type - 'ui' or 'session'
  * @returns {string} CSS class for background color
  */
 function getIndicatorClass(type) {
   const connectionMap = {
     ui: { connected: wsStore.uiConnected, retryCount: wsStore.uiRetryCount },
-    session: { connected: wsStore.sessionConnected, retryCount: wsStore.sessionRetryCount },
-    legion: { connected: wsStore.legionConnected, retryCount: wsStore.legionRetryCount }
+    session: { connected: wsStore.sessionConnected, retryCount: wsStore.sessionRetryCount }
   }
 
   const { connected, retryCount } = connectionMap[type]
@@ -65,26 +55,23 @@ function getIndicatorClass(type) {
 
 /**
  * Get tooltip text with connection details
- * @param {string} type - 'ui', 'session', or 'legion'
+ * @param {string} type - 'ui' or 'session'
  * @returns {string} Tooltip text
  */
 function getTooltip(type) {
   const labels = {
     ui: 'UI WebSocket',
-    session: 'Session WebSocket',
-    legion: 'Legion WebSocket'
+    session: 'Session WebSocket'
   }
 
   const descriptions = {
     ui: 'Global UI state updates',
-    session: 'Session message streaming',
-    legion: 'Multi-agent communications'
+    session: 'Session message streaming'
   }
 
   const connectionMap = {
     ui: { connected: wsStore.uiConnected, retryCount: wsStore.uiRetryCount },
-    session: { connected: wsStore.sessionConnected, retryCount: wsStore.sessionRetryCount },
-    legion: { connected: wsStore.legionConnected, retryCount: wsStore.legionRetryCount }
+    session: { connected: wsStore.sessionConnected, retryCount: wsStore.sessionRetryCount }
   }
 
   const { connected, retryCount } = connectionMap[type]
