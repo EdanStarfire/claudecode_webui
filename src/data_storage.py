@@ -431,11 +431,14 @@ class DataStorageManager:
         """
         Read all resource metadata from the resources JSONL log.
 
+        Filters out resources that have been soft-removed via removal markers.
+
         Returns:
             List of resource metadata dicts, sorted by timestamp
         """
         try:
             resources = []
+            removed_ids: set[str] = set()
 
             if not self.resources_metadata_file.exists():
                 return resources
@@ -445,10 +448,17 @@ class DataStorageManager:
                     line = line.strip()
                     if line:
                         try:
-                            resource = json.loads(line)
-                            resources.append(resource)
+                            entry = json.loads(line)
+                            if entry.get("type") == "remove":
+                                removed_ids.add(entry.get("resource_id", ""))
+                            else:
+                                resources.append(entry)
                         except json.JSONDecodeError as e:
                             logger.warning(f"Failed to parse resource line: {e}")
+
+            # Filter out removed resources
+            if removed_ids:
+                resources = [r for r in resources if r.get("resource_id") not in removed_ids]
 
             # Sort by timestamp (oldest first)
             resources.sort(key=lambda x: x.get('timestamp', 0))
@@ -458,6 +468,42 @@ class DataStorageManager:
         except Exception as e:
             logger.error(f"Failed to read resources: {e}")
             return []
+
+    async def remove_resource_from_display(self, resource_id: str) -> bool:
+        """
+        Soft-remove a resource by appending a removal marker to resources.jsonl.
+
+        The resource file (.bin) is NOT deleted. Only the display entry is hidden.
+
+        Args:
+            resource_id: Resource identifier to remove from display
+
+        Returns:
+            True if marker appended successfully, False otherwise
+        """
+        try:
+            # Ensure resources directory exists
+            self.resources_dir.mkdir(parents=True, exist_ok=True)
+
+            marker = {
+                "type": "remove",
+                "resource_id": resource_id,
+                "timestamp": get_unix_timestamp(),
+            }
+
+            with open(self.resources_metadata_file, 'a', encoding='utf-8') as f:
+                json.dump(marker, f, ensure_ascii=False)
+                f.write('\n')
+
+            storage_logger.debug(
+                f"Appended removal marker for resource {resource_id} "
+                f"in {self.session_dir.name}"
+            )
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to remove resource from display {resource_id}: {e}")
+            return False
 
     async def get_resource_file(self, resource_id: str) -> bytes | None:
         """
