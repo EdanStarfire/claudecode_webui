@@ -1413,13 +1413,123 @@ class ClaudeWebUI:
                                 "files": commit_files
                             })
 
-                # Get file change summary (numstat for insertions/deletions)
-                numstat_output = await self._run_git_command(
-                    ["git", "diff", "--numstat", f"{merge_base}...HEAD"], cwd
+                # Detect uncommitted changes (staged + unstaged + untracked)
+                status_output = await self._run_git_command(
+                    ["git", "status", "--porcelain"], cwd
                 )
-                # Get file status (A/M/D)
+                uncommitted_files = []
+                untracked_paths = []
+                if status_output:
+                    for line in status_output.strip().split("\n"):
+                        if not line or len(line) < 3:
+                            continue
+                        xy = line[:2]
+                        path = line[3:].strip()
+                        # Handle renames: "R  old -> new"
+                        if " -> " in path:
+                            path = path.split(" -> ", 1)[1]
+                        if xy == "??":
+                            untracked_paths.append(path)
+                        else:
+                            uncommitted_files.append(path)
+
+                # Build synthetic uncommitted commit if dirty working tree
+                if uncommitted_files or untracked_paths:
+                    # Tracked file stats: combined staged+unstaged vs HEAD
+                    wip_numstat = await self._run_git_command(
+                        ["git", "diff", "--numstat", "HEAD"], cwd
+                    )
+                    wip_name_status = await self._run_git_command(
+                        ["git", "diff", "--name-status", "HEAD"], cwd
+                    )
+                    # Also include staged new files (added but not in HEAD)
+                    staged_numstat = await self._run_git_command(
+                        ["git", "diff", "--numstat", "--cached"], cwd
+                    )
+                    staged_name_status = await self._run_git_command(
+                        ["git", "diff", "--name-status", "--cached"], cwd
+                    )
+
+                    wip_status_map = {}
+                    if wip_name_status:
+                        for line in wip_name_status.strip().split("\n"):
+                            if line:
+                                parts = line.split("\t", 1)
+                                if len(parts) == 2:
+                                    sc = parts[0].strip()
+                                    fp = parts[1].strip()
+                                    if sc.startswith("A"):
+                                        wip_status_map[fp] = "added"
+                                    elif sc.startswith("D"):
+                                        wip_status_map[fp] = "deleted"
+                                    elif sc.startswith("R"):
+                                        wip_status_map[fp] = "renamed"
+                                    else:
+                                        wip_status_map[fp] = "modified"
+                    # Merge staged-only entries (new files that only show in --cached)
+                    if staged_name_status:
+                        for line in staged_name_status.strip().split("\n"):
+                            if line:
+                                parts = line.split("\t", 1)
+                                if len(parts) == 2:
+                                    sc = parts[0].strip()
+                                    fp = parts[1].strip()
+                                    if fp not in wip_status_map:
+                                        if sc.startswith("A"):
+                                            wip_status_map[fp] = "added"
+                                        elif sc.startswith("D"):
+                                            wip_status_map[fp] = "deleted"
+                                        else:
+                                            wip_status_map[fp] = "modified"
+
+                    wip_files_list = []
+                    # Parse tracked file numstat
+                    all_numstat = (wip_numstat or "")
+                    if staged_numstat:
+                        # Merge staged numstat for files not in wip_numstat
+                        seen = set()
+                        if all_numstat:
+                            for line in all_numstat.strip().split("\n"):
+                                if line:
+                                    p = line.split("\t")
+                                    if len(p) >= 3:
+                                        seen.add(p[2].strip())
+                        for line in staged_numstat.strip().split("\n"):
+                            if line:
+                                p = line.split("\t")
+                                if len(p) >= 3 and p[2].strip() not in seen:
+                                    all_numstat += "\n" + line
+
+                    if all_numstat:
+                        for line in all_numstat.strip().split("\n"):
+                            if line:
+                                parts = line.split("\t")
+                                if len(parts) >= 3:
+                                    fp = parts[2].strip()
+                                    wip_files_list.append(fp)
+
+                    # Add untracked files
+                    for upath in untracked_paths:
+                        wip_files_list.append(upath)
+                        wip_status_map[upath] = "added"
+
+                    synthetic_commit = {
+                        "hash": "uncommitted",
+                        "short_hash": "wip",
+                        "message": "Uncommitted changes",
+                        "author": "",
+                        "date": "",
+                        "files": wip_files_list,
+                        "is_uncommitted": True
+                    }
+                    commits.insert(0, synthetic_commit)
+
+                # Total stats: two-dot notation includes uncommitted changes
+                numstat_output = await self._run_git_command(
+                    ["git", "diff", "--numstat", merge_base], cwd
+                )
                 name_status_output = await self._run_git_command(
-                    ["git", "diff", "--name-status", f"{merge_base}...HEAD"], cwd
+                    ["git", "diff", "--name-status", merge_base], cwd
                 )
 
                 files = {}
@@ -1453,7 +1563,6 @@ class ClaudeWebUI:
                                 ins = parts[0].strip()
                                 dels = parts[1].strip()
                                 filepath = parts[2].strip()
-                                # Binary files show '-' for insertions/deletions
                                 ins_count = int(ins) if ins != "-" else 0
                                 dels_count = int(dels) if dels != "-" else 0
                                 is_binary = ins == "-" and dels == "-"
@@ -1465,6 +1574,29 @@ class ClaudeWebUI:
                                     "deletions": dels_count,
                                     "is_binary": is_binary
                                 }
+
+                # Add untracked files to total stats (not covered by git diff)
+                if untracked_paths:
+                    for upath in untracked_paths:
+                        if upath not in files:
+                            ustat = await self._run_git_command(
+                                ["git", "diff", "--numstat", "--no-index",
+                                 "/dev/null", upath],
+                                cwd, allow_nonzero=True
+                            )
+                            ins_count = 0
+                            if ustat:
+                                parts = ustat.split("\t")
+                                if len(parts) >= 3:
+                                    ins_val = parts[0].strip()
+                                    ins_count = int(ins_val) if ins_val != "-" else 0
+                            total_insertions += ins_count
+                            files[upath] = {
+                                "status": "added",
+                                "insertions": ins_count,
+                                "deletions": 0,
+                                "is_binary": False
+                            }
 
                 return {
                     "is_git_repo": True,
@@ -1482,8 +1614,16 @@ class ClaudeWebUI:
                 raise HTTPException(status_code=500, detail=str(e))
 
         @self.app.get("/api/sessions/{session_id}/diff/file")
-        async def get_session_diff_file(session_id: str, path: str = None):
-            """Get unified diff content for a specific file."""
+        async def get_session_diff_file(
+            session_id: str, path: str = None, ref: str = None
+        ):
+            """Get unified diff content for a specific file.
+
+            Args:
+                ref: Optional. When ``uncommitted``, uses two-dot diff
+                    (includes working tree changes). Default uses three-dot
+                    (committed changes only).
+            """
             if not path:
                 raise HTTPException(status_code=400, detail="path query parameter required")
 
@@ -1510,10 +1650,34 @@ class ClaudeWebUI:
                         detail="No remote tracking branch found"
                     )
 
-                # Get unified diff for this file
-                diff_output = await self._run_git_command(
-                    ["git", "diff", f"{merge_base}...HEAD", "--", path], cwd
-                )
+                if ref == "uncommitted":
+                    # Check if file is untracked
+                    is_tracked = await self._run_git_command(
+                        ["git", "ls-files", path], cwd
+                    )
+                    status_check = await self._run_git_command(
+                        ["git", "status", "--porcelain", "--", path], cwd
+                    )
+                    is_untracked = (
+                        status_check and status_check.startswith("??")
+                    )
+
+                    if is_untracked or not is_tracked:
+                        # Untracked file: diff vs /dev/null
+                        diff_output = await self._run_git_command(
+                            ["git", "diff", "--no-index", "/dev/null", path],
+                            cwd, allow_nonzero=True
+                        )
+                    else:
+                        # Tracked file: two-dot diff includes working tree
+                        diff_output = await self._run_git_command(
+                            ["git", "diff", merge_base, "--", path], cwd
+                        )
+                else:
+                    # Default: three-dot (committed changes only)
+                    diff_output = await self._run_git_command(
+                        ["git", "diff", f"{merge_base}...HEAD", "--", path], cwd
+                    )
 
                 return {
                     "path": path,
@@ -2949,8 +3113,16 @@ class ClaudeWebUI:
 
 # _serialize_message method removed - now using MessageProcessor.prepare_for_websocket() for unified formatting
 
-    async def _run_git_command(self, args: list[str], cwd: str) -> str | None:
-        """Run a git command via asyncio.create_subprocess_exec and return stdout, or None on error."""
+    async def _run_git_command(
+        self, args: list[str], cwd: str, allow_nonzero: bool = False
+    ) -> str | None:
+        """Run a git command via asyncio.create_subprocess_exec and return stdout, or None on error.
+
+        Args:
+            allow_nonzero: If True, return stdout even on non-zero exit codes.
+                Required for commands like ``git diff --no-index`` which return
+                exit code 1 when files differ (expected, not an error).
+        """
         try:
             proc = await asyncio.create_subprocess_exec(
                 *args,
@@ -2959,7 +3131,7 @@ class ClaudeWebUI:
                 stderr=asyncio.subprocess.PIPE
             )
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
-            if proc.returncode != 0:
+            if proc.returncode != 0 and not allow_nonzero:
                 return None
             return stdout.decode().strip()
         except (TimeoutError, FileNotFoundError, OSError) as e:

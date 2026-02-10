@@ -74,7 +74,7 @@
             v-for="file in diffStore.currentFiles"
             :key="file.path"
             class="file-item d-flex align-items-center gap-2 px-3 py-2 border-bottom"
-            @click="openFile(file.path)"
+            @click="openFile(file.path, 'uncommitted')"
           >
             <span class="status-icon" :class="'status-' + file.status">
               {{ statusIcon(file.status) }}
@@ -105,11 +105,12 @@
               <svg class="chevron-icon" :class="{ expanded: expandedCommits.has(commit.hash) }" width="10" height="10" viewBox="0 0 12 12">
                 <path d="M4.5 2L8.5 6L4.5 10" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
               </svg>
-              <code class="commit-hash">{{ commit.short_hash }}</code>
+              <span v-if="commit.is_uncommitted" class="wip-badge">WIP</span>
+              <code v-else class="commit-hash">{{ commit.short_hash }}</code>
               <span class="commit-message text-truncate flex-grow-1" :title="commit.message">
                 {{ commit.message }}
               </span>
-              <span class="commit-date small text-muted text-nowrap">
+              <span v-if="!commit.is_uncommitted" class="commit-date small text-muted text-nowrap">
                 {{ formatDate(commit.date) }}
               </span>
             </div>
@@ -118,7 +119,7 @@
                 v-for="filePath in commit.files"
                 :key="filePath"
                 class="file-item d-flex align-items-center gap-2 px-4 py-1"
-                @click="openFile(filePath)"
+                @click="openFile(filePath, commit.is_uncommitted ? 'uncommitted' : null)"
               >
                 <span class="status-icon" :class="'status-' + getFileStatus(filePath)">
                   {{ statusIcon(getFileStatus(filePath)) }}
@@ -157,9 +158,9 @@ function refresh() {
   }
 }
 
-function openFile(filePath) {
+function openFile(filePath, fileRef = null) {
   if (sessionStore.currentSessionId) {
-    diffStore.openFullView(sessionStore.currentSessionId, filePath)
+    diffStore.openFullView(sessionStore.currentSessionId, filePath, fileRef)
   }
 }
 
@@ -206,6 +207,21 @@ watch(
   (newId) => {
     if (newId && !diffStore.diffBySession.get(newId)) {
       diffStore.loadDiff(newId)
+    }
+  },
+  { immediate: true }
+)
+
+// Auto-expand uncommitted commit when diff data loads
+watch(
+  () => diffStore.currentDiff,
+  (diff) => {
+    if (diff?.commits) {
+      const uncommitted = diff.commits.find(c => c.is_uncommitted)
+      if (uncommitted) {
+        expandedCommits.value.add(uncommitted.hash)
+        expandedCommits.value = new Set(expandedCommits.value)
+      }
     }
   },
   { immediate: true }
@@ -321,6 +337,18 @@ watch(
   padding: 1px 4px;
   border-radius: 3px;
   flex-shrink: 0;
+}
+
+.wip-badge {
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: #856404;
+  background: #fff3cd;
+  padding: 1px 6px;
+  border-radius: 3px;
+  flex-shrink: 0;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
 }
 
 .commit-message {
