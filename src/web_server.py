@@ -2759,6 +2759,37 @@ class ClaudeWebUI:
                     response['applied_updates_for_storage'] = applied_updates_for_storage
                     logger.info(f"Built {len(updated_permissions)} permission updates from suggestions")
 
+                    # Issue #433: Persist approved tool names to session allowed_tools
+                    # SDK suggestions split tool spec into toolName + ruleContent,
+                    # e.g. toolName="Bash", ruleContent="gh issue view:*"
+                    # Reconstruct full format: "Bash(gh issue view:*)"
+                    tools_to_persist = set()
+                    for suggestion_dict in applied_updates_for_storage:
+                        if (
+                            suggestion_dict.get('type') == 'addRules'
+                            and suggestion_dict.get('behavior') == 'allow'
+                        ):
+                            for rule in suggestion_dict.get('rules') or []:
+                                tool_name = rule.get('toolName', '')
+                                rule_content = rule.get('ruleContent', '')
+                                if tool_name:
+                                    if rule_content:
+                                        tools_to_persist.add(f"{tool_name}({rule_content})")
+                                    else:
+                                        tools_to_persist.add(tool_name)
+
+                    if tools_to_persist:
+                        try:
+                            await self.coordinator.session_manager.update_allowed_tools(
+                                session_id, list(tools_to_persist)
+                            )
+                            logger.info(
+                                f"Persisted {len(tools_to_persist)} approved tools to session "
+                                f"{session_id} allowed_tools: {tools_to_persist}"
+                            )
+                        except Exception as persist_error:
+                            logger.error(f"Failed to persist approved tools: {persist_error}")
+
             except Exception as e:
                 # Handle any errors (e.g., session termination)
                 logger.error(f"PERMISSION CALLBACK: Error waiting for permission decision: {e}")
