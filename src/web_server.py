@@ -2099,6 +2099,111 @@ class ClaudeWebUI:
                 logger.error(f"Failed to browse filesystem: {e}")
                 raise HTTPException(status_code=500, detail=str(e))
 
+        @self.app.get("/api/filesystem/tree")
+        async def filesystem_tree(path: str = None, show_hidden: bool = False):
+            """List directory entries (files and folders) for the file browser"""
+            try:
+                if not path:
+                    raise HTTPException(status_code=400, detail="path parameter is required")
+
+                tree_path = Path(path).resolve()
+
+                if not tree_path.exists():
+                    raise HTTPException(status_code=404, detail="Path does not exist")
+                if not tree_path.is_dir():
+                    raise HTTPException(status_code=400, detail="Path is not a directory")
+
+                entries = []
+                try:
+                    for entry in sorted(tree_path.iterdir(), key=lambda e: e.name.lower()):
+                        is_hidden = entry.name.startswith('.')
+                        if not show_hidden and is_hidden:
+                            continue
+                        try:
+                            stat_info = entry.stat()
+                            entry_type = "folder" if entry.is_dir() else "file"
+                            entries.append({
+                                "name": entry.name,
+                                "path": str(entry.resolve()),
+                                "type": entry_type,
+                                "is_hidden": is_hidden,
+                                "size": stat_info.st_size if entry_type == "file" else None,
+                            })
+                        except (PermissionError, OSError):
+                            continue
+                except PermissionError as err:
+                    raise HTTPException(
+                        status_code=403, detail="Permission denied"
+                    ) from err
+
+                # Sort: folders first, then files, alphabetical within each group
+                entries.sort(key=lambda e: (0 if e["type"] == "folder" else 1, e["name"].lower()))
+
+                return {"path": str(tree_path), "entries": entries}
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"Failed to list filesystem tree: {e}")
+                raise HTTPException(status_code=500, detail=str(e)) from e
+
+        @self.app.get("/api/filesystem/read")
+        async def filesystem_read(path: str = None):
+            """Read file content for the file browser viewer"""
+            try:
+                if not path:
+                    raise HTTPException(status_code=400, detail="path parameter is required")
+
+                file_path = Path(path).resolve()
+
+                if not file_path.exists():
+                    raise HTTPException(status_code=404, detail="File does not exist")
+                if not file_path.is_file():
+                    raise HTTPException(status_code=400, detail="Path is not a file")
+
+                file_size = file_path.stat().st_size
+                max_size = 1024 * 1024  # 1MB
+
+                # Detect binary files by reading first 8KB
+                try:
+                    with open(file_path, 'rb') as f:
+                        sample = f.read(8192)
+                        if b'\x00' in sample:
+                            return {
+                                "path": str(file_path),
+                                "content": None,
+                                "size": file_size,
+                                "truncated": False,
+                                "binary": True,
+                                "error": "Binary file - preview not available",
+                            }
+                except PermissionError as err:
+                    raise HTTPException(
+                        status_code=403, detail="Permission denied"
+                    ) from err
+
+                # Read text content
+                truncated = file_size > max_size
+                try:
+                    with open(file_path, encoding='utf-8', errors='replace') as f:
+                        content = f.read(max_size)
+                except PermissionError as err:
+                    raise HTTPException(
+                        status_code=403, detail="Permission denied"
+                    ) from err
+
+                return {
+                    "path": str(file_path),
+                    "content": content,
+                    "size": file_size,
+                    "truncated": truncated,
+                    "binary": False,
+                }
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"Failed to read file: {e}")
+                raise HTTPException(status_code=500, detail=str(e)) from e
+
         # ========== Template Endpoints ==========
 
         @self.app.get("/api/templates")

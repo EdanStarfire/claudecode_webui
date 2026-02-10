@@ -3,6 +3,7 @@ import { ref, computed, readonly, watch } from 'vue'
 import { api } from '../utils/api'
 import { useSessionStore } from './session'
 import { useTaskStore } from './task'
+import { useFileBrowserStore } from './filebrowser'
 
 /**
  * Message Store - Manages messages and tool calls per session
@@ -604,6 +605,19 @@ export const useMessageStore = defineStore('message', () => {
           })
         } catch (e) {
           console.warn('Failed to update task store:', e)
+        }
+      }
+
+      // Issue #437: Auto-refresh file browser on file-modifying tool completion
+      if (toolCall && ['Write', 'Edit', 'NotebookEdit'].includes(toolCall.name) && !toolResultBlock.is_error) {
+        try {
+          const fileBrowserStore = useFileBrowserStore()
+          const filePath = toolCall.input?.file_path || toolCall.input?.notebook_path
+          if (filePath) {
+            fileBrowserStore.onToolResult(sessionId, toolCall.name, filePath)
+          }
+        } catch (e) {
+          console.warn('Failed to notify file browser store:', e)
         }
       }
     }

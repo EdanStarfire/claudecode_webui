@@ -52,6 +52,16 @@
           </span>
         </button>
       </li>
+      <li class="nav-item" role="presentation">
+        <button
+          class="nav-link"
+          :class="{ active: activeTab === 'files' }"
+          type="button"
+          @click="uiStore.setRightSidebarTab('files')"
+        >
+          Files
+        </button>
+      </li>
     </ul>
 
     <!-- Tab Content -->
@@ -59,6 +69,7 @@
       <TaskListPanel v-show="activeTab === 'tasks'" />
       <DiffPanel v-show="activeTab === 'diff'" />
       <ResourceGallery v-show="activeTab === 'resources'" />
+      <FileBrowserPanel v-show="activeTab === 'files'" />
     </div>
 
     <!-- Resize Handle -->
@@ -72,6 +83,9 @@
 
     <!-- Diff Full View Modal (teleported to body, Issue #435) -->
     <DiffFullView />
+
+    <!-- File Viewer Modal (teleported to body, Issue #437) -->
+    <FileViewerModal />
   </aside>
 </template>
 
@@ -86,6 +100,8 @@ import ResourceGallery from '../tasks/ResourceGallery.vue'
 import ResourceFullView from '../common/ResourceFullView.vue'
 import DiffPanel from '../tasks/DiffPanel.vue'
 import DiffFullView from '../common/DiffFullView.vue'
+import FileBrowserPanel from '../tasks/FileBrowserPanel.vue'
+import FileViewerModal from '../common/FileViewerModal.vue'
 
 const uiStore = useUIStore()
 const taskStore = useTaskStore()
