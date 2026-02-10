@@ -27,8 +27,9 @@ export const useDiffStore = defineStore('diff', () => {
   const fullViewOpen = ref(false)
   const fullViewSessionId = ref(null)
   const currentFilePath = ref(null)
+  const fullViewRef = ref(null)
 
-  // Per-file diff content cache (sessionId:path -> { content, loading, error })
+  // Per-file diff content cache (sessionId:ref:path -> { content, loading, error })
   const fileDiffCache = ref(new Map())
 
   // ========== COMPUTED ==========
@@ -77,7 +78,8 @@ export const useDiffStore = defineStore('diff', () => {
    */
   const currentFullViewFileDiff = computed(() => {
     if (!fullViewSessionId.value || !currentFilePath.value) return null
-    const key = `${fullViewSessionId.value}:${currentFilePath.value}`
+    const refKey = fullViewRef.value || 'committed'
+    const key = `${fullViewSessionId.value}:${refKey}:${currentFilePath.value}`
     return fileDiffCache.value.get(key) || null
   })
 
@@ -120,10 +122,11 @@ export const useDiffStore = defineStore('diff', () => {
   /**
    * Load per-file diff content
    */
-  async function loadFileDiff(sessionId, filePath) {
+  async function loadFileDiff(sessionId, filePath, fileRef = null) {
     if (!sessionId || !filePath) return
 
-    const key = `${sessionId}:${filePath}`
+    const refKey = fileRef || 'committed'
+    const key = `${sessionId}:${refKey}:${filePath}`
     const cached = fileDiffCache.value.get(key)
     if (cached && !cached.error && cached.content !== null) return
 
@@ -131,8 +134,10 @@ export const useDiffStore = defineStore('diff', () => {
     fileDiffCache.value = new Map(fileDiffCache.value)
 
     try {
+      const params = { path: filePath }
+      if (fileRef) params.ref = fileRef
       const response = await apiGet(`/api/sessions/${sessionId}/diff/file`, {
-        params: { path: filePath }
+        params
       })
       fileDiffCache.value.set(key, { content: response.diff, loading: false, error: null })
     } catch (err) {
@@ -145,11 +150,12 @@ export const useDiffStore = defineStore('diff', () => {
   /**
    * Open full-screen diff view for a file
    */
-  function openFullView(sessionId, filePath) {
+  function openFullView(sessionId, filePath, fileRef = null) {
     fullViewSessionId.value = sessionId
     currentFilePath.value = filePath
+    fullViewRef.value = fileRef
     fullViewOpen.value = true
-    loadFileDiff(sessionId, filePath)
+    loadFileDiff(sessionId, filePath, fileRef)
   }
 
   /**
@@ -157,6 +163,7 @@ export const useDiffStore = defineStore('diff', () => {
    */
   function closeFullView() {
     fullViewOpen.value = false
+    fullViewRef.value = null
   }
 
   /**
@@ -170,7 +177,7 @@ export const useDiffStore = defineStore('diff', () => {
     const idx = files.findIndex(f => f.path === currentFilePath.value)
     const nextIdx = (idx + 1) % files.length
     currentFilePath.value = files[nextIdx].path
-    loadFileDiff(fullViewSessionId.value, currentFilePath.value)
+    loadFileDiff(fullViewSessionId.value, currentFilePath.value, fullViewRef.value)
   }
 
   /**
@@ -184,7 +191,7 @@ export const useDiffStore = defineStore('diff', () => {
     const idx = files.findIndex(f => f.path === currentFilePath.value)
     const prevIdx = (idx - 1 + files.length) % files.length
     currentFilePath.value = files[prevIdx].path
-    loadFileDiff(fullViewSessionId.value, currentFilePath.value)
+    loadFileDiff(fullViewSessionId.value, currentFilePath.value, fullViewRef.value)
   }
 
   /**
@@ -220,6 +227,7 @@ export const useDiffStore = defineStore('diff', () => {
     fullViewOpen,
     fullViewSessionId,
     currentFilePath,
+    fullViewRef,
     fileDiffCache,
 
     // Computed
