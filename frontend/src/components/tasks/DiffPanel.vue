@@ -74,7 +74,7 @@
             v-for="file in diffStore.currentFiles"
             :key="file.path"
             class="file-item d-flex align-items-center gap-2 px-3 py-2 border-bottom"
-            @click="openFile(file.path)"
+            @click="openFile(file.path, 'uncommitted')"
           >
             <span class="status-icon" :class="'status-' + file.status">
               {{ statusIcon(file.status) }}
