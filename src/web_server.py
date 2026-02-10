@@ -2759,6 +2759,30 @@ class ClaudeWebUI:
                     response['applied_updates_for_storage'] = applied_updates_for_storage
                     logger.info(f"Built {len(updated_permissions)} permission updates from suggestions")
 
+                    # Issue #433: Persist approved tool names to session allowed_tools
+                    tools_to_persist = set()
+                    for suggestion_dict in applied_updates_for_storage:
+                        if (
+                            suggestion_dict.get('type') == 'addRules'
+                            and suggestion_dict.get('behavior') == 'allow'
+                        ):
+                            for rule in suggestion_dict.get('rules') or []:
+                                rule_tool = rule.get('toolName', '')
+                                if rule_tool:
+                                    tools_to_persist.add(rule_tool)
+
+                    if tools_to_persist:
+                        try:
+                            await self.coordinator.session_manager.update_allowed_tools(
+                                session_id, list(tools_to_persist)
+                            )
+                            logger.info(
+                                f"Persisted {len(tools_to_persist)} approved tools to session "
+                                f"{session_id} allowed_tools: {tools_to_persist}"
+                            )
+                        except Exception as persist_error:
+                            logger.error(f"Failed to persist approved tools: {persist_error}")
+
             except Exception as e:
                 # Handle any errors (e.g., session termination)
                 logger.error(f"PERMISSION CALLBACK: Error waiting for permission decision: {e}")

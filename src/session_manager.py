@@ -552,6 +552,38 @@ class SessionManager:
                 logger.error(f"Failed to update session {session_id} permission mode: {e}")
                 return False
 
+    async def update_allowed_tools(self, session_id: str, tools_to_add: list[str]) -> bool:
+        """Add tools to session's allowed_tools list (case-sensitive, deduplicated).
+
+        Issue #433: Persist permission approvals to session configuration.
+        """
+        async with self._get_session_lock(session_id):
+            try:
+                session = self._active_sessions.get(session_id)
+                if not session:
+                    logger.error(f"Session {session_id} not found")
+                    return False
+
+                existing = set(session.allowed_tools or [])
+                new_tools = [t for t in tools_to_add if t not in existing]
+                if not new_tools:
+                    return True  # Already present
+
+                session.allowed_tools = list(existing | set(new_tools))
+                session.updated_at = datetime.now(UTC)
+                await self._persist_session_state(session_id)
+                await self._notify_state_change_callbacks(session_id, session.state)
+                session_logger.info(
+                    f"Added {len(new_tools)} tools to session {session_id} "
+                    f"allowed_tools: {new_tools}"
+                )
+                return True
+            except Exception as e:
+                logger.error(
+                    f"Failed to update allowed_tools for session {session_id}: {e}"
+                )
+                return False
+
     async def update_latest_message(
         self,
         session_id: str,
