@@ -14,6 +14,18 @@
           class="resource-item"
           :class="{ 'is-image': isImage(resource) }"
         >
+          <!-- Remove button (Issue #423) -->
+          <button
+            class="remove-btn"
+            @click.stop="removeResource(resource.resource_id)"
+            title="Remove from panel"
+            aria-label="Remove resource"
+          >
+            <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+              <path d="M4.646 4.646a.5.5 0 0 1 .708 0L8 7.293l2.646-2.647a.5.5 0 0 1 .708.708L8.707 8l2.647 2.646a.5.5 0 0 1-.708.708L8 8.707l-2.646 2.647a.5.5 0 0 1-.708-.708L7.293 8 4.646 5.354a.5.5 0 0 1 0-.708z"/>
+            </svg>
+          </button>
+
           <!-- Image thumbnail -->
           <div
             v-if="isImage(resource)"
@@ -128,6 +140,10 @@ function handleImageError(event) {
   event.target.src = 'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100"%3E%3Crect fill="%23eee" width="100" height="100"/%3E%3Ctext fill="%23999" x="50" y="50" text-anchor="middle" dy=".3em"%3E?%3C/text%3E%3C/svg%3E'
 }
 
+function removeResource(resourceId) {
+  resourceStore.removeResource(sessionStore.currentSessionId, resourceId)
+}
+
 function addToAttachments(resource) {
   if (addAttachmentFromResource) {
     addAttachmentFromResource(resource)
@@ -169,6 +185,7 @@ function addToAttachments(resource) {
 }
 
 .resource-item {
+  position: relative;
   display: flex;
   flex-direction: column;
   border-radius: 6px;
@@ -180,6 +197,44 @@ function addToAttachments(resource) {
 
 .resource-item:hover {
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+}
+
+/* Issue #423: Remove button */
+.remove-btn {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  z-index: 2;
+  width: 22px;
+  height: 22px;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 50%;
+  background-color: rgba(0, 0, 0, 0.5);
+  color: #fff;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s ease, background-color 0.15s ease;
+}
+
+.resource-item:hover .remove-btn {
+  opacity: 1;
+}
+
+.remove-btn:hover {
+  background-color: rgba(220, 53, 69, 0.85);
+}
+
+@media (hover: none) {
+  /* Touch devices: always show remove button */
+  .remove-btn {
+    opacity: 1;
+  }
 }
 
 .resource-thumbnail {

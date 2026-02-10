@@ -1200,6 +1200,28 @@ class ClaudeWebUI:
                 logger.error(f"Failed to download resource: {e}")
                 raise HTTPException(status_code=500, detail=str(e))
 
+        # Issue #423: Remove resource from session display (soft-remove)
+        @self.app.delete("/api/sessions/{session_id}/resources/{resource_id}")
+        async def remove_session_resource(session_id: str, resource_id: str):
+            """Soft-remove a resource from the session display (file is preserved)"""
+            try:
+                success = await self.coordinator.remove_session_resource(session_id, resource_id)
+                if not success:
+                    raise HTTPException(status_code=404, detail="Resource not found or removal failed")
+
+                # Broadcast removal to WebSocket clients
+                await self.websocket_manager.send_message(session_id, {
+                    "type": "resource_removed",
+                    "resource_id": resource_id,
+                })
+
+                return {"status": "ok", "resource_id": resource_id}
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"Failed to remove resource: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
         # Issue #404: Legacy image endpoints (backward compatibility)
         @self.app.get("/api/sessions/{session_id}/images")
         async def get_session_images(session_id: str):

@@ -432,6 +432,32 @@ class SessionCoordinator:
 
         return None
 
+    async def remove_session_resource(self, session_id: str, resource_id: str) -> bool:
+        """
+        Soft-remove a resource from the session display.
+
+        Issue #423: Appends a removal marker to resources.jsonl so the resource
+        is hidden from the gallery. The .bin file is NOT deleted.
+
+        Args:
+            session_id: Session ID
+            resource_id: Resource ID to remove from display
+
+        Returns:
+            True if removed successfully, False otherwise
+        """
+        storage_manager = self._storage_managers.get(session_id)
+        if not storage_manager:
+            session_dir = await self.session_manager.get_session_directory(session_id)
+            if session_dir:
+                storage_manager = DataStorageManager(session_dir)
+                await storage_manager.initialize()
+
+        if storage_manager:
+            return await storage_manager.remove_resource_from_display(resource_id)
+
+        return False
+
     def set_permission_callback_factory(self, factory: Callable[[str], Callable]) -> None:
         """
         Set the permission callback factory for creating callbacks on demand.

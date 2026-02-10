@@ -658,6 +658,15 @@ export const useWebSocketStore = defineStore('websocket', () => {
         }
         break
 
+      // Issue #423: Handle resource_removed (multi-client sync)
+      case 'resource_removed':
+        if (payload.resource_id) {
+          const resourceStore = useResourceStore()
+          resourceStore.handleResourceRemoved(sessionId, payload.resource_id)
+          console.log(`Resource removed for session ${sessionId}:`, payload.resource_id)
+        }
+        break
+
       // Backward compatibility: Handle image_registered from legacy MCP tool
       case 'image_registered':
         if (payload.image) {

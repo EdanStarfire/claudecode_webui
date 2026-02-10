@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { useSessionStore } from './session'
-import { apiGet } from '../utils/api'
+import { apiGet, apiDelete } from '../utils/api'
 
 /**
  * Resource Store - Manages resources (images, files) displayed via MCP tool per session
@@ -430,6 +430,59 @@ export const useResourceStore = defineStore('resource', () => {
   const clearImages = clearResources
 
   /**
+   * Remove a resource from the session display (soft-remove via API).
+   * Issue #423: The resource file is preserved on disk.
+   */
+  async function removeResource(sessionId, resourceId) {
+    if (!sessionId || !resourceId) return
+
+    try {
+      await apiDelete(`/api/sessions/${sessionId}/resources/${resourceId}`)
+      // Optimistically remove from local state
+      _spliceResource(sessionId, resourceId)
+    } catch (error) {
+      console.error(`Failed to remove resource ${resourceId}:`, error)
+    }
+  }
+
+  /**
+   * Handle resource_removed WebSocket event (multi-client sync).
+   * Issue #423: Called from websocket store when another client removes a resource.
+   */
+  function handleResourceRemoved(sessionId, resourceId) {
+    _spliceResource(sessionId, resourceId)
+  }
+
+  /**
+   * Internal: splice a resource out of local state and adjust full view index.
+   */
+  function _spliceResource(sessionId, resourceId) {
+    const resources = resourcesBySession.value.get(sessionId)
+    if (!resources) return
+
+    const idx = resources.findIndex(r => r.resource_id === resourceId)
+    if (idx === -1) return
+
+    resources.splice(idx, 1)
+
+    // Trigger reactivity
+    resourcesBySession.value = new Map(resourcesBySession.value)
+
+    // Adjust full view index if viewing this session
+    if (fullViewOpen.value && fullViewSessionId.value === sessionId) {
+      if (resources.length === 0) {
+        closeFullView()
+      } else if (currentResourceIndex.value >= resources.length) {
+        currentResourceIndex.value = resources.length - 1
+      }
+    }
+
+    // Clear text cache for removed resource
+    textContentCache.value.delete(resourceId)
+    textContentCache.value = new Map(textContentCache.value)
+  }
+
+  /**
    * Fetch text content for a resource and cache it
    */
   async function fetchTextContent(sessionId, resourceId) {
@@ -540,6 +593,8 @@ export const useResourceStore = defineStore('resource', () => {
     // Actions
     loadResources,
     addResource,
+    removeResource,
+    handleResourceRemoved,
     openFullView,
     closeFullView,
     nextResource,
