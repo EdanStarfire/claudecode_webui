@@ -2760,6 +2760,9 @@ class ClaudeWebUI:
                     logger.info(f"Built {len(updated_permissions)} permission updates from suggestions")
 
                     # Issue #433: Persist approved tool names to session allowed_tools
+                    # SDK suggestions split tool spec into toolName + ruleContent,
+                    # e.g. toolName="Bash", ruleContent="gh issue view:*"
+                    # Reconstruct full format: "Bash(gh issue view:*)"
                     tools_to_persist = set()
                     for suggestion_dict in applied_updates_for_storage:
                         if (
@@ -2767,9 +2770,13 @@ class ClaudeWebUI:
                             and suggestion_dict.get('behavior') == 'allow'
                         ):
                             for rule in suggestion_dict.get('rules') or []:
-                                rule_tool = rule.get('toolName', '')
-                                if rule_tool:
-                                    tools_to_persist.add(rule_tool)
+                                tool_name = rule.get('toolName', '')
+                                rule_content = rule.get('ruleContent', '')
+                                if tool_name:
+                                    if rule_content:
+                                        tools_to_persist.add(f"{tool_name}({rule_content})")
+                                    else:
+                                        tools_to_persist.add(tool_name)
 
                     if tools_to_persist:
                         try:
