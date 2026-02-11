@@ -109,6 +109,7 @@ def configure_logging(
     debug_legion: bool = False,
     debug_session_manager: bool = False,
     debug_template_manager: bool = False,
+    debug_skill_manager: bool = False,
     debug_all: bool = False,
     log_dir: str = "data/logs"
 ) -> None:
@@ -125,6 +126,7 @@ def configure_logging(
         debug_legion: Enable Legion multi-agent system debugging
         debug_session_manager: Enable session manager debugging
         debug_template_manager: Enable template manager debugging
+        debug_skill_manager: Enable skill manager debugging
         debug_all: Enable all debug logging (excludes ping/pong due to excessive noise)
         log_dir: Directory for log files
 
@@ -158,6 +160,7 @@ def configure_logging(
         'debug_legion': debug_legion or debug_all,
         'debug_session_manager': debug_session_manager or debug_all,
         'debug_template_manager': debug_template_manager or debug_all,
+        'debug_skill_manager': debug_skill_manager or debug_all,
         'log_dir': log_dir
     }
 
@@ -241,6 +244,12 @@ def configure_logging(
             'file': f"{log_dir}/template_manager.log",
             'enabled': _log_config['debug_template_manager'],
             'console': _log_config['debug_template_manager'],
+            'level': logging.DEBUG
+        },
+        'skill_manager': {
+            'file': f"{log_dir}/skill_manager.log",
+            'enabled': _log_config['debug_skill_manager'],
+            'console': _log_config['debug_skill_manager'],
             'level': logging.DEBUG
         }
     }

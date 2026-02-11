@@ -35,6 +35,7 @@ Debug Flags:
   --debug-legion            Enable Legion multi-agent system debugging
   --debug-session-manager   Enable session manager debugging
   --debug-template-manager  Enable template manager debugging
+  --debug-skill-manager     Enable skill manager debugging
   --debug-all               Enable all debug logging (excludes ping/pong)
         """
     )
@@ -62,6 +63,7 @@ Debug Flags:
     parser.add_argument('--debug-legion', action='store_true', help='Enable Legion multi-agent system debugging')
     parser.add_argument('--debug-session-manager', action='store_true', help='Enable session manager debugging')
     parser.add_argument('--debug-template-manager', action='store_true', help='Enable template manager debugging')
+    parser.add_argument('--debug-skill-manager', action='store_true', help='Enable skill manager debugging')
     parser.add_argument('--debug-all', action='store_true', help='Enable all debug logging (excludes ping/pong)')
 
     # Experimental features
@@ -90,6 +92,7 @@ Debug Flags:
         debug_legion=args.debug_legion,
         debug_session_manager=args.debug_session_manager,
         debug_template_manager=args.debug_template_manager,
+        debug_skill_manager=args.debug_skill_manager,
         debug_all=args.debug_all,
         log_dir=str(data_dir_path / "logs")
     )
