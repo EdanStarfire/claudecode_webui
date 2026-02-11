@@ -34,6 +34,7 @@ from .models.messages import (
 )
 from .permission_resolver import resolve_effective_permissions
 from .session_coordinator import SessionCoordinator
+from .skill_manager import SkillManager
 from .session_manager import SessionState
 from .timestamp_utils import normalize_timestamp
 
@@ -357,6 +358,7 @@ class ClaudeWebUI:
     def __init__(self, data_dir: Path = None, experimental: bool = False):
         self.app = FastAPI(title="Claude Code WebUI", version="1.0.0")
         self.coordinator = SessionCoordinator(data_dir, experimental=experimental)
+        self.skill_manager = SkillManager()
         self.websocket_manager = WebSocketManager()
         self.ui_websocket_manager = UIWebSocketManager()
         self.legion_websocket_manager = LegionWebSocketManager()
@@ -517,6 +519,7 @@ class ClaudeWebUI:
     async def initialize(self):
         """Initialize the WebUI application"""
         await self.coordinator.initialize()
+        await self.skill_manager.sync()
 
         # Templates are now loaded in SessionCoordinator.initialize()
 
