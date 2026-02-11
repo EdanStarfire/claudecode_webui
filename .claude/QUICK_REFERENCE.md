@@ -41,7 +41,7 @@ You are an **orchestrator** managing a fleet of minions that work on issues in i
 
 ### Sync Main Branch
 ```
-/sync_main
+/git-sync
 ```
 - Updates main from origin
 - Run before spawning new batch of workers
@@ -74,7 +74,7 @@ User: "Looks good, approve it"
 You: /approve_issue 123
 
 # 8. Prepare for next batch
-You: /sync_main
+You: /git-sync
 ```
 
 ## Key Points

@@ -63,7 +63,7 @@ Merge PR, clean up all resources after user approval.
 ### `/status_workers`
 Show status of all active Planners and Builders.
 
-### `/sync_main`
+### `/git-sync`
 Pull latest changes from main branch.
 
 ## Key Skills
@@ -148,7 +148,7 @@ User reviews PR and test servers
 - Let Builders work autonomously on approved plans
 - Review PRs before approving merges
 - Clean up after merges with `/approve_issue`
-- Sync main periodically with `/sync_main`
+- Sync main periodically with `/git-sync`
 
 **DON'T:**
 - Implement issues yourself (spawn minions instead)
