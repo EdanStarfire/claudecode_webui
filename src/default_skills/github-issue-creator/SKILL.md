@@ -1,7 +1,9 @@
 ---
 name: github-issue-creator
 description: Create well-structured GitHub issues focused on user problems and outcomes, not implementation. Use when user reports bugs or requests features to ensure clear, testable requirements without premature implementation details.
-allowed-tools: [Bash(gh issue create:*, gh label:*)]
+allowed-tools:
+  - Bash(gh issue create:*)
+  - Bash(gh label:*)
 ---
 
 # GitHub Issue Creator

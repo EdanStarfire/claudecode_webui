@@ -3,7 +3,15 @@ name: approve_issue
 description: Approve completed issue work, merge PR, and clean up resources
 disable-model-invocation: true
 argument-hint: <issue_number>
-allowed-tools: [Bash(git branch:*, git checkout:*, git pull:*), Bash(gh pr:*), Bash(ls:*), Skill, mcp__legion__dispose_minion, mcp__legion__get_minion_info]
+allowed-tools:
+  - Bash(git branch -d:*)
+  - Bash(git checkout:*)
+  - Bash(git pull:*)
+  - Bash(gh pr:*)
+  - Bash(ls:*)
+  - Skill(github-pr-manager)
+  - Skill(custom-cleanup-process)
+  - Skill(worktree-manager)
 ---
 
 ## Approve Issue

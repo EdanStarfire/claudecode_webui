@@ -2,9 +2,9 @@
 name: process-manager
 description: Safely start, monitor, and stop processes by PID. Use when managing background servers, finding running processes, or ensuring clean process termination.
 allowed-tools:
-  - Bash(scripts/find-port.sh :*)
-  - Bash(scripts/kill-pid.sh :*)
-  - Bash(scripts/check-pid.sh :*)
+  - Bash(~/.claude/skills/process-manager/scripts/find-port.sh :*)
+  - Bash(~/.claude/skills/process-manager/scripts/kill-pid.sh :*)
+  - Bash(~/.claude/skills/process-manager/scripts/check-pid.sh :*)
 ---
 
 # Process Manager
@@ -22,7 +22,7 @@ allowed-tools:
 #### Find process on a port
 
 ```bash
-bash scripts/find-port.sh <port>
+~/.claude/skills/process-manager/scripts/find-port.sh <port>
 ```
 
 | Field | Meaning |
@@ -37,9 +37,9 @@ bash scripts/find-port.sh <port>
 #### Kill a process
 
 ```bash
-bash scripts/kill-pid.sh <PID>
-bash scripts/kill-pid.sh <PID> --force              # Skip SIGTERM, go straight to SIGKILL
-bash scripts/kill-pid.sh <PID> --timeout 10          # Wait 10s before force-killing (default: 5)
+~/.claude/skills/process-manager/scripts/kill-pid.sh <PID>
+~/.claude/skills/process-manager/scripts/kill-pid.sh <PID> --force              # Skip SIGTERM, go straight to SIGKILL
+~/.claude/skills/process-manager/scripts/kill-pid.sh <PID> --timeout 10          # Wait 10s before force-killing (default: 5)
 ```
 
 | Field | Meaning |
@@ -56,7 +56,7 @@ bash scripts/kill-pid.sh <PID> --timeout 10          # Wait 10s before force-kil
 #### Check if a process is running
 
 ```bash
-bash scripts/check-pid.sh <PID>
+~/.claude/skills/process-manager/scripts/check-pid.sh <PID>
 ```
 
 | Field | Meaning |
@@ -75,11 +75,11 @@ bash scripts/check-pid.sh <PID>
 
 #### Port conflict ("Address already in use")
 
-1. Run `find-port.sh <port>` to identify what's there
+1. Run `~/.claude/skills/process-manager/scripts/find-port.sh <port>` to identify what's there
 2. Present process info to user and ask:
-   - **Kill it** — if it's a leftover test server, run `kill-pid.sh <PID>`
+   - **Kill it** — if it's a leftover test server, run `~/.claude/skills/process-manager/scripts/kill-pid.sh <PID>`
    - **Use different port** — if it's a production service or unrelated process
-   - **Investigate** — if unclear, run `check-pid.sh <PID>` for more detail
+   - **Investigate** — if unclear, run `~/.claude/skills/process-manager/scripts/check-pid.sh <PID>` for more detail
 
 #### Permission denied
 

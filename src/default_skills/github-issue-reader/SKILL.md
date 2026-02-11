@@ -1,7 +1,11 @@
 ---
 name: github-issue-reader
 description: Fetch and analyze GitHub issue details including comments, metadata, and discussion context. Use when user mentions issue numbers, URLs, or you need to understand implementation requirements from a GitHub issue.
-allowed-tools: [Bash(gh issue view:*, gh issue list:*, gh auth status:*)]
+allowed-tools:
+  - Bash(gh issue view:*)
+  - Bash(gh issue list:*)
+  - Bash(gh auth status)
+  - Bash(gh auth login)
 ---
 
 # GitHub Issue Reader
@@ -76,7 +80,7 @@ Ambiguities/Questions:
 ## Examples
 
 ### Example 1: User mentions issue number
-```
+```gh
 User: "Can you look at issue #42?"
 Action: Run gh issue view 42 and gh issue view 42 --comments
 Output: Structured summary of the issue

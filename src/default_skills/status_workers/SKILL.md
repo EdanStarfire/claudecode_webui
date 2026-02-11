@@ -1,7 +1,10 @@
 ---
 name: status_workers
 description: Show status of all active issue workers and their progress
-allowed-tools: [Bash(ls:*), Skill, mcp__legion__list_minions, mcp__legion__get_minion_info]
+allowed-tools:
+  - Bash(ls:*)
+  - Skill(worktree-manager)
+  - Skill(custom-environment-setup)
 ---
 
 ## Status Workers

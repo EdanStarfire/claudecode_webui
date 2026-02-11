@@ -2,9 +2,10 @@
 name: worktree-manager
 description: Manage git worktrees for isolated issue work. Create, list, and remove worktrees safely.
 allowed-tools:
-  - Bash(scripts/create.sh :*)
-  - Bash(scripts/list.sh)
-  - Bash(scripts/remove.sh :*)
+  - Bash(~/.claude/skills/worktree-manager/scripts/create.sh :*)
+  - Bash(~/.claude/skills/worktree-manager/scripts/list.sh)
+  - Bash(~/.claude/skills/worktree-manager/scripts/remove.sh :*)
+  - Bash(git status:*)
 ---
 
 # Worktree Manager
@@ -14,9 +15,9 @@ allowed-tools:
 ### Create a worktree
 
 ```bash
-bash scripts/create.sh <issue_number>
-bash scripts/create.sh <issue_number> --prefix fix       # Branch prefix (default: feat)
-bash scripts/create.sh <issue_number> --branch main      # Override default branch detection
+~/.claude/skills/worktree-manager/scripts/create.sh <issue_number>
+~/.claude/skills/worktree-manager/scripts/create.sh <issue_number> --prefix fix       # Branch prefix (default: feat)
+~/.claude/skills/worktree-manager/scripts/create.sh <issue_number> --branch main      # Override default branch detection
 ```
 
 The script creates `worktrees/issue-<N>/` with branch `<prefix>/issue-<N>` based on the latest `origin/<default-branch>`.
@@ -51,7 +52,7 @@ The script creates `worktrees/issue-<N>/` with branch `<prefix>/issue-<N>` based
 ### List worktrees
 
 ```bash
-bash scripts/list.sh
+~/.claude/skills/worktree-manager/scripts/list.sh
 ```
 
 Outputs one block per worktree (separated by `---`), plus a summary count at the end.
@@ -72,8 +73,8 @@ Format this into a readable summary for the user.
 ### Remove a worktree
 
 ```bash
-bash scripts/remove.sh <issue_number>
-bash scripts/remove.sh <issue_number> --force    # Discard uncommitted changes
+~/.claude/skills/worktree-manager/scripts/remove.sh <issue_number>
+~/.claude/skills/worktree-manager/scripts/remove.sh <issue_number> --force    # Discard uncommitted changes
 ```
 
 | Field | Meaning |

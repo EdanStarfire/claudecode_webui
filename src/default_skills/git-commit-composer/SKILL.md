@@ -1,7 +1,12 @@
 ---
 name: git-commit-composer
 description: Create well-formatted semantic commit messages following project conventions. Use when committing changes to ensure consistent, descriptive commit history.
-allowed-tools: [Bash(git commit:*, git status:*, git diff:*, git log:*, git add:*)]
+allowed-tools:
+  - Bash(git commit:*)
+  - Bash(git status:*)
+  - Bash(git diff:*)
+  - Bash(git log:*)
+  - Bash(git add:*)
 ---
 
 # Git Commit Composer

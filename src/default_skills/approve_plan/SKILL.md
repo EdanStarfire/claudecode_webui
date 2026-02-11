@@ -3,7 +3,12 @@ name: approve_plan
 description: Approve a plan and spawn a Builder to implement it
 disable-model-invocation: true
 argument-hint: <issue_number>
-allowed-tools: [Bash(git worktree:*, gh issue view:*, ls:*), Skill, mcp__legion__spawn_minion, mcp__legion__dispose_minion, mcp__legion__get_minion_info, mcp__legion__send_comm]
+allowed-tools:
+  - Bash(git worktree:*)
+  - Bash(gh issue view:*)
+  - Bash(ls:*)
+  - Skill(custom-plan-manager)
+  - Skill(custom-environment-setup)
 ---
 
 ## Approve Plan

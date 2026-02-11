@@ -3,7 +3,13 @@ name: plan_issue
 description: Start planning phase for an issue by spawning a Planner minion
 disable-model-invocation: true
 argument-hint: <issue_number>
-allowed-tools: [Bash(ls:*, git worktree:*), Skill, Task, mcp__legion__spawn_minion, mcp__legion__list_templates, mcp__legion__send_comm]
+allowed-tools:
+  - Bash(ls:*)
+  - Bash(git worktree:*)
+  - Skill(custom-plan-manager)
+  - Skill(custom-environment-setup)
+  - Skill(worktree-manager)
+  - Task
 ---
 
 ## Plan Issue

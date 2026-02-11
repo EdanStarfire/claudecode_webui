@@ -1,7 +1,9 @@
 ---
 name: github-authenticator
 description: Verify and troubleshoot GitHub CLI authentication. Use when gh commands fail with auth errors or when setting up GitHub integration for the first time.
-allowed-tools: [Bash(gh auth:*, gh config:*)]
+allowed-tools:
+  - Bash(gh auth:*)
+  - Bash(gh config get:*)
 ---
 
 # GitHub Authenticator

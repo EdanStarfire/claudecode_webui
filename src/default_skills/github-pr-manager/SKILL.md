@@ -1,7 +1,12 @@
 ---
 name: github-pr-manager
 description: Create, view, and merge GitHub pull requests with validation. Use when creating PRs from branches, checking PR status, or merging approved PRs with cleanup.
-allowed-tools: [Bash(git branch:*, git push:*, gh pr:*)]
+allowed-tools:
+  - Bash(git branch:*)
+  - Bash(git push:*)
+  - Bash(gh pr:*)
+  - Bash(gh auth status)
+  - Bash(gh auth login)
 ---
 
 # GitHub PR Manager

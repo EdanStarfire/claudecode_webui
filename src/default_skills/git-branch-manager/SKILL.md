@@ -2,10 +2,13 @@
 name: git-branch-manager
 description: Create, switch, and manage git branches with proper handling of uncommitted changes. Use when creating feature branches, switching contexts, or cleaning up after merges.
 allowed-tools:
+  - Skill(git-state-validator)
+  - Skill(git-sync)
   - Bash(git checkout:*)
   - Bash(git fetch:*)
   - Bash(git pull:*)
-  - Bash(git branch:*)
+  - Bash(git branch --list:*)
+  - Bash(git branch --merged:*)
   - Bash(git stash:*)
   - Bash(git log:*)]
 ---

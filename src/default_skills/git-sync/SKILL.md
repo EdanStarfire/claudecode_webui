@@ -2,7 +2,7 @@
 name: git-sync
 description: Synchronize local default branch with remote, ensuring up-to-date base for worktrees.
 allowed-tools: 
-  - Bash(scripts/sync.sh:*)
+  - Bash(~/.claude/skills/git-sync/scripts/sync.sh:*)
   - Bash(git stash :*)
   - Bash(git restore :*)
   - Bash(git checkout :*)
@@ -18,13 +18,13 @@ allowed-tools:
 Run the sync script. The script path is relative to this skill's directory:
 
 ```bash
-bash scripts/sync.sh
+~/.claude/skills/git-sync/scripts/sync.sh
 ```
 
 To override the default branch (e.g. if auto-detection fails):
 
 ```bash
-bash scripts/sync.sh --branch main
+~/.claude/skills/git-sync/scripts/sync.sh --branch main
 ```
 
 ### Reading the Output
@@ -70,7 +70,7 @@ The default branch has uncommitted changes, which is unexpected. Show the user t
 The script could not determine the default branch automatically. Ask the user which branch to sync (typically `main` or `master`), then re-run with:
 
 ```bash
-bash scripts/sync.sh --branch <user-specified-branch>
+~/.claude/skills/git-sync/scripts/sync.sh --branch <user-specified-branch>
 ```
 
 #### Exit 3 — Fast-forward failed (`ERROR_CODE=ff_failed`)

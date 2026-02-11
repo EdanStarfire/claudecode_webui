@@ -1,7 +1,14 @@
 ---
 name: codebase-explorer
 description: Identify relevant files, understand architecture patterns, and find code by functionality. Use when you need to understand where specific functionality lives or find files related to a feature area.
-allowed-tools: [Read, Grep, Glob]
+allowed-tools:
+  - Read
+  - Grep
+  - Glob
+  - Bash(grep :*)
+  - Bash(find :*)
+  - Bash(cat :*)
+  - Bash(rg :*)
 ---
 
 # Codebase Explorer

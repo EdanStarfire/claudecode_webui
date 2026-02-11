@@ -2,7 +2,7 @@
 name: git-state-validator
 description: Check git repository status, detect conflicts, and validate branch state before operations. Use when verifying working directory cleanliness, checking for conflicts, or validating branch state.
 allowed-tools:
-  - Bash(scripts/validate.sh:*)
+  - Bash(~/.claude/skills/git-state-validator/scripts/validate.sh:*)
 ---
 
 # Git State Validator
@@ -14,14 +14,14 @@ allowed-tools:
 Run the validation script:
 
 ```bash
-bash scripts/validate.sh
+~/.claude/skills/git-state-validator/scripts/validate.sh
 ```
 
 Optional flags:
 
 ```bash
-bash scripts/validate.sh --fetch     # Fetch remote before checking sync status
-bash scripts/validate.sh --health    # Include repository integrity check (slow)
+~/.claude/skills/git-state-validator/scripts/validate.sh --fetch     # Fetch remote before checking sync status
+~/.claude/skills/git-state-validator/scripts/validate.sh --health    # Include repository integrity check (slow)
 ```
 
 ### Reading the Output
