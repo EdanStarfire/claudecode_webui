@@ -98,6 +98,16 @@
                   <span v-if="tabErrors.advanced" class="error-indicator" title="This tab has validation errors"></span>
                 </button>
               </li>
+              <li class="nav-item" role="presentation">
+                <button
+                  class="nav-link"
+                  :class="{ active: activeTab === 'sandbox' }"
+                  type="button"
+                  @click="activeTab = 'sandbox'"
+                >
+                  Sandbox
+                </button>
+              </li>
             </ul>
 
             <!-- Tab Content -->
@@ -128,6 +138,15 @@
               />
               <AdvancedTab
                 v-show="activeTab === 'advanced'"
+                :mode="mode"
+                :form-data="formData"
+                :errors="errors"
+                :session="editSession"
+                :field-states="fieldStates"
+                @update:form-data="updateFormData"
+              />
+              <SandboxTab
+                v-show="activeTab === 'sandbox'"
                 :mode="mode"
                 :form-data="formData"
                 :errors="errors"
@@ -180,6 +199,7 @@ import { api } from '@/utils/api'
 import GeneralTab from './GeneralTab.vue'
 import PermissionsTab from './PermissionsTab.vue'
 import AdvancedTab from './AdvancedTab.vue'
+import SandboxTab from './SandboxTab.vue'
 import PermissionPreviewModal from './PermissionPreviewModal.vue'
 
 const router = useRouter()
@@ -244,7 +264,25 @@ const formData = reactive({
   system_prompt: '',
   override_system_prompt: false,
   initialization_context: '',  // template only
-  sandbox_enabled: false  // session only
+  sandbox_enabled: false,  // session only
+
+  // Sandbox tab (issue #458)
+  sandbox: {
+    autoAllowBashIfSandboxed: true,
+    allowUnsandboxedCommands: false,
+    excludedCommands: '',
+    enableWeakerNestedSandbox: false,
+    network: {
+      allowedDomains: '',
+      allowLocalBinding: false,
+      allowUnixSockets: '',
+      allowAllUnixSockets: false,
+    },
+    ignoreViolations: {
+      file: '',
+      network: '',
+    }
+  }
 })
 
 // Validation errors
@@ -325,6 +363,27 @@ const currentAllowedTools = computed(() => {
 function showPermissionPreview() {
   if (permissionPreviewModal.value) {
     permissionPreviewModal.value.show()
+  }
+}
+
+// Issue #458: Build sandbox_config dict from formData.sandbox for API payload
+function buildSandboxConfig() {
+  const parseList = (str) => str.split(',').map(s => s.trim()).filter(s => s.length > 0)
+  return {
+    autoAllowBashIfSandboxed: formData.sandbox.autoAllowBashIfSandboxed,
+    allowUnsandboxedCommands: formData.sandbox.allowUnsandboxedCommands,
+    excludedCommands: parseList(formData.sandbox.excludedCommands),
+    enableWeakerNestedSandbox: formData.sandbox.enableWeakerNestedSandbox,
+    network: {
+      allowedDomains: parseList(formData.sandbox.network.allowedDomains),
+      allowLocalBinding: formData.sandbox.network.allowLocalBinding,
+      allowUnixSockets: parseList(formData.sandbox.network.allowUnixSockets),
+      allowAllUnixSockets: formData.sandbox.network.allowAllUnixSockets,
+    },
+    ignoreViolations: {
+      file: parseList(formData.sandbox.ignoreViolations.file),
+      network: parseList(formData.sandbox.ignoreViolations.network),
+    }
   }
 }
 
@@ -566,6 +625,7 @@ async function createSession() {
     allowed_tools: toolsList.length > 0 ? toolsList : null,
     working_directory: formData.working_directory.trim() || null,
     sandbox_enabled: formData.sandbox_enabled,
+    sandbox_config: formData.sandbox_enabled ? buildSandboxConfig() : null,
     setting_sources: formData.setting_sources  // Issue #36
   }
 
@@ -619,6 +679,7 @@ async function updateSession() {
     allowed_tools: toolsList.length > 0 ? toolsList : null,
     capabilities: capsList.length > 0 ? capsList : null,
     sandbox_enabled: formData.sandbox_enabled,
+    sandbox_config: formData.sandbox_enabled ? buildSandboxConfig() : null,
     setting_sources: formData.setting_sources  // Issue #36
   }
 
@@ -654,7 +715,8 @@ async function createTemplate() {
     model: formData.model || null,
     capabilities: capsList.length > 0 ? capsList : null,
     override_system_prompt: formData.override_system_prompt,
-    sandbox_enabled: formData.sandbox_enabled
+    sandbox_enabled: formData.sandbox_enabled,
+    sandbox_config: formData.sandbox_enabled ? buildSandboxConfig() : null
   }
 
   await api.post('/api/templates', payload)
@@ -694,7 +756,8 @@ async function updateTemplate() {
     model: formData.model || null,
     capabilities: capsList.length > 0 ? capsList : null,
     override_system_prompt: formData.override_system_prompt,
-    sandbox_enabled: formData.sandbox_enabled
+    sandbox_enabled: formData.sandbox_enabled,
+    sandbox_config: formData.sandbox_enabled ? buildSandboxConfig() : null
   }
 
   await api.put(`/api/templates/${editTemplate.value.template_id}`, payload)
@@ -723,6 +786,18 @@ function resetForm() {
   formData.override_system_prompt = false
   formData.initialization_context = ''
   formData.sandbox_enabled = false
+
+  // Reset sandbox config (issue #458)
+  formData.sandbox.autoAllowBashIfSandboxed = true
+  formData.sandbox.allowUnsandboxedCommands = false
+  formData.sandbox.excludedCommands = ''
+  formData.sandbox.enableWeakerNestedSandbox = false
+  formData.sandbox.network.allowedDomains = ''
+  formData.sandbox.network.allowLocalBinding = false
+  formData.sandbox.network.allowUnixSockets = ''
+  formData.sandbox.network.allowAllUnixSockets = false
+  formData.sandbox.ignoreViolations.file = ''
+  formData.sandbox.ignoreViolations.network = ''
 
   errors.name = ''
 
@@ -760,6 +835,21 @@ function populateFormFromSession(session) {
   formData.sandbox_enabled = session.sandbox_enabled || false
   // Issue #36: Load setting_sources, default to all enabled if not set
   formData.setting_sources = session.setting_sources || ['user', 'project', 'local']
+
+  // Issue #458: Load sandbox config
+  const sc = session.sandbox_config || {}
+  formData.sandbox.autoAllowBashIfSandboxed = sc.autoAllowBashIfSandboxed ?? true
+  formData.sandbox.allowUnsandboxedCommands = sc.allowUnsandboxedCommands ?? false
+  formData.sandbox.excludedCommands = (sc.excludedCommands || []).join(', ')
+  formData.sandbox.enableWeakerNestedSandbox = sc.enableWeakerNestedSandbox ?? false
+  const net = sc.network || {}
+  formData.sandbox.network.allowedDomains = (net.allowedDomains || []).join(', ')
+  formData.sandbox.network.allowLocalBinding = net.allowLocalBinding ?? false
+  formData.sandbox.network.allowUnixSockets = (net.allowUnixSockets || []).join(', ')
+  formData.sandbox.network.allowAllUnixSockets = net.allowAllUnixSockets ?? false
+  const iv = sc.ignoreViolations || {}
+  formData.sandbox.ignoreViolations.file = (iv.file || []).join(', ')
+  formData.sandbox.ignoreViolations.network = (iv.network || []).join(', ')
 }
 
 function populateFormFromTemplate(template) {
@@ -773,6 +863,21 @@ function populateFormFromTemplate(template) {
   formData.capabilities = template.capabilities?.join(', ') || ''
   formData.override_system_prompt = template.override_system_prompt || false
   formData.sandbox_enabled = template.sandbox_enabled || false
+
+  // Issue #458: Load sandbox config from template
+  const sc = template.sandbox_config || {}
+  formData.sandbox.autoAllowBashIfSandboxed = sc.autoAllowBashIfSandboxed ?? true
+  formData.sandbox.allowUnsandboxedCommands = sc.allowUnsandboxedCommands ?? false
+  formData.sandbox.excludedCommands = (sc.excludedCommands || []).join(', ')
+  formData.sandbox.enableWeakerNestedSandbox = sc.enableWeakerNestedSandbox ?? false
+  const net = sc.network || {}
+  formData.sandbox.network.allowedDomains = (net.allowedDomains || []).join(', ')
+  formData.sandbox.network.allowLocalBinding = net.allowLocalBinding ?? false
+  formData.sandbox.network.allowUnixSockets = (net.allowUnixSockets || []).join(', ')
+  formData.sandbox.network.allowAllUnixSockets = net.allowAllUnixSockets ?? false
+  const iv = sc.ignoreViolations || {}
+  formData.sandbox.ignoreViolations.file = (iv.file || []).join(', ')
+  formData.sandbox.ignoreViolations.network = (iv.network || []).join(', ')
 }
 
 function onModalShown() {

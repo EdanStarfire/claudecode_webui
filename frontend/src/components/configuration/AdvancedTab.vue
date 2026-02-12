@@ -47,27 +47,6 @@
       </div>
     </div>
 
-    <!-- Sandbox Mode -->
-    <div class="mb-3 form-check">
-      <input
-        type="checkbox"
-        class="form-check-input"
-        id="config-sandbox"
-        :checked="formData.sandbox_enabled"
-        @change="$emit('update:form-data', 'sandbox_enabled', $event.target.checked)"
-      />
-      <label class="form-check-label" for="config-sandbox">
-        Enable Sandbox Mode
-      </label>
-      <div class="form-text" :class="formData.sandbox_enabled ? 'text-info' : 'text-muted'">
-        <small>
-          {{ formData.sandbox_enabled
-            ? 'Sandbox enabled: Session will have OS-level isolation restricting file system and network access.'
-            : 'Sandbox mode restricts file system and network access for added security.'
-          }}
-        </small>
-      </div>
-    </div>
   </div>
 </template>
 
@@ -116,9 +95,8 @@ const hasAnyChanges = computed(() => {
   // UI uses initialization_context, backend stores as system_prompt
   const initContextChanged = (props.formData.initialization_context || '') !== (props.session.system_prompt || '')
   const overrideChanged = (props.formData.override_system_prompt || false) !== (props.session.override_system_prompt || false)
-  const sandboxChanged = (props.formData.sandbox_enabled || false) !== (props.session.sandbox_enabled || false)
 
-  return initContextChanged || overrideChanged || sandboxChanged
+  return initContextChanged || overrideChanged
 })
 
 // Get the correct prompt value based on mode

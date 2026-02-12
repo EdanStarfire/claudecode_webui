@@ -155,6 +155,7 @@ class TemplateManager:
         capabilities: list[str] | None = None,
         override_system_prompt: bool = False,
         sandbox_enabled: bool = False,
+        sandbox_config: dict | None = None,
     ) -> MinionTemplate:
         """Create a new template."""
         if not name or not name.strip():
@@ -181,6 +182,7 @@ class TemplateManager:
             capabilities=capabilities if capabilities is not None else [],
             override_system_prompt=override_system_prompt,
             sandbox_enabled=sandbox_enabled,
+            sandbox_config=sandbox_config,
         )
 
         await self._save_template(template)
@@ -217,6 +219,7 @@ class TemplateManager:
         capabilities: list[str] | None = None,
         override_system_prompt: bool | None = None,
         sandbox_enabled: bool | None = None,
+        sandbox_config: dict | None = None,
     ) -> MinionTemplate:
         """Update existing template."""
         template = self.templates.get(template_id)
@@ -260,6 +263,9 @@ class TemplateManager:
 
         if sandbox_enabled is not None:
             template.sandbox_enabled = sandbox_enabled
+
+        if sandbox_config is not None:
+            template.sandbox_config = sandbox_config
 
         template.updated_at = datetime.now(UTC)
 

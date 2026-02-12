@@ -40,6 +40,7 @@ class OverseerController:
         working_directory: str | None = None,
         model: str | None = None,
         sandbox_enabled: bool = False,
+        sandbox_config: dict | None = None,
         setting_sources: list[str] | None = None
     ) -> str:
         """
@@ -57,6 +58,7 @@ class OverseerController:
             working_directory: Optional custom working directory (defaults to project directory)
             model: Model selection (sonnet, opus, haiku, opusplan)
             sandbox_enabled: Enable OS-level sandboxing (issue #319)
+            sandbox_config: Optional sandbox configuration settings (issue #458)
             setting_sources: Which settings files to load (issue #36)
 
         Returns:
@@ -108,6 +110,7 @@ class OverseerController:
             can_spawn_minions=True,  # User-created minion can spawn by default
             # Sandbox mode (issue #319)
             sandbox_enabled=sandbox_enabled,
+            sandbox_config=sandbox_config,
             # Settings sources (issue #36)
             setting_sources=setting_sources
         )
