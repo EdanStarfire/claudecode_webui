@@ -737,6 +737,7 @@ class ClaudeWebUI:
                     system_prompt=request.system_prompt,
                     override_system_prompt=request.override_system_prompt,
                     allowed_tools=request.allowed_tools,
+                    disallowed_tools=request.disallowed_tools,
                     model=request.model,
                     name=request.name,
                     permission_callback=self._create_permission_callback(session_id),
@@ -899,6 +900,10 @@ class ClaudeWebUI:
                 # Handle allowed_tools update (takes effect on next restart if session is active)
                 if request.allowed_tools is not None:
                     updates["allowed_tools"] = request.allowed_tools
+
+                # Handle disallowed_tools update (takes effect on next reset if session is active)
+                if request.disallowed_tools is not None:
+                    updates["disallowed_tools"] = request.disallowed_tools
 
                 # Handle role update
                 if request.role is not None:
