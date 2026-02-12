@@ -14,7 +14,7 @@ Transform an issue into a detailed, approved implementation plan through user co
    ls .claude/skills/custom-plan-manager/SKILL.md 2>/dev/null
    ```
    If it exists, invoke `custom-plan-manager` with operation=`fetch-issue` and issue_number=${ISSUE_NUMBER}.
-   If it does not exist, use `github-issue-reader` skill to get issue #${ISSUE_NUMBER}.
+   If it does not exist, invoke `plan-manager` with operation=`fetch-issue` and issue_number=${ISSUE_NUMBER}.
    - Extract requirements, acceptance criteria, and any existing discussion
    - Note the issue type (feature, bug, refactor, docs)
 
@@ -56,26 +56,28 @@ Transform an issue into a detailed, approved implementation plan through user co
 
 8. **User Approval**
    - Present final plan to user
-   - Get explicit approval before posting
+   - Get explicit approval before writing
 
-9. **Post Approved Plan**
+9. **Write Approved Plan**
    Check if `custom-plan-manager` skill exists:
    ```bash
    ls .claude/skills/custom-plan-manager/SKILL.md 2>/dev/null
    ```
-   If it exists, invoke `custom-plan-manager` with operation=`write-plan` and issue_number=${ISSUE_NUMBER}.
+   If it exists, invoke `custom-plan-manager` with operation=`write-plan` and issue_number=${ISSUE_NUMBER} and stage=${STAGE} (if provided in init context).
    Pass the finalized plan content. The custom skill handles storage and marking as approved.
 
-   If it does not exist, post directly to GitHub:
-   - Use `gh issue comment ${ISSUE_NUMBER} --body "..."`
-   - Add `ready-to-build` label: `gh issue edit ${ISSUE_NUMBER} --add-label "ready-to-build"`
+   If it does not exist, invoke `plan-manager` with operation=`write-plan` and issue_number=${ISSUE_NUMBER} and stage=${STAGE} (if provided in init context).
+   The plan-manager will:
+   - Create directory `$HOME/.cc_webui/plans/` if needed
+   - Write plan to `$HOME/.cc_webui/plans/issue-{suffix}.md`
+   - Register the plan as a resource for the Resource Gallery
 
 10. **Signal Completion**
-    - Send comm to Orchestrator: "Plan posted for issue #${ISSUE_NUMBER}, awaiting user approval"
+    - Send comm to Orchestrator: "Plan written for issue #${ISSUE_NUMBER}, awaiting user approval"
     - comm_type: "report"
-    - Include summary of the plan
+    - Include summary of the plan and the plan file path
 
-    ⚠️ **CRITICAL**: Your comm is **informational only**. It does NOT trigger the Build phase.
+    **CRITICAL**: Your comm is **informational only**. It does NOT trigger the Build phase.
     The user must explicitly invoke `/approve_plan ${ISSUE_NUMBER}` when they are satisfied.
     You remain active for potential iteration — the user may request revisions, ask questions,
     or refine the plan further. Do NOT attempt to advance the workflow or modify the plan
@@ -85,7 +87,7 @@ Transform an issue into a detailed, approved implementation plan through user co
 
 **Send comm to Orchestrator when:**
 - You need user input (comm_type: "question")
-- Plan is finalized and posted (comm_type: "report")
+- Plan is finalized and written (comm_type: "report")
 - You encounter blockers (comm_type: "question")
 
 **Use mcp__legion__send_comm:**
@@ -98,9 +100,9 @@ Transform an issue into a detailed, approved implementation plan through user co
 ## Constraints
 
 **READ-ONLY by default:**
-- Do NOT modify files unless user explicitly requests
+- Do NOT modify project files unless user explicitly requests
 - Focus on research, analysis, and design
-- All artifacts go in GitHub issue comments, not local files
+- Plan artifacts are written to `~/.cc_webui/plans/` (outside the project directory)
 
 **User-driven:**
 - All decisions flow through user approval
@@ -108,13 +110,13 @@ Transform an issue into a detailed, approved implementation plan through user co
 - Present options when multiple approaches exist
 
 **Clean handoff:**
-- The Builder receives the plan via custom-plan-manager or GitHub issue
-- No filesystem assumptions between Planner and Builder
+- The Builder receives the plan file path in its initialization context
+- Builder reads plan via custom-plan-manager read-plan or plan-manager read-plan
 - Your worktree state doesn't matter to Builder
 
 ## Plan Format
 
-When posting to GitHub, use this structure:
+Use this structure when writing the plan:
 
 ```markdown
 ## Implementation Plan for Issue #${ISSUE_NUMBER}
@@ -158,6 +160,7 @@ Your planning phase is complete when:
 - [x] User stories created and approved
 - [x] Design artifacts created (if applicable)
 - [x] Implementation plan finalized
-- [x] Plan posted and marked as approved (via custom-plan-manager or GitHub comment + label)
+- [x] Plan written to file (via custom-plan-manager or plan-manager) and registered as resource
 - [x] Orchestrator notified with completion comm
 - [x] Waiting for user to invoke `/approve_plan` (do NOT auto-advance)
+- [x] You remain alive until `/approve_issue` disposes you

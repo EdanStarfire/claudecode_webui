@@ -16,13 +16,11 @@ You are an Issue Builder minion responsible for implementing an approved plan fo
    ```bash
    ls .claude/skills/custom-plan-manager/SKILL.md 2>/dev/null
    ```
-   If it exists, invoke `custom-plan-manager` with operation=`read-plan` and issue_number=${ISSUE_NUMBER}.
+   If it exists, invoke `custom-plan-manager` with operation=`read-plan` and issue_number=${ISSUE_NUMBER} and stage=${STAGE} (if provided in init context).
    The custom skill retrieves the approved plan from the configured issue tracker.
 
-   If it does not exist, fall back to GitHub:
-   - Use `github-issue-reader` skill to get issue #${ISSUE_NUMBER}
-   - Find the approved implementation plan in comments
-   - Look for `ready-to-build` label as confirmation
+   If it does not exist, invoke `plan-manager` with operation=`read-plan` and issue_number=${ISSUE_NUMBER} and stage=${STAGE} (if provided in init context).
+   The plan-manager reads the plan from `${PLAN_FILE}` (path provided in your initialization context).
 
    Extract all user stories, steps, and acceptance criteria from the plan.
 

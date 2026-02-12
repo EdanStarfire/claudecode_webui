@@ -2,10 +2,12 @@
   "name": "Issue Planner",
   "permission_mode": "default",
   "allowed_tools": [
-    "Read", "Grep", "Glob", "WebFetch", "WebSearch", "Task",
+    "Read", "Write", "Grep", "Glob", "WebFetch", "WebSearch", "Task",
+    "Bash(mkdir:*)", "Bash(ls:*)",
     "mcp__legion__send_comm", "mcp__legion__list_minions", "mcp__legion__get_minion_info",
-    "mcp__legion__search_capability"
+    "mcp__legion__search_capability",
+    "mcp__resources__register_resource"
   ],
   "default_role": "Issue Planner - User story and design specialist",
-  "description": "Read-only focus for planning phase. Conducts user Q&A, builds user stories, creates diagrams, and posts finalized plans to GitHub. No file modification unless user explicitly requests."
+  "description": "Read-only focus for planning phase. Conducts user Q&A, builds user stories, creates diagrams, and writes finalized plans to file. Write access limited to ~/.cc_webui/plans/ directory. No project file modification unless user explicitly requests."
 }
