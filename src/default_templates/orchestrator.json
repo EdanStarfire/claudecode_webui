@@ -3,9 +3,10 @@
   "permission_mode": "default",
   "allowed_tools": [
     "Read", "Grep", "Glob", "Task",
+    "Bash(rm:*)", "Bash(ls:*)", "Bash(mkdir:*)",
     "mcp__legion__spawn_minion", "mcp__legion__dispose_minion", "mcp__legion__send_comm",
     "mcp__legion__list_minions", "mcp__legion__get_minion_info", "mcp__legion__search_capability"
   ],
   "default_role": "Coordinates complex workflows by delegating to specialist minions",
-  "description": "Read-only code access with full delegation capabilities. No direct code modification. Skills: codebase-explorer, git-branch-manager, github-issue-reader, github-pr-manager, worktree-manager, process-manager"
+  "description": "Read-only code access with full delegation capabilities. No direct code modification. Can delete plan files from ~/.cc_webui/plans/. Skills: codebase-explorer, git-branch-manager, github-issue-reader, github-pr-manager, worktree-manager, process-manager"
 }
