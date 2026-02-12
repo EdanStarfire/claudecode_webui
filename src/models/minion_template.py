@@ -29,6 +29,7 @@ class MinionTemplate:
     capabilities: list[str] | None = None
     override_system_prompt: bool = False
     sandbox_enabled: bool = False
+    sandbox_config: dict | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
 

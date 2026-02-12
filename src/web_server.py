@@ -34,8 +34,8 @@ from .models.messages import (
 )
 from .permission_resolver import resolve_effective_permissions
 from .session_coordinator import SessionCoordinator
-from .skill_manager import SkillManager
 from .session_manager import SessionState
+from .skill_manager import SkillManager
 from .timestamp_utils import normalize_timestamp
 
 # Get specialized logger for WebSocket lifecycle debugging
@@ -143,6 +143,7 @@ class SessionUpdateRequest(BaseModel):
     override_system_prompt: bool | None = None
     capabilities: list[str] | None = None
     sandbox_enabled: bool | None = None
+    sandbox_config: dict | None = None  # Issue #458: sandbox configuration settings
     setting_sources: list[str] | None = None  # Issue #36: which settings files to load
 
 
@@ -172,6 +173,7 @@ class MinionCreateRequest(BaseModel):
     allowed_tools: list[str] | None = None  # None or empty list means no pre-authorized tools
     working_directory: str | None = None  # Optional custom working directory for this minion
     sandbox_enabled: bool = False  # Enable OS-level sandboxing (issue #319)
+    sandbox_config: dict | None = None  # Issue #458: sandbox configuration settings
     setting_sources: list[str] | None = None  # Issue #36: which settings files to load
 
 
@@ -188,6 +190,7 @@ class TemplateCreateRequest(BaseModel):
     capabilities: list[str] | None = None
     override_system_prompt: bool = False
     sandbox_enabled: bool = False
+    sandbox_config: dict | None = None  # Issue #458: sandbox configuration settings
 
 
 class TemplateUpdateRequest(BaseModel):
@@ -201,6 +204,7 @@ class TemplateUpdateRequest(BaseModel):
     capabilities: list[str] | None = None
     override_system_prompt: bool | None = None
     sandbox_enabled: bool | None = None
+    sandbox_config: dict | None = None  # Issue #458: sandbox configuration settings
 
 
 class UIWebSocketManager:
@@ -910,6 +914,10 @@ class ClaudeWebUI:
                 # Handle sandbox_enabled update
                 if request.sandbox_enabled is not None:
                     updates["sandbox_enabled"] = request.sandbox_enabled
+
+                # Handle sandbox_config update (issue #458)
+                if request.sandbox_config is not None:
+                    updates["sandbox_config"] = request.sandbox_config
 
                 # Handle setting_sources update (issue #36)
                 if request.setting_sources is not None:
@@ -1863,6 +1871,7 @@ class ClaudeWebUI:
                     working_directory=str(working_dir),
                     model=request.model,
                     sandbox_enabled=request.sandbox_enabled,
+                    sandbox_config=request.sandbox_config,
                     setting_sources=request.setting_sources  # Issue #36
                 )
 
@@ -2143,6 +2152,7 @@ class ClaudeWebUI:
                     capabilities=request.capabilities,
                     override_system_prompt=request.override_system_prompt,
                     sandbox_enabled=request.sandbox_enabled,
+                    sandbox_config=request.sandbox_config,
                 )
                 return template.to_dict()
             except ValueError as e:
@@ -2167,6 +2177,7 @@ class ClaudeWebUI:
                     capabilities=request.capabilities,
                     override_system_prompt=request.override_system_prompt,
                     sandbox_enabled=request.sandbox_enabled,
+                    sandbox_config=request.sandbox_config,
                 )
                 return template.to_dict()
             except ValueError as e:
