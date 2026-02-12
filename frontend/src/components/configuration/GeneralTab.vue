@@ -74,10 +74,7 @@
         <option value="opusplan">OpusPlan - Opus planning + Sonnet execution</option>
       </select>
       <div class="form-text">
-        <span v-if="isEditSession && isSessionActive && modelChanged" class="text-warning">
-          Model change requires a <strong>reset</strong> (not restart) to take effect.
-        </span>
-        <span v-else-if="selectedModelInfo">
+        <span v-if="selectedModelInfo">
           {{ selectedModelInfo.description }}
         </span>
       </div>
@@ -246,12 +243,6 @@ const isEditSession = computed(() => props.mode === 'edit-session')
 
 const isSessionActive = computed(() => {
   return props.session?.state === 'active' || props.session?.state === 'starting'
-})
-
-const modelChanged = computed(() => {
-  if (!props.session) return false
-  const originalModel = props.session.model || 'sonnet'
-  return props.formData.model !== originalModel
 })
 
 const canUseBypassPermissions = computed(() => {

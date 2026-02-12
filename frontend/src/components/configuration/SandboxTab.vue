@@ -22,11 +22,6 @@
       </div>
     </div>
 
-    <!-- Reset warning for active sessions -->
-    <div v-if="isEditSession && isSessionActive && hasSandboxChanges" class="alert alert-warning mb-3" role="alert">
-      <small>Sandbox changes require a <strong>reset</strong> (not restart) to take effect.</small>
-    </div>
-
     <!-- Core Settings -->
     <h6 class="mt-3 mb-2" :class="{ 'text-muted': !formData.sandbox_enabled }">Core Settings</h6>
 
@@ -184,7 +179,6 @@
 </template>
 
 <script setup>
-import { computed } from 'vue'
 
 const props = defineProps({
   mode: {
@@ -210,42 +204,6 @@ const props = defineProps({
 })
 
 const emit = defineEmits(['update:form-data'])
-
-const isEditSession = computed(() => props.mode === 'edit-session')
-
-const isSessionActive = computed(() => {
-  return props.session?.state === 'active' || props.session?.state === 'starting'
-})
-
-const hasSandboxChanges = computed(() => {
-  if (!props.session) return false
-
-  const sandboxEnabledChanged = (props.formData.sandbox_enabled || false) !== (props.session.sandbox_enabled || false)
-  if (sandboxEnabledChanged) return true
-
-  // Compare sandbox config fields if sandbox is enabled
-  if (props.formData.sandbox_enabled) {
-    const sc = props.session.sandbox_config || {}
-    const fd = props.formData.sandbox
-
-    if (fd.autoAllowBashIfSandboxed !== (sc.autoAllowBashIfSandboxed ?? true)) return true
-    if (fd.allowUnsandboxedCommands !== (sc.allowUnsandboxedCommands ?? false)) return true
-    if (fd.excludedCommands !== (sc.excludedCommands || []).join(', ')) return true
-    if (fd.enableWeakerNestedSandbox !== (sc.enableWeakerNestedSandbox ?? false)) return true
-
-    const net = sc.network || {}
-    if (fd.network.allowedDomains !== (net.allowedDomains || []).join(', ')) return true
-    if (fd.network.allowLocalBinding !== (net.allowLocalBinding ?? false)) return true
-    if (fd.network.allowUnixSockets !== (net.allowUnixSockets || []).join(', ')) return true
-    if (fd.network.allowAllUnixSockets !== (net.allowAllUnixSockets ?? false)) return true
-
-    const iv = sc.ignoreViolations || {}
-    if (fd.ignoreViolations.file !== (iv.file || []).join(', ')) return true
-    if (fd.ignoreViolations.network !== (iv.network || []).join(', ')) return true
-  }
-
-  return false
-})
 
 function updateSandboxField(field, value) {
   props.formData.sandbox[field] = value

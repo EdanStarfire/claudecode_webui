@@ -161,6 +161,15 @@
             {{ errorMessage }}
           </div>
         </div>
+        <!-- Unified warning banner (Issue #459) -->
+        <div v-if="showWarningBanner" class="warning-banner" :class="'warning-banner-' + warningLevel">
+          <small v-if="warningLevel === 'reset'">
+            Changes require a <strong>reset</strong> to take effect. This starts a new conversation.
+          </small>
+          <small v-else>
+            Changes require a <strong>restart</strong> to take effect.
+          </small>
+        </div>
         <div class="modal-footer">
           <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">
             {{ mode === 'template-list' ? 'Close' : 'Cancel' }}
@@ -332,6 +341,85 @@ const isFormValid = computed(() => {
   if (isSessionMode.value && formData.name.includes(' ')) return false
 
   return true
+})
+
+// Warning banner computed properties (Issue #459)
+const isSessionActive = computed(() => {
+  return editSession.value?.state === 'active' || editSession.value?.state === 'starting'
+})
+
+const hasResetChanges = computed(() => {
+  if (!editSession.value) return false
+
+  const initContextChanged = (formData.initialization_context || '') !== (editSession.value.system_prompt || '')
+  const overrideChanged = (formData.override_system_prompt || false) !== (editSession.value.override_system_prompt || false)
+  const sandboxEnabledChanged = (formData.sandbox_enabled || false) !== (editSession.value.sandbox_enabled || false)
+
+  if (initContextChanged || overrideChanged || sandboxEnabledChanged) return true
+
+  // Compare sandbox config fields if sandbox is enabled
+  if (formData.sandbox_enabled) {
+    const sc = editSession.value.sandbox_config || {}
+    const fd = formData.sandbox
+    const origStr = JSON.stringify({
+      autoAllowBashIfSandboxed: sc.autoAllowBashIfSandboxed ?? true,
+      allowUnsandboxedCommands: sc.allowUnsandboxedCommands ?? false,
+      excludedCommands: (sc.excludedCommands || []).join(', '),
+      enableWeakerNestedSandbox: sc.enableWeakerNestedSandbox ?? false,
+      network: {
+        allowedDomains: (sc.network?.allowedDomains || []).join(', '),
+        allowLocalBinding: sc.network?.allowLocalBinding ?? false,
+        allowUnixSockets: (sc.network?.allowUnixSockets || []).join(', '),
+        allowAllUnixSockets: sc.network?.allowAllUnixSockets ?? false,
+      },
+      ignoreViolations: {
+        file: (sc.ignoreViolations?.file || []).join(', '),
+        network: (sc.ignoreViolations?.network || []).join(', '),
+      }
+    })
+    const currStr = JSON.stringify({
+      autoAllowBashIfSandboxed: fd.autoAllowBashIfSandboxed,
+      allowUnsandboxedCommands: fd.allowUnsandboxedCommands,
+      excludedCommands: fd.excludedCommands,
+      enableWeakerNestedSandbox: fd.enableWeakerNestedSandbox,
+      network: {
+        allowedDomains: fd.network.allowedDomains,
+        allowLocalBinding: fd.network.allowLocalBinding,
+        allowUnixSockets: fd.network.allowUnixSockets,
+        allowAllUnixSockets: fd.network.allowAllUnixSockets,
+      },
+      ignoreViolations: {
+        file: fd.ignoreViolations.file,
+        network: fd.ignoreViolations.network,
+      }
+    })
+    if (origStr !== currStr) return true
+  }
+
+  return false
+})
+
+const hasRestartChanges = computed(() => {
+  if (!editSession.value) return false
+
+  const modelChanged = (formData.model || 'sonnet') !== (editSession.value.model || 'sonnet')
+  const allowedToolsChanged = (formData.allowed_tools || '') !== (editSession.value.allowed_tools?.join(', ') || '')
+
+  const originalSources = editSession.value.setting_sources || ['user', 'project', 'local']
+  const currentSources = formData.setting_sources || ['user', 'project', 'local']
+  const settingSourcesChanged = JSON.stringify([...originalSources].sort()) !== JSON.stringify([...currentSources].sort())
+
+  return modelChanged || allowedToolsChanged || settingSourcesChanged
+})
+
+const warningLevel = computed(() => {
+  if (hasResetChanges.value) return 'reset'
+  if (hasRestartChanges.value) return 'restart'
+  return null
+})
+
+const showWarningBanner = computed(() => {
+  return mode.value === 'edit-session' && isSessionActive.value && warningLevel.value !== null
 })
 
 // Issue #36: Permission preview helpers
@@ -1057,6 +1145,24 @@ onUnmounted(() => {
   width: 1rem;
   height: 1rem;
   border-width: 0.15em;
+}
+
+/* Warning banner (Issue #459) */
+.warning-banner {
+  padding: 0.5rem 1rem;
+  border-top: 1px solid;
+}
+
+.warning-banner-reset {
+  background-color: #ffe4cc;
+  border-color: #f0c9a6;
+  color: #663c00;
+}
+
+.warning-banner-restart {
+  background-color: #fffbea;
+  border-color: #f0e6c0;
+  color: #664d03;
 }
 
 /* Mobile responsive tabs */

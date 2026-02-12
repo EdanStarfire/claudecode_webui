@@ -1,10 +1,5 @@
 <template>
   <div class="advanced-tab">
-    <!-- Reset warning banner for active sessions -->
-    <div v-if="isEditSession && isSessionActive && hasAnyChanges" class="alert alert-warning mb-3" role="alert">
-      <small>Changes to these settings require a <strong>reset</strong> (not restart) to take effect.</small>
-    </div>
-
     <!-- System Prompt / Initialization Context -->
     <div class="mb-3">
       <label for="config-system-prompt" class="form-label">
@@ -83,22 +78,6 @@ const emit = defineEmits(['update:form-data'])
 // Computed
 const isSessionMode = computed(() => props.mode === 'create-session' || props.mode === 'edit-session')
 const isTemplateMode = computed(() => props.mode === 'create-template' || props.mode === 'edit-template')
-const isEditSession = computed(() => props.mode === 'edit-session')
-
-const isSessionActive = computed(() => {
-  return props.session?.state === 'active' || props.session?.state === 'starting'
-})
-
-const hasAnyChanges = computed(() => {
-  if (!props.session) return false
-
-  // UI uses initialization_context, backend stores as system_prompt
-  const initContextChanged = (props.formData.initialization_context || '') !== (props.session.system_prompt || '')
-  const overrideChanged = (props.formData.override_system_prompt || false) !== (props.session.override_system_prompt || false)
-
-  return initContextChanged || overrideChanged
-})
-
 // Get the correct prompt value based on mode
 const promptValue = computed(() => {
   return props.formData.initialization_context
