@@ -64,12 +64,7 @@
         </div>
       </div>
       <div class="form-text">
-        <span v-if="isEditSession && isSessionActive && allowedToolsChanged" class="text-warning">
-          Allowed tools change requires a <strong>reset</strong> (not restart) to take effect.
-        </span>
-        <span v-else>
-          {{ isTemplateMode ? 'Default tools allowed for sessions using this template' : 'Leave empty to allow all tools' }}
-        </span>
+        {{ isTemplateMode ? 'Default tools allowed for sessions using this template' : 'Leave empty to allow all tools' }}
       </div>
     </div>
 
@@ -158,12 +153,7 @@
         </div>
       </div>
       <div class="form-text">
-        <span v-if="isEditSession && isSessionActive && settingSourcesChanged" class="text-warning">
-          Settings sources change requires a <strong>restart</strong> to take effect.
-        </span>
-        <span v-else>
-          Select which settings files to load permissions from
-        </span>
+        Select which settings files to load permissions from
       </div>
     </div>
 
@@ -253,28 +243,9 @@ const commonTools = ['Bash', 'Read', 'Edit', 'Write', 'Glob', 'Grep', 'WebFetch'
 // Computed
 const isTemplateMode = computed(() => props.mode === 'create-template' || props.mode === 'edit-template')
 const isSessionMode = computed(() => props.mode === 'create-session' || props.mode === 'edit-session')
-const isEditSession = computed(() => props.mode === 'edit-session')
-
-const isSessionActive = computed(() => {
-  return props.session?.state === 'active' || props.session?.state === 'starting'
-})
-
-const allowedToolsChanged = computed(() => {
-  if (!props.session) return false
-  const originalTools = props.session.allowed_tools?.join(', ') || ''
-  return props.formData.allowed_tools !== originalTools
-})
-
 // Issue #36: Setting sources computed
 const settingSourcesArray = computed(() => {
   return props.formData.setting_sources || ['user', 'project', 'local']
-})
-
-const settingSourcesChanged = computed(() => {
-  if (!props.session) return false
-  const originalSources = props.session.setting_sources || ['user', 'project', 'local']
-  const currentSources = props.formData.setting_sources || ['user', 'project', 'local']
-  return JSON.stringify(originalSources.sort()) !== JSON.stringify(currentSources.sort())
 })
 
 const toolsList = computed(() => {
