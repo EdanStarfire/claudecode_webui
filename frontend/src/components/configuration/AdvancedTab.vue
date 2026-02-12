@@ -42,11 +42,54 @@
       </div>
     </div>
 
+    <!-- Capabilities -->
+    <div class="mb-3">
+      <label for="config-capabilities" class="form-label">Capabilities</label>
+      <div class="capabilities-editor">
+        <!-- Current capabilities as tags -->
+        <div class="capabilities-list mb-2" v-if="capabilitiesList.length > 0">
+          <span
+            v-for="(cap, index) in capabilitiesList"
+            :key="index"
+            class="badge bg-info me-1 mb-1 capability-badge"
+          >
+            {{ cap }}
+            <button
+              type="button"
+              class="btn-close btn-close-white ms-1"
+              @click="removeCapability(index)"
+              aria-label="Remove capability"
+            ></button>
+          </span>
+        </div>
+
+        <!-- Add capability input -->
+        <div class="input-group input-group-sm">
+          <input
+            type="text"
+            class="form-control"
+            v-model="newCapability"
+            @keydown.enter.prevent="addCapability"
+            placeholder="Add capability (e.g., python, testing)"
+          />
+          <button
+            type="button"
+            class="btn btn-outline-info"
+            @click="addCapability"
+            :disabled="!newCapability.trim()"
+          >
+            Add
+          </button>
+        </div>
+      </div>
+      <div class="form-text">Comma-separated list of capability keywords for discovery</div>
+    </div>
+
   </div>
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { ref, computed } from 'vue'
 
 const props = defineProps({
   mode: {
@@ -112,10 +155,39 @@ const initContextFieldClass = computed(() => {
   return classes
 })
 
+// Local state
+const newCapability = ref('')
+
+// Capabilities computed
+const capabilitiesList = computed(() => {
+  if (!props.formData.capabilities || !props.formData.capabilities.trim()) return []
+  return props.formData.capabilities
+    .split(',')
+    .map(c => c.trim())
+    .filter(c => c.length > 0)
+})
+
 // Methods
 function handlePromptInput(event) {
   const value = event.target.value
   emit('update:form-data', 'initialization_context', value)
+}
+
+function addCapability() {
+  const cap = newCapability.value.trim().toLowerCase()
+  if (!cap) return
+
+  if (!capabilitiesList.value.includes(cap)) {
+    const newList = [...capabilitiesList.value, cap]
+    emit('update:form-data', 'capabilities', newList.join(', '))
+  }
+  newCapability.value = ''
+}
+
+function removeCapability(index) {
+  const newList = [...capabilitiesList.value]
+  newList.splice(index, 1)
+  emit('update:form-data', 'capabilities', newList.join(', '))
 }
 </script>
 
@@ -168,6 +240,29 @@ function handlePromptInput(event) {
 
 .field-indicator.modified {
   color: #cc5500;
+}
+
+/* Capabilities editor */
+.capabilities-editor {
+  background-color: var(--bs-gray-100);
+  padding: 0.75rem;
+  border-radius: 0.375rem;
+}
+
+.capabilities-list {
+  min-height: 1.5rem;
+}
+
+.capability-badge {
+  font-size: 0.875rem;
+  padding: 0.35em 0.65em;
+  display: inline-flex;
+  align-items: center;
+}
+
+.capability-badge .btn-close {
+  font-size: 0.5rem;
+  padding: 0.25em;
 }
 
 /* Smooth transitions */

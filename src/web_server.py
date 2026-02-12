@@ -120,6 +120,7 @@ class SessionCreateRequest(BaseModel):
     system_prompt: str | None = None
     override_system_prompt: bool = False
     allowed_tools: list[str] | None = None
+    disallowed_tools: list[str] | None = None  # Issue #461: tools to deny
     model: str | None = None
     name: str | None = None
     setting_sources: list[str] | None = None  # Issue #36: which settings files to load
@@ -138,6 +139,7 @@ class SessionUpdateRequest(BaseModel):
     name: str | None = None
     model: str | None = None  # sonnet, opus, haiku, opusplan
     allowed_tools: list[str] | None = None  # List of tool names to allow
+    disallowed_tools: list[str] | None = None  # Issue #461: tools to deny
     role: str | None = None
     system_prompt: str | None = None  # UI calls this "initialization_context"
     override_system_prompt: bool | None = None
@@ -171,6 +173,7 @@ class MinionCreateRequest(BaseModel):
     capabilities: list[str] | None = None
     permission_mode: str = "default"
     allowed_tools: list[str] | None = None  # None or empty list means no pre-authorized tools
+    disallowed_tools: list[str] | None = None  # Issue #461: tools to deny
     working_directory: str | None = None  # Optional custom working directory for this minion
     sandbox_enabled: bool = False  # Enable OS-level sandboxing (issue #319)
     sandbox_config: dict | None = None  # Issue #458: sandbox configuration settings
@@ -183,6 +186,7 @@ class TemplateCreateRequest(BaseModel):
     name: str
     permission_mode: str
     allowed_tools: list[str] | None = None
+    disallowed_tools: list[str] | None = None  # Issue #461: tools to deny
     default_role: str | None = None
     default_system_prompt: str | None = None
     description: str | None = None
@@ -197,6 +201,7 @@ class TemplateUpdateRequest(BaseModel):
     name: str | None = None
     permission_mode: str | None = None
     allowed_tools: list[str] | None = None
+    disallowed_tools: list[str] | None = None  # Issue #461: tools to deny
     default_role: str | None = None
     default_system_prompt: str | None = None
     description: str | None = None
@@ -732,6 +737,7 @@ class ClaudeWebUI:
                     system_prompt=request.system_prompt,
                     override_system_prompt=request.override_system_prompt,
                     allowed_tools=request.allowed_tools,
+                    disallowed_tools=request.disallowed_tools,
                     model=request.model,
                     name=request.name,
                     permission_callback=self._create_permission_callback(session_id),
@@ -894,6 +900,10 @@ class ClaudeWebUI:
                 # Handle allowed_tools update (takes effect on next restart if session is active)
                 if request.allowed_tools is not None:
                     updates["allowed_tools"] = request.allowed_tools
+
+                # Handle disallowed_tools update (takes effect on next reset if session is active)
+                if request.disallowed_tools is not None:
+                    updates["disallowed_tools"] = request.disallowed_tools
 
                 # Handle role update
                 if request.role is not None:
@@ -1868,6 +1878,7 @@ class ClaudeWebUI:
                     capabilities=request.capabilities,
                     permission_mode=request.permission_mode,
                     allowed_tools=request.allowed_tools,
+                    disallowed_tools=request.disallowed_tools,
                     working_directory=str(working_dir),
                     model=request.model,
                     sandbox_enabled=request.sandbox_enabled,
@@ -2145,6 +2156,7 @@ class ClaudeWebUI:
                     name=request.name,
                     permission_mode=request.permission_mode,
                     allowed_tools=request.allowed_tools,
+                    disallowed_tools=request.disallowed_tools,
                     default_role=request.default_role,
                     default_system_prompt=request.default_system_prompt,
                     description=request.description,
@@ -2170,6 +2182,7 @@ class ClaudeWebUI:
                     name=request.name,
                     permission_mode=request.permission_mode,
                     allowed_tools=request.allowed_tools,
+                    disallowed_tools=request.disallowed_tools,
                     default_role=request.default_role,
                     default_system_prompt=request.default_system_prompt,
                     description=request.description,

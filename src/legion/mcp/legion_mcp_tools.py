@@ -577,6 +577,7 @@ class LegionMCPTools:
         # Minions cannot specify custom permissions directly
         permission_mode = None
         allowed_tools = None
+        disallowed_tools = None
         template_applied = None
 
         if template_name:
@@ -598,6 +599,7 @@ class LegionMCPTools:
                 # Apply template values (enforced, no overrides)
                 permission_mode = template.permission_mode
                 allowed_tools = template.allowed_tools
+                disallowed_tools = template.disallowed_tools
 
                 # Use template's default_role if role not provided
                 if not role and template.default_role:
@@ -686,6 +688,7 @@ class LegionMCPTools:
                 capabilities=capabilities,
                 permission_mode=permission_mode,
                 allowed_tools=allowed_tools,
+                disallowed_tools=disallowed_tools,
                 working_directory=working_directory,
                 sandbox_enabled=sandbox_enabled,
                 model=model,

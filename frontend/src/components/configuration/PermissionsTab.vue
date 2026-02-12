@@ -68,47 +68,72 @@
       </div>
     </div>
 
-    <!-- Capabilities (template and session) -->
+    <!-- Disallowed Tools -->
     <div class="mb-3">
-      <label for="config-capabilities" class="form-label">Capabilities</label>
-      <div class="capabilities-editor">
-        <!-- Current capabilities as tags -->
-        <div class="capabilities-list mb-2" v-if="capabilitiesList.length > 0">
+      <label for="config-disallowed-tools" class="form-label">
+        Disallowed Tools
+        <span v-if="fieldStates.disallowed_tools === 'autofilled'" class="field-indicator autofilled" title="Auto-filled from template">
+          &lt;
+        </span>
+        <span v-if="fieldStates.disallowed_tools === 'modified'" class="field-indicator modified" title="Modified from template">
+          *
+        </span>
+      </label>
+      <div class="disallowed-tools-editor" :class="disallowedToolsEditorClass">
+        <!-- Current denied tools as tags -->
+        <div class="tools-list mb-2" v-if="deniedToolsList.length > 0">
           <span
-            v-for="(cap, index) in capabilitiesList"
+            v-for="(tool, index) in deniedToolsList"
             :key="index"
-            class="badge bg-info me-1 mb-1 capability-badge"
+            class="badge bg-danger me-1 mb-1 denied-tool-badge"
           >
-            {{ cap }}
+            {{ tool }}
             <button
               type="button"
               class="btn-close btn-close-white ms-1"
-              @click="removeCapability(index)"
-              aria-label="Remove capability"
+              @click="removeDeniedTool(index)"
+              aria-label="Remove denied tool"
             ></button>
           </span>
         </div>
 
-        <!-- Add capability input -->
+        <!-- Add denied tool input -->
         <div class="input-group input-group-sm">
           <input
             type="text"
             class="form-control"
-            v-model="newCapability"
-            @keydown.enter.prevent="addCapability"
-            placeholder="Add capability (e.g., python, testing)"
+            v-model="newDeniedTool"
+            @keydown.enter.prevent="addDeniedTool"
+            placeholder="Add denied tool (e.g., Bash, Write)"
           />
           <button
             type="button"
-            class="btn btn-outline-info"
-            @click="addCapability"
-            :disabled="!newCapability.trim()"
+            class="btn btn-outline-danger"
+            @click="addDeniedTool"
+            :disabled="!newDeniedTool.trim()"
           >
-            Add
+            Deny
+          </button>
+        </div>
+
+        <!-- Quick add common tools -->
+        <div class="mt-2">
+          <span class="form-text me-2">Quick deny:</span>
+          <button
+            v-for="tool in commonTools"
+            :key="tool"
+            type="button"
+            class="btn btn-outline-secondary btn-sm me-1 mb-1"
+            :class="{ 'btn-danger text-white': deniedToolsList.includes(tool) }"
+            @click="toggleDeniedTool(tool)"
+          >
+            {{ tool }}
           </button>
         </div>
       </div>
-      <div class="form-text">Comma-separated list of capability keywords for discovery</div>
+      <div class="form-text">
+        {{ isTemplateMode ? 'Tools explicitly denied for sessions using this template' : 'Tools to explicitly deny regardless of other permissions' }}
+      </div>
     </div>
 
     <!-- Settings Sources (Issue #36) -->
@@ -189,13 +214,14 @@
           placeholder="bash, read, edit, write, glob, grep"
         />
 
-        <label class="form-label small text-muted mt-2">Capabilities (comma-separated)</label>
+        <label class="form-label small text-muted mt-2">Disallowed Tools (comma-separated)</label>
         <input
           type="text"
           class="form-control form-control-sm"
-          :value="formData.capabilities"
-          @input="$emit('update:form-data', 'capabilities', $event.target.value)"
-          placeholder="python, testing, debugging"
+          :class="disallowedToolsFieldClass"
+          :value="formData.disallowed_tools"
+          @input="$emit('update:form-data', 'disallowed_tools', $event.target.value)"
+          placeholder="Bash, Write, WebFetch"
         />
       </div>
     </div>
@@ -225,7 +251,8 @@ const props = defineProps({
   fieldStates: {
     type: Object,
     default: () => ({
-      allowed_tools: 'normal'
+      allowed_tools: 'normal',
+      disallowed_tools: 'normal'
     })
   }
 })
@@ -234,7 +261,7 @@ const emit = defineEmits(['update:form-data', 'preview-permissions'])
 
 // Local state
 const newTool = ref('')
-const newCapability = ref('')
+const newDeniedTool = ref('')
 const showRawInput = ref(false)
 
 // Common tools for quick add
@@ -256,12 +283,12 @@ const toolsList = computed(() => {
     .filter(t => t.length > 0)
 })
 
-const capabilitiesList = computed(() => {
-  if (!props.formData.capabilities || !props.formData.capabilities.trim()) return []
-  return props.formData.capabilities
+const deniedToolsList = computed(() => {
+  if (!props.formData.disallowed_tools || !props.formData.disallowed_tools.trim()) return []
+  return props.formData.disallowed_tools
     .split(',')
-    .map(c => c.trim())
-    .filter(c => c.length > 0)
+    .map(t => t.trim())
+    .filter(t => t.length > 0)
 })
 
 // Field highlighting classes
@@ -273,6 +300,16 @@ const allowedToolsFieldClass = computed(() => ({
 const allowedToolsEditorClass = computed(() => ({
   'editor-autofilled': props.fieldStates.allowed_tools === 'autofilled',
   'editor-modified': props.fieldStates.allowed_tools === 'modified'
+}))
+
+const disallowedToolsFieldClass = computed(() => ({
+  'field-autofilled': props.fieldStates.disallowed_tools === 'autofilled',
+  'field-modified': props.fieldStates.disallowed_tools === 'modified'
+}))
+
+const disallowedToolsEditorClass = computed(() => ({
+  'editor-autofilled': props.fieldStates.disallowed_tools === 'autofilled',
+  'editor-modified': props.fieldStates.disallowed_tools === 'modified'
 }))
 
 // Methods
@@ -303,21 +340,31 @@ function toggleTool(tool) {
   }
 }
 
-function addCapability() {
-  const cap = newCapability.value.trim().toLowerCase()
-  if (!cap) return
+function addDeniedTool() {
+  const tool = newDeniedTool.value.trim()
+  if (!tool) return
 
-  if (!capabilitiesList.value.includes(cap)) {
-    const newList = [...capabilitiesList.value, cap]
-    emit('update:form-data', 'capabilities', newList.join(', '))
+  if (!deniedToolsList.value.includes(tool)) {
+    const newList = [...deniedToolsList.value, tool]
+    emit('update:form-data', 'disallowed_tools', newList.join(', '))
   }
-  newCapability.value = ''
+  newDeniedTool.value = ''
 }
 
-function removeCapability(index) {
-  const newList = [...capabilitiesList.value]
+function removeDeniedTool(index) {
+  const newList = [...deniedToolsList.value]
   newList.splice(index, 1)
-  emit('update:form-data', 'capabilities', newList.join(', '))
+  emit('update:form-data', 'disallowed_tools', newList.join(', '))
+}
+
+function toggleDeniedTool(tool) {
+  if (deniedToolsList.value.includes(tool)) {
+    const index = deniedToolsList.value.indexOf(tool)
+    removeDeniedTool(index)
+  } else {
+    const newList = [...deniedToolsList.value, tool]
+    emit('update:form-data', 'disallowed_tools', newList.join(', '))
+  }
 }
 
 // Issue #36: Toggle setting source
@@ -337,7 +384,7 @@ function toggleSettingSource(source) {
 
 <style scoped>
 .tool-badge,
-.capability-badge {
+.denied-tool-badge {
   font-size: 0.875rem;
   padding: 0.35em 0.65em;
   display: inline-flex;
@@ -345,13 +392,13 @@ function toggleSettingSource(source) {
 }
 
 .tool-badge .btn-close,
-.capability-badge .btn-close {
+.denied-tool-badge .btn-close {
   font-size: 0.5rem;
   padding: 0.25em;
 }
 
 .allowed-tools-editor,
-.capabilities-editor,
+.disallowed-tools-editor,
 .settings-sources-editor {
   background-color: var(--bs-gray-100);
   padding: 0.75rem;
@@ -359,8 +406,7 @@ function toggleSettingSource(source) {
   transition: background-color 0.3s ease;
 }
 
-.tools-list,
-.capabilities-list {
+.tools-list {
   min-height: 1.5rem;
 }
 

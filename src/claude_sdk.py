@@ -134,6 +134,7 @@ class ClaudeSDK:
         system_prompt: str | None = None,
         override_system_prompt: bool = False,
         tools: list[str] = None,
+        disallowed_tools: list[str] = None,
         model: str | None = None,
         resume_session_id: str | None = None,
         mcp_servers: list[Any] | None = None,
@@ -179,6 +180,7 @@ class ClaudeSDK:
         self.system_prompt = system_prompt
         self.override_system_prompt = override_system_prompt
         self.tools = tools if tools is not None else []
+        self.disallowed_tools = disallowed_tools if disallowed_tools is not None else []
         self.model = model
         self.resume_session_id = resume_session_id
         self.mcp_servers = mcp_servers if mcp_servers is not None else []
@@ -697,6 +699,10 @@ class ClaudeSDK:
             # Issue #36: Use configurable setting_sources (default: load from user, project, and local)
             "setting_sources": self.setting_sources if self.setting_sources else ["user", "project", "local"]
         }
+
+        # Issue #461: Add disallowed_tools if any are configured
+        if self.disallowed_tools:
+            options_kwargs["disallowed_tools"] = self.disallowed_tools
 
         # Only add system_prompt if not using file-based override
         if system_prompt_config is not None:
