@@ -95,6 +95,23 @@
                 </span>
               </div>
             </div>
+
+            <!-- Session disallowed tools -->
+            <div v-if="sessionDisallowedTools.length > 0" class="mt-3">
+              <h6>Session Disallowed Tools</h6>
+              <p class="small text-muted">
+                These tools are explicitly denied for this session:
+              </p>
+              <div>
+                <span
+                  v-for="tool in sessionDisallowedTools"
+                  :key="tool"
+                  class="badge bg-danger me-1 mb-1"
+                >
+                  {{ tool }}
+                </span>
+              </div>
+            </div>
           </div>
         </div>
         <div class="modal-footer">
@@ -134,6 +151,10 @@ const props = defineProps({
     default: () => ['user', 'project', 'local']
   },
   sessionAllowedTools: {
+    type: Array,
+    default: () => []
+  },
+  sessionDisallowedTools: {
     type: Array,
     default: () => []
   }

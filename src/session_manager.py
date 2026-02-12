@@ -64,6 +64,7 @@ class SessionInfo:
     system_prompt: str | None = None
     override_system_prompt: bool = False  # If True, use custom prompt only (no Claude Code preset)
     allowed_tools: list[str] = None
+    disallowed_tools: list[str] = None  # Tools explicitly denied (issue #461)
     model: str | None = None
     error_message: str | None = None
     claude_code_session_id: str | None = None
@@ -98,6 +99,8 @@ class SessionInfo:
     def __post_init__(self):
         if self.allowed_tools is None:
             self.allowed_tools = ["bash", "edit", "read"]
+        if self.disallowed_tools is None:
+            self.disallowed_tools = []
         if self.child_minion_ids is None:
             self.child_minion_ids = []
         if self.capabilities is None:
@@ -213,6 +216,7 @@ class SessionManager:
         system_prompt: str | None = None,
         override_system_prompt: bool = False,
         allowed_tools: list[str] = None,
+        disallowed_tools: list[str] = None,
         model: str | None = None,
         name: str | None = None,
         order: int | None = None,
@@ -256,6 +260,7 @@ class SessionManager:
             system_prompt=system_prompt,
             override_system_prompt=override_system_prompt,
             allowed_tools=allowed_tools if allowed_tools is not None else [],
+            disallowed_tools=disallowed_tools if disallowed_tools is not None else [],
             model=model,
             name=name,
             order=order,

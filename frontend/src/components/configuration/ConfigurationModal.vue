@@ -195,6 +195,7 @@
     :working-directory="currentWorkingDirectory"
     :setting-sources="formData.setting_sources"
     :session-allowed-tools="currentAllowedTools"
+    :session-disallowed-tools="currentDisallowedTools"
   />
 </template>
 
@@ -242,7 +243,8 @@ const templateOriginalValues = ref({
   default_role: null,
   initialization_context: null,
   permission_mode: null,
-  allowed_tools: null
+  allowed_tools: null,
+  disallowed_tools: null
 })
 
 // Track field states: 'normal', 'autofilled', or 'modified'
@@ -250,7 +252,8 @@ const fieldStates = reactive({
   default_role: 'normal',
   initialization_context: 'normal',
   permission_mode: 'normal',
-  allowed_tools: 'normal'
+  allowed_tools: 'normal',
+  disallowed_tools: 'normal'
 })
 
 // Form data (shared across tabs)
@@ -266,6 +269,7 @@ const formData = reactive({
 
   // Permissions tab
   allowed_tools: '',
+  disallowed_tools: '',  // Issue #461: denied tools
   capabilities: '',  // template only
   setting_sources: ['user', 'project', 'local'],  // Issue #36: settings sources to load
 
@@ -445,6 +449,14 @@ const currentAllowedTools = computed(() => {
     .filter(t => t.length > 0)
 })
 
+const currentDisallowedTools = computed(() => {
+  if (!formData.disallowed_tools || !formData.disallowed_tools.trim()) return []
+  return formData.disallowed_tools
+    .split(',')
+    .map(t => t.trim())
+    .filter(t => t.length > 0)
+})
+
 // Methods
 
 // Issue #36: Show permission preview modal
@@ -504,19 +516,22 @@ function applyTemplate() {
     formData.initialization_context = ''
     formData.permission_mode = 'default'
     formData.allowed_tools = ''
+    formData.disallowed_tools = ''
 
     // Reset all field states to normal
     fieldStates.default_role = 'normal'
     fieldStates.initialization_context = 'normal'
     fieldStates.permission_mode = 'normal'
     fieldStates.allowed_tools = 'normal'
+    fieldStates.disallowed_tools = 'normal'
 
     // Clear template values
     templateOriginalValues.value = {
       default_role: null,
       initialization_context: null,
       permission_mode: null,
-      allowed_tools: null
+      allowed_tools: null,
+      disallowed_tools: null
     }
     return
   }
@@ -529,6 +544,7 @@ function applyTemplate() {
   fieldStates.initialization_context = 'normal'
   fieldStates.permission_mode = 'normal'
   fieldStates.allowed_tools = 'normal'
+  fieldStates.disallowed_tools = 'normal'
 
   // Apply and track role
   if (template.default_role) {
@@ -569,6 +585,17 @@ function applyTemplate() {
   } else {
     formData.allowed_tools = ''
     templateOriginalValues.value.allowed_tools = null
+  }
+
+  // Apply and track disallowed tools
+  if (template.disallowed_tools && template.disallowed_tools.length > 0) {
+    const toolsStr = template.disallowed_tools.join(', ')
+    formData.disallowed_tools = toolsStr
+    templateOriginalValues.value.disallowed_tools = toolsStr
+    fieldStates.disallowed_tools = 'autofilled'
+  } else {
+    formData.disallowed_tools = ''
+    templateOriginalValues.value.disallowed_tools = null
   }
 }
 
@@ -696,6 +723,12 @@ async function createSession() {
     .map(t => t.trim())
     .filter(t => t.length > 0)
 
+  // Parse disallowed_tools
+  const deniedList = formData.disallowed_tools
+    .split(',')
+    .map(t => t.trim())
+    .filter(t => t.length > 0)
+
   // Parse capabilities
   const capsList = formData.capabilities
     .split(',')
@@ -711,6 +744,7 @@ async function createSession() {
     capabilities: capsList.length > 0 ? capsList : null,
     permission_mode: formData.permission_mode,
     allowed_tools: toolsList.length > 0 ? toolsList : null,
+    disallowed_tools: deniedList.length > 0 ? deniedList : null,
     working_directory: formData.working_directory.trim() || null,
     sandbox_enabled: formData.sandbox_enabled,
     sandbox_config: formData.sandbox_enabled ? buildSandboxConfig() : null,
@@ -750,6 +784,12 @@ async function updateSession() {
     .map(t => t.trim())
     .filter(t => t.length > 0)
 
+  // Parse disallowed tools from input
+  const deniedList = formData.disallowed_tools
+    .split(',')
+    .map(t => t.trim())
+    .filter(t => t.length > 0)
+
   // Parse capabilities from input
   const capsList = formData.capabilities
     .split(',')
@@ -765,6 +805,7 @@ async function updateSession() {
     system_prompt: formData.initialization_context.trim() || null,
     override_system_prompt: formData.override_system_prompt,
     allowed_tools: toolsList.length > 0 ? toolsList : null,
+    disallowed_tools: deniedList.length > 0 ? deniedList : null,
     capabilities: capsList.length > 0 ? capsList : null,
     sandbox_enabled: formData.sandbox_enabled,
     sandbox_config: formData.sandbox_enabled ? buildSandboxConfig() : null,
@@ -787,6 +828,12 @@ async function createTemplate() {
     .map(t => t.trim())
     .filter(t => t.length > 0)
 
+  // Parse disallowed tools
+  const deniedList = formData.disallowed_tools
+    .split(',')
+    .map(t => t.trim())
+    .filter(t => t.length > 0)
+
   // Parse capabilities
   const capsList = formData.capabilities
     .split(',')
@@ -798,6 +845,7 @@ async function createTemplate() {
     description: formData.description.trim() || null,
     permission_mode: formData.permission_mode,
     allowed_tools: toolsList.length > 0 ? toolsList : null,
+    disallowed_tools: deniedList.length > 0 ? deniedList : null,
     default_role: formData.default_role.trim() || null,
     default_system_prompt: formData.initialization_context.trim() || null,
     model: formData.model || null,
@@ -828,6 +876,12 @@ async function updateTemplate() {
     .map(t => t.trim())
     .filter(t => t.length > 0)
 
+  // Parse disallowed tools
+  const deniedList = formData.disallowed_tools
+    .split(',')
+    .map(t => t.trim())
+    .filter(t => t.length > 0)
+
   // Parse capabilities
   const capsList = formData.capabilities
     .split(',')
@@ -839,6 +893,7 @@ async function updateTemplate() {
     description: formData.description.trim() || null,
     permission_mode: formData.permission_mode,
     allowed_tools: toolsList.length > 0 ? toolsList : null,
+    disallowed_tools: deniedList.length > 0 ? deniedList : null,
     default_role: formData.default_role.trim() || null,
     default_system_prompt: formData.initialization_context.trim() || null,
     model: formData.model || null,
@@ -868,6 +923,7 @@ function resetForm() {
   formData.default_role = ''
   formData.startImmediately = true
   formData.allowed_tools = ''
+  formData.disallowed_tools = ''
   formData.capabilities = ''
   formData.setting_sources = ['user', 'project', 'local']  // Issue #36
   formData.system_prompt = ''
@@ -894,13 +950,15 @@ function resetForm() {
   fieldStates.initialization_context = 'normal'
   fieldStates.permission_mode = 'normal'
   fieldStates.allowed_tools = 'normal'
+  fieldStates.disallowed_tools = 'normal'
 
   // Clear template original values
   templateOriginalValues.value = {
     default_role: null,
     initialization_context: null,
     permission_mode: null,
-    allowed_tools: null
+    allowed_tools: null,
+    disallowed_tools: null
   }
 
   selectedTemplateId.value = null
@@ -919,6 +977,7 @@ function populateFormFromSession(session) {
   formData.override_system_prompt = session.override_system_prompt || false
   formData.system_prompt = ''  // Not used for sessions (only templates have separate additional instructions)
   formData.allowed_tools = session.allowed_tools?.join(', ') || ''
+  formData.disallowed_tools = session.disallowed_tools?.join(', ') || ''
   formData.capabilities = session.capabilities?.join(', ') || ''
   formData.sandbox_enabled = session.sandbox_enabled || false
   // Issue #36: Load setting_sources, default to all enabled if not set
@@ -947,6 +1006,7 @@ function populateFormFromTemplate(template) {
   formData.default_role = template.default_role || ''
   formData.initialization_context = template.default_system_prompt || ''
   formData.allowed_tools = template.allowed_tools?.join(', ') || ''
+  formData.disallowed_tools = template.disallowed_tools?.join(', ') || ''
   formData.model = template.model || 'sonnet'
   formData.capabilities = template.capabilities?.join(', ') || ''
   formData.override_system_prompt = template.override_system_prompt || false
@@ -1085,6 +1145,12 @@ watch(() => formData.permission_mode, (newVal) => {
 watch(() => formData.allowed_tools, (newVal) => {
   if (templateOriginalValues.value.allowed_tools !== null) {
     fieldStates.allowed_tools = newVal === templateOriginalValues.value.allowed_tools ? 'autofilled' : 'modified'
+  }
+})
+
+watch(() => formData.disallowed_tools, (newVal) => {
+  if (templateOriginalValues.value.disallowed_tools !== null) {
+    fieldStates.disallowed_tools = newVal === templateOriginalValues.value.disallowed_tools ? 'autofilled' : 'modified'
   }
 })
 

@@ -148,6 +148,7 @@ class TemplateManager:
         name: str,
         permission_mode: str,
         allowed_tools: list[str] | None = None,
+        disallowed_tools: list[str] | None = None,
         default_role: str | None = None,
         default_system_prompt: str | None = None,
         description: str | None = None,
@@ -175,6 +176,7 @@ class TemplateManager:
             name=name.strip(),
             permission_mode=permission_mode,
             allowed_tools=allowed_tools if allowed_tools is not None else [],
+            disallowed_tools=disallowed_tools if disallowed_tools is not None else [],
             default_role=default_role,
             default_system_prompt=default_system_prompt,
             description=description,
@@ -212,6 +214,7 @@ class TemplateManager:
         name: str | None = None,
         permission_mode: str | None = None,
         allowed_tools: list[str] | None = None,
+        disallowed_tools: list[str] | None = None,
         default_role: str | None = None,
         default_system_prompt: str | None = None,
         description: str | None = None,
@@ -242,6 +245,9 @@ class TemplateManager:
 
         if allowed_tools is not None:
             template.allowed_tools = allowed_tools
+
+        if disallowed_tools is not None:
+            template.disallowed_tools = disallowed_tools
 
         if default_role is not None:
             template.default_role = default_role

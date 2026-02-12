@@ -22,6 +22,7 @@ class MinionTemplate:
     name: str
     permission_mode: str  # default, acceptEdits, plan, bypassPermissions
     allowed_tools: list[str] | None = None
+    disallowed_tools: list[str] | None = None  # Tools explicitly denied (issue #461)
     default_role: str | None = None
     default_system_prompt: str | None = None
     description: str | None = None
@@ -41,6 +42,8 @@ class MinionTemplate:
             self.updated_at = datetime.now(UTC)
         if self.allowed_tools is None:
             self.allowed_tools = []
+        if self.disallowed_tools is None:
+            self.disallowed_tools = []
         if self.capabilities is None:
             self.capabilities = []
 
