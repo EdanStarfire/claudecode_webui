@@ -244,7 +244,14 @@ const templateOriginalValues = ref({
   initialization_context: null,
   permission_mode: null,
   allowed_tools: null,
-  disallowed_tools: null
+  disallowed_tools: null,
+  model: null,
+  capabilities: null,
+  sandbox_excludedCommands: null,
+  sandbox_network_allowedDomains: null,
+  sandbox_network_allowUnixSockets: null,
+  sandbox_ignoreViolations_file: null,
+  sandbox_ignoreViolations_network: null
 })
 
 // Track field states: 'normal', 'autofilled', or 'modified'
@@ -253,7 +260,14 @@ const fieldStates = reactive({
   initialization_context: 'normal',
   permission_mode: 'normal',
   allowed_tools: 'normal',
-  disallowed_tools: 'normal'
+  disallowed_tools: 'normal',
+  model: 'normal',
+  capabilities: 'normal',
+  sandbox_excludedCommands: 'normal',
+  sandbox_network_allowedDomains: 'normal',
+  sandbox_network_allowUnixSockets: 'normal',
+  sandbox_ignoreViolations_file: 'normal',
+  sandbox_ignoreViolations_network: 'normal'
 })
 
 // Form data (shared across tabs)
@@ -517,6 +531,22 @@ function applyTemplate() {
     formData.permission_mode = 'default'
     formData.allowed_tools = ''
     formData.disallowed_tools = ''
+    formData.model = 'sonnet'
+    formData.capabilities = ''
+    formData.override_system_prompt = false
+    formData.sandbox_enabled = false
+
+    // Reset sandbox config
+    formData.sandbox.autoAllowBashIfSandboxed = true
+    formData.sandbox.allowUnsandboxedCommands = false
+    formData.sandbox.excludedCommands = ''
+    formData.sandbox.enableWeakerNestedSandbox = false
+    formData.sandbox.network.allowedDomains = ''
+    formData.sandbox.network.allowLocalBinding = false
+    formData.sandbox.network.allowUnixSockets = ''
+    formData.sandbox.network.allowAllUnixSockets = false
+    formData.sandbox.ignoreViolations.file = ''
+    formData.sandbox.ignoreViolations.network = ''
 
     // Reset all field states to normal
     fieldStates.default_role = 'normal'
@@ -524,6 +554,13 @@ function applyTemplate() {
     fieldStates.permission_mode = 'normal'
     fieldStates.allowed_tools = 'normal'
     fieldStates.disallowed_tools = 'normal'
+    fieldStates.model = 'normal'
+    fieldStates.capabilities = 'normal'
+    fieldStates.sandbox_excludedCommands = 'normal'
+    fieldStates.sandbox_network_allowedDomains = 'normal'
+    fieldStates.sandbox_network_allowUnixSockets = 'normal'
+    fieldStates.sandbox_ignoreViolations_file = 'normal'
+    fieldStates.sandbox_ignoreViolations_network = 'normal'
 
     // Clear template values
     templateOriginalValues.value = {
@@ -531,7 +568,14 @@ function applyTemplate() {
       initialization_context: null,
       permission_mode: null,
       allowed_tools: null,
-      disallowed_tools: null
+      disallowed_tools: null,
+      model: null,
+      capabilities: null,
+      sandbox_excludedCommands: null,
+      sandbox_network_allowedDomains: null,
+      sandbox_network_allowUnixSockets: null,
+      sandbox_ignoreViolations_file: null,
+      sandbox_ignoreViolations_network: null
     }
     return
   }
@@ -545,6 +589,13 @@ function applyTemplate() {
   fieldStates.permission_mode = 'normal'
   fieldStates.allowed_tools = 'normal'
   fieldStates.disallowed_tools = 'normal'
+  fieldStates.model = 'normal'
+  fieldStates.capabilities = 'normal'
+  fieldStates.sandbox_excludedCommands = 'normal'
+  fieldStates.sandbox_network_allowedDomains = 'normal'
+  fieldStates.sandbox_network_allowUnixSockets = 'normal'
+  fieldStates.sandbox_ignoreViolations_file = 'normal'
+  fieldStates.sandbox_ignoreViolations_network = 'normal'
 
   // Apply and track role
   if (template.default_role) {
@@ -597,6 +648,70 @@ function applyTemplate() {
     formData.disallowed_tools = ''
     templateOriginalValues.value.disallowed_tools = null
   }
+
+  // Apply and track model
+  if (template.model) {
+    formData.model = template.model
+    templateOriginalValues.value.model = template.model
+    fieldStates.model = 'autofilled'
+  } else {
+    formData.model = 'sonnet'
+    templateOriginalValues.value.model = null
+  }
+
+  // Apply and track capabilities (array → comma-separated string)
+  if (template.capabilities && template.capabilities.length > 0) {
+    const capsStr = template.capabilities.join(', ')
+    formData.capabilities = capsStr
+    templateOriginalValues.value.capabilities = capsStr
+    fieldStates.capabilities = 'autofilled'
+  } else {
+    formData.capabilities = ''
+    templateOriginalValues.value.capabilities = null
+  }
+
+  // Apply override_system_prompt (boolean, no field-state tracking)
+  formData.override_system_prompt = template.override_system_prompt || false
+
+  // Apply sandbox_enabled (boolean, no field-state tracking)
+  formData.sandbox_enabled = template.sandbox_enabled || false
+
+  // Apply sandbox config fields
+  const sc = template.sandbox_config || {}
+  formData.sandbox.autoAllowBashIfSandboxed = sc.autoAllowBashIfSandboxed ?? true
+  formData.sandbox.allowUnsandboxedCommands = sc.allowUnsandboxedCommands ?? false
+  formData.sandbox.enableWeakerNestedSandbox = sc.enableWeakerNestedSandbox ?? false
+
+  const net = sc.network || {}
+  formData.sandbox.network.allowLocalBinding = net.allowLocalBinding ?? false
+  formData.sandbox.network.allowAllUnixSockets = net.allowAllUnixSockets ?? false
+
+  // Sandbox string fields with field-state tracking (array → comma-separated)
+  const excludedStr = (sc.excludedCommands || []).join(', ')
+  formData.sandbox.excludedCommands = excludedStr
+  templateOriginalValues.value.sandbox_excludedCommands = excludedStr || null
+  if (excludedStr) fieldStates.sandbox_excludedCommands = 'autofilled'
+
+  const domainsStr = (net.allowedDomains || []).join(', ')
+  formData.sandbox.network.allowedDomains = domainsStr
+  templateOriginalValues.value.sandbox_network_allowedDomains = domainsStr || null
+  if (domainsStr) fieldStates.sandbox_network_allowedDomains = 'autofilled'
+
+  const unixSocketsStr = (net.allowUnixSockets || []).join(', ')
+  formData.sandbox.network.allowUnixSockets = unixSocketsStr
+  templateOriginalValues.value.sandbox_network_allowUnixSockets = unixSocketsStr || null
+  if (unixSocketsStr) fieldStates.sandbox_network_allowUnixSockets = 'autofilled'
+
+  const iv = sc.ignoreViolations || {}
+  const ivFileStr = (iv.file || []).join(', ')
+  formData.sandbox.ignoreViolations.file = ivFileStr
+  templateOriginalValues.value.sandbox_ignoreViolations_file = ivFileStr || null
+  if (ivFileStr) fieldStates.sandbox_ignoreViolations_file = 'autofilled'
+
+  const ivNetStr = (iv.network || []).join(', ')
+  formData.sandbox.ignoreViolations.network = ivNetStr
+  templateOriginalValues.value.sandbox_ignoreViolations_network = ivNetStr || null
+  if (ivNetStr) fieldStates.sandbox_ignoreViolations_network = 'autofilled'
 }
 
 function openFolderBrowser() {
@@ -951,6 +1066,13 @@ function resetForm() {
   fieldStates.permission_mode = 'normal'
   fieldStates.allowed_tools = 'normal'
   fieldStates.disallowed_tools = 'normal'
+  fieldStates.model = 'normal'
+  fieldStates.capabilities = 'normal'
+  fieldStates.sandbox_excludedCommands = 'normal'
+  fieldStates.sandbox_network_allowedDomains = 'normal'
+  fieldStates.sandbox_network_allowUnixSockets = 'normal'
+  fieldStates.sandbox_ignoreViolations_file = 'normal'
+  fieldStates.sandbox_ignoreViolations_network = 'normal'
 
   // Clear template original values
   templateOriginalValues.value = {
@@ -958,7 +1080,14 @@ function resetForm() {
     initialization_context: null,
     permission_mode: null,
     allowed_tools: null,
-    disallowed_tools: null
+    disallowed_tools: null,
+    model: null,
+    capabilities: null,
+    sandbox_excludedCommands: null,
+    sandbox_network_allowedDomains: null,
+    sandbox_network_allowUnixSockets: null,
+    sandbox_ignoreViolations_file: null,
+    sandbox_ignoreViolations_network: null
   }
 
   selectedTemplateId.value = null
@@ -1151,6 +1280,48 @@ watch(() => formData.allowed_tools, (newVal) => {
 watch(() => formData.disallowed_tools, (newVal) => {
   if (templateOriginalValues.value.disallowed_tools !== null) {
     fieldStates.disallowed_tools = newVal === templateOriginalValues.value.disallowed_tools ? 'autofilled' : 'modified'
+  }
+})
+
+watch(() => formData.model, (newVal) => {
+  if (templateOriginalValues.value.model !== null) {
+    fieldStates.model = newVal === templateOriginalValues.value.model ? 'autofilled' : 'modified'
+  }
+})
+
+watch(() => formData.capabilities, (newVal) => {
+  if (templateOriginalValues.value.capabilities !== null) {
+    fieldStates.capabilities = newVal === templateOriginalValues.value.capabilities ? 'autofilled' : 'modified'
+  }
+})
+
+watch(() => formData.sandbox.excludedCommands, (newVal) => {
+  if (templateOriginalValues.value.sandbox_excludedCommands !== null) {
+    fieldStates.sandbox_excludedCommands = newVal === templateOriginalValues.value.sandbox_excludedCommands ? 'autofilled' : 'modified'
+  }
+})
+
+watch(() => formData.sandbox.network.allowedDomains, (newVal) => {
+  if (templateOriginalValues.value.sandbox_network_allowedDomains !== null) {
+    fieldStates.sandbox_network_allowedDomains = newVal === templateOriginalValues.value.sandbox_network_allowedDomains ? 'autofilled' : 'modified'
+  }
+})
+
+watch(() => formData.sandbox.network.allowUnixSockets, (newVal) => {
+  if (templateOriginalValues.value.sandbox_network_allowUnixSockets !== null) {
+    fieldStates.sandbox_network_allowUnixSockets = newVal === templateOriginalValues.value.sandbox_network_allowUnixSockets ? 'autofilled' : 'modified'
+  }
+})
+
+watch(() => formData.sandbox.ignoreViolations.file, (newVal) => {
+  if (templateOriginalValues.value.sandbox_ignoreViolations_file !== null) {
+    fieldStates.sandbox_ignoreViolations_file = newVal === templateOriginalValues.value.sandbox_ignoreViolations_file ? 'autofilled' : 'modified'
+  }
+})
+
+watch(() => formData.sandbox.ignoreViolations.network, (newVal) => {
+  if (templateOriginalValues.value.sandbox_ignoreViolations_network !== null) {
+    fieldStates.sandbox_ignoreViolations_network = newVal === templateOriginalValues.value.sandbox_ignoreViolations_network ? 'autofilled' : 'modified'
   }
 })
 
