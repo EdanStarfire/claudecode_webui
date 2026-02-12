@@ -1,7 +1,6 @@
 ---
 name: plan-manager
 description: File-based plan storage for the Planner/Builder workflow
-disable-model-invocation: true
 argument-hint: <operation> <issue_number> [stage]
 allowed-tools:
   - Bash(mkdir:*)
