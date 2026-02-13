@@ -35,8 +35,15 @@
     <template v-if="isExpanded">
       <template v-for="childId in childIds" :key="childId">
         <ChipConnector />
+        <!-- Recursive StackedChip if child also has children -->
+        <StackedChip
+          v-if="getChildSession(childId) && hasGrandchildren(childId)"
+          :session="getChildSession(childId)"
+          :isActive="childId === currentSessionId || isDescendantActive(childId)"
+          @select="$emit('select', $event)"
+        />
         <AgentChip
-          v-if="getChildSession(childId)"
+          v-else-if="getChildSession(childId)"
           :session="getChildSession(childId)"
           :isActive="childId === currentSessionId"
           variant="child"
@@ -54,6 +61,8 @@ import { useUIStore } from '@/stores/ui'
 import AgentChip from './AgentChip.vue'
 import PeekCard from './PeekCard.vue'
 import ChipConnector from './ChipConnector.vue'
+
+defineOptions({ name: 'StackedChip' })
 
 const props = defineProps({
   session: { type: Object, required: true },
@@ -91,6 +100,17 @@ const stackStyle = computed(() => {
 
 function getChildSession(childId) {
   return sessionStore.getSession(childId)
+}
+
+function hasGrandchildren(childId) {
+  const child = sessionStore.getSession(childId)
+  return child?.child_minion_ids?.length > 0
+}
+
+function isDescendantActive(childId) {
+  const child = sessionStore.getSession(childId)
+  if (!child?.child_minion_ids) return false
+  return child.child_minion_ids.includes(currentSessionId.value)
 }
 
 function toggleExpand() {
