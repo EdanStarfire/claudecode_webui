@@ -2944,7 +2944,7 @@ class ClaudeWebUI:
                                 # SDK uses snake_case (tool_name, rule_content) but suggestions come in camelCase
                                 rule_obj = PermissionRuleValue(
                                     tool_name=rule_dict.get('toolName', ''),
-                                    rule_content=rule_dict.get('ruleContent')
+                                    rule_content=rule_dict.get('ruleContent') or ""
                                 )
                                 rules_param.append(rule_obj)
 
