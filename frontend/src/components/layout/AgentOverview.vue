@@ -162,7 +162,7 @@ function manageSession() {
 
 function showInfo() {
   if (session.value) {
-    uiStore.showModal('session-info', { session: session.value })
+    uiStore.showModal('session-info', { sessionId: session.value.session_id })
   }
 }
 </script>
