@@ -11,23 +11,28 @@ const props = defineProps({
 })
 
 // AgentChip is ~44px tall. Spread connector lines vertically across the chip.
-// depth 1 at top region, maxDepth at bottom region.
 const CHIP_HEIGHT = 44
+const PAD = 8
+const USABLE = CHIP_HEIGHT - PAD * 2 // 28px usable range
 
 const connectorStyle = computed(() => {
-  // Number of distinct connector levels = maxDepth - 1
-  // (root at level 0 has no connector; connectors exist at levels 1..maxDepth-1)
-  const connectorLevels = props.maxDepth - 1
-  if (connectorLevels <= 1) {
-    // Single connector level: center the line
-    return { alignSelf: 'center' }
+  // maxDepth = total hierarchy levels below root
+  // depth = this connector's depth level (1 = first level children, 2 = grandchildren, etc.)
+  // maxDepth 1 = only 1 connector level → center
+  // maxDepth 2 = 2 connector levels → top/bottom
+  // maxDepth 3 = 3 connector levels → top/middle/bottom
+  const levels = props.maxDepth
+
+  let offset
+  if (levels <= 1) {
+    // Center: single connector level
+    offset = CHIP_HEIGHT / 2
+  } else {
+    // Spread: depth 1 at top, depth maxDepth at bottom
+    const fraction = (props.depth - 1) / (levels - 1)
+    offset = PAD + fraction * USABLE
   }
-  // Spread lines across the chip height with padding
-  // depth 1 → top, depth connectorLevels → bottom
-  const pad = 8
-  const usable = CHIP_HEIGHT - pad * 2
-  const fraction = (props.depth - 1) / (connectorLevels - 1)
-  const offset = pad + fraction * usable
+
   return {
     alignSelf: 'flex-start',
     marginTop: `${Math.round(offset)}px`
