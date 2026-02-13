@@ -34,12 +34,14 @@
     <!-- Expanded Chain -->
     <template v-if="isExpanded">
       <template v-for="childId in childIds" :key="childId">
-        <ChipConnector />
+        <ChipConnector :depth="depth" :maxDepth="treeMaxDepth" />
         <!-- Recursive StackedChip if child also has children -->
         <StackedChip
           v-if="getChildSession(childId) && hasGrandchildren(childId)"
           :session="getChildSession(childId)"
           :isActive="childId === currentSessionId || isDescendantActive(childId)"
+          :depth="depth + 1"
+          :maxDepth="treeMaxDepth"
           @select="$emit('select', $event)"
         />
         <AgentChip
@@ -66,7 +68,9 @@ defineOptions({ name: 'StackedChip' })
 
 const props = defineProps({
   session: { type: Object, required: true },
-  isActive: { type: Boolean, default: false }
+  isActive: { type: Boolean, default: false },
+  depth: { type: Number, default: 1 },
+  maxDepth: { type: Number, default: 0 } // 0 = auto-compute from tree
 })
 
 defineEmits(['select'])
@@ -78,6 +82,26 @@ const currentSessionId = computed(() => sessionStore.currentSessionId)
 
 const childIds = computed(() => {
   return props.session.child_minion_ids || []
+})
+
+// Compute max depth of the subtree rooted at this session
+function computeTreeDepth(session, level) {
+  if (!session?.child_minion_ids?.length) return level
+  let max = level
+  for (const cid of session.child_minion_ids) {
+    const child = sessionStore.getSession(cid)
+    if (child) {
+      max = Math.max(max, computeTreeDepth(child, level + 1))
+    }
+  }
+  return max
+}
+
+// If maxDepth wasn't provided (root StackedChip), compute it from the tree
+const treeMaxDepth = computed(() => {
+  if (props.maxDepth > 0) return props.maxDepth
+  // Depth from this node's children downward (this node is level 0, children are level 1+)
+  return computeTreeDepth(props.session, 0)
 })
 
 // Check if the active session is anywhere in this stack's descendant tree
