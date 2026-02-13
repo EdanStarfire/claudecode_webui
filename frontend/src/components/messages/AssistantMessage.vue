@@ -12,10 +12,11 @@
       <!-- Content -->
       <div v-if="hasContent" class="message-text" v-html="renderedContent"></div>
 
-      <!-- Tool Footer (hybrid active area + collapsible summary) -->
-      <ToolFooter
+      <!-- Activity Timeline (compact dot timeline replacing ToolFooter) -->
+      <ActivityTimeline
         v-if="hasToolUses"
         :tools="enrichedToolCalls"
+        :messageId="message.id"
       />
     </div>
   </div>
@@ -29,7 +30,7 @@ import { formatTimestamp } from '@/utils/time'
 import { useMessageStore } from '@/stores/message'
 import { useSessionStore } from '@/stores/session'
 import ThinkingBlock from './ThinkingBlock.vue'
-import ToolFooter from './ToolFooter.vue'
+import ActivityTimeline from './tools/ActivityTimeline.vue'
 
 const props = defineProps({
   message: {
