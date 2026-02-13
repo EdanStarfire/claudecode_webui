@@ -15,14 +15,19 @@ const props = defineProps({
 const CHIP_HEIGHT = 44
 
 const connectorStyle = computed(() => {
-  if (props.maxDepth <= 1) {
-    // Single depth: center the line
+  // Number of distinct connector levels = maxDepth - 1
+  // (root at level 0 has no connector; connectors exist at levels 1..maxDepth-1)
+  const connectorLevels = props.maxDepth - 1
+  if (connectorLevels <= 1) {
+    // Single connector level: center the line
     return { alignSelf: 'center' }
   }
   // Spread lines across the chip height with padding
+  // depth 1 → top, depth connectorLevels → bottom
   const pad = 8
   const usable = CHIP_HEIGHT - pad * 2
-  const offset = pad + (props.depth - 1) / (props.maxDepth - 1) * usable
+  const fraction = (props.depth - 1) / (connectorLevels - 1)
+  const offset = pad + fraction * usable
   return {
     alignSelf: 'flex-start',
     marginTop: `${Math.round(offset)}px`
