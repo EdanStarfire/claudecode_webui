@@ -107,17 +107,6 @@ function handleClick() {
 .agent-chip.child {
   border-color: #bfdbfe;
   background: #f0f7ff;
-  margin-left: -2px;
-}
-
-.agent-chip.child::before {
-  content: '';
-  position: absolute;
-  left: -8px;
-  top: 50%;
-  width: 8px;
-  height: 1px;
-  background: #cbd5e1;
 }
 
 .ac-dot {

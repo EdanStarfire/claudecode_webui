@@ -16,19 +16,12 @@ const PAD = 12
 const USABLE = CHIP_HEIGHT - PAD * 2 // 28px usable range
 
 const connectorStyle = computed(() => {
-  // maxDepth = total hierarchy levels below root
-  // depth = this connector's depth level (1 = first level children, 2 = grandchildren, etc.)
-  // maxDepth 1 = only 1 connector level → center
-  // maxDepth 2 = 2 connector levels → top/bottom
-  // maxDepth 3 = 3 connector levels → top/middle/bottom
   const levels = props.maxDepth
 
   let offset
   if (levels <= 1) {
-    // Center: single connector level
     offset = CHIP_HEIGHT / 2
   } else {
-    // Spread: depth 1 at top, depth maxDepth at bottom
     const fraction = (props.depth - 1) / (levels - 1)
     offset = PAD + fraction * USABLE
   }
