@@ -80,8 +80,23 @@ const childIds = computed(() => {
   return props.session.child_minion_ids || []
 })
 
+// Check if the active session is anywhere in this stack's descendant tree
+const hasActiveDescendant = computed(() => {
+  if (!currentSessionId.value) return false
+  function checkDescendants(ids) {
+    if (!ids) return false
+    for (const cid of ids) {
+      if (cid === currentSessionId.value) return true
+      const child = sessionStore.getSession(cid)
+      if (child?.child_minion_ids && checkDescendants(child.child_minion_ids)) return true
+    }
+    return false
+  }
+  return checkDescendants(childIds.value)
+})
+
 const isExpanded = computed(() => {
-  return uiStore.expandedStacks.has(props.session.session_id)
+  return uiStore.expandedStacks.has(props.session.session_id) || hasActiveDescendant.value
 })
 
 // Show up to 3 peek cards
