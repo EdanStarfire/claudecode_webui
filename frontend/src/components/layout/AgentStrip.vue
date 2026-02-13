@@ -1,17 +1,26 @@
 <template>
-  <div class="agent-strip" v-if="browsingProject">
+  <div class="agent-strip" v-if="browsingProject" @click="handleStripClick">
     <span class="strip-project-label">{{ browsingProject.name }}</span>
-    <AgentChip
-      v-for="session in projectSessions"
-      :key="session.session_id"
-      :session="session"
-      :isActive="session.session_id === currentSessionId"
-      @select="handleChipSelect"
-    />
-    <button class="strip-add-btn" @click="showCreateSessionModal" title="Add agent">
+    <template v-for="session in topLevelSessions" :key="session.session_id">
+      <!-- Stacked chip for parents with children -->
+      <StackedChip
+        v-if="hasChildren(session)"
+        :session="session"
+        :isActive="session.session_id === currentSessionId || isChildActive(session)"
+        @select="handleChipSelect"
+      />
+      <!-- Plain chip for standalone sessions -->
+      <AgentChip
+        v-else
+        :session="session"
+        :isActive="session.session_id === currentSessionId"
+        @select="handleChipSelect"
+      />
+    </template>
+    <button class="strip-add-btn" @click.stop="showCreateSessionModal" title="Add agent">
       +
     </button>
-    <span v-if="projectSessions.length === 0" class="strip-empty">No agents yet</span>
+    <span v-if="topLevelSessions.length === 0" class="strip-empty">No agents yet</span>
   </div>
   <div v-else class="agent-strip agent-strip-empty">
     <span class="strip-empty">Select a project above</span>
@@ -21,6 +30,7 @@
 <script setup>
 import { computed } from 'vue'
 import AgentChip from './AgentChip.vue'
+import StackedChip from './StackedChip.vue'
 import { useProjectStore } from '@/stores/project'
 import { useSessionStore } from '@/stores/session'
 import { useUIStore } from '@/stores/ui'
@@ -49,14 +59,47 @@ const projectSessions = computed(() => {
     .sort((a, b) => (a.order || 0) - (b.order || 0))
 })
 
+// Set of all child IDs so we can exclude them from top-level rendering
+const allChildIds = computed(() => {
+  const ids = new Set()
+  for (const session of projectSessions.value) {
+    if (session.child_minion_ids) {
+      for (const cid of session.child_minion_ids) {
+        ids.add(cid)
+      }
+    }
+  }
+  return ids
+})
+
+// Only show top-level sessions (not children already shown under a parent)
+const topLevelSessions = computed(() => {
+  return projectSessions.value.filter(s => !allChildIds.value.has(s.session_id))
+})
+
+function hasChildren(session) {
+  return session.child_minion_ids && session.child_minion_ids.length > 0
+}
+
+function isChildActive(session) {
+  if (!session.child_minion_ids) return false
+  return session.child_minion_ids.includes(currentSessionId.value)
+}
+
 function handleChipSelect(sessionId) {
-  // Set browsing project to the active project
   const session = sessionStore.getSession(sessionId)
   if (session) {
     uiStore.setBrowsingProject(session.project_id)
   }
   sessionStore.selectSession(sessionId)
   router.push(`/session/${sessionId}`)
+}
+
+function handleStripClick(e) {
+  // Collapse all expanded stacks when clicking empty strip area
+  if (e.target.classList.contains('agent-strip')) {
+    uiStore.collapseAllStacks()
+  }
 }
 
 function showCreateSessionModal() {
