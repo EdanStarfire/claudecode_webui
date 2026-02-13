@@ -120,7 +120,8 @@ const messageCount = computed(() => {
   const id = sessionStore.currentSessionId
   if (!id) return 0
   const msgs = messageStore.messagesBySession.get(id)
-  return msgs ? msgs.length : 0
+  if (!msgs) return 0
+  return msgs.filter(m => m.type === 'user' || m.type === 'assistant').length
 })
 
 const toolCallCount = computed(() => {
