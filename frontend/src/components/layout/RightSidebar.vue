@@ -3,7 +3,6 @@
     id="right-sidebar"
     class="right-sidebar"
     :class="{
-      'collapsed': rightSidebarCollapsed,
       'resizing': isResizing,
       'theme-red-panel': uiStore.isRedBackground
     }"
@@ -72,7 +71,6 @@ const taskStore = useTaskStore()
 const resourceStore = useResourceStore()
 const diffStore = useDiffStore()
 
-const rightSidebarCollapsed = computed(() => uiStore.rightSidebarCollapsed)
 const activeTab = computed(() => uiStore.rightSidebarActiveTab)
 
 // Badge counts
@@ -88,8 +86,11 @@ const tabs = computed(() => [
   { id: 'diff', label: 'Diff', badge: diffFileCount.value }
 ])
 
+const isOverlay = computed(() => uiStore.windowWidth <= 1024)
+
 const sidebarStyle = computed(() => {
-  if (uiStore.isMobile) return {}
+  // In overlay mode, sizing is handled by App.vue CSS
+  if (isOverlay.value) return {}
   return {
     width: `${uiStore.rightSidebarWidth}px`,
     minWidth: '200px',
@@ -130,13 +131,6 @@ function stopResize() {
   border-left: 1px solid #e2e8f0;
   position: relative;
   transition: width 0.3s ease;
-}
-
-.right-sidebar.collapsed {
-  width: 0 !important;
-  min-width: 0 !important;
-  overflow: hidden;
-  border-left: none;
 }
 
 .right-sidebar.resizing {

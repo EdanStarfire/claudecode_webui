@@ -198,6 +198,7 @@ export const useUIStore = defineStore('ui', () => {
     rightPanelVisible,
     browsingProjectId,
     expandedStacks,
+    windowWidth,
     isMobile,
     autoScrollEnabled,
     isRedBackground,

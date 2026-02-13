@@ -20,6 +20,14 @@
       <button class="header-btn" @click="uiStore.showModal('configuration')" title="Settings">
         ⚙
       </button>
+      <button
+        class="header-btn panel-toggle-btn"
+        @click="uiStore.toggleRightPanel()"
+        title="Toggle right panel"
+        :class="{ 'panel-open': uiStore.rightPanelVisible }"
+      >
+        ☰
+      </button>
     </div>
   </div>
 </template>
@@ -121,6 +129,21 @@ const uiConnected = computed(() => wsStore.uiConnected)
   height: 12px;
   border-radius: 3px;
   border: 1px solid rgba(255, 255, 255, 0.3);
+}
+
+.panel-toggle-btn {
+  display: none;
+}
+
+.panel-toggle-btn.panel-open {
+  border-color: #3b82f6;
+  color: #93c5fd;
+}
+
+@media (max-width: 1024px) {
+  .panel-toggle-btn {
+    display: flex;
+  }
 }
 
 @keyframes pulse-error {

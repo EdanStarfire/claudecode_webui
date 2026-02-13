@@ -97,4 +97,10 @@ function showCreateProjectModal() {
   color: #3b82f6;
   background: #eff6ff;
 }
+
+@media (max-width: 767px) {
+  .project-pill-bar {
+    padding: 0 8px;
+  }
+}
 </style>

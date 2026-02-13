@@ -9,11 +9,11 @@
     <!-- Row 3: Agent strip -->
     <AgentStrip />
 
-    <!-- Mobile backdrop for right sidebar overlay -->
+    <!-- Overlay backdrop for responsive right panel -->
     <div
-      id="right-sidebar-backdrop"
-      :class="{ 'show': !rightSidebarCollapsed && isMobile }"
-      @click="toggleRightSidebar"
+      id="right-panel-backdrop"
+      :class="{ 'show': rightPanelVisible && isTabletOrMobile }"
+      @click="uiStore.setRightPanelVisible(false)"
     ></div>
 
     <!-- Main Content (chat + right panel) -->
@@ -24,7 +24,7 @@
       </main>
 
       <!-- Right Panel -->
-      <RightSidebar />
+      <RightSidebar :class="{ 'panel-overlay': isTabletOrMobile, 'panel-visible': rightPanelVisible }" />
     </div>
 
     <!-- Global Modals -->
@@ -80,8 +80,8 @@ provide('addAttachmentFromResource', addAttachmentFromResource)
 provide('pendingResourceAttachment', pendingResourceAttachment)
 
 // Computed properties from UI store
-const rightSidebarCollapsed = computed(() => uiStore.rightSidebarCollapsed)
-const isMobile = computed(() => uiStore.isMobile)
+const rightPanelVisible = computed(() => uiStore.rightPanelVisible)
+const isTabletOrMobile = computed(() => uiStore.windowWidth <= 1024)
 
 // Auto-expand right sidebar when tasks first appear
 watch(() => taskStore.currentHasTasks, (hasTasks, hadTasks) => {
@@ -152,9 +152,6 @@ function handlePopState() {
   }
 }
 
-function toggleRightSidebar() {
-  uiStore.toggleRightSidebar()
-}
 </script>
 
 <style>
@@ -182,19 +179,39 @@ function toggleRightSidebar() {
   background: #fff;
 }
 
-/* Mobile backdrop for right sidebar */
-#right-sidebar-backdrop {
+/* Overlay backdrop for responsive right panel */
+#right-panel-backdrop {
   display: none;
   position: fixed;
   top: 0;
   left: 0;
   width: 100vw;
   height: 100vh;
-  background-color: rgba(0, 0, 0, 0.5);
+  background-color: rgba(0, 0, 0, 0.4);
   z-index: 1040;
+  transition: opacity 0.2s;
 }
 
-#right-sidebar-backdrop.show {
+#right-panel-backdrop.show {
   display: block;
+}
+
+/* Right panel overlay mode (tablet and mobile) */
+@media (max-width: 1024px) {
+  .panel-overlay {
+    position: fixed;
+    right: 0;
+    top: 142px;
+    bottom: 0;
+    width: min(380px, 90vw);
+    z-index: 1050;
+    transform: translateX(100%);
+    transition: transform 0.25s ease;
+    box-shadow: -4px 0 16px rgba(0, 0, 0, 0.1);
+  }
+
+  .panel-overlay.panel-visible {
+    transform: translateX(0);
+  }
 }
 </style>

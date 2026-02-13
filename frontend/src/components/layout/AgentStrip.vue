@@ -174,4 +174,11 @@ function showCreateSessionModal() {
   color: #3b82f6;
   background: #eff6ff;
 }
+
+@media (max-width: 767px) {
+  .agent-strip {
+    padding: 0 8px;
+    gap: 4px;
+  }
+}
 </style>
