@@ -212,30 +212,57 @@ export const useProjectStore = defineStore('project', () => {
       return [{ status: 'none', flex: 1 }]
     }
 
-    // Resolve sessions and sort by order to match AgentStrip rendering
-    const sessions = project.session_ids
-      .map(sid => sessionStore.getSession(sid))
-      .filter(Boolean)
+    // Build a set of all child IDs so we can identify top-level sessions
+    const allChildIds = new Set()
+    const sessionMap = new Map()
+    for (const sid of project.session_ids) {
+      const session = sessionStore.getSession(sid)
+      if (session) {
+        sessionMap.set(sid, session)
+        if (session.child_minion_ids) {
+          for (const cid of session.child_minion_ids) {
+            allChildIds.add(cid)
+          }
+        }
+      }
+    }
+
+    // Top-level sessions sorted by order (matches AgentStrip)
+    const topLevel = Array.from(sessionMap.values())
+      .filter(s => !allChildIds.has(s.session_id))
       .sort((a, b) => (a.order || 0) - (b.order || 0))
 
-    if (sessions.length === 0) {
+    if (topLevel.length === 0 && sessionMap.size === 0) {
       return [{ status: 'none', flex: 1 }]
     }
 
-    return sessions.map(session => {
-      let status = 'none'
-      if (session.state === 'active' && session.is_processing) {
-        status = 'active'
-      } else if (session.state === 'active') {
-        status = 'idle'
-      } else if (session.state === 'paused') {
-        status = 'waiting'
-      } else if (session.state === 'error') {
-        status = 'error'
-      }
+    // Walk hierarchy depth-first: parent segment, then children segments
+    function sessionStatus(session) {
+      if (session.state === 'active' && session.is_processing) return 'active'
+      if (session.state === 'active') return 'idle'
+      if (session.state === 'paused') return 'waiting'
+      if (session.state === 'error') return 'error'
+      return 'none'
+    }
 
-      return { status, flex: 1 }
-    })
+    function walkTree(session, segments) {
+      segments.push({ status: sessionStatus(session), flex: 1 })
+      if (session.child_minion_ids) {
+        for (const cid of session.child_minion_ids) {
+          const child = sessionMap.get(cid)
+          if (child) {
+            walkTree(child, segments)
+          }
+        }
+      }
+    }
+
+    const segments = []
+    for (const session of topLevel) {
+      walkTree(session, segments)
+    }
+
+    return segments.length > 0 ? segments : [{ status: 'none', flex: 1 }]
   }
 
   /**
