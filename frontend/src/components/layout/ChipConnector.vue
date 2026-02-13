@@ -12,7 +12,7 @@ const props = defineProps({
 
 // AgentChip is ~44px tall. Spread connector lines vertically across the chip.
 const CHIP_HEIGHT = 44
-const PAD = 8
+const PAD = 12
 const USABLE = CHIP_HEIGHT - PAD * 2 // 28px usable range
 
 const connectorStyle = computed(() => {
