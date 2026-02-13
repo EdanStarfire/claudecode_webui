@@ -238,8 +238,8 @@ function showInfo() {
   letter-spacing: 0.3px;
 }
 
-.status-active { background: #dcfce7; color: #166534; }
-.status-idle { background: #fef9c3; color: #854d0e; }
+.status-active { background: #ede9fe; color: #5b21b6; }
+.status-idle { background: #dcfce7; color: #166534; }
 .status-waiting { background: #ffedd5; color: #9a3412; }
 .status-error { background: #fee2e2; color: #991b1b; }
 .status-terminated { background: #f1f5f9; color: #475569; }

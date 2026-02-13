@@ -128,8 +128,8 @@ function handleClick() {
   background: #e2e8f0;
 }
 
-.ac-dot.active { background: #22c55e; }
-.ac-dot.idle { background: #eab308; }
+.ac-dot.active { background: #8b5cf6; }
+.ac-dot.idle { background: #22c55e; }
 .ac-dot.waiting { background: #f97316; }
 .ac-dot.error {
   background: #ef4444;

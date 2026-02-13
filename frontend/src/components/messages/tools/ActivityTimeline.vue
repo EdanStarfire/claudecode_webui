@@ -160,7 +160,7 @@ function getNodeColor(tool) {
     case 'error':
       return '#ef4444'
     case 'executing':
-      return '#eab308'
+      return '#8b5cf6'
     case 'permission_required':
       return '#f97316'
     case 'orphaned':
@@ -212,7 +212,7 @@ function toggleOverflow() {
 }
 
 .summary-running {
-  color: #eab308;
+  color: #8b5cf6;
   font-weight: 600;
 }
 

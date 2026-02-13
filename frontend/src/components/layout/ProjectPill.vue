@@ -141,8 +141,8 @@ function showEditModal() {
   transition: background-color 0.3s;
 }
 
-.seg.active { background: #22c55e; }
-.seg.idle { background: #eab308; }
+.seg.active { background: #8b5cf6; }
+.seg.idle { background: #22c55e; }
 .seg.waiting { background: #f97316; }
 .seg.error { background: #ef4444; }
 .seg.none { background: #e2e8f0; }

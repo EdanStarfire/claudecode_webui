@@ -66,7 +66,7 @@ const statusColor = computed(() => {
     case 'error':
       return '#ef4444'
     case 'executing':
-      return '#eab308'
+      return '#8b5cf6'
     case 'permission_required':
       return '#f97316'
     case 'orphaned':
@@ -158,8 +158,8 @@ defineExpose({ statusColor, effectiveStatus })
 }
 
 @keyframes running-pulse {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(234, 179, 8, 0.4); }
-  50% { box-shadow: 0 0 6px 2px rgba(234, 179, 8, 0.6); }
+  0%, 100% { box-shadow: 0 0 0 0 rgba(139, 92, 246, 0.4); }
+  50% { box-shadow: 0 0 6px 2px rgba(139, 92, 246, 0.6); }
 }
 
 @keyframes permission-pulse {
