@@ -1,25 +1,29 @@
 <template>
-  <div class="container-fluid vh-100 d-flex flex-column p-0">
-    <!-- Header -->
-    <AppHeader />
+  <div class="app-shell">
+    <!-- Row 1: Dark app chrome bar -->
+    <HeaderRow1 />
 
-    <!-- Mobile backdrop for sidebar overlay -->
-    <div id="sidebar-backdrop" :class="{ 'show': !sidebarCollapsed && isMobile }" @click="toggleSidebar"></div>
+    <!-- Row 2: Project pills -->
+    <ProjectPillBar />
+
+    <!-- Row 3: Agent strip -->
+    <AgentStrip />
 
     <!-- Mobile backdrop for right sidebar overlay -->
-    <div id="right-sidebar-backdrop" :class="{ 'show': !rightSidebarCollapsed && isMobile }" @click="toggleRightSidebar"></div>
+    <div
+      id="right-sidebar-backdrop"
+      :class="{ 'show': !rightSidebarCollapsed && isMobile }"
+      @click="toggleRightSidebar"
+    ></div>
 
-    <!-- Main Content -->
-    <div class="d-flex flex-grow-1 overflow-hidden position-relative">
-      <!-- Sidebar -->
-      <Sidebar />
-
-      <!-- Router View (main content area) -->
-      <main class="flex-grow-1 d-flex flex-column overflow-hidden">
+    <!-- Main Content (chat + right panel) -->
+    <div class="main-layout">
+      <!-- Center Panel (router view) -->
+      <main class="center-panel">
         <router-view />
       </main>
 
-      <!-- Right Sidebar (Task Panel and future panels) -->
+      <!-- Right Panel -->
       <RightSidebar />
     </div>
 
@@ -38,8 +42,9 @@
 <script setup>
 import { computed, onMounted, onUnmounted, watch, provide, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import AppHeader from './components/layout/AppHeader.vue'
-import Sidebar from './components/layout/Sidebar.vue'
+import HeaderRow1 from './components/layout/HeaderRow1.vue'
+import ProjectPillBar from './components/layout/ProjectPillBar.vue'
+import AgentStrip from './components/layout/AgentStrip.vue'
 import RightSidebar from './components/layout/RightSidebar.vue'
 import FolderBrowserModal from './components/common/FolderBrowserModal.vue'
 import ProjectCreateModal from './components/project/ProjectCreateModal.vue'
@@ -65,27 +70,22 @@ const resourceStore = useResourceStore()
 const router = useRouter()
 
 // Provide function for adding resource to attachments
-// This will be implemented by InputArea and consumed by ResourceGallery
 const pendingResourceAttachment = ref(null)
 
 function addAttachmentFromResource(resource) {
-  // Set the pending resource attachment - InputArea will watch for this
   pendingResourceAttachment.value = resource
 }
 
-// Provide to child components
 provide('addAttachmentFromResource', addAttachmentFromResource)
 provide('pendingResourceAttachment', pendingResourceAttachment)
 
 // Computed properties from UI store
-const sidebarCollapsed = computed(() => uiStore.sidebarCollapsed)
 const rightSidebarCollapsed = computed(() => uiStore.rightSidebarCollapsed)
 const isMobile = computed(() => uiStore.isMobile)
 
 // Auto-expand right sidebar when tasks first appear
 watch(() => taskStore.currentHasTasks, (hasTasks, hadTasks) => {
   if (hasTasks && !hadTasks) {
-    // Tasks appeared for the first time - auto-expand sidebar
     uiStore.setRightSidebarCollapsed(false)
   }
 })
@@ -93,17 +93,14 @@ watch(() => taskStore.currentHasTasks, (hasTasks, hadTasks) => {
 // Auto-expand right sidebar when resources first appear
 watch(() => resourceStore.currentHasResources, (hasResources, hadResources) => {
   if (hasResources && !hadResources) {
-    // Resources appeared for the first time - auto-expand sidebar
     uiStore.setRightSidebarCollapsed(false)
   }
 })
 
 // Initialize app on mount
 onMounted(async () => {
-  // Initialize background color from localStorage
   uiStore.initBackgroundColor()
 
-  // Initialize marked and DOMPurify if needed
   if (typeof marked !== 'undefined') {
     marked.setOptions({
       breaks: true,
@@ -129,14 +126,13 @@ onMounted(async () => {
     }
   } else if (hash.startsWith('#/timeline/')) {
     const legionId = hash.replace('#/timeline/', '')
-    // Handle Legion timeline view
     router.push(`/timeline/${legionId}`)
   }
 
   // Handle browser back/forward
   window.addEventListener('popstate', handlePopState)
 
-  // Handle window resize for mobile/desktop detection
+  // Handle window resize
   window.addEventListener('resize', uiStore.handleResize)
 })
 
@@ -147,7 +143,6 @@ onUnmounted(() => {
 })
 
 function handlePopState() {
-  // Handle browser navigation
   const hash = window.location.hash
   if (hash.startsWith('#/session/')) {
     const sessionId = hash.replace('#/session/', '')
@@ -157,18 +152,37 @@ function handlePopState() {
   }
 }
 
-function toggleSidebar() {
-  uiStore.toggleSidebar()
-}
-
 function toggleRightSidebar() {
   uiStore.toggleRightSidebar()
 }
 </script>
 
 <style>
-/* Mobile backdrop for sidebar */
-#sidebar-backdrop,
+.app-shell {
+  width: 100vw;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.main-layout {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.center-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+  background: #fff;
+}
+
+/* Mobile backdrop for right sidebar */
 #right-sidebar-backdrop {
   display: none;
   position: fixed;
@@ -180,15 +194,7 @@ function toggleRightSidebar() {
   z-index: 1040;
 }
 
-#sidebar-backdrop.show,
 #right-sidebar-backdrop.show {
   display: block;
-}
-
-@media (max-width: 768px) {
-  #sidebar-backdrop.show,
-  #right-sidebar-backdrop.show {
-    display: block;
-  }
 }
 </style>

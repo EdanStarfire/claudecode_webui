@@ -7,8 +7,7 @@ import { ref, computed } from 'vue'
 export const useUIStore = defineStore('ui', () => {
   // ========== STATE ==========
 
-  // Left Sidebar state
-  // Default: collapsed on mobile, visible on desktop
+  // Left Sidebar state (legacy - kept for compatibility during migration)
   const sidebarCollapsed = ref(window.innerWidth < 768)
   const sidebarWidth = ref(300)
 
@@ -17,8 +16,18 @@ export const useUIStore = defineStore('ui', () => {
   const rightSidebarCollapsed = ref(true)
   const rightSidebarWidth = ref(300)
 
-  // Right Sidebar active tab: 'tasks', 'diff', 'resources'
+  // Right Sidebar active tab: 'comms', 'resources', 'tasks', 'diff'
   const rightSidebarActiveTab = ref('tasks')
+
+  // Right panel visibility for responsive toggle (tablet/mobile overlay)
+  const rightPanelVisible = ref(window.innerWidth > 1024)
+
+  // Browsing project (which project's agents are shown in the strip)
+  // Distinct from active project (the project of the currently selected session)
+  const browsingProjectId = ref(null)
+
+  // Expanded stacked chips (Set of parent session IDs whose children are expanded)
+  const expandedStacks = ref(new Set())
 
   // Mobile detection (reactive to window size)
   const windowWidth = ref(window.innerWidth)
@@ -126,6 +135,36 @@ export const useUIStore = defineStore('ui', () => {
     showModal('restart-server')
   }
 
+  // Browsing project management
+  function setBrowsingProject(projectId) {
+    browsingProjectId.value = projectId
+  }
+
+  // Stacked chip management
+  function toggleStack(sessionId) {
+    if (expandedStacks.value.has(sessionId)) {
+      expandedStacks.value.delete(sessionId)
+    } else {
+      expandedStacks.value.add(sessionId)
+    }
+    expandedStacks.value = new Set(expandedStacks.value)
+  }
+
+  function collapseAllStacks() {
+    if (expandedStacks.value.size > 0) {
+      expandedStacks.value = new Set()
+    }
+  }
+
+  // Right panel responsive toggle
+  function toggleRightPanel() {
+    rightPanelVisible.value = !rightPanelVisible.value
+  }
+
+  function setRightPanelVisible(visible) {
+    rightPanelVisible.value = visible
+  }
+
   // Handle window resize
   function handleResize() {
     const previousWidth = windowWidth.value
@@ -139,6 +178,13 @@ export const useUIStore = defineStore('ui', () => {
     else if (windowWidth.value >= 768 && previousWidth < 768) {
       sidebarCollapsed.value = false
     }
+
+    // Right panel visibility based on breakpoint
+    if (windowWidth.value > 1024) {
+      rightPanelVisible.value = true
+    } else if (windowWidth.value <= 1024 && previousWidth > 1024) {
+      rightPanelVisible.value = false
+    }
   }
 
   // ========== RETURN ==========
@@ -149,6 +195,9 @@ export const useUIStore = defineStore('ui', () => {
     rightSidebarCollapsed,
     rightSidebarWidth,
     rightSidebarActiveTab,
+    rightPanelVisible,
+    browsingProjectId,
+    expandedStacks,
     isMobile,
     autoScrollEnabled,
     isRedBackground,
@@ -168,6 +217,11 @@ export const useUIStore = defineStore('ui', () => {
     setRightSidebarCollapsed,
     setRightSidebarWidth,
     setRightSidebarTab,
+    setBrowsingProject,
+    toggleStack,
+    collapseAllStacks,
+    toggleRightPanel,
+    setRightPanelVisible,
     setAutoScroll,
     initBackgroundColor,
     toggleBackgroundColor,

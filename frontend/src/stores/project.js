@@ -203,6 +203,35 @@ export const useProjectStore = defineStore('project', () => {
   }
 
   /**
+   * Get status bar segments for a project's sessions (for ProjectPill status bar)
+   * Returns array of { status: 'active'|'idle'|'waiting'|'error'|'none', flex: number }
+   */
+  function getStatusBarSegments(projectId, sessionStore) {
+    const project = projects.value.get(projectId)
+    if (!project || !project.session_ids || project.session_ids.length === 0) {
+      return [{ status: 'none', flex: 1 }]
+    }
+
+    return project.session_ids.map(sid => {
+      const session = sessionStore.getSession(sid)
+      if (!session) return { status: 'none', flex: 1 }
+
+      let status = 'none'
+      if (session.state === 'active' && session.is_processing) {
+        status = 'active'
+      } else if (session.state === 'active') {
+        status = 'idle'
+      } else if (session.state === 'paused') {
+        status = 'waiting'
+      } else if (session.state === 'error') {
+        status = 'error'
+      }
+
+      return { status, flex: 1 }
+    })
+  }
+
+  /**
    * Get project by ID
    */
   function getProject(projectId) {
@@ -259,6 +288,7 @@ export const useProjectStore = defineStore('project', () => {
     reorderProjects,
     reorderSessionsInProject,
     getProject,
+    getStatusBarSegments,
     selectProject,
     clearProjectSelection,
     formatPath
