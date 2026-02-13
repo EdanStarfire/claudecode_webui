@@ -212,10 +212,17 @@ export const useProjectStore = defineStore('project', () => {
       return [{ status: 'none', flex: 1 }]
     }
 
-    return project.session_ids.map(sid => {
-      const session = sessionStore.getSession(sid)
-      if (!session) return { status: 'none', flex: 1 }
+    // Resolve sessions and sort by order to match AgentStrip rendering
+    const sessions = project.session_ids
+      .map(sid => sessionStore.getSession(sid))
+      .filter(Boolean)
+      .sort((a, b) => (a.order || 0) - (b.order || 0))
 
+    if (sessions.length === 0) {
+      return [{ status: 'none', flex: 1 }]
+    }
+
+    return sessions.map(session => {
       let status = 'none'
       if (session.state === 'active' && session.is_processing) {
         status = 'active'
