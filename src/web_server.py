@@ -1397,19 +1397,32 @@ class ClaudeWebUI:
                     merge_base = await self._run_git_command(
                         ["git", "merge-base", "HEAD", "origin/master"], cwd
                     )
-                if merge_base is None:
-                    return {
-                        "is_git_repo": True,
-                        "branch": branch or "unknown",
-                        "error": "No remote tracking branch found (origin/main or origin/master)"
-                    }
+                # Track whether we're in local-only mode (no remote)
+                is_local_only = merge_base is None
+                if is_local_only:
+                    # No remote: use the empty tree as base so all commits/files are shown
+                    empty_tree = await self._run_git_command(
+                        ["git", "hash-object", "-t", "tree", "/dev/null"], cwd
+                    )
+                    if empty_tree:
+                        merge_base = empty_tree.strip()
+                    else:
+                        # Fallback to well-known empty tree hash
+                        merge_base = "4b825dc642cb6eb9a060e54bf899d15f7f09f993"
 
                 # Get commit log since merge base
-                log_output = await self._run_git_command(
-                    ["git", "log", f"{merge_base}..HEAD",
-                     "--format=%H%n%h%n%s%n%an%n%aI%n---COMMIT_END---"],
-                    cwd
-                )
+                if is_local_only:
+                    # Local-only: show all commits (--root includes initial commit)
+                    log_output = await self._run_git_command(
+                        ["git", "log", "--format=%H%n%h%n%s%n%an%n%aI%n---COMMIT_END---"],
+                        cwd
+                    )
+                else:
+                    log_output = await self._run_git_command(
+                        ["git", "log", f"{merge_base}..HEAD",
+                         "--format=%H%n%h%n%s%n%an%n%aI%n---COMMIT_END---"],
+                        cwd
+                    )
                 commits = []
                 if log_output:
                     raw_commits = log_output.strip().split("---COMMIT_END---")
@@ -1418,8 +1431,8 @@ class ClaudeWebUI:
                         if len(lines) >= 5:
                             # Get files for this commit
                             commit_files_output = await self._run_git_command(
-                                ["git", "diff-tree", "--no-commit-id", "-r",
-                                 "--name-only", lines[0]], cwd
+                                ["git", "diff-tree", "--no-commit-id", "--root",
+                                 "-r", "--name-only", lines[0]], cwd
                             )
                             commit_files = [
                                 f for f in (commit_files_output or "").strip().split("\n")
@@ -1641,9 +1654,9 @@ class ClaudeWebUI:
             """Get unified diff content for a specific file.
 
             Args:
-                ref: Optional. When ``uncommitted``, uses two-dot diff
-                    (includes working tree changes). Default uses three-dot
-                    (committed changes only).
+                ref: Optional. ``uncommitted`` for working tree changes,
+                    a commit hash for commit-specific changes, or null/empty
+                    for cumulative branch diff (merge_base...HEAD).
             """
             if not path:
                 raise HTTPException(status_code=400, detail="path query parameter required")
@@ -1657,18 +1670,50 @@ class ClaudeWebUI:
                 if not cwd or not Path(cwd).exists():
                     raise HTTPException(status_code=400, detail="Invalid working directory")
 
-                # Find merge base
+                if ref and ref != "uncommitted":
+                    # Commit-specific diff: validate ref then diff against parent
+                    verified = await self._run_git_command(
+                        ["git", "rev-parse", "--verify", ref], cwd
+                    )
+                    if verified is None:
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"Invalid commit reference: {ref}"
+                        )
+
+                    # Check if this commit has a parent
+                    parent = await self._run_git_command(
+                        ["git", "rev-parse", "--verify", f"{ref}~1"], cwd
+                    )
+                    if parent:
+                        # Normal commit: diff against parent
+                        diff_output = await self._run_git_command(
+                            ["git", "diff", f"{ref}~1", ref, "--", path], cwd
+                        )
+                    else:
+                        # Root commit: diff against empty tree
+                        empty_tree = await self._run_git_command(
+                            ["git", "hash-object", "-t", "tree", "/dev/null"], cwd
+                        )
+                        base = (empty_tree.strip() if empty_tree
+                                else "4b825dc642cb6eb9a060e54bf899d15f7f09f993")
+                        diff_output = await self._run_git_command(
+                            ["git", "diff", base, ref, "--", path], cwd
+                        )
+
+                    return {
+                        "path": path,
+                        "ref": ref,
+                        "diff": diff_output or ""
+                    }
+
+                # Find merge base for uncommitted / total views
                 merge_base = await self._run_git_command(
                     ["git", "merge-base", "HEAD", "origin/main"], cwd
                 )
                 if merge_base is None:
                     merge_base = await self._run_git_command(
                         ["git", "merge-base", "HEAD", "origin/master"], cwd
-                    )
-                if merge_base is None:
-                    raise HTTPException(
-                        status_code=400,
-                        detail="No remote tracking branch found"
                     )
 
                 if ref == "uncommitted":
@@ -1690,14 +1735,25 @@ class ClaudeWebUI:
                             cwd, allow_nonzero=True
                         )
                     else:
-                        # Tracked file: two-dot diff includes working tree
+                        # Tracked file: diff against merge base, or HEAD if no remote
+                        base = merge_base or "HEAD"
                         diff_output = await self._run_git_command(
-                            ["git", "diff", merge_base, "--", path], cwd
+                            ["git", "diff", base, "--", path], cwd
                         )
-                else:
+                elif merge_base is not None:
                     # Default: three-dot (committed changes only)
                     diff_output = await self._run_git_command(
                         ["git", "diff", f"{merge_base}...HEAD", "--", path], cwd
+                    )
+                else:
+                    # No remote: diff all changes from empty tree
+                    empty_tree = await self._run_git_command(
+                        ["git", "hash-object", "-t", "tree", "/dev/null"], cwd
+                    )
+                    base = (empty_tree.strip() if empty_tree
+                            else "4b825dc642cb6eb9a060e54bf899d15f7f09f993")
+                    diff_output = await self._run_git_command(
+                        ["git", "diff", base, "HEAD", "--", path], cwd
                     )
 
                 return {

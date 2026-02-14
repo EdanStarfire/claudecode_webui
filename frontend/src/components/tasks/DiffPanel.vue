@@ -81,7 +81,7 @@
             v-for="file in diffStore.currentFiles"
             :key="file.path"
             class="file-item d-flex align-items-center gap-2 px-3 py-2 border-bottom"
-            @click="openFile(file.path, 'uncommitted')"
+            @click="openFile(file.path, null)"
           >
             <span class="status-icon" :class="'status-' + file.status">
               {{ statusIcon(file.status) }}
@@ -126,7 +126,7 @@
                 v-for="filePath in commit.files"
                 :key="filePath"
                 class="file-item d-flex align-items-center gap-2 px-4 py-1"
-                @click="openFile(filePath, commit.is_uncommitted ? 'uncommitted' : null)"
+                @click="openFile(filePath, commit.is_uncommitted ? 'uncommitted' : commit.hash)"
               >
                 <span class="status-icon" :class="'status-' + getFileStatus(filePath)">
                   {{ statusIcon(getFileStatus(filePath)) }}
