@@ -73,6 +73,7 @@ function showEditModal() {
   transition: all 0.15s;
   white-space: nowrap;
   flex-shrink: 0;
+  min-width: 120px;
   position: relative;
   background: transparent;
 }
