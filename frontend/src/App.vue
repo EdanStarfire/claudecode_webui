@@ -183,14 +183,14 @@ function handlePopState() {
   background: #fff;
 }
 
-/* Overlay backdrop for responsive right panel */
+/* Overlay backdrop for responsive right panel — matches panel vertical extent */
 #right-panel-backdrop {
   display: none;
   position: fixed;
-  top: 0;
+  top: 142px;
   left: 0;
   width: 100vw;
-  height: 100vh;
+  bottom: 0;
   background-color: rgba(0, 0, 0, 0.4);
   z-index: 1040;
   transition: opacity 0.2s;
