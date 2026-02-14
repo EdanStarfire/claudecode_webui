@@ -2,19 +2,12 @@
   <div class="activity-timeline" :class="{ 'timeline-mobile': uiStore.isMobile }" v-if="sortedTools.length > 0">
     <!-- Timeline Row (nodes + segments) -->
     <div class="timeline-row">
-      <!-- Overflow chip (when collapsed, shows count of hidden tools) -->
-      <TimelineOverflow
-        v-if="hasOverflow && !isOverflowExpanded"
-        :count="overflowCount"
-        @toggle="toggleOverflow"
-      />
-
       <!-- Timeline items (nodes + segments) -->
-      <template v-for="(tool, index) in visibleTools" :key="tool.id">
+      <template v-for="(tool, index) in sortedTools" :key="tool.id">
         <!-- Segment between nodes (not before first) -->
         <TimelineSegment
           v-if="index > 0"
-          :leftColor="getNodeColor(visibleTools[index - 1])"
+          :leftColor="getNodeColor(sortedTools[index - 1])"
           :rightColor="getNodeColor(tool)"
           :compact="uiStore.isMobile"
         />
@@ -53,9 +46,6 @@ import { useUIStore } from '@/stores/ui'
 import TimelineNode from './TimelineNode.vue'
 import TimelineSegment from './TimelineSegment.vue'
 import TimelineDetail from './TimelineDetail.vue'
-import TimelineOverflow from './TimelineOverflow.vue'
-
-const OVERFLOW_THRESHOLD = 10
 
 const props = defineProps({
   tools: {
@@ -75,7 +65,6 @@ const uiStore = useUIStore()
 
 // Local state for this timeline instance
 const expandedNodeId = ref(null)
-const isOverflowExpanded = ref(false)
 const nodeRefs = ref({})
 
 function setNodeRef(id, el) {
@@ -95,22 +84,6 @@ const sortedTools = computed(() => {
       return a.originalIndex - b.originalIndex
     })
     .map(({ tool }) => tool)
-})
-
-// Overflow logic
-const hasOverflow = computed(() => sortedTools.value.length > OVERFLOW_THRESHOLD)
-
-const overflowCount = computed(() => {
-  if (!hasOverflow.value) return 0
-  return sortedTools.value.length - OVERFLOW_THRESHOLD
-})
-
-const visibleTools = computed(() => {
-  if (!hasOverflow.value || isOverflowExpanded.value) {
-    return sortedTools.value
-  }
-  // Show only the latest OVERFLOW_THRESHOLD tools
-  return sortedTools.value.slice(-OVERFLOW_THRESHOLD)
 })
 
 // Expanded tool
@@ -198,9 +171,6 @@ function toggleDetail(toolId) {
   }
 }
 
-function toggleOverflow() {
-  isOverflowExpanded.value = !isOverflowExpanded.value
-}
 </script>
 
 <style scoped>
