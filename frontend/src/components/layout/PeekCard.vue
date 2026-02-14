@@ -6,6 +6,7 @@
     @click.stop="$emit('click')"
   >
     <div class="peek-dot" :class="statusClass"></div>
+    <span class="peek-letter">{{ letter }}</span>
     <div v-if="hasAlert" class="peek-alert" :class="alertClass"></div>
   </div>
 </template>
@@ -25,8 +26,13 @@ const sessionStore = useSessionStore()
 
 const childSession = computed(() => sessionStore.getSession(props.sessionId))
 
+const letter = computed(() => {
+  const name = childSession.value?.name || childSession.value?.role || '?'
+  return name.charAt(0).toUpperCase()
+})
+
 const peekStyle = computed(() => ({
-  right: `${-16 - (props.index * 14)}px`
+  right: `${-20 - (props.index * 22)}px`
 }))
 
 const statusClass = computed(() => {
@@ -54,16 +60,18 @@ const alertClass = computed(() => {
 <style scoped>
 .peek-card {
   position: absolute;
-  top: 0;
-  width: 14px;
-  height: 34px;
+  top: 2px;
+  width: 26px;
+  height: 30px;
   background: #f1f5f9;
   border: 1px solid #cbd5e1;
-  border-radius: 6px;
+  border-radius: 8px;
   cursor: pointer;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
+  gap: 2px;
   z-index: 0;
   transition: all 0.15s;
 }
@@ -74,8 +82,8 @@ const alertClass = computed(() => {
 }
 
 .peek-dot {
-  width: 6px;
-  height: 6px;
+  width: 5px;
+  height: 5px;
   border-radius: 50%;
 }
 
@@ -85,12 +93,19 @@ const alertClass = computed(() => {
 .dot-error { background: #ef4444; }
 .dot-none { background: #e2e8f0; }
 
+.peek-letter {
+  font-size: 10px;
+  font-weight: 700;
+  color: #475569;
+  line-height: 1;
+}
+
 .peek-alert {
   position: absolute;
   top: -3px;
   right: -3px;
-  width: 12px;
-  height: 12px;
+  width: 10px;
+  height: 10px;
   border-radius: 50%;
   border: 1px solid white;
 }

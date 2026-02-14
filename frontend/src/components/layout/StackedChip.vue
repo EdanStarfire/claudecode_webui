@@ -133,7 +133,7 @@ const stackStyle = computed(() => {
   if (isExpanded.value || childIds.value.length === 0) return {}
   const peekCount = Math.min(childIds.value.length, 3)
   return {
-    marginRight: `${peekCount * 14 + 4}px`
+    marginRight: `${peekCount * 22 + 4}px`
   }
 })
 
