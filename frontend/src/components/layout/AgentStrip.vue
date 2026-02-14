@@ -1,5 +1,5 @@
 <template>
-  <div class="agent-strip" v-if="browsingProject" @click="handleStripClick">
+  <div class="agent-strip" ref="stripEl" v-if="browsingProject" @click="handleStripClick">
     <span class="strip-project-label">{{ browsingProject.name }}</span>
     <template v-for="session in topLevelSessions" :key="session.session_id">
       <!-- Stacked chip for parents with children -->
@@ -28,7 +28,7 @@
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, ref, onMounted, onUnmounted } from 'vue'
 import AgentChip from './AgentChip.vue'
 import StackedChip from './StackedChip.vue'
 import { useProjectStore } from '@/stores/project'
@@ -40,6 +40,23 @@ const projectStore = useProjectStore()
 const sessionStore = useSessionStore()
 const uiStore = useUIStore()
 const router = useRouter()
+
+// Auto-collapse stacks when clicking outside the agent strip
+const stripEl = ref(null)
+
+function handleDocumentClick(e) {
+  if (stripEl.value && !stripEl.value.contains(e.target)) {
+    uiStore.collapseAllStacks()
+  }
+}
+
+onMounted(() => {
+  document.addEventListener('click', handleDocumentClick, true)
+})
+
+onUnmounted(() => {
+  document.removeEventListener('click', handleDocumentClick, true)
+})
 
 const currentSessionId = computed(() => sessionStore.currentSessionId)
 
