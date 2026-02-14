@@ -131,19 +131,9 @@ const uiConnected = computed(() => wsStore.uiConnected)
   border: 1px solid rgba(255, 255, 255, 0.3);
 }
 
-.panel-toggle-btn {
-  display: none;
-}
-
 .panel-toggle-btn.panel-open {
   border-color: #3b82f6;
   color: #93c5fd;
-}
-
-@media (max-width: 1024px) {
-  .panel-toggle-btn {
-    display: flex;
-  }
 }
 
 @keyframes pulse-error {

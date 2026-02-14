@@ -23,8 +23,12 @@
         <router-view />
       </main>
 
-      <!-- Right Panel -->
-      <RightSidebar :class="{ 'panel-overlay': isTabletOrMobile, 'panel-visible': rightPanelVisible }" />
+      <!-- Right Panel: On desktop, v-show controls in-flow visibility;
+           on mobile/tablet, overlay CSS handles transform-based slide -->
+      <RightSidebar
+        v-show="rightPanelVisible || isTabletOrMobile"
+        :class="{ 'panel-overlay': isTabletOrMobile, 'panel-visible': rightPanelVisible }"
+      />
     </div>
 
     <!-- Global Modals -->
@@ -83,17 +87,17 @@ provide('pendingResourceAttachment', pendingResourceAttachment)
 const rightPanelVisible = computed(() => uiStore.rightPanelVisible)
 const isTabletOrMobile = computed(() => uiStore.windowWidth <= 1024)
 
-// Auto-expand right sidebar when tasks first appear
+// Auto-show right panel when tasks first appear
 watch(() => taskStore.currentHasTasks, (hasTasks, hadTasks) => {
   if (hasTasks && !hadTasks) {
-    uiStore.setRightSidebarCollapsed(false)
+    uiStore.setRightPanelVisible(true)
   }
 })
 
-// Auto-expand right sidebar when resources first appear
+// Auto-show right panel when resources first appear
 watch(() => resourceStore.currentHasResources, (hasResources, hadResources) => {
   if (hasResources && !hadResources) {
-    uiStore.setRightSidebarCollapsed(false)
+    uiStore.setRightPanelVisible(true)
   }
 })
 
@@ -196,9 +200,10 @@ function handlePopState() {
   display: block;
 }
 
-/* Right panel overlay mode (tablet and mobile) */
+/* Right panel overlay mode (tablet and mobile)
+   Uses #right-sidebar ID to override scoped styles (position: relative) */
 @media (max-width: 1024px) {
-  .panel-overlay {
+  #right-sidebar.panel-overlay {
     position: fixed;
     right: 0;
     top: 142px;
@@ -210,7 +215,7 @@ function handlePopState() {
     box-shadow: -4px 0 16px rgba(0, 0, 0, 0.1);
   }
 
-  .panel-overlay.panel-visible {
+  #right-sidebar.panel-overlay.panel-visible {
     transform: translateX(0);
   }
 }
