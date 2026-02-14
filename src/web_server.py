@@ -1397,27 +1397,32 @@ class ClaudeWebUI:
                     merge_base = await self._run_git_command(
                         ["git", "merge-base", "HEAD", "origin/master"], cwd
                     )
-                if merge_base is None:
-                    # No remote: fall back to root commit so we show all local history
-                    root_commit = await self._run_git_command(
-                        ["git", "rev-list", "--max-parents=0", "HEAD"], cwd
+                # Track whether we're in local-only mode (no remote)
+                is_local_only = merge_base is None
+                if is_local_only:
+                    # No remote: use the empty tree as base so all commits/files are shown
+                    empty_tree = await self._run_git_command(
+                        ["git", "hash-object", "-t", "tree", "/dev/null"], cwd
                     )
-                    if root_commit:
-                        # If multiple roots, take the first one
-                        merge_base = root_commit.strip().split("\n")[0]
+                    if empty_tree:
+                        merge_base = empty_tree.strip()
                     else:
-                        return {
-                            "is_git_repo": True,
-                            "branch": branch or "unknown",
-                            "error": "No commits found in repository"
-                        }
+                        # Fallback to well-known empty tree hash
+                        merge_base = "4b825dc642cb6eb9a060e54bf899d15f7f09f993"
 
                 # Get commit log since merge base
-                log_output = await self._run_git_command(
-                    ["git", "log", f"{merge_base}..HEAD",
-                     "--format=%H%n%h%n%s%n%an%n%aI%n---COMMIT_END---"],
-                    cwd
-                )
+                if is_local_only:
+                    # Local-only: show all commits (--root includes initial commit)
+                    log_output = await self._run_git_command(
+                        ["git", "log", "--format=%H%n%h%n%s%n%an%n%aI%n---COMMIT_END---"],
+                        cwd
+                    )
+                else:
+                    log_output = await self._run_git_command(
+                        ["git", "log", f"{merge_base}..HEAD",
+                         "--format=%H%n%h%n%s%n%an%n%aI%n---COMMIT_END---"],
+                        cwd
+                    )
                 commits = []
                 if log_output:
                     raw_commits = log_output.strip().split("---COMMIT_END---")
@@ -1731,8 +1736,15 @@ class ClaudeWebUI:
                         ["git", "diff", f"{merge_base}...HEAD", "--", path], cwd
                     )
                 else:
-                    # No remote: cannot compute cumulative branch diff
-                    diff_output = ""
+                    # No remote: diff all changes from empty tree
+                    empty_tree = await self._run_git_command(
+                        ["git", "hash-object", "-t", "tree", "/dev/null"], cwd
+                    )
+                    base = (empty_tree.strip() if empty_tree
+                            else "4b825dc642cb6eb9a060e54bf899d15f7f09f993")
+                    diff_output = await self._run_git_command(
+                        ["git", "diff", base, "HEAD", "--", path], cwd
+                    )
 
                 return {
                     "path": path,
