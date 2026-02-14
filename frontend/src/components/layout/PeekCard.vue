@@ -32,7 +32,8 @@ const letter = computed(() => {
 })
 
 const peekStyle = computed(() => ({
-  right: `${-20 - (props.index * 22)}px`
+  right: `${-20 - (props.index * 22)}px`,
+  zIndex: -props.index
 }))
 
 const statusClass = computed(() => {
@@ -72,7 +73,6 @@ const alertClass = computed(() => {
   align-items: center;
   justify-content: center;
   gap: 2px;
-  z-index: 0;
   transition: all 0.15s;
 }
 
