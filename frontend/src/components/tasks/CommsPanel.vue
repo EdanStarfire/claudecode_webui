@@ -11,28 +11,30 @@
         v-for="comm in comms"
         :key="comm.comm_id"
         class="comm-item"
+        :class="{ expandable: hasExpandableContent(comm) }"
         :style="commStyle(comm)"
+        @click="hasExpandableContent(comm) && toggleExpand(comm.comm_id)"
       >
-        <!-- Header: icon + type + direction + time -->
+        <!-- Header: icon + type + direction + time + chevron -->
         <div class="comm-meta">
           <span class="comm-icon">{{ commIcon(comm.comm_type) }}</span>
           <span class="comm-type">{{ capitalize(comm.comm_type) }}</span>
           <span class="comm-direction">{{ commDirection(comm) }}</span>
           <span class="comm-time">{{ formatTimestamp(comm.timestamp) }}</span>
+          <svg
+            v-if="hasExpandableContent(comm)"
+            class="expand-chevron"
+            :class="{ expanded: expandedComms.has(comm.comm_id) }"
+            width="12" height="12" viewBox="0 0 12 12" fill="none"
+          >
+            <path d="M4.5 2.5L8 6L4.5 9.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
         </div>
 
         <!-- Summary -->
         <div class="comm-summary">{{ comm.summary || truncate(comm.content, 120) }}</div>
 
-        <!-- Expandable content -->
-        <div
-          v-if="comm.content && comm.content !== comm.summary"
-          class="comm-expand"
-          @click="toggleExpand(comm.comm_id)"
-        >
-          <span class="expand-chevron" :class="{ expanded: expandedComms.has(comm.comm_id) }">&#x25B6;</span>
-          <span class="expand-label">{{ expandedComms.has(comm.comm_id) ? 'Hide details' : 'Show details' }}</span>
-        </div>
+        <!-- Expanded content -->
         <div v-if="expandedComms.has(comm.comm_id)" class="comm-content" v-html="renderMarkdown(comm.content)"></div>
       </div>
     </div>
@@ -167,6 +169,10 @@ function commDirection(comm) {
   return `${from} \u{2192} ${to}`
 }
 
+function hasExpandableContent(comm) {
+  return comm.content && comm.content !== comm.summary
+}
+
 function truncate(text, max) {
   if (!text) return ''
   if (text.length <= max) return text
@@ -291,7 +297,6 @@ onUnmounted(() => {
 .comm-time {
   color: #94a3b8;
   font-size: 10px;
-  margin-left: auto;
   white-space: nowrap;
 }
 
@@ -302,31 +307,23 @@ onUnmounted(() => {
   word-wrap: break-word;
 }
 
-.comm-expand {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  margin-top: 4px;
+.comm-item.expandable {
   cursor: pointer;
-  color: #64748b;
-  font-size: 10px;
 }
 
-.comm-expand:hover {
-  color: #334155;
+.comm-item.expandable:hover {
+  filter: brightness(0.97);
 }
 
 .expand-chevron {
-  font-size: 8px;
+  flex-shrink: 0;
+  margin-left: auto;
+  color: #94a3b8;
   transition: transform 0.2s;
 }
 
 .expand-chevron.expanded {
   transform: rotate(90deg);
-}
-
-.expand-label {
-  font-size: 10px;
 }
 
 .comm-content {
