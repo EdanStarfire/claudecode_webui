@@ -414,10 +414,7 @@ function normalizeMessage(message) {
 <style scoped>
 .messages-area {
   scroll-behavior: smooth;
-}
-
-.message-content {
-  white-space: pre-wrap;
-  word-wrap: break-word;
+  background: #ffffff;
+  padding: 8px 0;
 }
 </style>
