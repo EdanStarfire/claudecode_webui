@@ -2,9 +2,8 @@
   <div class="task-list-panel">
     <!-- Task List -->
     <div class="task-list p-2">
-      <div v-if="tasks.length === 0" class="text-muted text-center py-4">
-        <span class="empty-icon">📝</span>
-        <p class="mb-0 small">No tasks yet</p>
+      <div v-if="tasks.length === 0" class="empty-placeholder">
+        <span>Tasks will appear here as the agent works</span>
       </div>
 
       <TransitionGroup name="task-list" tag="div">
@@ -58,10 +57,12 @@ function toggleTaskExpansion(taskId) {
   overflow-y: auto;
 }
 
-.empty-icon {
-  font-size: 2rem;
-  display: block;
-  margin-bottom: 0.5rem;
+.empty-placeholder {
+  text-align: center;
+  padding: 24px 16px;
+  color: #94a3b8;
+  font-size: 12px;
+  font-style: italic;
 }
 
 /* Task list transition animations */

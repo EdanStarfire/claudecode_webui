@@ -1,25 +1,26 @@
 <template>
-  <div class="message-row message-row-user">
-    <div class="message-speaker" :title="tooltipText">
-      <span class="speaker-label">user</span>
+  <div class="msg-wrapper msg-user">
+    <div class="msg-meta">
+      <span class="msg-role">user</span>
+      <span class="msg-time">{{ formattedTimestamp }}</span>
     </div>
-    <div class="message-content-column">
+    <div class="msg-bubble msg-bubble-user">
       <!-- Content -->
-      <div class="message-text" v-html="renderedContent"></div>
+      <div class="msg-text" v-html="renderedContent"></div>
 
       <!-- Tool Results (if any) -->
       <div v-if="hasToolResults" class="tool-results mt-2">
         <div class="tool-results-header text-muted small mb-2">
-          🔧 Tool Results ({{ toolResults.length }})
+          Tool Results ({{ toolResults.length }})
         </div>
         <div
           v-for="(result, index) in toolResults"
           :key="index"
-          class="tool-result-summary p-2 mb-2 rounded"
-          :class="result.is_error ? 'bg-danger bg-opacity-10' : 'bg-success bg-opacity-10'"
+          class="tool-result-summary"
+          :class="result.is_error ? 'result-error' : 'result-success'"
         >
           <div class="d-flex align-items-start gap-2">
-            <span>{{ result.is_error ? '❌' : '✅' }}</span>
+            <span>{{ result.is_error ? '✗' : '✓' }}</span>
             <div class="flex-grow-1">
               <small class="text-muted">Tool: {{ result.tool_use_id }}</small>
               <div v-if="result.is_error" class="text-danger small">
@@ -56,10 +57,6 @@ const formattedTimestamp = computed(() => {
   return formatTimestamp(props.message.timestamp)
 })
 
-const tooltipText = computed(() => {
-  return `user\n${formattedTimestamp.value}`
-})
-
 const renderedContent = computed(() => {
   const content = props.message.content || ''
   // Render markdown and sanitize
@@ -88,124 +85,143 @@ function truncate(text, maxLength) {
 </script>
 
 <style scoped>
-/* Two-column row layout */
-.message-row {
+/* Right-aligned user bubble */
+.msg-wrapper {
+  padding: 4px 16px;
+}
+
+.msg-user {
   display: flex;
-  width: 100%;
-  min-height: 1.2rem;
-  padding: 0.2rem 0;
-  line-height: 1.2rem;
+  flex-direction: column;
+  align-items: flex-end;
 }
 
-.message-row-user {
-  background-color: #F3E5F5; /* Light purple */
+.msg-meta {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-bottom: 2px;
+  padding: 0 4px;
 }
 
-/* Speaker column (left) */
-.message-speaker {
-  width: 8em;
-  padding: 0 1rem;
-  flex-shrink: 0;
-  text-align: right;
-  cursor: help;
-  font-weight: 500;
-  color: #495057;
+.msg-role {
+  font-size: 12px;
+  font-weight: 600;
+  color: #3b82f6;
 }
 
-.speaker-label {
-  font-size: 0.9rem;
-  text-transform: lowercase;
+.msg-time {
+  font-size: 11px;
+  color: #94a3b8;
 }
 
-/* Content column (right) */
-.message-content-column {
-  flex: 1;
-  padding: 0 1rem 0 0.5rem;
-  overflow-wrap: break-word;
+.msg-bubble {
+  border-radius: 12px;
+  padding: 10px 14px;
+  max-width: 85%;
+  min-width: 60px;
 }
 
-.message-text {
-  line-height: 1.2rem;
+.msg-bubble-user {
+  background: #eef2ff;
+  border: 1px solid #e0e7ff;
+  border-top-right-radius: 4px;
+}
+
+.msg-text {
+  font-size: 14px;
+  line-height: 1.5;
+  color: #1e293b;
   white-space: pre-wrap;
   word-wrap: break-word;
 }
 
-/* Markdown/code styling - remove bottom margins by default */
-.message-text :deep(*) {
+/* Markdown styling */
+.msg-text :deep(*) {
   margin-bottom: 0;
 }
 
-.message-text :deep(pre) {
-  background: #f8f9fa;
+.msg-text :deep(p) {
+  margin-bottom: 0;
+}
+
+.msg-text :deep(p + p) {
+  margin-top: 0.5em;
+}
+
+.msg-text :deep(pre) {
+  background: rgba(0, 0, 0, 0.04);
   padding: 0.75rem;
-  border-radius: 0.25rem;
+  border-radius: 6px;
   overflow-x: auto;
   margin: 0.5rem 0;
 }
 
-.message-text :deep(code) {
-  background: #e9ecef;
-  padding: 0.2rem 0.4rem;
-  border-radius: 0.2rem;
+.msg-text :deep(code) {
+  background: rgba(0, 0, 0, 0.06);
+  padding: 0.15rem 0.35rem;
+  border-radius: 3px;
   font-family: 'Courier New', monospace;
   font-size: 0.9em;
 }
 
-.message-text :deep(pre code) {
+.msg-text :deep(pre code) {
   background: transparent;
   padding: 0;
 }
 
-.message-text :deep(ul),
-.message-text :deep(ol) {
+.msg-text :deep(ul),
+.msg-text :deep(ol) {
   padding-left: 1.5rem;
 }
 
-.message-text :deep(blockquote) {
-  border-left: 3px solid #dee2e6;
+.msg-text :deep(blockquote) {
+  border-left: 3px solid #cbd5e1;
   padding-left: 1rem;
   margin-left: 0;
-  color: #6c757d;
+  color: #64748b;
 }
 
-.message-text :deep(table) {
+.msg-text :deep(table) {
   border-collapse: collapse;
   width: 100%;
   margin: 0.5rem 0;
 }
 
-.message-text :deep(table th),
-.message-text :deep(table td) {
-  border: 1px solid #6c757d;
+.msg-text :deep(table th),
+.msg-text :deep(table td) {
+  border: 1px solid #94a3b8;
   padding: 0.5rem;
   text-align: left;
 }
 
-.message-text :deep(table th) {
-  background-color: rgba(0, 0, 0, 0.05);
+.msg-text :deep(table th) {
+  background-color: rgba(0, 0, 0, 0.04);
   font-weight: 600;
 }
 
-/* Tool results styling */
+/* Tool results */
 .tool-result-summary {
-  border: 1px solid rgba(0, 0, 0, 0.1);
+  border-radius: 6px;
+  padding: 6px 8px;
+  margin-bottom: 4px;
+  font-size: 12px;
 }
 
-/* Mobile responsive: stack speaker above content */
+.result-error {
+  background: rgba(239, 68, 68, 0.08);
+  border: 1px solid rgba(239, 68, 68, 0.15);
+}
+
+.result-success {
+  background: rgba(34, 197, 94, 0.08);
+  border: 1px solid rgba(34, 197, 94, 0.15);
+}
+
+/* Mobile */
 @media (max-width: 768px) {
-  .message-row {
-    flex-direction: column;
-  }
-
-  .message-speaker {
-    width: 100%;
-    text-align: left;
-    padding: 0.5rem 1rem;
-    border-bottom: 1px solid rgba(0, 0, 0, 0.05);
-  }
-
-  .message-content-column {
-    padding: 0.5rem 1rem;
+  .msg-bubble {
+    max-width: 95%;
   }
 }
 </style>

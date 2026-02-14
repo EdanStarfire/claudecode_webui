@@ -9,13 +9,13 @@
       </div>
 
       <!-- Not a git repo -->
-      <div v-else-if="diffStore.currentDiff && !diffStore.isGitRepo" class="text-muted text-center py-4">
-        <p class="mb-0 small">Not a git repository</p>
+      <div v-else-if="diffStore.currentDiff && !diffStore.isGitRepo" class="empty-placeholder">
+        <span>Not a git repository</span>
       </div>
 
       <!-- Error from backend (e.g., no remote) -->
-      <div v-else-if="diffStore.currentDiff && diffStore.currentDiff.error" class="text-muted text-center py-4">
-        <p class="mb-0 small">{{ diffStore.currentDiff.error }}</p>
+      <div v-else-if="diffStore.currentDiff && diffStore.currentDiff.error" class="empty-placeholder">
+        <span>{{ diffStore.currentDiff.error }}</span>
       </div>
 
       <!-- API error -->
@@ -24,8 +24,15 @@
       </div>
 
       <!-- No changes -->
-      <div v-else-if="diffStore.currentDiff && diffStore.fileCount === 0" class="text-muted text-center py-4">
-        <p class="mb-0 small">No changes since main</p>
+      <div v-else-if="diffStore.currentDiff && diffStore.fileCount === 0" class="empty-placeholder">
+        <span>No changes since main</span>
+        <button class="refresh-inline" @click="refresh" :disabled="diffStore.loading" title="Refresh diff">
+          <svg :class="{ 'spin': diffStore.loading }" width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+            <path d="M8 3a5 5 0 1 0 4.546 2.914.5.5 0 0 1 .908-.417A6 6 0 1 1 8 2v1z"/>
+            <path d="M8 4.466V.534a.25.25 0 0 1 .41-.192l2.36 1.966c.12.1.12.284 0 .384L8.41 4.658A.25.25 0 0 1 8 4.466z"/>
+          </svg>
+          Refresh
+        </button>
       </div>
 
       <!-- Diff content -->
@@ -134,9 +141,8 @@
       </div>
 
       <!-- No data loaded yet -->
-      <div v-else class="text-muted text-center py-4">
-        <span class="empty-icon">📂</span>
-        <p class="mb-0 small">No diff data</p>
+      <div v-else class="empty-placeholder">
+        <span>No diff data available</span>
       </div>
     </div>
   </div>
@@ -264,10 +270,41 @@ watch(
   overflow-y: auto;
 }
 
-.empty-icon {
-  font-size: 2rem;
-  display: block;
-  margin-bottom: 0.5rem;
+.empty-placeholder {
+  text-align: center;
+  padding: 32px 16px;
+  color: #94a3b8;
+  font-size: 12px;
+  font-style: italic;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
+.refresh-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: none;
+  border: 1px solid #e2e8f0;
+  border-radius: 4px;
+  padding: 4px 10px;
+  font-size: 11px;
+  font-style: normal;
+  color: #64748b;
+  cursor: pointer;
+}
+
+.refresh-inline:hover {
+  color: #334155;
+  border-color: #cbd5e1;
+  background: #f8fafc;
+}
+
+.refresh-inline:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .mode-toggle .btn-sm {

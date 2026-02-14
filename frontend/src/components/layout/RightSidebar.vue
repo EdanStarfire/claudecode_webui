@@ -1,76 +1,50 @@
 <template>
   <aside
     id="right-sidebar"
-    class="border-start d-flex flex-column overflow-auto"
+    class="right-sidebar"
     :class="{
-      'collapsed': rightSidebarCollapsed,
-      'mobile-open': !rightSidebarCollapsed && isMobile,
       'resizing': isResizing,
-      'theme-red-panel': uiStore.isRedBackground,
-      'bg-light': !uiStore.isRedBackground
+      'theme-red-panel': uiStore.isRedBackground
     }"
     :style="sidebarStyle"
   >
-    <!-- Tab Navigation -->
-    <ul class="nav nav-tabs sidebar-tabs" role="tablist">
-      <li class="nav-item" role="presentation">
-        <button
-          class="nav-link"
-          :class="{ active: activeTab === 'tasks' }"
-          type="button"
-          @click="uiStore.setRightSidebarTab('tasks')"
-        >
-          Tasks
-          <span v-if="taskStats.total > 0" class="tab-badge">
-            {{ taskStats.completed }}/{{ taskStats.total }}
-          </span>
-        </button>
-      </li>
-      <li class="nav-item" role="presentation">
-        <button
-          class="nav-link"
-          :class="{ active: activeTab === 'diff' }"
-          type="button"
-          @click="uiStore.setRightSidebarTab('diff')"
-        >
-          Diff
-          <span v-if="diffFileCount > 0" class="tab-badge">
-            {{ diffFileCount }}
-          </span>
-        </button>
-      </li>
-      <li class="nav-item" role="presentation">
-        <button
-          class="nav-link"
-          :class="{ active: activeTab === 'resources' }"
-          type="button"
-          @click="uiStore.setRightSidebarTab('resources')"
-        >
-          Resources
-          <span v-if="resourceCount > 0" class="tab-badge">
-            {{ resourceCount }}
-          </span>
-        </button>
-      </li>
-    </ul>
+    <!-- Agent Overview Section -->
+    <AgentOverview />
+
+    <!-- Tab Navigation (Diff, Tasks, Resources, Comms) -->
+    <div class="sidebar-tabs">
+      <button
+        v-for="tab in tabs"
+        :key="tab.id"
+        class="sidebar-tab"
+        :class="{ active: activeTab === tab.id }"
+        @click="uiStore.setRightSidebarTab(tab.id)"
+      >
+        {{ tab.label }}
+        <span v-if="tab.badge > 0" class="tab-badge">{{ tab.badge }}</span>
+      </button>
+    </div>
 
     <!-- Tab Content -->
     <div class="tab-content-container">
-      <TaskListPanel v-show="activeTab === 'tasks'" />
+      <!-- Diff Tab -->
       <DiffPanel v-show="activeTab === 'diff'" />
+
+      <!-- Tasks Tab -->
+      <TaskListPanel v-show="activeTab === 'tasks'" />
+
+      <!-- Resources Tab -->
       <ResourceGallery v-show="activeTab === 'resources'" />
+
+      <!-- Comms Tab -->
+      <CommsPanel v-show="activeTab === 'comms'" />
     </div>
 
     <!-- Resize Handle -->
-    <div
-      class="sidebar-resize-handle"
-      @mousedown="startResize"
-    ></div>
+    <div class="sidebar-resize-handle" @mousedown="startResize"></div>
 
-    <!-- Resource Full View Modal (teleported to body) -->
+    <!-- Modals (teleported to body) -->
     <ResourceFullView />
-
-    <!-- Diff Full View Modal (teleported to body, Issue #435) -->
     <DiffFullView />
   </aside>
 </template>
@@ -81,42 +55,60 @@ import { useUIStore } from '@/stores/ui'
 import { useTaskStore } from '@/stores/task'
 import { useResourceStore } from '@/stores/resource'
 import { useDiffStore } from '@/stores/diff'
+import { useLegionStore } from '@/stores/legion'
+import { useSessionStore } from '@/stores/session'
+import AgentOverview from './AgentOverview.vue'
 import TaskListPanel from '../tasks/TaskListPanel.vue'
 import ResourceGallery from '../tasks/ResourceGallery.vue'
 import ResourceFullView from '../common/ResourceFullView.vue'
 import DiffPanel from '../tasks/DiffPanel.vue'
 import DiffFullView from '../common/DiffFullView.vue'
+import CommsPanel from '../tasks/CommsPanel.vue'
 
 const uiStore = useUIStore()
 const taskStore = useTaskStore()
 const resourceStore = useResourceStore()
 const diffStore = useDiffStore()
+const legionStore = useLegionStore()
+const sessionStore = useSessionStore()
 
-const rightSidebarCollapsed = computed(() => uiStore.rightSidebarCollapsed)
-const isMobile = computed(() => uiStore.isMobile)
 const activeTab = computed(() => uiStore.rightSidebarActiveTab)
 
-// Badge counts for tabs
+// Badge counts
 const taskStats = computed(() => taskStore.currentTaskStats)
 const resourceCount = computed(() => resourceStore.currentResourceCount)
 const diffFileCount = computed(() => diffStore.fileCount)
+const commsCount = computed(() => {
+  const projectId = sessionStore.currentSession?.project_id
+  const sessionId = sessionStore.currentSessionId
+  if (!projectId || !sessionId) return 0
+  const allComms = legionStore.commsByLegion.get(projectId) || []
+  return allComms.filter(c =>
+    c.from_minion_id === sessionId || c.to_minion_id === sessionId
+  ).length
+})
+
+// Tab definitions
+const tabs = computed(() => [
+  { id: 'diff', label: 'Diff', badge: diffFileCount.value },
+  { id: 'tasks', label: 'Tasks', badge: taskStats.value.total > 0 ? taskStats.value.total : 0 },
+  { id: 'resources', label: 'Resources', badge: resourceCount.value },
+  { id: 'comms', label: 'Comms', badge: commsCount.value }
+])
+
+const isOverlay = computed(() => uiStore.windowWidth <= 1024)
 
 const sidebarStyle = computed(() => {
-  // On mobile, let CSS handle the transform via classes
-  if (isMobile.value) {
-    return {}
-  }
-  // On desktop, apply custom width
-  const width = `${uiStore.rightSidebarWidth}px`
+  // In overlay mode, sizing is handled by App.vue CSS
+  if (isOverlay.value) return {}
   return {
-    width: width,
+    width: `${uiStore.rightSidebarWidth}px`,
     minWidth: '200px',
-    maxWidth: '30vw',
-    '--sidebar-width': width
+    maxWidth: '30vw'
   }
 })
 
-// Sidebar resize functionality
+// Resize
 const isResizing = ref(false)
 
 function startResize(event) {
@@ -128,7 +120,6 @@ function startResize(event) {
 
 function handleResize(event) {
   if (isResizing.value) {
-    // For right sidebar, calculate width from right edge
     const newWidth = window.innerWidth - event.clientX
     uiStore.setRightSidebarWidth(newWidth)
   }
@@ -142,80 +133,82 @@ function stopResize() {
 </script>
 
 <style scoped>
-#right-sidebar {
-  position: relative;
-  transition: transform 0.3s ease, width 0.3s ease;
-}
-
-#right-sidebar.collapsed {
-  width: 0 !important;
-  min-width: 0 !important;
+.right-sidebar {
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
+  background: #ffffff;
+  border-left: 1px solid #e2e8f0;
+  position: relative;
+  transition: width 0.3s ease;
 }
 
-#right-sidebar.resizing {
+.right-sidebar.resizing {
   transition: none;
 }
 
-/* Tab navigation */
+.right-sidebar.theme-red-panel {
+  background: #fef2f2;
+}
+
+/* Tabs */
 .sidebar-tabs {
+  display: flex;
+  border-bottom: 1px solid #e2e8f0;
   flex-shrink: 0;
-  border-bottom: 1px solid #dee2e6;
-  padding: 0 4px;
-  background-color: #f8f9fa;
 }
 
-.sidebar-tabs .nav-item {
+.sidebar-tab {
   flex: 1;
-}
-
-.sidebar-tabs .nav-link {
-  font-size: 0.78rem;
   padding: 8px 4px;
-  text-align: center;
-  white-space: nowrap;
-  color: #6c757d;
   border: none;
   border-bottom: 2px solid transparent;
-  border-radius: 0;
+  background: transparent;
+  font-size: 12px;
+  font-weight: 500;
+  color: #64748b;
+  cursor: pointer;
+  text-align: center;
+  transition: all 0.15s;
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 4px;
 }
 
-.sidebar-tabs .nav-link:hover {
-  color: #495057;
-  border-bottom-color: #dee2e6;
+.sidebar-tab:hover {
+  color: #334155;
+  background: #f8fafc;
 }
 
-.sidebar-tabs .nav-link.active {
-  color: #0d6efd;
-  border-bottom-color: #0d6efd;
-  background: transparent;
+.sidebar-tab.active {
+  color: #3b82f6;
+  border-bottom-color: #3b82f6;
 }
 
 .tab-badge {
-  font-size: 0.65rem;
-  background: #6c757d;
+  font-size: 10px;
+  background: #94a3b8;
   color: white;
-  padding: 1px 5px;
-  border-radius: 10px;
-  line-height: 1.2;
+  padding: 0 5px;
+  border-radius: 8px;
+  line-height: 16px;
+  min-width: 16px;
 }
 
-.nav-link.active .tab-badge {
-  background: #0d6efd;
+.sidebar-tab.active .tab-badge {
+  background: #3b82f6;
 }
 
-/* Tab content - fills remaining space and scrolls */
+/* Tab content */
 .tab-content-container {
-  flex: 1 1 auto;
+  flex: 1;
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
 }
 
+/* Resize handle */
 .sidebar-resize-handle {
   position: absolute;
   left: 0;
@@ -229,6 +222,4 @@ function stopResize() {
 .sidebar-resize-handle:hover {
   background-color: rgba(0, 0, 0, 0.1);
 }
-
-/* Mobile styles moved to styles.css to match left sidebar pattern */
 </style>

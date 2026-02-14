@@ -29,13 +29,14 @@ export const useTaskStore = defineStore('task', () => {
     const taskMap = tasksBySession.value.get(sessionId)
     if (!taskMap) return []
 
-    // Convert to array and sort by creation order (ID order for now)
-    return Array.from(taskMap.values()).sort((a, b) => {
-      // Sort by ID (assumed to be sequential)
-      const idA = parseInt(a.id.replace(/\D/g, '')) || 0
-      const idB = parseInt(b.id.replace(/\D/g, '')) || 0
-      return idA - idB
-    })
+    // Convert to array, exclude deleted tasks, sort by creation order
+    return Array.from(taskMap.values())
+      .filter(t => t.status !== 'deleted')
+      .sort((a, b) => {
+        const idA = parseInt(a.id.replace(/\D/g, '')) || 0
+        const idB = parseInt(b.id.replace(/\D/g, '')) || 0
+        return idA - idB
+      })
   }
 
   /**
@@ -143,6 +144,8 @@ export const useTaskStore = defineStore('task', () => {
 
     const task = taskMap.get(taskId)
     if (!task) {
+      // Don't create a task if the update is a deletion
+      if (updates.status === 'deleted') return
       // Task doesn't exist yet - create it with updates
       createTask(sessionId, { id: taskId, ...updates })
       return

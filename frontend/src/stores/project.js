@@ -203,6 +203,69 @@ export const useProjectStore = defineStore('project', () => {
   }
 
   /**
+   * Get status bar segments for a project's sessions (for ProjectPill status bar)
+   * Returns array of { status: 'active'|'idle'|'waiting'|'error'|'none', flex: number }
+   */
+  function getStatusBarSegments(projectId, sessionStore) {
+    const project = projects.value.get(projectId)
+    if (!project || !project.session_ids || project.session_ids.length === 0) {
+      return [{ status: 'none', flex: 1 }]
+    }
+
+    // Build a set of all child IDs so we can identify top-level sessions
+    const allChildIds = new Set()
+    const sessionMap = new Map()
+    for (const sid of project.session_ids) {
+      const session = sessionStore.getSession(sid)
+      if (session) {
+        sessionMap.set(sid, session)
+        if (session.child_minion_ids) {
+          for (const cid of session.child_minion_ids) {
+            allChildIds.add(cid)
+          }
+        }
+      }
+    }
+
+    // Top-level sessions sorted by order (matches AgentStrip)
+    const topLevel = Array.from(sessionMap.values())
+      .filter(s => !allChildIds.has(s.session_id))
+      .sort((a, b) => (a.order || 0) - (b.order || 0))
+
+    if (topLevel.length === 0 && sessionMap.size === 0) {
+      return [{ status: 'none', flex: 1 }]
+    }
+
+    // Walk hierarchy depth-first: parent segment, then children segments
+    function sessionStatus(session) {
+      if (session.state === 'active' && session.is_processing) return 'active'
+      if (session.state === 'active') return 'idle'
+      if (session.state === 'paused') return 'waiting'
+      if (session.state === 'error') return 'error'
+      return 'none'
+    }
+
+    function walkTree(session, segments) {
+      segments.push({ status: sessionStatus(session), flex: 1 })
+      if (session.child_minion_ids) {
+        for (const cid of session.child_minion_ids) {
+          const child = sessionMap.get(cid)
+          if (child) {
+            walkTree(child, segments)
+          }
+        }
+      }
+    }
+
+    const segments = []
+    for (const session of topLevel) {
+      walkTree(session, segments)
+    }
+
+    return segments.length > 0 ? segments : [{ status: 'none', flex: 1 }]
+  }
+
+  /**
    * Get project by ID
    */
   function getProject(projectId) {
@@ -259,6 +322,7 @@ export const useProjectStore = defineStore('project', () => {
     reorderProjects,
     reorderSessionsInProject,
     getProject,
+    getStatusBarSegments,
     selectProject,
     clearProjectSelection,
     formatPath

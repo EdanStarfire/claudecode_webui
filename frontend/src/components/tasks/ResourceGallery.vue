@@ -2,9 +2,8 @@
   <div class="resource-gallery-panel">
     <!-- Resource Grid -->
     <div class="resource-grid-container p-2">
-      <div v-if="resources.length === 0" class="text-muted text-center py-4">
-        <span class="empty-icon">📂</span>
-        <p class="mb-0 small">No resources yet</p>
+      <div v-if="resources.length === 0" class="empty-placeholder">
+        <span>Resources shared by the agent will appear here</span>
       </div>
 
       <div v-else class="resource-grid">
@@ -166,10 +165,12 @@ function addToAttachments(resource) {
   overflow-y: auto;
 }
 
-.empty-icon {
-  font-size: 2rem;
-  display: block;
-  margin-bottom: 0.5rem;
+.empty-placeholder {
+  text-align: center;
+  padding: 24px 16px;
+  color: #94a3b8;
+  font-size: 12px;
+  font-style: italic;
 }
 
 .resource-grid {
