@@ -39,7 +39,7 @@
       <!-- Comms Tab -->
       <div v-show="activeTab === 'comms'" class="tab-pane comms-pane">
         <div class="comms-placeholder">
-          <span>Comms will appear here when agent is part of a Legion</span>
+          <span>Communication between this session's minions will appear here</span>
         </div>
       </div>
     </div>
