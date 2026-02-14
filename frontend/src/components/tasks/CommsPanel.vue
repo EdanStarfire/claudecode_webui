@@ -11,7 +11,7 @@
         v-for="comm in comms"
         :key="comm.comm_id"
         class="comm-item"
-        :class="{ 'comm-system': isSystemComm(comm) }"
+        :style="commStyle(comm)"
       >
         <!-- Header: icon + type + direction + time -->
         <div class="comm-meta">
@@ -56,8 +56,9 @@ const commsList = ref(null)
 const expandedComms = ref(new Set())
 let connectedLegionId = null
 
-// System minion ID constant
+// Reserved minion IDs
 const SYSTEM_MINION_ID = 'ffffffff-ffff-ffff-ffff-ffffffffffff'
+const USER_MINION_ID = '00000000-0000-0000-0000-000000000000'
 
 // Configure marked
 marked.setOptions({ breaks: true, gfm: true })
@@ -65,11 +66,73 @@ marked.setOptions({ breaks: true, gfm: true })
 // Current project (legion) ID from the active session
 const projectId = computed(() => sessionStore.currentSession?.project_id || null)
 
+// Current session ID (used to identify outbound comms from this session/minion)
+const currentSessionId = computed(() => sessionStore.currentSessionId)
+
 // Comms for the current legion
 const comms = computed(() => {
   if (!projectId.value) return []
   return legionStore.commsByLegion.get(projectId.value) || []
 })
+
+// Color palette for other minions (pastel tints)
+const MINION_COLORS = [
+  { bg: '#fef3c7', border: '#fde68a' }, // amber
+  { bg: '#fce7f3', border: '#fbcfe8' }, // pink
+  { bg: '#e0e7ff', border: '#c7d2fe' }, // indigo (lighter than user)
+  { bg: '#d1fae5', border: '#a7f3d0' }, // emerald
+  { bg: '#ede9fe', border: '#ddd6fe' }, // violet
+  { bg: '#fee2e2', border: '#fecaca' }, // red
+  { bg: '#cffafe', border: '#a5f3fc' }, // cyan
+  { bg: '#fef9c3', border: '#fef08a' }, // yellow
+]
+
+// Stable color assignment per sender name
+const senderColorMap = new Map()
+
+function getColorForSender(senderId) {
+  if (!senderId) return null
+  if (senderColorMap.has(senderId)) return senderColorMap.get(senderId)
+
+  // Simple hash to pick a consistent color index
+  let hash = 0
+  for (let i = 0; i < senderId.length; i++) {
+    hash = ((hash << 5) - hash + senderId.charCodeAt(i)) | 0
+  }
+  const index = Math.abs(hash) % MINION_COLORS.length
+  const color = MINION_COLORS[index]
+  senderColorMap.set(senderId, color)
+  return color
+}
+
+// Determine comm card style based on sender identity
+function commStyle(comm) {
+  const senderId = comm.from_minion_id
+
+  // System comms: muted gray
+  if (senderId === SYSTEM_MINION_ID) {
+    return { background: '#f1f5f9', borderColor: '#e2e8f0', opacity: 0.8 }
+  }
+
+  // User comms: indigo tint (matches user chat bubble)
+  if (comm.from_user || senderId === USER_MINION_ID) {
+    return { background: '#eef2ff', borderColor: '#e0e7ff' }
+  }
+
+  // Active session outbound: assistant colors (matches assistant chat bubble)
+  if (senderId === currentSessionId.value) {
+    return { background: '#f8fafc', borderColor: '#e2e8f0' }
+  }
+
+  // Other minions: unique color per sender
+  const color = getColorForSender(senderId)
+  if (color) {
+    return { background: color.bg, borderColor: color.border }
+  }
+
+  // Fallback
+  return { background: '#f8fafc', borderColor: '#e2e8f0' }
+}
 
 // Icon mapping
 function commIcon(type) {
@@ -91,10 +154,6 @@ function commIcon(type) {
 function capitalize(str) {
   if (!str) return ''
   return str.charAt(0).toUpperCase() + str.slice(1)
-}
-
-function isSystemComm(comm) {
-  return comm.from_minion_id === SYSTEM_MINION_ID
 }
 
 function commDirection(comm) {
@@ -195,15 +254,9 @@ onUnmounted(() => {
 .comm-item {
   padding: 8px 10px;
   margin-bottom: 6px;
-  background: #f8fafc;
   border: 1px solid #e2e8f0;
   border-radius: 8px;
   font-size: 12px;
-}
-
-.comm-item.comm-system {
-  background: #f1f5f9;
-  opacity: 0.8;
 }
 
 .comm-meta {
@@ -226,7 +279,7 @@ onUnmounted(() => {
 }
 
 .comm-direction {
-  color: #94a3b8;
+  color: #64748b;
   font-size: 11px;
 }
 
@@ -274,7 +327,7 @@ onUnmounted(() => {
 .comm-content {
   margin-top: 6px;
   padding-top: 6px;
-  border-top: 1px solid #e2e8f0;
+  border-top: 1px solid rgba(0, 0, 0, 0.08);
   color: #334155;
   font-size: 12px;
   line-height: 1.5;
@@ -282,7 +335,7 @@ onUnmounted(() => {
 }
 
 .comm-content :deep(pre) {
-  background: #f1f5f9;
+  background: rgba(0, 0, 0, 0.04);
   padding: 8px;
   border-radius: 4px;
   overflow-x: auto;
@@ -291,7 +344,7 @@ onUnmounted(() => {
 }
 
 .comm-content :deep(code) {
-  background: #e2e8f0;
+  background: rgba(0, 0, 0, 0.06);
   padding: 1px 4px;
   border-radius: 3px;
   font-family: 'Courier New', monospace;
