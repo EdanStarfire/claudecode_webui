@@ -814,6 +814,7 @@ export const useWebSocketStore = defineStore('websocket', () => {
     sessionRetryCount,
     legionConnected,
     legionRetryCount,
+    currentLegionId,
     overallStatus,
 
     // Actions
