@@ -1431,8 +1431,8 @@ class ClaudeWebUI:
                         if len(lines) >= 5:
                             # Get files for this commit
                             commit_files_output = await self._run_git_command(
-                                ["git", "diff-tree", "--no-commit-id", "-r",
-                                 "--name-only", lines[0]], cwd
+                                ["git", "diff-tree", "--no-commit-id", "--root",
+                                 "-r", "--name-only", lines[0]], cwd
                             )
                             commit_files = [
                                 f for f in (commit_files_output or "").strip().split("\n")
