@@ -41,12 +41,26 @@ const sessionStore = useSessionStore()
 const uiStore = useUIStore()
 const router = useRouter()
 
-// Auto-collapse stacks when clicking outside the agent strip
+// Auto-collapse stacks and reset browsing project when clicking outside nav area
 const stripEl = ref(null)
 
+// Active project = the project containing the currently selected session
+const activeProjectId = computed(() => {
+  const session = sessionStore.currentSession
+  if (!session) return null
+  return session.project_id
+})
+
 function handleDocumentClick(e) {
-  if (stripEl.value && !stripEl.value.contains(e.target)) {
+  const inStrip = stripEl.value && stripEl.value.contains(e.target)
+  const inPillBar = e.target.closest('.project-pill-bar')
+
+  if (!inStrip && !inPillBar) {
     uiStore.collapseAllStacks()
+    // Reset browsing project back to active project
+    if (activeProjectId.value && uiStore.browsingProjectId !== activeProjectId.value) {
+      uiStore.setBrowsingProject(activeProjectId.value)
+    }
   }
 }
 
