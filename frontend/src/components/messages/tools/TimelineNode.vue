@@ -1,13 +1,14 @@
 <template>
   <div
     class="timeline-node"
-    :class="nodeClasses"
+    :class="[nodeClasses, { 'node-compact': compact }]"
     :title="tooltip"
     @click.stop="$emit('click')"
     @mouseenter="showTooltip = true"
     @mouseleave="showTooltip = false"
   >
     <div class="node-dot" :class="dotClasses"></div>
+    <span class="node-label">{{ toolLabel }}</span>
   </div>
 </template>
 
@@ -19,7 +20,8 @@ import { useSessionStore } from '@/stores/session'
 
 const props = defineProps({
   tool: { type: Object, required: true },
-  isExpanded: { type: Boolean, default: false }
+  isExpanded: { type: Boolean, default: false },
+  compact: { type: Boolean, default: false }
 })
 
 defineEmits(['click'])
@@ -102,6 +104,16 @@ const tooltip = computed(() => {
   return `${summary} [${statusLabel}]`
 })
 
+const toolLabel = computed(() => {
+  const name = props.tool.name || ''
+  // For MCP tools (mcp__server__toolName), extract just the tool name after the last __
+  if (name.startsWith('mcp__')) {
+    const lastSep = name.lastIndexOf('__')
+    if (lastSep > 4) return name.slice(lastSep + 2)
+  }
+  return name.replace(/Tool$/, '')
+})
+
 // Expose for parent
 defineExpose({ statusColor, effectiveStatus })
 </script>
@@ -110,10 +122,10 @@ defineExpose({ statusColor, effectiveStatus })
 .timeline-node {
   flex-shrink: 0;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
-  width: 20px;
-  height: 20px;
+  min-width: 20px;
   cursor: pointer;
   z-index: 1;
 }
@@ -170,5 +182,31 @@ defineExpose({ statusColor, effectiveStatus })
 @keyframes error-pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.4; }
+}
+
+.node-label {
+  font-size: 9px;
+  color: #94a3b8;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 60px;
+  line-height: 1;
+  margin-top: 1px;
+}
+
+/* Mobile compact size */
+.node-compact {
+  min-width: 16px;
+}
+
+.node-compact .node-dot {
+  width: 9px;
+  height: 9px;
+}
+
+.node-compact .node-label {
+  font-size: 7px;
+  max-width: 40px;
 }
 </style>
