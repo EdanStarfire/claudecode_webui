@@ -1,6 +1,20 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 
+// localStorage helpers for sidebar persistence
+const STORAGE_PREFIX = 'webui-sidebar-'
+
+function readStorage(key, fallback) {
+  try {
+    const val = localStorage.getItem(STORAGE_PREFIX + key)
+    return val !== null ? JSON.parse(val) : fallback
+  } catch { return fallback }
+}
+
+function writeStorage(key, value) {
+  try { localStorage.setItem(STORAGE_PREFIX + key, JSON.stringify(value)) } catch {}
+}
+
 /**
  * UI Store - Manages UI state (sidebar, modals, scroll, etc.)
  */
@@ -11,16 +25,17 @@ export const useUIStore = defineStore('ui', () => {
   const sidebarCollapsed = ref(window.innerWidth < 768)
   const sidebarWidth = ref(300)
 
-  // Right Sidebar state (for task panel)
-  // Default: collapsed, only shown when tasks exist
-  const rightSidebarCollapsed = ref(true)
-  const rightSidebarWidth = ref(300)
+  // Right Sidebar state (for task panel) — persisted to localStorage
+  const rightSidebarCollapsed = ref(readStorage('rightCollapsed', true))
+  const rightSidebarWidth = ref(readStorage('rightWidth', 300))
 
   // Right Sidebar active tab: 'diff', 'tasks', 'resources', 'comms'
-  const rightSidebarActiveTab = ref('diff')
+  const rightSidebarActiveTab = ref(readStorage('activeTab', 'diff'))
 
   // Right panel visibility for responsive toggle (tablet/mobile overlay)
-  const rightPanelVisible = ref(window.innerWidth > 1024)
+  const rightPanelVisible = ref(
+    window.innerWidth > 1024 ? readStorage('rightVisible', true) : false
+  )
 
   // Browsing project (which project's agents are shown in the strip)
   // Distinct from active project (the project of the currently selected session)
@@ -76,18 +91,22 @@ export const useUIStore = defineStore('ui', () => {
 
   function toggleRightSidebar() {
     rightSidebarCollapsed.value = !rightSidebarCollapsed.value
+    writeStorage('rightCollapsed', rightSidebarCollapsed.value)
   }
 
   function setRightSidebarCollapsed(collapsed) {
     rightSidebarCollapsed.value = collapsed
+    writeStorage('rightCollapsed', collapsed)
   }
 
   function setRightSidebarWidth(width) {
     rightSidebarWidth.value = Math.max(200, Math.min(width, window.innerWidth * 0.3))
+    writeStorage('rightWidth', rightSidebarWidth.value)
   }
 
   function setRightSidebarTab(tab) {
     rightSidebarActiveTab.value = tab
+    writeStorage('activeTab', tab)
   }
 
   function setAutoScroll(enabled) {
@@ -159,10 +178,12 @@ export const useUIStore = defineStore('ui', () => {
   // Right panel responsive toggle
   function toggleRightPanel() {
     rightPanelVisible.value = !rightPanelVisible.value
+    writeStorage('rightVisible', rightPanelVisible.value)
   }
 
   function setRightPanelVisible(visible) {
     rightPanelVisible.value = visible
+    writeStorage('rightVisible', visible)
   }
 
   // Handle window resize
@@ -180,8 +201,8 @@ export const useUIStore = defineStore('ui', () => {
     }
 
     // Right panel visibility based on breakpoint
-    if (windowWidth.value > 1024) {
-      rightPanelVisible.value = true
+    if (windowWidth.value > 1024 && previousWidth <= 1024) {
+      rightPanelVisible.value = readStorage('rightVisible', true)
     } else if (windowWidth.value <= 1024 && previousWidth > 1024) {
       rightPanelVisible.value = false
     }
