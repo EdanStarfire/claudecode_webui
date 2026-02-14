@@ -32,6 +32,10 @@ export const useMessageStore = defineStore('message', () => {
   // Message sequence tracking for reconnection sync (sessionId -> ISO timestamp)
   const lastReceivedTimestamp = ref(new Map())
 
+  // Launch timestamp tracking (sessionId -> Unix timestamp in seconds)
+  // Populated from client_launched system messages for uptime calculation
+  const launchTimestampBySession = ref(new Map())
+
   // Issue #310: Backend display metadata cache (sessionId -> Map<tool_use_id -> ToolDisplayInfo>)
   // When backend provides display metadata, we store it here for quick lookup
   const backendToolStates = ref(new Map())
@@ -113,6 +117,13 @@ export const useMessageStore = defineStore('message', () => {
             markToolUseOrphaned(sessionId, id, 'Session was restarted')
           })
           openTools.clear()
+          // Track launch timestamp for uptime calculation
+          if (message.timestamp) {
+            const ts = typeof message.timestamp === 'number'
+              ? message.timestamp
+              : new Date(message.timestamp).getTime() / 1000
+            launchTimestampBySession.value.set(sessionId, ts)
+          }
         }
 
         // Detect session interrupt - mark open tools as orphaned
@@ -228,6 +239,13 @@ export const useMessageStore = defineStore('message', () => {
         markToolUseOrphaned(sessionId, id, 'Session was restarted')
       })
       openTools.clear()
+      // Track launch timestamp for uptime calculation
+      if (message.timestamp) {
+        const ts = typeof message.timestamp === 'number'
+          ? message.timestamp
+          : new Date(message.timestamp).getTime() / 1000
+        launchTimestampBySession.value.set(sessionId, ts)
+      }
     }
 
     // Detect interrupt during real-time
@@ -1058,6 +1076,9 @@ export const useMessageStore = defineStore('message', () => {
     // Issue #310: Backend display metadata
     getBackendToolState,
     hasBackendDisplayMetadata,
-    backendToolStates: readonly(backendToolStates)
+    backendToolStates: readonly(backendToolStates),
+
+    // Launch timestamp tracking (Issue #473)
+    launchTimestampBySession: readonly(launchTimestampBySession)
   }
 })

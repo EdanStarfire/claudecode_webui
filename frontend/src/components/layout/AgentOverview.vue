@@ -137,11 +137,25 @@ const childCount = computed(() => {
 })
 
 const uptime = computed(() => {
-  if (!session.value?.started_at) return '--'
+  const id = sessionStore.currentSessionId
+  if (!id) return '--'
+  const launchTs = messageStore.launchTimestampBySession.get(id)
+  if (!launchTs) return '--'
+  const startMs = launchTs * 1000
   const _ = now.value // trigger reactivity
-  const start = new Date(session.value.started_at).getTime()
-  const diff = Date.now() - start
+  let endMs
+  const state = session.value?.state
+  if (state === 'terminated' || state === 'error') {
+    // Frozen duration: use updated_at as termination time
+    endMs = session.value?.updated_at
+      ? new Date(session.value.updated_at).getTime()
+      : Date.now()
+  } else {
+    endMs = Date.now()
+  }
+  const diff = endMs - startMs
   if (diff < 0) return '--'
+  if (diff < 60000) return '< 1m'
   const mins = Math.floor(diff / 60000)
   if (mins < 60) return `${mins}m`
   const hours = Math.floor(mins / 60)
