@@ -32,7 +32,7 @@ const letter = computed(() => {
 })
 
 const peekStyle = computed(() => ({
-  right: `${-14 - (props.index * 22)}px`,
+  right: `${-8 - (props.index * 22)}px`,
   zIndex: 20 - props.index
 }))
 
