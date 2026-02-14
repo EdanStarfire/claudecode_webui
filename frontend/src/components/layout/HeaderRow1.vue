@@ -7,12 +7,21 @@
         {{ uiConnected ? 'Connected' : 'Disconnected' }}
       </div>
       <button
-        class="header-btn"
+        class="header-btn theme-toggle-btn"
         :class="{ 'theme-active': uiStore.isRedBackground }"
         @click="uiStore.toggleBackgroundColor()"
-        title="Toggle instance color"
+        :title="uiStore.isRedBackground ? 'Switch to light mode' : 'Switch to dark mode'"
       >
-        <span class="color-swatch" :style="{ backgroundColor: uiStore.isRedBackground ? '#ef4444' : '#94a3b8' }"></span>
+        <svg v-if="!uiStore.isRedBackground" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+        </svg>
+        <svg v-else width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="5"/>
+          <line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/>
+          <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/>
+          <line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/>
+          <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
+        </svg>
       </button>
       <button class="header-btn" @click="uiStore.showRestartModal()" title="Restart server">
         ↻
@@ -120,15 +129,13 @@ const uiConnected = computed(() => wsStore.uiConnected)
   border-color: #475569;
 }
 
-.header-btn.theme-active {
-  border-color: #ef4444;
+.theme-toggle-btn svg {
+  display: block;
 }
 
-.color-swatch {
-  width: 12px;
-  height: 12px;
-  border-radius: 3px;
-  border: 1px solid rgba(255, 255, 255, 0.3);
+.header-btn.theme-active {
+  border-color: #f59e0b;
+  color: #fbbf24;
 }
 
 .panel-toggle-btn.panel-open {
