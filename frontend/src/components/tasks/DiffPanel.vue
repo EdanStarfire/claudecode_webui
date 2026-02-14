@@ -9,13 +9,13 @@
       </div>
 
       <!-- Not a git repo -->
-      <div v-else-if="diffStore.currentDiff && !diffStore.isGitRepo" class="text-muted text-center py-4">
-        <p class="mb-0 small">Not a git repository</p>
+      <div v-else-if="diffStore.currentDiff && !diffStore.isGitRepo" class="empty-placeholder">
+        <span>Not a git repository</span>
       </div>
 
       <!-- Error from backend (e.g., no remote) -->
-      <div v-else-if="diffStore.currentDiff && diffStore.currentDiff.error" class="text-muted text-center py-4">
-        <p class="mb-0 small">{{ diffStore.currentDiff.error }}</p>
+      <div v-else-if="diffStore.currentDiff && diffStore.currentDiff.error" class="empty-placeholder">
+        <span>{{ diffStore.currentDiff.error }}</span>
       </div>
 
       <!-- API error -->
@@ -24,8 +24,8 @@
       </div>
 
       <!-- No changes -->
-      <div v-else-if="diffStore.currentDiff && diffStore.fileCount === 0" class="text-muted text-center py-4">
-        <p class="mb-0 small">No changes since main</p>
+      <div v-else-if="diffStore.currentDiff && diffStore.fileCount === 0" class="empty-placeholder">
+        <span>No changes since main</span>
       </div>
 
       <!-- Diff content -->
@@ -134,9 +134,8 @@
       </div>
 
       <!-- No data loaded yet -->
-      <div v-else class="text-muted text-center py-4">
-        <span class="empty-icon">📂</span>
-        <p class="mb-0 small">No diff data</p>
+      <div v-else class="empty-placeholder">
+        <span>No diff data available</span>
       </div>
     </div>
   </div>
@@ -264,10 +263,12 @@ watch(
   overflow-y: auto;
 }
 
-.empty-icon {
-  font-size: 2rem;
-  display: block;
-  margin-bottom: 0.5rem;
+.empty-placeholder {
+  text-align: center;
+  padding: 32px 16px;
+  color: #94a3b8;
+  font-size: 12px;
+  font-style: italic;
 }
 
 .mode-toggle .btn-sm {
