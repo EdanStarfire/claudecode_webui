@@ -32,7 +32,7 @@ const letter = computed(() => {
 })
 
 const peekStyle = computed(() => ({
-  right: `${-20 - (props.index * 22)}px`,
+  right: `${-14 - (props.index * 22)}px`,
   zIndex: 20 - props.index
 }))
 
@@ -63,16 +63,17 @@ const alertClass = computed(() => {
   position: absolute;
   top: 0;
   bottom: 0;
-  width: 26px;
+  width: 34px;
   background: #f1f5f9;
   border: 1px solid #cbd5e1;
   border-radius: 8px;
   cursor: pointer;
   display: flex;
   flex-direction: column;
-  align-items: center;
+  align-items: flex-end;
   justify-content: center;
   gap: 2px;
+  padding-right: 7px;
   transition: all 0.15s;
 }
 
