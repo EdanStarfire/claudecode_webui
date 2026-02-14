@@ -37,11 +37,11 @@
       <button class="btn-overview" @click="showInfo" title="View session details">
         Info
       </button>
-      <button class="btn-overview" @click="manageSession" title="Manage session lifecycle">
-        Manage
-      </button>
       <button class="btn-overview" @click="editSession" title="Edit session settings">
         Edit
+      </button>
+      <button class="btn-overview" @click="manageSession" title="Manage session lifecycle">
+        Manage
       </button>
     </div>
   </div>
