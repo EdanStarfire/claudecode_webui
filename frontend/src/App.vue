@@ -85,7 +85,7 @@ provide('pendingResourceAttachment', pendingResourceAttachment)
 
 // Computed properties from UI store
 const rightPanelVisible = computed(() => uiStore.rightPanelVisible)
-const isTabletOrMobile = computed(() => uiStore.windowWidth <= 1024)
+const isTabletOrMobile = computed(() => uiStore.windowWidth < 768)
 
 // Auto-show right panel when tasks first appear
 watch(() => taskStore.currentHasTasks, (hasTasks, hadTasks) => {
@@ -202,7 +202,7 @@ function handlePopState() {
 
 /* Right panel overlay mode (tablet and mobile)
    Uses #right-sidebar ID to override scoped styles (position: relative) */
-@media (max-width: 1024px) {
+@media (max-width: 767px) {
   #right-sidebar.panel-overlay {
     position: fixed;
     right: 0;
