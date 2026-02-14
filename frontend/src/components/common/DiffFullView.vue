@@ -42,6 +42,10 @@
                 {{ diffStore.currentFilePath }}
               </h5>
               <div class="diff-meta">
+                <span v-if="commitInfo" class="commit-ref-badge">
+                  <code>{{ commitInfo.short_hash }}</code>
+                  <span class="commit-ref-msg">{{ commitInfo.message }}</span>
+                </span>
                 <span v-if="currentFileInfo" class="meta-badge" :class="'status-' + currentFileInfo.status">
                   {{ currentFileInfo.status }}
                 </span>
@@ -140,15 +144,23 @@ const isOpen = computed(() => diffStore.fullViewOpen)
 const fileDiffEntry = computed(() => diffStore.currentFullViewFileDiff)
 const diffContent = computed(() => fileDiffEntry.value?.content || null)
 
-const totalFiles = computed(() => diffStore.currentFiles.length)
+const totalFiles = computed(() => diffStore.fullViewFiles.length)
 const currentFileIndex = computed(() => {
   if (!diffStore.currentFilePath) return 0
-  return diffStore.currentFiles.findIndex(f => f.path === diffStore.currentFilePath)
+  return diffStore.fullViewFiles.findIndex(f => f.path === diffStore.currentFilePath)
 })
 
 const currentFileInfo = computed(() => {
   if (!diffStore.currentFilePath || !diffStore.currentDiff?.files) return null
   return diffStore.currentDiff.files[diffStore.currentFilePath] || null
+})
+
+const commitInfo = computed(() => {
+  const ref = diffStore.fullViewRef
+  if (!ref || ref === 'uncommitted') return null
+  const diff = diffStore.currentDiff
+  if (!diff?.commits) return null
+  return diff.commits.find(c => c.hash === ref) || null
 })
 
 /**
@@ -392,6 +404,29 @@ onUnmounted(() => {
 .meta-badge.status-deleted { background: #f8d7da; color: #721c24; }
 .meta-badge.status-modified { background: #fff3cd; color: #856404; }
 .meta-badge.status-renamed { background: #cce5ff; color: #004085; }
+
+.commit-ref-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.78rem;
+  color: #495057;
+}
+
+.commit-ref-badge code {
+  font-size: 0.72rem;
+  color: #0d6efd;
+  background: #e7f1ff;
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+
+.commit-ref-msg {
+  max-width: 300px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 .meta-item {
   font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;

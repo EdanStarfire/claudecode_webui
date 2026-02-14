@@ -74,6 +74,27 @@ export const useDiffStore = defineStore('diff', () => {
   })
 
   /**
+   * Files scoped to the current full view context.
+   * For commit-specific views, returns only that commit's files.
+   * For total/uncommitted views, returns all changed files.
+   */
+  const fullViewFiles = computed(() => {
+    const ref = fullViewRef.value
+    if (ref && ref !== 'uncommitted') {
+      // Commit-specific: find the commit's file list
+      const diff = currentDiff.value
+      if (diff?.commits) {
+        const commit = diff.commits.find(c => c.hash === ref)
+        if (commit?.files) {
+          return commit.files.map(p => ({ path: p })).sort((a, b) => a.path.localeCompare(b.path))
+        }
+      }
+      return []
+    }
+    return currentFiles.value
+  })
+
+  /**
    * Current file diff content for full view
    */
   const currentFullViewFileDiff = computed(() => {
@@ -171,7 +192,7 @@ export const useDiffStore = defineStore('diff', () => {
    */
   function nextFile() {
     if (!fullViewSessionId.value) return
-    const files = currentFiles.value
+    const files = fullViewFiles.value
     if (files.length === 0) return
 
     const idx = files.findIndex(f => f.path === currentFilePath.value)
@@ -185,7 +206,7 @@ export const useDiffStore = defineStore('diff', () => {
    */
   function prevFile() {
     if (!fullViewSessionId.value) return
-    const files = currentFiles.value
+    const files = fullViewFiles.value
     if (files.length === 0) return
 
     const idx = files.findIndex(f => f.path === currentFilePath.value)
@@ -236,6 +257,7 @@ export const useDiffStore = defineStore('diff', () => {
     fileCount,
     commitCount,
     isGitRepo,
+    fullViewFiles,
     currentFullViewFileDiff,
 
     // Actions

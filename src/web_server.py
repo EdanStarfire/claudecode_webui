@@ -1641,9 +1641,9 @@ class ClaudeWebUI:
             """Get unified diff content for a specific file.
 
             Args:
-                ref: Optional. When ``uncommitted``, uses two-dot diff
-                    (includes working tree changes). Default uses three-dot
-                    (committed changes only).
+                ref: Optional. ``uncommitted`` for working tree changes,
+                    a commit hash for commit-specific changes, or null/empty
+                    for cumulative branch diff (merge_base...HEAD).
             """
             if not path:
                 raise HTTPException(status_code=400, detail="path query parameter required")
@@ -1657,7 +1657,34 @@ class ClaudeWebUI:
                 if not cwd or not Path(cwd).exists():
                     raise HTTPException(status_code=400, detail="Invalid working directory")
 
-                # Find merge base
+                if ref and ref != "uncommitted":
+                    # Commit-specific diff: validate ref then diff against parent
+                    verified = await self._run_git_command(
+                        ["git", "rev-parse", "--verify", ref], cwd
+                    )
+                    if verified is None:
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"Invalid commit reference: {ref}"
+                        )
+
+                    # Try diff against parent commit
+                    diff_output = await self._run_git_command(
+                        ["git", "diff", f"{ref}~1", ref, "--", path], cwd
+                    )
+                    if diff_output is None:
+                        # First commit or no parent — fall back to git show
+                        diff_output = await self._run_git_command(
+                            ["git", "show", ref, "--", path], cwd
+                        )
+
+                    return {
+                        "path": path,
+                        "ref": ref,
+                        "diff": diff_output or ""
+                    }
+
+                # Find merge base for uncommitted / total views
                 merge_base = await self._run_git_command(
                     ["git", "merge-base", "HEAD", "origin/main"], cwd
                 )
