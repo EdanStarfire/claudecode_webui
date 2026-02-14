@@ -115,11 +115,17 @@ const expandedTool = computed(() => {
   return sortedTools.value.find(t => t.id === expandedNodeId.value)
 })
 
-// Auto-expand detail when a tool needs permission
+// Auto-expand when a tool needs permission, auto-collapse when resolved
 watch(sortedTools, (tools) => {
   const permTool = tools.find(t => getEffectiveStatus(t) === 'permission_required')
   if (permTool) {
     expandedNodeId.value = permTool.id
+  } else if (expandedNodeId.value) {
+    // Permission was resolved — collapse the detail panel
+    const expanded = tools.find(t => t.id === expandedNodeId.value)
+    if (expanded && getEffectiveStatus(expanded) !== 'permission_required') {
+      expandedNodeId.value = null
+    }
   }
 }, { deep: true })
 
