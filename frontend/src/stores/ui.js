@@ -16,8 +16,8 @@ export const useUIStore = defineStore('ui', () => {
   const rightSidebarCollapsed = ref(true)
   const rightSidebarWidth = ref(300)
 
-  // Right Sidebar active tab: 'comms', 'resources', 'tasks', 'diff'
-  const rightSidebarActiveTab = ref('comms')
+  // Right Sidebar active tab: 'diff', 'tasks', 'resources', 'comms'
+  const rightSidebarActiveTab = ref('diff')
 
   // Right panel visibility for responsive toggle (tablet/mobile overlay)
   const rightPanelVisible = ref(window.innerWidth > 1024)

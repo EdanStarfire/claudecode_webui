@@ -11,7 +11,7 @@
     <!-- Agent Overview Section -->
     <AgentOverview />
 
-    <!-- Tab Navigation (Comms, Resources, Tasks, Diff) -->
+    <!-- Tab Navigation (Diff, Tasks, Resources, Comms) -->
     <div class="sidebar-tabs">
       <button
         v-for="tab in tabs"
@@ -27,21 +27,21 @@
 
     <!-- Tab Content -->
     <div class="tab-content-container">
+      <!-- Diff Tab -->
+      <DiffPanel v-show="activeTab === 'diff'" />
+
+      <!-- Tasks Tab -->
+      <TaskListPanel v-show="activeTab === 'tasks'" />
+
+      <!-- Resources Tab -->
+      <ResourceGallery v-show="activeTab === 'resources'" />
+
       <!-- Comms Tab -->
       <div v-show="activeTab === 'comms'" class="tab-pane comms-pane">
         <div class="comms-placeholder">
           <span>Comms will appear here when agent is part of a Legion</span>
         </div>
       </div>
-
-      <!-- Resources Tab -->
-      <ResourceGallery v-show="activeTab === 'resources'" />
-
-      <!-- Tasks Tab -->
-      <TaskListPanel v-show="activeTab === 'tasks'" />
-
-      <!-- Diff Tab -->
-      <DiffPanel v-show="activeTab === 'diff'" />
     </div>
 
     <!-- Resize Handle -->
@@ -80,10 +80,10 @@ const diffFileCount = computed(() => diffStore.fileCount)
 
 // Tab definitions
 const tabs = computed(() => [
-  { id: 'comms', label: 'Comms', badge: 0 },
-  { id: 'resources', label: 'Resources', badge: resourceCount.value },
+  { id: 'diff', label: 'Diff', badge: diffFileCount.value },
   { id: 'tasks', label: 'Tasks', badge: taskStats.value.total > 0 ? taskStats.value.total : 0 },
-  { id: 'diff', label: 'Diff', badge: diffFileCount.value }
+  { id: 'resources', label: 'Resources', badge: resourceCount.value },
+  { id: 'comms', label: 'Comms', badge: 0 }
 ])
 
 const isOverlay = computed(() => uiStore.windowWidth <= 1024)
