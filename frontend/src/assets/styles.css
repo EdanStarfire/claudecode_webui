@@ -34,42 +34,13 @@ button:focus {
 
 /* ========== CRITICAL LAYOUT FIXES ========== */
 
-/* Hamburger button styling */
-#sidebar-toggle-btn {
-    min-width: 40px;
-    padding: 0.25rem 0.5rem;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-
-#sidebar-toggle-icon {
-    font-size: 1.2rem;
-    line-height: 1;
-    display: flex;
-    align-items: center;
-}
-
-/* Task panel toggle button styling - mirrors sidebar toggle */
+/* Task panel toggle button styling */
 #task-panel-toggle-btn {
     min-width: 40px;
     padding: 0.25rem 0.5rem;
     display: flex;
     align-items: center;
     justify-content: center;
-}
-
-/* Sidebar: Make it resizable with handle */
-#sidebar {
-    position: relative;
-    resize: horizontal;
-    transition: transform 0.3s ease, margin-left 0.3s ease;
-}
-
-/* Desktop collapsed state - use negative margin to collapse width */
-#sidebar.desktop-collapsed {
-    margin-left: calc(-1 * var(--sidebar-width, 300px));
-    pointer-events: none;
 }
 
 .sidebar-resize-handle:hover {
@@ -506,27 +477,6 @@ button:focus {
 
 /* ========== MOBILE RESPONSIVE LAYOUT ========== */
 
-/* Mobile overlay backdrop */
-#sidebar-backdrop {
-    display: none;
-    position: fixed;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    background: rgba(0, 0, 0, 0.5);
-    z-index: 1044;
-    opacity: 0;
-    transition: opacity 0.3s ease;
-    pointer-events: none;
-}
-
-#sidebar-backdrop.show {
-    display: block;
-    opacity: 1;
-    pointer-events: auto;
-}
-
 /* Mobile styles (<768px) */
 @media (max-width: 767px) {
     /* Header uses sticky positioning to work with browser address bar */
@@ -534,59 +484,6 @@ button:focus {
         position: sticky;
         top: 0;
         z-index: 1050;
-    }
-
-    /* Backdrop positioned below header */
-    #sidebar-backdrop {
-        top: 0;
-        padding-top: 0;
-    }
-
-    /* Sidebar becomes overlay on mobile - positioned below header */
-    #sidebar {
-        position: fixed !important;
-        top: 0;
-        left: 0;
-        bottom: 0;
-        height: 100vh;
-        padding-top: 4rem; /* Header height with buffer */
-        width: 85vw !important; /* Use 85% of viewport width */
-        max-width: 350px !important;
-        min-width: unset !important;
-        z-index: 1046;
-        transform: translateX(-100%);
-        transition: transform 0.3s ease;
-        box-shadow: 2px 0 8px rgba(0, 0, 0, 0.15);
-    }
-
-    #sidebar.mobile-open {
-        transform: translateX(0);
-    }
-
-    /* Right sidebar mobile overlay - matches left sidebar pattern */
-    /* z-index: 1042 keeps task panel below session sidebar (1046) */
-    #right-sidebar {
-        position: fixed !important;
-        top: 0;
-        right: 0;
-        bottom: 0;
-        height: 100vh;
-        padding-top: 4rem; /* Header height with buffer */
-        width: 80vw !important;
-        max-width: 300px !important;
-        min-width: unset !important;
-        z-index: 1042;
-        transform: translateX(100%);
-        transition: transform 0.3s ease;
-        box-shadow: -2px 0 8px rgba(0, 0, 0, 0.15);
-    }
-
-    #right-sidebar.mobile-open {
-        transform: translateX(0);
-    }
-
-    #right-sidebar.collapsed {
-        transform: translateX(100%);
     }
 
     /* Hide resize handle on mobile */
@@ -604,7 +501,6 @@ button:focus {
         font-size: 1rem !important;
     }
 
-    #sidebar-toggle-btn,
     #task-panel-toggle-btn {
         padding: 0.2rem 0.4rem;
     }

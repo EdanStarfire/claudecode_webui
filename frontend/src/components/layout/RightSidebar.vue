@@ -96,7 +96,7 @@ const tabs = computed(() => [
   { id: 'comms', label: 'Comms', badge: commsCount.value }
 ])
 
-const isOverlay = computed(() => uiStore.windowWidth <= 1024)
+const isOverlay = computed(() => uiStore.windowWidth < 768)
 
 const sidebarStyle = computed(() => {
   // In overlay mode, sizing is handled by App.vue CSS

@@ -21,10 +21,6 @@ function writeStorage(key, value) {
 export const useUIStore = defineStore('ui', () => {
   // ========== STATE ==========
 
-  // Left Sidebar state (legacy - kept for compatibility during migration)
-  const sidebarCollapsed = ref(window.innerWidth < 768)
-  const sidebarWidth = ref(300)
-
   // Right Sidebar state (for task panel) — persisted to localStorage
   const rightSidebarCollapsed = ref(readStorage('rightCollapsed', true))
   const rightSidebarWidth = ref(readStorage('rightWidth', 300))
@@ -34,7 +30,7 @@ export const useUIStore = defineStore('ui', () => {
 
   // Right panel visibility for responsive toggle (tablet/mobile overlay)
   const rightPanelVisible = ref(
-    window.innerWidth > 1024 ? readStorage('rightVisible', true) : false
+    window.innerWidth >= 768 ? readStorage('rightVisible', true) : false
   )
 
   // Browsing project (which project's agents are shown in the strip)
@@ -76,18 +72,6 @@ export const useUIStore = defineStore('ui', () => {
   const restartStatus = ref('idle') // idle, confirming, pulling, restarting, reconnecting, error
 
   // ========== ACTIONS ==========
-
-  function toggleSidebar() {
-    sidebarCollapsed.value = !sidebarCollapsed.value
-  }
-
-  function setSidebarCollapsed(collapsed) {
-    sidebarCollapsed.value = collapsed
-  }
-
-  function setSidebarWidth(width) {
-    sidebarWidth.value = Math.max(200, Math.min(width, window.innerWidth * 0.3))
-  }
 
   function toggleRightSidebar() {
     rightSidebarCollapsed.value = !rightSidebarCollapsed.value
@@ -191,19 +175,10 @@ export const useUIStore = defineStore('ui', () => {
     const previousWidth = windowWidth.value
     windowWidth.value = window.innerWidth
 
-    // Collapse sidebar when resizing down to mobile
-    if (windowWidth.value < 768 && previousWidth >= 768) {
-      sidebarCollapsed.value = true
-    }
-    // Expand sidebar when resizing up to desktop
-    else if (windowWidth.value >= 768 && previousWidth < 768) {
-      sidebarCollapsed.value = false
-    }
-
     // Right panel visibility based on breakpoint
-    if (windowWidth.value > 1024 && previousWidth <= 1024) {
+    if (windowWidth.value >= 768 && previousWidth < 768) {
       rightPanelVisible.value = readStorage('rightVisible', true)
-    } else if (windowWidth.value <= 1024 && previousWidth > 1024) {
+    } else if (windowWidth.value < 768 && previousWidth >= 768) {
       rightPanelVisible.value = false
     }
   }
@@ -211,8 +186,6 @@ export const useUIStore = defineStore('ui', () => {
   // ========== RETURN ==========
   return {
     // State
-    sidebarCollapsed,
-    sidebarWidth,
     rightSidebarCollapsed,
     rightSidebarWidth,
     rightSidebarActiveTab,
@@ -232,9 +205,6 @@ export const useUIStore = defineStore('ui', () => {
     restartStatus,
 
     // Actions
-    toggleSidebar,
-    setSidebarCollapsed,
-    setSidebarWidth,
     toggleRightSidebar,
     setRightSidebarCollapsed,
     setRightSidebarWidth,
