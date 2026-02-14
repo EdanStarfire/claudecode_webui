@@ -68,7 +68,7 @@ function showEditModal() {
   gap: 6px;
   padding: 6px 12px;
   border-radius: 10px;
-  border: 1px solid transparent;
+  border: 1px solid #e2e8f0;
   cursor: pointer;
   transition: all 0.15s;
   white-space: nowrap;
