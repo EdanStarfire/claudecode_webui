@@ -1,5 +1,5 @@
 <template>
-  <div class="agent-strip" ref="stripEl" v-if="browsingProject" @click="handleStripClick">
+  <div class="agent-strip" :class="{ 'theme-dark': uiStore.isRedBackground }" ref="stripEl" v-if="browsingProject" @click="handleStripClick">
     <span class="strip-project-label">{{ browsingProject.name }}</span>
     <template v-for="session in topLevelSessions" :key="session.session_id">
       <!-- Stacked chip for parents with children -->
@@ -22,7 +22,7 @@
     </button>
     <span v-if="topLevelSessions.length === 0" class="strip-empty">No agents yet</span>
   </div>
-  <div v-else class="agent-strip agent-strip-empty">
+  <div v-else class="agent-strip agent-strip-empty" :class="{ 'theme-dark': uiStore.isRedBackground }">
     <span class="strip-empty">Select a project above</span>
   </div>
 </template>
@@ -204,6 +204,19 @@ function showCreateSessionModal() {
   border-color: #3b82f6;
   color: #3b82f6;
   background: #eff6ff;
+}
+
+.agent-strip.theme-dark {
+  background: #0f172a;
+  border-bottom-color: #334155;
+}
+
+.agent-strip.theme-dark .strip-project-label {
+  color: #64748b;
+}
+
+.agent-strip.theme-dark .strip-empty {
+  color: #64748b;
 }
 
 @media (max-width: 767px) {

@@ -1,5 +1,5 @@
 <template>
-  <div class="messages-area flex-grow-1 overflow-auto" ref="messagesArea">
+  <div class="messages-area flex-grow-1 overflow-auto" :class="{ 'theme-dark': uiStore.isRedBackground }" ref="messagesArea">
     <div v-if="displayableItems.length === 0" class="text-muted text-center py-5">
       No messages yet. Start a conversation!
     </div>
@@ -416,5 +416,9 @@ function normalizeMessage(message) {
   scroll-behavior: smooth;
   background: #ffffff;
   padding: 8px 0;
+}
+
+.messages-area.theme-dark {
+  background: #0f172a;
 }
 </style>

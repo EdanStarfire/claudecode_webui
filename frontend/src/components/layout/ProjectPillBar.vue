@@ -1,5 +1,5 @@
 <template>
-  <div class="project-pill-bar">
+  <div class="project-pill-bar" :class="{ 'theme-dark': uiStore.isRedBackground }">
     <ProjectPill
       v-for="project in orderedProjects"
       :key="project.project_id"
@@ -96,6 +96,11 @@ function showCreateProjectModal() {
   border-color: #3b82f6;
   color: #3b82f6;
   background: #eff6ff;
+}
+
+.project-pill-bar.theme-dark {
+  background: #1e293b;
+  border-bottom-color: #334155;
 }
 
 @media (max-width: 767px) {
