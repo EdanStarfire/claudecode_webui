@@ -144,6 +144,8 @@ export const useTaskStore = defineStore('task', () => {
 
     const task = taskMap.get(taskId)
     if (!task) {
+      // Don't create a task if the update is a deletion
+      if (updates.status === 'deleted') return
       // Task doesn't exist yet - create it with updates
       createTask(sessionId, { id: taskId, ...updates })
       return
