@@ -106,10 +106,12 @@ const tooltip = computed(() => {
 
 const toolLabel = computed(() => {
   const name = props.tool.name || ''
-  // Strip common prefixes/suffixes for brevity
-  return name
-    .replace(/^mcp__[^_]+__/, '')  // strip MCP prefixes
-    .replace(/Tool$/, '')           // strip Tool suffix
+  // For MCP tools (mcp__server__toolName), extract just the tool name after the last __
+  if (name.startsWith('mcp__')) {
+    const lastSep = name.lastIndexOf('__')
+    if (lastSep > 4) return name.slice(lastSep + 2)
+  }
+  return name.replace(/Tool$/, '')
 })
 
 // Expose for parent
