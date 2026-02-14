@@ -123,15 +123,14 @@ const isExpanded = computed(() => {
   return uiStore.expandedStacks.has(props.session.session_id) || hasActiveDescendant.value
 })
 
-// Show up to 3 peek cards
 const visiblePeekIds = computed(() => {
-  return childIds.value.slice(0, 3)
+  return childIds.value
 })
 
 // Margin-right for peek card protrusion
 const stackStyle = computed(() => {
   if (isExpanded.value || childIds.value.length === 0) return {}
-  const peekCount = Math.min(childIds.value.length, 3)
+  const peekCount = childIds.value.length
   return {
     marginRight: `${peekCount * 22}px`
   }
