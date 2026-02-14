@@ -1692,11 +1692,6 @@ class ClaudeWebUI:
                     merge_base = await self._run_git_command(
                         ["git", "merge-base", "HEAD", "origin/master"], cwd
                     )
-                if merge_base is None:
-                    raise HTTPException(
-                        status_code=400,
-                        detail="No remote tracking branch found"
-                    )
 
                 if ref == "uncommitted":
                     # Check if file is untracked
@@ -1717,15 +1712,19 @@ class ClaudeWebUI:
                             cwd, allow_nonzero=True
                         )
                     else:
-                        # Tracked file: two-dot diff includes working tree
+                        # Tracked file: diff against merge base, or HEAD if no remote
+                        base = merge_base or "HEAD"
                         diff_output = await self._run_git_command(
-                            ["git", "diff", merge_base, "--", path], cwd
+                            ["git", "diff", base, "--", path], cwd
                         )
-                else:
+                elif merge_base is not None:
                     # Default: three-dot (committed changes only)
                     diff_output = await self._run_git_command(
                         ["git", "diff", f"{merge_base}...HEAD", "--", path], cwd
                     )
+                else:
+                    # No remote: cannot compute cumulative branch diff
+                    diff_output = ""
 
                 return {
                     "path": path,
