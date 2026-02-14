@@ -97,7 +97,7 @@ watch(sortedTools, (tools) => {
       expandedNodeId.value = null
     }
   }
-}, { deep: true })
+}, { deep: true, immediate: true })
 
 // Get effective status for a tool
 function getEffectiveStatus(tool) {
