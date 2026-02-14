@@ -37,11 +37,7 @@
       <ResourceGallery v-show="activeTab === 'resources'" />
 
       <!-- Comms Tab -->
-      <div v-show="activeTab === 'comms'" class="tab-pane comms-pane">
-        <div class="comms-placeholder">
-          <span>Communication between this session's minions will appear here</span>
-        </div>
-      </div>
+      <CommsPanel v-show="activeTab === 'comms'" />
     </div>
 
     <!-- Resize Handle -->
@@ -59,17 +55,22 @@ import { useUIStore } from '@/stores/ui'
 import { useTaskStore } from '@/stores/task'
 import { useResourceStore } from '@/stores/resource'
 import { useDiffStore } from '@/stores/diff'
+import { useLegionStore } from '@/stores/legion'
+import { useSessionStore } from '@/stores/session'
 import AgentOverview from './AgentOverview.vue'
 import TaskListPanel from '../tasks/TaskListPanel.vue'
 import ResourceGallery from '../tasks/ResourceGallery.vue'
 import ResourceFullView from '../common/ResourceFullView.vue'
 import DiffPanel from '../tasks/DiffPanel.vue'
 import DiffFullView from '../common/DiffFullView.vue'
+import CommsPanel from '../tasks/CommsPanel.vue'
 
 const uiStore = useUIStore()
 const taskStore = useTaskStore()
 const resourceStore = useResourceStore()
 const diffStore = useDiffStore()
+const legionStore = useLegionStore()
+const sessionStore = useSessionStore()
 
 const activeTab = computed(() => uiStore.rightSidebarActiveTab)
 
@@ -77,13 +78,18 @@ const activeTab = computed(() => uiStore.rightSidebarActiveTab)
 const taskStats = computed(() => taskStore.currentTaskStats)
 const resourceCount = computed(() => resourceStore.currentResourceCount)
 const diffFileCount = computed(() => diffStore.fileCount)
+const commsCount = computed(() => {
+  const projectId = sessionStore.currentSession?.project_id
+  if (!projectId) return 0
+  return (legionStore.commsByLegion.get(projectId) || []).length
+})
 
 // Tab definitions
 const tabs = computed(() => [
   { id: 'diff', label: 'Diff', badge: diffFileCount.value },
   { id: 'tasks', label: 'Tasks', badge: taskStats.value.total > 0 ? taskStats.value.total : 0 },
   { id: 'resources', label: 'Resources', badge: resourceCount.value },
-  { id: 'comms', label: 'Comms', badge: 0 }
+  { id: 'comms', label: 'Comms', badge: commsCount.value }
 ])
 
 const isOverlay = computed(() => uiStore.windowWidth <= 1024)
@@ -196,19 +202,6 @@ function stopResize() {
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
-}
-
-/* Comms placeholder */
-.comms-pane {
-  padding: 0;
-}
-
-.comms-placeholder {
-  text-align: center;
-  padding: 32px 16px;
-  color: #94a3b8;
-  font-size: 12px;
-  font-style: italic;
 }
 
 /* Resize handle */
