@@ -127,7 +127,7 @@ watch(sortedTools, (tools) => {
       expandedNodeId.value = null
     }
   }
-}, { deep: true })
+}, { deep: true, immediate: true })
 
 // Status counts
 const runningCount = computed(() => {
