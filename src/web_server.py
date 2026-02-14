@@ -1398,11 +1398,19 @@ class ClaudeWebUI:
                         ["git", "merge-base", "HEAD", "origin/master"], cwd
                     )
                 if merge_base is None:
-                    return {
-                        "is_git_repo": True,
-                        "branch": branch or "unknown",
-                        "error": "No remote tracking branch found (origin/main or origin/master)"
-                    }
+                    # No remote: fall back to root commit so we show all local history
+                    root_commit = await self._run_git_command(
+                        ["git", "rev-list", "--max-parents=0", "HEAD"], cwd
+                    )
+                    if root_commit:
+                        # If multiple roots, take the first one
+                        merge_base = root_commit.strip().split("\n")[0]
+                    else:
+                        return {
+                            "is_git_repo": True,
+                            "branch": branch or "unknown",
+                            "error": "No commits found in repository"
+                        }
 
                 # Get commit log since merge base
                 log_output = await self._run_git_command(
