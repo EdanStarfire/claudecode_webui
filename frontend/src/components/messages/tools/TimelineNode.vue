@@ -8,6 +8,7 @@
     @mouseleave="showTooltip = false"
   >
     <div class="node-dot" :class="dotClasses"></div>
+    <span class="node-label">{{ toolLabel }}</span>
   </div>
 </template>
 
@@ -103,6 +104,14 @@ const tooltip = computed(() => {
   return `${summary} [${statusLabel}]`
 })
 
+const toolLabel = computed(() => {
+  const name = props.tool.name || ''
+  // Strip common prefixes/suffixes for brevity
+  return name
+    .replace(/^mcp__[^_]+__/, '')  // strip MCP prefixes
+    .replace(/Tool$/, '')           // strip Tool suffix
+})
+
 // Expose for parent
 defineExpose({ statusColor, effectiveStatus })
 </script>
@@ -111,10 +120,10 @@ defineExpose({ statusColor, effectiveStatus })
 .timeline-node {
   flex-shrink: 0;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
-  width: 20px;
-  height: 20px;
+  min-width: 20px;
   cursor: pointer;
   z-index: 1;
 }
@@ -173,14 +182,29 @@ defineExpose({ statusColor, effectiveStatus })
   50% { opacity: 0.4; }
 }
 
+.node-label {
+  font-size: 9px;
+  color: #94a3b8;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 60px;
+  line-height: 1;
+  margin-top: 1px;
+}
+
 /* Mobile compact size */
 .node-compact {
-  width: 16px;
-  height: 16px;
+  min-width: 16px;
 }
 
 .node-compact .node-dot {
   width: 9px;
   height: 9px;
+}
+
+.node-compact .node-label {
+  font-size: 7px;
+  max-width: 40px;
 }
 </style>

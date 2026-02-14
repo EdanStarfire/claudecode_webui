@@ -23,13 +23,6 @@
       </template>
     </div>
 
-    <!-- Summary (tool count + status) -->
-    <div class="timeline-summary">
-      <span class="summary-count">{{ sortedTools.length }} tool{{ sortedTools.length !== 1 ? 's' : '' }}</span>
-      <span v-if="runningCount > 0" class="summary-running">{{ runningCount }} running</span>
-      <span v-if="permissionCount > 0" class="summary-permission">{{ permissionCount }} needs permission</span>
-    </div>
-
     <!-- Detail Panel (one at a time) -->
     <TimelineDetail
       v-if="expandedNodeId && expandedTool"
@@ -106,15 +99,6 @@ watch(sortedTools, (tools) => {
   }
 }, { deep: true })
 
-// Status counts
-const runningCount = computed(() => {
-  return sortedTools.value.filter(t => getEffectiveStatus(t) === 'executing').length
-})
-
-const permissionCount = computed(() => {
-  return sortedTools.value.filter(t => getEffectiveStatus(t) === 'permission_required').length
-})
-
 // Get effective status for a tool
 function getEffectiveStatus(tool) {
   const sessionId = sessionStore.currentSessionId
@@ -180,34 +164,12 @@ function toggleDetail(toolId) {
 
 .timeline-row {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   min-height: 20px;
   gap: 0;
   padding: 2px 0;
 }
 
-.timeline-summary {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 2px;
-  font-size: 10px;
-  color: #94a3b8;
-}
-
-.summary-count {
-  font-weight: 500;
-}
-
-.summary-running {
-  color: #8b5cf6;
-  font-weight: 600;
-}
-
-.summary-permission {
-  color: #ffc107;
-  font-weight: 600;
-}
 
 /* Mobile: wrap timeline nodes onto multiple lines */
 .timeline-mobile .timeline-row {

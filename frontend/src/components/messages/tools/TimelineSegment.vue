@@ -26,7 +26,8 @@ const segmentStyle = computed(() => {
   flex: 1;
   height: 2px;
   min-width: 16px;
-  align-self: center;
+  margin-top: 5px;
+  align-self: flex-start;
 }
 
 .segment-compact {
