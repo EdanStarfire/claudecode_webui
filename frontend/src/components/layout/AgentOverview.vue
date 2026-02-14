@@ -34,14 +34,14 @@
 
     <!-- Action Buttons -->
     <div class="overview-actions">
-      <button class="btn-overview btn-overview-primary" @click="editSession" title="Edit session settings">
-        Edit
+      <button class="btn-overview" @click="showInfo" title="View session details">
+        Info
       </button>
       <button class="btn-overview" @click="manageSession" title="Manage session lifecycle">
         Manage
       </button>
-      <button class="btn-overview" @click="showInfo" title="View session details">
-        Info
+      <button class="btn-overview" @click="editSession" title="Edit session settings">
+        Edit
       </button>
     </div>
   </div>
@@ -300,13 +300,4 @@ function showInfo() {
   border-color: #cbd5e1;
 }
 
-.btn-overview-primary {
-  background: #3b82f6;
-  border-color: #3b82f6;
-  color: white;
-}
-
-.btn-overview-primary:hover {
-  background: #2563eb;
-}
 </style>
