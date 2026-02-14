@@ -44,7 +44,7 @@
 </template>
 
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useMessageStore } from '@/stores/message'
 import { useSessionStore } from '@/stores/session'
 import TimelineNode from './TimelineNode.vue'
@@ -114,6 +114,14 @@ const expandedTool = computed(() => {
   if (!expandedNodeId.value) return null
   return sortedTools.value.find(t => t.id === expandedNodeId.value)
 })
+
+// Auto-expand detail when a tool needs permission
+watch(sortedTools, (tools) => {
+  const permTool = tools.find(t => getEffectiveStatus(t) === 'permission_required')
+  if (permTool) {
+    expandedNodeId.value = permTool.id
+  }
+}, { deep: true })
 
 // Status counts
 const runningCount = computed(() => {
