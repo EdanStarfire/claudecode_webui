@@ -119,7 +119,7 @@ function handleClick() {
 
 .ac-dot.active { background: #8b5cf6; }
 .ac-dot.idle { background: #22c55e; }
-.ac-dot.waiting { background: #f97316; }
+.ac-dot.waiting { background: #ffc107; }
 .ac-dot.error {
   background: #ef4444;
   animation: pulse-error 1.5s infinite;

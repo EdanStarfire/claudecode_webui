@@ -143,7 +143,7 @@ function showEditModal() {
 
 .seg.active { background: #8b5cf6; }
 .seg.idle { background: #22c55e; }
-.seg.waiting { background: #f97316; }
+.seg.waiting { background: #ffc107; }
 .seg.error { background: #ef4444; }
 .seg.none { background: #e2e8f0; }
 </style>

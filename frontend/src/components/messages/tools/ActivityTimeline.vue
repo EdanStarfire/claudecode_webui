@@ -170,7 +170,7 @@ function getNodeColor(tool) {
     case 'executing':
       return '#8b5cf6'
     case 'permission_required':
-      return '#f97316'
+      return '#ffc107'
     case 'orphaned':
       return '#94a3b8'
     case 'pending':
@@ -225,7 +225,7 @@ function toggleOverflow() {
 }
 
 .summary-permission {
-  color: #f97316;
+  color: #ffc107;
   font-weight: 600;
 }
 </style>

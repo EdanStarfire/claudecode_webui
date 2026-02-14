@@ -81,7 +81,7 @@ const alertClass = computed(() => {
 
 .dot-active { background: #8b5cf6; }
 .dot-idle { background: #22c55e; }
-.dot-waiting { background: #f97316; }
+.dot-waiting { background: #ffc107; }
 .dot-error { background: #ef4444; }
 .dot-none { background: #e2e8f0; }
 

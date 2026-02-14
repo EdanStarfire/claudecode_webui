@@ -68,7 +68,7 @@ const statusColor = computed(() => {
     case 'executing':
       return '#8b5cf6'
     case 'permission_required':
-      return '#f97316'
+      return '#ffc107'
     case 'orphaned':
       return '#94a3b8'
     case 'pending':
