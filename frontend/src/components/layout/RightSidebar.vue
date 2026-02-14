@@ -200,7 +200,7 @@ function stopResize() {
 
 /* Comms placeholder */
 .comms-pane {
-  padding: 16px;
+  padding: 0;
 }
 
 .comms-placeholder {

@@ -167,7 +167,7 @@ function addToAttachments(resource) {
 
 .empty-placeholder {
   text-align: center;
-  padding: 32px 16px;
+  padding: 24px 16px;
   color: #94a3b8;
   font-size: 12px;
   font-style: italic;
