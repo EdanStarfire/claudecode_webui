@@ -1681,14 +1681,24 @@ class ClaudeWebUI:
                             detail=f"Invalid commit reference: {ref}"
                         )
 
-                    # Try diff against parent commit
-                    diff_output = await self._run_git_command(
-                        ["git", "diff", f"{ref}~1", ref, "--", path], cwd
+                    # Check if this commit has a parent
+                    parent = await self._run_git_command(
+                        ["git", "rev-parse", "--verify", f"{ref}~1"], cwd
                     )
-                    if diff_output is None:
-                        # First commit or no parent — fall back to git show
+                    if parent:
+                        # Normal commit: diff against parent
                         diff_output = await self._run_git_command(
-                            ["git", "show", ref, "--", path], cwd
+                            ["git", "diff", f"{ref}~1", ref, "--", path], cwd
+                        )
+                    else:
+                        # Root commit: diff against empty tree
+                        empty_tree = await self._run_git_command(
+                            ["git", "hash-object", "-t", "tree", "/dev/null"], cwd
+                        )
+                        base = (empty_tree.strip() if empty_tree
+                                else "4b825dc642cb6eb9a060e54bf899d15f7f09f993")
+                        diff_output = await self._run_git_command(
+                            ["git", "diff", base, ref, "--", path], cwd
                         )
 
                     return {
