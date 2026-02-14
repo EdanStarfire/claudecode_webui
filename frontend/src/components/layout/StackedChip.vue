@@ -177,7 +177,7 @@ function handlePeekClick() {
 
 .parent-wrapper > :deep(.agent-chip) {
   position: relative;
-  z-index: 5;
+  z-index: 25;
 }
 
 .stack-count {
@@ -196,7 +196,7 @@ function handlePeekClick() {
   justify-content: center;
   padding: 0 3px;
   cursor: pointer;
-  z-index: 6;
+  z-index: 26;
   border: 1px solid white;
 }
 
