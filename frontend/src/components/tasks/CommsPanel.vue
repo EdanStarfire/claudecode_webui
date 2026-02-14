@@ -42,7 +42,7 @@
 </template>
 
 <script setup>
-import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, computed, watch, nextTick } from 'vue'
 import { useSessionStore } from '@/stores/session'
 import { useLegionStore } from '@/stores/legion'
 import { useWebSocketStore } from '@/stores/websocket'
@@ -56,7 +56,6 @@ const wsStore = useWebSocketStore()
 
 const commsList = ref(null)
 const expandedComms = ref(new Set())
-let connectedLegionId = null
 
 // Reserved minion IDs
 const SYSTEM_MINION_ID = 'ffffffff-ffff-ffff-ffff-ffffffffffff'
@@ -207,35 +206,33 @@ watch(() => comms.value.length, async () => {
 // Connect to legion when project changes
 function connectToLegion(legionId) {
   if (!legionId) return
-  if (connectedLegionId === legionId) return
 
-  // Disconnect previous
-  if (connectedLegionId) {
-    wsStore.disconnectLegion()
+  // Always ensure current legion is set in store
+  legionStore.setCurrentLegion(legionId)
+
+  // Load timeline data if not already loaded for this legion
+  const existingComms = legionStore.commsByLegion.get(legionId)
+  if (!existingComms) {
+    legionStore.loadTimeline(legionId)
   }
 
-  connectedLegionId = legionId
-  legionStore.setCurrentLegion(legionId)
-  legionStore.loadTimeline(legionId)
-  wsStore.connectLegion(legionId)
+  // Connect WebSocket if not already connected to this legion
+  if (!wsStore.legionConnected || wsStore.currentLegionId !== legionId) {
+    wsStore.connectLegion(legionId)
+  }
 }
 
+// Watch project changes
 watch(projectId, (newId) => {
   if (newId) {
     connectToLegion(newId)
   }
 }, { immediate: true })
 
-onMounted(() => {
-  if (projectId.value) {
-    connectToLegion(projectId.value)
-  }
-})
-
-onUnmounted(() => {
-  if (connectedLegionId) {
-    wsStore.disconnectLegion()
-    connectedLegionId = null
+// Reload timeline when legion WebSocket reconnects
+watch(() => wsStore.legionConnected, (connected) => {
+  if (connected && projectId.value) {
+    legionStore.loadTimeline(projectId.value)
   }
 })
 </script>
