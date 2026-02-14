@@ -80,8 +80,12 @@ const resourceCount = computed(() => resourceStore.currentResourceCount)
 const diffFileCount = computed(() => diffStore.fileCount)
 const commsCount = computed(() => {
   const projectId = sessionStore.currentSession?.project_id
-  if (!projectId) return 0
-  return (legionStore.commsByLegion.get(projectId) || []).length
+  const sessionId = sessionStore.currentSessionId
+  if (!projectId || !sessionId) return 0
+  const allComms = legionStore.commsByLegion.get(projectId) || []
+  return allComms.filter(c =>
+    c.from_minion_id === sessionId || c.to_minion_id === sessionId
+  ).length
 })
 
 // Tab definitions

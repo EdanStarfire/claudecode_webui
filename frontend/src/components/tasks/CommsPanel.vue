@@ -69,10 +69,15 @@ const projectId = computed(() => sessionStore.currentSession?.project_id || null
 // Current session ID (used to identify outbound comms from this session/minion)
 const currentSessionId = computed(() => sessionStore.currentSessionId)
 
-// Comms for the current legion
+// Comms involving the current session (as sender or recipient)
 const comms = computed(() => {
   if (!projectId.value) return []
-  return legionStore.commsByLegion.get(projectId.value) || []
+  const allComms = legionStore.commsByLegion.get(projectId.value) || []
+  const sessionId = currentSessionId.value
+  if (!sessionId) return []
+  return allComms.filter(c =>
+    c.from_minion_id === sessionId || c.to_minion_id === sessionId
+  )
 })
 
 // Color palette for other minions (pastel tints)
