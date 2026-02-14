@@ -60,9 +60,9 @@ const alertClass = computed(() => {
 <style scoped>
 .peek-card {
   position: absolute;
-  top: 2px;
+  top: 0;
+  bottom: 0;
   width: 26px;
-  height: 30px;
   background: #f1f5f9;
   border: 1px solid #cbd5e1;
   border-radius: 8px;

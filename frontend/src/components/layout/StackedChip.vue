@@ -175,6 +175,11 @@ function handlePeekClick() {
   position: relative;
 }
 
+.parent-wrapper > :deep(.agent-chip) {
+  position: relative;
+  z-index: 1;
+}
+
 .stack-count {
   position: absolute;
   bottom: -4px;
