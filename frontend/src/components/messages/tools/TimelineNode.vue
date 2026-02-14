@@ -1,7 +1,7 @@
 <template>
   <div
     class="timeline-node"
-    :class="nodeClasses"
+    :class="[nodeClasses, { 'node-compact': compact }]"
     :title="tooltip"
     @click.stop="$emit('click')"
     @mouseenter="showTooltip = true"
@@ -19,7 +19,8 @@ import { useSessionStore } from '@/stores/session'
 
 const props = defineProps({
   tool: { type: Object, required: true },
-  isExpanded: { type: Boolean, default: false }
+  isExpanded: { type: Boolean, default: false },
+  compact: { type: Boolean, default: false }
 })
 
 defineEmits(['click'])
@@ -170,5 +171,16 @@ defineExpose({ statusColor, effectiveStatus })
 @keyframes error-pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.4; }
+}
+
+/* Mobile compact size */
+.node-compact {
+  width: 16px;
+  height: 16px;
+}
+
+.node-compact .node-dot {
+  width: 9px;
+  height: 9px;
 }
 </style>

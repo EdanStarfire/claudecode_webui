@@ -1,5 +1,5 @@
 <template>
-  <div class="activity-timeline" v-if="sortedTools.length > 0">
+  <div class="activity-timeline" :class="{ 'timeline-mobile': uiStore.isMobile }" v-if="sortedTools.length > 0">
     <!-- Timeline Row (nodes + segments) -->
     <div class="timeline-row">
       <!-- Overflow chip (when collapsed, shows count of hidden tools) -->
@@ -16,6 +16,7 @@
           v-if="index > 0"
           :leftColor="getNodeColor(visibleTools[index - 1])"
           :rightColor="getNodeColor(tool)"
+          :compact="uiStore.isMobile"
         />
 
         <!-- Node -->
@@ -23,6 +24,7 @@
           :ref="el => setNodeRef(tool.id, el)"
           :tool="tool"
           :isExpanded="expandedNodeId === tool.id"
+          :compact="uiStore.isMobile"
           @click="toggleDetail(tool.id)"
         />
       </template>
@@ -47,6 +49,7 @@
 import { computed, ref, watch } from 'vue'
 import { useMessageStore } from '@/stores/message'
 import { useSessionStore } from '@/stores/session'
+import { useUIStore } from '@/stores/ui'
 import TimelineNode from './TimelineNode.vue'
 import TimelineSegment from './TimelineSegment.vue'
 import TimelineDetail from './TimelineDetail.vue'
@@ -68,6 +71,7 @@ const props = defineProps({
 
 const messageStore = useMessageStore()
 const sessionStore = useSessionStore()
+const uiStore = useUIStore()
 
 // Local state for this timeline instance
 const expandedNodeId = ref(null)
@@ -233,5 +237,11 @@ function toggleOverflow() {
 .summary-permission {
   color: #ffc107;
   font-weight: 600;
+}
+
+/* Mobile: wrap timeline nodes onto multiple lines */
+.timeline-mobile .timeline-row {
+  flex-wrap: wrap;
+  gap: 2px 0;
 }
 </style>
