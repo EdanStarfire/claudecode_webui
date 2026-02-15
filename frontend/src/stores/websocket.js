@@ -566,30 +566,12 @@ export const useWebSocketStore = defineStore('websocket', () => {
           break
         }
 
-        // Issue #324: Handle unified tool_call messages
+        // Issue #324/#491: Handle unified tool_call messages (single path for all tool lifecycle)
         if (message.type === 'tool_call') {
           messageStore.handleToolCall(sessionId, message)
           // Don't add to message history - tool_call is its own display entity
           break
         }
-
-        // Handle permission_request messages (legacy - for backward compatibility)
-        if (message.type === 'permission_request') {
-          messageStore.handlePermissionRequest(sessionId, message)
-          // Don't add to message history - it's handled by tool call
-          break
-        }
-
-        // Handle permission_response messages (legacy - for backward compatibility)
-        if (message.type === 'permission_response') {
-          messageStore.handlePermissionResponse(sessionId, message)
-          // Don't add to message history - it's handled by tool call
-          break
-        }
-
-        // Note: Legacy has_tool_uses/has_tool_results extraction removed (Issue #490).
-        // The unified tool_call handler at line 570 handles all real-time tool lifecycle.
-        // Legacy extraction remains in loadMessages() and syncMessages() for history replay.
 
         // Capture init data for session info modal
         if (message.type === 'system' &&
@@ -600,21 +582,6 @@ export const useWebSocketStore = defineStore('websocket', () => {
 
         // Add message to history
         messageStore.addMessage(sessionId, message)
-        break
-
-      case 'permission_request':
-        // Handle permission request
-        messageStore.handlePermissionRequest(sessionId, payload)
-        break
-
-      case 'permission_response':
-        // Handle permission response (from backend)
-        messageStore.handlePermissionResponse(sessionId, payload)
-        break
-
-      case 'tool_result':
-        // Handle tool completion
-        messageStore.handleToolResult(sessionId, payload)
         break
 
       case 'state_change':

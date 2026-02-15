@@ -2918,25 +2918,8 @@ class ClaudeWebUI:
                     else:
                         logger.warning(f"Could not find matching ToolCall for permission request: {tool_name}")
 
-                    # Also broadcast legacy permission_request for backward compatibility
-                    websocket_data = {
-                        "type": "permission_request",
-                        "content": permission_request.content,
-                        "session_id": session_id,
-                        "timestamp": request_time,
-                        "tool_name": tool_name,
-                        "input_params": input_params,
-                        "request_id": request_id,
-                        "suggestions": [s.to_dict() for s in suggestion_objects]
-                    }
-                    websocket_message = {
-                        "type": "message",
-                        "session_id": session_id,
-                        "data": websocket_data,
-                        "timestamp": datetime.now(UTC).isoformat()
-                    }
-                    await self.websocket_manager.send_message(session_id, websocket_message)
-                    logger.info(f"Broadcasted permission request to WebSocket for session {session_id}")
+                    # Issue #491: Legacy permission_request broadcast removed.
+                    # Only unified tool_call messages are emitted for permission lifecycle.
                 except Exception as ws_error:
                     logger.error(f"Failed to broadcast permission request to WebSocket: {ws_error}")
 
@@ -3154,37 +3137,8 @@ class ClaudeWebUI:
                 except Exception as tc_error:
                     logger.error(f"Failed to update ToolCall for permission response: {tc_error}")
 
-                # Broadcast legacy permission response for backward compatibility
-                try:
-                    websocket_data = {
-                        "type": "permission_response",
-                        "content": permission_response_msg.content,
-                        "session_id": session_id,
-                        "timestamp": decision_time,
-                        "request_id": request_id,
-                        "decision": decision,
-                        "reasoning": reasoning,
-                        "tool_name": tool_name,
-                        "response_time_ms": int((decision_time - request_time) * 1000),
-                    }
-                    if clarification_msg:
-                        websocket_data["clarification_message"] = clarification_msg
-                        websocket_data["interrupt"] = False
-                    if applied_update_objects:
-                        websocket_data["applied_updates"] = [u.to_dict() for u in applied_update_objects]
-                    if updated_input_data:
-                        websocket_data["updated_input"] = updated_input_data
-
-                    websocket_message = {
-                        "type": "message",
-                        "session_id": session_id,
-                        "data": websocket_data,
-                        "timestamp": datetime.now(UTC).isoformat()
-                    }
-                    await self.websocket_manager.send_message(session_id, websocket_message)
-                    logger.info(f"Broadcasted permission response to WebSocket for session {session_id}")
-                except Exception as ws_error:
-                    logger.error(f"Failed to broadcast permission response to WebSocket: {ws_error}")
+                # Issue #491: Legacy permission_response broadcast removed.
+                # Only unified tool_call messages are emitted for permission lifecycle.
 
             except Exception as e:
                 logger.error(f"Failed to store permission response message: {e}")
