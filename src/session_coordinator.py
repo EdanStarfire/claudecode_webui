@@ -1450,7 +1450,12 @@ class SessionCoordinator:
         limit: int | None = None,
         offset: int = 0
     ) -> dict[str, Any]:
-        """Get messages from a session with pagination metadata"""
+        """Get messages from a session with pagination metadata.
+
+        Issue #491: Generates interleaved tool_call messages alongside regular messages.
+        The frontend processes all tool_call messages through handleToolCall() regardless
+        of whether they arrived via WebSocket or REST history endpoint.
+        """
         try:
             storage = self._storage_managers.get(session_id)
             if not storage:
@@ -1467,19 +1472,22 @@ class SessionCoordinator:
             raw_messages = await storage.read_messages(limit=limit, offset=offset)
             total_count = await storage.get_message_count()
 
-            # Convert stored messages to WebSocket format (skip re-processing if already processed)
+            # Convert stored messages to WebSocket format and generate tool_call messages
             parsed_messages = []
+
+            # Issue #491: Track tool lifecycle state for generating tool_call messages
+            # Maps tool_use_id -> ToolCall being reconstructed from history
+            active_history_tools: dict[str, ToolCall] = {}
+
             for raw_message in raw_messages:
                 try:
+                    websocket_data = None
+
                     # Issue #310: Handle new StoredMessage format with _type discriminator
                     if raw_message.get("_type"):
                         websocket_data = self._convert_stored_message_to_websocket(raw_message)
-                        if websocket_data:
-                            parsed_messages.append(websocket_data)
-                            continue
-
                     # Check if message is already fully processed (has metadata)
-                    if isinstance(raw_message.get("metadata"), dict) and raw_message.get("type") and raw_message.get("content") is not None:
+                    elif isinstance(raw_message.get("metadata"), dict) and raw_message.get("type") and raw_message.get("content") is not None:
                         # Message is already processed, prepare for WebSocket
                         metadata = raw_message["metadata"].copy()
 
@@ -1493,28 +1501,202 @@ class SessionCoordinator:
                         # Maintain backward compatibility with subtype at root level
                         if metadata.get('subtype'):
                             websocket_data["subtype"] = metadata['subtype']
-
-                        parsed_messages.append(websocket_data)
                     else:
                         # Message needs processing - run through MessageProcessor
                         processed_message = self.message_processor.process_message(raw_message, source="storage")
                         websocket_data = self.message_processor.prepare_for_websocket(processed_message)
-                        parsed_messages.append(websocket_data)
+
+                    if not websocket_data:
+                        continue
+
+                    # Add the regular message to the response
+                    parsed_messages.append(websocket_data)
+
+                    # Issue #491: Generate interleaved tool_call messages from message metadata
+                    msg_type = websocket_data.get("type", "")
+                    metadata = websocket_data.get("metadata", {})
+                    msg_timestamp = websocket_data.get("timestamp")
+
+                    # AssistantMessage with tool_uses → create pending ToolCall messages
+                    if metadata.get("has_tool_uses") and metadata.get("tool_uses"):
+                        for tool_use in metadata["tool_uses"]:
+                            tool_use_id = tool_use.get("id")
+                            if not tool_use_id:
+                                continue
+                            tool_call = ToolCall(
+                                tool_use_id=tool_use_id,
+                                session_id=session_id,
+                                name=tool_use.get("name", ""),
+                                input=tool_use.get("input", {}),
+                                status=ToolState.PENDING,
+                                created_at=msg_timestamp if isinstance(msg_timestamp, (int, float)) else 0.0,
+                                display=ToolDisplayInfo(
+                                    state=ToolState.PENDING,
+                                    visible=True,
+                                    collapsed=False,
+                                    style="default",
+                                ),
+                            )
+                            active_history_tools[tool_use_id] = tool_call
+                            tc_data = tool_call.to_dict()
+                            tc_data["type"] = "tool_call"
+                            parsed_messages.append(tc_data)
+
+                    # PermissionRequestMessage → update matching ToolCall to awaiting_permission
+                    if msg_type == "permission_request" or metadata.get("has_permission_requests"):
+                        perm_tool_name = metadata.get("tool_name", "")
+                        perm_request_id = metadata.get("request_id", "")
+                        perm_suggestions = metadata.get("suggestions", [])
+
+                        # Find matching tool by name+input signature
+                        matched_tool = None
+                        for tc in active_history_tools.values():
+                            if tc.name == perm_tool_name and tc.status == ToolState.PENDING:
+                                matched_tool = tc
+                                break
+                        # Fallback: match by tool name alone if unique pending
+                        if not matched_tool:
+                            candidates = [
+                                tc for tc in active_history_tools.values()
+                                if tc.name == perm_tool_name and tc.status in (
+                                    ToolState.PENDING, ToolState.AWAITING_PERMISSION
+                                )
+                            ]
+                            if len(candidates) == 1:
+                                matched_tool = candidates[0]
+
+                        if matched_tool:
+                            matched_tool.status = ToolState.AWAITING_PERMISSION
+                            matched_tool.requires_permission = True
+                            matched_tool.permission = PermissionInfo(
+                                message=websocket_data.get("content", ""),
+                                suggestions=perm_suggestions,
+                            )
+                            if matched_tool.display:
+                                matched_tool.display.state = ToolState.AWAITING_PERMISSION
+                                matched_tool.display.style = "warning"
+                            tc_data = matched_tool.to_dict()
+                            tc_data["type"] = "tool_call"
+                            tc_data["request_id"] = perm_request_id
+                            parsed_messages.append(tc_data)
+
+                    # PermissionResponseMessage → update matching ToolCall with decision
+                    if msg_type == "permission_response":
+                        perm_decision = metadata.get("decision", "")
+                        perm_request_id = metadata.get("request_id", "")
+                        perm_tool_name = metadata.get("tool_name", "")
+                        updated_input = metadata.get("updated_input")
+                        applied_updates = metadata.get("applied_updates", [])
+
+                        # Find matching tool awaiting permission
+                        matched_tool = None
+                        for tc in active_history_tools.values():
+                            if tc.name == perm_tool_name and tc.status == ToolState.AWAITING_PERMISSION:
+                                matched_tool = tc
+                                break
+
+                        if matched_tool:
+                            granted = perm_decision == "allow"
+                            matched_tool.permission_granted = granted
+                            if granted:
+                                matched_tool.status = ToolState.RUNNING
+                                if matched_tool.display:
+                                    matched_tool.display.state = ToolState.RUNNING
+                                    matched_tool.display.style = "default"
+                            else:
+                                matched_tool.status = ToolState.DENIED
+                                if matched_tool.display:
+                                    matched_tool.display.state = ToolState.DENIED
+                                    matched_tool.display.style = "error"
+
+                            tc_data = matched_tool.to_dict()
+                            tc_data["type"] = "tool_call"
+                            tc_data["request_id"] = perm_request_id
+                            if updated_input:
+                                tc_data["updated_input"] = updated_input
+                            if applied_updates:
+                                tc_data["applied_updates"] = applied_updates
+                            parsed_messages.append(tc_data)
+
+                            # Remove denied tools from tracking
+                            if not granted:
+                                active_history_tools.pop(matched_tool.tool_use_id, None)
+
+                    # UserMessage with tool_results → update matching ToolCall to completed/failed
+                    if metadata.get("has_tool_results") and metadata.get("tool_results"):
+                        for tool_result in metadata["tool_results"]:
+                            tool_use_id = tool_result.get("tool_use_id")
+                            if not tool_use_id:
+                                continue
+                            matched_tool = active_history_tools.pop(tool_use_id, None)
+                            if matched_tool:
+                                is_error = tool_result.get("is_error", False)
+                                result_content = tool_result.get("content", "")
+                                if is_error:
+                                    matched_tool.status = ToolState.FAILED
+                                    matched_tool.error = str(result_content) if result_content else "Tool execution failed"
+                                    if matched_tool.display:
+                                        matched_tool.display.state = ToolState.FAILED
+                                        matched_tool.display.style = "error"
+                                else:
+                                    matched_tool.status = ToolState.COMPLETED
+                                    matched_tool.result = result_content
+                                    if matched_tool.display:
+                                        matched_tool.display.state = ToolState.COMPLETED
+                                        matched_tool.display.style = "success"
+                                tc_data = matched_tool.to_dict()
+                                tc_data["type"] = "tool_call"
+                                parsed_messages.append(tc_data)
+
+                    # SystemMessage client_launched or interrupt → mark unresolved tools as interrupted
+                    if msg_type == "system":
+                        subtype = metadata.get("subtype", "")
+                        if subtype in ("client_launched", "interrupt"):
+                            for tool_use_id in list(active_history_tools.keys()):
+                                tc = active_history_tools.pop(tool_use_id)
+                                tc.status = ToolState.INTERRUPTED
+                                if tc.display:
+                                    tc.display.state = ToolState.INTERRUPTED
+                                    tc.display.style = "orphaned"
+                                tc_data = tc.to_dict()
+                                tc_data["type"] = "tool_call"
+                                parsed_messages.append(tc_data)
+
                 except Exception as e:
                     logger.warning(f"Failed to prepare historical message for WebSocket: {e}")
-                    # Fallback to basic format
-                    fallback_data = {
-                        "type": processed_message.type.value,
-                        "content": processed_message.content,
-                        "timestamp": processed_message.timestamp
-                    }
-                    if processed_message.session_id:
-                        fallback_data["session_id"] = processed_message.session_id
-                    parsed_messages.append(fallback_data)
+                    # Fallback to basic format if we have enough info
+                    try:
+                        msg_type = raw_message.get("type", raw_message.get("_type", "system"))
+                        fallback_data = {
+                            "type": msg_type,
+                            "content": raw_message.get("content", ""),
+                            "timestamp": raw_message.get("timestamp")
+                        }
+                        if raw_message.get("session_id"):
+                            fallback_data["session_id"] = raw_message["session_id"]
+                        parsed_messages.append(fallback_data)
+                    except Exception:
+                        pass
+
+            # Issue #491: Mark any remaining unresolved tools as interrupted
+            # (session may have been terminated without explicit interrupt/restart message)
+            session_info = await self.session_manager.get_session_info(session_id)
+            if session_info and session_info.state not in (
+                SessionState.ACTIVE, SessionState.PAUSED, SessionState.STARTING
+            ):
+                for tool_use_id in list(active_history_tools.keys()):
+                    tc = active_history_tools.pop(tool_use_id)
+                    tc.status = ToolState.INTERRUPTED
+                    if tc.display:
+                        tc.display.state = ToolState.INTERRUPTED
+                        tc.display.style = "orphaned"
+                    tc_data = tc.to_dict()
+                    tc_data["type"] = "tool_call"
+                    parsed_messages.append(tc_data)
 
             # Calculate pagination metadata
             actual_limit = limit or 50
-            has_more = (offset + len(parsed_messages)) < total_count
+            has_more = (offset + len(raw_messages)) < total_count
 
             return {
                 "messages": parsed_messages,

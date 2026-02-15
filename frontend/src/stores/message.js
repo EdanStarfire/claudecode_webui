@@ -76,92 +76,26 @@ export const useMessageStore = defineStore('message', () => {
 
       console.log(`Loaded ${messages.length} of ${totalCount} messages for session ${sessionId}`)
 
-      // Store messages
-      messagesBySession.value.set(sessionId, messages)
+      // Issue #491: Process messages through unified tool_call path.
+      // Backend now generates interleaved tool_call messages in history,
+      // so we route them through handleToolCall() — same as real-time WebSocket.
+      const regularMessages = []
 
-      // Track last received timestamp from loaded messages
-      if (messages.length > 0) {
-        const lastMessage = messages[messages.length - 1]
-        if (lastMessage.timestamp) {
-          lastReceivedTimestamp.value.set(sessionId, lastMessage.timestamp)
-          console.log(`Tracked last received timestamp for session ${sessionId}: ${lastMessage.timestamp}`)
-        }
-      }
-
-      // Track open tool uses for orphaned tool detection
-      const openTools = new Set()
-
-      // Process messages to extract tool uses, results, permission requests, and init data
       messages.forEach(message => {
-        // Track tool uses (for orphaned detection)
-        if (message.type === 'assistant' && message.metadata?.tool_uses) {
-          message.metadata.tool_uses.forEach(toolUse => {
-            openTools.add(toolUse.id)
-          })
+        // Route tool_call messages through unified handler (same path as real-time)
+        if (message.type === 'tool_call') {
+          handleToolCall(sessionId, message)
+          return // Don't add tool_call to message display list
         }
 
-        // Remove tool uses on results (for orphaned detection)
-        if (message.type === 'user' && message.metadata?.tool_results) {
-          message.metadata.tool_results.forEach(result => {
-            openTools.delete(result.tool_use_id)
-            // Also clear from orphaned if it was previously marked
-            const orphaned = orphanedToolUses.value.get(sessionId)
-            if (orphaned) {
-              orphaned.delete(result.tool_use_id)
-            }
-          })
-        }
-
-        // Detect session restart - mark open tools as orphaned
+        // Track launch timestamp for uptime calculation
         if (message.type === 'system' && message.metadata?.subtype === 'client_launched') {
-          openTools.forEach(id => {
-            markToolUseOrphaned(sessionId, id, 'Session was restarted')
-          })
-          openTools.clear()
-          // Track launch timestamp for uptime calculation
           if (message.timestamp) {
             const ts = typeof message.timestamp === 'number'
               ? message.timestamp
               : new Date(message.timestamp).getTime() / 1000
             launchTimestampBySession.value.set(sessionId, ts)
           }
-        }
-
-        // Detect session interrupt - mark open tools as orphaned
-        if (message.type === 'system' && message.metadata?.subtype === 'interrupt') {
-          openTools.forEach(id => {
-            markToolUseOrphaned(sessionId, id, 'Session was interrupted')
-          })
-          openTools.clear()
-        }
-        // Extract tool uses from assistant messages
-        if (message.metadata?.has_tool_uses && message.metadata.tool_uses) {
-          message.metadata.tool_uses.forEach(toolUse => {
-            handleToolUse(sessionId, toolUse, message.timestamp)
-          })
-        }
-
-        // Extract tool results from user messages
-        if (message.metadata?.has_tool_results && message.metadata.tool_results) {
-          message.metadata.tool_results.forEach(toolResult => {
-            handleToolResult(sessionId, toolResult)
-          })
-        }
-
-        // Extract permission requests (for restoring permission prompts on page refresh)
-        if (message.type === 'permission_request' || message.metadata?.has_permission_requests) {
-          handlePermissionRequest(sessionId, message)
-        }
-
-        // Extract permission responses (for restoring AskUserQuestion answers on page refresh)
-        if (message.type === 'permission_response') {
-          handlePermissionResponse(sessionId, {
-            request_id: message.metadata?.request_id,
-            decision: message.metadata?.decision,
-            updated_input: message.metadata?.updated_input,
-            reasoning: message.metadata?.reasoning,
-            applied_updates: message.metadata?.applied_updates
-          })
         }
 
         // Capture init data for session info modal
@@ -171,20 +105,20 @@ export const useMessageStore = defineStore('message', () => {
           const sessionStore = useSessionStore()
           sessionStore.storeInitData(sessionId, message.metadata.init_data)
         }
+
+        regularMessages.push(message)
       })
 
-      // Check session state for any remaining open tools
-      const sessionStore = useSessionStore()
-      const session = sessionStore.sessions.get(sessionId)
-      if (session && !['active', 'paused', 'starting'].includes(session.state)) {
-        openTools.forEach(id => {
-          markToolUseOrphaned(sessionId, id, 'Session was terminated')
-        })
-        openTools.clear()
-      }
+      // Store only regular messages (tool_call messages are handled separately)
+      messagesBySession.value.set(sessionId, regularMessages)
 
-      // Store active tools for real-time tracking
-      activeToolUses.value.set(sessionId, openTools)
+      // Track last received timestamp from loaded messages (use last regular message)
+      if (regularMessages.length > 0) {
+        const lastMessage = regularMessages[regularMessages.length - 1]
+        if (lastMessage.timestamp) {
+          lastReceivedTimestamp.value.set(sessionId, lastMessage.timestamp)
+        }
+      }
 
       // Trigger reactivity
       messagesBySession.value = new Map(messagesBySession.value)
@@ -192,17 +126,17 @@ export const useMessageStore = defineStore('message', () => {
       // Reconstruct task state from message history
       try {
         const taskStore = useTaskStore()
-        taskStore.reconstructFromMessages(sessionId, messages)
+        taskStore.reconstructFromMessages(sessionId, regularMessages)
       } catch (e) {
         console.warn('Failed to reconstruct task state:', e)
       }
 
       // Warn if there are more messages we didn't load
       if (hasMore) {
-        console.warn(`Warning: Only loaded ${messages.length} of ${totalCount} messages. Some messages may be missing.`)
+        console.warn(`Warning: Only loaded ${regularMessages.length} of ${totalCount} messages. Some messages may be missing.`)
       }
 
-      return { messages, totalCount, hasMore }
+      return { messages: regularMessages, totalCount, hasMore }
     } catch (error) {
       console.error('Failed to load messages:', error)
       throw error
@@ -329,38 +263,6 @@ export const useMessageStore = defineStore('message', () => {
         toolCallsBySession.value = new Map(toolCallsBySession.value)
       }
     }
-  }
-
-  /**
-   * Handle tool use message (create tool call)
-   * @param {string} sessionId - Session ID
-   * @param {Object} toolUseBlock - Tool use block from SDK
-   * @param {string|null} messageTimestamp - Backend message timestamp (for chronological ordering)
-   */
-  function handleToolUse(sessionId, toolUseBlock, messageTimestamp = null) {
-    const signature = createToolSignature(toolUseBlock.name, toolUseBlock.input)
-    if (!toolSignatureToId.value.has(sessionId)) {
-      toolSignatureToId.value.set(sessionId, new Map())
-    }
-    toolSignatureToId.value.get(sessionId).set(signature, toolUseBlock.id)
-
-    const toolCall = {
-      id: toolUseBlock.id,
-      name: toolUseBlock.name,
-      input: toolUseBlock.input,
-      signature: signature,
-      status: 'pending',
-      permissionRequestId: null,
-      permissionDecision: null,
-      result: null,
-      explanation: null,
-      timestamp: messageTimestamp || new Date().toISOString(),
-      isExpanded: true
-    }
-
-    addToolCall(sessionId, toolCall)
-    console.log(`Created tool call ${toolCall.id} for ${toolCall.name}`)
-    return toolCall
   }
 
   /**
@@ -600,46 +502,6 @@ export const useMessageStore = defineStore('message', () => {
         })
       } catch (e) {
         console.warn('Failed to update task store:', e)
-      }
-    }
-  }
-
-  /**
-   * Handle tool result (completion)
-   */
-  function handleToolResult(sessionId, toolResultBlock) {
-    const toolUseId = toolResultBlock.tool_use_id
-
-    updateToolCall(sessionId, toolUseId, {
-      status: toolResultBlock.is_error ? 'error' : 'completed',
-      backendStatus: toolResultBlock.is_error ? 'failed' : 'completed',
-      result: {
-        error: toolResultBlock.is_error,
-        content: toolResultBlock.content
-      },
-      isExpanded: false // Auto-collapse on completion
-    })
-
-    console.log(`Tool ${toolUseId} ${toolResultBlock.is_error ? 'failed' : 'completed'}`)
-
-    // Note: ExitPlanMode mode reset logic is handled by backend to prevent race conditions
-    // with multiple connected frontends. Backend tracks setMode suggestions and makes the
-    // decision to reset or not.
-
-    // Handle task tool results - update task store
-    const toolCalls = toolCallsBySession.value.get(sessionId)
-    if (toolCalls) {
-      const toolCall = toolCalls.find(tc => tc.id === toolUseId)
-      if (toolCall && ['TaskCreate', 'TaskUpdate', 'TaskList', 'TaskGet'].includes(toolCall.name)) {
-        try {
-          const taskStore = useTaskStore()
-          taskStore.handleTaskToolResult(sessionId, toolCall.name, toolCall.input, {
-            error: toolResultBlock.is_error,
-            content: toolResultBlock.content
-          })
-        } catch (e) {
-          console.warn('Failed to update task store:', e)
-        }
       }
     }
   }
@@ -913,11 +775,28 @@ export const useMessageStore = defineStore('message', () => {
 
       console.log(`After deduplication: ${uniqueNewMessages.length} unique new messages`)
 
-      // Only merge and sort if there are new messages
-      // This prevents re-sorting existing messages on every reconnection
-      if (uniqueNewMessages.length > 0) {
+      // Issue #491: Separate tool_call messages from regular messages.
+      // Route tool_call through handleToolCall(), merge regular messages into history.
+      const newToolCallMessages = []
+      const newRegularMessages = []
+
+      uniqueNewMessages.forEach(message => {
+        if (message.type === 'tool_call') {
+          newToolCallMessages.push(message)
+        } else {
+          newRegularMessages.push(message)
+        }
+      })
+
+      // Route tool_call messages through unified handler
+      newToolCallMessages.forEach(message => {
+        handleToolCall(sessionId, message)
+      })
+
+      // Only merge and sort regular messages if there are any
+      if (newRegularMessages.length > 0) {
         // Sort only the new messages by timestamp (using normalized timestamps)
-        const sortedNewMessages = uniqueNewMessages.sort((a, b) => {
+        const sortedNewMessages = newRegularMessages.sort((a, b) => {
           const timeA = normalizeTimestamp(a.timestamp)
           const timeB = normalizeTimestamp(b.timestamp)
           return timeA - timeB
@@ -925,30 +804,16 @@ export const useMessageStore = defineStore('message', () => {
 
         // CRITICAL: Get the ACTUAL last message from existingMessages (which may have been
         // updated by real-time WebSocket messages during disconnect), not the cached timestamp
-        // Re-fetch existingMessages to ensure we have the latest state
         const currentMessages = messagesBySession.value.get(sessionId) || []
         const lastExistingTimestamp = currentMessages.length > 0
           ? normalizeTimestamp(currentMessages[currentMessages.length - 1].timestamp)
           : 0
         const firstNewTimestamp = normalizeTimestamp(sortedNewMessages[0].timestamp)
-        const lastNewTimestamp = normalizeTimestamp(sortedNewMessages[sortedNewMessages.length - 1].timestamp)
-
-        console.log(`Timestamp comparison:`, {
-          existingCount: currentMessages.length,
-          lastExisting: lastExistingTimestamp,
-          lastExistingDate: currentMessages.length > 0 ? currentMessages[currentMessages.length - 1].timestamp : 'none',
-          firstNew: firstNewTimestamp,
-          firstNewDate: sortedNewMessages[0].timestamp,
-          lastNew: lastNewTimestamp,
-          lastNewDate: sortedNewMessages[sortedNewMessages.length - 1].timestamp,
-          shouldAppend: firstNewTimestamp > lastExistingTimestamp
-        })
 
         if (firstNewTimestamp > lastExistingTimestamp) {
           // Simple append - new messages are all newer than existing ones
           const mergedMessages = [...currentMessages, ...sortedNewMessages]
           messagesBySession.value.set(sessionId, mergedMessages)
-          console.log(`✅ Appended ${sortedNewMessages.length} new messages (no full sort needed)`)
         } else {
           // Need to merge and sort - some new messages are older than existing ones
           const mergedMessages = [...currentMessages, ...sortedNewMessages].sort((a, b) => {
@@ -957,47 +822,13 @@ export const useMessageStore = defineStore('message', () => {
             return timeA - timeB
           })
           messagesBySession.value.set(sessionId, mergedMessages)
-          console.log(`⚠️ Merged and sorted ${sortedNewMessages.length} new messages (interleaved with existing)`)
         }
-      } else {
-        // No new messages - don't touch existing array to avoid triggering re-render
-        console.log(`No new messages to merge, keeping existing ${existingMessages.length} messages unchanged`)
       }
 
-      // Process new messages for tool uses, results, etc.
-      uniqueNewMessages.forEach(message => {
-        // Track tool use lifecycle
+      // Process new regular messages for non-tool concerns
+      newRegularMessages.forEach(message => {
+        // Track tool use lifecycle for real-time orphan detection
         handleRealtimeToolTracking(sessionId, message)
-
-        // Extract tool uses
-        if (message.metadata?.has_tool_uses && message.metadata.tool_uses) {
-          message.metadata.tool_uses.forEach(toolUse => {
-            handleToolUse(sessionId, toolUse, message.timestamp)
-          })
-        }
-
-        // Extract tool results
-        if (message.metadata?.has_tool_results && message.metadata.tool_results) {
-          message.metadata.tool_results.forEach(toolResult => {
-            handleToolResult(sessionId, toolResult)
-          })
-        }
-
-        // Extract permission requests
-        if (message.type === 'permission_request' || message.metadata?.has_permission_requests) {
-          handlePermissionRequest(sessionId, message)
-        }
-
-        // Extract permission responses (for restoring AskUserQuestion answers)
-        if (message.type === 'permission_response') {
-          handlePermissionResponse(sessionId, {
-            request_id: message.metadata?.request_id,
-            decision: message.metadata?.decision,
-            updated_input: message.metadata?.updated_input,
-            reasoning: message.metadata?.reasoning,
-            applied_updates: message.metadata?.applied_updates
-          })
-        }
 
         // Capture init data
         if (message.type === 'system' &&
@@ -1073,11 +904,9 @@ export const useMessageStore = defineStore('message', () => {
     addMessage,
     addToolCall,
     updateToolCall,
-    handleToolCall,  // Issue #324: unified tool call handler
-    handleToolUse,
+    handleToolCall,  // Issue #324/#491: unified tool call handler (single path for real-time and history)
     handlePermissionRequest,
     handlePermissionResponse,
-    handleToolResult,
     toggleToolExpansion,
     clearMessages,
 
