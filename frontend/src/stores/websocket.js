@@ -587,21 +587,9 @@ export const useWebSocketStore = defineStore('websocket', () => {
           break
         }
 
-        // Process tool-related messages (legacy - for backward compatibility)
-        // These are still emitted alongside tool_call for now
-        if (message.metadata?.has_tool_uses) {
-          // Extract and create tool call cards from assistant messages
-          message.metadata.tool_uses.forEach(toolUse => {
-            messageStore.handleToolUse(sessionId, toolUse, message.timestamp)
-          })
-        }
-
-        if (message.metadata?.has_tool_results) {
-          // Extract and update tool call cards from user messages
-          message.metadata.tool_results.forEach(toolResult => {
-            messageStore.handleToolResult(sessionId, toolResult)
-          })
-        }
+        // Note: Legacy has_tool_uses/has_tool_results extraction removed (Issue #490).
+        // The unified tool_call handler at line 570 handles all real-time tool lifecycle.
+        // Legacy extraction remains in loadMessages() and syncMessages() for history replay.
 
         // Capture init data for session info modal
         if (message.type === 'system' &&
