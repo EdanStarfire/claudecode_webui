@@ -22,6 +22,7 @@ export const useMessageStore = defineStore('message', () => {
   const toolCallsBySession = ref(new Map())
 
   // Tool call manager state (tracking tool lifecycle)
+  // Per-session signature map: Map<sessionId, Map<signature, toolUseId>>
   const toolSignatureToId = ref(new Map())
   const permissionToToolMap = ref(new Map())
 
@@ -338,7 +339,10 @@ export const useMessageStore = defineStore('message', () => {
    */
   function handleToolUse(sessionId, toolUseBlock, messageTimestamp = null) {
     const signature = createToolSignature(toolUseBlock.name, toolUseBlock.input)
-    toolSignatureToId.value.set(signature, toolUseBlock.id)
+    if (!toolSignatureToId.value.has(sessionId)) {
+      toolSignatureToId.value.set(sessionId, new Map())
+    }
+    toolSignatureToId.value.get(sessionId).set(signature, toolUseBlock.id)
 
     const toolCall = {
       id: toolUseBlock.id,
@@ -374,7 +378,7 @@ export const useMessageStore = defineStore('message', () => {
     console.log('Extracted data:', { toolName, inputParams, requestId, suggestions })
 
     const signature = createToolSignature(toolName, inputParams)
-    const toolUseId = toolSignatureToId.value.get(signature)
+    const toolUseId = toolSignatureToId.value.get(sessionId)?.get(signature)
 
     if (toolUseId) {
       permissionToToolMap.value.set(requestId, toolUseId)
@@ -483,6 +487,15 @@ export const useMessageStore = defineStore('message', () => {
     if (existingIndex !== -1) {
       // Update existing tool call
       const existing = toolCalls[existingIndex]
+
+      // Guard: prevent regressing a terminal status to a non-terminal status
+      const terminalStatuses = ['completed', 'error']
+      const nonTerminalStatuses = ['pending', 'executing', 'permission_required']
+      if (terminalStatuses.includes(existing.status) && nonTerminalStatuses.includes(frontendStatus)) {
+        console.warn(`Ignoring status regression for tool ${toolUseId}: ${existing.status} → ${frontendStatus}`)
+        return
+      }
+
       existing.status = frontendStatus
       existing.backendStatus = toolCall.status
 
@@ -535,7 +548,10 @@ export const useMessageStore = defineStore('message', () => {
     } else {
       // Create new tool call entry
       const signature = createToolSignature(toolCall.name, toolCall.input)
-      toolSignatureToId.value.set(signature, toolUseId)
+      if (!toolSignatureToId.value.has(sessionId)) {
+        toolSignatureToId.value.set(sessionId, new Map())
+      }
+      toolSignatureToId.value.get(sessionId).set(signature, toolUseId)
 
       const newToolCall = {
         id: toolUseId,
@@ -596,6 +612,7 @@ export const useMessageStore = defineStore('message', () => {
 
     updateToolCall(sessionId, toolUseId, {
       status: toolResultBlock.is_error ? 'error' : 'completed',
+      backendStatus: toolResultBlock.is_error ? 'failed' : 'completed',
       result: {
         error: toolResultBlock.is_error,
         content: toolResultBlock.content
@@ -822,6 +839,7 @@ export const useMessageStore = defineStore('message', () => {
   function clearMessages(sessionId) {
     messagesBySession.value.delete(sessionId)
     toolCallsBySession.value.delete(sessionId)
+    toolSignatureToId.value.delete(sessionId)
 
     // Trigger reactivity
     messagesBySession.value = new Map(messagesBySession.value)
