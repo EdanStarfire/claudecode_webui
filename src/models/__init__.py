@@ -39,6 +39,11 @@ from src.models.messages import (
     ToolDisplayInfo,
     ToolState,
 )
+from src.models.schedule_models import (
+    Schedule,
+    ScheduleExecution,
+    ScheduleStatus,
+)
 
 __all__ = [
     # Message models (Issue #310)
@@ -65,4 +70,8 @@ __all__ = [
     # Archive models (Issue #236)
     "ArchiveResult",
     "DisposalMetadata",
+    # Schedule models (Issue #495)
+    "Schedule",
+    "ScheduleExecution",
+    "ScheduleStatus",
 ]
