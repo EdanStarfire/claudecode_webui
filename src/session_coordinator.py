@@ -1323,18 +1323,24 @@ class SessionCoordinator:
             logger.error(f"Failed to restart session {session_id}: {e}")
             return False
 
-    async def reset_session(self, session_id: str, permission_callback: Callable | None = None) -> bool:
+    async def reset_session(self, session_id: str, permission_callback: Callable | None = None, _from_queue_processor: bool = False) -> bool:
         """
         Reset a session by clearing all messages and starting fresh.
 
         Keeps session settings (permission mode, tools, etc.) but clears conversation history.
         Queue: pending items preserved, in-flight items marked failed.
+
+        Args:
+            _from_queue_processor: When True, skip stopping the queue processor to avoid
+                cancelling the calling task (the processor manages its own lifecycle).
         """
         try:
             coord_logger.info(f"Resetting session {session_id}")
 
             # Issue #500: Stop queue processor and mark any in-flight item as failed
-            self.queue_processor.stop(session_id)
+            # Skip when called from the processor itself to avoid self-cancellation
+            if not _from_queue_processor:
+                self.queue_processor.stop(session_id)
 
             # Get current SDK and disconnect
             sdk = self._active_sdks.get(session_id)

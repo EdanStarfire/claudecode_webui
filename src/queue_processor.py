@@ -159,7 +159,7 @@ class QueueProcessor:
                     perm_callback = None
                     if self._coordinator._permission_callback_factory:
                         perm_callback = self._coordinator._permission_callback_factory(session_id)
-                    success = await self._coordinator.reset_session(session_id, perm_callback)
+                    success = await self._coordinator.reset_session(session_id, perm_callback, _from_queue_processor=True)
                     if not success:
                         queue_proc_logger.error(f"Failed to reset session {session_id}")
                         session_dir = await self._coordinator.session_manager.get_session_directory(session_id)
