@@ -2,13 +2,54 @@
   <div class="schedule-item" :class="schedule.status">
     <!-- Header -->
     <div class="schedule-header">
-      <span class="schedule-name">{{ schedule.name }}</span>
+      <template v-if="!editingName">
+        <span
+          class="schedule-name"
+          :class="{ editable: schedule.status !== 'cancelled' }"
+          :title="schedule.status !== 'cancelled' ? 'Click to edit name' : ''"
+          @click.stop="schedule.status !== 'cancelled' && startEditName()"
+        >{{ schedule.name }}</span>
+      </template>
+      <template v-else>
+        <input
+          ref="nameInput"
+          v-model="editNameText"
+          class="inline-edit-input name-input"
+          @keydown.enter.stop="saveName"
+          @keydown.escape.stop="cancelEditName"
+          @blur="saveName"
+        />
+      </template>
       <span class="status-badge" :class="schedule.status">{{ schedule.status }}</span>
     </div>
 
     <!-- Cron + next run -->
     <div class="schedule-meta">
-      <span class="cron-desc" :title="schedule.cron_expression">{{ cronDescription }}</span>
+      <template v-if="!editingCron">
+        <span
+          class="cron-desc"
+          :class="{ editable: schedule.status !== 'cancelled' }"
+          :title="schedule.status !== 'cancelled' ? `${schedule.cron_expression} — click to edit` : schedule.cron_expression"
+          @click.stop="schedule.status !== 'cancelled' && startEditCron()"
+        >{{ cronDescription }}</span>
+      </template>
+      <template v-else>
+        <div class="cron-edit-row">
+          <input
+            ref="cronInput"
+            v-model="editCronText"
+            class="inline-edit-input cron-input"
+            placeholder="e.g. */5 * * * *"
+            @keydown.enter.stop="saveCron"
+            @keydown.escape.stop="cancelEditCron"
+          />
+          <button class="ctrl-btn save" @click.stop="saveCron" :disabled="!isCronValid">Save</button>
+          <button class="ctrl-btn" @click.stop="cancelEditCron">Cancel</button>
+        </div>
+        <div class="cron-preview" :class="{ invalid: !isCronValid }">
+          {{ cronEditPreview }}
+        </div>
+      </template>
     </div>
     <div class="schedule-timing">
       <span v-if="schedule.next_run" class="next-run">
@@ -126,12 +167,37 @@ const editingPrompt = ref(false)
 const editPromptText = ref('')
 const saving = ref(false)
 const promptInput = ref(null)
+const editingName = ref(false)
+const editNameText = ref('')
+const nameInput = ref(null)
+const editingCron = ref(false)
+const editCronText = ref('')
+const cronInput = ref(null)
 
 const cronDescription = computed(() => {
   try {
     return cronstrue.toString(props.schedule.cron_expression)
   } catch {
     return props.schedule.cron_expression
+  }
+})
+
+const cronEditPreview = computed(() => {
+  if (!editCronText.value.trim()) return 'Enter a cron expression'
+  try {
+    return cronstrue.toString(editCronText.value.trim())
+  } catch {
+    return 'Invalid cron expression'
+  }
+})
+
+const isCronValid = computed(() => {
+  if (!editCronText.value.trim()) return false
+  try {
+    cronstrue.toString(editCronText.value.trim())
+    return true
+  } catch {
+    return false
   }
 })
 
@@ -195,6 +261,76 @@ async function remove() {
   } catch (e) {
     console.error('Failed to delete schedule:', e)
   }
+}
+
+function startEditName() {
+  editNameText.value = props.schedule.name
+  editingName.value = true
+  nextTick(() => {
+    if (nameInput.value) {
+      nameInput.value.focus()
+      nameInput.value.select()
+    }
+  })
+}
+
+function cancelEditName() {
+  editingName.value = false
+  editNameText.value = ''
+}
+
+async function saveName() {
+  const trimmed = editNameText.value.trim()
+  if (!trimmed || trimmed === props.schedule.name) {
+    cancelEditName()
+    return
+  }
+  try {
+    await scheduleStore.updateSchedule(
+      props.legionId,
+      props.schedule.schedule_id,
+      { name: trimmed }
+    )
+  } catch (e) {
+    console.error('Failed to update name:', e)
+  }
+  editingName.value = false
+  editNameText.value = ''
+}
+
+function startEditCron() {
+  editCronText.value = props.schedule.cron_expression
+  editingCron.value = true
+  nextTick(() => {
+    if (cronInput.value) {
+      cronInput.value.focus()
+      cronInput.value.select()
+    }
+  })
+}
+
+function cancelEditCron() {
+  editingCron.value = false
+  editCronText.value = ''
+}
+
+async function saveCron() {
+  const trimmed = editCronText.value.trim()
+  if (!trimmed || trimmed === props.schedule.cron_expression || !isCronValid.value) {
+    cancelEditCron()
+    return
+  }
+  try {
+    await scheduleStore.updateSchedule(
+      props.legionId,
+      props.schedule.schedule_id,
+      { cron_expression: trimmed }
+    )
+  } catch (e) {
+    console.error('Failed to update cron expression:', e)
+  }
+  editingCron.value = false
+  editCronText.value = ''
 }
 
 function startEditPrompt() {
@@ -275,6 +411,63 @@ async function toggleHistory() {
   font-weight: 600;
   color: #1e293b;
   font-size: 12px;
+}
+
+.schedule-name.editable,
+.cron-desc.editable {
+  cursor: pointer;
+  border-bottom: 1px dashed transparent;
+}
+
+.schedule-name.editable:hover,
+.cron-desc.editable:hover {
+  border-bottom-color: #94a3b8;
+}
+
+.inline-edit-input {
+  border: 1px solid #6366f1;
+  border-radius: 4px;
+  font-size: inherit;
+  font-family: inherit;
+  color: #334155;
+  padding: 1px 4px;
+  outline: none;
+  box-sizing: border-box;
+}
+
+.inline-edit-input:focus {
+  border-color: #4f46e5;
+  box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.15);
+}
+
+.name-input {
+  font-weight: 600;
+  font-size: 12px;
+  flex: 1;
+  min-width: 0;
+}
+
+.cron-input {
+  font-size: 11px;
+  flex: 1;
+  min-width: 0;
+  font-family: monospace;
+}
+
+.cron-edit-row {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.cron-preview {
+  font-size: 10px;
+  color: #16a34a;
+  margin-top: 2px;
+}
+
+.cron-preview.invalid {
+  color: #dc2626;
 }
 
 .status-badge {
