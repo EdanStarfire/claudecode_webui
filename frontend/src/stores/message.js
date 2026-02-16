@@ -702,6 +702,7 @@ export const useMessageStore = defineStore('message', () => {
     messagesBySession.value.delete(sessionId)
     toolCallsBySession.value.delete(sessionId)
     toolSignatureToId.value.delete(sessionId)
+    lastReceivedTimestamp.value.delete(sessionId)
 
     // Trigger reactivity
     messagesBySession.value = new Map(messagesBySession.value)

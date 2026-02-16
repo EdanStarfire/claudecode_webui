@@ -30,6 +30,8 @@ from .models.messages import (
     legacy_to_stored,
 )
 from .project_manager import ProjectInfo, ProjectManager
+from .queue_manager import QueueManager
+from .queue_processor import QueueProcessor
 from .session_manager import SessionManager, SessionState
 from .timestamp_utils import get_unix_timestamp
 
@@ -71,6 +73,7 @@ class SessionCoordinator:
         self._message_callbacks: dict[str, list[Callable]] = {}
         self._error_callbacks: dict[str, list[Callable]] = {}
         self._state_change_callbacks: list[Callable] = []
+        self._session_reset_callbacks: list[Callable] = []
 
         # Track recent tool uses for ExitPlanMode detection
         self._recent_tool_uses: dict[str, dict[str, str]] = {}  # session_id -> {tool_use_id: tool_name}
@@ -111,6 +114,10 @@ class SessionCoordinator:
             template_manager=self.template_manager
         )
 
+        # Issue #500: Message queue system
+        self.queue_manager = QueueManager()
+        self.queue_processor = QueueProcessor(self)
+
         # Issue #404: Resource MCP tools for displaying resources in task panel
         # Callback for broadcasting resource_registered events will be set by web_server
         from src.mcp.resource_mcp_tools import ResourceMCPTools
@@ -143,6 +150,9 @@ class SessionCoordinator:
 
             # Initialize storage managers for all existing sessions
             await self._initialize_existing_session_storage()
+
+            # Issue #500: Load message queues for all existing sessions
+            await self._initialize_queues()
 
             # Validate and cleanup orphaned project/session references (issue #63)
             await self._validate_and_cleanup_projects()
@@ -177,6 +187,120 @@ class SessionCoordinator:
         except Exception as e:
             logger.error(f"Failed to initialize storage managers for existing sessions: {e}")
             # Don't raise - this shouldn't block coordinator initialization
+
+    async def _initialize_queues(self):
+        """Load message queues for all existing sessions on startup."""
+        try:
+            sessions = await self.session_manager.list_sessions()
+            for session in sessions:
+                session_id = session.session_id
+                session_dir = await self.session_manager.get_session_directory(session_id)
+                if session_dir:
+                    await self.queue_manager.load_queue(session_id, session_dir)
+                    # Auto-start processor if there are pending items
+                    if self.queue_manager.get_pending_count(session_id) > 0:
+                        queue_paused = getattr(session, 'queue_paused', False)
+                        if not queue_paused:
+                            self.queue_processor.ensure_running(session_id)
+        except Exception as e:
+            logger.error(f"Failed to initialize queues: {e}")
+
+    # =========================================================================
+    # Message Queue Operations (Issue #500)
+    # =========================================================================
+
+    async def enqueue_message(
+        self,
+        session_id: str,
+        content: str,
+        reset_session: bool | None = None,
+        metadata: dict | None = None,
+    ) -> dict:
+        """Enqueue a message for a session. Returns the queue item dict."""
+        session_info = await self.session_manager.get_session_info(session_id)
+        if not session_info:
+            raise ValueError(f"Session {session_id} not found")
+
+        session_dir = await self.session_manager.get_session_directory(session_id)
+        if not session_dir:
+            raise ValueError(f"Session directory not found for {session_id}")
+
+        queue_config = getattr(session_info, 'queue_config', None) or {}
+        max_queue_size = queue_config.get("max_queue_size", 100)
+
+        # Use session default if not specified
+        if reset_session is None:
+            reset_session = queue_config.get("default_reset_session", True)
+
+        item = await self.queue_manager.enqueue(
+            session_id=session_id,
+            session_dir=session_dir,
+            content=content,
+            reset_session=reset_session,
+            metadata=metadata,
+            max_queue_size=max_queue_size,
+        )
+
+        # Start processor if not paused
+        queue_paused = getattr(session_info, 'queue_paused', False)
+        if not queue_paused:
+            self.queue_processor.ensure_running(session_id)
+
+        return item.to_dict()
+
+    async def cancel_queue_item(self, session_id: str, queue_id: str) -> dict | None:
+        """Cancel a pending queue item. Returns the item dict or None."""
+        session_dir = await self.session_manager.get_session_directory(session_id)
+        if not session_dir:
+            return None
+        item = await self.queue_manager.cancel(session_id, session_dir, queue_id)
+        return item.to_dict() if item else None
+
+    async def requeue_item(self, session_id: str, queue_id: str) -> dict | None:
+        """Re-queue a sent/failed item at the front. Returns the new item dict."""
+        session_dir = await self.session_manager.get_session_directory(session_id)
+        if not session_dir:
+            return None
+        item = await self.queue_manager.requeue(session_id, session_dir, queue_id)
+        if item:
+            session_info = await self.session_manager.get_session_info(session_id)
+            queue_paused = getattr(session_info, 'queue_paused', False) if session_info else False
+            if not queue_paused:
+                self.queue_processor.ensure_running(session_id)
+        return item.to_dict() if item else None
+
+    async def clear_queue(self, session_id: str) -> int:
+        """Clear all pending queue items. Returns count of cancelled items."""
+        session_dir = await self.session_manager.get_session_directory(session_id)
+        if not session_dir:
+            return 0
+        return await self.queue_manager.clear_pending(session_id, session_dir)
+
+    async def get_queue(self, session_id: str) -> list[dict]:
+        """Get all queue items for a session."""
+        return [item.to_dict() for item in self.queue_manager.get_queue(session_id)]
+
+    async def pause_queue(self, session_id: str, paused: bool) -> bool:
+        """Pause or resume the queue for a session."""
+        success = await self.session_manager.update_session(
+            session_id, queue_paused=paused
+        )
+        if success and not paused:
+            # Resume: start processor if there are pending items
+            if self.queue_manager.get_pending_count(session_id) > 0:
+                self.queue_processor.ensure_running(session_id)
+        return success
+
+    async def update_queue_config(self, session_id: str, config: dict) -> bool:
+        """Update queue configuration for a session."""
+        session_info = await self.session_manager.get_session_info(session_id)
+        if not session_info:
+            return False
+        current = getattr(session_info, 'queue_config', None) or {}
+        current.update(config)
+        return await self.session_manager.update_session(
+            session_id, queue_config=current
+        )
 
     async def create_session(
         self,
@@ -754,6 +878,9 @@ class SessionCoordinator:
     async def terminate_session(self, session_id: str) -> bool:
         """Terminate a session and cleanup resources"""
         try:
+            # Issue #500: Stop queue processor before termination
+            self.queue_processor.stop(session_id)
+
             # Reset processing state before termination
             await self.session_manager.update_processing_state(session_id, False)
 
@@ -1202,14 +1329,24 @@ class SessionCoordinator:
             logger.error(f"Failed to restart session {session_id}: {e}")
             return False
 
-    async def reset_session(self, session_id: str, permission_callback: Callable | None = None) -> bool:
+    async def reset_session(self, session_id: str, permission_callback: Callable | None = None, _from_queue_processor: bool = False) -> bool:
         """
         Reset a session by clearing all messages and starting fresh.
 
         Keeps session settings (permission mode, tools, etc.) but clears conversation history.
+        Queue: pending items preserved, in-flight items marked failed.
+
+        Args:
+            _from_queue_processor: When True, skip stopping the queue processor to avoid
+                cancelling the calling task (the processor manages its own lifecycle).
         """
         try:
             coord_logger.info(f"Resetting session {session_id}")
+
+            # Issue #500: Stop queue processor and mark any in-flight item as failed
+            # Skip when called from the processor itself to avoid self-cancellation
+            if not _from_queue_processor:
+                self.queue_processor.stop(session_id)
 
             # Get current SDK and disconnect
             sdk = self._active_sdks.get(session_id)
@@ -1242,6 +1379,9 @@ class SessionCoordinator:
 
             # Issue #310: Reset DisplayProjection state (clears tool tracking)
             self._reset_display_projection(session_id)
+
+            # Issue #500: Notify frontend to clear messages for this session
+            await self._notify_session_reset(session_id)
 
             # Start fresh session (will create new Claude Code session)
             success = await self.start_session(session_id, permission_callback)
@@ -1737,6 +1877,21 @@ class SessionCoordinator:
     def add_state_change_callback(self, callback: Callable):
         """Add callback for session state changes"""
         self._state_change_callbacks.append(callback)
+
+    def add_session_reset_callback(self, callback: Callable):
+        """Add callback for session reset events (Issue #500)."""
+        self._session_reset_callbacks.append(callback)
+
+    async def _notify_session_reset(self, session_id: str) -> None:
+        """Notify registered callbacks that a session was reset."""
+        for cb in self._session_reset_callbacks:
+            try:
+                if asyncio.iscoroutinefunction(cb):
+                    await cb(session_id)
+                else:
+                    cb(session_id)
+            except Exception as e:
+                logger.error(f"Error in session reset callback: {e}")
 
     def _get_display_projection(self, session_id: str) -> DisplayProjection:
         """

@@ -4,6 +4,7 @@ import { useSessionStore } from './session'
 import { useProjectStore } from './project'
 import { useMessageStore } from './message'
 import { useResourceStore } from './resource'
+import { useQueueStore } from './queue'
 
 /**
  * WebSocket Store - Manages WebSocket connections and message routing
@@ -498,8 +499,33 @@ export const useWebSocketStore = defineStore('websocket', () => {
         // Backend sends: {type: "state_change", data: {session_id: "...", session: {...}, timestamp: "..."}}
         if (payload.data && payload.data.session_id && payload.data.session) {
           sessionStore.updateSession(payload.data.session_id, payload.data.session)
+
+          // Issue #500: Auto-reconnect session WebSocket when queue processor
+          // resets/restarts a session. The reset cycle (terminated → starting → active)
+          // disconnects the session WebSocket. Reconnect when state becomes active
+          // for the currently selected session if the session socket is not connected.
+          const changedSessionId = payload.data.session_id
+          const newState = payload.data.session.state
+          if (changedSessionId === sessionStore.currentSessionId &&
+              newState === 'active' &&
+              !sessionConnected.value) {
+            console.log(`[UI state_change] Session ${changedSessionId} became active, reconnecting session WebSocket`)
+            sessionRetryCount.value = 0  // Reset retry count for fresh connection
+            connectSession(changedSessionId)
+          }
         }
         break
+
+      case 'session_reset': {
+        // Issue #500: Queue processor reset a session — clear stale messages
+        const resetSessionId = payload.data?.session_id
+        if (resetSessionId) {
+          console.log(`[UI session_reset] Clearing messages for session ${resetSessionId}`)
+          const messageStore = useMessageStore()
+          messageStore.clearMessages(resetSessionId)
+        }
+        break
+      }
 
       case 'project_updated':
         // Update project (payload.data contains {project: {...}})
@@ -634,6 +660,13 @@ export const useWebSocketStore = defineStore('websocket', () => {
           console.log(`Image registered (legacy) for session ${sessionId}:`, payload.image.image_id)
         }
         break
+
+      // Issue #500: Handle queue updates
+      case 'queue_update': {
+        const queueStore = useQueueStore()
+        queueStore.handleQueueUpdate(sessionId, payload)
+        break
+      }
 
       default:
         console.warn('Unknown Session WebSocket message type:', payload.type)
