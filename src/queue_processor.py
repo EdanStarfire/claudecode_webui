@@ -226,15 +226,7 @@ class QueueProcessor:
                         await self._broadcast("failed", session_id, item)
                     break
 
-                # Poll for completion with idle timer
-                min_idle = queue_config.get("min_idle_seconds", DEFAULT_MIN_IDLE_SECONDS)
-                completed = await self._wait_for_idle(session_id, item.queue_id, min_idle)
-
-                if not completed:
-                    # Session entered error state during processing
-                    break
-
-                # Mark as sent
+                # Mark as sent immediately — the message has been delivered to the SDK
                 session_dir = await self._coordinator.session_manager.get_session_directory(session_id)
                 if session_dir:
                     await self._coordinator.queue_manager.mark_sent(
@@ -242,7 +234,15 @@ class QueueProcessor:
                     )
                     await self._broadcast("sent", session_id, item)
 
-                queue_proc_logger.info(f"Queue item {item.queue_id} sent successfully for session {session_id}")
+                queue_proc_logger.info(f"Queue item {item.queue_id} sent to session {session_id}")
+
+                # Wait for SDK to finish processing before picking up next item
+                min_idle = queue_config.get("min_idle_seconds", DEFAULT_MIN_IDLE_SECONDS)
+                completed = await self._wait_for_idle(session_id, item.queue_id, min_idle)
+
+                if not completed:
+                    # Session entered error state during processing
+                    break
 
         except asyncio.CancelledError:
             queue_proc_logger.info(f"Queue processor cancelled for session {session_id}")
@@ -300,11 +300,10 @@ class QueueProcessor:
                         await self._broadcast("failed", session_id, item)
                 return False
 
-            # Check pause
-            if getattr(info, 'queue_paused', False):
-                idle_start = None
-                await asyncio.sleep(1)
-                continue
+            # Pause does NOT affect idle detection — once a message has been
+            # sent to the SDK, we must complete its idle cycle before the
+            # next item is picked up.  Pause only prevents the next item
+            # from being picked up (checked at the top of the main loop).
 
             if info.is_processing:
                 # Still processing — reset idle timer
