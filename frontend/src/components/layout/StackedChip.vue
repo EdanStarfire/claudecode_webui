@@ -181,14 +181,14 @@ function handlePeekClick() {
 
 .stack-count {
   position: absolute;
-  bottom: -4px;
-  right: -4px;
-  min-width: 16px;
-  height: 16px;
+  bottom: -3px;
+  right: -3px;
+  min-width: 15px;
+  height: 15px;
   border-radius: 8px;
   background: #475569;
   color: white;
-  font-size: 9px;
+  font-size: 8px;
   font-weight: 600;
   display: flex;
   align-items: center;

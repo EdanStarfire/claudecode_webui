@@ -160,12 +160,12 @@ function handleClick() {
 
 .ac-alert {
   position: absolute;
-  top: -4px;
-  right: -4px;
-  width: 18px;
-  height: 18px;
+  top: -3px;
+  right: -3px;
+  width: 15px;
+  height: 15px;
   border-radius: 50%;
-  font-size: 9px;
+  font-size: 8px;
   font-weight: 700;
   color: #fff;
   display: flex;
@@ -178,11 +178,11 @@ function handleClick() {
 
 .ac-schedule-badge {
   position: absolute;
-  right: -4px;
+  right: -3px;
   top: 50%;
   transform: translateY(-50%);
-  width: 18px;
-  height: 18px;
+  width: 15px;
+  height: 15px;
   border-radius: 50%;
   background: #6366f1;
   color: #fff;
