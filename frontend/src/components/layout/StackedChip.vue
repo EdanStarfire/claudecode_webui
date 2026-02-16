@@ -196,7 +196,6 @@ function handlePeekClick() {
   padding: 0 3px;
   cursor: pointer;
   z-index: 26;
-  border: 1px solid white;
 }
 
 .stack-count:hover {

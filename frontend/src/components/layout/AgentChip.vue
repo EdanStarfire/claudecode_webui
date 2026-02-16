@@ -171,7 +171,6 @@ function handleClick() {
   display: flex;
   align-items: center;
   justify-content: center;
-  border: 2px solid #fff;
 }
 
 .ac-alert.permission { background: #f59e0b; }
@@ -190,7 +189,6 @@ function handleClick() {
   display: flex;
   align-items: center;
   justify-content: center;
-  border: 2px solid #fff;
 }
 
 @keyframes pulse-error {
