@@ -30,6 +30,39 @@
       </span>
     </div>
 
+    <!-- Prompt viewer/editor -->
+    <div class="prompt-section">
+      <div class="prompt-toggle" @click.stop="showPrompt = !showPrompt">
+        <span class="prompt-label">Prompt</span>
+        <span class="prompt-arrow">{{ showPrompt ? '▾' : '▸' }}</span>
+      </div>
+      <div v-if="showPrompt" class="prompt-body">
+        <template v-if="!editingPrompt">
+          <pre class="prompt-text">{{ schedule.prompt }}</pre>
+          <button
+            v-if="schedule.status !== 'cancelled'"
+            class="ctrl-btn edit-prompt"
+            @click.stop="startEditPrompt"
+          >Edit</button>
+        </template>
+        <template v-else>
+          <textarea
+            ref="promptInput"
+            v-model="editPromptText"
+            class="prompt-editor"
+            rows="5"
+            @keydown.escape.stop="cancelEditPrompt"
+          ></textarea>
+          <div class="prompt-edit-controls">
+            <button class="ctrl-btn save" @click.stop="savePrompt" :disabled="saving">
+              {{ saving ? 'Saving...' : 'Save' }}
+            </button>
+            <button class="ctrl-btn" @click.stop="cancelEditPrompt">Cancel</button>
+          </div>
+        </template>
+      </div>
+    </div>
+
     <!-- Controls -->
     <div class="schedule-controls">
       <button
@@ -76,7 +109,7 @@
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, nextTick } from 'vue'
 import { useScheduleStore } from '@/stores/schedule'
 import cronstrue from 'cronstrue'
 
@@ -88,6 +121,11 @@ const props = defineProps({
 const scheduleStore = useScheduleStore()
 const expanded = ref(false)
 const history = ref([])
+const showPrompt = ref(false)
+const editingPrompt = ref(false)
+const editPromptText = ref('')
+const saving = ref(false)
+const promptInput = ref(null)
 
 const cronDescription = computed(() => {
   try {
@@ -156,6 +194,41 @@ async function remove() {
     await scheduleStore.deleteSchedule(props.legionId, props.schedule.schedule_id)
   } catch (e) {
     console.error('Failed to delete schedule:', e)
+  }
+}
+
+function startEditPrompt() {
+  editPromptText.value = props.schedule.prompt
+  editingPrompt.value = true
+  nextTick(() => {
+    if (promptInput.value) promptInput.value.focus()
+  })
+}
+
+function cancelEditPrompt() {
+  editingPrompt.value = false
+  editPromptText.value = ''
+}
+
+async function savePrompt() {
+  const trimmed = editPromptText.value.trim()
+  if (!trimmed || trimmed === props.schedule.prompt) {
+    cancelEditPrompt()
+    return
+  }
+  saving.value = true
+  try {
+    await scheduleStore.updateSchedule(
+      props.legionId,
+      props.schedule.schedule_id,
+      { prompt: trimmed }
+    )
+    editingPrompt.value = false
+    editPromptText.value = ''
+  } catch (e) {
+    console.error('Failed to update prompt:', e)
+  } finally {
+    saving.value = false
   }
 }
 
@@ -265,6 +338,92 @@ async function toggleHistory() {
 
 .failures {
   color: #dc2626;
+}
+
+.prompt-section {
+  margin-bottom: 6px;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.prompt-toggle {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 4px 8px;
+  cursor: pointer;
+  background: #f1f5f9;
+  user-select: none;
+}
+
+.prompt-toggle:hover {
+  background: #e2e8f0;
+}
+
+.prompt-label {
+  font-size: 11px;
+  font-weight: 500;
+  color: #475569;
+}
+
+.prompt-arrow {
+  font-size: 10px;
+  color: #94a3b8;
+}
+
+.prompt-body {
+  padding: 6px 8px;
+}
+
+.prompt-text {
+  margin: 0 0 4px 0;
+  padding: 4px 6px;
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 4px;
+  font-size: 11px;
+  font-family: inherit;
+  color: #334155;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 150px;
+  overflow-y: auto;
+}
+
+.prompt-editor {
+  width: 100%;
+  padding: 6px;
+  border: 1px solid #6366f1;
+  border-radius: 4px;
+  font-size: 11px;
+  font-family: inherit;
+  color: #334155;
+  resize: vertical;
+  min-height: 60px;
+  outline: none;
+  box-sizing: border-box;
+}
+
+.prompt-editor:focus {
+  border-color: #4f46e5;
+  box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.15);
+}
+
+.prompt-edit-controls {
+  display: flex;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.ctrl-btn.edit-prompt {
+  border-color: #c7d2fe;
+  color: #4338ca;
+}
+
+.ctrl-btn.save {
+  border-color: #86efac;
+  color: #166534;
 }
 
 .schedule-controls {
