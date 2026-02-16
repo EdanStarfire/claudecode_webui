@@ -17,7 +17,15 @@ from typing import Any
 
 from claude_agent_sdk import PermissionUpdate
 from claude_agent_sdk.types import PermissionRuleValue
-from fastapi import FastAPI, File, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import (
+    FastAPI,
+    File,
+    HTTPException,
+    Request,
+    UploadFile,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -495,6 +503,28 @@ class ClaudeWebUI:
         except Exception as e:
             logger.error(f"Error broadcasting resource_registered: {e}")
 
+    async def _broadcast_queue_update(self, session_id: str, action: str, item: dict):
+        """
+        Broadcast queue update to session WebSocket clients.
+
+        Issue #500: Real-time queue status updates.
+
+        Args:
+            session_id: Session ID
+            action: enqueued|sent|failed|cancelled|cleared|paused|resumed
+            item: Queue item dict or action-specific data
+        """
+        try:
+            await self.websocket_manager.send_message(session_id, {
+                "type": "queue_update",
+                "action": action,
+                "item": item,
+                "pending_count": self.coordinator.queue_manager.get_pending_count(session_id),
+                "timestamp": datetime.now(UTC).isoformat()
+            })
+        except Exception as e:
+            logger.error(f"Error broadcasting queue_update: {e}")
+
     def _cleanup_pending_permissions_for_session(self, session_id: str):
         """Clean up pending permissions for a specific session by auto-denying them"""
         try:
@@ -534,6 +564,9 @@ class ClaudeWebUI:
 
         # Register callbacks
         self.coordinator.add_state_change_callback(self._on_state_change)
+
+        # Issue #500: Wire queue processor broadcast callback
+        self.coordinator.queue_processor.set_broadcast_callback(self._broadcast_queue_update)
 
         logger.info("Claude Code WebUI initialized")
 
@@ -1767,6 +1800,131 @@ class ClaudeWebUI:
                 logger.error(f"Failed to get file diff for {path}: {e}")
                 raise HTTPException(status_code=500, detail=str(e))
 
+        # ==================== QUEUE ENDPOINTS (Issue #500) ====================
+
+        @self.app.post("/api/sessions/{session_id}/queue-message")
+        async def enqueue_message(session_id: str, request: Request):
+            """Enqueue a message for a session."""
+            try:
+                data = await request.json()
+                content = data.get("content")
+                if not content:
+                    raise HTTPException(status_code=400, detail="content is required")
+
+                item = await self.coordinator.enqueue_message(
+                    session_id=session_id,
+                    content=content,
+                    reset_session=data.get("reset_session"),
+                    metadata=data.get("metadata"),
+                )
+
+                # Broadcast queue update via session WebSocket
+                await self._broadcast_queue_update(session_id, "enqueued", item)
+
+                return {
+                    "queue_id": item["queue_id"],
+                    "position": item["position"],
+                    "item": item,
+                }
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e))
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"Failed to enqueue message: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @self.app.get("/api/sessions/{session_id}/queue")
+        async def get_queue(session_id: str):
+            """List all queue items for a session."""
+            try:
+                items = await self.coordinator.get_queue(session_id)
+                pending_count = sum(1 for i in items if i.get("status") == "pending")
+                return {
+                    "items": items,
+                    "pending_count": pending_count,
+                }
+            except Exception as e:
+                logger.error(f"Failed to get queue: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @self.app.delete("/api/sessions/{session_id}/queue/{queue_id}")
+        async def cancel_queue_item(session_id: str, queue_id: str):
+            """Cancel a pending queue item."""
+            try:
+                item = await self.coordinator.cancel_queue_item(session_id, queue_id)
+                if not item:
+                    raise HTTPException(status_code=404, detail="Queue item not found or not pending")
+
+                await self._broadcast_queue_update(session_id, "cancelled", item)
+                return {"item": item}
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"Failed to cancel queue item: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @self.app.post("/api/sessions/{session_id}/queue/{queue_id}/requeue")
+        async def requeue_item(session_id: str, queue_id: str):
+            """Re-queue a sent or failed item at the front."""
+            try:
+                item = await self.coordinator.requeue_item(session_id, queue_id)
+                if not item:
+                    raise HTTPException(status_code=404, detail="Queue item not found or not in sent/failed state")
+
+                await self._broadcast_queue_update(session_id, "enqueued", item)
+                return {"item": item}
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"Failed to requeue item: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @self.app.delete("/api/sessions/{session_id}/queue")
+        async def clear_queue(session_id: str):
+            """Clear all pending queue items."""
+            try:
+                count = await self.coordinator.clear_queue(session_id)
+                await self._broadcast_queue_update(session_id, "cleared", {"count": count})
+                return {"cancelled_count": count}
+            except Exception as e:
+                logger.error(f"Failed to clear queue: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @self.app.put("/api/sessions/{session_id}/queue/pause")
+        async def pause_queue(session_id: str, request: Request):
+            """Pause or resume the queue."""
+            try:
+                data = await request.json()
+                paused = data.get("paused", True)
+                success = await self.coordinator.pause_queue(session_id, paused)
+                if not success:
+                    raise HTTPException(status_code=400, detail="Failed to update queue pause state")
+
+                action = "paused" if paused else "resumed"
+                await self._broadcast_queue_update(session_id, action, {"paused": paused})
+                return {"paused": paused}
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"Failed to pause/resume queue: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @self.app.put("/api/sessions/{session_id}/queue/config")
+        async def update_queue_config(session_id: str, request: Request):
+            """Update queue configuration."""
+            try:
+                data = await request.json()
+                success = await self.coordinator.update_queue_config(session_id, data)
+                if not success:
+                    raise HTTPException(status_code=400, detail="Failed to update queue config")
+                return {"config": data}
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"Failed to update queue config: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
         # ==================== LEGION ENDPOINTS ====================
         # All projects support Legion capabilities (issue #313)
 
@@ -2792,11 +2950,16 @@ class ClaudeWebUI:
                 # Get full session info for real-time updates
                 session_info = await self.coordinator.session_manager.get_session_info(session_id)
                 if session_info:
+                    session_dict = session_info.to_dict()
+                    # Issue #500: Include queue status in state changes
+                    session_dict["queue_pending_count"] = (
+                        self.coordinator.queue_manager.get_pending_count(session_id)
+                    )
                     message = {
                         "type": "state_change",
                         "data": {
                             "session_id": session_id,
-                            "session": session_info.to_dict(),
+                            "session": session_dict,
                             "timestamp": state_data.get("timestamp")
                         }
                     }

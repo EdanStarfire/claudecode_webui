@@ -4,6 +4,7 @@ import { useSessionStore } from './session'
 import { useProjectStore } from './project'
 import { useMessageStore } from './message'
 import { useResourceStore } from './resource'
+import { useQueueStore } from './queue'
 
 /**
  * WebSocket Store - Manages WebSocket connections and message routing
@@ -634,6 +635,13 @@ export const useWebSocketStore = defineStore('websocket', () => {
           console.log(`Image registered (legacy) for session ${sessionId}:`, payload.image.image_id)
         }
         break
+
+      // Issue #500: Handle queue updates
+      case 'queue_update': {
+        const queueStore = useQueueStore()
+        queueStore.handleQueueUpdate(sessionId, payload)
+        break
+      }
 
       default:
         console.warn('Unknown Session WebSocket message type:', payload.type)

@@ -96,6 +96,10 @@ class SessionInfo:
     # Settings sources (issue #36) - which settings files to load permissions from
     setting_sources: list[str] | None = None  # Default: ["user", "project", "local"]
 
+    # Message queue configuration (issue #500)
+    queue_config: dict | None = None  # {max_queue_size, min_wait_seconds, min_idle_seconds, default_reset_session}
+    queue_paused: bool = False  # If True, queue processor skips delivery
+
     def __post_init__(self):
         if self.allowed_tools is None:
             self.allowed_tools = ["bash", "edit", "read"]

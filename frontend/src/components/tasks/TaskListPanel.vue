@@ -16,6 +16,9 @@
         />
       </TransitionGroup>
     </div>
+
+    <!-- Message Queue Section (Issue #500) -->
+    <QueueSection />
   </div>
 </template>
 
@@ -23,6 +26,7 @@
 import { ref, computed } from 'vue'
 import { useTaskStore } from '@/stores/task'
 import TaskItem from './TaskItem.vue'
+import QueueSection from './QueueSection.vue'
 
 const taskStore = useTaskStore()
 

@@ -30,6 +30,8 @@ from .models.messages import (
     legacy_to_stored,
 )
 from .project_manager import ProjectInfo, ProjectManager
+from .queue_manager import QueueManager
+from .queue_processor import QueueProcessor
 from .session_manager import SessionManager, SessionState
 from .timestamp_utils import get_unix_timestamp
 
@@ -111,6 +113,10 @@ class SessionCoordinator:
             template_manager=self.template_manager
         )
 
+        # Issue #500: Message queue system
+        self.queue_manager = QueueManager()
+        self.queue_processor = QueueProcessor(self)
+
         # Issue #404: Resource MCP tools for displaying resources in task panel
         # Callback for broadcasting resource_registered events will be set by web_server
         from src.mcp.resource_mcp_tools import ResourceMCPTools
@@ -144,6 +150,9 @@ class SessionCoordinator:
             # Initialize storage managers for all existing sessions
             await self._initialize_existing_session_storage()
 
+            # Issue #500: Load message queues for all existing sessions
+            await self._initialize_queues()
+
             # Validate and cleanup orphaned project/session references (issue #63)
             await self._validate_and_cleanup_projects()
 
@@ -172,6 +181,120 @@ class SessionCoordinator:
         except Exception as e:
             logger.error(f"Failed to initialize storage managers for existing sessions: {e}")
             # Don't raise - this shouldn't block coordinator initialization
+
+    async def _initialize_queues(self):
+        """Load message queues for all existing sessions on startup."""
+        try:
+            sessions = await self.session_manager.list_sessions()
+            for session in sessions:
+                session_id = session.session_id
+                session_dir = await self.session_manager.get_session_directory(session_id)
+                if session_dir:
+                    await self.queue_manager.load_queue(session_id, session_dir)
+                    # Auto-start processor if there are pending items
+                    if self.queue_manager.get_pending_count(session_id) > 0:
+                        queue_paused = getattr(session, 'queue_paused', False)
+                        if not queue_paused:
+                            self.queue_processor.ensure_running(session_id)
+        except Exception as e:
+            logger.error(f"Failed to initialize queues: {e}")
+
+    # =========================================================================
+    # Message Queue Operations (Issue #500)
+    # =========================================================================
+
+    async def enqueue_message(
+        self,
+        session_id: str,
+        content: str,
+        reset_session: bool | None = None,
+        metadata: dict | None = None,
+    ) -> dict:
+        """Enqueue a message for a session. Returns the queue item dict."""
+        session_info = await self.session_manager.get_session_info(session_id)
+        if not session_info:
+            raise ValueError(f"Session {session_id} not found")
+
+        session_dir = await self.session_manager.get_session_directory(session_id)
+        if not session_dir:
+            raise ValueError(f"Session directory not found for {session_id}")
+
+        queue_config = getattr(session_info, 'queue_config', None) or {}
+        max_queue_size = queue_config.get("max_queue_size", 100)
+
+        # Use session default if not specified
+        if reset_session is None:
+            reset_session = queue_config.get("default_reset_session", True)
+
+        item = await self.queue_manager.enqueue(
+            session_id=session_id,
+            session_dir=session_dir,
+            content=content,
+            reset_session=reset_session,
+            metadata=metadata,
+            max_queue_size=max_queue_size,
+        )
+
+        # Start processor if not paused
+        queue_paused = getattr(session_info, 'queue_paused', False)
+        if not queue_paused:
+            self.queue_processor.ensure_running(session_id)
+
+        return item.to_dict()
+
+    async def cancel_queue_item(self, session_id: str, queue_id: str) -> dict | None:
+        """Cancel a pending queue item. Returns the item dict or None."""
+        session_dir = await self.session_manager.get_session_directory(session_id)
+        if not session_dir:
+            return None
+        item = await self.queue_manager.cancel(session_id, session_dir, queue_id)
+        return item.to_dict() if item else None
+
+    async def requeue_item(self, session_id: str, queue_id: str) -> dict | None:
+        """Re-queue a sent/failed item at the front. Returns the new item dict."""
+        session_dir = await self.session_manager.get_session_directory(session_id)
+        if not session_dir:
+            return None
+        item = await self.queue_manager.requeue(session_id, session_dir, queue_id)
+        if item:
+            session_info = await self.session_manager.get_session_info(session_id)
+            queue_paused = getattr(session_info, 'queue_paused', False) if session_info else False
+            if not queue_paused:
+                self.queue_processor.ensure_running(session_id)
+        return item.to_dict() if item else None
+
+    async def clear_queue(self, session_id: str) -> int:
+        """Clear all pending queue items. Returns count of cancelled items."""
+        session_dir = await self.session_manager.get_session_directory(session_id)
+        if not session_dir:
+            return 0
+        return await self.queue_manager.clear_pending(session_id, session_dir)
+
+    async def get_queue(self, session_id: str) -> list[dict]:
+        """Get all queue items for a session."""
+        return [item.to_dict() for item in self.queue_manager.get_queue(session_id)]
+
+    async def pause_queue(self, session_id: str, paused: bool) -> bool:
+        """Pause or resume the queue for a session."""
+        success = await self.session_manager.update_session(
+            session_id, queue_paused=paused
+        )
+        if success and not paused:
+            # Resume: start processor if there are pending items
+            if self.queue_manager.get_pending_count(session_id) > 0:
+                self.queue_processor.ensure_running(session_id)
+        return success
+
+    async def update_queue_config(self, session_id: str, config: dict) -> bool:
+        """Update queue configuration for a session."""
+        session_info = await self.session_manager.get_session_info(session_id)
+        if not session_info:
+            return False
+        current = getattr(session_info, 'queue_config', None) or {}
+        current.update(config)
+        return await self.session_manager.update_session(
+            session_id, queue_config=current
+        )
 
     async def create_session(
         self,
@@ -749,6 +872,9 @@ class SessionCoordinator:
     async def terminate_session(self, session_id: str) -> bool:
         """Terminate a session and cleanup resources"""
         try:
+            # Issue #500: Stop queue processor before termination
+            self.queue_processor.stop(session_id)
+
             # Reset processing state before termination
             await self.session_manager.update_processing_state(session_id, False)
 
@@ -1202,9 +1328,13 @@ class SessionCoordinator:
         Reset a session by clearing all messages and starting fresh.
 
         Keeps session settings (permission mode, tools, etc.) but clears conversation history.
+        Queue: pending items preserved, in-flight items marked failed.
         """
         try:
             coord_logger.info(f"Resetting session {session_id}")
+
+            # Issue #500: Stop queue processor and mark any in-flight item as failed
+            self.queue_processor.stop(session_id)
 
             # Get current SDK and disconnect
             sdk = self._active_sdks.get(session_id)
