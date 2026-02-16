@@ -564,6 +564,7 @@ class ClaudeWebUI:
 
         # Register callbacks
         self.coordinator.add_state_change_callback(self._on_state_change)
+        self.coordinator.add_session_reset_callback(self._on_session_reset)
 
         # Issue #500: Wire queue processor broadcast callback
         self.coordinator.queue_processor.set_broadcast_callback(self._broadcast_queue_update)
@@ -2968,6 +2969,18 @@ class ClaudeWebUI:
                     logger.info(f"Broadcasted state change for session {session_id} to all UI clients")
         except Exception as e:
             logger.error(f"Error handling state change: {e}")
+
+    async def _on_session_reset(self, session_id: str):
+        """Issue #500: Broadcast session_reset so frontend clears stale messages."""
+        try:
+            message = {
+                "type": "session_reset",
+                "data": {"session_id": session_id},
+            }
+            await self.ui_websocket_manager.broadcast_to_all(message)
+            logger.info(f"Broadcasted session_reset for {session_id}")
+        except Exception as e:
+            logger.error(f"Error broadcasting session_reset: {e}")
 
     def _create_permission_callback(self, session_id: str):
         """Create permission callback for tool usage"""

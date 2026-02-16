@@ -73,6 +73,7 @@ class SessionCoordinator:
         self._message_callbacks: dict[str, list[Callable]] = {}
         self._error_callbacks: dict[str, list[Callable]] = {}
         self._state_change_callbacks: list[Callable] = []
+        self._session_reset_callbacks: list[Callable] = []
 
         # Track recent tool uses for ExitPlanMode detection
         self._recent_tool_uses: dict[str, dict[str, str]] = {}  # session_id -> {tool_use_id: tool_name}
@@ -1374,6 +1375,9 @@ class SessionCoordinator:
             # Issue #310: Reset DisplayProjection state (clears tool tracking)
             self._reset_display_projection(session_id)
 
+            # Issue #500: Notify frontend to clear messages for this session
+            await self._notify_session_reset(session_id)
+
             # Start fresh session (will create new Claude Code session)
             success = await self.start_session(session_id, permission_callback)
 
@@ -1868,6 +1872,21 @@ class SessionCoordinator:
     def add_state_change_callback(self, callback: Callable):
         """Add callback for session state changes"""
         self._state_change_callbacks.append(callback)
+
+    def add_session_reset_callback(self, callback: Callable):
+        """Add callback for session reset events (Issue #500)."""
+        self._session_reset_callbacks.append(callback)
+
+    async def _notify_session_reset(self, session_id: str) -> None:
+        """Notify registered callbacks that a session was reset."""
+        for cb in self._session_reset_callbacks:
+            try:
+                if asyncio.iscoroutinefunction(cb):
+                    await cb(session_id)
+                else:
+                    cb(session_id)
+            except Exception as e:
+                logger.error(f"Error in session reset callback: {e}")
 
     def _get_display_projection(self, session_id: str) -> DisplayProjection:
         """

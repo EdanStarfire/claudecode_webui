@@ -516,6 +516,17 @@ export const useWebSocketStore = defineStore('websocket', () => {
         }
         break
 
+      case 'session_reset': {
+        // Issue #500: Queue processor reset a session — clear stale messages
+        const resetSessionId = payload.data?.session_id
+        if (resetSessionId) {
+          console.log(`[UI session_reset] Clearing messages for session ${resetSessionId}`)
+          const messageStore = useMessageStore()
+          messageStore.clearMessages(resetSessionId)
+        }
+        break
+      }
+
       case 'project_updated':
         // Update project (payload.data contains {project: {...}})
         if (payload.data && payload.data.project) {
