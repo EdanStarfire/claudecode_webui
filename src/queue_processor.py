@@ -87,6 +87,25 @@ class QueueProcessor:
         return task is not None and not task.done()
 
     # =========================================================================
+    # Callback wiring
+    # =========================================================================
+
+    def _ensure_message_callback(self, session_id: str) -> None:
+        """Ensure WebSocket message callback is registered for a session.
+
+        When the queue processor auto-starts or resets a session, it bypasses
+        the web_server REST endpoint that normally registers the WebSocket
+        broadcast callback. This method uses the registrar injected by
+        web_server to wire the callback so messages are streamed to the UI.
+        """
+        registrar = self._coordinator._message_callback_registrar
+        if registrar:
+            registrar(session_id)
+            queue_proc_logger.info(f"Registered WebSocket message callback for session {session_id}")
+        else:
+            queue_proc_logger.warning(f"No message callback registrar available for session {session_id}")
+
+    # =========================================================================
     # Main processing loop
     # =========================================================================
 
@@ -125,6 +144,8 @@ class QueueProcessor:
                 # Auto-start session if needed
                 if session_info.state in (SessionState.CREATED, SessionState.TERMINATED):
                     queue_proc_logger.info(f"Auto-starting session {session_id} for queue processing")
+                    # Register WebSocket message callback so messages are broadcast to frontend
+                    self._ensure_message_callback(session_id)
                     # Get permission callback from factory if available
                     perm_callback = None
                     if self._coordinator._permission_callback_factory:
@@ -156,6 +177,8 @@ class QueueProcessor:
                 # Reset session if requested
                 if item.reset_session:
                     queue_proc_logger.info(f"Resetting session {session_id} before queue item {item.queue_id}")
+                    # Register WebSocket message callback so messages are broadcast to frontend
+                    self._ensure_message_callback(session_id)
                     perm_callback = None
                     if self._coordinator._permission_callback_factory:
                         perm_callback = self._coordinator._permission_callback_factory(session_id)

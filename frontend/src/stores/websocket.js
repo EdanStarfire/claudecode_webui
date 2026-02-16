@@ -499,6 +499,20 @@ export const useWebSocketStore = defineStore('websocket', () => {
         // Backend sends: {type: "state_change", data: {session_id: "...", session: {...}, timestamp: "..."}}
         if (payload.data && payload.data.session_id && payload.data.session) {
           sessionStore.updateSession(payload.data.session_id, payload.data.session)
+
+          // Issue #500: Auto-reconnect session WebSocket when queue processor
+          // resets/restarts a session. The reset cycle (terminated → starting → active)
+          // disconnects the session WebSocket. Reconnect when state becomes active
+          // for the currently selected session if the session socket is not connected.
+          const changedSessionId = payload.data.session_id
+          const newState = payload.data.session.state
+          if (changedSessionId === sessionStore.currentSessionId &&
+              newState === 'active' &&
+              !sessionConnected.value) {
+            console.log(`[UI state_change] Session ${changedSessionId} became active, reconnecting session WebSocket`)
+            sessionRetryCount.value = 0  // Reset retry count for fresh connection
+            connectSession(changedSessionId)
+          }
         }
         break
 
