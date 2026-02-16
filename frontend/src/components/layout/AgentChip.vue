@@ -16,12 +16,18 @@
     <div v-if="alertType" class="ac-alert" :class="alertType">
       {{ alertType === 'error' ? '!' : '?' }}
     </div>
+    <div v-if="hasSchedules" class="ac-schedule-badge" title="Has active schedules">
+      <svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor">
+        <path d="M8 0a8 8 0 1 0 0 16A8 8 0 0 0 8 0zm0 14.5A6.5 6.5 0 1 1 8 1.5a6.5 6.5 0 0 1 0 13zM8.5 4H7v5l4.25 2.55.75-1.23L8.5 8.25V4z"/>
+      </svg>
+    </div>
   </div>
 </template>
 
 <script setup>
 import { computed } from 'vue'
 import { useSessionStore } from '@/stores/session'
+import { useScheduleStore } from '@/stores/schedule'
 
 const props = defineProps({
   session: { type: Object, required: true },
@@ -32,6 +38,11 @@ const props = defineProps({
 const emit = defineEmits(['select'])
 
 const sessionStore = useSessionStore()
+const scheduleStore = useScheduleStore()
+
+const hasSchedules = computed(() =>
+  scheduleStore.getScheduleCount(props.session.session_id) > 0
+)
 
 const displayName = computed(() =>
   props.session.name || props.session.role || 'Agent'
@@ -165,6 +176,21 @@ function handleClick() {
 
 .ac-alert.permission { background: #f59e0b; }
 .ac-alert.error { background: #ef4444; }
+
+.ac-schedule-badge {
+  position: absolute;
+  bottom: -3px;
+  right: -3px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #6366f1;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid #fff;
+}
 
 @keyframes pulse-error {
   0%, 100% { opacity: 1; }

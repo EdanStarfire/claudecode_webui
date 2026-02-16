@@ -147,6 +147,11 @@ class SessionCoordinator:
             # Validate and cleanup orphaned project/session references (issue #63)
             await self._validate_and_cleanup_projects()
 
+            # Load and start scheduler service (issue #495)
+            if hasattr(self, 'legion_system') and self.legion_system is not None:
+                await self.legion_system.scheduler_service.load_all_schedules()
+                await self.legion_system.scheduler_service.start()
+
             coord_logger.info("Session coordinator initialized successfully")
         except Exception as e:
             logger.error(f"Failed to initialize session coordinator: {e}")
@@ -2676,6 +2681,10 @@ class SessionCoordinator:
     async def cleanup(self):
         """Cleanup all resources"""
         try:
+            # Stop scheduler service (issue #495)
+            if hasattr(self, 'legion_system') and self.legion_system is not None:
+                await self.legion_system.scheduler_service.stop()
+
             # Terminate all active sessions
             session_ids = list(self._active_sdks.keys())
             for session_id in session_ids:

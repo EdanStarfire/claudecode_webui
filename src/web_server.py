@@ -175,6 +175,25 @@ class MinionCreateRequest(BaseModel):
     allowed_tools: list[str] | None = None  # None or empty list means no pre-authorized tools
     disallowed_tools: list[str] | None = None  # Issue #461: tools to deny
     working_directory: str | None = None  # Optional custom working directory for this minion
+
+
+class ScheduleCreateRequest(BaseModel):
+    """Request to create a cron schedule (issue #495)."""
+    minion_id: str
+    name: str
+    cron_expression: str
+    prompt: str
+    max_retries: int = 3
+    timeout_seconds: int = 3600
+
+
+class ScheduleUpdateRequest(BaseModel):
+    """Request to update a schedule (issue #495)."""
+    name: str | None = None
+    cron_expression: str | None = None
+    prompt: str | None = None
+    max_retries: int | None = None
+    timeout_seconds: int | None = None
     sandbox_enabled: bool = False  # Enable OS-level sandboxing (issue #319)
     sandbox_config: dict | None = None  # Issue #458: sandbox configuration settings
     setting_sources: list[str] | None = None  # Issue #36: which settings files to load
@@ -392,6 +411,9 @@ class ClaudeWebUI:
         self.coordinator.legion_system.comm_router.set_comm_broadcast_callback(
             self._broadcast_comm_to_legion_websocket
         )
+        self.coordinator.legion_system.scheduler_service.set_schedule_broadcast_callback(
+            self._broadcast_schedule_to_legion_websocket
+        )
 
         # Inject permission callback factory into SessionCoordinator
         # This allows legion components (overseer_controller, comm_router) to create
@@ -474,6 +496,14 @@ class ClaudeWebUI:
             logger.debug(f"Broadcast comm {comm.comm_id} to legion {legion_id} WebSocket clients")
         except Exception as e:
             logger.error(f"Error broadcasting comm to legion WebSocket: {e}")
+
+    async def _broadcast_schedule_to_legion_websocket(self, legion_id: str, event: dict):
+        """Broadcast schedule event to WebSocket clients watching this legion."""
+        try:
+            await self.legion_websocket_manager.broadcast_to_legion(legion_id, event)
+            logger.debug(f"Broadcast schedule event to legion {legion_id} WebSocket clients")
+        except Exception as e:
+            logger.error(f"Error broadcasting schedule event to legion WebSocket: {e}")
 
     async def _broadcast_resource_registered(self, session_id: str, resource_metadata: dict):
         """
@@ -2011,6 +2041,225 @@ class ClaudeWebUI:
                 raise
             except Exception as e:
                 logger.error(f"Failed to resume all minions: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+        # ==================== SCHEDULE ENDPOINTS (Issue #495) ====================
+
+        @self.app.get("/api/legions/{legion_id}/schedules")
+        async def list_schedules(
+            legion_id: str, minion_id: str | None = None, status: str | None = None
+        ):
+            """List schedules for a legion with optional filters."""
+            try:
+                project = await self.coordinator.project_manager.get_project(legion_id)
+                if not project:
+                    raise HTTPException(status_code=404, detail="Project not found")
+
+                status_filter = None
+                if status:
+                    from src.models.schedule_models import ScheduleStatus
+                    try:
+                        status_filter = ScheduleStatus(status)
+                    except ValueError:
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"Invalid status: {status}. Use active, paused, or cancelled",
+                        )
+
+                schedules = await self.coordinator.legion_system.scheduler_service.list_schedules(
+                    legion_id=legion_id, minion_id=minion_id, status=status_filter
+                )
+                return {"schedules": [s.to_dict() for s in schedules]}
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"Failed to list schedules: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @self.app.post("/api/legions/{legion_id}/schedules")
+        async def create_schedule(legion_id: str, request: ScheduleCreateRequest):
+            """Create a new schedule for a minion."""
+            try:
+                project = await self.coordinator.project_manager.get_project(legion_id)
+                if not project:
+                    raise HTTPException(status_code=404, detail="Project not found")
+
+                # Get minion name
+                session = await self.coordinator.session_manager.get_session_info(
+                    request.minion_id
+                )
+                if not session:
+                    raise HTTPException(status_code=404, detail="Minion not found")
+
+                schedule = await self.coordinator.legion_system.scheduler_service.create_schedule(
+                    legion_id=legion_id,
+                    minion_id=request.minion_id,
+                    minion_name=session.name or request.minion_id[:8],
+                    name=request.name,
+                    cron_expression=request.cron_expression,
+                    prompt=request.prompt,
+                    max_retries=request.max_retries,
+                    timeout_seconds=request.timeout_seconds,
+                )
+                return {"schedule": schedule.to_dict()}
+            except HTTPException:
+                raise
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e))
+            except Exception as e:
+                logger.error(f"Failed to create schedule: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @self.app.get("/api/legions/{legion_id}/schedules/{schedule_id}")
+        async def get_schedule(legion_id: str, schedule_id: str):
+            """Get a single schedule."""
+            try:
+                schedule = await self.coordinator.legion_system.scheduler_service.get_schedule(
+                    schedule_id
+                )
+                if not schedule or schedule.legion_id != legion_id:
+                    raise HTTPException(status_code=404, detail="Schedule not found")
+                return {"schedule": schedule.to_dict()}
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"Failed to get schedule: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @self.app.put("/api/legions/{legion_id}/schedules/{schedule_id}")
+        async def update_schedule(
+            legion_id: str, schedule_id: str, request: ScheduleUpdateRequest
+        ):
+            """Update schedule fields."""
+            try:
+                schedule = await self.coordinator.legion_system.scheduler_service.get_schedule(
+                    schedule_id
+                )
+                if not schedule or schedule.legion_id != legion_id:
+                    raise HTTPException(status_code=404, detail="Schedule not found")
+
+                fields = {k: v for k, v in request.model_dump().items() if v is not None}
+                updated = await self.coordinator.legion_system.scheduler_service.update_schedule(
+                    schedule_id, **fields
+                )
+                return {"schedule": updated.to_dict()}
+            except HTTPException:
+                raise
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e))
+            except Exception as e:
+                logger.error(f"Failed to update schedule: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @self.app.post("/api/legions/{legion_id}/schedules/{schedule_id}/pause")
+        async def pause_schedule(legion_id: str, schedule_id: str):
+            """Pause an active schedule."""
+            try:
+                schedule = await self.coordinator.legion_system.scheduler_service.get_schedule(
+                    schedule_id
+                )
+                if not schedule or schedule.legion_id != legion_id:
+                    raise HTTPException(status_code=404, detail="Schedule not found")
+
+                updated = await self.coordinator.legion_system.scheduler_service.pause_schedule(
+                    schedule_id
+                )
+                return {"schedule": updated.to_dict()}
+            except HTTPException:
+                raise
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e))
+            except Exception as e:
+                logger.error(f"Failed to pause schedule: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @self.app.post("/api/legions/{legion_id}/schedules/{schedule_id}/resume")
+        async def resume_schedule(legion_id: str, schedule_id: str):
+            """Resume a paused schedule."""
+            try:
+                schedule = await self.coordinator.legion_system.scheduler_service.get_schedule(
+                    schedule_id
+                )
+                if not schedule or schedule.legion_id != legion_id:
+                    raise HTTPException(status_code=404, detail="Schedule not found")
+
+                updated = await self.coordinator.legion_system.scheduler_service.resume_schedule(
+                    schedule_id
+                )
+                return {"schedule": updated.to_dict()}
+            except HTTPException:
+                raise
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e))
+            except Exception as e:
+                logger.error(f"Failed to resume schedule: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @self.app.post("/api/legions/{legion_id}/schedules/{schedule_id}/cancel")
+        async def cancel_schedule(legion_id: str, schedule_id: str):
+            """Cancel a schedule permanently."""
+            try:
+                schedule = await self.coordinator.legion_system.scheduler_service.get_schedule(
+                    schedule_id
+                )
+                if not schedule or schedule.legion_id != legion_id:
+                    raise HTTPException(status_code=404, detail="Schedule not found")
+
+                updated = await self.coordinator.legion_system.scheduler_service.cancel_schedule(
+                    schedule_id
+                )
+                return {"schedule": updated.to_dict()}
+            except HTTPException:
+                raise
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e))
+            except Exception as e:
+                logger.error(f"Failed to cancel schedule: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @self.app.delete("/api/legions/{legion_id}/schedules/{schedule_id}")
+        async def delete_schedule(legion_id: str, schedule_id: str):
+            """Delete a schedule entirely."""
+            try:
+                schedule = await self.coordinator.legion_system.scheduler_service.get_schedule(
+                    schedule_id
+                )
+                if not schedule or schedule.legion_id != legion_id:
+                    raise HTTPException(status_code=404, detail="Schedule not found")
+
+                await self.coordinator.legion_system.scheduler_service.delete_schedule(
+                    schedule_id
+                )
+                return {"success": True}
+            except HTTPException:
+                raise
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e))
+            except Exception as e:
+                logger.error(f"Failed to delete schedule: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @self.app.get("/api/legions/{legion_id}/schedules/{schedule_id}/history")
+        async def get_schedule_history(
+            legion_id: str, schedule_id: str, limit: int = 50, offset: int = 0
+        ):
+            """Get execution history for a schedule."""
+            try:
+                executions = (
+                    await self.coordinator.legion_system.scheduler_service.get_schedule_history(
+                        legion_id=legion_id,
+                        schedule_id=schedule_id,
+                        limit=limit,
+                        offset=offset,
+                    )
+                )
+                return {
+                    "executions": [e.to_dict() for e in executions],
+                    "limit": limit,
+                    "offset": offset,
+                }
+            except Exception as e:
+                logger.error(f"Failed to get schedule history: {e}")
                 raise HTTPException(status_code=500, detail=str(e))
 
         # ==================== PERMISSION PREVIEW ENDPOINT (Issue #36) ====================
