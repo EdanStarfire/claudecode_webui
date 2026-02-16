@@ -248,6 +248,92 @@ class LegionMCPTools:
             args["_from_minion_id"] = session_id
             return await self._handle_whoami(args)
 
+        # ── Schedule tools (Issue #495) ──
+
+        @tool(
+            "create_schedule",
+            "Create a recurring cron schedule for yourself. The system will automatically "
+            "deliver the specified prompt to you at the scheduled times. If you are terminated "
+            "when a schedule fires, the system will auto-start you."
+            "\n\nParameters:"
+            "\n- name: Human-readable name (e.g., 'Daily status report')"
+            "\n- cron_expression: Standard 5-field cron (min hour dom mon dow). "
+            "Examples: '0 8 * * 1-5' (weekdays 8am), '0 */2 * * *' (every 2 hours), "
+            "'30 9 1 * *' (1st of month at 9:30am)"
+            "\n- prompt: The prompt text delivered to you when the schedule fires"
+            "\n- max_retries (optional, default 3): Max delivery retries on failure"
+            "\n- timeout_seconds (optional, default 3600): Delivery timeout",
+            {
+                "name": str,
+                "cron_expression": str,
+                "prompt": str,
+                "max_retries": int,
+                "timeout_seconds": int,
+            }
+        )
+        async def create_schedule_tool(args: dict[str, Any]) -> dict[str, Any]:
+            """Create a recurring schedule for the calling minion."""
+            args["_from_minion_id"] = session_id
+            return await self._handle_create_schedule(args)
+
+        @tool(
+            "list_schedules",
+            "List your active schedules. Shows schedule name, cron expression, next run time, "
+            "and status. Optionally filter by status."
+            "\n\nParameters:"
+            "\n- status (optional): Filter by 'active', 'paused', or 'cancelled'",
+            {
+                "status": str,
+            }
+        )
+        async def list_schedules_tool(args: dict[str, Any]) -> dict[str, Any]:
+            """List schedules for the calling minion."""
+            args["_from_minion_id"] = session_id
+            return await self._handle_list_schedules(args)
+
+        @tool(
+            "pause_schedule",
+            "Pause one of your active schedules. The schedule will stop firing until resumed."
+            "\n\nParameters:"
+            "\n- schedule_id: The ID of the schedule to pause",
+            {
+                "schedule_id": str,
+            }
+        )
+        async def pause_schedule_tool(args: dict[str, Any]) -> dict[str, Any]:
+            """Pause a schedule owned by the calling minion."""
+            args["_from_minion_id"] = session_id
+            return await self._handle_pause_schedule(args)
+
+        @tool(
+            "resume_schedule",
+            "Resume one of your paused schedules. The schedule will start firing again "
+            "from the next cron window."
+            "\n\nParameters:"
+            "\n- schedule_id: The ID of the schedule to resume",
+            {
+                "schedule_id": str,
+            }
+        )
+        async def resume_schedule_tool(args: dict[str, Any]) -> dict[str, Any]:
+            """Resume a schedule owned by the calling minion."""
+            args["_from_minion_id"] = session_id
+            return await self._handle_resume_schedule(args)
+
+        @tool(
+            "cancel_schedule",
+            "Cancel one of your schedules permanently. Cancelled schedules cannot be resumed."
+            "\n\nParameters:"
+            "\n- schedule_id: The ID of the schedule to cancel",
+            {
+                "schedule_id": str,
+            }
+        )
+        async def cancel_schedule_tool(args: dict[str, Any]) -> dict[str, Any]:
+            """Cancel a schedule owned by the calling minion."""
+            args["_from_minion_id"] = session_id
+            return await self._handle_cancel_schedule(args)
+
         # Create and return MCP server with all tools
         return create_sdk_mcp_server(
             name="legion",
@@ -261,7 +347,12 @@ class LegionMCPTools:
                 get_minion_info_tool,
                 list_templates_tool,
                 update_expertise_tool,
-                whoami_tool
+                whoami_tool,
+                create_schedule_tool,
+                list_schedules_tool,
+                pause_schedule_tool,
+                resume_schedule_tool,
+                cancel_schedule_tool,
             ]
         )
 
@@ -1521,3 +1612,312 @@ class LegionMCPTools:
             "is_error": False,
             "identity": identity  # Also include as structured data for programmatic access
         }
+
+    # ── Schedule Tool Handlers (Issue #495) ──
+
+    async def _handle_create_schedule(self, args: dict[str, Any]) -> dict[str, Any]:
+        """Handle create_schedule tool call."""
+        from_minion_id = args.get("_from_minion_id")
+        if not from_minion_id:
+            return {
+                "content": [{"type": "text", "text": "Error: Unable to determine minion ID"}],
+                "is_error": True,
+            }
+
+        name = args.get("name", "").strip()
+        cron_expression = args.get("cron_expression", "").strip()
+        prompt = args.get("prompt", "").strip()
+
+        if not name or not cron_expression or not prompt:
+            return {
+                "content": [{"type": "text", "text": "Error: name, cron_expression, and prompt are all required"}],
+                "is_error": True,
+            }
+
+        # Get minion info for legion_id and name
+        session = await self.system.session_coordinator.session_manager.get_session_info(from_minion_id)
+        if not session:
+            return {
+                "content": [{"type": "text", "text": "Error: Could not find your session"}],
+                "is_error": True,
+            }
+
+        legion_id = session.project_id
+        if not legion_id:
+            return {
+                "content": [{"type": "text", "text": "Error: You must be in a project/legion to create schedules"}],
+                "is_error": True,
+            }
+
+        max_retries = args.get("max_retries", 3)
+        timeout_seconds = args.get("timeout_seconds", 3600)
+
+        # Convert string to int if needed
+        if isinstance(max_retries, str):
+            try:
+                max_retries = int(max_retries)
+            except ValueError:
+                max_retries = 3
+        if isinstance(timeout_seconds, str):
+            try:
+                timeout_seconds = int(timeout_seconds)
+            except ValueError:
+                timeout_seconds = 3600
+
+        try:
+            schedule = await self.system.scheduler_service.create_schedule(
+                legion_id=legion_id,
+                minion_id=from_minion_id,
+                minion_name=session.name or from_minion_id[:8],
+                name=name,
+                cron_expression=cron_expression,
+                prompt=prompt,
+                max_retries=max_retries,
+                timeout_seconds=timeout_seconds,
+            )
+
+            from datetime import UTC, datetime
+            next_run_str = "N/A"
+            if schedule.next_run:
+                next_run_str = datetime.fromtimestamp(schedule.next_run, tz=UTC).strftime(
+                    "%Y-%m-%d %H:%M UTC"
+                )
+
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": (
+                        f"Schedule created successfully.\n\n"
+                        f"- **ID**: {schedule.schedule_id}\n"
+                        f"- **Name**: {schedule.name}\n"
+                        f"- **Cron**: {schedule.cron_expression}\n"
+                        f"- **Next run**: {next_run_str}\n"
+                        f"- **Status**: {schedule.status.value}"
+                    ),
+                }],
+                "is_error": False,
+            }
+        except ValueError as e:
+            return {
+                "content": [{"type": "text", "text": f"Error: {e}"}],
+                "is_error": True,
+            }
+        except Exception as e:
+            return {
+                "content": [{"type": "text", "text": f"Unexpected error creating schedule: {e}"}],
+                "is_error": True,
+            }
+
+    async def _handle_list_schedules(self, args: dict[str, Any]) -> dict[str, Any]:
+        """Handle list_schedules tool call."""
+        from_minion_id = args.get("_from_minion_id")
+        if not from_minion_id:
+            return {
+                "content": [{"type": "text", "text": "Error: Unable to determine minion ID"}],
+                "is_error": True,
+            }
+
+        session = await self.system.session_coordinator.session_manager.get_session_info(from_minion_id)
+        if not session or not session.project_id:
+            return {
+                "content": [{"type": "text", "text": "Error: Could not find your session/legion"}],
+                "is_error": True,
+            }
+
+        status_filter = None
+        status_str = args.get("status", "").strip()
+        if status_str:
+            from src.models.schedule_models import ScheduleStatus
+            try:
+                status_filter = ScheduleStatus(status_str)
+            except ValueError:
+                return {
+                    "content": [{"type": "text", "text": f"Error: Invalid status '{status_str}'. Use 'active', 'paused', or 'cancelled'"}],
+                    "is_error": True,
+                }
+
+        try:
+            schedules = await self.system.scheduler_service.list_schedules(
+                legion_id=session.project_id,
+                minion_id=from_minion_id,
+                status=status_filter,
+            )
+
+            if not schedules:
+                return {
+                    "content": [{"type": "text", "text": "No schedules found."}],
+                    "is_error": False,
+                }
+
+            from datetime import UTC, datetime
+            lines = [f"**Your Schedules** ({len(schedules)} total):\n"]
+            for s in schedules:
+                next_run_str = "N/A"
+                if s.next_run:
+                    next_run_str = datetime.fromtimestamp(s.next_run, tz=UTC).strftime(
+                        "%Y-%m-%d %H:%M UTC"
+                    )
+                lines.append(
+                    f"\n- **{s.name}** (ID: {s.schedule_id[:8]}...)\n"
+                    f"  - Cron: `{s.cron_expression}`\n"
+                    f"  - Status: {s.status.value}\n"
+                    f"  - Next run: {next_run_str}\n"
+                    f"  - Executions: {s.execution_count} (failures: {s.failure_count})"
+                )
+
+            return {
+                "content": [{"type": "text", "text": "".join(lines)}],
+                "is_error": False,
+            }
+        except Exception as e:
+            return {
+                "content": [{"type": "text", "text": f"Unexpected error listing schedules: {e}"}],
+                "is_error": True,
+            }
+
+    async def _handle_pause_schedule(self, args: dict[str, Any]) -> dict[str, Any]:
+        """Handle pause_schedule tool call."""
+        from_minion_id = args.get("_from_minion_id")
+        schedule_id = args.get("schedule_id", "").strip()
+
+        if not from_minion_id:
+            return {
+                "content": [{"type": "text", "text": "Error: Unable to determine minion ID"}],
+                "is_error": True,
+            }
+        if not schedule_id:
+            return {
+                "content": [{"type": "text", "text": "Error: schedule_id is required"}],
+                "is_error": True,
+            }
+
+        # Validate ownership
+        schedule = await self.system.scheduler_service.get_schedule(schedule_id)
+        if not schedule:
+            return {
+                "content": [{"type": "text", "text": f"Error: Schedule {schedule_id} not found"}],
+                "is_error": True,
+            }
+        if schedule.minion_id != from_minion_id:
+            return {
+                "content": [{"type": "text", "text": "Error: You can only pause your own schedules"}],
+                "is_error": True,
+            }
+
+        try:
+            await self.system.scheduler_service.pause_schedule(schedule_id)
+            return {
+                "content": [{"type": "text", "text": f"Schedule '{schedule.name}' paused successfully."}],
+                "is_error": False,
+            }
+        except ValueError as e:
+            return {
+                "content": [{"type": "text", "text": f"Error: {e}"}],
+                "is_error": True,
+            }
+        except Exception as e:
+            return {
+                "content": [{"type": "text", "text": f"Unexpected error pausing schedule: {e}"}],
+                "is_error": True,
+            }
+
+    async def _handle_resume_schedule(self, args: dict[str, Any]) -> dict[str, Any]:
+        """Handle resume_schedule tool call."""
+        from_minion_id = args.get("_from_minion_id")
+        schedule_id = args.get("schedule_id", "").strip()
+
+        if not from_minion_id:
+            return {
+                "content": [{"type": "text", "text": "Error: Unable to determine minion ID"}],
+                "is_error": True,
+            }
+        if not schedule_id:
+            return {
+                "content": [{"type": "text", "text": "Error: schedule_id is required"}],
+                "is_error": True,
+            }
+
+        schedule = await self.system.scheduler_service.get_schedule(schedule_id)
+        if not schedule:
+            return {
+                "content": [{"type": "text", "text": f"Error: Schedule {schedule_id} not found"}],
+                "is_error": True,
+            }
+        if schedule.minion_id != from_minion_id:
+            return {
+                "content": [{"type": "text", "text": "Error: You can only resume your own schedules"}],
+                "is_error": True,
+            }
+
+        try:
+            updated = await self.system.scheduler_service.resume_schedule(schedule_id)
+
+            from datetime import UTC, datetime
+            next_run_str = "N/A"
+            if updated.next_run:
+                next_run_str = datetime.fromtimestamp(updated.next_run, tz=UTC).strftime(
+                    "%Y-%m-%d %H:%M UTC"
+                )
+
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": f"Schedule '{schedule.name}' resumed. Next run: {next_run_str}",
+                }],
+                "is_error": False,
+            }
+        except ValueError as e:
+            return {
+                "content": [{"type": "text", "text": f"Error: {e}"}],
+                "is_error": True,
+            }
+        except Exception as e:
+            return {
+                "content": [{"type": "text", "text": f"Unexpected error resuming schedule: {e}"}],
+                "is_error": True,
+            }
+
+    async def _handle_cancel_schedule(self, args: dict[str, Any]) -> dict[str, Any]:
+        """Handle cancel_schedule tool call."""
+        from_minion_id = args.get("_from_minion_id")
+        schedule_id = args.get("schedule_id", "").strip()
+
+        if not from_minion_id:
+            return {
+                "content": [{"type": "text", "text": "Error: Unable to determine minion ID"}],
+                "is_error": True,
+            }
+        if not schedule_id:
+            return {
+                "content": [{"type": "text", "text": "Error: schedule_id is required"}],
+                "is_error": True,
+            }
+
+        schedule = await self.system.scheduler_service.get_schedule(schedule_id)
+        if not schedule:
+            return {
+                "content": [{"type": "text", "text": f"Error: Schedule {schedule_id} not found"}],
+                "is_error": True,
+            }
+        if schedule.minion_id != from_minion_id:
+            return {
+                "content": [{"type": "text", "text": "Error: You can only cancel your own schedules"}],
+                "is_error": True,
+            }
+
+        try:
+            await self.system.scheduler_service.cancel_schedule(schedule_id)
+            return {
+                "content": [{"type": "text", "text": f"Schedule '{schedule.name}' cancelled permanently."}],
+                "is_error": False,
+            }
+        except ValueError as e:
+            return {
+                "content": [{"type": "text", "text": f"Error: {e}"}],
+                "is_error": True,
+            }
+        except Exception as e:
+            return {
+                "content": [{"type": "text", "text": f"Unexpected error cancelling schedule: {e}"}],
+                "is_error": True,
+            }

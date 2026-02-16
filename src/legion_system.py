@@ -23,6 +23,7 @@ if TYPE_CHECKING:
     from src.legion.mcp.legion_mcp_tools import LegionMCPTools
     from src.legion.memory_manager import MemoryManager
     from src.legion.overseer_controller import OverseerController
+    from src.legion.scheduler_service import SchedulerService
     from src.session_coordinator import SessionCoordinator
     from src.template_manager import TemplateManager
 
@@ -66,6 +67,7 @@ class LegionSystem:
     comm_router: 'CommRouter' = field(init=False)
     memory_manager: 'MemoryManager' = field(init=False)
     archive_manager: 'ArchiveManager' = field(init=False)
+    scheduler_service: 'SchedulerService' = field(init=False)
     mcp_tools: 'LegionMCPTools' = field(init=False)
 
     def __post_init__(self):
@@ -81,12 +83,14 @@ class LegionSystem:
         from src.legion.mcp.legion_mcp_tools import LegionMCPTools
         from src.legion.memory_manager import MemoryManager
         from src.legion.overseer_controller import OverseerController
+        from src.legion.scheduler_service import SchedulerService
 
         # Initialize components in dependency order
         # Lower-level components first (fewer dependencies)
         self.comm_router = CommRouter(self)
         self.memory_manager = MemoryManager(self)
         self.archive_manager = ArchiveManager(self)
+        self.scheduler_service = SchedulerService(self)
         self.overseer_controller = OverseerController(self)
 
         # Higher-level components (depend on above)

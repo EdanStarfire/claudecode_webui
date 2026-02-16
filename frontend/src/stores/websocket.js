@@ -739,6 +739,14 @@ export const useWebSocketStore = defineStore('websocket', () => {
           }
           break
 
+        case 'schedule_updated':
+          // Schedule created/updated/deleted (Issue #495)
+          import('./schedule').then(({ useScheduleStore }) => {
+            const scheduleStore = useScheduleStore()
+            scheduleStore.handleScheduleEvent(legionId, payload)
+          })
+          break
+
         case 'connection_established':
           console.log(`Legion WebSocket: Connection established for ${legionId}`)
           break

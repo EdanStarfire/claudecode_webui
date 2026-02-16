@@ -38,6 +38,9 @@
 
       <!-- Comms Tab -->
       <CommsPanel v-show="activeTab === 'comms'" />
+
+      <!-- Schedules Tab (Issue #495) -->
+      <SchedulePanel v-show="activeTab === 'schedules'" />
     </div>
 
     <!-- Resize Handle -->
@@ -64,6 +67,8 @@ import ResourceFullView from '../common/ResourceFullView.vue'
 import DiffPanel from '../tasks/DiffPanel.vue'
 import DiffFullView from '../common/DiffFullView.vue'
 import CommsPanel from '../tasks/CommsPanel.vue'
+import SchedulePanel from '../schedules/SchedulePanel.vue'
+import { useScheduleStore } from '@/stores/schedule'
 
 const uiStore = useUIStore()
 const taskStore = useTaskStore()
@@ -71,6 +76,7 @@ const resourceStore = useResourceStore()
 const diffStore = useDiffStore()
 const legionStore = useLegionStore()
 const sessionStore = useSessionStore()
+const scheduleStore = useScheduleStore()
 
 const activeTab = computed(() => uiStore.rightSidebarActiveTab)
 
@@ -88,12 +94,20 @@ const commsCount = computed(() => {
   ).length
 })
 
+const schedulesCount = computed(() => {
+  const projectId = sessionStore.currentSession?.project_id
+  if (!projectId) return 0
+  const all = scheduleStore.getSchedules(projectId)
+  return all.filter(s => s.status === 'active').length
+})
+
 // Tab definitions
 const tabs = computed(() => [
   { id: 'diff', label: 'Diff', badge: diffFileCount.value },
   { id: 'tasks', label: 'Tasks', badge: taskStats.value.total > 0 ? taskStats.value.total : 0 },
   { id: 'resources', label: 'Resources', badge: resourceCount.value },
-  { id: 'comms', label: 'Comms', badge: commsCount.value }
+  { id: 'comms', label: 'Comms', badge: commsCount.value },
+  { id: 'schedules', label: 'Sched', badge: schedulesCount.value }
 ])
 
 const isOverlay = computed(() => uiStore.windowWidth < 768)
