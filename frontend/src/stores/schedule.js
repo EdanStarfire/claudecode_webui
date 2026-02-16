@@ -51,7 +51,7 @@ export const useScheduleStore = defineStore('schedule', () => {
       const data = await api.get(`/api/legions/${legionId}/schedules`)
       const schedules = data.schedules || []
       schedulesByLegion.value.set(legionId, schedules)
-      _rebuildMinionCounts(legionId)
+      _rebuildMinionCounts(legionId, null)
       return schedules
     } catch (error) {
       console.error('Failed to load schedules:', error)
@@ -164,14 +164,16 @@ export const useScheduleStore = defineStore('schedule', () => {
       schedules.push(schedule)
     }
     schedulesByLegion.value.set(legionId, [...schedules])
-    _rebuildMinionCounts(legionId)
+    _rebuildMinionCounts(legionId, null)
   }
 
   function _removeSchedule(legionId, scheduleId) {
     const schedules = schedulesByLegion.value.get(legionId) || []
+    // Capture minion_ids referenced BEFORE removal (to clear stale counts)
+    const minionIdsBefore = new Set(schedules.map(s => s.minion_id))
     const filtered = schedules.filter(s => s.schedule_id !== scheduleId)
     schedulesByLegion.value.set(legionId, filtered)
-    _rebuildMinionCounts(legionId)
+    _rebuildMinionCounts(legionId, minionIdsBefore)
 
     if (selectedScheduleId.value === scheduleId) {
       selectedScheduleId.value = null
@@ -179,7 +181,7 @@ export const useScheduleStore = defineStore('schedule', () => {
     }
   }
 
-  function _rebuildMinionCounts(legionId) {
+  function _rebuildMinionCounts(legionId, previousMinionIds) {
     const schedules = schedulesByLegion.value.get(legionId) || []
     const counts = new Map()
 
@@ -189,16 +191,24 @@ export const useScheduleStore = defineStore('schedule', () => {
       }
     }
 
-    // Merge into global map (clear old entries for this legion first)
-    // We need to track which minion_ids belong to this legion
+    // Include both current and previous minion IDs to clear stale entries
     const allMinionIds = new Set(schedules.map(s => s.minion_id))
-    for (const mid of allMinionIds) {
-      if (counts.has(mid)) {
-        scheduleCountByMinion.value.set(mid, counts.get(mid))
-      } else {
-        scheduleCountByMinion.value.delete(mid)
+    if (previousMinionIds) {
+      for (const mid of previousMinionIds) {
+        allMinionIds.add(mid)
       }
     }
+
+    // Replace the entire Map to trigger Vue reactivity
+    const newCounts = new Map(scheduleCountByMinion.value)
+    for (const mid of allMinionIds) {
+      if (counts.has(mid)) {
+        newCounts.set(mid, counts.get(mid))
+      } else {
+        newCounts.delete(mid)
+      }
+    }
+    scheduleCountByMinion.value = newCounts
   }
 
   return {
