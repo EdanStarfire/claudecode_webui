@@ -179,8 +179,9 @@ function handleClick() {
 
 .ac-schedule-badge {
   position: absolute;
-  bottom: -3px;
-  left: -3px;
+  right: -3px;
+  top: 50%;
+  transform: translateY(-50%);
   width: 16px;
   height: 16px;
   border-radius: 50%;
