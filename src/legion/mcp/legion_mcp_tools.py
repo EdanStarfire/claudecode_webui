@@ -261,12 +261,14 @@ class LegionMCPTools:
             "Examples: '0 8 * * 1-5' (weekdays 8am), '0 */2 * * *' (every 2 hours), "
             "'30 9 1 * *' (1st of month at 9:30am)"
             "\n- prompt: The prompt text delivered to you when the schedule fires"
+            "\n- reset_session (optional, default false): Reset session before each execution for clean context"
             "\n- max_retries (optional, default 3): Max delivery retries on failure"
             "\n- timeout_seconds (optional, default 3600): Delivery timeout",
             {
                 "name": str,
                 "cron_expression": str,
                 "prompt": str,
+                "reset_session": bool,
                 "max_retries": int,
                 "timeout_seconds": int,
             }
@@ -1649,10 +1651,13 @@ class LegionMCPTools:
                 "is_error": True,
             }
 
+        reset_session = args.get("reset_session", False)
         max_retries = args.get("max_retries", 3)
         timeout_seconds = args.get("timeout_seconds", 3600)
 
-        # Convert string to int if needed
+        # Convert string/int types if needed (MCP may pass as string)
+        if isinstance(reset_session, str):
+            reset_session = reset_session.lower() in ("true", "1", "yes")
         if isinstance(max_retries, str):
             try:
                 max_retries = int(max_retries)
@@ -1672,6 +1677,7 @@ class LegionMCPTools:
                 name=name,
                 cron_expression=cron_expression,
                 prompt=prompt,
+                reset_session=reset_session,
                 max_retries=max_retries,
                 timeout_seconds=timeout_seconds,
             )

@@ -2,7 +2,7 @@
 SchedulerService - Background asyncio service for cron-based schedule execution.
 
 Ticks every 30 seconds, evaluates cron expressions via croniter, and delivers
-due prompts to owning minions through CommRouter.route_comm().
+due prompts to owning minions through SessionCoordinator.enqueue_message().
 """
 
 import asyncio
@@ -12,7 +12,6 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from src.logging_config import get_logger
-from src.models.legion_models import Comm, CommType
 from src.models.schedule_models import (
     Schedule,
     ScheduleExecution,
@@ -100,6 +99,7 @@ class SchedulerService:
         name: str,
         cron_expression: str,
         prompt: str,
+        reset_session: bool = False,
         max_retries: int = 3,
         timeout_seconds: int = 3600,
     ) -> Schedule:
@@ -119,6 +119,7 @@ class SchedulerService:
             name=name,
             cron_expression=cron_expression,
             prompt=prompt,
+            reset_session=reset_session,
             status=ScheduleStatus.ACTIVE,
             max_retries=max_retries,
             timeout_seconds=timeout_seconds,
@@ -326,7 +327,7 @@ class SchedulerService:
     # ── Execution ──
 
     async def _fire_schedule(self, schedule: Schedule, now: float):
-        """Fire a due schedule by creating and routing a Comm."""
+        """Fire a due schedule by enqueuing the prompt via SessionCoordinator."""
         legion_logger.info(
             f"Firing schedule {schedule.schedule_id} '{schedule.name}' "
             f"for minion {schedule.minion_id}"
@@ -345,18 +346,9 @@ class SchedulerService:
         except Exception:
             pass
 
-        comm_id = str(uuid.uuid4())
-        comm = Comm(
-            comm_id=comm_id,
-            from_user=True,
-            to_minion_id=schedule.minion_id,
-            to_minion_name=schedule.minion_name,
-            summary=f"Scheduled: {schedule.name}",
-            content=(
-                f"**[Scheduled Task: {schedule.name}]**\n\n"
-                f"{schedule.prompt}"
-            ),
-            comm_type=CommType.TASK,
+        formatted_prompt = (
+            f"**[Scheduled Task: {schedule.name}]**\n\n"
+            f"{schedule.prompt}"
         )
 
         execution = ScheduleExecution(
@@ -364,22 +356,32 @@ class SchedulerService:
             schedule_id=schedule.schedule_id,
             scheduled_time=schedule.next_run or now,
             actual_time=now,
-            status="delivered",
+            status="queued",
             minion_state=minion_state,
-            comm_id=comm_id,
         )
 
         try:
-            result = await self.system.comm_router.route_comm(comm)
-            if not result:
-                raise RuntimeError("CommRouter returned False")
+            result = await self.system.session_coordinator.enqueue_message(
+                session_id=schedule.minion_id,
+                content=formatted_prompt,
+                reset_session=schedule.reset_session,
+                metadata={
+                    "source": "cron",
+                    "schedule_id": schedule.schedule_id,
+                    "schedule_name": schedule.name,
+                    "trigger_time": now,
+                },
+            )
+
+            # Capture queue_id from response
+            execution.queue_id = result.get("queue_id")
 
             # Success
             schedule.last_run = now
-            schedule.last_status = "delivered"
+            schedule.last_status = "queued"
             schedule.execution_count += 1
             schedule.failure_count = 0
-            execution.status = "delivered"
+            execution.status = "queued"
             legion_logger.info(f"Schedule {schedule.schedule_id} fired successfully")
 
         except Exception as e:
