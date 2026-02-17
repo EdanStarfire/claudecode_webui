@@ -22,7 +22,7 @@
         <div class="modal-body">
           <!-- Phase 1: Confirmation -->
           <div v-if="phase === 'confirm'">
-            <p>This will pull the latest code and restart the backend server. All active sessions will be interrupted.</p>
+            <p>This will pull the latest code, sync dependencies, and restart the backend server. All active sessions will be interrupted.</p>
 
             <div v-if="gitLoading" class="text-center py-3">
               <div class="spinner-border spinner-border-sm" role="status"></div>
@@ -51,7 +51,7 @@
           <div v-else-if="phase === 'progress'" class="text-center py-3">
             <div v-if="uiStore.restartStatus === 'pulling'" class="mb-3">
               <div class="spinner-border" role="status"></div>
-              <div class="mt-2">Pulling latest code...</div>
+              <div class="mt-2">Pulling code &amp; syncing dependencies...</div>
             </div>
             <div v-else-if="uiStore.restartStatus === 'restarting'" class="mb-3">
               <div class="spinner-border" role="status"></div>
