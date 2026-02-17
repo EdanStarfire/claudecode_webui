@@ -164,16 +164,10 @@ function toggleDetail(toolId) {
 
 .timeline-row {
   display: flex;
+  flex-wrap: wrap;
   align-items: flex-start;
   min-height: 20px;
-  gap: 0;
-  padding: 2px 0;
-}
-
-
-/* Mobile: wrap timeline nodes onto multiple lines */
-.timeline-mobile .timeline-row {
-  flex-wrap: wrap;
   gap: 2px 0;
+  padding: 2px 0;
 }
 </style>
