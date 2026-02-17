@@ -555,6 +555,33 @@ class StoredMessage:
             display=display,
         )
 
+    @classmethod
+    def from_tool_call_update(
+        cls,
+        tool_call: ToolCall,
+        triggering_message: dict[str, Any] | None = None,
+    ) -> 'StoredMessage':
+        """
+        Create from a ToolCall lifecycle update (Issue #494).
+
+        Stores the ToolCall state at each transition (PENDING, AWAITING_PERMISSION,
+        RUNNING, COMPLETED, etc.) as a StoredMessage with _type="ToolCallUpdate".
+
+        The optional triggering_message embeds the raw SDK data that caused
+        this transition (e.g., the ToolUseBlock, PermissionRequestMessage data,
+        ToolResultBlock). It is stripped before frontend propagation.
+        """
+        import time as _time
+        data = tool_call.to_dict()
+        if triggering_message is not None:
+            data['_triggering_message'] = triggering_message
+        return cls(
+            _type='ToolCallUpdate',
+            timestamp=tool_call.completed_at or tool_call.started_at or tool_call.created_at or _time.time(),
+            session_id=tool_call.session_id,
+            data=data,
+        )
+
     def to_dict(self) -> dict[str, Any]:
         """Serialize for storage/WebSocket."""
         result = {
