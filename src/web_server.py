@@ -132,6 +132,7 @@ class SessionCreateRequest(BaseModel):
     model: str | None = None
     name: str | None = None
     setting_sources: list[str] | None = None  # Issue #36: which settings files to load
+    cli_path: str | None = None  # Issue #489: custom CLI executable path
 
 
 class MessageRequest(BaseModel):
@@ -186,6 +187,7 @@ class MinionCreateRequest(BaseModel):
     sandbox_enabled: bool | None = None  # Enable OS-level sandboxing (issue #319)
     sandbox_config: dict | None = None  # Issue #458: sandbox configuration settings
     setting_sources: list[str] | None = None  # Issue #36: which settings files to load
+    cli_path: str | None = None  # Issue #489: custom CLI executable path
 
 
 class ScheduleCreateRequest(BaseModel):
@@ -226,6 +228,7 @@ class TemplateCreateRequest(BaseModel):
     override_system_prompt: bool = False
     sandbox_enabled: bool = False
     sandbox_config: dict | None = None  # Issue #458: sandbox configuration settings
+    cli_path: str | None = None  # Issue #489: custom CLI path
 
 
 class TemplateUpdateRequest(BaseModel):
@@ -241,6 +244,7 @@ class TemplateUpdateRequest(BaseModel):
     override_system_prompt: bool | None = None
     sandbox_enabled: bool | None = None
     sandbox_config: dict | None = None  # Issue #458: sandbox configuration settings
+    cli_path: str | None = None  # Issue #489: custom CLI path
 
 
 class UIWebSocketManager:
@@ -809,7 +813,8 @@ class ClaudeWebUI:
                     model=request.model,
                     name=request.name,
                     permission_callback=self._create_permission_callback(session_id),
-                    setting_sources=request.setting_sources  # Issue #36
+                    setting_sources=request.setting_sources,  # Issue #36
+                    cli_path=request.cli_path  # Issue #489
                 )
 
                 # Broadcast session creation to all UI clients
@@ -2132,7 +2137,8 @@ class ClaudeWebUI:
                     model=request.model,
                     sandbox_enabled=request.sandbox_enabled,
                     sandbox_config=request.sandbox_config,
-                    setting_sources=request.setting_sources  # Issue #36
+                    setting_sources=request.setting_sources,  # Issue #36
+                    cli_path=request.cli_path  # Issue #489
                 )
 
                 # Get the created minion info
@@ -2656,6 +2662,7 @@ class ClaudeWebUI:
                     override_system_prompt=request.override_system_prompt,
                     sandbox_enabled=request.sandbox_enabled,
                     sandbox_config=request.sandbox_config,
+                    cli_path=request.cli_path,
                 )
                 return template.to_dict()
             except ValueError as e:
@@ -2682,6 +2689,7 @@ class ClaudeWebUI:
                     override_system_prompt=request.override_system_prompt,
                     sandbox_enabled=request.sandbox_enabled,
                     sandbox_config=request.sandbox_config,
+                    cli_path=request.cli_path,
                 )
                 return template.to_dict()
             except ValueError as e:

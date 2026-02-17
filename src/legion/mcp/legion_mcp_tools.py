@@ -723,6 +723,10 @@ class LegionMCPTools:
                 if template.sandbox_enabled:
                     sandbox_enabled = True
 
+                # Apply cli_path from template (issue #489)
+                # SECURITY: cli_path flows only through user-controlled templates
+                cli_path = template.cli_path
+
             except Exception as e:
                 coord_logger.error(f"Error applying template: {e}", exc_info=True)
                 return {
@@ -738,6 +742,7 @@ class LegionMCPTools:
             allowed_tools = []  # No pre-authorized tools (user must approve each tool use)
             model = None
             override_system_prompt = False
+            cli_path = None
 
         # Validate role is set (from parameter or template)
         if not role:
@@ -786,6 +791,7 @@ class LegionMCPTools:
                 sandbox_enabled=sandbox_enabled,
                 model=model,
                 override_system_prompt=override_system_prompt,
+                cli_path=cli_path,  # Issue #489: from template only
             )
 
             child_minion_id = spawn_result["minion_id"]

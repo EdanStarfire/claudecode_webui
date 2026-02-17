@@ -31,6 +31,7 @@ class MinionTemplate:
     override_system_prompt: bool = False
     sandbox_enabled: bool = False
     sandbox_config: dict | None = None
+    cli_path: str | None = None  # Custom CLI executable path (issue #489)
     created_at: datetime | None = None
     updated_at: datetime | None = None
 

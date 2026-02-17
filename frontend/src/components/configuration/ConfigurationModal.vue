@@ -292,6 +292,7 @@ const formData = reactive({
   override_system_prompt: false,
   initialization_context: '',  // template only
   sandbox_enabled: false,  // session only
+  cli_path: '',  // Issue #489: custom CLI executable path
 
   // Sandbox tab (issue #458)
   sandbox: {
@@ -535,6 +536,7 @@ function applyTemplate() {
     formData.capabilities = ''
     formData.override_system_prompt = false
     formData.sandbox_enabled = false
+    formData.cli_path = ''  // Issue #489
 
     // Reset sandbox config
     formData.sandbox.autoAllowBashIfSandboxed = true
@@ -675,6 +677,9 @@ function applyTemplate() {
 
   // Apply sandbox_enabled (boolean, no field-state tracking)
   formData.sandbox_enabled = template.sandbox_enabled || false
+
+  // Apply cli_path from template (issue #489, no field-state tracking)
+  formData.cli_path = template.cli_path || ''
 
   // Apply sandbox config fields
   const sc = template.sandbox_config || {}
@@ -863,7 +868,8 @@ async function createSession() {
     working_directory: formData.working_directory.trim() || null,
     sandbox_enabled: formData.sandbox_enabled,
     sandbox_config: formData.sandbox_enabled ? buildSandboxConfig() : null,
-    setting_sources: formData.setting_sources  // Issue #36
+    setting_sources: formData.setting_sources,  // Issue #36
+    cli_path: formData.cli_path.trim() || null  // Issue #489
   }
 
   const response = await api.post(`/api/legions/${projectId.value}/minions`, payload)
@@ -967,7 +973,8 @@ async function createTemplate() {
     capabilities: capsList.length > 0 ? capsList : null,
     override_system_prompt: formData.override_system_prompt,
     sandbox_enabled: formData.sandbox_enabled,
-    sandbox_config: formData.sandbox_enabled ? buildSandboxConfig() : null
+    sandbox_config: formData.sandbox_enabled ? buildSandboxConfig() : null,
+    cli_path: formData.cli_path.trim() || null  // Issue #489
   }
 
   await api.post('/api/templates', payload)
@@ -1015,7 +1022,8 @@ async function updateTemplate() {
     capabilities: capsList.length > 0 ? capsList : null,
     override_system_prompt: formData.override_system_prompt,
     sandbox_enabled: formData.sandbox_enabled,
-    sandbox_config: formData.sandbox_enabled ? buildSandboxConfig() : null
+    sandbox_config: formData.sandbox_enabled ? buildSandboxConfig() : null,
+    cli_path: formData.cli_path.trim() || null  // Issue #489
   }
 
   await api.put(`/api/templates/${editTemplate.value.template_id}`, payload)
@@ -1045,6 +1053,7 @@ function resetForm() {
   formData.override_system_prompt = false
   formData.initialization_context = ''
   formData.sandbox_enabled = false
+  formData.cli_path = ''  // Issue #489
 
   // Reset sandbox config (issue #458)
   formData.sandbox.autoAllowBashIfSandboxed = true
@@ -1109,6 +1118,7 @@ function populateFormFromSession(session) {
   formData.disallowed_tools = session.disallowed_tools?.join(', ') || ''
   formData.capabilities = session.capabilities?.join(', ') || ''
   formData.sandbox_enabled = session.sandbox_enabled || false
+  formData.cli_path = session.cli_path || ''  // Issue #489
   // Issue #36: Load setting_sources, default to all enabled if not set
   formData.setting_sources = session.setting_sources || ['user', 'project', 'local']
 
@@ -1140,6 +1150,7 @@ function populateFormFromTemplate(template) {
   formData.capabilities = template.capabilities?.join(', ') || ''
   formData.override_system_prompt = template.override_system_prompt || false
   formData.sandbox_enabled = template.sandbox_enabled || false
+  formData.cli_path = template.cli_path || ''  // Issue #489
 
   // Issue #458: Load sandbox config from template
   const sc = template.sandbox_config || {}

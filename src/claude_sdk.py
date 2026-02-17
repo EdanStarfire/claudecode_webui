@@ -141,7 +141,8 @@ class ClaudeSDK:
         sandbox_enabled: bool = False,
         sandbox_config: dict | None = None,
         setting_sources: list[str] | None = None,
-        experimental: bool = False
+        experimental: bool = False,
+        cli_path: str | None = None
     ):
         """
         Initialize enhanced Claude Code SDK wrapper.
@@ -163,6 +164,7 @@ class ClaudeSDK:
             sandbox_config: Optional SandboxSettings configuration dict
             setting_sources: List of settings sources to load (issue #36)
             experimental: Enable experimental features like Agent Teams (issue #411)
+            cli_path: Custom CLI executable path for tool execution (issue #489)
         """
         self.session_id = session_id
         self.working_directory = Path(working_directory)
@@ -188,6 +190,7 @@ class ClaudeSDK:
         self.sandbox_config = sandbox_config
         self.setting_sources = setting_sources  # Issue #36: which settings files to load
         self.experimental = experimental  # Issue #411: Enable experimental features
+        self.cli_path = cli_path  # Issue #489: Custom CLI executable path
 
         self.info = SessionInfo(session_id=session_id, working_directory=str(self.working_directory))
 
@@ -735,6 +738,11 @@ class ClaudeSDK:
         if self.mcp_servers:
             options_kwargs["mcp_servers"] = self.mcp_servers
             sdk_logger.info(f"Attaching MCP servers to session {self.session_id}: {list(self.mcp_servers.keys()) if isinstance(self.mcp_servers, dict) else 'unknown format'}")
+
+        # Add CLI path override (issue #489)
+        if self.cli_path:
+            options_kwargs["cli_path"] = self.cli_path
+            sdk_logger.info(f"Using custom CLI path for session {self.session_id}: {self.cli_path}")
 
         # Add sandbox configuration (issue #319)
         if self.sandbox_enabled:

@@ -42,6 +42,22 @@
       </div>
     </div>
 
+    <!-- CLI Path (issue #489) -->
+    <div class="mb-3">
+      <label for="config-cli-path" class="form-label">CLI Path</label>
+      <input
+        type="text"
+        class="form-control"
+        id="config-cli-path"
+        :value="formData.cli_path"
+        @input="$emit('update:form-data', 'cli_path', $event.target.value)"
+        placeholder="/path/to/claude-cli or Docker launcher script"
+      />
+      <div class="form-text">
+        Path to a custom CLI executable or Docker launcher script. When set, the SDK uses this instead of the default Claude Code CLI. Leave empty for default behavior.
+      </div>
+    </div>
+
     <!-- Capabilities -->
     <div class="mb-3">
       <label for="config-capabilities" class="form-label">Capabilities</label>

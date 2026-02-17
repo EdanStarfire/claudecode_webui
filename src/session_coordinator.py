@@ -326,6 +326,8 @@ class SessionCoordinator:
         sandbox_config: dict | None = None,
         # Settings sources (issue #36)
         setting_sources: list[str] | None = None,
+        # CLI path override (issue #489)
+        cli_path: str | None = None,
     ) -> str:
         """Create a new Claude Code session with integrated components (within a project)"""
         try:
@@ -366,7 +368,9 @@ class SessionCoordinator:
                 sandbox_enabled=sandbox_enabled,
                 sandbox_config=sandbox_config,
                 # Settings sources (issue #36)
-                setting_sources=setting_sources
+                setting_sources=setting_sources,
+                # CLI path override (issue #489)
+                cli_path=cli_path
             )
 
             # Add session to project
@@ -782,7 +786,8 @@ class SessionCoordinator:
                 sandbox_enabled=session_info.sandbox_enabled,
                 sandbox_config=session_info.sandbox_config,
                 setting_sources=session_info.setting_sources,  # Issue #36
-                experimental=self.experimental
+                experimental=self.experimental,
+                cli_path=session_info.cli_path  # Issue #489
             )
             self._active_sdks[session_id] = sdk
 
