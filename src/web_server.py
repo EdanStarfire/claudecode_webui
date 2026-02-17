@@ -191,6 +191,7 @@ class ScheduleCreateRequest(BaseModel):
     name: str
     cron_expression: str
     prompt: str
+    reset_session: bool = False
     max_retries: int = 3
     timeout_seconds: int = 3600
 
@@ -2257,6 +2258,7 @@ class ClaudeWebUI:
                     name=request.name,
                     cron_expression=request.cron_expression,
                     prompt=request.prompt,
+                    reset_session=request.reset_session,
                     max_retries=request.max_retries,
                     timeout_seconds=request.timeout_seconds,
                 )

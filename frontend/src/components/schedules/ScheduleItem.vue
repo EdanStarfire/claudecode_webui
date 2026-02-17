@@ -69,6 +69,7 @@
       <span v-if="schedule.failure_count > 0" class="failures">
         {{ schedule.failure_count }} consecutive failures
       </span>
+      <span v-if="schedule.reset_session" class="reset-badge" title="Session resets before each execution">reset</span>
     </div>
 
     <!-- Prompt viewer/editor -->
@@ -513,7 +514,8 @@ async function toggleHistory() {
   font-size: 10px;
 }
 
-.last-status.delivered {
+.last-status.delivered,
+.last-status.queued {
   color: #16a34a;
 }
 
@@ -531,6 +533,15 @@ async function toggleHistory() {
 
 .failures {
   color: #dc2626;
+}
+
+.reset-badge {
+  font-size: 9px;
+  padding: 0 5px;
+  border-radius: 8px;
+  background: #e0e7ff;
+  color: #4338ca;
+  font-weight: 500;
 }
 
 .prompt-section {
@@ -711,7 +722,8 @@ async function toggleHistory() {
   font-weight: 500;
 }
 
-.history-item.delivered .history-status {
+.history-item.delivered .history-status,
+.history-item.queued .history-status {
   color: #16a34a;
 }
 
