@@ -183,6 +183,9 @@ class MinionCreateRequest(BaseModel):
     allowed_tools: list[str] | None = None  # None or empty list means no pre-authorized tools
     disallowed_tools: list[str] | None = None  # Issue #461: tools to deny
     working_directory: str | None = None  # Optional custom working directory for this minion
+    sandbox_enabled: bool | None = None  # Enable OS-level sandboxing (issue #319)
+    sandbox_config: dict | None = None  # Issue #458: sandbox configuration settings
+    setting_sources: list[str] | None = None  # Issue #36: which settings files to load
 
 
 class ScheduleCreateRequest(BaseModel):
