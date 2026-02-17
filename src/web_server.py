@@ -2507,12 +2507,33 @@ class ClaudeWebUI:
                 logger.error(f"git pull failed: {e}")
                 raise HTTPException(status_code=500, detail=str(e)) from e
 
+            # Sync Python dependencies (after git pull, before restart)
+            try:
+                sync_result = subprocess.run(
+                    ["uv", "sync"],
+                    cwd=project_root, capture_output=True, text=True, timeout=120
+                )
+                if sync_result.returncode != 0:
+                    raise HTTPException(
+                        status_code=500,
+                        detail=f"uv sync failed: {sync_result.stderr.strip()}"
+                    )
+                sync_output = sync_result.stdout.strip()
+            except subprocess.TimeoutExpired as e:
+                raise HTTPException(status_code=504, detail="uv sync timed out") from e
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"uv sync failed: {e}")
+                raise HTTPException(status_code=500, detail=str(e)) from e
+
             # Broadcast restart notice to all WebSocket connections
             try:
                 await self.ui_websocket_manager.broadcast({
                     "type": "server_restarting",
                     "message": "Server is restarting...",
                     "pull_output": pull_output,
+                    "sync_output": sync_output,
                     "timestamp": datetime.now(UTC).isoformat(),
                 })
             except Exception as e:
@@ -2534,6 +2555,7 @@ class ClaudeWebUI:
                 "status": "restarting",
                 "message": "Server is pulling latest code and restarting...",
                 "pull_output": pull_output,
+                "sync_output": sync_output,
             }
 
         # ==================== FILESYSTEM ENDPOINTS ====================
