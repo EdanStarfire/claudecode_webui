@@ -33,6 +33,7 @@ class Schedule:
     cron_expression: str
     prompt: str
     status: ScheduleStatus = ScheduleStatus.ACTIVE
+    reset_session: bool = False
     max_retries: int = 3
     timeout_seconds: int = 3600
     created_at: float = field(default_factory=lambda: datetime.now(UTC).timestamp())
@@ -53,6 +54,7 @@ class Schedule:
             "name": self.name,
             "cron_expression": self.cron_expression,
             "prompt": self.prompt,
+            "reset_session": self.reset_session,
             "status": self.status.value,
             "max_retries": self.max_retries,
             "timeout_seconds": self.timeout_seconds,
@@ -70,6 +72,7 @@ class Schedule:
         """Create from dictionary."""
         data = data.copy()
         data["status"] = ScheduleStatus(data["status"])
+        data.setdefault("reset_session", False)
         return cls(**data)
 
 
@@ -83,11 +86,11 @@ class ScheduleExecution:
     schedule_id: str
     scheduled_time: float
     actual_time: float
-    status: str  # "delivered" | "failed" | "timeout" | "retry"
+    status: str  # "queued" | "failed" | "timeout" | "retry"
     minion_state: str
     error_message: str | None = None
     retry_number: int = 0
-    comm_id: str | None = None
+    queue_id: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization."""
@@ -100,12 +103,18 @@ class ScheduleExecution:
             "minion_state": self.minion_state,
             "error_message": self.error_message,
             "retry_number": self.retry_number,
-            "comm_id": self.comm_id,
+            "queue_id": self.queue_id,
         }
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "ScheduleExecution":
-        """Create from dictionary."""
+        """Create from dictionary. Handles legacy comm_id field."""
+        data = data.copy()
+        # Migrate legacy comm_id to queue_id
+        if "comm_id" in data and "queue_id" not in data:
+            data["queue_id"] = data.pop("comm_id")
+        elif "comm_id" in data:
+            data.pop("comm_id")
         return cls(**data)
 
 

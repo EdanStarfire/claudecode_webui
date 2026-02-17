@@ -57,6 +57,15 @@
           ></textarea>
         </div>
 
+        <!-- Reset session toggle -->
+        <div class="form-group toggle-group">
+          <label class="toggle-label">
+            <input type="checkbox" v-model="form.reset_session" />
+            <span>Reset session before each execution</span>
+          </label>
+          <div class="toggle-hint">When enabled, the agent's session is reset for a clean context each time the schedule fires.</div>
+        </div>
+
         <!-- Error -->
         <div v-if="error" class="error-msg">{{ error }}</div>
 
@@ -95,6 +104,7 @@ const form = ref({
   name: '',
   cron_expression: '',
   prompt: '',
+  reset_session: false,
 })
 
 const projectSessions = computed(() => {
@@ -135,6 +145,7 @@ async function submit() {
       name: form.value.name,
       cron_expression: form.value.cron_expression,
       prompt: form.value.prompt,
+      reset_session: form.value.reset_session,
     })
     emit('created', schedule)
   } catch (e) {
@@ -256,6 +267,31 @@ form {
 
 .cron-presets button:hover {
   background: #e2e8f0;
+}
+
+.toggle-group {
+  margin-bottom: 14px;
+}
+
+.toggle-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: #334155;
+  cursor: pointer;
+}
+
+.toggle-label input[type="checkbox"] {
+  width: auto;
+  margin: 0;
+}
+
+.toggle-hint {
+  font-size: 11px;
+  color: #94a3b8;
+  margin-top: 2px;
+  padding-left: 24px;
 }
 
 .error-msg {
