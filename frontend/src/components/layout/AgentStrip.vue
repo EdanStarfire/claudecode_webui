@@ -1,6 +1,7 @@
 <template>
   <div class="agent-strip" :class="{ 'theme-red': uiStore.isRedBackground }" ref="stripEl" v-if="browsingProject" @click="handleStripClick">
     <span class="strip-project-label">{{ browsingProject.name }}</span>
+    <span v-if="isBrowsingOther" class="strip-viewing-badge" aria-label="Temporarily viewing this project">VIEWING</span>
     <template v-for="session in topLevelSessions" :key="session.session_id">
       <!-- Stacked chip for parents with children -->
       <StackedChip
@@ -50,6 +51,10 @@ const activeProjectId = computed(() => {
   if (!session) return null
   return session.project_id
 })
+
+const isBrowsingOther = computed(() =>
+  activeProjectId.value && uiStore.browsingProjectId !== activeProjectId.value
+)
 
 function handleDocumentClick(e) {
   const inStrip = stripEl.value && stripEl.value.contains(e.target)
@@ -175,6 +180,17 @@ function showCreateSessionModal() {
   letter-spacing: 0.3px;
   padding-right: 8px;
   flex-shrink: 0;
+}
+
+.strip-viewing-badge {
+  background: #f1f5f9;
+  color: #64748b;
+  font-size: 9px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 8px;
+  flex-shrink: 0;
+  letter-spacing: 0.3px;
 }
 
 .strip-empty {

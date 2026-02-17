@@ -3,7 +3,8 @@
     class="agent-chip"
     :class="{
       active: isActive,
-      child: variant === 'child'
+      child: variant === 'child',
+      'parent-of-active': isParentOfActive
     }"
     @click="handleClick"
     :title="chipTooltip"
@@ -32,6 +33,7 @@ import { useScheduleStore } from '@/stores/schedule'
 const props = defineProps({
   session: { type: Object, required: true },
   isActive: { type: Boolean, default: false },
+  isParentOfActive: { type: Boolean, default: false },
   variant: { type: String, default: 'default' } // 'default' | 'child'
 })
 
@@ -116,8 +118,20 @@ function handleClick() {
 }
 
 .agent-chip.child {
-  border-color: #bfdbfe;
-  background: #f0f7ff;
+  border-color: #e2e8f0;
+  background: #f8fafc;
+}
+
+.agent-chip.child.active {
+  border-color: #3b82f6;
+  background: #eff6ff;
+  box-shadow: 0 0 0 1px #3b82f6;
+}
+
+.agent-chip.parent-of-active {
+  border-style: dashed;
+  border-color: #93c5fd;
+  box-shadow: none;
 }
 
 .ac-dot {

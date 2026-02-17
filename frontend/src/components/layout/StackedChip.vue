@@ -5,6 +5,7 @@
       <AgentChip
         :session="session"
         :isActive="isActive"
+        :isParentOfActive="isParentOfActive"
         @select="$emit('select', session.session_id)"
         @dblclick.native="toggleExpand"
       />
@@ -117,6 +118,12 @@ const hasActiveDescendant = computed(() => {
     return false
   }
   return checkDescendants(childIds.value)
+})
+
+const isParentOfActive = computed(() => {
+  if (!currentSessionId.value) return false
+  if (props.session.session_id === currentSessionId.value) return false
+  return hasActiveDescendant.value
 })
 
 const isExpanded = computed(() => {
