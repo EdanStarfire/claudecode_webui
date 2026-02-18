@@ -1,7 +1,8 @@
 <template>
   <div class="msg-wrapper msg-system">
-    <div class="msg-pill" :class="{ 'pill-compaction': isCompactionStatus }">
-      <span v-if="isCompactionStatus" class="pill-icon">&#x1F5DC;&#xFE0F;</span>
+    <div class="msg-pill" :class="{ 'pill-compaction': isCompactionStatus, 'pill-stderr': isStderr }">
+      <span v-if="isStderr" class="pill-icon">&#x26A0;&#xFE0F;</span>
+      <span v-else-if="isCompactionStatus" class="pill-icon">&#x1F5DC;&#xFE0F;</span>
       <span class="pill-text">{{ displayContent }}</span>
       <span class="pill-sep">&middot;</span>
       <span class="pill-time">{{ formattedTimestamp }}</span>
@@ -30,14 +31,20 @@ const isCompactionStatus = computed(() => {
          props.message.metadata?.init_data?.status === 'compacting'
 })
 
+// Check if this is a stderr message from the SDK
+const isStderr = computed(() => {
+  return props.message.metadata?.subtype === 'stderr'
+})
+
 const displayContent = computed(() => {
   if (isCompactionStatus.value) {
     return 'Context compaction in progress...'
   }
   const content = props.message.content || ''
-  // Truncate long system messages for the pill display
-  if (content.length > 80) {
-    return content.substring(0, 77) + '...'
+  // Allow longer display for stderr messages since they often contain important error details
+  const maxLen = isStderr.value ? 200 : 80
+  if (content.length > maxLen) {
+    return content.substring(0, maxLen - 3) + '...'
   }
   return content
 })
@@ -67,6 +74,18 @@ const displayContent = computed(() => {
 .pill-compaction {
   background: #fffbea;
   border-color: #fde68a;
+}
+
+.pill-stderr {
+  background: #fef2f2;
+  border-color: #fecaca;
+}
+
+.pill-stderr .pill-text {
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  color: #991b1b;
+  white-space: normal;
+  word-break: break-word;
 }
 
 .pill-icon {

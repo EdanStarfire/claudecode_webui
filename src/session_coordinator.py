@@ -448,7 +448,8 @@ class SessionCoordinator:
                 mcp_servers=mcp_servers if mcp_servers else None,
                 sandbox_enabled=sandbox_enabled,
                 sandbox_config=sandbox_config,
-                experimental=self.experimental
+                experimental=self.experimental,
+                stderr_callback=self._create_stderr_callback(session_id)
             )
             self._active_sdks[session_id] = sdk
 
@@ -788,7 +789,8 @@ class SessionCoordinator:
                 sandbox_config=session_info.sandbox_config,
                 setting_sources=session_info.setting_sources,  # Issue #36
                 experimental=self.experimental,
-                cli_path=session_info.cli_path  # Issue #489
+                cli_path=session_info.cli_path,  # Issue #489
+                stderr_callback=self._create_stderr_callback(session_id)
             )
             self._active_sdks[session_id] = sdk
 
@@ -2593,6 +2595,30 @@ class SessionCoordinator:
 
             except Exception as e:
                 logger.error(f"Error processing error callback for {session_id}: {e}")
+
+        return callback
+
+    def _create_stderr_callback(self, session_id: str) -> Callable:
+        """Create stderr callback that routes SDK stderr output through the message pipeline.
+
+        Issue #517: Each stderr line becomes a system message with subtype 'stderr',
+        persisted to messages.jsonl and broadcast to the frontend via WebSocket.
+        """
+        message_callback = self._create_message_callback(session_id)
+
+        async def callback(output: str):
+            try:
+                coord_logger.warning(f"[STDERR] Session {session_id}: {output}")
+                stderr_message = {
+                    "type": "system",
+                    "subtype": "stderr",
+                    "content": output,
+                    "session_id": session_id,
+                    "timestamp": get_unix_timestamp()
+                }
+                await message_callback(stderr_message)
+            except Exception as e:
+                logger.error(f"Error in stderr callback for session {session_id}: {e}")
 
         return callback
 
