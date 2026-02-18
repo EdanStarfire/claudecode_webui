@@ -66,7 +66,8 @@
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, toRef } from 'vue'
+import { useToolResult } from '@/composables/useToolResult'
 
 const props = defineProps({
   toolCall: {
@@ -75,32 +76,17 @@ const props = defineProps({
   }
 })
 
+const { hasResult, isError, resultContent } = useToolResult(toRef(props, 'toolCall'))
+
 // Parameters
 const taskId = computed(() => props.toolCall.input?.taskId || null)
 
-// Result
-const hasResult = computed(() => {
-  return props.toolCall.result !== null && props.toolCall.result !== undefined
-})
+// Expose summary, params, result for parent ToolCallCard
+const summary = computed(() => taskId.value ? `Get Task #${taskId.value}` : 'Get Task')
+const params = computed(() => ({ taskId: taskId.value }))
+const result = computed(() => props.toolCall.result || null)
 
-const isError = computed(() => {
-  return props.toolCall.result?.error || props.toolCall.status === 'error'
-})
-
-const resultContent = computed(() => {
-  if (!hasResult.value) return ''
-
-  const result = props.toolCall.result
-  if (result.content !== undefined) {
-    return typeof result.content === 'string'
-      ? result.content
-      : JSON.stringify(result.content, null, 2)
-  }
-  if (result.message) {
-    return result.message
-  }
-  return JSON.stringify(result, null, 2)
-})
+defineExpose({ summary, params, result })
 
 // Try to parse task details from result
 const parsedTask = computed(() => {
@@ -193,7 +179,7 @@ const statusClass = computed(() => {
 
 <style scoped>
 .task-get-tool-handler {
-  font-size: 0.9rem;
+  font-size: var(--tool-font-size, 13px);
 }
 
 .tool-section {
@@ -205,9 +191,9 @@ const statusClass = computed(() => {
   align-items: center;
   gap: 0.5rem;
   padding: 0.5rem 0.75rem;
-  background: #d1ecf1;
-  border: 1px solid #bee5eb;
-  border-radius: 0.25rem 0.25rem 0 0;
+  background: var(--tool-bg-header, #f1f5f9);
+  border: 1px solid var(--tool-border, #e2e8f0);
+  border-radius: var(--tool-radius, 4px) var(--tool-radius, 4px) 0 0;
 }
 
 .task-icon {
@@ -215,19 +201,19 @@ const statusClass = computed(() => {
 }
 
 .task-id-badge {
-  background: #6c757d;
+  background: var(--tool-text-muted, #64748b);
   color: white;
   padding: 0.1rem 0.4rem;
-  border-radius: 0.25rem;
+  border-radius: var(--tool-radius, 4px);
   font-size: 0.8rem;
   font-family: 'Courier New', monospace;
 }
 
 .task-details-result {
   background: #fff;
-  border: 1px solid #dee2e6;
+  border: 1px solid var(--tool-border, #e2e8f0);
   border-top: none;
-  border-radius: 0 0 0.25rem 0.25rem;
+  border-radius: 0 0 var(--tool-radius, 4px) var(--tool-radius, 4px);
 }
 
 .task-field {
@@ -238,12 +224,12 @@ const statusClass = computed(() => {
 
 .field-label {
   font-weight: 600;
-  color: #6c757d;
-  font-size: 0.85rem;
+  color: var(--tool-text-muted, #64748b);
+  font-size: var(--tool-code-font-size, 11px);
 }
 
 .field-value {
-  color: #495057;
+  color: var(--tool-text-muted, #64748b);
 }
 
 .subject-value {
@@ -264,23 +250,23 @@ const statusClass = computed(() => {
 }
 
 .status-pending {
-  color: #6c757d;
+  color: var(--tool-text-muted, #64748b);
 }
 
 .tool-result-error {
   padding: 0.5rem 0.75rem;
-  background: #fff5f5;
-  border: 1px solid #dc3545;
-  border-radius: 0 0 0.25rem 0.25rem;
+  background: var(--tool-error-bg, #fee2e2);
+  border: 1px solid var(--tool-error-border, #f87171);
+  border-radius: 0 0 var(--tool-radius, 4px) var(--tool-radius, 4px);
 }
 
 .tool-code {
   margin: 0;
   font-family: 'Courier New', monospace;
-  font-size: 0.85rem;
+  font-size: var(--tool-code-font-size, 11px);
   white-space: pre-wrap;
   word-break: break-word;
-  max-height: 300px;
+  max-height: var(--tool-code-max-height, 200px);
   overflow-y: auto;
 }
 </style>

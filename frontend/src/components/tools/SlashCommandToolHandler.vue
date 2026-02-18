@@ -190,11 +190,18 @@ const errorMessage = computed(() => {
   if (result?.error) return result.error
   return 'An error occurred'
 })
+
+// Expose summary, params, result for ToolCallCard
+const summary = computed(() => `Slash Command: ${commandName.value}`)
+const params = computed(() => ({ command: commandName.value }))
+const result = computed(() => props.toolCall.result || null)
+
+defineExpose({ summary, params, result })
 </script>
 
 <style scoped>
 .slashcommand-tool-handler {
-  font-size: 0.9rem;
+  font-size: var(--tool-font-size, 13px);
 }
 
 .tool-section {
@@ -205,114 +212,24 @@ const errorMessage = computed(() => {
   margin-bottom: 0;
 }
 
-.command-info {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.75rem;
-  background: #f8f9fa;
-  border: 1px solid #dee2e6;
-  border-radius: 0.25rem;
-  flex-wrap: wrap;
-}
-
-.command-icon {
-  font-size: 1.5rem;
-  font-weight: bold;
-  flex-shrink: 0;
-  color: #0969da;
-}
-
-.command-name {
-  padding: 0.25rem 0.5rem;
-  background: #e7f3ff;
-  border-radius: 0.25rem;
-  font-size: 0.85rem;
-  font-family: 'Courier New', monospace;
-  color: #0969da;
-  font-weight: 600;
-}
-
-.command-status-badge {
-  padding: 0.25rem 0.5rem;
-  border-radius: 0.25rem;
-  font-size: 0.75rem;
-  font-weight: 600;
-  text-transform: uppercase;
-}
-
-.badge-secondary {
-  background: #6c757d;
-  color: white;
-}
-
-.badge-warning {
-  background: #ffc107;
-  color: #000;
-}
-
-.badge-primary {
-  background: #0d6efd;
-  color: white;
-}
-
-.badge-success {
-  background: #198754;
-  color: white;
-}
-
-.badge-danger {
-  background: #dc3545;
-  color: white;
-}
-
-.arguments-info {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.75rem;
-  background: #f8f9fa;
-  border: 1px solid #dee2e6;
-  border-radius: 0.25rem;
-  flex-wrap: wrap;
-}
-
-.arguments-icon {
-  font-size: 1.1rem;
-  flex-shrink: 0;
-}
-
-.arguments-text {
-  padding: 0.2rem 0.5rem;
-  background: #e9ecef;
-  border-radius: 0.2rem;
-  font-family: 'Courier New', monospace;
-  font-size: 0.85rem;
-  color: #495057;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 100%;
-}
-
 .command-content-header {
   padding: 0.75rem;
-  background: #e9ecef;
-  border: 1px solid #dee2e6;
-  border-radius: 0.25rem 0.25rem 0 0;
+  background: var(--tool-bg-header, #f1f5f9);
+  border: 1px solid var(--tool-border, #e2e8f0);
+  border-radius: var(--tool-radius, 4px) var(--tool-radius, 4px) 0 0;
   cursor: pointer;
   user-select: none;
   transition: background-color 0.2s;
 }
 
 .command-content-header:hover {
-  background: #dee2e6;
+  background: var(--tool-border, #e2e8f0);
 }
 
 .command-content-body {
-  border: 1px solid #dee2e6;
+  border: 1px solid var(--tool-border, #e2e8f0);
   border-top: none;
-  border-radius: 0 0 0.25rem 0.25rem;
+  border-radius: 0 0 var(--tool-radius, 4px) var(--tool-radius, 4px);
   overflow: hidden;
 }
 
@@ -320,13 +237,13 @@ const errorMessage = computed(() => {
   margin: 0;
   padding: 0.75rem;
   font-family: 'Courier New', monospace;
-  font-size: 0.85rem;
-  background: #f8f9fa;
+  font-size: var(--tool-code-font-size, 11px);
+  background: var(--tool-bg, #f8fafc);
   border: none;
   white-space: pre-wrap;
   word-wrap: break-word;
   overflow-x: auto;
-  max-height: 500px;
+  max-height: var(--tool-code-max-height, 200px);
   overflow-y: auto;
   line-height: 1.5;
 }
@@ -337,28 +254,28 @@ const errorMessage = computed(() => {
 }
 
 .tool-result {
-  background: #f8f9fa;
-  border: 1px solid #dee2e6;
-  border-radius: 0.25rem;
+  background: var(--tool-bg, #f8fafc);
+  border: 1px solid var(--tool-border, #e2e8f0);
+  border-radius: var(--tool-radius, 4px);
   overflow: hidden;
 }
 
 .tool-result-error {
-  background: #fff5f5;
-  border-color: #dc3545;
+  background: var(--tool-error-bg, #fee2e2);
+  border-color: var(--tool-error-border, #f87171);
 }
 
 .tool-code {
   margin: 0;
   padding: 0.75rem;
   font-family: 'Courier New', monospace;
-  font-size: 0.85rem;
+  font-size: var(--tool-code-font-size, 11px);
   background: transparent;
   border: none;
   white-space: pre-wrap;
   word-wrap: break-word;
   overflow-x: auto;
-  max-height: 400px;
+  max-height: var(--tool-code-max-height, 200px);
   overflow-y: auto;
 }
 </style>

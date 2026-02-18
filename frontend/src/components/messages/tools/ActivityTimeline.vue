@@ -33,9 +33,8 @@
 
 <script setup>
 import { computed, ref, watch } from 'vue'
-import { useMessageStore } from '@/stores/message'
-import { useSessionStore } from '@/stores/session'
 import { useUIStore } from '@/stores/ui'
+import { getEffectiveStatusForTool, getColorForStatus } from '@/composables/useToolStatus'
 import TimelineNode from './TimelineNode.vue'
 import TimelineSegment from './TimelineSegment.vue'
 import TimelineDetail from './TimelineDetail.vue'
@@ -52,8 +51,6 @@ const props = defineProps({
   }
 })
 
-const messageStore = useMessageStore()
-const sessionStore = useSessionStore()
 const uiStore = useUIStore()
 
 // Local state for this timeline instance
@@ -87,63 +84,25 @@ const expandedTool = computed(() => {
 
 // Auto-expand when a tool needs permission, auto-collapse when resolved
 watch(sortedTools, (tools) => {
-  const permTool = tools.find(t => getEffectiveStatus(t) === 'permission_required')
+  const permTool = tools.find(t => getEffectiveStatusForTool(t) === 'permission_required')
   if (permTool) {
     expandedNodeId.value = permTool.id
   } else if (expandedNodeId.value) {
-    // Permission was resolved — collapse the detail panel
     const expanded = tools.find(t => t.id === expandedNodeId.value)
-    if (expanded && getEffectiveStatus(expanded) !== 'permission_required') {
+    if (expanded && getEffectiveStatusForTool(expanded) !== 'permission_required') {
       expandedNodeId.value = null
     }
   }
 }, { deep: true, immediate: true })
 
-// Get effective status for a tool
-function getEffectiveStatus(tool) {
-  const sessionId = sessionStore.currentSessionId
-  if (!sessionId) return tool.status
-
-  if (tool.backendStatus) {
-    const map = {
-      'pending': 'pending',
-      'awaiting_permission': 'permission_required',
-      'running': 'executing',
-      'completed': 'completed',
-      'failed': 'error',
-      'denied': 'completed',
-      'interrupted': 'orphaned'
-    }
-    return map[tool.backendStatus] || tool.backendStatus
-  }
-
-  if (messageStore.isToolUseOrphaned(sessionId, tool.id)) {
-    return 'orphaned'
-  }
-
-  return tool.status
-}
-
 // Get node color for segment gradient computation
 function getNodeColor(tool) {
-  const status = getEffectiveStatus(tool)
-  const hasError = tool.result?.error || tool.status === 'error' || tool.permissionDecision === 'deny'
-
-  switch (status) {
-    case 'completed':
-      return hasError ? '#ef4444' : '#22c55e'
-    case 'error':
-      return '#ef4444'
-    case 'executing':
-      return '#8b5cf6'
-    case 'permission_required':
-      return '#ffc107'
-    case 'orphaned':
-      return '#94a3b8'
-    case 'pending':
-    default:
-      return '#e2e8f0'
-  }
+  // Read from TimelineNode's exposed statusColor if available
+  const nodeRef = nodeRefs.value[tool.id]
+  if (nodeRef?.statusColor) return nodeRef.statusColor
+  // Fallback to utility function
+  const status = getEffectiveStatusForTool(tool)
+  return getColorForStatus(status, tool)
 }
 
 // Toggle detail panel

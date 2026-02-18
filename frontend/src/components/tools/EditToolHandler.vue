@@ -51,20 +51,18 @@
         <pre class="tool-code">{{ resultContent }}</pre>
       </div>
 
-      <div v-else class="tool-result tool-result-success">
-        <div class="success-message">
-          <span class="success-icon">✅</span>
-          <strong>File edited successfully</strong>
-          <span v-if="replaceAll" class="success-detail">(all occurrences replaced)</span>
-        </div>
+      <div v-else>
+        <ToolSuccessMessage message="File edited successfully" :detail="replaceAll ? '(all occurrences replaced)' : null" />
       </div>
     </div>
   </div>
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, toRef } from 'vue'
 import { createPatch } from 'diff'
+import { useToolResult } from '@/composables/useToolResult'
+import ToolSuccessMessage from './ToolSuccessMessage.vue'
 
 const props = defineProps({
   toolCall: {
@@ -132,37 +130,19 @@ const addedCount = computed(() => {
   return diffLines.value.filter(line => line.type === 'added').length
 })
 
-// Result
-const hasResult = computed(() => {
-  return props.toolCall.result !== null && props.toolCall.result !== undefined
-})
+// Result (composable replaces duplicated hasResult/isError/resultContent)
+const { hasResult, isError, resultContent } = useToolResult(toRef(props, 'toolCall'))
 
-const isError = computed(() => {
-  return props.toolCall.result?.error || props.toolCall.status === 'error'
-})
-
-const resultContent = computed(() => {
-  if (!hasResult.value) return ''
-
-  const result = props.toolCall.result
-
-  if (result.content !== undefined) {
-    return typeof result.content === 'string'
-      ? result.content
-      : JSON.stringify(result.content, null, 2)
-  }
-
-  if (result.message) {
-    return result.message
-  }
-
-  return JSON.stringify(result, null, 2)
-})
+// Expose for parent components
+const summary = computed(() => `Edit: ${filePath.value}`)
+const params = computed(() => ({ file_path: filePath.value, replace_all: replaceAll.value }))
+const result = computed(() => props.toolCall.result || null)
+defineExpose({ summary, params, result })
 </script>
 
 <style scoped>
 .edit-tool-handler {
-  font-size: 0.9rem;
+  font-size: var(--tool-font-size, 13px);
 }
 
 .tool-section {
@@ -179,9 +159,9 @@ const resultContent = computed(() => {
   gap: 0.5rem;
   flex-wrap: wrap;
   padding: 0.75rem;
-  background: #f8f9fa;
-  border: 1px solid #dee2e6;
-  border-radius: 0.25rem 0.25rem 0 0;
+  background: var(--tool-bg, #f8fafc);
+  border: 1px solid var(--tool-border, #e2e8f0);
+  border-radius: var(--tool-radius, 4px) var(--tool-radius, 4px) 0 0;
   border-bottom: none;
   overflow: hidden;
 }
@@ -192,14 +172,13 @@ const resultContent = computed(() => {
 }
 
 .file-path {
-  background: #e9ecef;
+  background: var(--tool-bg-header, #f1f5f9);
   padding: 0.2rem 0.5rem;
-  border-radius: 0.2rem;
+  border-radius: var(--tool-radius, 4px);
   font-family: 'Courier New', monospace;
-  font-size: 0.85rem;
+  font-size: var(--tool-code-font-size, 11px);
   color: #0d6efd;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  overflow-x: auto;
   white-space: nowrap;
   max-width: 100%;
 }
@@ -208,15 +187,15 @@ const resultContent = computed(() => {
   background: #ffc107;
   color: #000;
   padding: 0.2rem 0.5rem;
-  border-radius: 0.25rem;
+  border-radius: var(--tool-radius, 4px);
   font-size: 0.8rem;
   font-weight: 600;
 }
 
 .edit-diff-container {
   background: #fff;
-  border: 1px solid #dee2e6;
-  border-radius: 0 0 0.25rem 0.25rem;
+  border: 1px solid var(--tool-border, #e2e8f0);
+  border-radius: 0 0 var(--tool-radius, 4px) var(--tool-radius, 4px);
   overflow: hidden;
 }
 
@@ -225,20 +204,20 @@ const resultContent = computed(() => {
   align-items: center;
   justify-content: space-between;
   padding: 0.5rem 0.75rem;
-  background: #e9ecef;
-  border-bottom: 1px solid #dee2e6;
+  background: var(--tool-bg-header, #f1f5f9);
+  border-bottom: 1px solid var(--tool-border, #e2e8f0);
 }
 
 .diff-label {
   font-weight: 600;
-  color: #6c757d;
+  color: var(--tool-text-muted, #64748b);
 }
 
 .diff-stats {
   display: flex;
   gap: 0.75rem;
   font-family: 'Courier New', monospace;
-  font-size: 0.85rem;
+  font-size: var(--tool-code-font-size, 11px);
   font-weight: 600;
 }
 
@@ -251,7 +230,7 @@ const resultContent = computed(() => {
 }
 
 .unified-diff {
-  max-height: 400px;
+  max-height: var(--tool-code-max-height, 200px);
   overflow: auto;
   white-space: pre;
 }
@@ -264,7 +243,7 @@ const resultContent = computed(() => {
 .diff-line {
   display: flex;
   font-family: 'Courier New', monospace;
-  font-size: 0.85rem;
+  font-size: var(--tool-code-font-size, 11px);
   line-height: 1.4;
   white-space: nowrap;
 }
@@ -329,41 +308,19 @@ const resultContent = computed(() => {
 
 .tool-result {
   padding: 0.75rem;
-  border-radius: 0.25rem;
-}
-
-.tool-result-success {
-  background: #d1e7dd;
-  border: 1px solid #badbcc;
+  border-radius: var(--tool-radius, 4px);
 }
 
 .tool-result-error {
-  background: #fff5f5;
-  border: 1px solid #dc3545;
-}
-
-.success-message {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  color: #0f5132;
-}
-
-.success-icon {
-  font-size: 1.2rem;
-}
-
-.success-detail {
-  color: #6c757d;
-  font-size: 0.9rem;
-  font-style: italic;
+  background: var(--tool-error-bg, #fee2e2);
+  border: 1px solid var(--tool-error-border, #f87171);
 }
 
 .tool-code {
   margin: 0;
   padding: 0;
   font-family: 'Courier New', monospace;
-  font-size: 0.85rem;
+  font-size: var(--tool-code-font-size, 11px);
   background: transparent;
   border: none;
   white-space: pre;

@@ -1,0 +1,231 @@
+/*
+ * Tool Theme - Tailwind Slate Palette
+ *
+ * Shared CSS tokens and utility classes for all tool handlers.
+ * Matches TimelineDetail's existing design language.
+ *
+ * Import in main.js: import '@/assets/tool-theme.css'
+ */
+
+:root {
+  /* Slate palette tokens */
+  --tool-bg: #f8fafc;
+  --tool-bg-header: #f1f5f9;
+  --tool-border: #e2e8f0;
+  --tool-text: #334155;
+  --tool-text-muted: #64748b;
+  --tool-font-size: 13px;
+  --tool-code-font-size: 11px;
+  --tool-padding: 6px 8px;
+  --tool-code-max-height: 200px;
+  --tool-radius: 4px;
+  --tool-font-mono: 'Courier New', monospace;
+
+  /* Error tokens */
+  --tool-error-bg: #fee2e2;
+  --tool-error-border: #f87171;
+  --tool-error-text: #991b1b;
+
+  /* Success tokens */
+  --tool-success-bg: #dcfce7;
+  --tool-success-border: #86efac;
+  --tool-success-text: #166534;
+
+  /* Badge tokens */
+  --tool-badge-bg: #3b82f6;
+  --tool-badge-text: white;
+
+  /* File path tokens */
+  --tool-path-bg: #f1f5f9;
+  --tool-path-color: #2563eb;
+}
+
+/* Shared section container */
+.tool-section {
+  margin-bottom: 4px;
+}
+
+.tool-section:last-child {
+  margin-bottom: 0;
+}
+
+/* Section label */
+.tool-label {
+  font-weight: 600;
+  color: var(--tool-text-muted);
+  font-size: var(--tool-code-font-size);
+  margin-bottom: 2px;
+}
+
+/* Code block (pre) */
+.tool-code-block {
+  margin: 0;
+  padding: var(--tool-padding);
+  font-family: var(--tool-font-mono);
+  font-size: var(--tool-code-font-size);
+  background: var(--tool-bg-header);
+  border: 1px solid var(--tool-border);
+  border-radius: var(--tool-radius);
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: var(--tool-code-max-height);
+  overflow: auto;
+  line-height: 1.4;
+}
+
+/* File info row */
+.tool-file-info {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding: var(--tool-padding);
+  background: var(--tool-bg);
+  border: 1px solid var(--tool-border);
+  border-radius: var(--tool-radius);
+  font-size: var(--tool-font-size);
+  overflow: hidden;
+}
+
+.tool-file-info .file-icon {
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+.tool-file-info .file-path {
+  background: var(--tool-path-bg);
+  padding: 1px 6px;
+  border-radius: 2px;
+  font-family: var(--tool-font-mono);
+  font-size: var(--tool-code-font-size);
+  color: var(--tool-path-color);
+  overflow-x: auto;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+/* Badge */
+.tool-badge {
+  display: inline-block;
+  background: var(--tool-badge-bg);
+  color: var(--tool-badge-text);
+  padding: 1px 6px;
+  border-radius: 2px;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.tool-badge-purple {
+  background: #7c3aed;
+}
+
+.tool-badge-amber {
+  background: #d97706;
+  color: white;
+}
+
+.tool-badge-slate {
+  background: #64748b;
+  color: white;
+}
+
+/* Error result */
+.tool-error {
+  background: var(--tool-error-bg);
+  border: 1px solid var(--tool-error-border);
+  border-radius: var(--tool-radius);
+  padding: var(--tool-padding);
+  color: var(--tool-error-text);
+  font-size: var(--tool-font-size);
+}
+
+.tool-error pre {
+  margin: 0;
+  font-family: var(--tool-font-mono);
+  font-size: var(--tool-code-font-size);
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: inherit;
+}
+
+/* Success result */
+.tool-success {
+  background: var(--tool-success-bg);
+  border: 1px solid var(--tool-success-border);
+  border-radius: var(--tool-radius);
+  padding: var(--tool-padding);
+  color: var(--tool-success-text);
+  font-size: var(--tool-font-size);
+}
+
+/* Content preview block (with header + body) */
+.tool-content-block {
+  background: var(--tool-bg);
+  border: 1px solid var(--tool-border);
+  border-radius: var(--tool-radius);
+  overflow: hidden;
+}
+
+.tool-content-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  background: var(--tool-bg-header);
+  border-bottom: 1px solid var(--tool-border);
+  font-size: var(--tool-code-font-size);
+  flex-wrap: wrap;
+}
+
+.tool-content-header .content-label {
+  font-weight: 600;
+  color: var(--tool-text-muted);
+}
+
+.tool-content-body {
+  padding: 0;
+}
+
+.tool-content-body pre {
+  margin: 0;
+  padding: var(--tool-padding);
+  font-family: var(--tool-font-mono);
+  font-size: var(--tool-code-font-size);
+  background: transparent;
+  border: none;
+  white-space: pre;
+  overflow-x: auto;
+  max-height: var(--tool-code-max-height);
+  overflow-y: auto;
+  line-height: 1.4;
+}
+
+.tool-more-indicator {
+  text-align: center;
+  padding: 3px;
+  color: var(--tool-text-muted);
+  font-weight: bold;
+  font-size: var(--tool-code-font-size);
+  background: var(--tool-bg-header);
+  border-top: 1px solid var(--tool-border);
+}
+
+/* Filter/info badge (for search filters etc.) */
+.tool-filter-badge {
+  background: #dbeafe;
+  color: #1e40af;
+  padding: 1px 6px;
+  border-radius: 2px;
+  font-size: 10px;
+  font-weight: 600;
+  font-family: var(--tool-font-mono);
+}
+
+/* Range badge */
+.tool-range-badge {
+  color: var(--tool-text-muted);
+  font-size: var(--tool-code-font-size);
+  padding: 1px 6px;
+  background: var(--tool-bg-header);
+  border-radius: 2px;
+}

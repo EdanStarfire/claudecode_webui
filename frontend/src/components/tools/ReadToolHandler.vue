@@ -46,7 +46,8 @@
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, toRef } from 'vue'
+import { useToolResult } from '@/composables/useToolResult'
 
 const props = defineProps({
   toolCall: {
@@ -54,6 +55,8 @@ const props = defineProps({
     required: true
   }
 })
+
+const { hasResult, isError, resultContent } = useToolResult(toRef(props, 'toolCall'))
 
 // Parameters
 const filePath = computed(() => {
@@ -86,15 +89,6 @@ const endLine = computed(() => {
 const isImageFile = computed(() => {
   const path = filePath.value.toLowerCase()
   return /\.(png|jpg|jpeg|gif|webp|svg|bmp|ico)$/.test(path)
-})
-
-// Result
-const hasResult = computed(() => {
-  return props.toolCall.result !== null && props.toolCall.result !== undefined
-})
-
-const isError = computed(() => {
-  return props.toolCall.result?.error || props.toolCall.status === 'error'
 })
 
 // Extract image data from result if present
@@ -134,24 +128,6 @@ const imageMimeType = computed(() => {
   return 'image/png'
 })
 
-const resultContent = computed(() => {
-  if (!hasResult.value) return ''
-
-  const result = props.toolCall.result
-
-  if (result.content !== undefined) {
-    return typeof result.content === 'string'
-      ? result.content
-      : JSON.stringify(result.content, null, 2)
-  }
-
-  if (result.message) {
-    return result.message
-  }
-
-  return JSON.stringify(result, null, 2)
-})
-
 const previewLimit = 100
 const lines = computed(() => {
   if (isError.value || !resultContent.value || imageData.value) return []
@@ -166,11 +142,16 @@ const previewContent = computed(() => {
   const previewLines = lines.value.slice(0, previewLimit)
   return previewLines.join('\n')
 })
+
+const summary = computed(() => `Read: ${filePath.value}`)
+const params = computed(() => ({ file_path: filePath.value, range: hasRange.value ? `${startLine.value}-${endLine.value}` : null }))
+const result = computed(() => props.toolCall.result || null)
+defineExpose({ summary, params, result })
 </script>
 
 <style scoped>
 .read-tool-handler {
-  font-size: 0.9rem;
+  font-size: var(--tool-font-size, 13px);
 }
 
 .tool-section {
@@ -187,9 +168,9 @@ const previewContent = computed(() => {
   gap: 0.5rem;
   flex-wrap: wrap;
   padding: 0.75rem;
-  background: #f8f9fa;
-  border: 1px solid #dee2e6;
-  border-radius: 0.25rem;
+  background: var(--tool-bg, #f8fafc);
+  border: 1px solid var(--tool-border, #e2e8f0);
+  border-radius: var(--tool-radius, 4px);
   overflow: hidden;
 }
 
@@ -199,49 +180,48 @@ const previewContent = computed(() => {
 }
 
 .file-path {
-  background: #e9ecef;
+  background: var(--tool-bg-header, #f1f5f9);
   padding: 0.2rem 0.5rem;
-  border-radius: 0.2rem;
+  border-radius: var(--tool-radius, 4px);
   font-family: 'Courier New', monospace;
-  font-size: 0.85rem;
+  font-size: var(--tool-code-font-size, 11px);
   color: #0d6efd;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  overflow-x: auto;
   white-space: nowrap;
   max-width: 100%;
 }
 
 .read-range {
-  color: #6c757d;
-  font-size: 0.85rem;
+  color: var(--tool-text-muted, #64748b);
+  font-size: var(--tool-code-font-size, 11px);
   padding: 0.2rem 0.5rem;
-  background: #e9ecef;
-  border-radius: 0.2rem;
+  background: var(--tool-bg-header, #f1f5f9);
+  border-radius: var(--tool-radius, 4px);
 }
 
 .tool-result {
-  background: #f8f9fa;
-  border: 1px solid #dee2e6;
-  border-radius: 0.25rem;
+  background: var(--tool-bg, #f8fafc);
+  border: 1px solid var(--tool-border, #e2e8f0);
+  border-radius: var(--tool-radius, 4px);
   overflow: hidden;
 }
 
 .tool-result-error {
-  background: #fff5f5;
-  border-color: #dc3545;
+  background: var(--tool-error-bg, #fee2e2);
+  border-color: var(--tool-error-border, #f87171);
 }
 
 .file-content-preview {
-  background: #f8f9fa;
-  border: 1px solid #dee2e6;
-  border-radius: 0.25rem;
+  background: var(--tool-bg, #f8fafc);
+  border: 1px solid var(--tool-border, #e2e8f0);
+  border-radius: var(--tool-radius, 4px);
   overflow: hidden;
 }
 
 .image-preview {
-  background: #f8f9fa;
-  border: 1px solid #dee2e6;
-  border-radius: 0.25rem;
+  background: var(--tool-bg, #f8fafc);
+  border: 1px solid var(--tool-border, #e2e8f0);
+  border-radius: var(--tool-radius, 4px);
   overflow: hidden;
 }
 
@@ -250,21 +230,21 @@ const previewContent = computed(() => {
   align-items: center;
   gap: 0.5rem;
   padding: 0.5rem 0.75rem;
-  background: #e9ecef;
-  border-bottom: 1px solid #dee2e6;
+  background: var(--tool-bg-header, #f1f5f9);
+  border-bottom: 1px solid var(--tool-border, #e2e8f0);
   flex-wrap: wrap;
 }
 
 .content-label {
   font-weight: 600;
-  color: #6c757d;
+  color: var(--tool-text-muted, #64748b);
 }
 
 .line-count-badge {
   background: #0d6efd;
   color: white;
   padding: 0.2rem 0.5rem;
-  border-radius: 0.25rem;
+  border-radius: var(--tool-radius, 4px);
   font-size: 0.8rem;
   font-weight: 600;
 }
@@ -273,14 +253,14 @@ const previewContent = computed(() => {
   background: #6f42c1;
   color: white;
   padding: 0.2rem 0.5rem;
-  border-radius: 0.25rem;
+  border-radius: var(--tool-radius, 4px);
   font-size: 0.8rem;
   font-weight: 600;
 }
 
 .preview-note {
-  color: #6c757d;
-  font-size: 0.85rem;
+  color: var(--tool-text-muted, #64748b);
+  font-size: var(--tool-code-font-size, 11px);
   font-style: italic;
 }
 
@@ -294,9 +274,9 @@ const previewContent = computed(() => {
 
 .preview-image {
   max-width: 100%;
-  max-height: 400px;
+  max-height: var(--tool-code-max-height, 200px);
   object-fit: contain;
-  border-radius: 0.25rem;
+  border-radius: var(--tool-radius, 4px);
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
 }
 
@@ -304,12 +284,12 @@ const previewContent = computed(() => {
   margin: 0;
   padding: 0.75rem;
   font-family: 'Courier New', monospace;
-  font-size: 0.85rem;
+  font-size: var(--tool-code-font-size, 11px);
   background: transparent;
   border: none;
   white-space: pre;
   overflow-x: auto;
-  max-height: 400px;
+  max-height: var(--tool-code-max-height, 200px);
   overflow-y: auto;
   line-height: 1.4;
 }
@@ -318,12 +298,12 @@ const previewContent = computed(() => {
   margin: 0;
   padding: 0.75rem;
   font-family: 'Courier New', monospace;
-  font-size: 0.85rem;
+  font-size: var(--tool-code-font-size, 11px);
   background: transparent;
   border: none;
   white-space: pre;
   overflow-x: auto;
-  max-height: 400px;
+  max-height: var(--tool-code-max-height, 200px);
   overflow-y: auto;
   line-height: 1.4;
 }
@@ -331,9 +311,9 @@ const previewContent = computed(() => {
 .more-indicator {
   text-align: center;
   padding: 0.5rem;
-  color: #6c757d;
+  color: var(--tool-text-muted, #64748b);
   font-weight: bold;
-  background: #e9ecef;
-  border-top: 1px solid #dee2e6;
+  background: var(--tool-bg-header, #f1f5f9);
+  border-top: 1px solid var(--tool-border, #e2e8f0);
 }
 </style>

@@ -318,6 +318,16 @@ const allQuestionsAnswered = computed(() => {
   })
 })
 
+// Standardized tool handler computed properties
+const summary = computed(() => {
+  const count = questions.value.length
+  return count > 0 ? `Question (${count})` : 'Question'
+})
+
+const params = computed(() => ({ questions: questions.value.map(q => q.question) }))
+
+const result = computed(() => props.toolCall.result || null)
+
 // Expose for parent component
 defineExpose({
   allQuestionsAnswered,
@@ -347,7 +357,10 @@ defineExpose({
       }
     })
     return answers
-  }
+  },
+  summary,
+  params,
+  result
 })
 </script>
 
@@ -358,15 +371,15 @@ defineExpose({
 
 /* Read-only answers display */
 .answers-summary {
-  background: #f8f9fa;
-  border: 1px solid #dee2e6;
-  border-radius: 0.375rem;
+  background: var(--tool-bg, #f8fafc);
+  border: 1px solid var(--tool-border, #e2e8f0);
+  border-radius: var(--tool-radius, 4px);
   padding: 0.75rem;
 }
 
 .answer-item {
   padding-bottom: 0.5rem;
-  border-bottom: 1px solid #eee;
+  border-bottom: 1px solid var(--tool-border, #e2e8f0);
 }
 
 .answer-item:last-child {
@@ -376,7 +389,7 @@ defineExpose({
 }
 
 .answer-question {
-  font-size: 0.85rem;
+  font-size: var(--tool-code-font-size, 11px);
 }
 
 .answer-value {
@@ -385,21 +398,21 @@ defineExpose({
 
 /* Interactive questions display */
 .question-block {
-  background: #f8f9fa;
-  border: 1px solid #dee2e6;
-  border-radius: 0.375rem;
+  background: var(--tool-bg, #f8fafc);
+  border: 1px solid var(--tool-border, #e2e8f0);
+  border-radius: var(--tool-radius, 4px);
   padding: 1rem;
 }
 
 .question-header {
-  border-bottom: 1px solid #dee2e6;
+  border-bottom: 1px solid var(--tool-border, #e2e8f0);
   padding-bottom: 0.5rem;
   margin-bottom: 0.75rem;
 }
 
 .question-text {
-  color: #212529;
-  font-size: 0.95rem;
+  color: #1e293b;
+  font-size: var(--tool-font-size, 13px);
 }
 
 .options-list {
@@ -410,8 +423,8 @@ defineExpose({
 
 .option-item {
   padding: 0.5rem 0.75rem;
-  border: 1px solid #dee2e6;
-  border-radius: 0.25rem;
+  border: 1px solid var(--tool-border, #e2e8f0);
+  border-radius: var(--tool-radius, 4px);
   background: #fff;
   transition: all 0.15s ease;
 }
@@ -428,7 +441,7 @@ defineExpose({
 
 .option-label {
   font-weight: 500;
-  color: #212529;
+  color: #1e293b;
 }
 
 .option-description {

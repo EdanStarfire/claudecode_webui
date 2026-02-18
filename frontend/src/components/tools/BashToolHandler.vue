@@ -32,7 +32,8 @@
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, toRef } from 'vue'
+import { useToolResult } from '@/composables/useToolResult'
 
 const props = defineProps({
   toolCall: {
@@ -73,41 +74,23 @@ const flagsText = computed(() => {
   return flags.join(', ')
 })
 
-// Result
-const hasResult = computed(() => {
-  return props.toolCall.result !== null && props.toolCall.result !== undefined
-})
-
-const isError = computed(() => {
-  return props.toolCall.result?.error || props.toolCall.status === 'error'
-})
+// Result (shared composable)
+const { hasResult, isError, resultContent } = useToolResult(toRef(props, 'toolCall'))
 
 const resultClass = computed(() => {
   return isError.value ? 'tool-result-error' : 'tool-result-success'
 })
 
-const resultContent = computed(() => {
-  if (!hasResult.value) return ''
-
-  const result = props.toolCall.result
-
-  if (result.content !== undefined) {
-    return typeof result.content === 'string'
-      ? result.content
-      : JSON.stringify(result.content, null, 2)
-  }
-
-  if (result.message) {
-    return result.message
-  }
-
-  return JSON.stringify(result, null, 2)
-})
+// Expose for parent ToolCallCard
+const summary = computed(() => `Bash: ${command.value?.substring(0, 60) || ''}`)
+const params = computed(() => ({ command: command.value, description: description.value }))
+const result = computed(() => props.toolCall.result || null)
+defineExpose({ summary, params, result })
 </script>
 
 <style scoped>
 .bash-tool-handler {
-  font-size: 0.9rem;
+  font-size: var(--tool-font-size, 13px);
 }
 
 .tool-section {
@@ -123,9 +106,9 @@ const resultContent = computed(() => {
   align-items: start;
   gap: 0.75rem;
   padding: 0.75rem;
-  background: #f8f9fa;
-  border: 1px solid #dee2e6;
-  border-radius: 0.25rem 0.25rem 0 0;
+  background: var(--tool-bg, #f8fafc);
+  border: 1px solid var(--tool-border, #e2e8f0);
+  border-radius: var(--tool-radius, 4px) var(--tool-radius, 4px) 0 0;
   border-bottom: none;
 }
 
@@ -146,12 +129,12 @@ const resultContent = computed(() => {
 }
 
 .bash-flags {
-  font-size: 0.85rem;
+  font-size: var(--tool-code-font-size, 11px);
   color: #6c757d;
   font-family: 'Courier New', monospace;
-  background: #e9ecef;
+  background: var(--tool-bg-header, #f1f5f9);
   padding: 0.25rem 0.5rem;
-  border-radius: 0.2rem;
+  border-radius: var(--tool-radius, 4px);
   display: inline-block;
   align-self: flex-start;
 }
@@ -160,19 +143,19 @@ const resultContent = computed(() => {
   background: #212529;
   color: #f8f9fa;
   padding: 0.75rem;
-  border: 1px solid #dee2e6;
-  border-radius: 0 0 0.25rem 0.25rem;
+  border: 1px solid var(--tool-border, #e2e8f0);
+  border-radius: 0 0 var(--tool-radius, 4px) var(--tool-radius, 4px);
 }
 
 .bash-command-label {
   color: #adb5bd;
   margin-bottom: 0.5rem;
-  font-size: 0.85rem;
+  font-size: var(--tool-code-font-size, 11px);
 }
 
 .bash-command-content {
   font-family: 'Courier New', monospace;
-  font-size: 0.9rem;
+  font-size: var(--tool-font-size, 13px);
   white-space: pre;
   overflow-x: auto;
   background: #212529;  /* Override global light blue - use dark terminal background */
@@ -181,31 +164,31 @@ const resultContent = computed(() => {
 
 .tool-result {
   padding: 0.75rem;
-  border-radius: 0.25rem;
+  border-radius: var(--tool-radius, 4px);
 }
 
 .tool-result-success {
-  background: #f8f9fa;
-  border: 1px solid #dee2e6;
+  background: var(--tool-bg, #f8fafc);
+  border: 1px solid var(--tool-border, #e2e8f0);
 }
 
 .tool-result-error {
-  background: #fff5f5;
-  border: 1px solid #dc3545;
+  background: var(--tool-error-bg, #fee2e2);
+  border: 1px solid var(--tool-error-border, #f87171);
 }
 
 .bash-output {
   margin: 0.5rem 0 0 0;
   padding: 0.75rem;
   font-family: 'Courier New', monospace;
-  font-size: 0.85rem;
+  font-size: var(--tool-code-font-size, 11px);
   background: #212529;
   color: #f8f9fa;
   border: none;
-  border-radius: 0.25rem;
+  border-radius: var(--tool-radius, 4px);
   white-space: pre;
   overflow-x: auto;
-  max-height: 400px;
+  max-height: var(--tool-code-max-height, 200px);
   overflow-y: auto;
   line-height: 1.4;
 }
@@ -216,7 +199,7 @@ const resultContent = computed(() => {
   color: #6c757d;
   font-style: italic;
   text-align: center;
-  background: #f8f9fa;
-  border-radius: 0.25rem;
+  background: var(--tool-bg, #f8fafc);
+  border-radius: var(--tool-radius, 4px);
 }
 </style>

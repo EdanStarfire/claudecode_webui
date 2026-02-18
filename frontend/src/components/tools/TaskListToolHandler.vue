@@ -48,7 +48,8 @@
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, toRef } from 'vue'
+import { useToolResult } from '@/composables/useToolResult'
 
 const props = defineProps({
   toolCall: {
@@ -57,29 +58,8 @@ const props = defineProps({
   }
 })
 
-// Result
-const hasResult = computed(() => {
-  return props.toolCall.result !== null && props.toolCall.result !== undefined
-})
-
-const isError = computed(() => {
-  return props.toolCall.result?.error || props.toolCall.status === 'error'
-})
-
-const resultContent = computed(() => {
-  if (!hasResult.value) return ''
-
-  const result = props.toolCall.result
-  if (result.content !== undefined) {
-    return typeof result.content === 'string'
-      ? result.content
-      : JSON.stringify(result.content, null, 2)
-  }
-  if (result.message) {
-    return result.message
-  }
-  return JSON.stringify(result, null, 2)
-})
+// Shared result composable
+const { hasResult, isError, resultContent } = useToolResult(toRef(props, 'toolCall'))
 
 // Try to parse task list from result
 const parsedTasks = computed(() => {
@@ -118,11 +98,18 @@ function getStatusIcon(status) {
       return '⏳'
   }
 }
+
+// Expose summary/params/result for ToolCallCard
+const summary = computed(() => 'List Tasks')
+const params = computed(() => ({}))
+const result = computed(() => props.toolCall.result || null)
+
+defineExpose({ summary, params, result })
 </script>
 
 <style scoped>
 .task-list-tool-handler {
-  font-size: 0.9rem;
+  font-size: var(--tool-font-size, 13px);
 }
 
 .tool-section {
@@ -134,9 +121,9 @@ function getStatusIcon(status) {
   align-items: center;
   gap: 0.5rem;
   padding: 0.5rem 0.75rem;
-  background: #e2e3e5;
-  border: 1px solid #d6d8db;
-  border-radius: 0.25rem 0.25rem 0 0;
+  background: var(--tool-bg-header, #f1f5f9);
+  border: 1px solid var(--tool-border, #e2e8f0);
+  border-radius: var(--tool-radius, 4px) var(--tool-radius, 4px) 0 0;
 }
 
 .task-icon {
@@ -145,9 +132,9 @@ function getStatusIcon(status) {
 
 .task-list-result {
   background: #fff;
-  border: 1px solid #dee2e6;
+  border: 1px solid var(--tool-border, #e2e8f0);
   border-top: none;
-  border-radius: 0 0 0.25rem 0.25rem;
+  border-radius: 0 0 var(--tool-radius, 4px) var(--tool-radius, 4px);
 }
 
 .task-summary:last-child {
@@ -161,8 +148,9 @@ function getStatusIcon(status) {
 
 .task-id {
   font-family: 'Courier New', monospace;
-  font-size: 0.85rem;
+  font-size: var(--tool-code-font-size, 11px);
   flex-shrink: 0;
+  color: var(--tool-text-muted, #64748b);
 }
 
 .task-subject {
@@ -178,30 +166,30 @@ function getStatusIcon(status) {
 }
 
 .no-tasks {
-  background: #f8f9fa;
-  border: 1px solid #dee2e6;
+  background: var(--tool-bg, #f8fafc);
+  border: 1px solid var(--tool-border, #e2e8f0);
   border-top: none;
-  border-radius: 0 0 0.25rem 0.25rem;
+  border-radius: 0 0 var(--tool-radius, 4px) var(--tool-radius, 4px);
 }
 
 .tool-result-error {
   padding: 0.5rem 0.75rem;
-  background: #fff5f5;
-  border: 1px solid #dc3545;
-  border-radius: 0 0 0.25rem 0.25rem;
+  background: var(--tool-error-bg, #fee2e2);
+  border: 1px solid var(--tool-error-border, #f87171);
+  border-radius: 0 0 var(--tool-radius, 4px) var(--tool-radius, 4px);
 }
 
 .raw-result {
-  background: #f8f9fa;
+  background: var(--tool-bg, #f8fafc);
 }
 
 .tool-code {
   margin: 0;
   font-family: 'Courier New', monospace;
-  font-size: 0.85rem;
+  font-size: var(--tool-code-font-size, 11px);
   white-space: pre-wrap;
   word-break: break-word;
-  max-height: 300px;
+  max-height: var(--tool-code-max-height, 200px);
   overflow-y: auto;
 }
 </style>
