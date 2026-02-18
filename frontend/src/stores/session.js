@@ -1,7 +1,8 @@
 import { defineStore } from 'pinia'
-import { ref, computed } from 'vue'
+import { ref, computed, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { api } from '../utils/api'
+import { useUIStore } from './ui'
 
 /**
  * Session Store - Manages session state and operations
@@ -134,6 +135,10 @@ export const useSessionStore = defineStore('session', () => {
 
     // Set mutex flag
     selectingSession.value = true
+
+    // Suppress auto-show of right panel while loading existing session data (#521)
+    const uiStore = useUIStore()
+    uiStore.setSuppressAutoShow(true)
 
     try {
       // Update current session immediately to prevent UI confusion
@@ -271,6 +276,9 @@ export const useSessionStore = defineStore('session', () => {
         pendingSelectAbort = null
       }
       selectingSession.value = false
+
+      // Clear suppression after Vue processes reactive updates from loaded data (#521)
+      nextTick(() => uiStore.setSuppressAutoShow(false))
     }
   }
 

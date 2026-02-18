@@ -71,6 +71,10 @@ export const useUIStore = defineStore('ui', () => {
   const restartInProgress = ref(false)
   const restartStatus = ref('idle') // idle, confirming, pulling, restarting, reconnecting, error
 
+  // Suppress auto-show of right panel during session switching (issue #521)
+  // Transient flag — not persisted to localStorage
+  const suppressAutoShow = ref(false)
+
   // ========== ACTIONS ==========
 
   function toggleRightSidebar() {
@@ -95,6 +99,10 @@ export const useUIStore = defineStore('ui', () => {
 
   function setAutoScroll(enabled) {
     autoScrollEnabled.value = enabled
+  }
+
+  function setSuppressAutoShow(value) {
+    suppressAutoShow.value = value
   }
 
   function initBackgroundColor() {
@@ -203,6 +211,7 @@ export const useUIStore = defineStore('ui', () => {
     loadingMessage,
     restartInProgress,
     restartStatus,
+    suppressAutoShow,
 
     // Actions
     toggleRightSidebar,
@@ -215,6 +224,7 @@ export const useUIStore = defineStore('ui', () => {
     toggleRightPanel,
     setRightPanelVisible,
     setAutoScroll,
+    setSuppressAutoShow,
     initBackgroundColor,
     toggleBackgroundColor,
     showModal,
