@@ -353,11 +353,8 @@ function autoResizeGuidance() {
 
 <style scoped>
 .timeline-detail {
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
-  border-radius: 6px;
   margin-top: 4px;
-  padding: 8px;
+  padding: 0;
   font-size: 13px;
   max-height: 400px;
   overflow-y: auto;
