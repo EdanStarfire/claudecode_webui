@@ -13,10 +13,9 @@
 </template>
 
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, ref, toRef } from 'vue'
 import { generateShortToolSummary } from '@/utils/toolSummary'
-import { useMessageStore } from '@/stores/message'
-import { useSessionStore } from '@/stores/session'
+import { useToolStatus } from '@/composables/useToolStatus'
 
 const props = defineProps({
   tool: { type: Object, required: true },
@@ -26,58 +25,9 @@ const props = defineProps({
 
 defineEmits(['click'])
 
-const messageStore = useMessageStore()
-const sessionStore = useSessionStore()
 const showTooltip = ref(false)
 
-const effectiveStatus = computed(() => {
-  const sessionId = sessionStore.currentSessionId
-  if (!sessionId) return props.tool.status
-
-  // Check backend status first
-  if (props.tool.backendStatus) {
-    const map = {
-      'pending': 'pending',
-      'awaiting_permission': 'permission_required',
-      'running': 'executing',
-      'completed': 'completed',
-      'failed': 'error',
-      'denied': 'completed',
-      'interrupted': 'orphaned'
-    }
-    return map[props.tool.backendStatus] || props.tool.backendStatus
-  }
-
-  // Check orphaned
-  if (messageStore.isToolUseOrphaned(sessionId, props.tool.id)) {
-    return 'orphaned'
-  }
-
-  return props.tool.status
-})
-
-const hasError = computed(() => {
-  return props.tool.result?.error || props.tool.status === 'error' || props.tool.permissionDecision === 'deny'
-})
-
-const statusColor = computed(() => {
-  const status = effectiveStatus.value
-  switch (status) {
-    case 'completed':
-      return hasError.value ? '#ef4444' : '#22c55e'
-    case 'error':
-      return '#ef4444'
-    case 'executing':
-      return '#8b5cf6'
-    case 'permission_required':
-      return '#ffc107'
-    case 'orphaned':
-      return '#94a3b8'
-    case 'pending':
-    default:
-      return '#e2e8f0'
-  }
-})
+const { effectiveStatus, statusColor, hasError } = useToolStatus(toRef(props, 'tool'))
 
 const nodeClasses = computed(() => ({
   'node-expanded': props.isExpanded,

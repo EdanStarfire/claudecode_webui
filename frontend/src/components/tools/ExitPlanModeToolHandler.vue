@@ -7,7 +7,7 @@
         <strong>Exiting Plan Mode</strong>
       </div>
 
-      <div v-if="plan" class="plan-content mt-2">
+      <div v-if="plan" class="plan-content">
         <div class="plan-header">
           <strong>Proposed Plan:</strong>
         </div>
@@ -19,16 +19,11 @@
 
     <!-- Result Section -->
     <div v-if="toolCall.result" class="tool-section">
-      <div class="result-header mb-2">
-        <strong>Result:</strong>
+      <div v-if="toolCall.result.success !== false">
+        <ToolSuccessMessage message="Permission mode reverted to default" />
       </div>
-      <div class="tool-result" :class="resultClass">
-        <div v-if="toolCall.result.success !== false">
-          ✅ Permission mode reverted to default
-        </div>
-        <div v-else class="text-danger">
-          ❗ {{ toolCall.result.error || 'Failed to exit plan mode' }}
-        </div>
+      <div v-else class="tool-error" style="padding: var(--tool-padding, 6px 8px);">
+        ❗ {{ toolCall.result.error || 'Failed to exit plan mode' }}
       </div>
     </div>
   </div>
@@ -36,6 +31,7 @@
 
 <script setup>
 import { computed } from 'vue'
+import ToolSuccessMessage from './ToolSuccessMessage.vue'
 
 const props = defineProps({
   toolCall: {
@@ -44,27 +40,24 @@ const props = defineProps({
   }
 })
 
-const plan = computed(() => {
-  return props.toolCall.input?.plan
-})
+const plan = computed(() => props.toolCall.input?.plan)
 
-const resultClass = computed(() => {
-  if (props.toolCall.result?.success === false) {
-    return 'tool-result-error'
-  }
-  return 'tool-result-success'
-})
+const summary = computed(() => 'Exit Plan Mode')
+const params = computed(() => ({ plan: plan.value }))
+const result = computed(() => props.toolCall.result || null)
+
+defineExpose({ summary, params, result })
 </script>
 
 <style scoped>
 .exit-plan-mode-tool-handler {
-  font-size: 0.9rem;
+  font-size: var(--tool-font-size, 13px);
 }
 
 .tool-section {
-  padding: 0.75rem;
-  background: #f8f9fa;
-  border-radius: 0.25rem;
+  padding: var(--tool-padding, 6px 8px);
+  background: var(--tool-bg, #f8fafc);
+  border-radius: var(--tool-radius, 4px);
 }
 
 .plan-info {
@@ -73,7 +66,7 @@ const resultClass = computed(() => {
   gap: 0.5rem;
   padding: 0.5rem;
   background: white;
-  border-radius: 0.25rem;
+  border-radius: var(--tool-radius, 4px);
 }
 
 .plan-icon {
@@ -81,9 +74,10 @@ const resultClass = computed(() => {
 }
 
 .plan-content {
+  margin-top: 0.5rem;
   padding: 0.5rem;
   background: white;
-  border-radius: 0.25rem;
+  border-radius: var(--tool-radius, 4px);
 }
 
 .plan-header {
@@ -93,31 +87,12 @@ const resultClass = computed(() => {
 }
 
 .plan-text {
-  padding: 0.75rem;
-  background: #f6f8fa;
+  padding: var(--tool-padding, 6px 8px);
+  background: var(--tool-bg, #f8fafc);
   border-left: 3px solid #0969da;
-  border-radius: 0.25rem;
-  font-size: 0.9rem;
+  border-radius: var(--tool-radius, 4px);
+  font-size: var(--tool-font-size, 13px);
   line-height: 1.6;
   white-space: pre-wrap;
-}
-
-.result-header {
-  font-weight: 600;
-}
-
-.tool-result {
-  padding: 0.75rem;
-  border-radius: 0.25rem;
-}
-
-.tool-result-success {
-  background: #d1e7dd;
-  color: #0f5132;
-}
-
-.tool-result-error {
-  background: #f8d7da;
-  color: #842029;
 }
 </style>

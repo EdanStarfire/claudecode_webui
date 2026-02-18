@@ -43,7 +43,8 @@
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, toRef } from 'vue'
+import { useToolResult } from '@/composables/useToolResult'
 
 const props = defineProps({
   toolCall: {
@@ -65,42 +66,24 @@ const subagentType = computed(() => {
   return props.toolCall.input?.subagent_type || null
 })
 
-// Result
-const hasResult = computed(() => {
-  return props.toolCall.result !== null && props.toolCall.result !== undefined
-})
-
-const isError = computed(() => {
-  return props.toolCall.result?.error || props.toolCall.status === 'error'
-})
-
-const resultContent = computed(() => {
-  if (!hasResult.value) return ''
-
-  const result = props.toolCall.result
-
-  if (result.content !== undefined) {
-    return typeof result.content === 'string'
-      ? result.content
-      : JSON.stringify(result.content, null, 2)
-  }
-
-  if (result.message) {
-    return result.message
-  }
-
-  return JSON.stringify(result, null, 2)
-})
+// Result (shared composable)
+const { hasResult, isError, resultContent } = useToolResult(toRef(props, 'toolCall'))
 
 const resultLines = computed(() => {
   if (!resultContent.value) return 0
   return resultContent.value.split('\n').length
 })
+
+// Expose for ToolCallCard
+const summary = computed(() => `Task: ${description.value || subagentType.value || 'agent'}`)
+const params = computed(() => ({ description: description.value, subagent_type: subagentType.value }))
+const result = computed(() => props.toolCall.result || null)
+defineExpose({ summary, params, result })
 </script>
 
 <style scoped>
 .task-tool-handler {
-  font-size: 0.9rem;
+  font-size: var(--tool-font-size, 13px);
 }
 
 .tool-section {
@@ -116,9 +99,9 @@ const resultLines = computed(() => {
   align-items: center;
   gap: 0.75rem;
   padding: 0.75rem;
-  background: #f8f9fa;
-  border: 1px solid #dee2e6;
-  border-radius: 0.25rem 0.25rem 0 0;
+  background: var(--tool-bg, #f8fafc);
+  border: 1px solid var(--tool-border, #e2e8f0);
+  border-radius: var(--tool-radius, 4px) var(--tool-radius, 4px) 0 0;
   border-bottom: none;
   flex-wrap: wrap;
 }
@@ -132,7 +115,7 @@ const resultLines = computed(() => {
   background: #6f42c1;
   color: white;
   padding: 0.2rem 0.6rem;
-  border-radius: 0.25rem;
+  border-radius: var(--tool-radius, 4px);
   font-size: 0.8rem;
   font-weight: 600;
   text-transform: lowercase;
@@ -142,27 +125,27 @@ const resultLines = computed(() => {
 .task-description {
   padding: 0.75rem;
   background: #fff;
-  border-left: 1px solid #dee2e6;
-  border-right: 1px solid #dee2e6;
+  border-left: 1px solid var(--tool-border, #e2e8f0);
+  border-right: 1px solid var(--tool-border, #e2e8f0);
 }
 
 .description-label {
   font-weight: 600;
-  color: #6c757d;
+  color: var(--tool-text-muted, #64748b);
   font-size: 0.85rem;
   margin-bottom: 0.5rem;
 }
 
 .description-content {
-  color: #495057;
+  color: var(--tool-text, #334155);
   line-height: 1.4;
   font-weight: 500;
 }
 
 .task-prompt-container {
   background: #fff;
-  border: 1px solid #dee2e6;
-  border-radius: 0 0 0.25rem 0.25rem;
+  border: 1px solid var(--tool-border, #e2e8f0);
+  border-radius: 0 0 var(--tool-radius, 4px) var(--tool-radius, 4px);
   border-top: none;
   overflow: hidden;
 }
@@ -172,18 +155,18 @@ const resultLines = computed(() => {
   align-items: center;
   gap: 0.5rem;
   padding: 0.5rem 0.75rem;
-  background: #e9ecef;
-  border-bottom: 1px solid #dee2e6;
+  background: var(--tool-bg-header, #f1f5f9);
+  border-bottom: 1px solid var(--tool-border, #e2e8f0);
   flex-wrap: wrap;
 }
 
 .prompt-label {
   font-weight: 600;
-  color: #6c757d;
+  color: var(--tool-text-muted, #64748b);
 }
 
 .prompt-length {
-  color: #6c757d;
+  color: var(--tool-text-muted, #64748b);
   font-size: 0.85rem;
   font-style: italic;
 }
@@ -192,21 +175,21 @@ const resultLines = computed(() => {
   margin: 0;
   padding: 0.75rem;
   font-family: 'Courier New', monospace;
-  font-size: 0.85rem;
+  font-size: var(--tool-code-font-size, 11px);
   background: transparent;
   border: none;
   white-space: pre;
   overflow-x: auto;
-  max-height: 300px;
+  max-height: var(--tool-code-max-height, 200px);
   overflow-y: auto;
   line-height: 1.4;
-  color: #495057;
+  color: var(--tool-text, #334155);
 }
 
 .agent-output {
-  background: #f8f9fa;
-  border: 1px solid #dee2e6;
-  border-radius: 0.25rem;
+  background: var(--tool-bg, #f8fafc);
+  border: 1px solid var(--tool-border, #e2e8f0);
+  border-radius: var(--tool-radius, 4px);
   overflow: hidden;
 }
 
@@ -215,21 +198,21 @@ const resultLines = computed(() => {
   align-items: center;
   gap: 0.5rem;
   padding: 0.5rem 0.75rem;
-  background: #e9ecef;
-  border-bottom: 1px solid #dee2e6;
+  background: var(--tool-bg-header, #f1f5f9);
+  border-bottom: 1px solid var(--tool-border, #e2e8f0);
   flex-wrap: wrap;
 }
 
 .output-label {
   font-weight: 600;
-  color: #6c757d;
+  color: var(--tool-text-muted, #64748b);
 }
 
 .output-count-badge {
   background: #6f42c1;
   color: white;
   padding: 0.2rem 0.5rem;
-  border-radius: 0.25rem;
+  border-radius: var(--tool-radius, 4px);
   font-size: 0.8rem;
   font-weight: 600;
 }
@@ -240,24 +223,24 @@ const resultLines = computed(() => {
 
 .tool-result {
   padding: 0.75rem;
-  border-radius: 0.25rem;
+  border-radius: var(--tool-radius, 4px);
 }
 
 .tool-result-error {
-  background: #fff5f5;
-  border: 1px solid #dc3545;
+  background: var(--tool-error-bg, #fee2e2);
+  border: 1px solid var(--tool-error-border, #f87171);
 }
 
 .tool-code {
   margin: 0;
   padding: 0.75rem;
   font-family: 'Courier New', monospace;
-  font-size: 0.85rem;
+  font-size: var(--tool-code-font-size, 11px);
   background: transparent;
   border: none;
   white-space: pre;
   overflow-x: auto;
-  max-height: 400px;
+  max-height: var(--tool-code-max-height, 200px);
   overflow-y: auto;
   line-height: 1.4;
 }

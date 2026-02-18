@@ -12,6 +12,7 @@
     <!-- Tool Handler Content -->
     <component
       v-if="!(isAskUserQuestion && effectiveStatus === 'permission_required')"
+      ref="handlerRef"
       :is="toolHandlerComponent"
       :toolCall="toolCall"
     />
@@ -144,30 +145,15 @@
       Permission denied
       <span v-if="toolCall.result?.message"> - {{ toolCall.result.message }}</span>
     </div>
-
-    <!-- Parameters Section -->
-    <div v-if="hasParams && !isPermission" class="detail-section">
-      <div class="section-header" @click="paramsExpanded = !paramsExpanded">
-        <span>{{ paramsExpanded ? '▾' : '▸' }} Parameters</span>
-      </div>
-      <pre v-if="paramsExpanded" class="detail-pre">{{ formattedParams }}</pre>
-    </div>
-
-    <!-- Result Section -->
-    <div v-if="hasResult && !isPermission" class="detail-section">
-      <div class="section-header" @click="resultExpanded = !resultExpanded">
-        <span>{{ resultExpanded ? '▾' : '▸' }} Result</span>
-      </div>
-      <pre v-if="resultExpanded" class="detail-pre" :class="{ 'result-error': toolCall.result?.error }">{{ formattedResult }}</pre>
-    </div>
   </div>
 </template>
 
 <script setup>
-import { ref, computed, watch, nextTick } from 'vue'
+import { ref, computed, toRef, watch, nextTick } from 'vue'
 import { useMessageStore } from '@/stores/message'
 import { useSessionStore } from '@/stores/session'
 import { useWebSocketStore } from '@/stores/websocket'
+import { useToolStatus } from '@/composables/useToolStatus'
 import BaseToolHandler from '@/components/tools/BaseToolHandler.vue'
 import ReadToolHandler from '@/components/tools/ReadToolHandler.vue'
 import WriteToolHandler from '@/components/tools/WriteToolHandler.vue'
@@ -197,9 +183,11 @@ const messageStore = useMessageStore()
 const sessionStore = useSessionStore()
 const wsStore = useWebSocketStore()
 
+// Use shared composable for status computation
+const { effectiveStatus, isOrphaned, orphanedInfo } = useToolStatus(toRef(props, 'toolCall'))
+
 // Local state
-const paramsExpanded = ref(false)
-const resultExpanded = ref(false)
+const handlerRef = ref(null)
 const isSubmittingPermission = ref(false)
 const permissionAction = ref(null)
 const guidanceMessage = ref('')
@@ -223,7 +211,7 @@ const selectedSuggestions = computed(() => {
   return props.toolCall.suggestions.filter((_, index) => checkedSuggestions.value[index])
 })
 
-// Tool handler registry (same as ToolCallCard)
+// Tool handler registry
 const toolHandlers = {
   'Read': ReadToolHandler,
   'Write': WriteToolHandler,
@@ -252,48 +240,6 @@ const toolHandlerComponent = computed(() => {
   return toolHandlers[props.toolCall.name] || BaseToolHandler
 })
 
-// Status computation (ported from ToolCallCard)
-const effectiveStatus = computed(() => {
-  if (props.toolCall.backendStatus) {
-    const map = {
-      'pending': 'pending',
-      'awaiting_permission': 'permission_required',
-      'running': 'executing',
-      'completed': 'completed',
-      'failed': 'error',
-      'denied': 'completed',
-      'interrupted': 'completed'
-    }
-    return map[props.toolCall.backendStatus] || props.toolCall.backendStatus
-  }
-
-  const backendState = messageStore.getBackendToolState(sessionStore.currentSessionId, props.toolCall.id)
-  if (backendState) {
-    const map = {
-      'pending': 'pending',
-      'permission_required': 'permission_required',
-      'executing': 'executing',
-      'completed': 'completed',
-      'failed': 'error',
-      'orphaned': 'completed'
-    }
-    return map[backendState.state] || backendState.state
-  }
-
-  return props.toolCall.status
-})
-
-const isOrphaned = computed(() => {
-  if (props.toolCall.backendStatus === 'interrupted') return true
-  return messageStore.isToolUseOrphaned(sessionStore.currentSessionId, props.toolCall.id)
-})
-
-const orphanedInfo = computed(() => {
-  return messageStore.getOrphanedInfo(sessionStore.currentSessionId, props.toolCall.id)
-})
-
-const isPermission = computed(() => effectiveStatus.value === 'permission_required')
-
 const isAskUserQuestion = computed(() => props.toolCall.name === 'AskUserQuestion')
 
 const hasValidAnswers = computed(() => {
@@ -305,35 +251,7 @@ const hasSuggestions = computed(() => {
   return props.toolCall.suggestions && props.toolCall.suggestions.length > 0
 })
 
-const hasParams = computed(() => {
-  return props.toolCall.input && Object.keys(props.toolCall.input).length > 0
-})
-
-const hasResult = computed(() => {
-  return props.toolCall.result != null
-})
-
-const formattedParams = computed(() => {
-  try {
-    return JSON.stringify(props.toolCall.input, null, 2)
-  } catch {
-    return String(props.toolCall.input)
-  }
-})
-
-const formattedResult = computed(() => {
-  const result = props.toolCall.result
-  if (!result) return ''
-  if (typeof result === 'string') return result
-  if (result.content) return typeof result.content === 'string' ? result.content : JSON.stringify(result.content, null, 2)
-  try {
-    return JSON.stringify(result, null, 2)
-  } catch {
-    return String(result)
-  }
-})
-
-// Permission handlers (ported from ToolCallCard)
+// Permission handlers
 function handleQuestionAnswer(answers) {
   currentAnswers.value = answers
 }
@@ -472,41 +390,6 @@ function autoResizeGuidance() {
   background: #fee2e2;
   border: 1px solid #f87171;
   color: #991b1b;
-}
-
-/* Sections */
-.detail-section {
-  margin-top: 6px;
-}
-
-.section-header {
-  font-size: 11px;
-  font-weight: 600;
-  color: #64748b;
-  cursor: pointer;
-  user-select: none;
-  padding: 2px 0;
-}
-
-.section-header:hover { color: #334155; }
-
-.detail-pre {
-  font-family: 'Courier New', monospace;
-  font-size: 11px;
-  background: #f1f5f9;
-  border: 1px solid #e2e8f0;
-  border-radius: 4px;
-  padding: 6px 8px;
-  margin: 4px 0 0;
-  max-height: 200px;
-  overflow: auto;
-  white-space: pre-wrap;
-  word-break: break-all;
-}
-
-.result-error {
-  border-color: #fca5a5;
-  background: #fff1f2;
 }
 
 /* Permission UI */

@@ -41,11 +41,11 @@
       </div>
 
       <!-- Success/Error message (shown when no stdout/stderr) -->
-      <div v-if="!parsedResult?.stdout && !parsedResult?.stderr" class="tool-result" :class="resultClass">
+      <div v-if="!parsedResult?.stdout && !parsedResult?.stderr">
         <div v-if="toolCall.result.success !== false">
-          ✅ {{ resultMessage }}
+          <ToolSuccessMessage :message="resultMessage" />
         </div>
-        <div v-else class="text-danger">
+        <div v-else class="tool-error" style="padding: var(--tool-padding, 6px 8px);">
           ❗ {{ toolCall.result.error || 'Operation failed' }}
         </div>
       </div>
@@ -55,6 +55,7 @@
 
 <script setup>
 import { computed } from 'vue'
+import ToolSuccessMessage from './ToolSuccessMessage.vue'
 
 const props = defineProps({
   toolCall: {
@@ -166,13 +167,6 @@ const statusBadgeClass = computed(() => {
   return 'bg-info'
 })
 
-const resultClass = computed(() => {
-  if (props.toolCall.result?.success === false) {
-    return 'tool-result-error'
-  }
-  return 'tool-result-success'
-})
-
 const resultMessage = computed(() => {
   if (props.toolCall.result?.message) {
     return props.toolCall.result.message
@@ -194,17 +188,22 @@ const resultMessage = computed(() => {
 
   return 'Operation completed'
 })
+
+const summary = computed(() => `${toolLabel.value}: Shell ${shellId.value || ''}`)
+const params = computed(() => ({ shell_id: shellId.value, filter: filter.value }))
+const result = computed(() => props.toolCall.result || null)
+defineExpose({ summary, params, result })
 </script>
 
 <style scoped>
 .shell-tool-handler {
-  font-size: 0.9rem;
+  font-size: var(--tool-font-size, 13px);
 }
 
 .tool-section {
   padding: 0.75rem;
-  background: #f8f9fa;
-  border-radius: 0.25rem;
+  background: var(--tool-bg, #f8fafc);
+  border-radius: var(--tool-radius, 4px);
 }
 
 .shell-info {
@@ -213,7 +212,7 @@ const resultMessage = computed(() => {
   gap: 0.5rem;
   padding: 0.5rem;
   background: white;
-  border-radius: 0.25rem;
+  border-radius: var(--tool-radius, 4px);
 }
 
 .shell-icon {
@@ -222,23 +221,23 @@ const resultMessage = computed(() => {
 
 .shell-id {
   padding: 0.25rem 0.5rem;
-  background: #e9ecef;
-  border-radius: 0.25rem;
-  font-size: 0.85rem;
+  background: var(--tool-bg-header, #f1f5f9);
+  border-radius: var(--tool-radius, 4px);
+  font-size: var(--tool-code-font-size, 11px);
   font-family: 'Courier New', monospace;
 }
 
 .filter-info {
   padding: 0.5rem;
   background: white;
-  border-radius: 0.25rem;
+  border-radius: var(--tool-radius, 4px);
 }
 
 .filter-pattern {
   padding: 0.25rem 0.5rem;
   background: #fff3cd;
-  border-radius: 0.25rem;
-  font-size: 0.85rem;
+  border-radius: var(--tool-radius, 4px);
+  font-size: var(--tool-code-font-size, 11px);
   font-family: 'Courier New', monospace;
   color: #856404;
 }
@@ -258,18 +257,18 @@ const resultMessage = computed(() => {
 
 .shell-output {
   background: #1e1e1e;
-  border-radius: 0.25rem;
+  border-radius: var(--tool-radius, 4px);
   overflow: hidden;
 }
 
 .shell-output pre {
   margin: 0;
   padding: 0.75rem;
-  max-height: 400px;
+  max-height: var(--tool-code-max-height, 200px);
   overflow: auto;
   color: #d4d4d4;
   font-family: 'Courier New', monospace;
-  font-size: 0.85rem;
+  font-size: var(--tool-code-font-size, 11px);
   line-height: 1.4;
   white-space: pre;
 }
@@ -283,18 +282,7 @@ const resultMessage = computed(() => {
   color: #f48771;
 }
 
-.tool-result {
-  padding: 0.75rem;
-  border-radius: 0.25rem;
-}
-
-.tool-result-success {
-  background: #d1e7dd;
-  color: #0f5132;
-}
-
-.tool-result-error {
-  background: #f8d7da;
-  color: #842029;
+.tool-error {
+  color: #dc3545;
 }
 </style>

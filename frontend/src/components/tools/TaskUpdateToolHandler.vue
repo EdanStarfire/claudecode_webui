@@ -59,16 +59,17 @@
         <pre class="tool-code">{{ resultContent }}</pre>
       </div>
 
-      <div v-else class="tool-result tool-result-success">
-        <span class="result-icon">✅</span>
-        <span class="result-text">{{ resultContent }}</span>
+      <div v-else>
+        <ToolSuccessMessage :message="resultContent" />
       </div>
     </div>
   </div>
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, toRef } from 'vue'
+import { useToolResult } from '@/composables/useToolResult'
+import ToolSuccessMessage from './ToolSuccessMessage.vue'
 
 const props = defineProps({
   toolCall: {
@@ -118,34 +119,19 @@ const statusClass = computed(() => {
   }
 })
 
-// Result
-const hasResult = computed(() => {
-  return props.toolCall.result !== null && props.toolCall.result !== undefined
-})
+// Result (shared composable)
+const { hasResult, isError, resultContent } = useToolResult(toRef(props, 'toolCall'))
 
-const isError = computed(() => {
-  return props.toolCall.result?.error || props.toolCall.status === 'error'
-})
-
-const resultContent = computed(() => {
-  if (!hasResult.value) return ''
-
-  const result = props.toolCall.result
-  if (result.content !== undefined) {
-    return typeof result.content === 'string'
-      ? result.content
-      : JSON.stringify(result.content, null, 2)
-  }
-  if (result.message) {
-    return result.message
-  }
-  return JSON.stringify(result, null, 2)
-})
+// Expose for parent components
+const summary = computed(() => `Update Task #${taskId.value}: ${status.value || ''}`)
+const params = computed(() => ({ taskId: taskId.value, status: status.value }))
+const result = computed(() => props.toolCall.result || null)
+defineExpose({ summary, params, result })
 </script>
 
 <style scoped>
 .task-update-tool-handler {
-  font-size: 0.9rem;
+  font-size: var(--tool-font-size, 13px);
 }
 
 .tool-section {
@@ -159,7 +145,7 @@ const resultContent = computed(() => {
   padding: 0.5rem 0.75rem;
   background: #fff3cd;
   border: 1px solid #ffc107;
-  border-radius: 0.25rem 0.25rem 0 0;
+  border-radius: var(--tool-radius, 4px) var(--tool-radius, 4px) 0 0;
 }
 
 .task-icon {
@@ -170,16 +156,16 @@ const resultContent = computed(() => {
   background: #6c757d;
   color: white;
   padding: 0.1rem 0.4rem;
-  border-radius: 0.25rem;
+  border-radius: var(--tool-radius, 4px);
   font-size: 0.8rem;
   font-family: 'Courier New', monospace;
 }
 
 .task-details {
   background: #fff;
-  border: 1px solid #dee2e6;
+  border: 1px solid var(--tool-border, #e2e8f0);
   border-top: none;
-  border-radius: 0 0 0.25rem 0.25rem;
+  border-radius: 0 0 var(--tool-radius, 4px) var(--tool-radius, 4px);
 }
 
 .task-field {
@@ -190,12 +176,12 @@ const resultContent = computed(() => {
 
 .field-label {
   font-weight: 600;
-  color: #6c757d;
-  font-size: 0.85rem;
+  color: var(--tool-text-muted, #64748b);
+  font-size: var(--tool-code-font-size, 11px);
 }
 
 .field-value {
-  color: #495057;
+  color: var(--tool-text, #334155);
 }
 
 .description-value {
@@ -226,32 +212,23 @@ const resultContent = computed(() => {
 
 .tool-result {
   padding: 0.5rem 0.75rem;
-  border-radius: 0.25rem;
+  border-radius: var(--tool-radius, 4px);
   display: flex;
   align-items: center;
   gap: 0.5rem;
 }
 
-.tool-result-success {
-  background: #d4edda;
-  border: 1px solid #c3e6cb;
-}
-
 .tool-result-error {
-  background: #fff5f5;
-  border: 1px solid #dc3545;
+  background: var(--tool-error-bg, #fee2e2);
+  border: 1px solid var(--tool-error-border, #f87171);
   flex-direction: column;
   align-items: flex-start;
-}
-
-.result-icon {
-  font-size: 1rem;
 }
 
 .tool-code {
   margin: 0;
   font-family: 'Courier New', monospace;
-  font-size: 0.85rem;
+  font-size: var(--tool-code-font-size, 11px);
   white-space: pre-wrap;
   word-break: break-word;
 }

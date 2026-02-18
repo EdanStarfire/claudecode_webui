@@ -8,7 +8,7 @@
         <code class="command-code">{{ commandName }}</code>
       </div>
 
-      <div v-if="commandPrompt" class="prompt-info mt-2">
+      <div v-if="commandPrompt" class="prompt-info">
         <div class="prompt-header">
           <strong>Expanded Prompt:</strong>
         </div>
@@ -20,16 +20,11 @@
 
     <!-- Result Section -->
     <div v-if="toolCall.result" class="tool-section">
-      <div class="result-header mb-2">
-        <strong>Result:</strong>
+      <div v-if="toolCall.result.success !== false">
+        <ToolSuccessMessage :message="resultMessage" />
       </div>
-      <div class="tool-result" :class="resultClass">
-        <div v-if="toolCall.result.success !== false">
-          ✅ {{ resultMessage }}
-        </div>
-        <div v-else class="text-danger">
-          ❗ {{ toolCall.result.error || 'Command execution failed' }}
-        </div>
+      <div v-else class="tool-error" style="padding: var(--tool-padding, 6px 8px);">
+        ❗ {{ toolCall.result.error || 'Command execution failed' }}
       </div>
     </div>
   </div>
@@ -37,6 +32,7 @@
 
 <script setup>
 import { computed } from 'vue'
+import ToolSuccessMessage from './ToolSuccessMessage.vue'
 
 const props = defineProps({
   toolCall: {
@@ -57,47 +53,35 @@ const toolLabel = computed(() => {
   return 'Command'
 })
 
-const commandName = computed(() => {
-  return props.toolCall.input?.command || 'Unknown'
-})
+const commandName = computed(() => props.toolCall.input?.command || 'Unknown')
 
 const commandPrompt = computed(() => {
-  // The result might contain the expanded prompt/description
   return props.toolCall.result?.prompt || props.toolCall.result?.description
 })
 
-const resultClass = computed(() => {
-  if (props.toolCall.result?.success === false) {
-    return 'tool-result-error'
-  }
-  return 'tool-result-success'
-})
-
 const resultMessage = computed(() => {
-  if (props.toolCall.result?.message) {
-    return props.toolCall.result.message
-  }
-
-  if (props.toolCall.name === 'SlashCommand') {
-    return 'Slash command executed successfully'
-  }
-  if (props.toolCall.name === 'Skill') {
-    return 'Skill executed successfully'
-  }
-
+  if (props.toolCall.result?.message) return props.toolCall.result.message
+  if (props.toolCall.name === 'SlashCommand') return 'Slash command executed successfully'
+  if (props.toolCall.name === 'Skill') return 'Skill executed successfully'
   return 'Command completed'
 })
+
+const summary = computed(() => `${toolLabel.value}: ${commandName.value}`)
+const params = computed(() => ({ command: commandName.value }))
+const result = computed(() => props.toolCall.result || null)
+
+defineExpose({ summary, params, result })
 </script>
 
 <style scoped>
 .command-tool-handler {
-  font-size: 0.9rem;
+  font-size: var(--tool-font-size, 13px);
 }
 
 .tool-section {
-  padding: 0.75rem;
-  background: #f8f9fa;
-  border-radius: 0.25rem;
+  padding: var(--tool-padding, 6px 8px);
+  background: var(--tool-bg, #f8fafc);
+  border-radius: var(--tool-radius, 4px);
 }
 
 .command-info {
@@ -106,7 +90,7 @@ const resultMessage = computed(() => {
   gap: 0.5rem;
   padding: 0.5rem;
   background: white;
-  border-radius: 0.25rem;
+  border-radius: var(--tool-radius, 4px);
 }
 
 .command-icon {
@@ -116,17 +100,18 @@ const resultMessage = computed(() => {
 .command-code {
   padding: 0.25rem 0.5rem;
   background: #e7f3ff;
-  border-radius: 0.25rem;
-  font-size: 0.85rem;
+  border-radius: var(--tool-radius, 4px);
+  font-size: var(--tool-code-font-size, 11px);
   font-family: 'Courier New', monospace;
   color: #0969da;
   font-weight: 600;
 }
 
 .prompt-info {
+  margin-top: 0.5rem;
   padding: 0.5rem;
   background: white;
-  border-radius: 0.25rem;
+  border-radius: var(--tool-radius, 4px);
 }
 
 .prompt-header {
@@ -136,30 +121,11 @@ const resultMessage = computed(() => {
 
 .prompt-content {
   padding: 0.5rem;
-  background: #f8f9fa;
+  background: var(--tool-bg, #f8fafc);
   border-left: 3px solid #0969da;
-  border-radius: 0.25rem;
-  font-size: 0.9rem;
+  border-radius: var(--tool-radius, 4px);
+  font-size: var(--tool-font-size, 13px);
   line-height: 1.5;
   white-space: pre-wrap;
-}
-
-.result-header {
-  font-weight: 600;
-}
-
-.tool-result {
-  padding: 0.75rem;
-  border-radius: 0.25rem;
-}
-
-.tool-result-success {
-  background: #d1e7dd;
-  color: #0f5132;
-}
-
-.tool-result-error {
-  background: #f8d7da;
-  color: #842029;
 }
 </style>

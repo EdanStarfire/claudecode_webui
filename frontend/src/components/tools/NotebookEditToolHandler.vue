@@ -34,16 +34,11 @@
 
     <!-- Result Section -->
     <div v-if="toolCall.result" class="tool-section">
-      <div class="result-header mb-2">
-        <strong>Result:</strong>
+      <div v-if="toolCall.result.success !== false">
+        <ToolSuccessMessage :message="resultMessage" />
       </div>
-      <div class="tool-result" :class="resultClass">
-        <div v-if="toolCall.result.success !== false">
-          ✅ {{ resultMessage }}
-        </div>
-        <div v-else class="text-danger">
-          ❗ {{ toolCall.result.error || 'Operation failed' }}
-        </div>
+      <div v-else class="tool-error" style="padding: var(--tool-padding, 6px 8px);">
+        ❗ {{ toolCall.result.error || 'Operation failed' }}
       </div>
     </div>
   </div>
@@ -51,6 +46,7 @@
 
 <script setup>
 import { computed } from 'vue'
+import ToolSuccessMessage from './ToolSuccessMessage.vue'
 
 const props = defineProps({
   toolCall: {
@@ -87,13 +83,6 @@ const cellTypeBadgeClass = computed(() => {
   return cellType.value === 'code' ? 'bg-primary' : 'bg-secondary'
 })
 
-const resultClass = computed(() => {
-  if (props.toolCall.result?.success === false) {
-    return 'tool-result-error'
-  }
-  return 'tool-result-success'
-})
-
 const resultMessage = computed(() => {
   if (props.toolCall.result?.message) {
     return props.toolCall.result.message
@@ -108,17 +97,22 @@ const resultMessage = computed(() => {
     return 'Cell updated successfully'
   }
 })
+
+const summary = computed(() => `Notebook: ${editMode.value} cell in ${notebookPath.value}`)
+const params = computed(() => ({ notebook_path: notebookPath.value, cell_id: cellId.value, edit_mode: editMode.value }))
+const result = computed(() => props.toolCall.result || null)
+defineExpose({ summary, params, result })
 </script>
 
 <style scoped>
 .notebook-edit-tool-handler {
-  font-size: 0.9rem;
+  font-size: var(--tool-font-size, 13px);
 }
 
 .tool-section {
   padding: 0.75rem;
-  background: #f8f9fa;
-  border-radius: 0.25rem;
+  background: var(--tool-bg, #f8fafc);
+  border-radius: var(--tool-radius, 4px);
 }
 
 .notebook-info {
@@ -127,7 +121,7 @@ const resultMessage = computed(() => {
   gap: 0.5rem;
   padding: 0.5rem;
   background: white;
-  border-radius: 0.25rem;
+  border-radius: var(--tool-radius, 4px);
 }
 
 .notebook-icon {
@@ -136,9 +130,9 @@ const resultMessage = computed(() => {
 
 .file-path {
   padding: 0.25rem 0.5rem;
-  background: #e9ecef;
-  border-radius: 0.25rem;
-  font-size: 0.85rem;
+  background: var(--tool-bg-header, #f1f5f9);
+  border-radius: var(--tool-radius, 4px);
+  font-size: var(--tool-code-font-size, 11px);
   word-break: break-all;
 }
 
@@ -154,7 +148,7 @@ const resultMessage = computed(() => {
   gap: 0.5rem;
   padding: 0.25rem 0.5rem;
   background: white;
-  border-radius: 0.25rem;
+  border-radius: var(--tool-radius, 4px);
 }
 
 .info-row strong {
@@ -163,7 +157,7 @@ const resultMessage = computed(() => {
 
 .source-preview {
   background: white;
-  border-radius: 0.25rem;
+  border-radius: var(--tool-radius, 4px);
   overflow: hidden;
 }
 
@@ -172,8 +166,8 @@ const resultMessage = computed(() => {
   align-items: center;
   justify-content: space-between;
   padding: 0.5rem;
-  background: #e9ecef;
-  border-bottom: 1px solid #dee2e6;
+  background: var(--tool-bg-header, #f1f5f9);
+  border-bottom: 1px solid var(--tool-border, #e2e8f0);
 }
 
 .preview-label {
@@ -181,7 +175,7 @@ const resultMessage = computed(() => {
 }
 
 .preview-stats {
-  font-size: 0.85rem;
+  font-size: var(--tool-code-font-size, 11px);
   color: #6c757d;
 }
 
@@ -190,29 +184,10 @@ const resultMessage = computed(() => {
   padding: 0.75rem;
   max-height: 300px;
   overflow: auto;
-  background: #f8f9fa;
+  background: var(--tool-bg, #f8fafc);
   font-family: 'Courier New', monospace;
-  font-size: 0.85rem;
+  font-size: var(--tool-code-font-size, 11px);
   line-height: 1.4;
   white-space: pre;
-}
-
-.tool-result {
-  padding: 0.75rem;
-  border-radius: 0.25rem;
-}
-
-.tool-result-success {
-  background: #d1e7dd;
-  color: #0f5132;
-}
-
-.tool-result-error {
-  background: #f8d7da;
-  color: #842029;
-}
-
-.result-header {
-  font-weight: 600;
 }
 </style>
