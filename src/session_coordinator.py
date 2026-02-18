@@ -1465,8 +1465,18 @@ class SessionCoordinator:
             # Issue #494: ToolCallUpdate messages are returned as tool_call type directly
             if _type == "ToolCallUpdate":
                 tool_call_data = dict(data)
-                tool_call_data.pop("_triggering_message", None)  # Strip internal field
+                triggering = tool_call_data.pop("_triggering_message", None)
                 tool_call_data["type"] = "tool_call"
+                # Preserve request_id from triggering PermissionRequestMessage so that
+                # page-refresh recovery can still correlate permission responses.
+                if (
+                    triggering
+                    and not tool_call_data.get("request_id")
+                    and isinstance(triggering.get("data"), dict)
+                ):
+                    req_id = triggering["data"].get("request_id")
+                    if req_id:
+                        tool_call_data["request_id"] = req_id
                 return tool_call_data
 
             # Map _type to legacy type string
