@@ -156,6 +156,7 @@ class SessionUpdateRequest(BaseModel):
     sandbox_enabled: bool | None = None
     sandbox_config: dict | None = None  # Issue #458: sandbox configuration settings
     setting_sources: list[str] | None = None  # Issue #36: which settings files to load
+    cli_path: str | None = None  # Issue #489: custom CLI executable path
 
 
 class SessionReorderRequest(BaseModel):
@@ -1005,6 +1006,11 @@ class ClaudeWebUI:
                 # Handle setting_sources update (issue #36)
                 if request.setting_sources is not None:
                     updates["setting_sources"] = request.setting_sources
+
+                # Handle cli_path update (issue #489)
+                # Empty string means clear the custom CLI path
+                if request.cli_path is not None:
+                    updates["cli_path"] = request.cli_path if request.cli_path.strip() else None
 
                 if not updates:
                     return {"success": True, "message": "No fields to update"}

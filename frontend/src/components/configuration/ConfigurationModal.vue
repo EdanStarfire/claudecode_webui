@@ -930,7 +930,8 @@ async function updateSession() {
     capabilities: capsList.length > 0 ? capsList : null,
     sandbox_enabled: formData.sandbox_enabled,
     sandbox_config: formData.sandbox_enabled ? buildSandboxConfig() : null,
-    setting_sources: formData.setting_sources  // Issue #36
+    setting_sources: formData.setting_sources,  // Issue #36
+    cli_path: formData.cli_path.trim()  // Issue #489: send empty string to clear, non-empty to set
   }
 
   // Update session via PATCH (takes effect on next restart if session is active)
