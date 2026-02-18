@@ -148,8 +148,7 @@ defineExpose({ summary, params, result })
   font-size: var(--tool-code-font-size, 11px);
   color: #0d6efd;
   text-decoration: none;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  overflow-x: auto;
   white-space: nowrap;
   max-width: 100%;
 }
@@ -165,8 +164,7 @@ defineExpose({ summary, params, result })
   font-family: 'Courier New', monospace;
   font-size: var(--tool-code-font-size, 11px);
   color: #0d6efd;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  overflow-x: auto;
   white-space: nowrap;
   max-width: 100%;
 }

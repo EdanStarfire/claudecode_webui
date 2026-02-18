@@ -99,8 +99,7 @@
   font-family: var(--tool-font-mono);
   font-size: var(--tool-code-font-size);
   color: var(--tool-path-color);
-  overflow: hidden;
-  text-overflow: ellipsis;
+  overflow-x: auto;
   white-space: nowrap;
   max-width: 100%;
 }
