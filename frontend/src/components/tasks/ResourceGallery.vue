@@ -1,12 +1,39 @@
 <template>
   <div class="resource-gallery-panel">
-    <!-- Resource Grid -->
+    <!-- View Toggle (Issue #523) -->
+    <div v-if="resources.length > 0" class="view-toggle">
+      <button
+        class="toggle-btn"
+        :class="{ active: viewMode === 'gallery' }"
+        @click="setViewMode('gallery')"
+        title="Gallery view"
+        aria-label="Gallery view"
+      >
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+          <path d="M1 2.5A1.5 1.5 0 0 1 2.5 1h3A1.5 1.5 0 0 1 7 2.5v3A1.5 1.5 0 0 1 5.5 7h-3A1.5 1.5 0 0 1 1 5.5v-3zm8 0A1.5 1.5 0 0 1 10.5 1h3A1.5 1.5 0 0 1 15 2.5v3A1.5 1.5 0 0 1 13.5 7h-3A1.5 1.5 0 0 1 9 5.5v-3zm-8 8A1.5 1.5 0 0 1 2.5 9h3A1.5 1.5 0 0 1 7 10.5v3A1.5 1.5 0 0 1 5.5 15h-3A1.5 1.5 0 0 1 1 13.5v-3zm8 0A1.5 1.5 0 0 1 10.5 9h3a1.5 1.5 0 0 1 1.5 1.5v3a1.5 1.5 0 0 1-1.5 1.5h-3A1.5 1.5 0 0 1 9 13.5v-3z"/>
+        </svg>
+      </button>
+      <button
+        class="toggle-btn"
+        :class="{ active: viewMode === 'list' }"
+        @click="setViewMode('list')"
+        title="List view"
+        aria-label="List view"
+      >
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+          <path fill-rule="evenodd" d="M2.5 12a.5.5 0 0 1 .5-.5h10a.5.5 0 0 1 0 1H3a.5.5 0 0 1-.5-.5zm0-4a.5.5 0 0 1 .5-.5h10a.5.5 0 0 1 0 1H3a.5.5 0 0 1-.5-.5zm0-4a.5.5 0 0 1 .5-.5h10a.5.5 0 0 1 0 1H3a.5.5 0 0 1-.5-.5z"/>
+        </svg>
+      </button>
+    </div>
+
+    <!-- Resource Grid / List -->
     <div class="resource-grid-container p-2">
       <div v-if="resources.length === 0" class="empty-placeholder">
         <span>Resources shared by the agent will appear here</span>
       </div>
 
-      <div v-else class="resource-grid">
+      <!-- Gallery View -->
+      <div v-else-if="viewMode === 'gallery'" class="resource-grid">
         <div
           v-for="(resource, index) in resources"
           :key="resource.resource_id"
@@ -84,12 +111,59 @@
           </div>
         </div>
       </div>
+
+      <!-- List View (Issue #523) -->
+      <div v-else class="resource-list">
+        <div
+          v-for="(resource, index) in resources"
+          :key="resource.resource_id"
+          class="resource-list-item"
+          @click="openFullView(index)"
+        >
+          <span class="list-item-icon">{{ getIcon(resource) }}</span>
+          <span class="list-item-title" :title="resource.title || resource.original_filename">
+            {{ resource.title || resource.original_filename || 'Untitled' }}
+          </span>
+          <div class="list-item-actions">
+            <button
+              class="btn btn-sm btn-outline-primary action-btn"
+              @click.stop="addToAttachments(resource)"
+              title="Add to message attachments"
+            >
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+                <path d="M8 4a.5.5 0 0 1 .5.5v3h3a.5.5 0 0 1 0 1h-3v3a.5.5 0 0 1-1 0v-3h-3a.5.5 0 0 1 0-1h3v-3A.5.5 0 0 1 8 4z"/>
+              </svg>
+            </button>
+            <a
+              :href="getDownloadUrl(resource.resource_id)"
+              class="btn btn-sm btn-outline-secondary action-btn"
+              :download="resource.original_filename || resource.title || 'download'"
+              title="Download"
+              @click.stop
+            >
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+                <path d="M.5 9.9a.5.5 0 0 1 .5.5v2.5a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-2.5a.5.5 0 0 1 1 0v2.5a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2v-2.5a.5.5 0 0 1 .5-.5z"/>
+                <path d="M7.646 11.854a.5.5 0 0 0 .708 0l3-3a.5.5 0 0 0-.708-.708L8.5 10.293V1.5a.5.5 0 0 0-1 0v8.793L5.354 8.146a.5.5 0 1 0-.708.708l3 3z"/>
+              </svg>
+            </a>
+            <button
+              class="btn btn-sm btn-outline-danger action-btn"
+              @click.stop="removeResource(resource.resource_id)"
+              title="Remove from panel"
+            >
+              <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+                <path d="M4.646 4.646a.5.5 0 0 1 .708 0L8 7.293l2.646-2.647a.5.5 0 0 1 .708.708L8.707 8l2.647 2.646a.5.5 0 0 1-.708.708L8 8.707l-2.646 2.647a.5.5 0 0 1-.708-.708L7.293 8 4.646 5.354a.5.5 0 0 1 0-.708z"/>
+              </svg>
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 </template>
 
 <script setup>
-import { computed, inject } from 'vue'
+import { computed, inject, ref, watch } from 'vue'
 import { useResourceStore } from '@/stores/resource'
 import { useSessionStore } from '@/stores/session'
 
@@ -98,6 +172,20 @@ const sessionStore = useSessionStore()
 
 // Inject the addAttachmentFromResource function from parent
 const addAttachmentFromResource = inject('addAttachmentFromResource', null)
+
+// View mode state with localStorage persistence (Issue #523)
+const STORAGE_KEY = 'resource-view-preference'
+const viewMode = ref(localStorage.getItem(STORAGE_KEY) || 'gallery')
+
+function setViewMode(mode) {
+  viewMode.value = mode
+}
+
+watch(viewMode, (val) => {
+  localStorage.setItem(STORAGE_KEY, val)
+})
+
+defineExpose({ viewMode, setViewMode })
 
 // Computed properties
 const resources = computed(() => resourceStore.currentResources)
@@ -313,5 +401,97 @@ function addToAttachments(resource) {
 
 .action-btn svg {
   display: block;
+}
+
+/* Issue #523: View toggle */
+.view-toggle {
+  display: flex;
+  gap: 2px;
+  padding: 6px 8px;
+  border-bottom: 1px solid #e2e8f0;
+  flex-shrink: 0;
+}
+
+.toggle-btn {
+  padding: 4px 8px;
+  border: 1px solid #dee2e6;
+  background: transparent;
+  color: #64748b;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  transition: all 0.15s ease;
+}
+
+.toggle-btn:hover {
+  background: #f1f5f9;
+  color: #334155;
+}
+
+.toggle-btn.active {
+  background: #3b82f6;
+  border-color: #3b82f6;
+  color: #fff;
+}
+
+/* Issue #523: List view */
+.resource-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.resource-list-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  border-bottom: 1px solid #f1f5f9;
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+
+.resource-list-item:hover {
+  background-color: #f8fafc;
+}
+
+.resource-list-item:last-child {
+  border-bottom: none;
+}
+
+.list-item-icon {
+  font-size: 1.25rem;
+  flex-shrink: 0;
+  width: 24px;
+  text-align: center;
+}
+
+.list-item-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.8rem;
+  color: #334155;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.list-item-actions {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.resource-list-item:hover .list-item-actions {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .list-item-actions {
+    opacity: 1;
+  }
 }
 </style>
