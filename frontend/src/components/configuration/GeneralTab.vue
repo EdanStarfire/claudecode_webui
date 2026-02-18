@@ -68,9 +68,9 @@
         :value="formData.model"
         @change="$emit('update:form-data', 'model', $event.target.value)"
       >
-        <option value="sonnet">Sonnet 4.5 (Recommended) - Coding & complex agents</option>
-        <option value="opus">Opus 4.5 - Complex reasoning tasks</option>
-        <option value="haiku">Haiku 4.5 - Fastest for simple tasks</option>
+        <option value="sonnet">Sonnet (Recommended) - Coding & complex agents</option>
+        <option value="opus">Opus - Complex reasoning tasks</option>
+        <option value="haiku">Haiku - Fastest for simple tasks</option>
         <option value="opusplan">OpusPlan - Opus planning + Sonnet execution</option>
       </select>
       <div class="form-text">

@@ -131,9 +131,9 @@ let modalInstance = null
 
 // Model display names mapping
 const modelDisplayNames = {
-  'sonnet': 'Sonnet 4.5',
-  'opus': 'Opus 4.5',
-  'haiku': 'Haiku 4.5',
+  'sonnet': 'Sonnet',
+  'opus': 'Opus',
+  'haiku': 'Haiku',
   'opusplan': 'OpusPlan (Opus + Sonnet)'
 }
 
@@ -163,7 +163,7 @@ const initData = computed(() => {
 // Get human-readable model display name
 function getModelDisplayName(modelId) {
   if (!modelId) {
-    return 'Default (Sonnet 4.5)'
+    return 'Default (Sonnet)'
   }
   return modelDisplayNames[modelId] || modelId
 }
