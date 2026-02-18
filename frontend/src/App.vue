@@ -87,16 +87,18 @@ provide('pendingResourceAttachment', pendingResourceAttachment)
 const rightPanelVisible = computed(() => uiStore.rightPanelVisible)
 const isTabletOrMobile = computed(() => uiStore.windowWidth < 768)
 
-// Auto-show right panel when tasks first appear
+// Auto-show right panel when tasks first appear (suppressed during session switch, #521)
 watch(() => taskStore.currentHasTasks, (hasTasks, hadTasks) => {
-  if (hasTasks && !hadTasks) {
+  if (hasTasks && !hadTasks && !uiStore.suppressAutoShow) {
+    uiStore.setRightSidebarTab('tasks')
     uiStore.setRightPanelVisible(true)
   }
 })
 
-// Auto-show right panel when resources first appear
+// Auto-show right panel when resources first appear (suppressed during session switch, #521)
 watch(() => resourceStore.currentHasResources, (hasResources, hadResources) => {
-  if (hasResources && !hadResources) {
+  if (hasResources && !hadResources && !uiStore.suppressAutoShow) {
+    uiStore.setRightSidebarTab('resources')
     uiStore.setRightPanelVisible(true)
   }
 })
