@@ -3211,6 +3211,7 @@ class ClaudeWebUI:
                             tool_use_id=tool_use_id,
                             result=result_content,
                             is_error=is_error,
+                            triggering_message=tool_result,  # Issue #494: embed ToolResultBlock
                         )
 
                         if updated_tool_call:
@@ -3336,14 +3337,9 @@ class ClaudeWebUI:
                     session_id=session_id,
                 )
 
-                # Wrap in StoredMessage for unified storage
+                # Wrap in StoredMessage for triggering_message data (Issue #494: no longer stored separately)
                 stored_msg = StoredMessage.from_permission_request(permission_request)
                 storage_data = stored_msg.to_dict()
-
-                storage_manager = await self.coordinator.get_session_storage(session_id)
-                if storage_manager:
-                    await storage_manager.append_message(storage_data)
-                    logger.debug(f"Stored permission request message for session {session_id}")
 
                 # Issue #324: Update ToolCall to awaiting_permission and emit unified tool_call message
                 try:
@@ -3365,6 +3361,7 @@ class ClaudeWebUI:
                             session_id,
                             tool_call.tool_use_id,
                             permission_info,
+                            triggering_message=storage_data,  # Issue #494: embed permission request data
                         )
 
                         if updated_tool_call:
@@ -3555,18 +3552,9 @@ class ClaudeWebUI:
                     updated_input=updated_input_data,
                 )
 
-                # Wrap in StoredMessage for unified storage
+                # Wrap in StoredMessage for triggering_message data (Issue #494: no longer stored separately)
                 stored_msg = StoredMessage.from_permission_response(permission_response_msg)
                 storage_data = stored_msg.to_dict()
-
-                if storage_manager:
-                    await storage_manager.append_message(storage_data)
-                    logger.debug(f"Stored permission response message for session {session_id}")
-
-                if clarification_msg:
-                    logger.info(f"Stored permission denial with clarification for session {session_id}")
-                if applied_update_objects:
-                    logger.info(f"Permission response includes {len(applied_update_objects)} applied updates")
 
                 # Issue #324: Update ToolCall after permission response and emit unified tool_call message
                 try:
@@ -3582,6 +3570,7 @@ class ClaudeWebUI:
                             session_id,
                             tool_call.tool_use_id,
                             granted,
+                            triggering_message=storage_data,  # Issue #494: embed permission response data
                         )
 
                         if updated_tool_call:

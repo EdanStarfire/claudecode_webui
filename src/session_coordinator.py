@@ -24,6 +24,7 @@ from .message_parser import MessageParser, MessageProcessor
 from .models.messages import (
     DisplayProjection,
     PermissionInfo,
+    StoredMessage,
     ToolCall,
     ToolDisplayInfo,
     ToolState,
@@ -1461,6 +1462,23 @@ class SessionCoordinator:
             session_id = stored_msg.get("session_id")
             display = stored_msg.get("display")
 
+            # Issue #494: ToolCallUpdate messages are returned as tool_call type directly
+            if _type == "ToolCallUpdate":
+                tool_call_data = dict(data)
+                triggering = tool_call_data.pop("_triggering_message", None)
+                tool_call_data["type"] = "tool_call"
+                # Preserve request_id from triggering PermissionRequestMessage so that
+                # page-refresh recovery can still correlate permission responses.
+                if (
+                    triggering
+                    and not tool_call_data.get("request_id")
+                    and isinstance(triggering.get("data"), dict)
+                ):
+                    req_id = triggering["data"].get("request_id")
+                    if req_id:
+                        tool_call_data["request_id"] = req_id
+                return tool_call_data
+
             # Map _type to legacy type string
             type_mapping = {
                 "AssistantMessage": "assistant",
@@ -1629,12 +1647,27 @@ class SessionCoordinator:
             # Maps tool_use_id -> ToolCall being reconstructed from history
             active_history_tools: dict[str, ToolCall] = {}
 
+            # Issue #494: Track tool_use_ids that have stored ToolCallUpdate entries.
+            # Synthetic reconstruction is skipped for these IDs.
+            stored_tool_update_ids: set[str] = set()
+
             for raw_message in raw_messages:
                 try:
                     websocket_data = None
 
                     # Issue #310: Handle new StoredMessage format with _type discriminator
                     if raw_message.get("_type"):
+                        # Issue #494: ToolCallUpdate entries are converted to tool_call messages
+                        # directly and should NOT go through synthetic reconstruction
+                        if raw_message["_type"] == "ToolCallUpdate":
+                            tool_call_msg = self._convert_stored_message_to_websocket(raw_message)
+                            if tool_call_msg:
+                                parsed_messages.append(tool_call_msg)
+                                tc_id = tool_call_msg.get("tool_use_id")
+                                if tc_id:
+                                    stored_tool_update_ids.add(tc_id)
+                            continue
+
                         websocket_data = self._convert_stored_message_to_websocket(raw_message)
                     # Check if message is already fully processed (has metadata)
                     elif isinstance(raw_message.get("metadata"), dict) and raw_message.get("type") and raw_message.get("content") is not None:
@@ -1663,6 +1696,7 @@ class SessionCoordinator:
                     parsed_messages.append(websocket_data)
 
                     # Issue #491: Generate interleaved tool_call messages from message metadata
+                    # Issue #494: Skip synthetic reconstruction for tool_use_ids with stored updates
                     msg_type = websocket_data.get("type", "")
                     metadata = websocket_data.get("metadata", {})
                     msg_timestamp = websocket_data.get("timestamp")
@@ -1672,6 +1706,9 @@ class SessionCoordinator:
                         for tool_use in metadata["tool_uses"]:
                             tool_use_id = tool_use.get("id")
                             if not tool_use_id:
+                                continue
+                            # Issue #494: Skip if this tool has stored ToolCallUpdate entries
+                            if tool_use_id in stored_tool_update_ids:
                                 continue
                             tool_call = ToolCall(
                                 tool_use_id=tool_use_id,
@@ -1932,6 +1969,54 @@ class SessionCoordinator:
         return []
 
     # ============================================================
+    # Issue #494: ToolCallUpdate Storage
+    # ============================================================
+
+    def _schedule_tool_call_update_storage(
+        self,
+        session_id: str,
+        tool_call: ToolCall,
+        triggering_message: dict[str, Any] | None = None,
+    ) -> None:
+        """
+        Snapshot and schedule storage of a ToolCallUpdate entry (Issue #494).
+
+        The StoredMessage is built eagerly (synchronously) to capture the
+        current tool_call state before the object is mutated by subsequent
+        lifecycle transitions.  The actual I/O is deferred via ensure_future.
+        """
+        storage = self._storage_managers.get(session_id)
+        if not storage:
+            coord_logger.warning(
+                f"No storage manager for session {session_id}, skipping ToolCallUpdate"
+            )
+            return
+        try:
+            stored_dict = StoredMessage.from_tool_call_update(
+                tool_call, triggering_message
+            ).to_dict()
+        except Exception as e:
+            coord_logger.error(
+                f"Failed to build ToolCallUpdate for {tool_call.tool_use_id}: {e}"
+            )
+            return
+        asyncio.ensure_future(self._write_tool_call_update(storage, stored_dict, tool_call.tool_use_id))
+
+    async def _write_tool_call_update(
+        self,
+        storage,
+        stored_dict: dict[str, Any],
+        tool_use_id: str,
+    ) -> None:
+        """Write a pre-built ToolCallUpdate dict to storage (Issue #494)."""
+        try:
+            await storage.append_message(stored_dict)
+        except Exception as e:
+            coord_logger.error(
+                f"Failed to store ToolCallUpdate for {tool_use_id}: {e}"
+            )
+
+    # ============================================================
     # Issue #324: Unified ToolCall Lifecycle Management
     # ============================================================
 
@@ -1975,6 +2060,10 @@ class SessionCoordinator:
         coord_logger.debug(
             f"Created ToolCall {tool_use_id} for {name} in session {session_id}"
         )
+
+        # Issue #494: Store PENDING ToolCallUpdate
+        self._schedule_tool_call_update_storage(session_id, tool_call)
+
         return tool_call
 
     def update_tool_call_permission_request(
@@ -1982,6 +2071,7 @@ class SessionCoordinator:
         session_id: str,
         tool_use_id: str,
         permission_info: PermissionInfo,
+        triggering_message: dict[str, Any] | None = None,
     ) -> ToolCall | None:
         """
         Update ToolCall to awaiting_permission status (Issue #324).
@@ -2006,6 +2096,10 @@ class SessionCoordinator:
         coord_logger.debug(
             f"Updated ToolCall {tool_use_id} to awaiting_permission in session {session_id}"
         )
+
+        # Issue #494: Store AWAITING_PERMISSION ToolCallUpdate
+        self._schedule_tool_call_update_storage(session_id, tool_call, triggering_message)
+
         return tool_call
 
     def update_tool_call_permission_response(
@@ -2013,6 +2107,7 @@ class SessionCoordinator:
         session_id: str,
         tool_use_id: str,
         granted: bool,
+        triggering_message: dict[str, Any] | None = None,
     ) -> ToolCall | None:
         """
         Update ToolCall after permission response (Issue #324).
@@ -2050,6 +2145,10 @@ class SessionCoordinator:
         coord_logger.debug(
             f"Updated ToolCall {tool_use_id} permission_granted={granted} in session {session_id}"
         )
+
+        # Issue #494: Store RUNNING or DENIED ToolCallUpdate
+        self._schedule_tool_call_update_storage(session_id, tool_call, triggering_message)
+
         return tool_call
 
     def update_tool_call_running(
@@ -2082,6 +2181,10 @@ class SessionCoordinator:
         coord_logger.debug(
             f"Updated ToolCall {tool_use_id} to running in session {session_id}"
         )
+
+        # Issue #494: Store RUNNING ToolCallUpdate
+        self._schedule_tool_call_update_storage(session_id, tool_call)
+
         return tool_call
 
     def update_tool_call_result(
@@ -2090,6 +2193,7 @@ class SessionCoordinator:
         tool_use_id: str,
         result: Any,
         is_error: bool = False,
+        triggering_message: dict[str, Any] | None = None,
     ) -> ToolCall | None:
         """
         Update ToolCall with result (Issue #324).
@@ -2127,6 +2231,10 @@ class SessionCoordinator:
         coord_logger.debug(
             f"Updated ToolCall {tool_use_id} to {'failed' if is_error else 'completed'} in session {session_id}"
         )
+
+        # Issue #494: Store COMPLETED or FAILED ToolCallUpdate
+        self._schedule_tool_call_update_storage(session_id, tool_call, triggering_message)
+
         return tool_call
 
     def mark_session_tools_interrupted(self, session_id: str) -> list[ToolCall]:
@@ -2148,6 +2256,9 @@ class SessionCoordinator:
                 tool_call.display.state = ToolState.INTERRUPTED
                 tool_call.display.style = "orphaned"
             interrupted.append(tool_call)
+
+            # Issue #494: Store INTERRUPTED ToolCallUpdate for each tool
+            self._schedule_tool_call_update_storage(session_id, tool_call)
 
         # Clear active tools for session
         if session_id in self._active_tool_calls:
