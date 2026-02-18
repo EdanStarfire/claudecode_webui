@@ -42,7 +42,8 @@ class OverseerController:
         model: str | None = None,
         sandbox_enabled: bool = False,
         sandbox_config: dict | None = None,
-        setting_sources: list[str] | None = None
+        setting_sources: list[str] | None = None,
+        cli_path: str | None = None
     ) -> str:
         """
         Create a minion for the user (root overseer).
@@ -114,7 +115,9 @@ class OverseerController:
             sandbox_enabled=sandbox_enabled,
             sandbox_config=sandbox_config,
             # Settings sources (issue #36)
-            setting_sources=setting_sources
+            setting_sources=setting_sources,
+            # CLI path override (issue #489)
+            cli_path=cli_path
         )
 
         # Register capabilities in capability registry
@@ -152,6 +155,7 @@ class OverseerController:
         sandbox_enabled: bool = False,
         model: str | None = None,
         override_system_prompt: bool = False,
+        cli_path: str | None = None,
     ) -> dict[str, any]:
         """
         Spawn a child minion autonomously by a parent overseer.
@@ -236,7 +240,9 @@ class OverseerController:
             overseer_level=overseer_level,
             can_spawn_minions=True,  # Child can spawn by default
             # Sandbox mode (issue #319)
-            sandbox_enabled=sandbox_enabled
+            sandbox_enabled=sandbox_enabled,
+            # CLI path override (issue #489)
+            cli_path=cli_path
         )
 
         # 8. Update parent: mark as overseer, add child to child_minion_ids

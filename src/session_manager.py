@@ -100,6 +100,9 @@ class SessionInfo:
     queue_config: dict | None = None  # {max_queue_size, min_wait_seconds, min_idle_seconds, default_reset_session}
     queue_paused: bool = False  # If True, queue processor skips delivery
 
+    # CLI path override (issue #489) - custom executable for tool execution (e.g., Docker launcher)
+    cli_path: str | None = None
+
     def __post_init__(self):
         if self.allowed_tools is None:
             self.allowed_tools = ["bash", "edit", "read"]
@@ -235,7 +238,9 @@ class SessionManager:
         sandbox_enabled: bool = False,
         sandbox_config: dict | None = None,
         # Settings sources (issue #36)
-        setting_sources: list[str] | None = None
+        setting_sources: list[str] | None = None,
+        # CLI path override (issue #489)
+        cli_path: str | None = None
     ) -> None:
         """Create a new session (all sessions are minions - issue #349)"""
         # Validate session_id is not reserved
@@ -279,7 +284,9 @@ class SessionManager:
             sandbox_enabled=sandbox_enabled,
             sandbox_config=sandbox_config,
             # Settings sources (issue #36)
-            setting_sources=setting_sources
+            setting_sources=setting_sources,
+            # CLI path override (issue #489)
+            cli_path=cli_path
         )
 
         try:
