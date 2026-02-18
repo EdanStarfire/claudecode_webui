@@ -406,6 +406,10 @@ export const useMessageStore = defineStore('message', () => {
         existing.suggestions = toolCall.permission.suggestions || []
         existing.permissionRequestId = toolCall.request_id  // request_id is added by backend for correlation
       }
+      // Populate permissionToToolMap for handlePermissionResponse correlation
+      if (toolCall.request_id && toolCall.status === 'awaiting_permission') {
+        permissionToToolMap.value.set(toolCall.request_id, toolUseId)
+      }
       if (toolCall.permission_granted !== null && toolCall.permission_granted !== undefined) {
         existing.permissionDecision = toolCall.permission_granted ? 'allow' : 'deny'
       }
@@ -485,6 +489,10 @@ export const useMessageStore = defineStore('message', () => {
       }
 
       toolCalls.push(newToolCall)
+      // Populate permissionToToolMap for handlePermissionResponse correlation
+      if (toolCall.request_id && toolCall.status === 'awaiting_permission') {
+        permissionToToolMap.value.set(toolCall.request_id, toolUseId)
+      }
       console.log(`Created new tool call ${toolUseId} for ${toolCall.name} with status: ${frontendStatus}`)
     }
 
