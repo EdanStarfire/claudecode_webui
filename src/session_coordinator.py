@@ -1962,18 +1962,18 @@ class SessionCoordinator:
     # Issue #494: ToolCallUpdate Storage
     # ============================================================
 
-    async def _store_tool_call_update(
+    def _schedule_tool_call_update_storage(
         self,
         session_id: str,
         tool_call: ToolCall,
         triggering_message: dict[str, Any] | None = None,
     ) -> None:
         """
-        Store a ToolCallUpdate entry in the session's messages.jsonl (Issue #494).
+        Snapshot and schedule storage of a ToolCallUpdate entry (Issue #494).
 
-        Each tool lifecycle transition (PENDING, AWAITING_PERMISSION, RUNNING,
-        COMPLETED, etc.) is persisted so that history reload can reconstruct
-        tool states without synthetic correlation logic.
+        The StoredMessage is built eagerly (synchronously) to capture the
+        current tool_call state before the object is mutated by subsequent
+        lifecycle transitions.  The actual I/O is deferred via ensure_future.
         """
         storage = self._storage_managers.get(session_id)
         if not storage:
@@ -1982,11 +1982,28 @@ class SessionCoordinator:
             )
             return
         try:
-            stored_msg = StoredMessage.from_tool_call_update(tool_call, triggering_message)
-            await storage.append_message(stored_msg.to_dict())
+            stored_dict = StoredMessage.from_tool_call_update(
+                tool_call, triggering_message
+            ).to_dict()
         except Exception as e:
             coord_logger.error(
-                f"Failed to store ToolCallUpdate for {tool_call.tool_use_id}: {e}"
+                f"Failed to build ToolCallUpdate for {tool_call.tool_use_id}: {e}"
+            )
+            return
+        asyncio.ensure_future(self._write_tool_call_update(storage, stored_dict, tool_call.tool_use_id))
+
+    async def _write_tool_call_update(
+        self,
+        storage,
+        stored_dict: dict[str, Any],
+        tool_use_id: str,
+    ) -> None:
+        """Write a pre-built ToolCallUpdate dict to storage (Issue #494)."""
+        try:
+            await storage.append_message(stored_dict)
+        except Exception as e:
+            coord_logger.error(
+                f"Failed to store ToolCallUpdate for {tool_use_id}: {e}"
             )
 
     # ============================================================
@@ -2035,7 +2052,7 @@ class SessionCoordinator:
         )
 
         # Issue #494: Store PENDING ToolCallUpdate
-        asyncio.ensure_future(self._store_tool_call_update(session_id, tool_call))
+        self._schedule_tool_call_update_storage(session_id, tool_call)
 
         return tool_call
 
@@ -2071,9 +2088,7 @@ class SessionCoordinator:
         )
 
         # Issue #494: Store AWAITING_PERMISSION ToolCallUpdate
-        asyncio.ensure_future(
-            self._store_tool_call_update(session_id, tool_call, triggering_message)
-        )
+        self._schedule_tool_call_update_storage(session_id, tool_call, triggering_message)
 
         return tool_call
 
@@ -2122,9 +2137,7 @@ class SessionCoordinator:
         )
 
         # Issue #494: Store RUNNING or DENIED ToolCallUpdate
-        asyncio.ensure_future(
-            self._store_tool_call_update(session_id, tool_call, triggering_message)
-        )
+        self._schedule_tool_call_update_storage(session_id, tool_call, triggering_message)
 
         return tool_call
 
@@ -2160,7 +2173,7 @@ class SessionCoordinator:
         )
 
         # Issue #494: Store RUNNING ToolCallUpdate
-        asyncio.ensure_future(self._store_tool_call_update(session_id, tool_call))
+        self._schedule_tool_call_update_storage(session_id, tool_call)
 
         return tool_call
 
@@ -2210,9 +2223,7 @@ class SessionCoordinator:
         )
 
         # Issue #494: Store COMPLETED or FAILED ToolCallUpdate
-        asyncio.ensure_future(
-            self._store_tool_call_update(session_id, tool_call, triggering_message)
-        )
+        self._schedule_tool_call_update_storage(session_id, tool_call, triggering_message)
 
         return tool_call
 
@@ -2237,7 +2248,7 @@ class SessionCoordinator:
             interrupted.append(tool_call)
 
             # Issue #494: Store INTERRUPTED ToolCallUpdate for each tool
-            asyncio.ensure_future(self._store_tool_call_update(session_id, tool_call))
+            self._schedule_tool_call_update_storage(session_id, tool_call)
 
         # Clear active tools for session
         if session_id in self._active_tool_calls:
