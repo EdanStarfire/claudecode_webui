@@ -156,11 +156,6 @@
       <p>{{ orphanedInfo?.message || 'Session was terminated before permission could be granted' }}</p>
     </div>
 
-    <!-- Denied -->
-    <div v-if="toolCall.permissionDecision === 'deny'" class="detail-banner detail-banner-error">
-      Permission denied
-      <span v-if="toolCall.result?.message"> - {{ toolCall.result.message }}</span>
-    </div>
   </div>
 </template>
 
