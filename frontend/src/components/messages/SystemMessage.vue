@@ -31,9 +31,10 @@ const isCompactionStatus = computed(() => {
          props.message.metadata?.init_data?.status === 'compacting'
 })
 
-// Check if this is a stderr message from the SDK
+// Check if this is an error-class message (stderr or session failure)
 const isStderr = computed(() => {
-  return props.message.metadata?.subtype === 'stderr'
+  const subtype = props.message.metadata?.subtype
+  return subtype === 'stderr' || subtype === 'session_failed'
 })
 
 const displayContent = computed(() => {
