@@ -9,6 +9,22 @@
       </div>
     </div>
 
+    <!-- Permission Details (shown after permission resolved) -->
+    <div v-if="hasPermissionInfo" class="permission-details" :class="permissionDetailsClass">
+      <div class="permission-status">
+        <span class="permission-status-icon" :style="{ color: permissionStatusColor }">{{ permissionStatusIcon }}</span>
+        <span>{{ permissionStatusLabel }}</span>
+      </div>
+      <div v-if="hasAppliedUpdates" class="permission-changes">
+        <span class="changes-label">Permission rules added:</span>
+        <ul>
+          <li v-for="(update, index) in toolCall.appliedUpdates" :key="index">
+            {{ formatSuggestion(update) }}
+          </li>
+        </ul>
+      </div>
+    </div>
+
     <!-- Tool Handler Content -->
     <component
       v-if="!(isAskUserQuestion && effectiveStatus === 'permission_required')"
@@ -251,6 +267,31 @@ const hasSuggestions = computed(() => {
   return props.toolCall.suggestions && props.toolCall.suggestions.length > 0
 })
 
+// Permission details (post-decision display)
+const hasPermissionInfo = computed(() => {
+  return props.toolCall.permissionDecision != null && effectiveStatus.value !== 'permission_required'
+})
+
+const hasAppliedUpdates = computed(() => {
+  return props.toolCall.appliedUpdates && props.toolCall.appliedUpdates.length > 0
+})
+
+const permissionStatusIcon = computed(() => {
+  return props.toolCall.permissionDecision === 'allow' ? '✓' : '✗'
+})
+
+const permissionStatusColor = computed(() => {
+  return props.toolCall.permissionDecision === 'allow' ? '#22c55e' : '#ef4444'
+})
+
+const permissionStatusLabel = computed(() => {
+  return props.toolCall.permissionDecision === 'allow' ? 'Approved by user' : 'Denied by user'
+})
+
+const permissionDetailsClass = computed(() => {
+  return props.toolCall.permissionDecision === 'allow' ? 'permission-approved' : 'permission-denied'
+})
+
 // Permission handlers
 function handleQuestionAnswer(answers) {
   currentAnswers.value = answers
@@ -387,6 +428,61 @@ function autoResizeGuidance() {
   background: #fee2e2;
   border: 1px solid #f87171;
   color: #991b1b;
+}
+
+/* Permission Details (post-decision) */
+.permission-details {
+  padding: 5px 8px;
+  border-radius: 4px;
+  margin-bottom: 8px;
+  font-size: 11px;
+  border-left: 3px solid;
+}
+
+.permission-approved {
+  background: #f0fdf4;
+  border-left-color: #22c55e;
+}
+
+.permission-denied {
+  background: #fef2f2;
+  border-left-color: #ef4444;
+}
+
+.permission-status {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-weight: 500;
+  color: #334155;
+}
+
+.permission-status-icon {
+  font-weight: 700;
+  font-size: 12px;
+}
+
+.permission-changes {
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px solid rgba(0, 0, 0, 0.06);
+}
+
+.permission-changes .changes-label {
+  font-size: 10px;
+  font-weight: 600;
+  color: #64748b;
+}
+
+.permission-changes ul {
+  margin: 2px 0 0;
+  padding-left: 16px;
+  font-size: 11px;
+  color: #475569;
+}
+
+.permission-changes li {
+  padding: 1px 0;
 }
 
 /* Permission UI */

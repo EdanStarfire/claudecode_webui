@@ -8,7 +8,16 @@
     @mouseleave="showTooltip = false"
   >
     <div class="node-dot" :class="dotClasses"></div>
-    <span class="node-label">{{ toolLabel }}</span>
+    <span class="node-label">
+      {{ toolLabel }}
+      <span
+        v-if="approvalIndicator"
+        class="approval-icon"
+        :style="{ color: approvalIndicator.color }"
+        :aria-label="approvalIndicator.ariaLabel"
+        role="img"
+      >{{ approvalIndicator.icon }}</span>
+    </span>
   </div>
 </template>
 
@@ -27,7 +36,20 @@ defineEmits(['click'])
 
 const showTooltip = ref(false)
 
-const { effectiveStatus, statusColor, hasError } = useToolStatus(toRef(props, 'tool'))
+const { effectiveStatus, statusColor, hasError, isOrphaned } = useToolStatus(toRef(props, 'tool'))
+
+const approvalIndicator = computed(() => {
+  if (isOrphaned.value) {
+    return { icon: '⚠', color: '#f97316', ariaLabel: 'Orphaned - tool execution was interrupted' }
+  }
+  if (props.tool.permissionDecision === 'allow') {
+    return { icon: '✓', color: '#22c55e', ariaLabel: 'Approved by user' }
+  }
+  if (props.tool.permissionDecision === 'deny') {
+    return { icon: '✗', color: '#ef4444', ariaLabel: 'Denied by user' }
+  }
+  return null
+})
 
 const nodeClasses = computed(() => ({
   'node-expanded': props.isExpanded,
@@ -145,6 +167,12 @@ defineExpose({ statusColor, effectiveStatus })
   margin-top: 1px;
 }
 
+.approval-icon {
+  font-size: 8px;
+  font-weight: 700;
+  margin-left: 1px;
+}
+
 /* Mobile compact size */
 .node-compact {
   min-width: 16px;
@@ -158,5 +186,9 @@ defineExpose({ statusColor, effectiveStatus })
 .node-compact .node-label {
   font-size: 7px;
   max-width: 40px;
+}
+
+.node-compact .approval-icon {
+  font-size: 7px;
 }
 </style>
