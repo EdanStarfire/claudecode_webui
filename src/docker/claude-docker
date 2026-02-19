@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# claude-docker: Run Claude Code in a disposable Docker container
+#
+# Usage:
+#   claude-docker [claude-args...]
+#
+# Examples:
+#   claude-docker -p "explain this codebase"
+#   claude-docker -p "fix the bug in main.py" --allowedTools bash,edit
+#   claude-docker                              # interactive mode
+#
+# The container:
+#   - Mounts the current directory at its real host path inside the container
+#   - Mounts ~/.claude credentials for subscription auth
+#   - Is removed after exit (--rm)
+#   - Runs as non-root user
+#
+# Environment variables:
+#   CLAUDE_DOCKER_IMAGE         - Docker image name (default: claude-code:local)
+#   CLAUDE_DOCKER_EXTRA_MOUNTS  - Comma-separated extra -v mount specs
+#   CLAUDE_DOCKER_WORKSPACE     - Workspace directory to mount (default: $PWD)
+
+IMAGE_NAME="${CLAUDE_DOCKER_IMAGE:-claude-code:local}"
+CONTAINER_NAME="claude-code-$$"
+
+# Build image if it doesn't exist
+if ! docker image inspect "$IMAGE_NAME" &>/dev/null; then
+    echo "Building Claude Code container image..."
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    docker build -t "$IMAGE_NAME" "$SCRIPT_DIR"
+fi
+
+# Determine workspace to mount (default: current directory)
+WORKSPACE="${CLAUDE_DOCKER_WORKSPACE:-$(pwd)}"
+
+# -i: always attach stdin (needed for piped input like stream-json)
+# -t: only allocate TTY when stdin is a terminal (interactive mode)
+DOCKER_FLAGS="-i"
+if [ -t 0 ]; then
+    DOCKER_FLAGS="-it"
+fi
+
+# Build extra mount flags from CLAUDE_DOCKER_EXTRA_MOUNTS
+EXTRA_MOUNT_FLAGS=""
+if [ -n "${CLAUDE_DOCKER_EXTRA_MOUNTS:-}" ]; then
+    IFS=',' read -ra MOUNTS <<< "$CLAUDE_DOCKER_EXTRA_MOUNTS"
+    for mount in "${MOUNTS[@]}"; do
+        mount="$(echo "$mount" | xargs)"  # trim whitespace
+        if [ -n "$mount" ]; then
+            EXTRA_MOUNT_FLAGS="$EXTRA_MOUNT_FLAGS -v $mount"
+        fi
+    done
+fi
+
+# Run the container
+exec docker run \
+    --rm \
+    $DOCKER_FLAGS \
+    --name "$CONTAINER_NAME" \
+    -v "$WORKSPACE:$WORKSPACE" \
+    -w "$WORKSPACE" \
+    -v "$HOME/.claude/.credentials.json:/home/claude/.claude/.credentials.json:ro" \
+    -v "$HOME/.claude/settings.json:/home/claude/.claude/settings.json:ro" \
+    -e "CLAUDE_CODE_DISABLE_AUTO_UPDATE=1" \
+    $EXTRA_MOUNT_FLAGS \
+    "$IMAGE_NAME" \
+    "$@"

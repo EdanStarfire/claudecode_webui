@@ -727,6 +727,12 @@ class LegionMCPTools:
                 # SECURITY: cli_path flows only through user-controlled templates
                 cli_path = template.cli_path
 
+                # Apply Docker isolation from template (issue #496)
+                # SECURITY: Docker config flows only through user-controlled templates
+                docker_enabled = getattr(template, 'docker_enabled', False)
+                docker_image = getattr(template, 'docker_image', None)
+                docker_extra_mounts = getattr(template, 'docker_extra_mounts', None)
+
             except Exception as e:
                 coord_logger.error(f"Error applying template: {e}", exc_info=True)
                 return {
@@ -743,6 +749,9 @@ class LegionMCPTools:
             model = None
             override_system_prompt = False
             cli_path = None
+            docker_enabled = False
+            docker_image = None
+            docker_extra_mounts = None
 
         # Validate role is set (from parameter or template)
         if not role:
@@ -792,6 +801,10 @@ class LegionMCPTools:
                 model=model,
                 override_system_prompt=override_system_prompt,
                 cli_path=cli_path,  # Issue #489: from template only
+                # Docker session isolation (issue #496): from template only
+                docker_enabled=docker_enabled,
+                docker_image=docker_image,
+                docker_extra_mounts=docker_extra_mounts,
             )
 
             child_minion_id = spawn_result["minion_id"]

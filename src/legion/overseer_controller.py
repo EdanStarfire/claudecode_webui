@@ -43,7 +43,11 @@ class OverseerController:
         sandbox_enabled: bool = False,
         sandbox_config: dict | None = None,
         setting_sources: list[str] | None = None,
-        cli_path: str | None = None
+        cli_path: str | None = None,
+        # Docker session isolation (issue #496)
+        docker_enabled: bool = False,
+        docker_image: str | None = None,
+        docker_extra_mounts: list[str] | None = None,
     ) -> str:
         """
         Create a minion for the user (root overseer).
@@ -117,7 +121,11 @@ class OverseerController:
             # Settings sources (issue #36)
             setting_sources=setting_sources,
             # CLI path override (issue #489)
-            cli_path=cli_path
+            cli_path=cli_path,
+            # Docker session isolation (issue #496)
+            docker_enabled=docker_enabled,
+            docker_image=docker_image,
+            docker_extra_mounts=docker_extra_mounts,
         )
 
         # Register capabilities in capability registry
@@ -156,6 +164,10 @@ class OverseerController:
         model: str | None = None,
         override_system_prompt: bool = False,
         cli_path: str | None = None,
+        # Docker session isolation (issue #496)
+        docker_enabled: bool = False,
+        docker_image: str | None = None,
+        docker_extra_mounts: list[str] | None = None,
     ) -> dict[str, any]:
         """
         Spawn a child minion autonomously by a parent overseer.
@@ -242,7 +254,11 @@ class OverseerController:
             # Sandbox mode (issue #319)
             sandbox_enabled=sandbox_enabled,
             # CLI path override (issue #489)
-            cli_path=cli_path
+            cli_path=cli_path,
+            # Docker session isolation (issue #496)
+            docker_enabled=docker_enabled,
+            docker_image=docker_image,
+            docker_extra_mounts=docker_extra_mounts,
         )
 
         # 8. Update parent: mark as overseer, add child to child_minion_ids
