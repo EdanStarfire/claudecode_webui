@@ -412,6 +412,14 @@ export const useMessageStore = defineStore('message', () => {
       }
       if (toolCall.permission_granted !== null && toolCall.permission_granted !== undefined) {
         existing.permissionDecision = toolCall.permission_granted ? 'allow' : 'deny'
+      } else if (!existing.permissionDecision && existing.permissionRequestId) {
+        // Infer permission decision from status transitions when permission_granted is missing
+        // (backwards compat for data stored before the backend fix)
+        if (toolCall.status === 'completed' || toolCall.status === 'running') {
+          existing.permissionDecision = 'allow'
+        } else if (toolCall.status === 'denied' || toolCall.status === 'failed') {
+          existing.permissionDecision = 'deny'
+        }
       }
 
       // Update result fields
@@ -469,7 +477,9 @@ export const useMessageStore = defineStore('message', () => {
         permissionRequestId: toolCall.request_id,
         permissionDecision: toolCall.permission_granted !== undefined
           ? (toolCall.permission_granted ? 'allow' : 'deny')
-          : null,
+          : (toolCall.requires_permission && ['completed', 'running'].includes(toolCall.status) ? 'allow'
+            : toolCall.requires_permission && ['denied', 'failed'].includes(toolCall.status) ? 'deny'
+            : null),
         suggestions: toolCall.permission?.suggestions || [],
         result: toolCall.result ? {
           error: toolCall.status === 'failed',
@@ -635,24 +645,23 @@ export const useMessageStore = defineStore('message', () => {
    * Mark a tool use as orphaned (denied due to session restart/interrupt/termination)
    */
   function markToolUseOrphaned(sessionId, toolUseId, message) {
-    const orphaned = orphanedToolUses.value.get(sessionId) || new Map()
-    orphaned.set(toolUseId, {
-      reason: 'denied',
-      message: message
-    })
-    orphanedToolUses.value.set(sessionId, orphaned)
-    // Trigger reactivity for computed properties that read orphanedToolUses
-    orphanedToolUses.value = new Map(orphanedToolUses.value)
+    const info = { reason: 'denied', message: message }
 
-    // Collapse the tool card when marking as orphaned
+    const orphaned = orphanedToolUses.value.get(sessionId) || new Map()
+    orphaned.set(toolUseId, info)
+    orphanedToolUses.value.set(sessionId, orphaned)
+
+    // Stamp directly on tool call object for reliable reactivity
     const toolCalls = toolCallsBySession.value.get(sessionId)
     if (toolCalls) {
       const toolCall = toolCalls.find(tc => tc.id === toolUseId)
-      if (toolCall && toolCall.isExpanded) {
+      if (toolCall) {
+        toolCall._isOrphaned = true
+        toolCall._orphanedInfo = info
         toolCall.isExpanded = false
       }
     }
-    // Always trigger toolCalls reactivity so isOrphaned computeds re-evaluate
+    // Trigger reactivity
     toolCallsBySession.value = new Map(toolCallsBySession.value)
 
     console.log(`Marked tool use ${toolUseId} as orphaned: ${message}`)
