@@ -65,6 +65,8 @@ export function useToolStatus(toolRef) {
   const isOrphaned = computed(() => {
     const tool = toolRef.value
     if (!tool) return false
+    // Check stamped property first (set by markToolUseOrphaned for reliable reactivity)
+    if (tool._isOrphaned) return true
     if (tool.backendStatus === 'interrupted') return true
     const sessionId = sessionStore.currentSessionId
     if (!sessionId) return false
@@ -74,6 +76,8 @@ export function useToolStatus(toolRef) {
   const orphanedInfo = computed(() => {
     const tool = toolRef.value
     if (!tool) return null
+    // Check stamped property first
+    if (tool._orphanedInfo) return tool._orphanedInfo
     const sessionId = sessionStore.currentSessionId
     if (!sessionId) return null
     return messageStore.getOrphanedInfo(sessionId, tool.id)

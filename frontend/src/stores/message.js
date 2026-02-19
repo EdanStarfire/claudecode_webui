@@ -413,6 +413,10 @@ export const useMessageStore = defineStore('message', () => {
       if (toolCall.permission_granted !== null && toolCall.permission_granted !== undefined) {
         existing.permissionDecision = toolCall.permission_granted ? 'allow' : 'deny'
       }
+      // Populate appliedUpdates from backend ToolCallUpdate data
+      if (toolCall.applied_updates && toolCall.applied_updates.length > 0) {
+        existing.appliedUpdates = toolCall.applied_updates
+      }
 
       // Update result fields
       if (toolCall.result !== undefined) {
@@ -467,9 +471,10 @@ export const useMessageStore = defineStore('message', () => {
         status: frontendStatus,
         backendStatus: toolCall.status,
         permissionRequestId: toolCall.request_id,
-        permissionDecision: toolCall.permission_granted !== undefined
+        permissionDecision: toolCall.permission_granted != null
           ? (toolCall.permission_granted ? 'allow' : 'deny')
           : null,
+        appliedUpdates: toolCall.applied_updates || [],
         suggestions: toolCall.permission?.suggestions || [],
         result: toolCall.result ? {
           error: toolCall.status === 'failed',
@@ -635,23 +640,24 @@ export const useMessageStore = defineStore('message', () => {
    * Mark a tool use as orphaned (denied due to session restart/interrupt/termination)
    */
   function markToolUseOrphaned(sessionId, toolUseId, message) {
+    const info = { reason: 'denied', message: message }
+
     const orphaned = orphanedToolUses.value.get(sessionId) || new Map()
-    orphaned.set(toolUseId, {
-      reason: 'denied',
-      message: message
-    })
+    orphaned.set(toolUseId, info)
     orphanedToolUses.value.set(sessionId, orphaned)
 
-    // Collapse the tool card when marking as orphaned
+    // Stamp directly on tool call object for reliable reactivity
     const toolCalls = toolCallsBySession.value.get(sessionId)
     if (toolCalls) {
       const toolCall = toolCalls.find(tc => tc.id === toolUseId)
-      if (toolCall && toolCall.isExpanded) {
+      if (toolCall) {
+        toolCall._isOrphaned = true
+        toolCall._orphanedInfo = info
         toolCall.isExpanded = false
-        // Trigger reactivity
-        toolCallsBySession.value = new Map(toolCallsBySession.value)
       }
     }
+    // Trigger reactivity
+    toolCallsBySession.value = new Map(toolCallsBySession.value)
 
     console.log(`Marked tool use ${toolUseId} as orphaned: ${message}`)
   }

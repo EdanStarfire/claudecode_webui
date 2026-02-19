@@ -604,6 +604,7 @@ class ClaudeWebUI:
         # Register callbacks
         self.coordinator.add_state_change_callback(self._on_state_change)
         self.coordinator.add_session_reset_callback(self._on_session_reset)
+        self.coordinator.add_tool_call_broadcast_callback(self._on_tool_call_broadcast)
 
         # Issue #500: Wire queue processor broadcast callback
         self.coordinator.queue_processor.set_broadcast_callback(self._broadcast_queue_update)
@@ -3261,6 +3262,21 @@ class ClaudeWebUI:
         except Exception as e:
             logger.error(f"Error handling state change: {e}")
 
+    def _on_tool_call_broadcast(self, session_id: str, tool_call_data: dict):
+        """Issue #520: Broadcast tool_call message via WebSocket.
+
+        Called synchronously from coordinator; schedules async send.
+        """
+        websocket_message = {
+            "type": "message",
+            "session_id": session_id,
+            "data": tool_call_data,
+            "timestamp": datetime.now(UTC).isoformat(),
+        }
+        asyncio.ensure_future(
+            self.websocket_manager.send_message(session_id, websocket_message)
+        )
+
     async def _on_session_reset(self, session_id: str):
         """Issue #500: Broadcast session_reset so frontend clears stale messages."""
         try:
@@ -3566,11 +3582,17 @@ class ClaudeWebUI:
                     if tool_call:
                         # Update tool call with permission decision
                         granted = decision == "allow"
+                        # Issue #520: Pass applied_updates so they're stored on the ToolCall
+                        applied_updates_dicts = [
+                            u.to_dict() if hasattr(u, 'to_dict') else u
+                            for u in applied_update_objects
+                        ] if applied_update_objects else []
                         updated_tool_call = self.coordinator.update_tool_call_permission_response(
                             session_id,
                             tool_call.tool_use_id,
                             granted,
                             triggering_message=storage_data,  # Issue #494: embed permission response data
+                            applied_updates=applied_updates_dicts,
                         )
 
                         if updated_tool_call:

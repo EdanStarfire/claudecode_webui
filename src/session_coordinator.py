@@ -75,6 +75,7 @@ class SessionCoordinator:
         self._error_callbacks: dict[str, list[Callable]] = {}
         self._state_change_callbacks: list[Callable] = []
         self._session_reset_callbacks: list[Callable] = []
+        self._tool_call_broadcast_callbacks: list[Callable] = []
 
         # Track recent tool uses for ExitPlanMode detection
         self._recent_tool_uses: dict[str, dict[str, str]] = {}  # session_id -> {tool_use_id: tool_name}
@@ -896,6 +897,9 @@ class SessionCoordinator:
             # Issue #310: Mark active tools as orphaned before termination
             self._mark_tools_orphaned(session_id)
 
+            # Issue #520: Mark active ToolCalls as interrupted and store ToolCallUpdate entries
+            self.mark_session_tools_interrupted(session_id)
+
             # Terminate SDK first
             sdk = self._active_sdks.get(session_id)
             if sdk:
@@ -1232,6 +1236,9 @@ class SessionCoordinator:
 
                 # Issue #310: Mark active tools as orphaned on interrupt
                 self._mark_tools_orphaned(session_id)
+
+                # Issue #520: Mark active ToolCalls as interrupted and store ToolCallUpdate entries
+                self.mark_session_tools_interrupted(session_id)
 
                 # Send interrupt system message via callback system (following client_launched pattern)
                 await self._send_interrupt_message(session_id)
@@ -1927,6 +1934,10 @@ class SessionCoordinator:
         """Add callback for session reset events (Issue #500)."""
         self._session_reset_callbacks.append(callback)
 
+    def add_tool_call_broadcast_callback(self, callback: Callable):
+        """Add callback for broadcasting tool_call messages via WebSocket (Issue #520)."""
+        self._tool_call_broadcast_callbacks.append(callback)
+
     async def _notify_session_reset(self, session_id: str) -> None:
         """Notify registered callbacks that a session was reset."""
         for cb in self._session_reset_callbacks:
@@ -2111,6 +2122,7 @@ class SessionCoordinator:
         tool_use_id: str,
         granted: bool,
         triggering_message: dict[str, Any] | None = None,
+        applied_updates: list[dict[str, Any]] | None = None,
     ) -> ToolCall | None:
         """
         Update ToolCall after permission response (Issue #324).
@@ -2129,6 +2141,8 @@ class SessionCoordinator:
 
         tool_call.permission_granted = granted
         tool_call.permission_response_at = time.time()
+        if applied_updates:
+            tool_call.applied_updates = applied_updates
 
         if granted:
             tool_call.status = ToolState.RUNNING
@@ -2245,7 +2259,8 @@ class SessionCoordinator:
         Mark all active tools for a session as interrupted (Issue #324).
 
         Called when session is terminated or interrupted.
-        Returns list of interrupted ToolCalls for WebSocket broadcast.
+        Stores INTERRUPTED ToolCallUpdate entries and broadcasts via WebSocket.
+        Returns list of interrupted ToolCalls.
         """
         import time
 
@@ -2271,6 +2286,15 @@ class SessionCoordinator:
             coord_logger.info(
                 f"Marked {len(interrupted)} tools as interrupted for session {session_id}"
             )
+            # Issue #520: Broadcast interrupted tool_call messages via WebSocket
+            for tool_call in interrupted:
+                tool_call_data = tool_call.to_dict()
+                tool_call_data["type"] = "tool_call"
+                for cb in self._tool_call_broadcast_callbacks:
+                    try:
+                        cb(session_id, tool_call_data)
+                    except Exception as e:
+                        logger.error(f"Error in tool_call broadcast callback: {e}")
 
         return interrupted
 
@@ -2333,7 +2357,7 @@ class SessionCoordinator:
             tc_hash = hashlib.md5(tc_first_value.encode()).hexdigest()[:8]
             tc_signature = f"{tool_call.name}:{tc_hash}"
 
-            if tc_signature == target_signature and tool_call.status == ToolState.PENDING:
+            if tc_signature == target_signature and tool_call.status in (ToolState.PENDING, ToolState.AWAITING_PERMISSION):
                 return tool_call
 
         return None
