@@ -729,8 +729,13 @@ class SessionCoordinator:
             #     resume_sdk_session = session_id  # Use WebUI session ID as resume identifier
             # else:
             #     logger.info(f"No Claude Code session ID found - starting fresh session for {session_id}")
-            if session_info.claude_code_session_id:
+            if session_info.claude_code_session_id and not session_info.docker_enabled:
                 resume_sdk_session = session_id  # Use WebUI session ID as resume identifier
+            elif session_info.docker_enabled and session_info.claude_code_session_id:
+                logger.info(
+                    f"Skipping resume for Docker session {session_id} "
+                    "(container state is ephemeral)"
+                )
 
             # Issue #313: Attach MCP tools based on can_spawn_minions flag (universal Legion)
             # All sessions with can_spawn_minions=True get Legion MCP tools
