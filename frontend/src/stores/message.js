@@ -412,14 +412,10 @@ export const useMessageStore = defineStore('message', () => {
       }
       if (toolCall.permission_granted !== null && toolCall.permission_granted !== undefined) {
         existing.permissionDecision = toolCall.permission_granted ? 'allow' : 'deny'
-      } else if (!existing.permissionDecision && existing.permissionRequestId) {
-        // Infer permission decision from status transitions when permission_granted is missing
-        // (backwards compat for data stored before the backend fix)
-        if (toolCall.status === 'completed' || toolCall.status === 'running') {
-          existing.permissionDecision = 'allow'
-        } else if (toolCall.status === 'denied' || toolCall.status === 'failed') {
-          existing.permissionDecision = 'deny'
-        }
+      }
+      // Populate appliedUpdates from backend ToolCallUpdate data
+      if (toolCall.applied_updates && toolCall.applied_updates.length > 0) {
+        existing.appliedUpdates = toolCall.applied_updates
       }
 
       // Update result fields
@@ -475,11 +471,10 @@ export const useMessageStore = defineStore('message', () => {
         status: frontendStatus,
         backendStatus: toolCall.status,
         permissionRequestId: toolCall.request_id,
-        permissionDecision: toolCall.permission_granted !== undefined
+        permissionDecision: toolCall.permission_granted != null
           ? (toolCall.permission_granted ? 'allow' : 'deny')
-          : (toolCall.requires_permission && ['completed', 'running'].includes(toolCall.status) ? 'allow'
-            : toolCall.requires_permission && ['denied', 'failed'].includes(toolCall.status) ? 'deny'
-            : null),
+          : null,
+        appliedUpdates: toolCall.applied_updates || [],
         suggestions: toolCall.permission?.suggestions || [],
         result: toolCall.result ? {
           error: toolCall.status === 'failed',

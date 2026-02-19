@@ -140,6 +140,7 @@ class ToolCall:
     permission: PermissionInfo | None = None
     permission_granted: bool | None = None
     permission_response_at: float | None = None
+    applied_updates: list[dict[str, Any]] = field(default_factory=list)
 
     # Result (when completed)
     result: Any = None
@@ -173,6 +174,8 @@ class ToolCall:
             result["permission_granted"] = self.permission_granted
         if self.permission_response_at is not None:
             result["permission_response_at"] = self.permission_response_at
+        if self.applied_updates:
+            result["applied_updates"] = self.applied_updates
 
         # Result fields
         if self.result is not None:
@@ -219,6 +222,7 @@ class ToolCall:
             permission=permission,
             permission_granted=data.get("permission_granted"),
             permission_response_at=data.get("permission_response_at"),
+            applied_updates=data.get("applied_updates", []),
             result=data.get("result"),
             error=data.get("error"),
             display=display,
