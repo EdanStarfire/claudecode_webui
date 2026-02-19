@@ -641,6 +641,8 @@ export const useMessageStore = defineStore('message', () => {
       message: message
     })
     orphanedToolUses.value.set(sessionId, orphaned)
+    // Trigger reactivity for computed properties that read orphanedToolUses
+    orphanedToolUses.value = new Map(orphanedToolUses.value)
 
     // Collapse the tool card when marking as orphaned
     const toolCalls = toolCallsBySession.value.get(sessionId)
@@ -648,10 +650,10 @@ export const useMessageStore = defineStore('message', () => {
       const toolCall = toolCalls.find(tc => tc.id === toolUseId)
       if (toolCall && toolCall.isExpanded) {
         toolCall.isExpanded = false
-        // Trigger reactivity
-        toolCallsBySession.value = new Map(toolCallsBySession.value)
       }
     }
+    // Always trigger toolCalls reactivity so isOrphaned computeds re-evaluate
+    toolCallsBySession.value = new Map(toolCallsBySession.value)
 
     console.log(`Marked tool use ${toolUseId} as orphaned: ${message}`)
   }

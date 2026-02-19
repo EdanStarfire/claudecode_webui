@@ -2333,7 +2333,7 @@ class SessionCoordinator:
             tc_hash = hashlib.md5(tc_first_value.encode()).hexdigest()[:8]
             tc_signature = f"{tool_call.name}:{tc_hash}"
 
-            if tc_signature == target_signature and tool_call.status == ToolState.PENDING:
+            if tc_signature == target_signature and tool_call.status in (ToolState.PENDING, ToolState.AWAITING_PERMISSION):
                 return tool_call
 
         return None
