@@ -36,25 +36,40 @@ ReadToolHandler.vue / EditToolHandler.vue / etc.
 ```
 frontend/src/
 ├── components/
-│   └── messages/
-│       ├── MessageItem.vue          # Router: selects handler based on tool name
-│       ├── ToolCallCard.vue         # Container: lifecycle, expand/collapse, status
-│       └── tools/                   # Tool handler components
-│           ├── BaseToolHandler.vue           # Fallback for unknown tools
-│           ├── ReadToolHandler.vue           # File reading
-│           ├── EditToolHandler.vue           # File editing (diff view)
-│           ├── WriteToolHandler.vue          # File creation
-│           ├── BashToolHandler.vue           # Shell commands
-│           ├── SearchToolHandler.vue         # Grep/Glob results
-│           ├── WebToolHandler.vue            # WebFetch/WebSearch
-│           ├── TodoToolHandler.vue           # Task checklists
-│           ├── TaskToolHandler.vue           # Agent task delegation
-│           ├── NotebookEditToolHandler.vue   # Jupyter notebooks
-│           ├── ExitPlanModeToolHandler.vue   # Plan mode transitions
-│           ├── ShellToolHandler.vue          # Generic shell operations
-│           └── CommandToolHandler.vue        # Generic command display
+│   ├── messages/
+│   │   └── tools/                           # Activity Timeline (5 components)
+│   │       ├── ActivityTimeline.vue          # Horizontal timeline container
+│   │       ├── TimelineNode.vue             # Individual tool dot with status
+│   │       ├── TimelineDetail.vue           # Expanded detail + permission UI
+│   │       ├── TimelineSegment.vue          # Gradient connector line
+│   │       └── TimelineOverflow.vue         # "+N" hidden count pill
+│   └── tools/                               # Tool handlers (21 components)
+│       ├── BaseToolHandler.vue              # Fallback for unknown tools
+│       ├── ReadToolHandler.vue              # File reading
+│       ├── EditToolHandler.vue              # File editing (diff view)
+│       ├── WriteToolHandler.vue             # File creation
+│       ├── BashToolHandler.vue              # Shell commands
+│       ├── SearchToolHandler.vue            # Grep/Glob results
+│       ├── WebToolHandler.vue               # WebFetch/WebSearch
+│       ├── TodoToolHandler.vue              # Task checklists
+│       ├── TaskToolHandler.vue              # Agent task delegation
+│       ├── NotebookEditToolHandler.vue      # Jupyter notebooks
+│       ├── ExitPlanModeToolHandler.vue      # Plan mode transitions
+│       ├── ShellToolHandler.vue             # Generic shell operations
+│       ├── CommandToolHandler.vue           # Generic command display
+│       ├── AskUserQuestionToolHandler.vue   # Interactive Q&A
+│       ├── SkillToolHandler.vue             # Skill invocation
+│       ├── SlashCommandToolHandler.vue      # Slash command display
+│       ├── TaskCreateToolHandler.vue        # Task creation
+│       ├── TaskGetToolHandler.vue           # Task detail display
+│       ├── TaskListToolHandler.vue          # Task list display
+│       ├── TaskUpdateToolHandler.vue        # Task update display
+│       └── ToolSuccessMessage.vue           # Shared success banner
+├── composables/
+│   ├── useToolResult.js                     # Shared tool result extraction
+│   └── useToolStatus.js                     # Shared tool status computation
 └── stores/
-    └── message.js                   # Tool call state management (Pinia)
+    └── message.js                           # Tool call state management (Pinia)
 ```
 
 ### Styling
@@ -543,6 +558,188 @@ Always check for data existence before rendering:
 
 ---
 
+### Interactive
+
+#### AskUserQuestionToolHandler.vue
+**Tool Name**: `AskUserQuestion`
+
+**Features**:
+- Two rendering modes: interactive (pending) and read-only (completed)
+- Single-select (radio) and multi-select (checkbox) per question
+- "Other" option with free-text input field
+- Option descriptions as secondary text
+- Disabled state when session is not active
+- Emits `answer` event with selections object
+
+**Example Input**:
+```javascript
+{
+  questions: [
+    {
+      question: "Which database should we use?",
+      header: "Database",
+      multiSelect: false,
+      options: [
+        { label: "PostgreSQL", description: "Best for relational data" },
+        { label: "MongoDB", description: "Best for document data" }
+      ]
+    }
+  ]
+}
+```
+
+**Composable Usage**: `useToolResult`
+**Styling**: Bootstrap form-check classes, dashed border for "Other" option, highlighted selected state
+
+---
+
+### Skills
+
+#### SkillToolHandler.vue
+**Tool Name**: `Skill`
+
+**Features**:
+- Collapsible skill content section with line count
+- Searches session messages for skill content output (XML-tagged `<command-message>`)
+- Extracts base directory and markdown content from message pattern
+- Chevron toggle for expand/collapse (`bi-chevron-down`/`bi-chevron-right`)
+- Scrollable `<pre>` block for content display
+- Error detection and display
+
+**Example Input**:
+```javascript
+{ skill: "commit", args: "-m 'Fix bug'" }
+```
+
+**Composable Usage**: `useToolResult`
+**Store Access**: `useMessageStore`, `useSessionStore` (to search adjacent messages)
+**Styling**: Custom header background, monospace code font, max-height scrollable content
+
+---
+
+#### SlashCommandToolHandler.vue
+**Tool Name**: `SlashCommand`
+
+**Features**:
+- Collapsible command content section with line count
+- Parses `<command-name>` and `<command-args>` XML tags from message stream
+- Extracts command arguments and content before "ARGUMENTS:" trailer
+- Text chevron toggle (`▾`/`▸`) for expand/collapse
+- Error detection and display
+
+**Example Input**:
+```javascript
+{ command_name: "review-pr", args: "123" }
+```
+
+**Composable Usage**: `useToolResult`
+**Store Access**: `useMessageStore`, `useSessionStore` (to search adjacent messages)
+**Styling**: Similar to SkillToolHandler, monospace font with max-height scroll
+
+---
+
+### Task Management (SDK Tasks)
+
+#### TaskCreateToolHandler.vue
+**Tool Name**: `TaskCreate`
+
+**Features**:
+- Displays task creation parameters: subject, description, activeForm
+- Uses `ToolSuccessMessage` component for success result
+- Conditional rendering per field
+- 📝 task icon in header
+
+**Example Input**:
+```javascript
+{
+  subject: "Fix authentication bug",
+  description: "Users cannot log in with OAuth",
+  activeForm: "Fixing authentication bug"
+}
+```
+
+**Composable Usage**: `useToolResult`
+**Child Components**: `ToolSuccessMessage`
+**Styling**: Blue header (`#e8f4fd`), white content area
+
+---
+
+#### TaskGetToolHandler.vue
+**Tool Name**: `TaskGet`
+
+**Features**:
+- Task ID badge in header
+- Parses task details from result (JSON or line-based format)
+- Displays Subject, Status (with emoji), Description, Owner, BlockedBy/Blocks badges
+- Status icons: ✅ completed, 🔄 in_progress, ⏳ pending
+- Color-coded status via `statusClass` computed property
+
+**Example Input**:
+```javascript
+{ taskId: "3" }
+```
+
+**Composable Usage**: `useToolResult`
+**Styling**: Conditional status color classes, badge styling for task IDs and dependencies
+
+---
+
+#### TaskListToolHandler.vue
+**Tool Name**: `TaskList`
+
+**Features**:
+- Parses tasks from pattern: `#ID. [STATUS] Subject`
+- Renders task rows with status icon, ID, subject, owner badge
+- Empty state message with 📝 icon
+- Flex layout with ellipsis truncation for subject
+- 📋 list icon in header
+
+**Composable Usage**: `useToolResult`
+**Styling**: Monospace task IDs, flex layout with proper spacing
+
+---
+
+#### TaskUpdateToolHandler.vue
+**Tool Name**: `TaskUpdate`
+
+**Features**:
+- Task ID badge in header with ✏️ icon
+- Displays all update parameters with conditional rendering
+- Status icons with color coding: ✅ completed, ✏️ in_progress, ⏳ pending, 🗑️ deleted
+- Supports blocked dependency visualization with badges
+- Uses `ToolSuccessMessage` component for success result
+
+**Example Input**:
+```javascript
+{
+  taskId: "3",
+  status: "completed",
+  addBlocks: ["4", "5"]
+}
+```
+
+**Composable Usage**: `useToolResult`
+**Child Components**: `ToolSuccessMessage`
+**Styling**: Yellow/gold header (`#fff3cd`), color-coded status classes
+
+---
+
+### Shared Components
+
+#### ToolSuccessMessage.vue
+**Tool Names**: *(helper component, not a tool handler)*
+
+**Purpose**: Reusable success banner rendered by TaskCreate, TaskUpdate, and other handlers.
+
+**Props**:
+- `message` (String, required): Success message text
+- `icon` (String, default: `✅`): Icon to display
+- `detail` (String, optional): Secondary detail text
+
+**Styling**: Green background (`#dcfce7`), green border (`#86efac`), green text (`#166534`), CSS variable support
+
+---
+
 ### Fallback Handler
 
 #### BaseToolHandler.vue
@@ -555,6 +752,67 @@ Always check for data existence before rendering:
 - Supports all standard statuses
 
 **Styling**: Neutral gray theme
+
+---
+
+## Shared Infrastructure
+
+### Composables
+
+#### `useToolResult.js` — Tool Result Extraction
+
+Shared composable eliminating duplicated result-parsing logic across tool handlers.
+
+**Input**: `toolCallRef` (reactive ref to toolCall object)
+
+**Returns**:
+| Property | Type | Description |
+|----------|------|-------------|
+| `hasResult` | `boolean` | `true` if result exists |
+| `isError` | `boolean` | Checks `result.error` or `status === 'error'` |
+| `resultContent` | `string` | Extracts `result.content`, falls back to `result.message` or `JSON.stringify` |
+| `formattedInput` | `string` | JSON-formatted tool input |
+
+**Usage**:
+```javascript
+import { useToolResult } from '@/composables/useToolResult'
+const { hasResult, isError, resultContent } = useToolResult(toRef(props, 'toolCall'))
+```
+
+**Used by**: TaskCreateToolHandler, TaskGetToolHandler, TaskListToolHandler, TaskUpdateToolHandler, AskUserQuestionToolHandler, SkillToolHandler, SlashCommandToolHandler
+
+---
+
+#### `useToolStatus.js` — Tool Status Computation
+
+Shared composable providing consistent status mapping, orphaned detection, and color coding.
+
+**Input**: `toolRef` (reactive ref to tool/toolCall object)
+
+**Returns**:
+| Property | Type | Description |
+|----------|------|-------------|
+| `effectiveStatus` | `string` | Maps backend statuses to frontend display states |
+| `isOrphaned` | `boolean` | Detects orphaned tools (cancelled by session events) |
+| `orphanedInfo` | `Object` | Orphaned info from message store |
+| `statusColor` | `string` | Hex color for current status |
+| `hasError` | `boolean` | Checks error, failure, or denial states |
+
+**Status Mapping**:
+| Backend Status | Frontend Status | Color |
+|---------------|----------------|-------|
+| `pending` | `pending` | `#ffc107` (yellow) |
+| `awaiting_permission` | `permission_required` | `#8b5cf6` (purple) |
+| `running` | `executing` | `#3b82f6` (blue) |
+| `completed` | `completed` | `#22c55e` (green) |
+| `failed` / `denied` | `error` | `#ef4444` (red) |
+| *(orphaned)* | `orphaned` | `#94a3b8` (gray) |
+
+**Helper Functions** (non-reactive, for use outside composable context):
+- `getEffectiveStatusForTool(tool)` — Returns effective status string
+- `getColorForStatus(status)` — Returns hex color for a status
+
+**Used by**: TimelineNode, ActivityTimeline, TimelineDetail, tool handlers
 
 ---
 

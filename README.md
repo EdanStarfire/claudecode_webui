@@ -115,25 +115,54 @@ Use your browser to manage local claude code instances from your phone.
 - **Name customization** - Rename projects and sessions for clarity
 
 #### 🛠️ Rich Tool Visualization
-Custom UI for every Claude Agent SDK tool:
+Custom UI for 21+ Claude Agent SDK tools:
 - **File operations** - Syntax-highlighted previews for Read, color-coded diffs for Edit/Write
 - **Search results** - Formatted Grep/Glob output with file paths and context
+- **Task management** - SDK task tracking (TaskCreate/Get/List/Update) with status icons
 - **Todo lists** - Visual task tracking (☐ pending, ◐ in-progress, ☑ completed)
 - **Shell commands** - Bash execution with real-time output display
 - **Web tools** - WebFetch/WebSearch with prompt and result visibility
+- **Interactive Q&A** - AskUserQuestion with selectable options and free-text input
+- **Skills & slash commands** - Collapsible content display for skill invocations
 - **Notebooks** - Jupyter notebook editing with cell-by-cell changes
+- **Activity timeline** - Horizontal timeline of tool calls with status dots and expand-to-detail
 - **Fallback handler** - Generic display for new/unconfigured tools
 
 #### 🔐 Permission System
 - **Supports CC modes**: `default` (prompt), `acceptEdits` (permissive), `plan` (auto-resets), `bypassPermissions` (no prompts)
 - **Smart suggestions** - SDK-provided permission updates you can apply instantly
 - **Runtime switching** - Supports both manual and SDK-driven mode changes
+- **Permission preview** - Preview effective permissions from settings files before starting sessions
 - **Session state indication** - Visual indicators when a session is awaiting permissions
 
 #### 💬 Real-Time Updates
 - **WebSocket streaming** - See messages, tool calls, and thinking blocks as they arrive
 - **Connection resilience** - Automatic reconnection with exponential backoff
 - **Multi-session support** - Run dozens of conversations simultaneously
+- **Context compaction display** - Visual indicators when context is compressed
+
+#### 📎 File & Resource Management
+- **File uploads** - Attach files to messages for agent processing
+- **Resource gallery** - Browse images and files registered by agents
+- **Git diff viewer** - Per-commit and aggregate diff views with file-level detail
+
+#### 📬 Message Queue
+- **Timed delivery** - Queue messages for sequential delivery with configurable delays
+- **Auto-start** - Automatically start sessions to deliver queued messages
+- **Queue controls** - Pause, resume, cancel, re-queue, and clear items
+
+#### ⏰ Cron Scheduling
+- **Recurring tasks** - Schedule agent prompts with cron expressions
+- **Execution history** - Track schedule runs with success/failure status
+- **Schedule controls** - Pause, resume, and cancel schedules
+
+#### 🧩 Templates & Configuration
+- **Minion templates** - Pre-configured permission sets for spawning agents
+- **Sandbox mode** - OS-level sandboxing for restricted agent environments
+- **Slash command autocomplete** - Auto-suggest available slash commands while typing
+
+#### 🔄 Server Management
+- **Self-update & restart** - Restart the backend server from the UI
 
 ### Multi-Agent Mode (Legion) - In Progress
 
@@ -159,10 +188,10 @@ __Longer-term Goals__
 - **Minion forking** - Duplicate agents with identical memory for A/B testing (planned)
 
 ### 📊 Developer Experience
-- **Vue 3 + Pinia** - Modern reactive frontend with centralized state management
-- **REST API** - Full programmatic access to projects, sessions, messages, and Legion features
+- **Vue 3 + Pinia** - 12 stores, 85+ components, 3 composables for reactive state management
+- **REST API** - 50+ endpoints for programmatic access to projects, sessions, messages, and Legion features
 - **Debug logging** - Per-category logs (SDK, WebSocket, storage, parser, coordinator) with `--debug-all`
-- **Extensible architecture** - Add custom tool handlers, MCP tools, or frontend components
+- **Extensible architecture** - 21 tool handlers, MCP tools, and modular component system
 - **Comprehensive documentation** - Architecture guides, API references, and development workflows
 
 ## Configuration
@@ -212,8 +241,10 @@ Access Claude WebUI from any device on your network:
 ## Documentation
 
 ### Technical Documentation
-- **[CLAUDE.md](./CLAUDE.md)** - Complete architecture, backend internals, API reference
-- **[frontend/README.md](./frontend/README.md)** - Vue 3 frontend architecture and development guide
+- **[CLAUDE.md](./CLAUDE.md)** - Backend architecture, SDK integration, system design
+- **[frontend/CLAUDE.md](./frontend/CLAUDE.md)** - Frontend architecture (stores, components, composables)
+- **[.claude/API_REFERENCE.md](./.claude/API_REFERENCE.md)** - REST and WebSocket API reference
+- **[TOOL_HANDLERS.md](./TOOL_HANDLERS.md)** - Tool handler development guide
 
 ## Architecture Overview
 
@@ -224,7 +255,7 @@ Access Claude WebUI from any device on your network:
 │                       Browser (Vue 3)                        │
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐      │
 │  │ Pinia Stores │  │  Components  │  │ Vue Router   │      │
-│  │  (6 stores)  │  │ (53 files)   │  │  (routing)   │      │
+│  │ (12 stores)  │  │ (85+ files)  │  │  (routing)   │      │
 │  └──────────────┘  └──────────────┘  └──────────────┘      │
 └────────────┬────────────────────────────────────────────────┘
              │ WebSocket (3 connections) + REST API
