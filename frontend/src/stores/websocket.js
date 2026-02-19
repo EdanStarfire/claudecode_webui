@@ -513,6 +513,16 @@ export const useWebSocketStore = defineStore('websocket', () => {
             sessionRetryCount.value = 0  // Reset retry count for fresh connection
             connectSession(changedSessionId)
           }
+
+          // Issue #517: When a session transitions to error state (e.g., SDK startup failure),
+          // the failure system message is persisted to JSONL but the session WebSocket may not
+          // be connected yet. Reload messages so the error appears immediately in the chat.
+          if (changedSessionId === sessionStore.currentSessionId &&
+              newState === 'error') {
+            console.log(`[UI state_change] Session ${changedSessionId} entered error state, reloading messages`)
+            const messageStore = useMessageStore()
+            messageStore.loadMessages(changedSessionId)
+          }
         }
         break
 
