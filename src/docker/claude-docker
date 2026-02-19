@@ -54,6 +54,19 @@ if [ -n "${CLAUDE_DOCKER_EXTRA_MOUNTS:-}" ]; then
     done
 fi
 
+# Scan arguments for file-based flags that need host files mounted into container
+# The SDK passes --append-system-prompt-file or --system-prompt-file with a temp file path
+FILE_MOUNT_FLAGS=""
+PREV_ARG=""
+for arg in "$@"; do
+    if [ "$PREV_ARG" = "--append-system-prompt-file" ] || [ "$PREV_ARG" = "--system-prompt-file" ]; then
+        if [ -f "$arg" ]; then
+            FILE_MOUNT_FLAGS="$FILE_MOUNT_FLAGS -v $arg:$arg:ro"
+        fi
+    fi
+    PREV_ARG="$arg"
+done
+
 # Run the container
 exec docker run \
     --rm \
@@ -65,5 +78,6 @@ exec docker run \
     -v "$HOME/.claude/settings.json:/home/claude/.claude/settings.json:ro" \
     -e "CLAUDE_CODE_DISABLE_AUTO_UPDATE=1" \
     $EXTRA_MOUNT_FLAGS \
+    $FILE_MOUNT_FLAGS \
     "$IMAGE_NAME" \
     "$@"
