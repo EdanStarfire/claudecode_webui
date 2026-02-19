@@ -78,6 +78,7 @@ def resolve_docker_cli_path(
     docker_image: str | None = None,
     docker_extra_mounts: list[str] | None = None,
     workspace: str | None = None,
+    session_data_dir: str | None = None,
 ) -> tuple[str, dict[str, str]]:
     """
     Resolve the cli_path and environment variables for Docker mode.
@@ -86,6 +87,9 @@ def resolve_docker_cli_path(
         docker_image: Custom Docker image name (None = default)
         docker_extra_mounts: Additional volume mount specs
         workspace: Working directory to mount in the container
+        session_data_dir: Host-side directory for persistent Claude session data.
+                          Mounted as /home/claude/.claude/ inside the container so that
+                          session transcripts survive container restarts (enabling --resume).
 
     Returns:
         Tuple of (cli_path_string, env_vars_dict)
@@ -101,5 +105,8 @@ def resolve_docker_cli_path(
 
     if workspace:
         env_vars["CLAUDE_DOCKER_WORKSPACE"] = workspace
+
+    if session_data_dir:
+        env_vars["CLAUDE_DOCKER_DATA_DIR"] = session_data_dir
 
     return wrapper_path, env_vars
