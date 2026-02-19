@@ -28,16 +28,24 @@
       v-if="expandedNodeId && expandedTool"
       :toolCall="expandedTool"
     />
+
+    <!-- Permission Prompt (outside scroll container for accessibility) -->
+    <PermissionPrompt
+      v-if="expandedTool && needsPermission"
+      ref="permissionRef"
+      :toolCall="expandedTool"
+    />
   </div>
 </template>
 
 <script setup>
-import { computed, ref, watch } from 'vue'
+import { computed, ref, watch, nextTick } from 'vue'
 import { useUIStore } from '@/stores/ui'
 import { getEffectiveStatusForTool, getColorForStatus } from '@/composables/useToolStatus'
 import TimelineNode from './TimelineNode.vue'
 import TimelineSegment from './TimelineSegment.vue'
 import TimelineDetail from './TimelineDetail.vue'
+import PermissionPrompt from './PermissionPrompt.vue'
 
 const props = defineProps({
   tools: {
@@ -56,6 +64,7 @@ const uiStore = useUIStore()
 // Local state for this timeline instance
 const expandedNodeId = ref(null)
 const nodeRefs = ref({})
+const permissionRef = ref(null)
 
 function setNodeRef(id, el) {
   if (el) nodeRefs.value[id] = el
@@ -80,6 +89,21 @@ const sortedTools = computed(() => {
 const expandedTool = computed(() => {
   if (!expandedNodeId.value) return null
   return sortedTools.value.find(t => t.id === expandedNodeId.value)
+})
+
+// Whether the expanded tool currently needs a permission prompt
+const needsPermission = computed(() => {
+  if (!expandedTool.value) return false
+  return getEffectiveStatusForTool(expandedTool.value) === 'permission_required'
+})
+
+// Scroll permission prompt into view when it appears (respects auto-scroll toggle)
+watch(needsPermission, (needs) => {
+  if (needs && uiStore.autoScrollEnabled) {
+    nextTick(() => {
+      permissionRef.value?.$el?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+    })
+  }
 })
 
 // Auto-expand when a tool needs permission, auto-collapse when resolved
