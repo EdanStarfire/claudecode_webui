@@ -819,8 +819,8 @@ class SessionCoordinator:
                 except Exception as state_error:
                     logger.error(f"Failed to update session state to ERROR: {state_error}")
 
-                # Send system message explaining the failure
-                await self._send_session_failure_message(session_id, error_message)
+                # Send system message explaining the failure (with raw details)
+                await self._send_session_failure_message(session_id, error_message, raw_error_message)
 
                 # Clean up the failed SDK
                 if session_id in self._active_sdks:
@@ -844,8 +844,9 @@ class SessionCoordinator:
         except Exception as e:
             logger.error(f"Failed to start integrated session {session_id}: {e}")
 
-            # Extract user-friendly error message
-            error_message = self._extract_claude_cli_error(str(e))
+            # Extract user-friendly error message, preserve raw for details
+            raw_error_str = str(e)
+            error_message = self._extract_claude_cli_error(raw_error_str)
 
             # Update session state to ERROR and reset processing state
             try:
@@ -856,8 +857,8 @@ class SessionCoordinator:
             except Exception as state_error:
                 logger.error(f"Failed to update session state to ERROR: {state_error}")
 
-            # Send system message explaining the failure
-            await self._send_session_failure_message(session_id, error_message)
+            # Send system message explaining the failure (with raw details)
+            await self._send_session_failure_message(session_id, error_message, raw_error_str)
 
             # Clean up any partially created SDK
             if session_id in self._active_sdks:
@@ -2561,8 +2562,9 @@ class SessionCoordinator:
                 if error_type in ["startup_failed", "message_processing_loop_error", "immediate_cli_failure"]:
                     # logger.info(f"Handling critical SDK error: {error_type}")
 
-                    # Extract user-friendly error message
-                    user_error_message = self._extract_claude_cli_error(str(error))
+                    # Extract user-friendly error message, preserve raw for details
+                    raw_error_str = str(error)
+                    user_error_message = self._extract_claude_cli_error(raw_error_str)
 
                     # Update session state to ERROR and reset processing state
                     try:
@@ -2574,8 +2576,8 @@ class SessionCoordinator:
                     except Exception as state_error:
                         logger.error(f"Failed to update session state to ERROR: {state_error}")
 
-                    # Send system message explaining the runtime failure
-                    await self._send_session_failure_message(session_id, user_error_message)
+                    # Send system message explaining the runtime failure (with raw details)
+                    await self._send_session_failure_message(session_id, user_error_message, raw_error_str)
 
                     # Clean up the failed SDK
                     if session_id in self._active_sdks:
@@ -2655,14 +2657,21 @@ class SessionCoordinator:
             import traceback
             logger.error(f"ERROR: Traceback: {traceback.format_exc()}")
 
-    async def _send_session_failure_message(self, session_id: str, error_message: str):
+    async def _send_session_failure_message(self, session_id: str, error_message: str,
+                                               raw_error: str | None = None):
         """Send a system message indicating the session failed to start"""
         try:
+            # Include raw error details when available (issue #517)
+            if raw_error and raw_error != error_message:
+                content = f"Session failed: {error_message}\n{raw_error}"
+            else:
+                content = f"Session failed: {error_message}"
+
             # Create system message for session failure
             message_data = {
                 "type": "system",
                 "subtype": "session_failed",
-                "content": f"Session failed to start: {error_message}",
+                "content": content,
                 "session_id": session_id,
                 "timestamp": get_unix_timestamp(),
                 "sdk_message_type": "SystemMessage",
