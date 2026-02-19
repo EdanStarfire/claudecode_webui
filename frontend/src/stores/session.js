@@ -213,6 +213,13 @@ export const useSessionStore = defineStore('session', () => {
               break
             }
 
+            // Issue #517: Break early if session enters error state (startup failure)
+            // No point waiting 60s when the session has already failed
+            if (currentSession && currentSession.state === 'error') {
+              console.log(`Session ${sessionId} entered error state after ${elapsedMs}ms, stopping wait`)
+              break
+            }
+
             // Log progress every 5 seconds
             if (elapsedMs - lastLogMs >= logIntervalMs) {
               const currentState = sessions.value.get(sessionId)?.state || 'unknown'

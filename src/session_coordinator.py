@@ -448,7 +448,8 @@ class SessionCoordinator:
                 mcp_servers=mcp_servers if mcp_servers else None,
                 sandbox_enabled=sandbox_enabled,
                 sandbox_config=sandbox_config,
-                experimental=self.experimental
+                experimental=self.experimental,
+                stderr_callback=self._create_stderr_callback(session_id)
             )
             self._active_sdks[session_id] = sdk
 
@@ -788,7 +789,8 @@ class SessionCoordinator:
                 sandbox_config=session_info.sandbox_config,
                 setting_sources=session_info.setting_sources,  # Issue #36
                 experimental=self.experimental,
-                cli_path=session_info.cli_path  # Issue #489
+                cli_path=session_info.cli_path,  # Issue #489
+                stderr_callback=self._create_stderr_callback(session_id)
             )
             self._active_sdks[session_id] = sdk
 
@@ -817,8 +819,8 @@ class SessionCoordinator:
                 except Exception as state_error:
                     logger.error(f"Failed to update session state to ERROR: {state_error}")
 
-                # Send system message explaining the failure
-                await self._send_session_failure_message(session_id, error_message)
+                # Send system message explaining the failure (with raw details)
+                await self._send_session_failure_message(session_id, error_message, raw_error_message)
 
                 # Clean up the failed SDK
                 if session_id in self._active_sdks:
@@ -842,8 +844,9 @@ class SessionCoordinator:
         except Exception as e:
             logger.error(f"Failed to start integrated session {session_id}: {e}")
 
-            # Extract user-friendly error message
-            error_message = self._extract_claude_cli_error(str(e))
+            # Extract user-friendly error message, preserve raw for details
+            raw_error_str = str(e)
+            error_message = self._extract_claude_cli_error(raw_error_str)
 
             # Update session state to ERROR and reset processing state
             try:
@@ -854,8 +857,8 @@ class SessionCoordinator:
             except Exception as state_error:
                 logger.error(f"Failed to update session state to ERROR: {state_error}")
 
-            # Send system message explaining the failure
-            await self._send_session_failure_message(session_id, error_message)
+            # Send system message explaining the failure (with raw details)
+            await self._send_session_failure_message(session_id, error_message, raw_error_str)
 
             # Clean up any partially created SDK
             if session_id in self._active_sdks:
@@ -2559,8 +2562,9 @@ class SessionCoordinator:
                 if error_type in ["startup_failed", "message_processing_loop_error", "immediate_cli_failure"]:
                     # logger.info(f"Handling critical SDK error: {error_type}")
 
-                    # Extract user-friendly error message
-                    user_error_message = self._extract_claude_cli_error(str(error))
+                    # Extract user-friendly error message, preserve raw for details
+                    raw_error_str = str(error)
+                    user_error_message = self._extract_claude_cli_error(raw_error_str)
 
                     # Update session state to ERROR and reset processing state
                     try:
@@ -2572,8 +2576,8 @@ class SessionCoordinator:
                     except Exception as state_error:
                         logger.error(f"Failed to update session state to ERROR: {state_error}")
 
-                    # Send system message explaining the runtime failure
-                    await self._send_session_failure_message(session_id, user_error_message)
+                    # Send system message explaining the runtime failure (with raw details)
+                    await self._send_session_failure_message(session_id, user_error_message, raw_error_str)
 
                     # Clean up the failed SDK
                     if session_id in self._active_sdks:
@@ -2593,6 +2597,30 @@ class SessionCoordinator:
 
             except Exception as e:
                 logger.error(f"Error processing error callback for {session_id}: {e}")
+
+        return callback
+
+    def _create_stderr_callback(self, session_id: str) -> Callable:
+        """Create stderr callback that routes SDK stderr output through the message pipeline.
+
+        Issue #517: Each stderr line becomes a system message with subtype 'stderr',
+        persisted to messages.jsonl and broadcast to the frontend via WebSocket.
+        """
+        message_callback = self._create_message_callback(session_id)
+
+        async def callback(output: str):
+            try:
+                coord_logger.warning(f"[STDERR] Session {session_id}: {output}")
+                stderr_message = {
+                    "type": "system",
+                    "subtype": "stderr",
+                    "content": output,
+                    "session_id": session_id,
+                    "timestamp": get_unix_timestamp()
+                }
+                await message_callback(stderr_message)
+            except Exception as e:
+                logger.error(f"Error in stderr callback for session {session_id}: {e}")
 
         return callback
 
@@ -2629,14 +2657,20 @@ class SessionCoordinator:
             import traceback
             logger.error(f"ERROR: Traceback: {traceback.format_exc()}")
 
-    async def _send_session_failure_message(self, session_id: str, error_message: str):
+    async def _send_session_failure_message(self, session_id: str, error_message: str,
+                                               raw_error: str | None = None):
         """Send a system message indicating the session failed to start"""
         try:
+            # Issue #517: Build a clean error message for the user
+            # When stderr output is embedded in the raw error, extract it and show
+            # just the stderr (the actual useful info) instead of the noisy chain
+            content = self._format_failure_content(error_message, raw_error)
+
             # Create system message for session failure
             message_data = {
                 "type": "system",
                 "subtype": "session_failed",
-                "content": f"Session failed to start: {error_message}",
+                "content": content,
                 "session_id": session_id,
                 "timestamp": get_unix_timestamp(),
                 "sdk_message_type": "SystemMessage",
@@ -2678,6 +2712,41 @@ class SessionCoordinator:
 
         except Exception as e:
             logger.error(f"Failed to send interrupt message for {session_id}: {e}")
+
+    def _format_failure_content(self, friendly_error: str, raw_error: str | None) -> str:
+        """Format failure message content, extracting stderr when available.
+
+        Issue #517: When the raw error contains 'Stderr output:', extract just
+        the stderr portion as the meaningful detail. This avoids showing the
+        noisy chain of 'Command failed ... Check stderr output for details ...'.
+        """
+        if not raw_error or raw_error == friendly_error:
+            return f"Session failed: {friendly_error}"
+
+        # Extract stderr content if embedded in the raw error
+        stderr_marker = "Stderr output:\n"
+        stderr_idx = raw_error.find(stderr_marker)
+        if stderr_idx >= 0:
+            stderr_content = raw_error[stderr_idx + len(stderr_marker):].strip()
+            if stderr_content:
+                return f"Session failed: {stderr_content}"
+
+        # No stderr marker — check if raw_error adds useful info beyond the friendly message
+        # Strip the noisy SDK wrapper phrases
+        noise_phrases = [
+            "Command failed with exit code",
+            "Error output: Check stderr output for details",
+            "(exit code:",
+        ]
+        cleaned = raw_error
+        for phrase in noise_phrases:
+            cleaned = cleaned.replace(phrase, "")
+        cleaned = " ".join(cleaned.split()).strip()
+
+        if cleaned and cleaned != friendly_error:
+            return f"Session failed: {cleaned}"
+
+        return f"Session failed: {friendly_error}"
 
     def _extract_claude_cli_error(self, error_message: str) -> str:
         """Extract and format user-friendly error messages from Claude CLI output"""

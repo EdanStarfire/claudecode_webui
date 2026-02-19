@@ -142,7 +142,8 @@ class ClaudeSDK:
         sandbox_config: dict | None = None,
         setting_sources: list[str] | None = None,
         experimental: bool = False,
-        cli_path: str | None = None
+        cli_path: str | None = None,
+        stderr_callback: Callable[[str], Any] | None = None
     ):
         """
         Initialize enhanced Claude Code SDK wrapper.
@@ -165,6 +166,7 @@ class ClaudeSDK:
             setting_sources: List of settings sources to load (issue #36)
             experimental: Enable experimental features like Agent Teams (issue #411)
             cli_path: Custom CLI executable path for tool execution (issue #489)
+            stderr_callback: Called with each stderr line from SDK subprocess (issue #517)
         """
         self.session_id = session_id
         self.working_directory = Path(working_directory)
@@ -191,6 +193,8 @@ class ClaudeSDK:
         self.setting_sources = setting_sources  # Issue #36: which settings files to load
         self.experimental = experimental  # Issue #411: Enable experimental features
         self.cli_path = cli_path  # Issue #489: Custom CLI executable path
+        self.stderr_callback = stderr_callback  # Issue #517: stderr callback for system messages
+        self._stderr_buffer: list[str] = []  # Issue #517: buffer stderr lines for error reporting
 
         self.info = SessionInfo(session_id=session_id, working_directory=str(self.working_directory))
 
@@ -643,9 +647,15 @@ class ClaudeSDK:
                 logger.error(f"Health check failed during fatal error handling: {health_check_error}")
 
             self.info.state = SessionState.FAILED
-            self.info.error_message = str(e)
+            # Include buffered stderr in error message (issue #517)
+            error_msg = str(e)
+            if self._stderr_buffer:
+                stderr_text = "\n".join(self._stderr_buffer)
+                error_msg = f"{error_msg}\nStderr output:\n{stderr_text}"
+            self.info.error_message = error_msg
             if self.error_callback:
-                await self._safe_callback(self.error_callback, "message_processing_loop_error", e)
+                await self._safe_callback(self.error_callback, "message_processing_loop_error",
+                                          Exception(error_msg))
         finally:
             cleanup_time = time.time()
             self._sdk_client = None
@@ -761,10 +771,20 @@ class ClaudeSDK:
             sdk_logger.info(f"Experimental Agent Teams enabled for session {self.session_id}")
         options_kwargs["env"] = env_vars
 
-        # Add stderr callback to capture SDK CLI errors
+        # Add stderr handler to capture SDK CLI errors (issue #517)
         def stderr_handler(output: str) -> None:
             """Capture and log stderr output from Claude Code CLI."""
             logger.error(f"[SDK_STDERR] {self.session_id}: {output}")
+            self._stderr_buffer.append(output)
+            if self.stderr_callback:
+                try:
+                    loop = asyncio.get_running_loop()
+                    loop.call_soon_threadsafe(
+                        asyncio.ensure_future,
+                        self._safe_callback(self.stderr_callback, output)
+                    )
+                except RuntimeError:
+                    pass  # No running event loop, skip callback
 
         options_kwargs["stderr"] = stderr_handler
 
