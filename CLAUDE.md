@@ -137,45 +137,54 @@ Ruff configuration is in `pyproject.toml`:
 
 ## Current Status
 
-The frontend migration to Vue 3 is **substantially complete** and in production use:
+The Vue 3 migration is **complete** and in production use. The frontend has grown significantly beyond the original migration scope with 12 Pinia stores, 85+ Vue components, 21 tool handlers, and 3 composables.
 
-- ✅ **Phase 1 Complete**: All Pinia stores, Vue Router, base components
-- ✅ **Phase 2 Complete**: Project/Session components with full CRUD operations
-- ✅ **Phase 3 Complete**: Message display, tool handlers (13+ custom handlers), tool lifecycle tracking
-- ✅ **Phase 4 Complete**: Legion Timeline/Spy views, minion management, comm system
-- ⏳ **Phase 5 In Progress**: Polish, orphaned tool detection, permission system refinements
-- ⏳ **Phase 6 Pending**: Production build optimization, cutover from dev server
-
-**Documentation**: See `frontend/README.md` for development guide and `frontend/MIGRATION_PLAN.md` for detailed migration status.
+**Documentation**: See [frontend/CLAUDE.md](./frontend/CLAUDE.md) for detailed frontend architecture.
 
 ## Frontend Structure
 
 ```
 frontend/
 ├── src/
-│   ├── stores/                    # Pinia stores (state management)
+│   ├── stores/                    # 12 Pinia stores
 │   │   ├── session.js             # Session CRUD, selection, deep linking
 │   │   ├── project.js             # Project hierarchy, ordering
 │   │   ├── message.js             # Messages, tool calls, orphaned detection
 │   │   ├── websocket.js           # 3 WebSocket connections (UI, session, legion)
 │   │   ├── legion.js              # Multi-agent: comms, minions
-│   │   └── ui.js                  # Sidebar, modals, loading, responsive
+│   │   ├── ui.js                  # Sidebar, modals, loading, responsive
+│   │   ├── queue.js               # Per-session message queue
+│   │   ├── schedule.js            # Per-legion cron schedules
+│   │   ├── resource.js            # Per-session resources (images/files)
+│   │   ├── diff.js                # Per-session git diff data
+│   │   ├── task.js                # Per-session SDK task tracking
+│   │   └── image.js               # Deprecated shim → resource.js
+│   │
+│   ├── composables/               # 3 reusable composition functions
+│   │   ├── useToolResult.js       # Shared tool result extraction
+│   │   ├── useToolStatus.js       # Tool status computation
+│   │   └── useWebSocket.js        # Generic WebSocket hook
 │   │
 │   ├── components/
-│   │   ├── layout/                # AppHeader, Sidebar, ConnectionIndicator
-│   │   ├── project/               # ProjectList, ProjectItem, ProjectCreateModal, etc.
-│   │   ├── session/               # SessionView, SessionItem, SessionCreateModal, etc.
-│   │   ├── messages/              # MessageList, MessageItem, UserMessage, AssistantMessage, etc.
-│   │   ├── messages/tools/        # 13+ tool handlers (ReadToolHandler, EditToolHandler, etc.)
-│   │   ├── legion/                # TimelineView, SpyView, CommComposer, etc.
-│   │   └── common/                # FolderBrowserModal, InputArea, etc.
+│   │   ├── layout/        (12)    # ProjectPillBar, AgentStrip, AgentChip, RightSidebar, etc.
+│   │   ├── configuration/ (6)     # ConfigurationModal + tabs + PermissionPreview
+│   │   ├── project/       (4)     # ProjectOverview, ProjectCreateModal, etc.
+│   │   ├── session/       (7)     # SessionView, SessionInfoBar, modals, etc.
+│   │   ├── messages/      (7)     # MessageList, MessageItem, InputArea, AttachmentList, etc.
+│   │   ├── messages/tools/ (5)    # ActivityTimeline, TimelineNode/Detail/Segment/Overflow
+│   │   ├── tools/         (21)    # Tool handlers: Read, Edit, Bash, Task*, Skill, etc.
+│   │   ├── legion/        (4)     # TimelineView, CommComposer, MinionTreeNode, etc.
+│   │   ├── header/        (1)     # TimelineHeader
+│   │   ├── statusbar/     (2)     # SessionStatusBar, TimelineStatusBar
+│   │   ├── schedules/     (3)     # SchedulePanel, ScheduleItem, ScheduleCreateModal
+│   │   ├── tasks/         (7)     # TaskListPanel, DiffPanel, ResourceGallery, QueueSection, etc.
+│   │   └── common/        (4)     # FolderBrowserModal, CommCard, DiffFullView, ResourceFullView
 │   │
-│   ├── router/                    # Vue Router: /, /session/:id, /timeline/:id, /spy/:id
-│   ├── composables/               # Reusable composition functions
-│   ├── utils/                     # API client, helpers
-│   └── assets/                    # CSS, images
+│   ├── router/                    # Vue Router: /, /project/:id, /session/:id, /timeline/:id
+│   ├── utils/                     # API client, time formatting, tool summaries
+│   └── assets/                    # CSS (styles.css, tool-theme.css)
 │
-├── vite.config.js                 # Vite dev server + build config
+├── vite.config.js                 # Vite dev server + proxy + build config
 ├── index.html                     # Entry point
 └── package.json                   # Dependencies (Vue 3.4, Pinia 2.1, Vite 5.2, Bootstrap 5.3)
 ```
@@ -209,13 +218,15 @@ npm run build  # Output: frontend/dist/
 
 ## Key Benefits Over Vanilla JS
 
-1. **State Management**: 6 Pinia stores replace 135+ instance variables and dual Map+Array storage
+1. **State Management**: 12 Pinia stores replace 135+ instance variables and dual Map+Array storage
 2. **Automatic Reactivity**: No manual `renderSessions()` calls - Vue reactivity handles all UI updates
-3. **Component Architecture**: 6767-line monolith split into 53 focused, reusable components
+3. **Component Architecture**: 6767-line monolith split into 85+ focused, reusable components
 4. **Event Listener Cleanup**: Automatic cleanup prevents memory leaks
 5. **Developer Experience**: Instant HMR, Vue DevTools, TypeScript support, clear separation of concerns
 
-## Pinia Stores (State Management)
+## Pinia Stores (12 Stores)
+
+For detailed store documentation, see [frontend/CLAUDE.md](./frontend/CLAUDE.md#pinia-stores-12).
 
 ### 1. Session Store (`stores/session.js`)
 **Responsibility**: Session lifecycle, CRUD operations, selection
@@ -302,48 +313,72 @@ npm run build  # Output: frontend/dist/
 - `toggleSidebar()`, `setSidebarWidth()`, `setAutoScroll()`
 - `showModal()`, `hideModal()`, `showLoading()`, `hideLoading()`
 
-## Vue Components (53 files)
+### 7. Queue Store (`stores/queue.js`)
+**Responsibility**: Per-session message queue state, pause/resume, item lifecycle
 
-### Layout (3)
-- `AppHeader.vue`: Top navigation
-- `Sidebar.vue`: Project/Session/Legion hierarchy
-- `ConnectionIndicator.vue`: WebSocket status
+### 8. Schedule Store (`stores/schedule.js`)
+**Responsibility**: Per-legion cron schedules, execution history, WebSocket updates
 
-### Session Management (9)
-- `SessionView.vue`: Main chat interface
-- `SessionItem.vue`: Sidebar session entry
-- `SessionCreateModal.vue`, `SessionEditModal.vue`, `SessionManageModal.vue`, `SessionInfoModal.vue`
-- `SessionInfoBar.vue`, `SessionStatusBar.vue`, `NoSessionSelected.vue`
+### 9. Resource Store (`stores/resource.js`)
+**Responsibility**: Per-session resources (images/files), gallery state, full view modal, text content cache
 
-### Project Management (5)
-- `ProjectList.vue`, `ProjectItem.vue`, `ProjectStatusLine.vue`
-- `ProjectCreateModal.vue`, `ProjectEditModal.vue`
+### 10. Diff Store (`stores/diff.js`)
+**Responsibility**: Per-session git diff data, view modes (total/commits), per-file diff cache
 
-### Message Display (7)
-- `MessageList.vue`: Auto-scrolling container
-- `MessageItem.vue`: Router to specific message types
-- `UserMessage.vue`, `AssistantMessage.vue`, `SystemMessage.vue`
-- `ThinkingBlock.vue`, `ToolCallCard.vue`
+### 11. Task Store (`stores/task.js`)
+**Responsibility**: Per-session SDK task tracking (TaskCreate/Update/List/Get tool integration)
 
-### Tool Handlers (13)
-**See TOOL_HANDLERS.md for detailed documentation**
+### 12. Image Store (`stores/image.js`)
+**Responsibility**: Deprecated shim re-exporting `useResourceStore`
 
-- `BaseToolHandler.vue`: Fallback for unknown tools
-- `ReadToolHandler.vue`, `EditToolHandler.vue`, `WriteToolHandler.vue`
-- `BashToolHandler.vue`, `ShellToolHandler.vue`, `CommandToolHandler.vue`
-- `SearchToolHandler.vue`, `WebToolHandler.vue`
-- `TodoToolHandler.vue`, `TaskToolHandler.vue`, `ExitPlanModeToolHandler.vue`
-- `NotebookEditToolHandler.vue`
+## Vue Components (85+ files)
 
-### Legion Features (7)
-- `TimelineView.vue`, `TimelineHeader.vue`, `TimelineStatusBar.vue`
-- `SpyView.vue`, `SpySelector.vue`
-- `MinionTreeNode.vue`, `CommComposer.vue`, `CreateMinionModal.vue`
+For detailed component documentation, see [frontend/CLAUDE.md](./frontend/CLAUDE.md#component-organization).
 
-### Common (3)
-- `FolderBrowserModal.vue`: Directory selection
-- `InputArea.vue`: Message textarea
-- Status bars: `SessionStatusBar.vue`, `TimelineStatusBar.vue`
+### Layout (12)
+- `ProjectPillBar`, `ProjectPill`, `AgentStrip`, `AgentChip`, `StackedChip`, `ChipConnector`
+- `HeaderRow1`, `AgentOverview`, `PeekCard`, `ConnectionIndicator`, `RightSidebar`, `RestartModal`
+
+### Configuration (6)
+- `ConfigurationModal`, `GeneralTab`, `PermissionsTab`, `AdvancedTab`, `SandboxTab`, `PermissionPreviewModal`
+
+### Session (7)
+- `SessionView`, `SessionInfoBar`, `SessionStateStatusLine`, `SessionInfoModal`, `SessionManageModal`, `NoSessionSelected`
+
+### Project (4)
+- `ProjectOverview`, `ProjectStatusLine`, `ProjectCreateModal`, `ProjectEditModal`
+
+### Messages (7)
+- `MessageList`, `MessageItem`, `UserMessage`, `AssistantMessage`, `SystemMessage`, `ThinkingBlock`, `InputArea`
+- `AttachmentList`, `CompactionEventGroup`, `SlashCommandDropdown`
+
+### Activity Timeline (5)
+- `ActivityTimeline`, `TimelineNode`, `TimelineDetail`, `TimelineSegment`, `TimelineOverflow`
+
+### Tool Handlers (21)
+**See [TOOL_HANDLERS.md](./TOOL_HANDLERS.md) for detailed documentation**
+
+- **File**: `ReadToolHandler`, `EditToolHandler`, `WriteToolHandler`
+- **Shell**: `BashToolHandler`, `ShellToolHandler`, `CommandToolHandler`
+- **Search**: `SearchToolHandler` (Grep/Glob)
+- **Web**: `WebToolHandler` (WebFetch/WebSearch)
+- **Tasks**: `TodoToolHandler`, `TaskToolHandler`, `TaskCreateToolHandler`, `TaskGetToolHandler`, `TaskListToolHandler`, `TaskUpdateToolHandler`
+- **Interactive**: `AskUserQuestionToolHandler`
+- **Skills**: `SkillToolHandler`, `SlashCommandToolHandler`
+- **Other**: `ExitPlanModeToolHandler`, `NotebookEditToolHandler`
+- **Shared**: `ToolSuccessMessage` (success banner), `BaseToolHandler` (fallback)
+
+### Right Sidebar Panels (7)
+- `TaskListPanel`, `TaskItem`, `DiffPanel`, `ResourceGallery`, `ImageGallery`, `CommsPanel`, `QueueSection`
+
+### Schedules (3)
+- `SchedulePanel`, `ScheduleItem`, `ScheduleCreateModal`
+
+### Legion (4)
+- `TimelineView`, `CommComposer`, `MinionTreeNode`, `MinionViewModal`
+
+### Common (4)
+- `FolderBrowserModal`, `CommCard`, `DiffFullView`, `ResourceFullView`
 
 ## Naming Conventions
 
@@ -360,7 +395,7 @@ npm run build  # Output: frontend/dist/
 │                       Browser (Vue 3 Frontend)                       │
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐             │
 │  │ Pinia Stores │  │ Components   │  │ Vue Router   │             │
-│  │  (6 stores)  │  │  (53 files)  │  │  (routing)   │             │
+│  │ (12 stores)  │  │  (85+ files) │  │  (routing)   │             │
 │  └──────────────┘  └──────────────┘  └──────────────┘             │
 └────────┬────────────────────┬────────────────────┬──────────────────┘
          │                    │                    │
@@ -564,6 +599,52 @@ npm run build  # Output: frontend/dist/
 - `CommType` enum: TASK, QUESTION, REPORT, INFO, HALT, PIVOT, THOUGHT, SPAWN, DISPOSE, SYSTEM
 - `MemoryEntry`, `MinionMemory`: Knowledge management (future)
 
+## Additional Backend Systems
+
+### Queue System (`src/queue_manager.py`, `src/queue_processor.py`)
+
+FIFO message queue with JSONL persistence for timed/sequential message delivery.
+
+- **QueueManager**: State management with `QueueItem` dataclass (queue_id, session_id, content, reset_session, status, position). Storage via `queue.jsonl` with event replay on startup.
+- **QueueProcessor**: Background asyncio task delivering queued messages with timing guards (`min_wait_seconds=10`, `min_idle_seconds=10`). Auto-starts sessions, handles pausing, polls `is_processing` without timeout.
+
+### Cron Scheduler (`src/legion/scheduler_service.py`)
+
+Background service evaluating cron schedules every 30 seconds.
+
+- **SchedulerService**: Creates/manages `Schedule` objects with croniter evaluation. Enqueues prompts via SessionCoordinator when due. Records `ScheduleExecution` history to JSONL. Auto-cancels on minion disposal.
+- **Models**: `Schedule` (cron, next_run, status, failure tracking), `ScheduleExecution` (execution record), `ScheduleStatus` (ACTIVE/PAUSED/CANCELLED)
+
+### Archive Manager (`src/legion/archive_manager.py`)
+
+Timestamped archival of minion session data before disposal.
+
+- **ArchiveManager**: Copies messages.jsonl, state.json, and disposal metadata to `data/archives/minions/{minion_id}/{timestamp}/`. Returns `ArchiveResult` with archive path and file count.
+
+### Permission Resolver (`src/permission_resolver.py`)
+
+Multi-source permission merge for effective permission preview.
+
+- **`resolve_effective_permissions()`**: Parses permissions from user/project/local settings files and session-level allowed_tools. Returns list of `{permission, sources}` with source tracking.
+
+### Resource MCP Tools (`src/resource_mcp_tools.py`)
+
+Session-scoped MCP server for agent resource display in the task panel.
+
+- **ResourceMCPTools**: Creates per-session MCP servers with `register_resource` and `register_image` (deprecated alias) tools. Validates file path, extension, size (10MB max, 100 per session). Broadcasts `resource_registered` via WebSocket.
+
+### Template Manager (`src/template_manager.py`)
+
+File-based minion template CRUD with slug naming.
+
+- **TemplateManager**: Stores templates as JSON+MD file pairs in `data/templates/`. Supports slug-based filenames for human readability. Seeds default templates from `src/default_templates/`. Migrates legacy UUID filenames on load.
+
+### Skill Manager (`src/skill_manager.py`)
+
+Global skill deployment and symlink management.
+
+- **SkillManager**: Syncs skills from `src/default_skills/` to `~/.cc_webui/skills/`, creates symlinks in `~/.claude/skills/`. Detects conflicts with user files. Returns (added, updated, removed) counts.
+
 ## Data Directory Structure
 
 ```
@@ -581,10 +662,21 @@ data/
 │
 ├── sessions/{uuid}/                # One folder per session
 │   ├── state.json                  # SessionInfo serialized
-│   └── messages.jsonl              # Append-only message log
+│   ├── messages.jsonl              # Append-only message log
+│   ├── queue.jsonl                 # Message queue event log
+│   └── resources/                  # Registered resources (images/files)
+│
+├── templates/                      # Minion templates (JSON + MD pairs)
+│   ├── {slug}.json                 # Template configuration
+│   └── {slug}.md                   # Template system prompt
+│
+├── archives/                       # Archived minion data (post-disposal)
+│   └── minions/{minion_id}/{ts}/   # Timestamped snapshots
 │
 └── legions/{uuid}/                 # One folder per legion (multi-agent project)
     ├── timeline.jsonl              # Unified comm log
+    ├── schedules.json              # Cron schedule definitions
+    ├── schedule_history.jsonl      # Schedule execution log
     └── minions/{minion_id}/
         ├── minion_state.json
         ├── session_messages.jsonl  # SDK messages
@@ -595,67 +687,9 @@ data/
 
 ## API Endpoint Reference
 
-### Project Endpoints
+For the complete endpoint reference with request/response details, see [.claude/API_REFERENCE.md](./.claude/API_REFERENCE.md).
 
-```
-POST   /api/projects                      # Create project (with is_multi_agent, max_concurrent_minions)
-GET    /api/projects                      # List all projects with sessions
-GET    /api/projects/{id}                 # Get specific project
-PUT    /api/projects/{id}                 # Update name/expansion state
-DELETE /api/projects/{id}                 # Delete project and all sessions
-PUT    /api/projects/{id}/toggle-expansion
-PUT    /api/projects/reorder              # Reorder projects
-PUT    /api/projects/{id}/sessions/reorder
-```
-
-### Session Endpoints
-
-```
-POST   /api/sessions                      # Create session (with project_id, permission_mode, tools, model, name)
-GET    /api/sessions                      # List all sessions
-GET    /api/sessions/{id}                 # Get session info
-POST   /api/sessions/{id}/start           # Start/resume session
-POST   /api/sessions/{id}/pause           # Pause session
-POST   /api/sessions/{id}/terminate       # Stop session
-POST   /api/sessions/{id}/restart         # Restart session (keep history)
-POST   /api/sessions/{id}/reset           # Clear messages, fresh start
-DELETE /api/sessions/{id}                 # Delete session
-POST   /api/sessions/{id}/messages        # Send message
-GET    /api/sessions/{id}/messages?limit=50&offset=0  # Get messages (paginated)
-POST   /api/sessions/{id}/permission-mode # Set permission mode
-PUT    /api/sessions/{id}/name            # Update session name
-POST   /api/sessions/{id}/disconnect      # End SDK session, keep state
-```
-
-### Legion Endpoints (Multi-Agent)
-
-```
-GET    /api/legions/{id}/timeline?limit=100&offset=0  # Get comm timeline (paginated)
-POST   /api/legions/{id}/comms            # Send comm (user to minion)
-POST   /api/legions/{id}/minions          # Create minion
-```
-
-### Utility Endpoints
-
-```
-GET    /                                  # Serve index.html
-GET    /health                            # Health check
-GET    /api/filesystem/browse?path=/foo  # Browse directories
-```
-
-### WebSocket Endpoints
-
-**UI WebSocket** (`/ws/ui`): Global UI state updates
-- Receives: `sessions_list`, `state_change`, `project_updated`, `project_deleted`
-- Sends: `ping`
-
-**Session WebSocket** (`/ws/session/{id}`): Session-specific message streaming
-- Receives: `message`, `permission_request`, `permission_response`, `tool_result`, `state_change`, `connection_established`
-- Sends: `send_message`, `interrupt_session`, `permission_response`
-
-**Legion WebSocket** (`/ws/legion/{id}`): Multi-agent communications
-- Receives: `comm`, `minion_created`, `ping`
-- Sends: `ping`
+**Summary**: 50+ REST endpoints across 10 domains (projects, sessions, files, resources, diffs, queue, legion, schedules, templates, system) + 3 WebSocket endpoints (UI, Session, Legion).
 
 ## Message Flow Architecture
 
@@ -792,11 +826,19 @@ main.py
       │   │   └─ logging_config.py
       │   ├─ data_storage.py
       │   ├─ message_parser.py
+      │   ├─ queue_manager.py
+      │   ├─ queue_processor.py
+      │   ├─ template_manager.py
+      │   ├─ skill_manager.py
+      │   ├─ permission_resolver.py
+      │   ├─ resource_mcp_tools.py
       │   ├─ legion/legion_coordinator.py (if multi-agent)
       │   │   ├─ legion/overseer_controller.py
       │   │   ├─ legion/comm_router.py
       │   │   ├─ legion/memory_manager.py
-      │   │   └─ legion/legion_mcp_tools.py
+      │   │   ├─ legion/legion_mcp_tools.py
+      │   │   ├─ legion/scheduler_service.py
+      │   │   └─ legion/archive_manager.py
       │   └─ logging_config.py
       ├─ message_parser.py
       └─ logging_config.py
@@ -930,9 +972,9 @@ npm run dev  # http://localhost:5173
 ## Additional Resources
 
 - **User Guide**: [run_guide.md](./run_guide.md) - Setup, usage, troubleshooting
+- **Frontend Architecture**: [frontend/CLAUDE.md](./frontend/CLAUDE.md) - Vue 3 stores, components, composables
+- **API Reference**: [.claude/API_REFERENCE.md](./.claude/API_REFERENCE.md) - All REST + WebSocket endpoints
 - **Tool Handlers**: [TOOL_HANDLERS.md](./TOOL_HANDLERS.md) - Vue 3 tool handler development
-- **Frontend Docs**: [frontend/README.md](./frontend/README.md) - Vue 3 architecture details
-- **Migration Plan**: [frontend/MIGRATION_PLAN.md](./frontend/MIGRATION_PLAN.md) - Vue 3 migration status
 - **Legion Proposal**: [legion_proposal/LEGION_PROPOSAL.md](./legion_proposal/LEGION_PROPOSAL.md) - Multi-agent design
 - **MCP Tools**: [legion_proposal/MCP_TOOLS_ARCHITECTURE.md](./legion_proposal/MCP_TOOLS_ARCHITECTURE.md) - Inter-agent communication
 - **Development Plan**: [DEVELOPMENT_PLAN.md](./DEVELOPMENT_PLAN.md) - Project roadmap
@@ -943,28 +985,32 @@ npm run dev  # http://localhost:5173
 Claude WebUI is a **production-ready web interface** for Claude Agent SDK with:
 
 **Single-Agent Features**:
-- Real-time streaming conversations with rich tool visualization
+- Real-time streaming conversations with rich tool visualization (21 tool handlers)
 - Project/session hierarchy with drag-and-drop reordering
-- Four permission modes with smart suggestions
+- Four permission modes with smart suggestions and permission preview
+- Message queue with timed delivery and auto-start
+- Resource gallery (images and files from agents)
+- Git diff viewer with per-commit and aggregate views
 - Orphaned tool detection and cleanup
 - Persistent message storage (JSONL + JSON)
-- Vue 3 + Pinia reactive UI
+- Vue 3 + Pinia reactive UI (12 stores, 85+ components)
 - Mobile-responsive design
 
 **Multi-Agent Features (Legion)**:
-- Minion creation and management
+- Minion creation and management with templates
 - Inter-agent communication (structured Comms)
-- Timeline, Spy views for observability
-- MCP tools for explicit minion actions
-- Memory & learning system (future)
+- Cron-based scheduling for recurring agent tasks
+- Timeline view for observability
+- MCP tools for explicit minion actions (send_comm, spawn/dispose, discovery)
+- Sandbox mode for minions
+- Session archival on disposal
 
 **Developer Experience**:
 - Comprehensive debugging tools (per-category logs)
-- Complete REST + WebSocket API
-- Extensible architecture (13+ tool handlers, easy to add more)
+- 50+ REST endpoints + 3 WebSocket endpoints
+- Extensible architecture (21 tool handlers, easy to add more)
 - Hot Module Replacement for instant feedback
 - Vue DevTools integration
-- Well-documented codebase
 
 ---
 
