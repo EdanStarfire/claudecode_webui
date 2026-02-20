@@ -108,6 +108,11 @@ class SessionInfo:
     docker_image: str | None = None  # Custom image name (default: claude-code:local)
     docker_extra_mounts: list[str] | None = None  # Additional volume mount specs
 
+    # Thinking and effort configuration (issue #540)
+    thinking_mode: str | None = None  # "adaptive", "enabled", "disabled", or None (SDK default)
+    thinking_budget_tokens: int | None = None  # Token budget when thinking_mode="enabled" (min 1024)
+    effort: str | None = None  # "low", "medium", "high", "max", or None (SDK default)
+
     def __post_init__(self):
         if self.allowed_tools is None:
             self.allowed_tools = ["bash", "edit", "read"]
@@ -252,6 +257,10 @@ class SessionManager:
         docker_enabled: bool = False,
         docker_image: str | None = None,
         docker_extra_mounts: list[str] | None = None,
+        # Thinking and effort configuration (issue #540)
+        thinking_mode: str | None = None,
+        thinking_budget_tokens: int | None = None,
+        effort: str | None = None,
     ) -> None:
         """Create a new session (all sessions are minions - issue #349)"""
         # Validate session_id is not reserved
@@ -302,6 +311,10 @@ class SessionManager:
             docker_enabled=docker_enabled,
             docker_image=docker_image,
             docker_extra_mounts=docker_extra_mounts if docker_extra_mounts is not None else [],
+            # Thinking and effort configuration (issue #540)
+            thinking_mode=thinking_mode,
+            thinking_budget_tokens=thinking_budget_tokens,
+            effort=effort,
         )
 
         try:

@@ -48,6 +48,10 @@ class OverseerController:
         docker_enabled: bool = False,
         docker_image: str | None = None,
         docker_extra_mounts: list[str] | None = None,
+        # Thinking and effort configuration (issue #540)
+        thinking_mode: str | None = None,
+        thinking_budget_tokens: int | None = None,
+        effort: str | None = None,
     ) -> str:
         """
         Create a minion for the user (root overseer).
@@ -126,6 +130,10 @@ class OverseerController:
             docker_enabled=docker_enabled,
             docker_image=docker_image,
             docker_extra_mounts=docker_extra_mounts,
+            # Thinking and effort configuration (issue #540)
+            thinking_mode=thinking_mode,
+            thinking_budget_tokens=thinking_budget_tokens,
+            effort=effort,
         )
 
         # Register capabilities in capability registry

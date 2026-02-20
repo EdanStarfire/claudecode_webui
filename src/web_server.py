@@ -162,6 +162,10 @@ class SessionUpdateRequest(BaseModel):
     setting_sources: list[str] | None = None  # Issue #36: which settings files to load
     cli_path: str | None = None  # Issue #489: custom CLI executable path
     # Issue #496: Docker fields intentionally excluded — immutable after session creation
+    # Thinking and effort configuration (issue #540)
+    thinking_mode: str | None = None  # "adaptive", "enabled", "disabled"
+    thinking_budget_tokens: int | None = None  # Token budget (min 1024)
+    effort: str | None = None  # "low", "medium", "high", "max"
 
 
 class SessionReorderRequest(BaseModel):
@@ -198,6 +202,10 @@ class MinionCreateRequest(BaseModel):
     docker_enabled: bool = False
     docker_image: str | None = None
     docker_extra_mounts: list[str] | None = None
+    # Thinking and effort configuration (issue #540)
+    thinking_mode: str | None = None  # "adaptive", "enabled", "disabled"
+    thinking_budget_tokens: int | None = None  # Token budget (min 1024)
+    effort: str | None = None  # "low", "medium", "high", "max"
 
 
 class ScheduleCreateRequest(BaseModel):
@@ -1035,6 +1043,14 @@ class ClaudeWebUI:
                     updates["cli_path"] = request.cli_path if request.cli_path.strip() else None
 
                 # Issue #496: Docker fields are immutable after session creation — not updatable here
+
+                # Handle thinking and effort configuration (issue #540)
+                if request.thinking_mode is not None:
+                    updates["thinking_mode"] = request.thinking_mode if request.thinking_mode else None
+                if request.thinking_budget_tokens is not None:
+                    updates["thinking_budget_tokens"] = request.thinking_budget_tokens
+                if request.effort is not None:
+                    updates["effort"] = request.effort if request.effort else None
 
                 if not updates:
                     return {"success": True, "message": "No fields to update"}
@@ -2173,6 +2189,10 @@ class ClaudeWebUI:
                     docker_enabled=request.docker_enabled,
                     docker_image=request.docker_image,
                     docker_extra_mounts=request.docker_extra_mounts,
+                    # Thinking and effort configuration (issue #540)
+                    thinking_mode=request.thinking_mode,
+                    thinking_budget_tokens=request.thinking_budget_tokens,
+                    effort=request.effort,
                 )
 
                 # Get the created minion info
