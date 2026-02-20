@@ -508,9 +508,25 @@ class ClaudeSDK:
                 async def consume_all_responses():
                     """Consume all responses from all queries for entire session"""
                     try:
-                        async for response_message in client.receive_messages():
+                        # Wrap iteration to survive SDK parse errors (e.g. rate_limit_event
+                        # in Claude Code >=2.1.49 not yet handled by claude_agent_sdk).
+                        # client.receive_messages() yields parse_message(data) which raises
+                        # MessageParseError for unknown types, killing the async generator.
+                        # We fall back to the raw transport stream and parse with tolerance.
+                        raw_stream = client._query.receive_messages()
+                        async for raw_data in raw_stream:
                             if self._shutdown_event.is_set():
                                 break
+                            try:
+                                from claude_agent_sdk._internal.message_parser import (
+                                    parse_message,
+                                )
+                                response_message = parse_message(raw_data)
+                            except Exception as parse_err:
+                                sdk_logger.debug(
+                                    f"Skipping unparseable SDK message: {parse_err}"
+                                )
+                                continue
                             await self._process_sdk_message(response_message)
                             self._session_health_checks["total_responses_received"] += 1
                             self._session_health_checks["last_successful_response"] = time.time()
