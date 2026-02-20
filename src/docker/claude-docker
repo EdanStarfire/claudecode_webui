@@ -61,9 +61,10 @@ fi
 # survive container restarts.
 DATA_DIR_FLAGS=""
 if [ -n "${CLAUDE_DOCKER_DATA_DIR:-}" ]; then
-    mkdir -p "$CLAUDE_DOCKER_DATA_DIR/projects" "$CLAUDE_DOCKER_DATA_DIR/todos"
+    mkdir -p "$CLAUDE_DOCKER_DATA_DIR/projects" "$CLAUDE_DOCKER_DATA_DIR/todos" "$CLAUDE_DOCKER_DATA_DIR/tasks"
     DATA_DIR_FLAGS="-v $CLAUDE_DOCKER_DATA_DIR/projects:/home/claude/.claude/projects"
     DATA_DIR_FLAGS="$DATA_DIR_FLAGS -v $CLAUDE_DOCKER_DATA_DIR/todos:/home/claude/.claude/todos"
+    DATA_DIR_FLAGS="$DATA_DIR_FLAGS -v $CLAUDE_DOCKER_DATA_DIR/tasks:/home/claude/.claude/tasks"
 fi
 
 # Forward CLAUDE_CODE_* environment variables into the container
