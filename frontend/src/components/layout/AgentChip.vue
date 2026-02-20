@@ -7,6 +7,11 @@
       'parent-of-active': isParentOfActive
     }"
     @click="handleClick"
+    @contextmenu.prevent="handleManage"
+    @touchstart="onTouchStart"
+    @touchmove="onTouchMove"
+    @touchend="onTouchEnd"
+    @touchcancel="onTouchCancel"
     :title="chipTooltip"
   >
     <div class="ac-dot" :class="statusClass"></div>
@@ -29,6 +34,8 @@
 import { computed } from 'vue'
 import { useSessionStore } from '@/stores/session'
 import { useScheduleStore } from '@/stores/schedule'
+import { useUIStore } from '@/stores/ui'
+import { useLongPress } from '@/composables/useLongPress'
 
 const props = defineProps({
   session: { type: Object, required: true },
@@ -37,10 +44,18 @@ const props = defineProps({
   variant: { type: String, default: 'default' } // 'default' | 'child'
 })
 
-const emit = defineEmits(['select'])
+const emit = defineEmits(['select', 'manage'])
 
 const sessionStore = useSessionStore()
 const scheduleStore = useScheduleStore()
+const uiStore = useUIStore()
+
+function handleManage() {
+  uiStore.showModal('manage-session', { session: props.session })
+  emit('manage', props.session.session_id)
+}
+
+const { onTouchStart, onTouchMove, onTouchEnd, onTouchCancel, fired } = useLongPress(handleManage)
 
 const hasSchedules = computed(() =>
   scheduleStore.getScheduleCount(props.session.session_id) > 0
@@ -86,6 +101,10 @@ const chipTooltip = computed(() => {
 })
 
 function handleClick() {
+  if (fired.value) {
+    fired.value = false
+    return
+  }
   emit('select', props.session.session_id)
 }
 </script>
