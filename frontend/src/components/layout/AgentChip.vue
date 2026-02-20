@@ -27,6 +27,14 @@
         <path d="M8 0a8 8 0 1 0 0 16A8 8 0 0 0 8 0zm0 14.5A6.5 6.5 0 1 1 8 1.5a6.5 6.5 0 0 1 0 13zM8.5 4H7v5l4.25 2.55.75-1.23L8.5 8.25V4z"/>
       </svg>
     </div>
+    <div v-if="session.docker_enabled" class="ac-docker-badge" title="Running with Docker isolation">
+      <svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor">
+        <rect x="1" y="4" width="5" height="4" rx="0.5" stroke="currentColor" stroke-width="0.8" fill="none"/>
+        <rect x="1" y="8" width="14" height="5" rx="1" stroke="currentColor" stroke-width="0.8" fill="none"/>
+        <line x1="5" y1="8" x2="5" y2="13" stroke="currentColor" stroke-width="0.6"/>
+        <line x1="9" y1="8" x2="9" y2="13" stroke="currentColor" stroke-width="0.6"/>
+      </svg>
+    </div>
   </div>
 </template>
 
@@ -97,6 +105,7 @@ const chipTooltip = computed(() => {
   if (props.session.role) parts.push(`Role: ${props.session.role}`)
   parts.push(`Status: ${statusText.value}`)
   if (props.session.model) parts.push(`Model: ${props.session.model}`)
+  if (props.session.docker_enabled) parts.push('Docker isolated')
   return parts.join('\n')
 })
 
@@ -218,6 +227,20 @@ function handleClick() {
   height: 15px;
   border-radius: 50%;
   background: #6366f1;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.ac-docker-badge {
+  position: absolute;
+  left: -3px;
+  bottom: -3px;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  background: #0db7ed;
   color: #fff;
   display: flex;
   align-items: center;
