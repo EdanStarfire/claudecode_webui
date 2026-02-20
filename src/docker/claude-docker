@@ -64,6 +64,12 @@ if [ -n "${CLAUDE_DOCKER_DATA_DIR:-}" ]; then
     DATA_DIR_FLAGS="-v $CLAUDE_DOCKER_DATA_DIR:/home/claude/.claude/projects"
 fi
 
+# Mount ~/.claude/todos/ for persistent task tracking (Tasks system)
+TODOS_FLAGS=""
+if [ -d "$HOME/.claude/todos" ]; then
+    TODOS_FLAGS="-v $HOME/.claude/todos:/home/claude/.claude/todos"
+fi
+
 # Forward CLAUDE_CODE_* environment variables into the container
 # The SDK sets env vars like CLAUDE_CODE_ENABLE_TASKS, CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS
 # which must be passed through to the Claude CLI inside the container
@@ -99,6 +105,7 @@ exec docker run \
     -e "CLAUDE_CODE_DISABLE_AUTO_UPDATE=1" \
     $ENV_FLAGS \
     $DATA_DIR_FLAGS \
+    $TODOS_FLAGS \
     $EXTRA_MOUNT_FLAGS \
     $FILE_MOUNT_FLAGS \
     "$IMAGE_NAME" \
