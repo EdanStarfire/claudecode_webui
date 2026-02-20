@@ -55,19 +55,15 @@ if [ -n "${CLAUDE_DOCKER_EXTRA_MOUNTS:-}" ]; then
     done
 fi
 
-# Build persistent data dir mount for session resume support
-# When set, this host directory is mounted as the container's ~/.claude/ projects dir
-# so that Claude Code session transcripts survive container restarts.
+# Build persistent data dir mounts for session-scoped state.
+# When CLAUDE_DOCKER_DATA_DIR is set, subdirectories are mounted into
+# the container's ~/.claude/ so that session transcripts and task data
+# survive container restarts.
 DATA_DIR_FLAGS=""
 if [ -n "${CLAUDE_DOCKER_DATA_DIR:-}" ]; then
-    mkdir -p "$CLAUDE_DOCKER_DATA_DIR"
-    DATA_DIR_FLAGS="-v $CLAUDE_DOCKER_DATA_DIR:/home/claude/.claude/projects"
-fi
-
-# Mount ~/.claude/todos/ for persistent task tracking (Tasks system)
-TODOS_FLAGS=""
-if [ -d "$HOME/.claude/todos" ]; then
-    TODOS_FLAGS="-v $HOME/.claude/todos:/home/claude/.claude/todos"
+    mkdir -p "$CLAUDE_DOCKER_DATA_DIR/projects" "$CLAUDE_DOCKER_DATA_DIR/todos"
+    DATA_DIR_FLAGS="-v $CLAUDE_DOCKER_DATA_DIR/projects:/home/claude/.claude/projects"
+    DATA_DIR_FLAGS="$DATA_DIR_FLAGS -v $CLAUDE_DOCKER_DATA_DIR/todos:/home/claude/.claude/todos"
 fi
 
 # Forward CLAUDE_CODE_* environment variables into the container
@@ -105,7 +101,6 @@ exec docker run \
     -e "CLAUDE_CODE_DISABLE_AUTO_UPDATE=1" \
     $ENV_FLAGS \
     $DATA_DIR_FLAGS \
-    $TODOS_FLAGS \
     $EXTRA_MOUNT_FLAGS \
     $FILE_MOUNT_FLAGS \
     "$IMAGE_NAME" \
