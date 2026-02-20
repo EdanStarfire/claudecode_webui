@@ -789,10 +789,6 @@ class SessionCoordinator:
                     workspace=session_info.working_directory,
                     session_data_dir=docker_data_dir,
                 )
-                # Use a fixed task list ID so todos survive session resume
-                # (Claude Code normally ties task lists to session IDs, which change on resume)
-                docker_env_vars["CLAUDE_CODE_TASK_LIST_ID"] = "docker-tasks"
-
                 coord_logger.info(
                     f"Docker mode enabled for session {session_id}: "
                     f"cli_path={effective_cli_path}, env={docker_env_vars}"
