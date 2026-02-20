@@ -143,7 +143,8 @@ class ClaudeSDK:
         setting_sources: list[str] | None = None,
         experimental: bool = False,
         cli_path: str | None = None,
-        stderr_callback: Callable[[str], Any] | None = None
+        stderr_callback: Callable[[str], Any] | None = None,
+        extra_env: dict[str, str] | None = None,
     ):
         """
         Initialize enhanced Claude Code SDK wrapper.
@@ -194,6 +195,7 @@ class ClaudeSDK:
         self.experimental = experimental  # Issue #411: Enable experimental features
         self.cli_path = cli_path  # Issue #489: Custom CLI executable path
         self.stderr_callback = stderr_callback  # Issue #517: stderr callback for system messages
+        self.extra_env = extra_env or {}  # Issue #496: extra env vars (e.g., Docker wrapper config)
         self._stderr_buffer: list[str] = []  # Issue #517: buffer stderr lines for error reporting
 
         self.info = SessionInfo(session_id=session_id, working_directory=str(self.working_directory))
@@ -508,9 +510,25 @@ class ClaudeSDK:
                 async def consume_all_responses():
                     """Consume all responses from all queries for entire session"""
                     try:
-                        async for response_message in client.receive_messages():
+                        # Wrap iteration to survive SDK parse errors (e.g. rate_limit_event
+                        # in Claude Code >=2.1.49 not yet handled by claude_agent_sdk).
+                        # client.receive_messages() yields parse_message(data) which raises
+                        # MessageParseError for unknown types, killing the async generator.
+                        # We fall back to the raw transport stream and parse with tolerance.
+                        raw_stream = client._query.receive_messages()
+                        async for raw_data in raw_stream:
                             if self._shutdown_event.is_set():
                                 break
+                            try:
+                                from claude_agent_sdk._internal.message_parser import (
+                                    parse_message,
+                                )
+                                response_message = parse_message(raw_data)
+                            except Exception as parse_err:
+                                sdk_logger.debug(
+                                    f"Skipping unparseable SDK message: {parse_err}"
+                                )
+                                continue
                             await self._process_sdk_message(response_message)
                             self._session_health_checks["total_responses_received"] += 1
                             self._session_health_checks["last_successful_response"] = time.time()
@@ -769,6 +787,9 @@ class ClaudeSDK:
         if self.experimental:
             env_vars["CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"] = "1"
             sdk_logger.info(f"Experimental Agent Teams enabled for session {self.session_id}")
+        # Issue #496: Merge extra env vars (e.g., Docker wrapper config like CLAUDE_DOCKER_*)
+        if self.extra_env:
+            env_vars.update(self.extra_env)
         options_kwargs["env"] = env_vars
 
         # Add stderr handler to capture SDK CLI errors (issue #517)

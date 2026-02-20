@@ -32,6 +32,10 @@ class MinionTemplate:
     sandbox_enabled: bool = False
     sandbox_config: dict | None = None
     cli_path: str | None = None  # Custom CLI executable path (issue #489)
+    # Docker session isolation (issue #496)
+    docker_enabled: bool = False
+    docker_image: str | None = None
+    docker_extra_mounts: list[str] | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
@@ -47,6 +51,8 @@ class MinionTemplate:
             self.disallowed_tools = []
         if self.capabilities is None:
             self.capabilities = []
+        if self.docker_extra_mounts is None:
+            self.docker_extra_mounts = []
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for JSON serialization."""

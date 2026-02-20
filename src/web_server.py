@@ -133,6 +133,10 @@ class SessionCreateRequest(BaseModel):
     name: str | None = None
     setting_sources: list[str] | None = None  # Issue #36: which settings files to load
     cli_path: str | None = None  # Issue #489: custom CLI executable path
+    # Docker session isolation (issue #496)
+    docker_enabled: bool = False
+    docker_image: str | None = None
+    docker_extra_mounts: list[str] | None = None
 
 
 class MessageRequest(BaseModel):
@@ -157,6 +161,7 @@ class SessionUpdateRequest(BaseModel):
     sandbox_config: dict | None = None  # Issue #458: sandbox configuration settings
     setting_sources: list[str] | None = None  # Issue #36: which settings files to load
     cli_path: str | None = None  # Issue #489: custom CLI executable path
+    # Issue #496: Docker fields intentionally excluded — immutable after session creation
 
 
 class SessionReorderRequest(BaseModel):
@@ -189,6 +194,10 @@ class MinionCreateRequest(BaseModel):
     sandbox_config: dict | None = None  # Issue #458: sandbox configuration settings
     setting_sources: list[str] | None = None  # Issue #36: which settings files to load
     cli_path: str | None = None  # Issue #489: custom CLI executable path
+    # Docker session isolation (issue #496)
+    docker_enabled: bool = False
+    docker_image: str | None = None
+    docker_extra_mounts: list[str] | None = None
 
 
 class ScheduleCreateRequest(BaseModel):
@@ -230,6 +239,10 @@ class TemplateCreateRequest(BaseModel):
     sandbox_enabled: bool = False
     sandbox_config: dict | None = None  # Issue #458: sandbox configuration settings
     cli_path: str | None = None  # Issue #489: custom CLI path
+    # Docker session isolation (issue #496)
+    docker_enabled: bool = False
+    docker_image: str | None = None
+    docker_extra_mounts: list[str] | None = None
 
 
 class TemplateUpdateRequest(BaseModel):
@@ -246,6 +259,10 @@ class TemplateUpdateRequest(BaseModel):
     sandbox_enabled: bool | None = None
     sandbox_config: dict | None = None  # Issue #458: sandbox configuration settings
     cli_path: str | None = None  # Issue #489: custom CLI path
+    # Docker session isolation (issue #496)
+    docker_enabled: bool | None = None
+    docker_image: str | None = None
+    docker_extra_mounts: list[str] | None = None
 
 
 class UIWebSocketManager:
@@ -816,7 +833,11 @@ class ClaudeWebUI:
                     name=request.name,
                     permission_callback=self._create_permission_callback(session_id),
                     setting_sources=request.setting_sources,  # Issue #36
-                    cli_path=request.cli_path  # Issue #489
+                    cli_path=request.cli_path,  # Issue #489
+                    # Docker session isolation (issue #496)
+                    docker_enabled=request.docker_enabled,
+                    docker_image=request.docker_image,
+                    docker_extra_mounts=request.docker_extra_mounts,
                 )
 
                 # Broadcast session creation to all UI clients
@@ -1012,6 +1033,8 @@ class ClaudeWebUI:
                 # Empty string means clear the custom CLI path
                 if request.cli_path is not None:
                     updates["cli_path"] = request.cli_path if request.cli_path.strip() else None
+
+                # Issue #496: Docker fields are immutable after session creation — not updatable here
 
                 if not updates:
                     return {"success": True, "message": "No fields to update"}
@@ -2145,7 +2168,11 @@ class ClaudeWebUI:
                     sandbox_enabled=request.sandbox_enabled,
                     sandbox_config=request.sandbox_config,
                     setting_sources=request.setting_sources,  # Issue #36
-                    cli_path=request.cli_path  # Issue #489
+                    cli_path=request.cli_path,  # Issue #489
+                    # Docker session isolation (issue #496)
+                    docker_enabled=request.docker_enabled,
+                    docker_image=request.docker_image,
+                    docker_extra_mounts=request.docker_extra_mounts,
                 )
 
                 # Get the created minion info
@@ -2461,6 +2488,17 @@ class ClaudeWebUI:
 
         # ==================== SYSTEM ENDPOINTS (Issue #434) ====================
 
+        @self.app.get("/api/system/docker-status")
+        async def get_docker_status():
+            """Check Docker availability and image status (issue #496)."""
+            try:
+                from src.docker_utils import check_docker_available
+                status = await check_docker_available()
+                return status
+            except Exception as e:
+                logger.error(f"Failed to check Docker status: {e}")
+                raise HTTPException(status_code=500, detail=str(e)) from e
+
         @self.app.get("/api/system/git-status")
         async def get_git_status():
             """Return current git branch, last commit, and dirty state."""
@@ -2670,6 +2708,10 @@ class ClaudeWebUI:
                     sandbox_enabled=request.sandbox_enabled,
                     sandbox_config=request.sandbox_config,
                     cli_path=request.cli_path,
+                    # Docker session isolation (issue #496)
+                    docker_enabled=request.docker_enabled,
+                    docker_image=request.docker_image,
+                    docker_extra_mounts=request.docker_extra_mounts,
                 )
                 return template.to_dict()
             except ValueError as e:
@@ -2697,6 +2739,10 @@ class ClaudeWebUI:
                     sandbox_enabled=request.sandbox_enabled,
                     sandbox_config=request.sandbox_config,
                     cli_path=request.cli_path,
+                    # Docker session isolation (issue #496)
+                    docker_enabled=request.docker_enabled,
+                    docker_image=request.docker_image,
+                    docker_extra_mounts=request.docker_extra_mounts,
                 )
                 return template.to_dict()
             except ValueError as e:

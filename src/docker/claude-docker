@@ -1,0 +1,124 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# claude-docker: Run Claude Code in a disposable Docker container
+#
+# Usage:
+#   claude-docker [claude-args...]
+#
+# Examples:
+#   claude-docker -p "explain this codebase"
+#   claude-docker -p "fix the bug in main.py" --allowedTools bash,edit
+#   claude-docker                              # interactive mode
+#
+# The container:
+#   - Mounts the current directory at its real host path inside the container
+#   - Mounts ~/.claude credentials for subscription auth
+#   - Is removed after exit (--rm)
+#   - Runs as non-root user
+#
+# Environment variables:
+#   CLAUDE_DOCKER_IMAGE         - Docker image name (default: claude-code:local)
+#   CLAUDE_DOCKER_EXTRA_MOUNTS  - Comma-separated extra -v mount specs
+#   CLAUDE_DOCKER_WORKSPACE     - Workspace directory to mount (default: $PWD)
+#   CLAUDE_DOCKER_DATA_DIR      - Host dir for persistent Claude session data (enables --resume)
+
+DEFAULT_IMAGE="claude-code:local"
+IMAGE_NAME="${CLAUDE_DOCKER_IMAGE:-$DEFAULT_IMAGE}"
+CONTAINER_NAME="claude-code-$$"
+
+# Build default image if it doesn't exist; fail fast for custom images
+if ! docker image inspect "$IMAGE_NAME" &>/dev/null; then
+    if [ "$IMAGE_NAME" = "$DEFAULT_IMAGE" ]; then
+        echo "Building Claude Code container image..."
+        SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+        docker build -t "$IMAGE_NAME" "$SCRIPT_DIR"
+    else
+        echo "Error: Docker image '$IMAGE_NAME' not found. Build or pull it first." >&2
+        exit 1
+    fi
+fi
+
+# Determine workspace to mount (default: current directory)
+WORKSPACE="${CLAUDE_DOCKER_WORKSPACE:-$(pwd)}"
+
+# -i: always attach stdin (needed for piped input like stream-json)
+# -t: only allocate TTY when stdin is a terminal (interactive mode)
+DOCKER_FLAGS="-i"
+if [ -t 0 ]; then
+    DOCKER_FLAGS="-it"
+fi
+
+# Build extra mount flags from CLAUDE_DOCKER_EXTRA_MOUNTS
+EXTRA_MOUNT_FLAGS=""
+if [ -n "${CLAUDE_DOCKER_EXTRA_MOUNTS:-}" ]; then
+    IFS=',' read -ra MOUNTS <<< "$CLAUDE_DOCKER_EXTRA_MOUNTS"
+    for mount in "${MOUNTS[@]}"; do
+        mount="$(echo "$mount" | xargs)"  # trim whitespace
+        if [ -n "$mount" ]; then
+            EXTRA_MOUNT_FLAGS="$EXTRA_MOUNT_FLAGS -v $mount"
+        fi
+    done
+fi
+
+# Build persistent data dir mounts for session-scoped state.
+# When CLAUDE_DOCKER_DATA_DIR is set, subdirectories are mounted into
+# the container's ~/.claude/ so that session data survives container restarts.
+#
+# Mounted paths:
+#   projects/        - Per-project conversation history
+#   todos/           - Task/todo list data per session (legacy)
+#   tasks/           - Team task lists for multi-agent swarms
+#   plans/           - Plan mode plan files
+#   debug/           - Debug logs per session
+#   shell-snapshots/ - Shell state snapshots (bash context persistence)
+#   session-env/     - Per-session environment variables
+#   downloads/       - Files downloaded during sessions
+DATA_DIR_FLAGS=""
+if [ -n "${CLAUDE_DOCKER_DATA_DIR:-}" ]; then
+    SESSION_DIRS="projects todos tasks plans debug shell-snapshots session-env downloads"
+    for dir in $SESSION_DIRS; do
+        mkdir -p "$CLAUDE_DOCKER_DATA_DIR/$dir"
+        DATA_DIR_FLAGS="$DATA_DIR_FLAGS -v $CLAUDE_DOCKER_DATA_DIR/$dir:/home/claude/.claude/$dir"
+    done
+fi
+
+# Forward CLAUDE_CODE_* environment variables into the container
+# The SDK sets env vars like CLAUDE_CODE_ENABLE_TASKS, CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS
+# which must be passed through to the Claude CLI inside the container
+ENV_FLAGS=""
+while IFS='=' read -r name value; do
+    if [[ "$name" == CLAUDE_CODE_* ]]; then
+        ENV_FLAGS="$ENV_FLAGS -e $name=$value"
+    fi
+done < <(env)
+
+# Scan arguments for file-based flags that need host files mounted into container
+# The SDK passes --append-system-prompt-file or --system-prompt-file with a temp file path
+FILE_MOUNT_FLAGS=""
+PREV_ARG=""
+for arg in "$@"; do
+    if [ "$PREV_ARG" = "--append-system-prompt-file" ] || [ "$PREV_ARG" = "--system-prompt-file" ]; then
+        if [ -f "$arg" ]; then
+            FILE_MOUNT_FLAGS="$FILE_MOUNT_FLAGS -v $arg:$arg:ro"
+        fi
+    fi
+    PREV_ARG="$arg"
+done
+
+# Run the container
+exec docker run \
+    --rm \
+    $DOCKER_FLAGS \
+    --name "$CONTAINER_NAME" \
+    -v "$WORKSPACE:$WORKSPACE" \
+    -w "$WORKSPACE" \
+    -v "$HOME/.claude/.credentials.json:/home/claude/.claude/.credentials.json:ro" \
+    -v "$HOME/.claude/settings.json:/home/claude/.claude/settings.json:ro" \
+    -e "CLAUDE_CODE_DISABLE_AUTO_UPDATE=1" \
+    $ENV_FLAGS \
+    $DATA_DIR_FLAGS \
+    $EXTRA_MOUNT_FLAGS \
+    $FILE_MOUNT_FLAGS \
+    "$IMAGE_NAME" \
+    "$@"

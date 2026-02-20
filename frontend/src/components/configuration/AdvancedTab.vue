@@ -42,6 +42,71 @@
       </div>
     </div>
 
+    <!-- Docker Session Isolation (issue #496) -->
+    <div class="mb-3">
+      <div class="docker-section">
+        <div class="form-check mb-2">
+          <input
+            type="checkbox"
+            class="form-check-input"
+            id="config-docker-enabled"
+            :checked="formData.docker_enabled"
+            @change="handleDockerToggle($event.target.checked)"
+            :disabled="isEditSession"
+          />
+          <label class="form-check-label" for="config-docker-enabled">
+            Enable Docker Isolation
+          </label>
+        </div>
+
+        <!-- Locked notice for existing sessions -->
+        <div v-if="isEditSession && formData.docker_enabled" class="alert alert-secondary py-2 mb-2">
+          <small>Docker settings are locked after session creation.</small>
+        </div>
+
+        <!-- Docker status warning -->
+        <div v-if="formData.docker_enabled && dockerStatus && !dockerStatus.available && !isEditSession" class="alert alert-warning py-2 mb-2">
+          <small>Docker is not available on this system. Sessions will fail to start.</small>
+        </div>
+        <div v-if="formData.docker_enabled && dockerStatus && dockerStatus.available && !dockerStatus.image_exists && !isEditSession" class="alert alert-info py-2 mb-2">
+          <small>Docker image not yet built. It will be built automatically on first session start (~50s).</small>
+        </div>
+
+        <!-- Docker config fields (shown when enabled) -->
+        <div v-if="formData.docker_enabled" class="docker-config ms-4">
+          <div class="mb-2">
+            <label for="config-docker-image" class="form-label form-label-sm">Docker Image</label>
+            <input
+              type="text"
+              class="form-control form-control-sm"
+              id="config-docker-image"
+              :value="formData.docker_image"
+              @input="$emit('update:form-data', 'docker_image', $event.target.value)"
+              :disabled="isEditSession"
+              placeholder="claude-code:local"
+            />
+          </div>
+          <div class="mb-2">
+            <label for="config-docker-mounts" class="form-label form-label-sm">Extra Mounts</label>
+            <textarea
+              id="config-docker-mounts"
+              class="form-control form-control-sm"
+              :value="formData.docker_extra_mounts"
+              @input="$emit('update:form-data', 'docker_extra_mounts', $event.target.value)"
+              :disabled="isEditSession"
+              rows="2"
+              placeholder="/host/path:/container/path:ro (one per line)"
+            ></textarea>
+            <div class="form-text"><small>Additional volume mounts, one per line.</small></div>
+          </div>
+        </div>
+
+        <div class="form-text">
+          Run the Claude CLI inside a disposable Docker container. Tool execution (Bash, Read, Write, Edit) runs inside the container.
+        </div>
+      </div>
+    </div>
+
     <!-- CLI Path (issue #489) -->
     <div class="mb-3">
       <label for="config-cli-path" class="form-label">CLI Path</label>
@@ -51,10 +116,16 @@
         id="config-cli-path"
         :value="formData.cli_path"
         @input="$emit('update:form-data', 'cli_path', $event.target.value)"
-        placeholder="/path/to/claude-cli or Docker launcher script"
+        :disabled="formData.docker_enabled"
+        placeholder="/path/to/claude-cli"
       />
       <div class="form-text">
-        Path to a custom CLI executable or Docker launcher script. When set, the SDK uses this instead of the default Claude Code CLI. Leave empty for default behavior.
+        <template v-if="formData.docker_enabled">
+          <small class="text-muted">Managed automatically by Docker mode.</small>
+        </template>
+        <template v-else>
+          Path to a custom CLI executable. When set, the SDK uses this instead of the default Claude Code CLI. Leave empty for default behavior.
+        </template>
       </div>
     </div>
 
@@ -105,7 +176,8 @@
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
+import { api } from '@/utils/api'
 
 const props = defineProps({
   mode: {
@@ -137,6 +209,7 @@ const emit = defineEmits(['update:form-data'])
 // Computed
 const isSessionMode = computed(() => props.mode === 'create-session' || props.mode === 'edit-session')
 const isTemplateMode = computed(() => props.mode === 'create-template' || props.mode === 'edit-template')
+const isEditSession = computed(() => props.mode === 'edit-session')
 // Get the correct prompt value based on mode
 const promptValue = computed(() => {
   return props.formData.initialization_context
@@ -173,6 +246,25 @@ const initContextFieldClass = computed(() => {
 
 // Local state
 const newCapability = ref('')
+const dockerStatus = ref(null)
+
+// Fetch Docker status on mount
+onMounted(async () => {
+  try {
+    dockerStatus.value = await api.get('/api/system/docker-status')
+  } catch {
+    dockerStatus.value = { available: false, error: 'Failed to check Docker status' }
+  }
+})
+
+// Docker toggle handler
+function handleDockerToggle(checked) {
+  emit('update:form-data', 'docker_enabled', checked)
+  if (checked) {
+    // Clear manual cli_path when Docker takes over
+    emit('update:form-data', 'cli_path', '')
+  }
+}
 
 // Capabilities computed
 const capabilitiesList = computed(() => {

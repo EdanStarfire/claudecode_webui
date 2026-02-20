@@ -293,6 +293,9 @@ const formData = reactive({
   initialization_context: '',  // template only
   sandbox_enabled: false,  // session only
   cli_path: '',  // Issue #489: custom CLI executable path
+  docker_enabled: false,  // Issue #496: Docker session isolation
+  docker_image: '',
+  docker_extra_mounts: '',
 
   // Sandbox tab (issue #458)
   sandbox: {
@@ -537,6 +540,9 @@ function applyTemplate() {
     formData.override_system_prompt = false
     formData.sandbox_enabled = false
     formData.cli_path = ''  // Issue #489
+    formData.docker_enabled = false  // Issue #496
+    formData.docker_image = ''
+    formData.docker_extra_mounts = ''
 
     // Reset sandbox config
     formData.sandbox.autoAllowBashIfSandboxed = true
@@ -680,6 +686,11 @@ function applyTemplate() {
 
   // Apply cli_path from template (issue #489, no field-state tracking)
   formData.cli_path = template.cli_path || ''
+
+  // Apply docker config from template (issue #496, no field-state tracking)
+  formData.docker_enabled = template.docker_enabled || false
+  formData.docker_image = template.docker_image || ''
+  formData.docker_extra_mounts = (template.docker_extra_mounts || []).join('\n')
 
   // Apply sandbox config fields
   const sc = template.sandbox_config || {}
@@ -869,7 +880,10 @@ async function createSession() {
     sandbox_enabled: formData.sandbox_enabled,
     sandbox_config: formData.sandbox_enabled ? buildSandboxConfig() : null,
     setting_sources: formData.setting_sources,  // Issue #36
-    cli_path: formData.cli_path.trim() || null  // Issue #489
+    cli_path: formData.cli_path.trim() || null,  // Issue #489
+    docker_enabled: formData.docker_enabled,  // Issue #496
+    docker_image: formData.docker_image.trim() || null,
+    docker_extra_mounts: formData.docker_extra_mounts.trim() ? formData.docker_extra_mounts.trim().split('\n').map(m => m.trim()).filter(m => m) : null
   }
 
   const response = await api.post(`/api/legions/${projectId.value}/minions`, payload)
@@ -931,7 +945,8 @@ async function updateSession() {
     sandbox_enabled: formData.sandbox_enabled,
     sandbox_config: formData.sandbox_enabled ? buildSandboxConfig() : null,
     setting_sources: formData.setting_sources,  // Issue #36
-    cli_path: formData.cli_path.trim()  // Issue #489: send empty string to clear, non-empty to set
+    cli_path: formData.cli_path.trim(),  // Issue #489: send empty string to clear, non-empty to set
+    // Issue #496: Docker settings are immutable after session creation (no docker_enabled/image/mounts here)
   }
 
   // Update session via PATCH (takes effect on next restart if session is active)
@@ -975,7 +990,10 @@ async function createTemplate() {
     override_system_prompt: formData.override_system_prompt,
     sandbox_enabled: formData.sandbox_enabled,
     sandbox_config: formData.sandbox_enabled ? buildSandboxConfig() : null,
-    cli_path: formData.cli_path.trim() || null  // Issue #489
+    cli_path: formData.cli_path.trim() || null,  // Issue #489
+    docker_enabled: formData.docker_enabled,  // Issue #496
+    docker_image: formData.docker_image.trim() || null,
+    docker_extra_mounts: formData.docker_extra_mounts.trim() ? formData.docker_extra_mounts.trim().split('\n').map(m => m.trim()).filter(m => m) : null
   }
 
   await api.post('/api/templates', payload)
@@ -1024,7 +1042,10 @@ async function updateTemplate() {
     override_system_prompt: formData.override_system_prompt,
     sandbox_enabled: formData.sandbox_enabled,
     sandbox_config: formData.sandbox_enabled ? buildSandboxConfig() : null,
-    cli_path: formData.cli_path.trim() || null  // Issue #489
+    cli_path: formData.cli_path.trim() || null,  // Issue #489
+    docker_enabled: formData.docker_enabled,  // Issue #496
+    docker_image: formData.docker_image.trim() || null,
+    docker_extra_mounts: formData.docker_extra_mounts.trim() ? formData.docker_extra_mounts.trim().split('\n').map(m => m.trim()).filter(m => m) : null
   }
 
   await api.put(`/api/templates/${editTemplate.value.template_id}`, payload)
@@ -1055,6 +1076,9 @@ function resetForm() {
   formData.initialization_context = ''
   formData.sandbox_enabled = false
   formData.cli_path = ''  // Issue #489
+  formData.docker_enabled = false  // Issue #496
+  formData.docker_image = ''
+  formData.docker_extra_mounts = ''
 
   // Reset sandbox config (issue #458)
   formData.sandbox.autoAllowBashIfSandboxed = true
@@ -1120,6 +1144,9 @@ function populateFormFromSession(session) {
   formData.capabilities = session.capabilities?.join(', ') || ''
   formData.sandbox_enabled = session.sandbox_enabled || false
   formData.cli_path = session.cli_path || ''  // Issue #489
+  formData.docker_enabled = session.docker_enabled || false  // Issue #496
+  formData.docker_image = session.docker_image || ''
+  formData.docker_extra_mounts = (session.docker_extra_mounts || []).join('\n')
   // Issue #36: Load setting_sources, default to all enabled if not set
   formData.setting_sources = session.setting_sources || ['user', 'project', 'local']
 
@@ -1152,6 +1179,9 @@ function populateFormFromTemplate(template) {
   formData.override_system_prompt = template.override_system_prompt || false
   formData.sandbox_enabled = template.sandbox_enabled || false
   formData.cli_path = template.cli_path || ''  // Issue #489
+  formData.docker_enabled = template.docker_enabled || false  // Issue #496
+  formData.docker_image = template.docker_image || ''
+  formData.docker_extra_mounts = (template.docker_extra_mounts || []).join('\n')
 
   // Issue #458: Load sandbox config from template
   const sc = template.sandbox_config || {}

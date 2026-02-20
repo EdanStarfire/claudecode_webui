@@ -158,6 +158,10 @@ class TemplateManager:
         sandbox_enabled: bool = False,
         sandbox_config: dict | None = None,
         cli_path: str | None = None,
+        # Docker session isolation (issue #496)
+        docker_enabled: bool = False,
+        docker_image: str | None = None,
+        docker_extra_mounts: list[str] | None = None,
     ) -> MinionTemplate:
         """Create a new template."""
         if not name or not name.strip():
@@ -187,6 +191,10 @@ class TemplateManager:
             sandbox_enabled=sandbox_enabled,
             sandbox_config=sandbox_config,
             cli_path=cli_path,
+            # Docker session isolation (issue #496)
+            docker_enabled=docker_enabled,
+            docker_image=docker_image,
+            docker_extra_mounts=docker_extra_mounts if docker_extra_mounts is not None else [],
         )
 
         await self._save_template(template)
@@ -226,6 +234,10 @@ class TemplateManager:
         sandbox_enabled: bool | None = None,
         sandbox_config: dict | None = None,
         cli_path: str | None = None,
+        # Docker session isolation (issue #496)
+        docker_enabled: bool | None = None,
+        docker_image: str | None = None,
+        docker_extra_mounts: list[str] | None = None,
     ) -> MinionTemplate:
         """Update existing template."""
         template = self.templates.get(template_id)
@@ -278,6 +290,14 @@ class TemplateManager:
 
         if cli_path is not None:
             template.cli_path = cli_path
+
+        # Docker session isolation (issue #496)
+        if docker_enabled is not None:
+            template.docker_enabled = docker_enabled
+        if docker_image is not None:
+            template.docker_image = docker_image
+        if docker_extra_mounts is not None:
+            template.docker_extra_mounts = docker_extra_mounts
 
         template.updated_at = datetime.now(UTC)
 

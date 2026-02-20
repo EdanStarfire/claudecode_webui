@@ -103,6 +103,11 @@ class SessionInfo:
     # CLI path override (issue #489) - custom executable for tool execution (e.g., Docker launcher)
     cli_path: str | None = None
 
+    # Docker session isolation (issue #496)
+    docker_enabled: bool = False
+    docker_image: str | None = None  # Custom image name (default: claude-code:local)
+    docker_extra_mounts: list[str] | None = None  # Additional volume mount specs
+
     def __post_init__(self):
         if self.allowed_tools is None:
             self.allowed_tools = ["bash", "edit", "read"]
@@ -112,6 +117,8 @@ class SessionInfo:
             self.child_minion_ids = []
         if self.capabilities is None:
             self.capabilities = []
+        if self.docker_extra_mounts is None:
+            self.docker_extra_mounts = []
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for JSON serialization"""
@@ -240,7 +247,11 @@ class SessionManager:
         # Settings sources (issue #36)
         setting_sources: list[str] | None = None,
         # CLI path override (issue #489)
-        cli_path: str | None = None
+        cli_path: str | None = None,
+        # Docker session isolation (issue #496)
+        docker_enabled: bool = False,
+        docker_image: str | None = None,
+        docker_extra_mounts: list[str] | None = None,
     ) -> None:
         """Create a new session (all sessions are minions - issue #349)"""
         # Validate session_id is not reserved
@@ -286,7 +297,11 @@ class SessionManager:
             # Settings sources (issue #36)
             setting_sources=setting_sources,
             # CLI path override (issue #489)
-            cli_path=cli_path
+            cli_path=cli_path,
+            # Docker session isolation (issue #496)
+            docker_enabled=docker_enabled,
+            docker_image=docker_image,
+            docker_extra_mounts=docker_extra_mounts if docker_extra_mounts is not None else [],
         )
 
         try:

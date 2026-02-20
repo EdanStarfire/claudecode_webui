@@ -330,6 +330,10 @@ class SessionCoordinator:
         setting_sources: list[str] | None = None,
         # CLI path override (issue #489)
         cli_path: str | None = None,
+        # Docker session isolation (issue #496)
+        docker_enabled: bool = False,
+        docker_image: str | None = None,
+        docker_extra_mounts: list[str] | None = None,
     ) -> str:
         """Create a new Claude Code session with integrated components (within a project)"""
         try:
@@ -372,7 +376,11 @@ class SessionCoordinator:
                 # Settings sources (issue #36)
                 setting_sources=setting_sources,
                 # CLI path override (issue #489)
-                cli_path=cli_path
+                cli_path=cli_path,
+                # Docker session isolation (issue #496)
+                docker_enabled=docker_enabled,
+                docker_image=docker_image,
+                docker_extra_mounts=docker_extra_mounts,
             )
 
             # Add session to project
@@ -768,6 +776,24 @@ class SessionCoordinator:
                 coord_logger.info(f"Escaped system prompt: {len(escaped_prompt)} chars (original: {len(minion_system_prompt)})")
                 minion_system_prompt = escaped_prompt
 
+            # Issue #496: Auto-resolve cli_path when Docker mode is enabled
+            effective_cli_path = session_info.cli_path
+            docker_env_vars = {}
+            if session_info.docker_enabled and not session_info.cli_path:
+                from src.docker_utils import resolve_docker_cli_path
+                # Persistent data dir for Claude session transcripts (enables --resume)
+                docker_data_dir = str(session_dir / "docker_claude_data")
+                effective_cli_path, docker_env_vars = resolve_docker_cli_path(
+                    docker_image=session_info.docker_image,
+                    docker_extra_mounts=session_info.docker_extra_mounts,
+                    workspace=session_info.working_directory,
+                    session_data_dir=docker_data_dir,
+                )
+                coord_logger.info(
+                    f"Docker mode enabled for session {session_id}: "
+                    f"cli_path={effective_cli_path}, env={docker_env_vars}"
+                )
+
             # Create/recreate SDK instance with session parameters
             # system_prompt is used for both regular sessions and minions (SDK appends to Claude Code preset unless override is set)
             sdk = ClaudeSDK(
@@ -790,8 +816,9 @@ class SessionCoordinator:
                 sandbox_config=session_info.sandbox_config,
                 setting_sources=session_info.setting_sources,  # Issue #36
                 experimental=self.experimental,
-                cli_path=session_info.cli_path,  # Issue #489
-                stderr_callback=self._create_stderr_callback(session_id)
+                cli_path=effective_cli_path,  # Issue #489, #496: may be auto-resolved for Docker
+                stderr_callback=self._create_stderr_callback(session_id),
+                extra_env=docker_env_vars if docker_env_vars else None,  # Issue #496: Docker wrapper env
             )
             self._active_sdks[session_id] = sdk
 
