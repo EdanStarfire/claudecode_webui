@@ -6,6 +6,8 @@ Tests: list_templates, update_expertise
 
 import pytest
 
+pytestmark = pytest.mark.slow
+
 # ============================================================================
 # list_templates Tests
 # ============================================================================

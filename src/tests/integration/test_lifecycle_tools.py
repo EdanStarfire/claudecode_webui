@@ -10,6 +10,8 @@ import pytest
 
 from src.session_manager import SessionState
 
+pytestmark = pytest.mark.slow
+
 # ============================================================================
 # spawn_minion Tests
 # ============================================================================

@@ -8,6 +8,8 @@ import json
 
 import pytest
 
+pytestmark = pytest.mark.slow
+
 
 # Placeholder - verify fixture works
 @pytest.mark.asyncio
