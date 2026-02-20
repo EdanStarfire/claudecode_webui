@@ -99,6 +99,7 @@ exec docker run \
     -v "$HOME/.claude/.credentials.json:/home/claude/.claude/.credentials.json:ro" \
     -v "$HOME/.claude/settings.json:/home/claude/.claude/settings.json:ro" \
     -e "CLAUDE_CODE_DISABLE_AUTO_UPDATE=1" \
+    -e "CLAUDE_CODE_TASK_LIST_ID=${CLAUDE_CODE_TASK_LIST_ID:-docker-tasks}" \
     $ENV_FLAGS \
     $DATA_DIR_FLAGS \
     $EXTRA_MOUNT_FLAGS \
