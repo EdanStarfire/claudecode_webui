@@ -64,6 +64,16 @@ if [ -n "${CLAUDE_DOCKER_DATA_DIR:-}" ]; then
     DATA_DIR_FLAGS="-v $CLAUDE_DOCKER_DATA_DIR:/home/claude/.claude/projects"
 fi
 
+# Forward CLAUDE_CODE_* environment variables into the container
+# The SDK sets env vars like CLAUDE_CODE_ENABLE_TASKS, CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS
+# which must be passed through to the Claude CLI inside the container
+ENV_FLAGS=""
+while IFS='=' read -r name value; do
+    if [[ "$name" == CLAUDE_CODE_* ]]; then
+        ENV_FLAGS="$ENV_FLAGS -e $name=$value"
+    fi
+done < <(env)
+
 # Scan arguments for file-based flags that need host files mounted into container
 # The SDK passes --append-system-prompt-file or --system-prompt-file with a temp file path
 FILE_MOUNT_FLAGS=""
@@ -87,6 +97,7 @@ exec docker run \
     -v "$HOME/.claude/.credentials.json:/home/claude/.claude/.credentials.json:ro" \
     -v "$HOME/.claude/settings.json:/home/claude/.claude/settings.json:ro" \
     -e "CLAUDE_CODE_DISABLE_AUTO_UPDATE=1" \
+    $ENV_FLAGS \
     $DATA_DIR_FLAGS \
     $EXTRA_MOUNT_FLAGS \
     $FILE_MOUNT_FLAGS \

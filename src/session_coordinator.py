@@ -793,9 +793,6 @@ class SessionCoordinator:
                     f"Docker mode enabled for session {session_id}: "
                     f"cli_path={effective_cli_path}, env={docker_env_vars}"
                 )
-                # Set environment variables for the wrapper script
-                for key, value in docker_env_vars.items():
-                    os.environ[key] = value
 
             # Create/recreate SDK instance with session parameters
             # system_prompt is used for both regular sessions and minions (SDK appends to Claude Code preset unless override is set)
@@ -820,7 +817,8 @@ class SessionCoordinator:
                 setting_sources=session_info.setting_sources,  # Issue #36
                 experimental=self.experimental,
                 cli_path=effective_cli_path,  # Issue #489, #496: may be auto-resolved for Docker
-                stderr_callback=self._create_stderr_callback(session_id)
+                stderr_callback=self._create_stderr_callback(session_id),
+                extra_env=docker_env_vars if docker_env_vars else None,  # Issue #496: Docker wrapper env
             )
             self._active_sdks[session_id] = sdk
 
