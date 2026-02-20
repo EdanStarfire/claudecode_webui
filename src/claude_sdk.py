@@ -145,6 +145,10 @@ class ClaudeSDK:
         cli_path: str | None = None,
         stderr_callback: Callable[[str], Any] | None = None,
         extra_env: dict[str, str] | None = None,
+        # Thinking and effort configuration (issue #540)
+        thinking_mode: str | None = None,
+        thinking_budget_tokens: int | None = None,
+        effort: str | None = None,
     ):
         """
         Initialize enhanced Claude Code SDK wrapper.
@@ -196,6 +200,9 @@ class ClaudeSDK:
         self.cli_path = cli_path  # Issue #489: Custom CLI executable path
         self.stderr_callback = stderr_callback  # Issue #517: stderr callback for system messages
         self.extra_env = extra_env or {}  # Issue #496: extra env vars (e.g., Docker wrapper config)
+        self.thinking_mode = thinking_mode  # Issue #540: thinking configuration
+        self.thinking_budget_tokens = thinking_budget_tokens  # Issue #540: budget when thinking_mode="enabled"
+        self.effort = effort  # Issue #540: effort level
         self._stderr_buffer: list[str] = []  # Issue #517: buffer stderr lines for error reporting
 
         self.info = SessionInfo(session_id=session_id, working_directory=str(self.working_directory))
@@ -780,6 +787,22 @@ class ClaudeSDK:
                 sandbox_settings.update(self.sandbox_config)
             options_kwargs["sandbox"] = sandbox_settings
             sdk_logger.info(f"Sandbox enabled for session {self.session_id}: {sandbox_settings}")
+
+        # Issue #540: Thinking configuration
+        if self.thinking_mode:
+            if self.thinking_mode == "adaptive":
+                options_kwargs["thinking"] = {"type": "adaptive"}
+            elif self.thinking_mode == "enabled":
+                options_kwargs["thinking"] = {
+                    "type": "enabled",
+                    "budget_tokens": self.thinking_budget_tokens or 10240,
+                }
+            elif self.thinking_mode == "disabled":
+                options_kwargs["thinking"] = {"type": "disabled"}
+
+        # Issue #540: Effort configuration
+        if self.effort:
+            options_kwargs["effort"] = self.effort
 
         # Enable native Tasks system (Claude Code 2.1+)
         env_vars = {"CLAUDE_CODE_ENABLE_TASKS": "true"}

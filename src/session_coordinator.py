@@ -334,6 +334,10 @@ class SessionCoordinator:
         docker_enabled: bool = False,
         docker_image: str | None = None,
         docker_extra_mounts: list[str] | None = None,
+        # Thinking and effort configuration (issue #540)
+        thinking_mode: str | None = None,
+        thinking_budget_tokens: int | None = None,
+        effort: str | None = None,
     ) -> str:
         """Create a new Claude Code session with integrated components (within a project)"""
         try:
@@ -381,6 +385,10 @@ class SessionCoordinator:
                 docker_enabled=docker_enabled,
                 docker_image=docker_image,
                 docker_extra_mounts=docker_extra_mounts,
+                # Thinking and effort configuration (issue #540)
+                thinking_mode=thinking_mode,
+                thinking_budget_tokens=thinking_budget_tokens,
+                effort=effort,
             )
 
             # Add session to project
@@ -458,7 +466,11 @@ class SessionCoordinator:
                 sandbox_enabled=sandbox_enabled,
                 sandbox_config=sandbox_config,
                 experimental=self.experimental,
-                stderr_callback=self._create_stderr_callback(session_id)
+                stderr_callback=self._create_stderr_callback(session_id),
+                # Thinking and effort configuration (issue #540)
+                thinking_mode=thinking_mode,
+                thinking_budget_tokens=thinking_budget_tokens,
+                effort=effort,
             )
             self._active_sdks[session_id] = sdk
 
@@ -819,6 +831,10 @@ class SessionCoordinator:
                 cli_path=effective_cli_path,  # Issue #489, #496: may be auto-resolved for Docker
                 stderr_callback=self._create_stderr_callback(session_id),
                 extra_env=docker_env_vars if docker_env_vars else None,  # Issue #496: Docker wrapper env
+                # Thinking and effort configuration (issue #540)
+                thinking_mode=session_info.thinking_mode,
+                thinking_budget_tokens=session_info.thinking_budget_tokens,
+                effort=session_info.effort,
             )
             self._active_sdks[session_id] = sdk
 

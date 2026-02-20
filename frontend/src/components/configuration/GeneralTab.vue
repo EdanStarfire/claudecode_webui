@@ -80,6 +80,59 @@
       </div>
     </div>
 
+    <!-- Thinking Mode (issue #540) -->
+    <div class="mb-3">
+      <label for="config-thinking-mode" class="form-label">Thinking Mode</label>
+      <select
+        id="config-thinking-mode"
+        class="form-select"
+        :value="formData.thinking_mode"
+        @change="$emit('update:form-data', 'thinking_mode', $event.target.value)"
+      >
+        <option value="">Default (SDK decides)</option>
+        <option value="adaptive">Adaptive</option>
+        <option value="enabled">Enabled</option>
+        <option value="disabled">Disabled</option>
+      </select>
+      <div class="form-text">Controls whether the model uses extended thinking</div>
+    </div>
+
+    <!-- Budget Tokens slider (conditional on thinking_mode === 'enabled') (issue #540) -->
+    <div v-if="formData.thinking_mode === 'enabled'" class="mb-3">
+      <label for="config-thinking-budget" class="form-label">
+        Thinking Budget: {{ formData.thinking_budget_tokens?.toLocaleString() || '10,240' }} tokens
+      </label>
+      <input
+        id="config-thinking-budget"
+        type="range"
+        class="form-range"
+        :value="formData.thinking_budget_tokens || 10240"
+        @input="$emit('update:form-data', 'thinking_budget_tokens', parseInt($event.target.value))"
+        min="1024"
+        max="32768"
+        step="1024"
+      />
+      <div class="form-text">Token budget for extended thinking (1,024 - 32,768)</div>
+    </div>
+
+    <!-- Effort (issue #540) -->
+    <div class="mb-3">
+      <label for="config-effort" class="form-label">Effort</label>
+      <select
+        id="config-effort"
+        class="form-select"
+        :value="formData.effort"
+        @change="$emit('update:form-data', 'effort', $event.target.value)"
+      >
+        <option value="">Default (SDK decides)</option>
+        <option value="low">Low</option>
+        <option value="medium">Medium</option>
+        <option value="high">High</option>
+        <option value="max">Max</option>
+      </select>
+      <div class="form-text">Balance response quality against latency</div>
+    </div>
+
     <!-- Permission Mode -->
     <div class="mb-3">
       <label for="config-permission-mode" class="form-label">

@@ -281,6 +281,11 @@ const formData = reactive({
   default_role: '',  // template only
   startImmediately: true,  // create-session only
 
+  // Thinking and effort (issue #540)
+  thinking_mode: '',           // '', 'adaptive', 'enabled', 'disabled'
+  thinking_budget_tokens: 10240,  // default 10240
+  effort: '',                  // '', 'low', 'medium', 'high', 'max'
+
   // Permissions tab
   allowed_tools: '',
   disallowed_tools: '',  // Issue #461: denied tools
@@ -431,7 +436,12 @@ const hasRestartChanges = computed(() => {
   const currentSources = formData.setting_sources || ['user', 'project', 'local']
   const settingSourcesChanged = JSON.stringify([...originalSources].sort()) !== JSON.stringify([...currentSources].sort())
 
-  return modelChanged || allowedToolsChanged || settingSourcesChanged
+  // Issue #540: Thinking and effort changes require restart
+  const thinkingModeChanged = (formData.thinking_mode || '') !== (editSession.value.thinking_mode || '')
+  const thinkingBudgetChanged = (formData.thinking_budget_tokens || 10240) !== (editSession.value.thinking_budget_tokens || 10240)
+  const effortChanged = (formData.effort || '') !== (editSession.value.effort || '')
+
+  return modelChanged || allowedToolsChanged || settingSourcesChanged || thinkingModeChanged || thinkingBudgetChanged || effortChanged
 })
 
 const warningLevel = computed(() => {
@@ -543,6 +553,9 @@ function applyTemplate() {
     formData.docker_enabled = false  // Issue #496
     formData.docker_image = ''
     formData.docker_extra_mounts = ''
+    formData.thinking_mode = ''  // Issue #540
+    formData.thinking_budget_tokens = 10240
+    formData.effort = ''
 
     // Reset sandbox config
     formData.sandbox.autoAllowBashIfSandboxed = true
@@ -883,7 +896,11 @@ async function createSession() {
     cli_path: formData.cli_path.trim() || null,  // Issue #489
     docker_enabled: formData.docker_enabled,  // Issue #496
     docker_image: formData.docker_image.trim() || null,
-    docker_extra_mounts: formData.docker_extra_mounts.trim() ? formData.docker_extra_mounts.trim().split('\n').map(m => m.trim()).filter(m => m) : null
+    docker_extra_mounts: formData.docker_extra_mounts.trim() ? formData.docker_extra_mounts.trim().split('\n').map(m => m.trim()).filter(m => m) : null,
+    // Issue #540: Thinking and effort configuration
+    thinking_mode: formData.thinking_mode || null,
+    thinking_budget_tokens: formData.thinking_mode === 'enabled' ? formData.thinking_budget_tokens : null,
+    effort: formData.effort || null,
   }
 
   const response = await api.post(`/api/legions/${projectId.value}/minions`, payload)
@@ -947,6 +964,10 @@ async function updateSession() {
     setting_sources: formData.setting_sources,  // Issue #36
     cli_path: formData.cli_path.trim(),  // Issue #489: send empty string to clear, non-empty to set
     // Issue #496: Docker settings are immutable after session creation (no docker_enabled/image/mounts here)
+    // Issue #540: Thinking and effort configuration
+    thinking_mode: formData.thinking_mode || null,
+    thinking_budget_tokens: formData.thinking_mode === 'enabled' ? formData.thinking_budget_tokens : null,
+    effort: formData.effort || null,
   }
 
   // Update session via PATCH (takes effect on next restart if session is active)
@@ -1067,6 +1088,9 @@ function resetForm() {
   formData.description = ''
   formData.default_role = ''
   formData.startImmediately = true
+  formData.thinking_mode = ''  // Issue #540
+  formData.thinking_budget_tokens = 10240  // Issue #540
+  formData.effort = ''  // Issue #540
   formData.allowed_tools = ''
   formData.disallowed_tools = ''
   formData.capabilities = ''
@@ -1147,6 +1171,10 @@ function populateFormFromSession(session) {
   formData.docker_enabled = session.docker_enabled || false  // Issue #496
   formData.docker_image = session.docker_image || ''
   formData.docker_extra_mounts = (session.docker_extra_mounts || []).join('\n')
+  // Issue #540: Thinking and effort configuration
+  formData.thinking_mode = session.thinking_mode || ''
+  formData.thinking_budget_tokens = session.thinking_budget_tokens || 10240
+  formData.effort = session.effort || ''
   // Issue #36: Load setting_sources, default to all enabled if not set
   formData.setting_sources = session.setting_sources || ['user', 'project', 'local']
 
@@ -1182,6 +1210,10 @@ function populateFormFromTemplate(template) {
   formData.docker_enabled = template.docker_enabled || false  // Issue #496
   formData.docker_image = template.docker_image || ''
   formData.docker_extra_mounts = (template.docker_extra_mounts || []).join('\n')
+  // Issue #540: Thinking and effort configuration
+  formData.thinking_mode = template.thinking_mode || ''
+  formData.thinking_budget_tokens = template.thinking_budget_tokens || 10240
+  formData.effort = template.effort || ''
 
   // Issue #458: Load sandbox config from template
   const sc = template.sandbox_config || {}
