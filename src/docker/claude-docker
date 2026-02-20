@@ -23,14 +23,20 @@ set -euo pipefail
 #   CLAUDE_DOCKER_WORKSPACE     - Workspace directory to mount (default: $PWD)
 #   CLAUDE_DOCKER_DATA_DIR      - Host dir for persistent Claude session data (enables --resume)
 
-IMAGE_NAME="${CLAUDE_DOCKER_IMAGE:-claude-code:local}"
+DEFAULT_IMAGE="claude-code:local"
+IMAGE_NAME="${CLAUDE_DOCKER_IMAGE:-$DEFAULT_IMAGE}"
 CONTAINER_NAME="claude-code-$$"
 
-# Build image if it doesn't exist
+# Build default image if it doesn't exist; fail fast for custom images
 if ! docker image inspect "$IMAGE_NAME" &>/dev/null; then
-    echo "Building Claude Code container image..."
-    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    docker build -t "$IMAGE_NAME" "$SCRIPT_DIR"
+    if [ "$IMAGE_NAME" = "$DEFAULT_IMAGE" ]; then
+        echo "Building Claude Code container image..."
+        SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+        docker build -t "$IMAGE_NAME" "$SCRIPT_DIR"
+    else
+        echo "Error: Docker image '$IMAGE_NAME' not found. Build or pull it first." >&2
+        exit 1
+    fi
 fi
 
 # Determine workspace to mount (default: current directory)
