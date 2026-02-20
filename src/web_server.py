@@ -161,10 +161,7 @@ class SessionUpdateRequest(BaseModel):
     sandbox_config: dict | None = None  # Issue #458: sandbox configuration settings
     setting_sources: list[str] | None = None  # Issue #36: which settings files to load
     cli_path: str | None = None  # Issue #489: custom CLI executable path
-    # Docker session isolation (issue #496)
-    docker_enabled: bool | None = None
-    docker_image: str | None = None
-    docker_extra_mounts: list[str] | None = None
+    # Issue #496: Docker fields intentionally excluded — immutable after session creation
 
 
 class SessionReorderRequest(BaseModel):
@@ -1037,13 +1034,7 @@ class ClaudeWebUI:
                 if request.cli_path is not None:
                     updates["cli_path"] = request.cli_path if request.cli_path.strip() else None
 
-                # Handle Docker session isolation updates (issue #496)
-                if request.docker_enabled is not None:
-                    updates["docker_enabled"] = request.docker_enabled
-                if request.docker_image is not None:
-                    updates["docker_image"] = request.docker_image if request.docker_image.strip() else None
-                if request.docker_extra_mounts is not None:
-                    updates["docker_extra_mounts"] = request.docker_extra_mounts
+                # Issue #496: Docker fields are immutable after session creation — not updatable here
 
                 if not updates:
                     return {"success": True, "message": "No fields to update"}

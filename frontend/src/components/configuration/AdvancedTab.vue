@@ -52,17 +52,23 @@
             id="config-docker-enabled"
             :checked="formData.docker_enabled"
             @change="handleDockerToggle($event.target.checked)"
+            :disabled="isEditSession"
           />
           <label class="form-check-label" for="config-docker-enabled">
             Enable Docker Isolation
           </label>
         </div>
 
+        <!-- Locked notice for existing sessions -->
+        <div v-if="isEditSession && formData.docker_enabled" class="alert alert-secondary py-2 mb-2">
+          <small>Docker settings are locked after session creation.</small>
+        </div>
+
         <!-- Docker status warning -->
-        <div v-if="formData.docker_enabled && dockerStatus && !dockerStatus.available" class="alert alert-warning py-2 mb-2">
+        <div v-if="formData.docker_enabled && dockerStatus && !dockerStatus.available && !isEditSession" class="alert alert-warning py-2 mb-2">
           <small>Docker is not available on this system. Sessions will fail to start.</small>
         </div>
-        <div v-if="formData.docker_enabled && dockerStatus && dockerStatus.available && !dockerStatus.image_exists" class="alert alert-info py-2 mb-2">
+        <div v-if="formData.docker_enabled && dockerStatus && dockerStatus.available && !dockerStatus.image_exists && !isEditSession" class="alert alert-info py-2 mb-2">
           <small>Docker image not yet built. It will be built automatically on first session start (~50s).</small>
         </div>
 
@@ -76,6 +82,7 @@
               id="config-docker-image"
               :value="formData.docker_image"
               @input="$emit('update:form-data', 'docker_image', $event.target.value)"
+              :disabled="isEditSession"
               placeholder="claude-code:local"
             />
           </div>
@@ -86,6 +93,7 @@
               class="form-control form-control-sm"
               :value="formData.docker_extra_mounts"
               @input="$emit('update:form-data', 'docker_extra_mounts', $event.target.value)"
+              :disabled="isEditSession"
               rows="2"
               placeholder="/host/path:/container/path:ro (one per line)"
             ></textarea>
@@ -201,6 +209,7 @@ const emit = defineEmits(['update:form-data'])
 // Computed
 const isSessionMode = computed(() => props.mode === 'create-session' || props.mode === 'edit-session')
 const isTemplateMode = computed(() => props.mode === 'create-template' || props.mode === 'edit-template')
+const isEditSession = computed(() => props.mode === 'edit-session')
 // Get the correct prompt value based on mode
 const promptValue = computed(() => {
   return props.formData.initialization_context

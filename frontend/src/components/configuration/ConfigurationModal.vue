@@ -946,9 +946,7 @@ async function updateSession() {
     sandbox_config: formData.sandbox_enabled ? buildSandboxConfig() : null,
     setting_sources: formData.setting_sources,  // Issue #36
     cli_path: formData.cli_path.trim(),  // Issue #489: send empty string to clear, non-empty to set
-    docker_enabled: formData.docker_enabled,  // Issue #496
-    docker_image: formData.docker_image.trim() || null,
-    docker_extra_mounts: formData.docker_extra_mounts.trim() ? formData.docker_extra_mounts.trim().split('\n').map(m => m.trim()).filter(m => m) : null
+    // Issue #496: Docker settings are immutable after session creation (no docker_enabled/image/mounts here)
   }
 
   // Update session via PATCH (takes effect on next restart if session is active)
