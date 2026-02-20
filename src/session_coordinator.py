@@ -1558,10 +1558,9 @@ class SessionCoordinator:
                         if isinstance(block, dict):
                             if "text" in block:
                                 texts.append(block["text"])
-                            elif "thinking" in block:
-                                texts.append(f"[Thinking: {block['thinking'][:100]}...]")
-                            # Explicitly skip tool_use blocks - they go into metadata.tool_uses
-                            # and should not contribute to content string
+                            # Skip thinking blocks - they go into metadata.thinking_blocks
+                            # Skip tool_use blocks - they go into metadata.tool_uses
+                            # Neither should contribute to the content string
                     content = " ".join(texts) if texts else ""
 
             # Build metadata
@@ -1603,6 +1602,9 @@ class SessionCoordinator:
             if thinking_blocks:
                 metadata["has_thinking"] = True
                 metadata["thinking_blocks"] = thinking_blocks
+                metadata["thinking_content"] = " ".join(
+                    block["content"] for block in thinking_blocks
+                )
 
             # Handle SystemMessage subtypes
             if _type == "SystemMessage":
