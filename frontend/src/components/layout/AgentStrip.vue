@@ -29,18 +29,31 @@
 </template>
 
 <script setup>
-import { computed, ref, onMounted, onUnmounted } from 'vue'
+import { computed, ref, watch, onMounted, onUnmounted } from 'vue'
 import AgentChip from './AgentChip.vue'
 import StackedChip from './StackedChip.vue'
 import { useProjectStore } from '@/stores/project'
 import { useSessionStore } from '@/stores/session'
+import { useScheduleStore } from '@/stores/schedule'
 import { useUIStore } from '@/stores/ui'
 import { useRouter } from 'vue-router'
 
 const projectStore = useProjectStore()
 const sessionStore = useSessionStore()
+const scheduleStore = useScheduleStore()
 const uiStore = useUIStore()
 const router = useRouter()
+
+// Eagerly load schedules so AgentChip badges render immediately
+watch(
+  () => uiStore.browsingProjectId,
+  (projectId) => {
+    if (projectId) {
+      scheduleStore.loadSchedules(projectId)
+    }
+  },
+  { immediate: true }
+)
 
 // Auto-collapse stacks and reset browsing project when clicking outside nav area
 const stripEl = ref(null)
