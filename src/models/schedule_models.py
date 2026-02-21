@@ -134,9 +134,9 @@ def get_next_run(cron_expression: str, base_time: float | None = None) -> float:
         Unix timestamp of next execution.
     """
     if base_time is not None:
-        base = datetime.fromtimestamp(base_time, tz=UTC)
+        base = datetime.fromtimestamp(base_time).astimezone()
     else:
-        base = datetime.now(UTC)
+        base = datetime.now().astimezone()
     cron = croniter(cron_expression, base)
     next_dt = cron.get_next(datetime)
     return next_dt.timestamp()
