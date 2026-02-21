@@ -1,5 +1,5 @@
 <template>
-  <div class="queue-section" v-if="allItems.length > 0 || isPaused">
+  <div class="queue-section" v-if="allItems.length > 0 || isPaused" :style="sectionStyle">
     <!-- Section Header -->
     <div
       class="queue-header d-flex align-items-center gap-2 px-3 py-2"
@@ -125,10 +125,28 @@ import { ref, computed, watch } from 'vue'
 import { useQueueStore } from '@/stores/queue'
 import { useSessionStore } from '@/stores/session'
 
+const props = defineProps({
+  height: {
+    type: Number,
+    default: 200
+  }
+})
+
 const queueStore = useQueueStore()
 const sessionStore = useSessionStore()
 
 const collapsed = ref(false)
+
+const sectionStyle = computed(() => {
+  if (collapsed.value) return {}
+  return {
+    flexShrink: 0,
+    height: props.height + 'px',
+    display: 'flex',
+    flexDirection: 'column',
+    overflow: 'hidden'
+  }
+})
 const showHistory = ref(false)
 
 const sessionId = computed(() => sessionStore.currentSessionId)
@@ -226,7 +244,8 @@ async function resumeQueue() {
 }
 
 .queue-items {
-  max-height: 200px;
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
 }
 

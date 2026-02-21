@@ -75,6 +75,9 @@ export const useUIStore = defineStore('ui', () => {
   // Transient flag — not persisted to localStorage
   const suppressAutoShow = ref(false)
 
+  // Queue panel height (resizable, issue #552)
+  const queuePanelHeight = ref(readStorage('queuePanelHeight', 200))
+
   // ========== ACTIONS ==========
 
   function toggleRightSidebar() {
@@ -103,6 +106,13 @@ export const useUIStore = defineStore('ui', () => {
 
   function setSuppressAutoShow(value) {
     suppressAutoShow.value = value
+  }
+
+  function setQueuePanelHeight(height, containerHeight = 600) {
+    const maxHeight = Math.floor(containerHeight * 0.6)
+    const clamped = Math.max(80, Math.min(height, maxHeight))
+    queuePanelHeight.value = clamped
+    writeStorage('queuePanelHeight', clamped)
   }
 
   function initBackgroundColor() {
@@ -212,6 +222,7 @@ export const useUIStore = defineStore('ui', () => {
     restartInProgress,
     restartStatus,
     suppressAutoShow,
+    queuePanelHeight,
 
     // Actions
     toggleRightSidebar,
@@ -225,6 +236,7 @@ export const useUIStore = defineStore('ui', () => {
     setRightPanelVisible,
     setAutoScroll,
     setSuppressAutoShow,
+    setQueuePanelHeight,
     initBackgroundColor,
     toggleBackgroundColor,
     showModal,
