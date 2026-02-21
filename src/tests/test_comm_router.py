@@ -2,7 +2,6 @@
 Tests for CommRouter communication routing.
 """
 
-import tempfile
 import uuid
 from pathlib import Path
 from unittest.mock import AsyncMock, Mock, patch
@@ -112,26 +111,28 @@ class TestCommRouter:
         assert result is True
 
     @pytest.mark.asyncio
-    async def test_append_to_comm_log(self, comm_router):
+    async def test_append_to_comm_log(self, comm_router, tmp_path):
         """Test appending Comm to JSONL log file."""
-        with tempfile.TemporaryDirectory() as temp_dir:
-            with patch('src.legion.comm_router.Path', return_value=Path(temp_dir)):
-                comm = Comm(
-                    comm_id=str(uuid.uuid4()),
-                    from_user=True,
-                    to_minion_id="test-minion-123",
-                    content="Test message"
-                )
+        # Point data_dir to tmp_path so _append_to_comm_log writes there
+        comm_router.system.session_coordinator.data_dir = tmp_path
 
-                # This will create the log file
-                await comm_router._append_to_comm_log(
-                    "test-legion-456",
-                    "minions/test-minion-123",
-                    comm
-                )
+        comm = Comm(
+            comm_id=str(uuid.uuid4()),
+            from_user=True,
+            to_minion_id="test-minion-123",
+            content="Test message"
+        )
 
-                # Verify log file exists (in temp dir structure)
-                # Note: Path is mocked, so this just tests the method runs without error
+        await comm_router._append_to_comm_log(
+            "test-legion-456",
+            "minions/test-minion-123",
+            comm
+        )
+
+        # Verify log file was created with comm data
+        log_file = tmp_path / "legions" / "test-legion-456" / "minions" / "test-minion-123" / "comms.jsonl"
+        assert log_file.exists()
+        assert log_file.read_text().strip() != ""
 
     @pytest.mark.asyncio
     async def test_persist_comm_from_minion(self, comm_router, sample_minion, legion_system):

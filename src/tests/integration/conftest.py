@@ -96,15 +96,14 @@ async def legion_test_env(request):
 
         # Wait for session to become ACTIVE (with timeout and timing)
         import time
-        max_wait = 50.0  # 50 second timeout (generous for CI environments)
-        poll_interval = 0.1  # Check every 100ms
+        max_wait = 15.0
+        poll_interval = 0.1
         start_time = time.time()
 
         while True:
             elapsed = time.time() - start_time
 
             if elapsed >= max_wait:
-                # Timeout - raise error
                 session_info = await session_coordinator.session_manager.get_session_info(session_id)
                 raise TimeoutError(
                     f"Session {name} ({session_id}) did not become ACTIVE within {max_wait}s. "
@@ -113,21 +112,6 @@ async def legion_test_env(request):
 
             session_info = await session_coordinator.session_manager.get_session_info(session_id)
             if session_info.state == SessionState.ACTIVE:
-                # Session is active - check timing thresholds
-                if elapsed > 45.0:
-                    raise RuntimeError(
-                        f"ERROR: Session {name} took {elapsed:.2f}s to become ACTIVE (>45s threshold). "
-                        "This indicates a serious performance issue."
-                    )
-                elif elapsed > 20.0:
-                    import warnings
-                    warnings.warn(
-                        f"WARNING: Session {name} took {elapsed:.2f}s to become ACTIVE (>20s threshold). "
-                        "This is slower than expected.",
-                        UserWarning
-                    )
-
-                # Log timing for all sessions (useful for performance tracking)
                 print(f"  > Session {name} became ACTIVE in {elapsed:.2f}s")
                 return session_info
 

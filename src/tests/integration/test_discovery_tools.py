@@ -6,6 +6,8 @@ Tests: search_capability, list_minions, get_minion_info
 
 import pytest
 
+pytestmark = pytest.mark.slow
+
 
 async def _setup_siblings(env, *minion_specs):
     """

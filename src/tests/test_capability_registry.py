@@ -82,6 +82,7 @@ def mock_legion_system(sample_minion_1, sample_minion_2, sample_minion_3, sample
     system = Mock()
     system.session_coordinator = Mock()
     system.session_coordinator.session_manager = Mock()
+    system.session_coordinator.session_manager._persist_session_state = AsyncMock()
 
     # Mock get_session_info to return sample minions
     async def mock_get_session_info(session_id):
