@@ -2521,7 +2521,7 @@ class ClaudeWebUI:
 
         @self.app.get("/api/system/git-status")
         async def get_git_status():
-            """Return current git branch, last commit, and dirty state."""
+            """Return current git branch, last commit, remote commit info, and dirty state."""
             try:
                 project_root = str(Path(__file__).parent.parent)
 
@@ -2538,11 +2538,84 @@ class ClaudeWebUI:
                     ["git", "status", "--porcelain"], project_root
                 )
 
+                # Remote commit info
+                remote_commit_hash = ""
+                remote_commit_message = ""
+                commits_behind = 0
+                remote_fetch_failed = False
+
+                # Detect remote tracking branch
+                remote_branch = None
+                if branch and branch != "HEAD":
+                    # Try the tracking branch for the current local branch
+                    candidate = f"origin/{branch}"
+                    ref_exists = await self._run_git_command(
+                        ["git", "rev-parse", "--verify", candidate], project_root
+                    )
+                    if ref_exists:
+                        remote_branch = candidate
+
+                if not remote_branch:
+                    # Detached HEAD, no remote tracking, or unknown — try origin/HEAD
+                    origin_head = await self._run_git_command(
+                        ["git", "rev-parse", "--abbrev-ref", "origin/HEAD"], project_root
+                    )
+                    if origin_head:
+                        remote_branch = origin_head
+                    else:
+                        # Fall back to origin/main, then origin/master
+                        for fallback in ["origin/main", "origin/master"]:
+                            ref_check = await self._run_git_command(
+                                ["git", "rev-parse", "--verify", fallback], project_root
+                            )
+                            if ref_check:
+                                remote_branch = fallback
+                                break
+
+                # Fetch from origin (15s timeout)
+                if remote_branch:
+                    try:
+                        proc = await asyncio.create_subprocess_exec(
+                            "git", "fetch", "origin",
+                            cwd=project_root,
+                            stdout=asyncio.subprocess.PIPE,
+                            stderr=asyncio.subprocess.PIPE,
+                        )
+                        await asyncio.wait_for(proc.communicate(), timeout=15)
+                        if proc.returncode != 0:
+                            remote_fetch_failed = True
+                    except (TimeoutError, OSError):
+                        remote_fetch_failed = True
+
+                    # Read remote commit info (works even if fetch failed, using stale refs)
+                    r_hash = await self._run_git_command(
+                        ["git", "log", "-1", "--format=%H", remote_branch], project_root
+                    )
+                    r_msg = await self._run_git_command(
+                        ["git", "log", "-1", "--format=%s", remote_branch], project_root
+                    )
+                    if r_hash:
+                        remote_commit_hash = r_hash
+                        remote_commit_message = r_msg or ""
+                        behind = await self._run_git_command(
+                            ["git", "rev-list", "--count",
+                             f"HEAD..{remote_branch}"], project_root
+                        )
+                        commits_behind = int(behind) if behind else 0
+                    else:
+                        remote_fetch_failed = True
+                else:
+                    remote_fetch_failed = True
+
                 return {
                     "branch": branch or "unknown",
                     "last_commit_hash": commit_hash or "",
                     "last_commit_message": commit_message or "",
                     "has_uncommitted_changes": bool(status),
+                    "remote_commit_hash": remote_commit_hash,
+                    "remote_commit_message": remote_commit_message,
+                    "commits_behind": commits_behind,
+                    "remote_fetch_failed": remote_fetch_failed,
                 }
             except Exception as e:
                 logger.error(f"Failed to get git status: {e}")
