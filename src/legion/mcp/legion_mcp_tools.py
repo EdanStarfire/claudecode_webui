@@ -1701,11 +1701,11 @@ class LegionMCPTools:
                 timeout_seconds=timeout_seconds,
             )
 
-            from datetime import UTC, datetime
+            from datetime import datetime
             next_run_str = "N/A"
             if schedule.next_run:
-                next_run_str = datetime.fromtimestamp(schedule.next_run, tz=UTC).strftime(
-                    "%Y-%m-%d %H:%M UTC"
+                next_run_str = datetime.fromtimestamp(schedule.next_run).astimezone().strftime(
+                    "%Y-%m-%d %H:%M %Z"
                 )
 
             return {
@@ -1774,13 +1774,13 @@ class LegionMCPTools:
                     "is_error": False,
                 }
 
-            from datetime import UTC, datetime
+            from datetime import datetime
             lines = [f"**Your Schedules** ({len(schedules)} total):\n"]
             for s in schedules:
                 next_run_str = "N/A"
                 if s.next_run:
-                    next_run_str = datetime.fromtimestamp(s.next_run, tz=UTC).strftime(
-                        "%Y-%m-%d %H:%M UTC"
+                    next_run_str = datetime.fromtimestamp(s.next_run).astimezone().strftime(
+                        "%Y-%m-%d %H:%M %Z"
                     )
                 lines.append(
                     f"\n- **{s.name}** (ID: {s.schedule_id[:8]}...)\n"
@@ -1877,11 +1877,11 @@ class LegionMCPTools:
         try:
             updated = await self.system.scheduler_service.resume_schedule(schedule_id)
 
-            from datetime import UTC, datetime
+            from datetime import datetime
             next_run_str = "N/A"
             if updated.next_run:
-                next_run_str = datetime.fromtimestamp(updated.next_run, tz=UTC).strftime(
-                    "%Y-%m-%d %H:%M UTC"
+                next_run_str = datetime.fromtimestamp(updated.next_run).astimezone().strftime(
+                    "%Y-%m-%d %H:%M %Z"
                 )
 
             return {
