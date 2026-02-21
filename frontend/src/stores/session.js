@@ -20,6 +20,9 @@ export const useSessionStore = defineStore('session', () => {
   // Input cache per session (preserve text when switching)
   const inputCache = ref(new Map())
 
+  // Attachment cache per session (preserve file attachments when switching)
+  const attachmentCache = ref(new Map())
+
   // Session init data (for info modal)
   const initData = ref(new Map())
 
@@ -53,6 +56,20 @@ export const useSessionStore = defineStore('session', () => {
     set: (value) => {
       if (currentSessionId.value) {
         inputCache.value.set(currentSessionId.value, value)
+      }
+    }
+  })
+
+  // Current session's file attachments
+  const currentAttachments = computed({
+    get: () => attachmentCache.value.get(currentSessionId.value) || [],
+    set: (value) => {
+      if (currentSessionId.value) {
+        if (value.length === 0) {
+          attachmentCache.value.delete(currentSessionId.value)
+        } else {
+          attachmentCache.value.set(currentSessionId.value, value)
+        }
       }
     }
   })
@@ -324,6 +341,7 @@ export const useSessionStore = defineStore('session', () => {
       for (const deletedId of deletedIds) {
         sessions.value.delete(deletedId)
         inputCache.value.delete(deletedId)
+        attachmentCache.value.delete(deletedId)
         initData.value.delete(deletedId)
       }
 
@@ -450,6 +468,7 @@ export const useSessionStore = defineStore('session', () => {
     sessions,
     currentSessionId,
     inputCache,
+    attachmentCache,
     initData,
     deletingSessions,
 
@@ -458,6 +477,7 @@ export const useSessionStore = defineStore('session', () => {
     orderedSessions,
     sessionsInProject,
     currentInput,
+    currentAttachments,
 
     // Actions
     fetchSessions,

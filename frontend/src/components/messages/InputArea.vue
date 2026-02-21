@@ -136,8 +136,11 @@ const messageTextarea = ref(null)
 const fileInput = ref(null)
 const windowWidth = ref(window.innerWidth)
 
-// File upload state
-const attachments = ref([])
+// File upload state - backed by session store for per-session persistence
+const attachments = computed({
+  get: () => sessionStore.currentAttachments,
+  set: (value) => { sessionStore.currentAttachments = value }
+})
 const isDragging = ref(false)
 const isUploading = ref(false)
 
@@ -355,11 +358,12 @@ function handlePaste(event) {
  * Add files to attachments list with validation
  */
 function addFiles(files) {
+  const newAttachments = []
   for (const file of files) {
     // Check file size
     if (file.size > MAX_FILE_SIZE) {
       // Add with error state
-      attachments.value.push({
+      newAttachments.push({
         id: generateId(),
         name: file.name,
         size: file.size,
@@ -376,7 +380,7 @@ function addFiles(files) {
       preview = URL.createObjectURL(file)
     }
 
-    attachments.value.push({
+    newAttachments.push({
       id: generateId(),
       name: file.name,
       size: file.size,
@@ -390,6 +394,9 @@ function addFiles(files) {
       error: null
     })
   }
+  if (newAttachments.length > 0) {
+    attachments.value = [...attachments.value, ...newAttachments]
+  }
 }
 
 /**
@@ -401,7 +408,7 @@ function removeAttachment(index) {
   if (attachment.preview) {
     URL.revokeObjectURL(attachment.preview)
   }
-  attachments.value.splice(index, 1)
+  attachments.value = attachments.value.filter((_, i) => i !== index)
 }
 
 /**
@@ -566,7 +573,7 @@ function addResourceAsAttachment(resource) {
   }
 
   // Add as pre-uploaded attachment
-  attachments.value.push({
+  attachments.value = [...attachments.value, {
     id: generateId(),
     resourceId: resource.resource_id,
     name: resource.original_filename || resource.title || 'Resource',
@@ -585,7 +592,7 @@ function addResourceAsAttachment(resource) {
     },
     error: null,
     isResourceReference: true // Mark as resource reference
-  })
+  }]
 
   console.log('Added resource as attachment:', resource.resource_id)
 }
