@@ -33,8 +33,28 @@
               <div class="card-body py-2 px-3">
                 <div class="small">
                   <div><strong>Branch:</strong> {{ gitStatus.branch }}</div>
-                  <div><strong>Last commit:</strong> {{ gitStatus.last_commit_message }}</div>
-                  <div class="font-monospace text-muted" style="font-size: 0.75rem;">{{ gitStatus.last_commit_hash?.substring(0, 12) }}</div>
+
+                  <!-- Remote commit info (primary) -->
+                  <template v-if="!gitStatus.remote_fetch_failed && gitStatus.remote_commit_hash">
+                    <div><strong>Latest on origin:</strong> {{ gitStatus.remote_commit_message }}</div>
+                    <div class="font-monospace text-muted" style="font-size: 0.75rem;">{{ gitStatus.remote_commit_hash?.substring(0, 12) }}</div>
+                    <div v-if="gitStatus.commits_behind > 0" class="text-info mt-1">
+                      {{ gitStatus.commits_behind }} commit{{ gitStatus.commits_behind !== 1 ? 's' : '' }} behind origin
+                    </div>
+                    <div v-else class="text-success mt-1">
+                      Already up to date
+                    </div>
+                  </template>
+
+                  <!-- Fallback: local commit when remote unavailable -->
+                  <template v-else>
+                    <div class="text-warning mt-1 mb-1" v-if="gitStatus.remote_fetch_failed">
+                      <small>Could not fetch remote info — showing local commit</small>
+                    </div>
+                    <div><strong>Last commit:</strong> {{ gitStatus.last_commit_message }}</div>
+                    <div class="font-monospace text-muted" style="font-size: 0.75rem;">{{ gitStatus.last_commit_hash?.substring(0, 12) }}</div>
+                  </template>
+
                   <div v-if="gitStatus.has_uncommitted_changes" class="text-warning mt-1">
                     <strong>Warning:</strong> Uncommitted changes detected. git pull may fail.
                   </div>
