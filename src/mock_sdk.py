@@ -432,11 +432,89 @@ class MockClaudeSDK:
         self._replay_task: asyncio.Task | None = None
         self._shutdown_event = asyncio.Event()
 
+        # Wrap message_callback to convert fixture format → legacy dict format
+        # so SessionCoordinator's MessageProcessor can parse them correctly
+        self._raw_message_callback = message_callback
+        if message_callback:
+            self.message_callback = self._converting_callback
+        else:
+            self.message_callback = None
+
         # Compatibility attributes that ClaudeSDK has
         self.current_permission_mode = kwargs.get("permissions", "default")
         self.model = kwargs.get("model")
         self.storage_manager = kwargs.get("storage_manager")
         self.session_manager = kwargs.get("session_manager")
+
+    # ---- Fixture → legacy dict conversion (issue #561) ----
+
+    _SDK_TYPE_MAP = {
+        "SystemMessage": "system",
+        "AssistantMessage": "assistant",
+        "ResultMessage": "result",
+        "UserMessage": "user",
+    }
+
+    def _convert_fixture_message(self, msg: dict) -> dict:
+        """Convert _type-based fixture message to legacy dict format.
+
+        The SessionCoordinator message callback expects dicts with
+        ``"type": "assistant"`` etc.  Fixture JSONL may store SDK-style
+        ``"_type": "AssistantMessage"`` dicts.  This method normalises
+        them so the existing MessageProcessor handlers can parse them.
+        """
+        sdk_type = msg.get("_type")
+        if not sdk_type:
+            # Already in legacy format
+            return msg
+
+        legacy_type = self._SDK_TYPE_MAP.get(sdk_type, "unknown")
+        converted = {
+            "type": legacy_type,
+            "timestamp": msg.get("timestamp", time.time()),
+            "session_id": msg.get("session_id", self.session_id),
+        }
+        data = msg.get("data", {})
+
+        if legacy_type == "system":
+            subtype = data.get("subtype") or data.get("type", "init")
+            converted["subtype"] = subtype
+            converted["content"] = data.get("content", f"System {subtype}")
+            # Preserve init data for session info feature
+            if data:
+                converted["metadata"] = {"subtype": subtype, "init_data": data}
+        elif legacy_type == "assistant":
+            # Extract text content from content blocks
+            content_blocks = data.get("content", [])
+            text_parts = []
+            for block in content_blocks:
+                if isinstance(block, dict) and "text" in block:
+                    text_parts.append(block["text"])
+            converted["content"] = "\n".join(text_parts) if text_parts else ""
+        elif legacy_type == "result":
+            subtype = data.get("subtype", "success")
+            converted["subtype"] = subtype
+            converted["content"] = f"Result: {subtype}"
+            converted["metadata"] = {
+                "subtype": subtype,
+                "duration_ms": data.get("duration_ms"),
+                "is_error": data.get("is_error", False),
+                "num_turns": data.get("num_turns"),
+                "total_cost_usd": data.get("total_cost_usd"),
+            }
+        else:
+            converted["content"] = msg.get("content", "")
+
+        return converted
+
+    async def _converting_callback(self, msg: dict) -> None:
+        """Wrapper that converts fixture messages before calling the real callback."""
+        converted = self._convert_fixture_message(msg)
+        if self._raw_message_callback:
+            if asyncio.iscoroutinefunction(self._raw_message_callback):
+                await self._raw_message_callback(converted)
+            else:
+                self._raw_message_callback(converted)
 
     async def start(self) -> bool:
         """
