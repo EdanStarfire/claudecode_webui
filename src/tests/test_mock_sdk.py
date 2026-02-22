@@ -287,9 +287,9 @@ class TestMockClaudeSDK:
         )
         await mock.start()
 
-        # Segment 0 replayed on start (client_launched)
+        # Segment 0 is skipped (client_launched handled by SessionCoordinator)
         start_count = len(received)
-        assert start_count >= 1
+        assert start_count == 0
 
         # Send a message
         await mock.send_message("Hello")

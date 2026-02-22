@@ -530,7 +530,8 @@ class MockClaudeSDK:
         """
         Start the mock session.
 
-        Loads the SessionRecording and replays Segment 0 (client_launched).
+        Loads the SessionRecording and skips Segment 0 (client_launched is
+        handled by SessionCoordinator._send_client_launched_message).
         """
         try:
             self.info.state = SessionState.STARTING
@@ -547,9 +548,11 @@ class MockClaudeSDK:
 
             self.info.state = SessionState.RUNNING
 
-            # Replay Segment 0 (typically just client_launched system message)
+            # Skip Segment 0 replay — it contains client_launched which the
+            # SessionCoordinator already sends via _send_client_launched_message.
+            # Just advance the cursor past it.
             if self._recording.get_segment_count() > 0:
-                await self._engine.replay_segment(0)
+                self._engine._segment_cursor = 1
 
             # Notify session manager if available
             if self.session_manager:
