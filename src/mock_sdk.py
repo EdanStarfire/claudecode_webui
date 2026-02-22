@@ -508,8 +508,18 @@ class MockClaudeSDK:
         return converted
 
     async def _converting_callback(self, msg: dict) -> None:
-        """Wrapper that converts fixture messages before calling the real callback."""
+        """Wrapper that converts fixture messages, stores them, then calls the real callback."""
         converted = self._convert_fixture_message(msg)
+
+        # Persist to JSONL (mirrors ClaudeSDK._store_sdk_message)
+        if self.storage_manager:
+            try:
+                storage_data = dict(converted)
+                storage_data.setdefault("session_id", self.session_id)
+                await self.storage_manager.append_message(storage_data)
+            except Exception as e:
+                logger.error(f"Failed to store replayed message: {e}")
+
         if self._raw_message_callback:
             if asyncio.iscoroutinefunction(self._raw_message_callback):
                 await self._raw_message_callback(converted)
@@ -579,7 +589,7 @@ class MockClaudeSDK:
                 )
             self._action_cursor += 1
 
-            # Store user message via callback (matches real SDK flow)
+            # Fire user message through callback (which also persists via _converting_callback)
             if self.message_callback:
                 from datetime import UTC, datetime
 
@@ -590,18 +600,6 @@ class MockClaudeSDK:
                     "timestamp": datetime.now(UTC).timestamp(),
                 }
                 await self._safe_callback(self.message_callback, user_msg)
-
-            # Store via storage manager if available
-            if self.storage_manager:
-                from datetime import UTC, datetime
-
-                user_msg = {
-                    "type": "user",
-                    "content": message,
-                    "session_id": self.session_id,
-                    "timestamp": datetime.now(UTC).timestamp(),
-                }
-                await self.storage_manager.append_message(user_msg)
 
             self.info.message_count += 1
             self.info.last_activity = time.time()
