@@ -152,9 +152,26 @@ const showSlashDropdown = ref(false)
 const slashFilter = ref('')
 const selectedSlashIndex = ref(0)
 
+// Local ref for input text — avoids double-computed reactivity chain through Map
+// that can cause hasContent to not update while typing (issue #561)
+const localInput = ref(sessionStore.currentInput || '')
+
+// Sync store → local when session changes or store is updated externally
+watch(() => sessionStore.currentInput, (storeVal) => {
+  if (storeVal !== localInput.value) {
+    localInput.value = storeVal || ''
+  }
+})
+
+// Sync local → store on every keystroke
+watch(localInput, (val) => {
+  sessionStore.currentInput = val
+})
+
+// inputText alias for template v-model and sendMessage
 const inputText = computed({
-  get: () => sessionStore.currentInput,
-  set: (value) => { sessionStore.currentInput = value }
+  get: () => localInput.value,
+  set: (value) => { localInput.value = value }
 })
 
 const isProcessing = computed(() => sessionStore.currentSession?.is_processing || false)
@@ -163,7 +180,7 @@ const isStarting = computed(() => sessionStore.currentSession?.state === 'starti
 const currentSessionId = computed(() => sessionStore.currentSessionId)
 
 // Check if input has content (text or valid attachments)
-const hasContent = computed(() => !!inputText.value.trim() || attachments.value.filter(a => !a.error).length > 0)
+const hasContent = computed(() => !!localInput.value.trim() || attachments.value.filter(a => !a.error).length > 0)
 
 // Mobile detection based on viewport width
 const isMobile = computed(() => windowWidth.value < 768)
