@@ -128,8 +128,8 @@ class TestSessionRecording:
         recording = SessionRecording(FIXTURES_DIR / "tool_use")
         # First message is legacy format
         assert recording._get_message_type(recording.messages[0]) == "system"
-        # Assistant tool_use is also legacy format
-        assert recording._get_message_type(recording.messages[3]) == "assistant"
+        # Assistant tool_use is now SDK format
+        assert recording._get_message_type(recording.messages[3]) == "AssistantMessage"
 
     def test_sdk_format_detection(self):
         """SDK format messages (_type: XxxMessage) are detected correctly."""

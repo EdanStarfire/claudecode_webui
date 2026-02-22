@@ -484,13 +484,31 @@ class MockClaudeSDK:
             if data:
                 converted["metadata"] = {"subtype": subtype, "init_data": data}
         elif legacy_type == "assistant":
-            # Extract text content from content blocks
+            # Extract text and tool_use content from content blocks
             content_blocks = data.get("content", [])
             text_parts = []
+            tool_uses = []
             for block in content_blocks:
-                if isinstance(block, dict) and "text" in block:
-                    text_parts.append(block["text"])
+                if isinstance(block, dict):
+                    if block.get("type") == "tool_use":
+                        tool_uses.append({
+                            "id": block.get("id"),
+                            "name": block.get("name"),
+                            "input": block.get("input", {}),
+                            "timestamp": converted["timestamp"],
+                        })
+                    elif "text" in block:
+                        text_parts.append(block["text"])
             converted["content"] = "\n".join(text_parts) if text_parts else ""
+            if tool_uses:
+                converted["metadata"] = {
+                    "tool_uses": tool_uses,
+                    "tool_results": [],
+                    "has_tool_uses": True,
+                    "has_tool_results": False,
+                    "model": data.get("model"),
+                    "session_id": converted["session_id"],
+                }
         elif legacy_type == "result":
             subtype = data.get("subtype", "success")
             converted["subtype"] = subtype
@@ -502,6 +520,38 @@ class MockClaudeSDK:
                 "num_turns": data.get("num_turns"),
                 "total_cost_usd": data.get("total_cost_usd"),
             }
+        elif legacy_type == "user":
+            # Extract text and tool_result content from content blocks
+            content_blocks = data.get("content", [])
+            text_parts = []
+            tool_results = []
+            if isinstance(content_blocks, list):
+                for block in content_blocks:
+                    if isinstance(block, dict):
+                        if block.get("type") == "tool_result":
+                            tool_results.append({
+                                "tool_use_id": block.get("tool_use_id"),
+                                "content": block.get("content", ""),
+                                "is_error": block.get("is_error", False),
+                                "timestamp": converted["timestamp"],
+                            })
+                        elif block.get("type") == "text":
+                            text_parts.append(block.get("text", ""))
+            elif isinstance(content_blocks, str):
+                text_parts.append(content_blocks)
+
+            if tool_results and not text_parts:
+                converted["content"] = f"Tool results: {len(tool_results)} results"
+            else:
+                converted["content"] = "\n".join(text_parts) if text_parts else ""
+            if tool_results:
+                converted["metadata"] = {
+                    "tool_uses": [],
+                    "tool_results": tool_results,
+                    "has_tool_uses": False,
+                    "has_tool_results": True,
+                    "session_id": converted["session_id"],
+                }
         else:
             converted["content"] = msg.get("content", "")
 
