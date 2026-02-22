@@ -425,9 +425,20 @@ class LegionWebSocketManager:
 class ClaudeWebUI:
     """Main WebUI application class"""
 
-    def __init__(self, data_dir: Path = None, experimental: bool = False):
+    def __init__(self, data_dir: Path = None, experimental: bool = False,
+                 mock_sdk: bool = False, fixtures_dir: Path | None = None,
+                 available_fixtures: list[str] | None = None):
         self.app = FastAPI(title="Claude Code WebUI", version="1.0.0")
         self.coordinator = SessionCoordinator(data_dir, experimental=experimental)
+
+        # Wire mock SDK factory if mock mode active (issue #561)
+        if mock_sdk and fixtures_dir:
+            from src.mock_sdk import MockClaudeSDK
+            self.coordinator.set_sdk_factory(
+                _mock_factory_for_fixtures(
+                    MockClaudeSDK, fixtures_dir, set(available_fixtures or [])
+                )
+            )
         self.skill_manager = SkillManager()
         self.websocket_manager = WebSocketManager()
         self.ui_websocket_manager = UIWebSocketManager()
@@ -3818,10 +3829,37 @@ class ClaudeWebUI:
 # Global application instance
 webui_app = None
 
-def create_app(data_dir: Path = None, experimental: bool = False) -> FastAPI:
+def _mock_factory_for_fixtures(mock_cls, fixtures_dir: Path, available_fixtures: set[str]):
+    """Create a factory that maps session names to fixture directories (issue #561)."""
+    def factory(session_id, working_directory, **kwargs):
+        session_name = kwargs.pop("session_name", None)
+        if session_name:
+            candidate = fixtures_dir / session_name
+            if candidate.is_dir():
+                kwargs["session_dir"] = str(candidate)
+            else:
+                raise ValueError(
+                    f"No fixture found for session name '{session_name}'. "
+                    f"Available fixtures: {', '.join(sorted(available_fixtures))}"
+                )
+        return mock_cls(session_id=session_id, working_directory=working_directory, **kwargs)
+    return factory
+
+
+def create_app(
+    data_dir: Path = None,
+    experimental: bool = False,
+    mock_sdk: bool = False,
+    fixtures_dir: Path | None = None,
+    available_fixtures: list[str] | None = None,
+) -> FastAPI:
     """Create and configure the FastAPI application"""
     global webui_app
-    webui_app = ClaudeWebUI(data_dir, experimental=experimental)
+    webui_app = ClaudeWebUI(
+        data_dir, experimental=experimental,
+        mock_sdk=mock_sdk, fixtures_dir=fixtures_dir,
+        available_fixtures=available_fixtures,
+    )
     return webui_app.app
 
 async def startup_event():

@@ -517,11 +517,10 @@ class TestSessionCoordinatorInjection:
 
     def test_sdk_factory_default(self):
         """SessionCoordinator defaults to ClaudeSDK factory."""
-        from src.claude_sdk import ClaudeSDK
         from src.session_coordinator import SessionCoordinator
 
         coordinator = SessionCoordinator()
-        assert coordinator._sdk_factory is ClaudeSDK
+        assert coordinator._sdk_factory is SessionCoordinator._default_sdk_factory
 
     def test_set_sdk_factory(self):
         """set_sdk_factory replaces the factory."""

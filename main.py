@@ -69,6 +69,16 @@ Debug Flags:
     # Experimental features
     parser.add_argument('--experimental', action='store_true', help='Enable experimental features (Agent Teams)')
 
+    # Mock SDK mode (for browser automation testing — issue #561)
+    parser.add_argument(
+        '--mock-sdk', action='store_true',
+        help='Use MockClaudeSDK with fixture replay instead of real SDK'
+    )
+    parser.add_argument(
+        '--fixtures-dir', type=str, default=None,
+        help='Directory containing named fixture subdirectories (required with --mock-sdk)'
+    )
+
     args = parser.parse_args()
 
     # Validate and create data directory
@@ -97,8 +107,31 @@ Debug Flags:
         log_dir=str(data_dir_path / "logs")
     )
 
+    # Validate mock SDK arguments (issue #561)
+    if args.mock_sdk:
+        if not args.fixtures_dir:
+            parser.error("--fixtures-dir is required when --mock-sdk is specified")
+        fixtures_path = Path(args.fixtures_dir).resolve()
+        if not fixtures_path.is_dir():
+            parser.error(f"Fixtures directory does not exist: {fixtures_path}")
+        available_fixtures = sorted(
+            d.name for d in fixtures_path.iterdir() if d.is_dir()
+        )
+        if not available_fixtures:
+            parser.error(f"No fixture subdirectories found in: {fixtures_path}")
+        print(f"Mock SDK mode enabled. Available fixtures: {', '.join(available_fixtures)}")
+    else:
+        fixtures_path = None
+        available_fixtures = None
+
     # Create FastAPI app
-    app = create_app(data_dir=data_dir_path, experimental=args.experimental)
+    app = create_app(
+        data_dir=data_dir_path,
+        experimental=args.experimental,
+        mock_sdk=args.mock_sdk,
+        fixtures_dir=fixtures_path if args.mock_sdk else None,
+        available_fixtures=available_fixtures,
+    )
 
     # Add startup/shutdown events
     app.add_event_handler("startup", startup_event)
