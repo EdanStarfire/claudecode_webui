@@ -1,0 +1,9 @@
+{
+  "session_id": "test-single-turn",
+  "state": "terminated",
+  "working_directory": "/tmp/test",
+  "current_permission_mode": "default",
+  "model": "claude-sonnet-4-5-20250929",
+  "is_processing": false,
+  "name": "single-turn-test"
+}

@@ -1,0 +1,9 @@
+{"type": "system", "content": "Claude Code Launched", "timestamp": 1000000.0, "metadata": {"subtype": "client_launched", "session_id": "test-multi-turn"}, "session_id": "test-multi-turn"}
+{"type": "user", "content": "What is 2+2?", "session_id": "test-multi-turn", "timestamp": 1000005.0}
+{"_type": "SystemMessage", "timestamp": 1000005.1, "session_id": "test-multi-turn", "data": {"subtype": "init", "data": {"type": "system", "subtype": "init", "session_id": "sdk-session-2", "tools": ["Read"], "model": "claude-sonnet-4-5-20250929"}}}
+{"_type": "AssistantMessage", "timestamp": 1000006.0, "session_id": "test-multi-turn", "data": {"content": [{"text": "2 + 2 = 4."}], "model": "claude-sonnet-4-5-20250929"}}
+{"_type": "ResultMessage", "timestamp": 1000006.1, "session_id": "test-multi-turn", "data": {"subtype": "success", "duration_ms": 1000, "is_error": false, "num_turns": 1, "total_cost_usd": 0.005}}
+{"type": "user", "content": "And what is 3+3?", "session_id": "test-multi-turn", "timestamp": 1000020.0}
+{"_type": "SystemMessage", "timestamp": 1000020.1, "session_id": "test-multi-turn", "data": {"subtype": "init", "data": {"type": "system", "subtype": "init", "session_id": "sdk-session-2", "tools": ["Read"], "model": "claude-sonnet-4-5-20250929"}}}
+{"_type": "AssistantMessage", "timestamp": 1000021.0, "session_id": "test-multi-turn", "data": {"content": [{"text": "3 + 3 = 6."}], "model": "claude-sonnet-4-5-20250929"}}
+{"_type": "ResultMessage", "timestamp": 1000021.1, "session_id": "test-multi-turn", "data": {"subtype": "success", "duration_ms": 1000, "is_error": false, "num_turns": 1, "total_cost_usd": 0.005}}

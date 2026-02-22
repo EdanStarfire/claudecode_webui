@@ -110,18 +110,18 @@ class TestSessionCoordinator:
         # Create session first
         session_id = await coordinator.create_session(**sample_session_config)
 
-        # Mock ClaudeSDK class to avoid actual SDK calls
-        with patch('src.session_coordinator.ClaudeSDK') as mock_claude_sdk:
-            mock_sdk_instance = AsyncMock()
-            mock_sdk_instance.start.return_value = True
-            mock_sdk_instance.is_running.return_value = False
-            mock_claude_sdk.return_value = mock_sdk_instance
+        # Use SDK factory injection (issue #559) to avoid actual SDK calls
+        mock_sdk_instance = AsyncMock()
+        mock_sdk_instance.start.return_value = True
+        mock_sdk_instance.is_running.return_value = False
+        mock_factory = Mock(return_value=mock_sdk_instance)
+        coordinator.set_sdk_factory(mock_factory)
 
-            # Start the session
-            success = await coordinator.start_session(session_id)
+        # Start the session
+        success = await coordinator.start_session(session_id)
 
-            assert success is True
-            mock_sdk_instance.start.assert_called_once()
+        assert success is True
+        mock_sdk_instance.start.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_start_session_sdk_failure(self, temp_coordinator, sample_session_config):
@@ -131,19 +131,19 @@ class TestSessionCoordinator:
         # Create session first
         session_id = await coordinator.create_session(**sample_session_config)
 
-        # Mock ClaudeSDK class with failing start
-        with patch('src.session_coordinator.ClaudeSDK') as mock_claude_sdk:
-            mock_sdk_instance = AsyncMock()
-            mock_sdk_instance.start.return_value = False
-            mock_sdk_instance.is_running.return_value = False
-            # Add info attribute with error_message for error handling
-            mock_sdk_instance.info = Mock()
-            mock_sdk_instance.info.error_message = "Test SDK start failure"
-            mock_claude_sdk.return_value = mock_sdk_instance
+        # Use SDK factory injection (issue #559) with failing start
+        mock_sdk_instance = AsyncMock()
+        mock_sdk_instance.start.return_value = False
+        mock_sdk_instance.is_running.return_value = False
+        # Add info attribute with error_message for error handling
+        mock_sdk_instance.info = Mock()
+        mock_sdk_instance.info.error_message = "Test SDK start failure"
+        mock_factory = Mock(return_value=mock_sdk_instance)
+        coordinator.set_sdk_factory(mock_factory)
 
-            success = await coordinator.start_session(session_id)
+        success = await coordinator.start_session(session_id)
 
-            assert success is False
+        assert success is False
 
     @pytest.mark.asyncio
     async def test_start_nonexistent_session(self, temp_coordinator):

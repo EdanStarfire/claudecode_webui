@@ -1,0 +1,9 @@
+{
+  "session_id": "test-tool-use",
+  "state": "terminated",
+  "working_directory": "/tmp/test",
+  "current_permission_mode": "default",
+  "model": "claude-sonnet-4-5-20250929",
+  "is_processing": false,
+  "name": "tool-use-test"
+}

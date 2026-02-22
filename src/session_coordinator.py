@@ -87,6 +87,9 @@ class SessionCoordinator:
         # Tracks tool lifecycle state and computes display metadata for frontend
         self._display_projections: dict[str, DisplayProjection] = {}
 
+        # SDK factory for dependency injection (enables MockClaudeSDK for testing)
+        self._sdk_factory = ClaudeSDK
+
         # Track ExitPlanMode that had setMode suggestions applied (to prevent auto-reset)
         self._exitplanmode_with_setmode: dict[str, bool] = {}  # session_id -> bool
 
@@ -130,6 +133,10 @@ class SessionCoordinator:
         )
         # Backward compatibility alias
         self.image_viewer_mcp_tools = self.resource_mcp_tools
+
+    def set_sdk_factory(self, factory):
+        """Set custom SDK factory for testing (e.g., MockClaudeSDK)."""
+        self._sdk_factory = factory
 
     async def initialize(self):
         """Initialize the session coordinator"""
@@ -447,8 +454,8 @@ class SessionCoordinator:
                 escaped_system_prompt = escaped_system_prompt.replace('"', '\\"').replace('$', '\\$')
                 coord_logger.info(f"Escaped system prompt in create: {len(escaped_system_prompt)} chars (original: {len(system_prompt)})")
 
-            # Create SDK instance
-            sdk = ClaudeSDK(
+            # Create SDK instance (uses factory for testability — issue #559)
+            sdk = self._sdk_factory(
                 session_id=session_id,
                 working_directory=working_directory,
                 storage_manager=storage_manager,
@@ -806,9 +813,9 @@ class SessionCoordinator:
                     f"cli_path={effective_cli_path}, env={docker_env_vars}"
                 )
 
-            # Create/recreate SDK instance with session parameters
+            # Create/recreate SDK instance with session parameters (uses factory for testability — issue #559)
             # system_prompt is used for both regular sessions and minions (SDK appends to Claude Code preset unless override is set)
-            sdk = ClaudeSDK(
+            sdk = self._sdk_factory(
                 session_id=session_id,
                 working_directory=session_info.working_directory,
                 storage_manager=storage_manager,
