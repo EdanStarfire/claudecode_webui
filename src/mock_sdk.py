@@ -618,6 +618,10 @@ class MockClaudeSDK:
                 # Check if segment ends with a permission request and handle it
                 await self._handle_pending_permissions()
 
+            # Emit end-of-replay marker when all segments have been consumed
+            if self._engine._segment_cursor >= self._recording.get_segment_count():
+                await self._emit_replay_complete()
+
             return True
 
         except ActionMismatchError:
@@ -659,6 +663,29 @@ class MockClaudeSDK:
                     await self._replay_task
             else:
                 break
+
+    async def _emit_replay_complete(self) -> None:
+        """Emit a system message indicating the fixture replay finished."""
+        total_segments = self._recording.get_segment_count()
+        total_actions = self._recording.get_action_count()
+        marker = {
+            "type": "system",
+            "subtype": "replay_complete",
+            "content": (
+                f"Mock replay complete — {total_segments} segments, "
+                f"{total_actions} actions replayed from fixture"
+            ),
+            "session_id": self.session_id,
+            "timestamp": time.time(),
+            "metadata": {
+                "subtype": "replay_complete",
+                "total_segments": total_segments,
+                "total_actions": total_actions,
+                "fixture_dir": str(self.session_dir),
+            },
+        }
+        if self.message_callback:
+            await self._safe_callback(self.message_callback, marker)
 
     async def interrupt_session(self) -> bool:
         """Interrupt the current replay."""
