@@ -10,6 +10,7 @@ import gc
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import time
@@ -38,6 +39,20 @@ VALID_MODELS = {
 
 # Default model for new sessions
 DEFAULT_MODEL = "sonnet"
+
+
+def slugify_name(name: str) -> str:
+    """Convert a display name to a slug for MCP tool compatibility.
+
+    "Database Optimizer" -> "database-optimizer"
+    "frontend-dev" -> "frontend-dev"  (already slugified, no change)
+    """
+    slug = name.lower()
+    slug = slug.replace("_", "-").replace(" ", "-")
+    slug = re.sub(r'[^a-z0-9-]', '', slug)
+    slug = re.sub(r'-+', '-', slug)
+    slug = slug.strip('-')
+    return slug
 
 
 class SessionState(Enum):
@@ -70,6 +85,7 @@ class SessionInfo:
     claude_code_session_id: str | None = None
     is_processing: bool = False
     name: str | None = None
+    slug: str | None = None  # Slugified name for MCP tool lookups (issue #546)
     order: int | None = None
     project_id: str | None = None
 
@@ -147,6 +163,11 @@ class SessionInfo:
             data['latest_message_time'] = datetime.fromisoformat(data['latest_message_time'])
         # Issue #349: Silently ignore deprecated is_minion field from old data
         data.pop('is_minion', None)
+        # Issue #546: Derive slug from name if missing (backward compat)
+        if 'slug' not in data or not data.get('slug'):
+            name = data.get('name')
+            if name:
+                data['slug'] = slugify_name(name)
         return cls(**data)
 
 
@@ -292,6 +313,7 @@ class SessionManager:
             disallowed_tools=disallowed_tools if disallowed_tools is not None else [],
             model=model,
             name=name,
+            slug=slugify_name(name) if name else None,
             order=order,
             project_id=project_id,
             # Multi-agent fields (universal Legion - issue #313, #349)
@@ -562,6 +584,7 @@ class SessionManager:
                     return False
 
                 session.name = name.strip()
+                session.slug = slugify_name(name.strip())
                 session.updated_at = datetime.now(UTC)
                 await self._persist_session_state(session_id)
                 await self._notify_state_change_callbacks(session_id, session.state)

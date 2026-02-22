@@ -71,20 +71,28 @@ class LegionCoordinator:
 
     async def get_minion_by_name(self, name: str) -> Optional['SessionInfo']:
         """
-        Get minion by name (case-sensitive) - GLOBAL search across all legions.
+        Get minion by name or slug - GLOBAL search across all legions.
+
+        Matches slug first, then falls back to display name for backward compat.
 
         WARNING: This method searches globally and may return minions from other legions.
         For legion-scoped lookups, use get_minion_by_name_in_legion() instead.
 
         Issue #349: All sessions are minions.
+        Issue #546: Slug-first matching.
 
         Args:
-            name: Minion name
+            name: Minion slug or display name
 
         Returns:
             SessionInfo if found, None otherwise
         """
         sessions = await self.session_manager.list_sessions()
+        # Slug-first matching
+        for session in sessions:
+            if session.slug and session.slug == name:
+                return session
+        # Fallback to display name for backward compat
         for session in sessions:
             if session.name == name:
                 return session
@@ -111,7 +119,13 @@ class LegionCoordinator:
         if not legion:
             return None
 
-        # Search through legion's sessions for matching name
+        # Issue #546: Slug-first matching, then fallback to display name
+        for session_id in legion.session_ids:
+            session = await self.session_manager.get_session_info(session_id)
+            if session and session.slug and session.slug == name:
+                return session
+
+        # Fallback to display name for backward compat
         for session_id in legion.session_ids:
             session = await self.session_manager.get_session_info(session_id)
             if session and session.name == name:
