@@ -364,9 +364,6 @@ const isFormValid = computed(() => {
   // Name is required for all modes
   if (!formData.name.trim()) return false
 
-  // Session name validation - no spaces for sessions (for nametag matching)
-  if (isSessionMode.value && formData.name.includes(' ')) return false
-
   return true
 })
 
@@ -805,12 +802,6 @@ function validate() {
 
   if (!formData.name.trim()) {
     errors.name = 'Name is required'
-    isValid = false
-  }
-
-  // Session name must be single word for nametag matching
-  if (isSessionMode.value && formData.name.includes(' ')) {
-    errors.name = 'Session name must be a single word (no spaces)'
     isValid = false
   }
 
