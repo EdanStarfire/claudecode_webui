@@ -266,8 +266,17 @@ function handleKeyPress(event) {
 
 /**
  * Auto-resize textarea based on content (matching CommComposer behavior)
+ * Also force-syncs the DOM value to the inputText ref to bypass Vue's
+ * composition guard — mobile predictive keyboards use composition mode
+ * for regular Latin text, which suppresses v-model updates until a space
+ * or punctuation commits the composition (issue #561).
  */
-function autoResizeTextarea() {
+function autoResizeTextarea(event) {
+  // Force-sync DOM value → ref (bypasses Vue v-model composition guard)
+  if (event?.target) {
+    inputText.value = event.target.value
+  }
+
   const textarea = messageTextarea.value
   if (!textarea) return
 

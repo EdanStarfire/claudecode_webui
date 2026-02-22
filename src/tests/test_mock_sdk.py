@@ -128,8 +128,8 @@ class TestSessionRecording:
         recording = SessionRecording(FIXTURES_DIR / "tool_use")
         # First message is legacy format
         assert recording._get_message_type(recording.messages[0]) == "system"
-        # Assistant tool_use is also legacy format
-        assert recording._get_message_type(recording.messages[3]) == "assistant"
+        # Assistant tool_use is now SDK format
+        assert recording._get_message_type(recording.messages[3]) == "AssistantMessage"
 
     def test_sdk_format_detection(self):
         """SDK format messages (_type: XxxMessage) are detected correctly."""
@@ -287,9 +287,9 @@ class TestMockClaudeSDK:
         )
         await mock.start()
 
-        # Segment 0 replayed on start (client_launched)
+        # Segment 0 is skipped (client_launched handled by SessionCoordinator)
         start_count = len(received)
-        assert start_count >= 1
+        assert start_count == 0
 
         # Send a message
         await mock.send_message("Hello")
@@ -517,11 +517,10 @@ class TestSessionCoordinatorInjection:
 
     def test_sdk_factory_default(self):
         """SessionCoordinator defaults to ClaudeSDK factory."""
-        from src.claude_sdk import ClaudeSDK
         from src.session_coordinator import SessionCoordinator
 
         coordinator = SessionCoordinator()
-        assert coordinator._sdk_factory is ClaudeSDK
+        assert coordinator._sdk_factory is SessionCoordinator._default_sdk_factory
 
     def test_set_sdk_factory(self):
         """set_sdk_factory replaces the factory."""

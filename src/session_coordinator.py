@@ -88,7 +88,7 @@ class SessionCoordinator:
         self._display_projections: dict[str, DisplayProjection] = {}
 
         # SDK factory for dependency injection (enables MockClaudeSDK for testing)
-        self._sdk_factory = ClaudeSDK
+        self._sdk_factory = self._default_sdk_factory
 
         # Track ExitPlanMode that had setMode suggestions applied (to prevent auto-reset)
         self._exitplanmode_with_setmode: dict[str, bool] = {}  # session_id -> bool
@@ -133,6 +133,12 @@ class SessionCoordinator:
         )
         # Backward compatibility alias
         self.image_viewer_mcp_tools = self.resource_mcp_tools
+
+    @staticmethod
+    def _default_sdk_factory(session_id, working_directory, **kwargs):
+        """Default factory that strips session_name before calling ClaudeSDK."""
+        kwargs.pop("session_name", None)
+        return ClaudeSDK(session_id=session_id, working_directory=working_directory, **kwargs)
 
     def set_sdk_factory(self, factory):
         """Set custom SDK factory for testing (e.g., MockClaudeSDK)."""
@@ -458,6 +464,7 @@ class SessionCoordinator:
             sdk = self._sdk_factory(
                 session_id=session_id,
                 working_directory=working_directory,
+                session_name=name,  # For mock SDK fixture resolution (issue #561)
                 storage_manager=storage_manager,
                 session_manager=self.session_manager,
                 message_callback=self._create_message_callback(session_id),
@@ -818,6 +825,7 @@ class SessionCoordinator:
             sdk = self._sdk_factory(
                 session_id=session_id,
                 working_directory=session_info.working_directory,
+                session_name=session_info.name,  # For mock SDK fixture resolution (issue #561)
                 storage_manager=storage_manager,
                 session_manager=self.session_manager,
                 message_callback=self._create_message_callback(session_id),

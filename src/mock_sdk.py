@@ -432,17 +432,156 @@ class MockClaudeSDK:
         self._replay_task: asyncio.Task | None = None
         self._shutdown_event = asyncio.Event()
 
+        # Wrap message_callback to convert fixture format → legacy dict format
+        # so SessionCoordinator's MessageProcessor can parse them correctly
+        self._raw_message_callback = message_callback
+        if message_callback:
+            self.message_callback = self._converting_callback
+        else:
+            self.message_callback = None
+
         # Compatibility attributes that ClaudeSDK has
         self.current_permission_mode = kwargs.get("permissions", "default")
         self.model = kwargs.get("model")
         self.storage_manager = kwargs.get("storage_manager")
         self.session_manager = kwargs.get("session_manager")
 
+    # ---- Fixture → legacy dict conversion (issue #561) ----
+
+    _SDK_TYPE_MAP = {
+        "SystemMessage": "system",
+        "AssistantMessage": "assistant",
+        "ResultMessage": "result",
+        "UserMessage": "user",
+    }
+
+    def _convert_fixture_message(self, msg: dict) -> dict:
+        """Convert _type-based fixture message to legacy dict format.
+
+        The SessionCoordinator message callback expects dicts with
+        ``"type": "assistant"`` etc.  Fixture JSONL may store SDK-style
+        ``"_type": "AssistantMessage"`` dicts.  This method normalises
+        them so the existing MessageProcessor handlers can parse them.
+        """
+        sdk_type = msg.get("_type")
+        if not sdk_type:
+            # Already in legacy format
+            return msg
+
+        legacy_type = self._SDK_TYPE_MAP.get(sdk_type, "unknown")
+        converted = {
+            "type": legacy_type,
+            "timestamp": msg.get("timestamp", time.time()),
+            "session_id": msg.get("session_id", self.session_id),
+        }
+        data = msg.get("data", {})
+
+        if legacy_type == "system":
+            subtype = data.get("subtype") or data.get("type", "init")
+            converted["subtype"] = subtype
+            converted["content"] = data.get("content", f"System {subtype}")
+            # Preserve init data for session info feature
+            if data:
+                converted["metadata"] = {"subtype": subtype, "init_data": data}
+        elif legacy_type == "assistant":
+            # Extract text and tool_use content from content blocks
+            content_blocks = data.get("content", [])
+            text_parts = []
+            tool_uses = []
+            for block in content_blocks:
+                if isinstance(block, dict):
+                    if block.get("type") == "tool_use":
+                        tool_uses.append({
+                            "id": block.get("id"),
+                            "name": block.get("name"),
+                            "input": block.get("input", {}),
+                            "timestamp": converted["timestamp"],
+                        })
+                    elif "text" in block:
+                        text_parts.append(block["text"])
+            converted["content"] = "\n".join(text_parts) if text_parts else ""
+            if tool_uses:
+                converted["metadata"] = {
+                    "tool_uses": tool_uses,
+                    "tool_results": [],
+                    "has_tool_uses": True,
+                    "has_tool_results": False,
+                    "model": data.get("model"),
+                    "session_id": converted["session_id"],
+                }
+        elif legacy_type == "result":
+            subtype = data.get("subtype", "success")
+            converted["subtype"] = subtype
+            converted["content"] = f"Result: {subtype}"
+            converted["metadata"] = {
+                "subtype": subtype,
+                "duration_ms": data.get("duration_ms"),
+                "is_error": data.get("is_error", False),
+                "num_turns": data.get("num_turns"),
+                "total_cost_usd": data.get("total_cost_usd"),
+            }
+        elif legacy_type == "user":
+            # Extract text and tool_result content from content blocks
+            content_blocks = data.get("content", [])
+            text_parts = []
+            tool_results = []
+            if isinstance(content_blocks, list):
+                for block in content_blocks:
+                    if isinstance(block, dict):
+                        if block.get("type") == "tool_result":
+                            tool_results.append({
+                                "tool_use_id": block.get("tool_use_id"),
+                                "content": block.get("content", ""),
+                                "is_error": block.get("is_error", False),
+                                "timestamp": converted["timestamp"],
+                            })
+                        elif block.get("type") == "text":
+                            text_parts.append(block.get("text", ""))
+            elif isinstance(content_blocks, str):
+                text_parts.append(content_blocks)
+
+            if tool_results and not text_parts:
+                converted["content"] = f"Tool results: {len(tool_results)} results"
+            else:
+                converted["content"] = "\n".join(text_parts) if text_parts else ""
+            if tool_results:
+                converted["metadata"] = {
+                    "tool_uses": [],
+                    "tool_results": tool_results,
+                    "has_tool_uses": False,
+                    "has_tool_results": True,
+                    "session_id": converted["session_id"],
+                }
+        else:
+            converted["content"] = msg.get("content", "")
+
+        return converted
+
+    async def _converting_callback(self, msg: dict) -> None:
+        """Wrapper that converts fixture messages, stores them, then calls the real callback."""
+        converted = self._convert_fixture_message(msg)
+
+        # Persist to JSONL (mirrors ClaudeSDK._store_sdk_message)
+        if self.storage_manager:
+            try:
+                storage_data = dict(converted)
+                storage_data.setdefault("session_id", self.session_id)
+                await self.storage_manager.append_message(storage_data)
+            except Exception as e:
+                logger.error(f"Failed to store replayed message: {e}")
+
+        if self._raw_message_callback:
+            if asyncio.iscoroutinefunction(self._raw_message_callback):
+                await self._raw_message_callback(converted)
+            else:
+                self._raw_message_callback(converted)
+
     async def start(self) -> bool:
         """
         Start the mock session.
 
-        Loads the SessionRecording and replays Segment 0 (client_launched).
+        Loads the SessionRecording and skips Segment 0 (client_launched is
+        handled by SessionCoordinator._send_client_launched_message).
         """
         try:
             self.info.state = SessionState.STARTING
@@ -459,9 +598,11 @@ class MockClaudeSDK:
 
             self.info.state = SessionState.RUNNING
 
-            # Replay Segment 0 (typically just client_launched system message)
+            # Skip Segment 0 replay — it contains client_launched which the
+            # SessionCoordinator already sends via _send_client_launched_message.
+            # Just advance the cursor past it.
             if self._recording.get_segment_count() > 0:
-                await self._engine.replay_segment(0)
+                self._engine._segment_cursor = 1
 
             # Notify session manager if available
             if self.session_manager:
@@ -501,7 +642,7 @@ class MockClaudeSDK:
                 )
             self._action_cursor += 1
 
-            # Store user message via callback (matches real SDK flow)
+            # Fire user message through callback (which also persists via _converting_callback)
             if self.message_callback:
                 from datetime import UTC, datetime
 
@@ -512,18 +653,6 @@ class MockClaudeSDK:
                     "timestamp": datetime.now(UTC).timestamp(),
                 }
                 await self._safe_callback(self.message_callback, user_msg)
-
-            # Store via storage manager if available
-            if self.storage_manager:
-                from datetime import UTC, datetime
-
-                user_msg = {
-                    "type": "user",
-                    "content": message,
-                    "session_id": self.session_id,
-                    "timestamp": datetime.now(UTC).timestamp(),
-                }
-                await self.storage_manager.append_message(user_msg)
 
             self.info.message_count += 1
             self.info.last_activity = time.time()
@@ -538,6 +667,10 @@ class MockClaudeSDK:
 
                 # Check if segment ends with a permission request and handle it
                 await self._handle_pending_permissions()
+
+            # Emit end-of-replay marker when all segments have been consumed
+            if self._engine._segment_cursor >= self._recording.get_segment_count():
+                await self._emit_replay_complete()
 
             return True
 
@@ -580,6 +713,29 @@ class MockClaudeSDK:
                     await self._replay_task
             else:
                 break
+
+    async def _emit_replay_complete(self) -> None:
+        """Emit a system message indicating the fixture replay finished."""
+        total_segments = self._recording.get_segment_count()
+        total_actions = self._recording.get_action_count()
+        marker = {
+            "type": "system",
+            "subtype": "replay_complete",
+            "content": (
+                f"Mock replay complete — {total_segments} segments, "
+                f"{total_actions} actions replayed from fixture"
+            ),
+            "session_id": self.session_id,
+            "timestamp": time.time(),
+            "metadata": {
+                "subtype": "replay_complete",
+                "total_segments": total_segments,
+                "total_actions": total_actions,
+                "fixture_dir": str(self.session_dir),
+            },
+        }
+        if self.message_callback:
+            await self._safe_callback(self.message_callback, marker)
 
     async def interrupt_session(self) -> bool:
         """Interrupt the current replay."""

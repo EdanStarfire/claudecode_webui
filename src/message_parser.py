@@ -260,6 +260,19 @@ class AssistantMessageHandler(MessageHandler):
             else:
                 self._extract_from_legacy_format(message_data, text_parts)
 
+        # Extract tool_uses from metadata (covers dict-format messages from mock SDK)
+        if not tool_uses:
+            meta = message_data.get("metadata", {})
+            meta_tool_uses = meta.get("tool_uses", [])
+            for tu in meta_tool_uses:
+                if isinstance(tu, dict) and tu.get("id"):
+                    tool_uses.append({
+                        "id": tu["id"],
+                        "name": tu.get("name"),
+                        "input": tu.get("input", {}),
+                        "timestamp": tu.get("timestamp", message_data.get("timestamp", time.time())),
+                    })
+
         # Extract additional legacy format data
         message = message_data.get("message", {})
         if message:
@@ -610,6 +623,19 @@ class UserMessageHandler(MessageHandler):
         # Handle other dict-based formats
         else:
             self._extract_from_dict_format(message_data, text_parts, tool_results, tool_uses)
+
+        # Extract tool_results/tool_uses from metadata (covers dict-format messages from mock SDK)
+        if not tool_results:
+            meta = message_data.get("metadata", {})
+            meta_tool_results = meta.get("tool_results", [])
+            for tr in meta_tool_results:
+                if isinstance(tr, dict) and tr.get("tool_use_id"):
+                    tool_results.append({
+                        "tool_use_id": tr["tool_use_id"],
+                        "content": tr.get("content", ""),
+                        "is_error": tr.get("is_error", False),
+                        "timestamp": tr.get("timestamp", message_data.get("timestamp", time.time())),
+                    })
 
         # Extract additional legacy format data
         message = message_data.get("message", {})
