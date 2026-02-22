@@ -809,6 +809,10 @@ class LegionMCPTools:
 
             child_minion_id = spawn_result["minion_id"]
 
+            # Get slug for the newly created minion (issue #546)
+            child_session = await self.system.session_coordinator.session_manager.get_session_info(child_minion_id)
+            child_slug = child_session.slug if child_session else name
+
             # Build success message with permission info
             perm_info = ""
             if template_applied:
@@ -835,19 +839,20 @@ class LegionMCPTools:
             if sandbox_enabled:
                 sandbox_info = "\n**Sandbox:** Enabled (OS-level isolation)\n"
 
-            next_step_msg = f"Send a comm to '{name}' to start them working on their task"
+            next_step_msg = f"Send a comm to '{child_slug}' to start them working on their task"
 
             return {
                 "content": [{
                     "type": "text",
                     "text": (
-                        f"✅ Successfully spawned minion '{name}' with role '{role}'.\n\n"
+                        f"✅ Successfully spawned minion '{name}' (slug: '{child_slug}') with role '{role}'.\n\n"
                         f"Minion ID: {child_minion_id}\n"
+                        f"Slug: {child_slug}\n"
                         f"{wd_info}"
                         f"{sandbox_info}"
                         f"{perm_info}\n"
                         f"The child minion is now active and ready to receive comms. "
-                        f"You can communicate with them using send_comm(to_minion_name='{name}', ...)."
+                        f"You can communicate with them using send_comm(to_minion_name='{child_slug}', ...)."
                         f"\n\n**Next Step:** {next_step_msg}"
                     )
                 }],
@@ -1061,6 +1066,7 @@ class LegionMCPTools:
                     continue  # Skip if minion no longer exists
 
                 name = minion.name or minion_id[:8]
+                slug = minion.slug or name
                 role = minion.role or "No role specified"
                 state = minion.state.value if hasattr(minion.state, 'value') else str(minion.state)
 
@@ -1068,7 +1074,7 @@ class LegionMCPTools:
                 expertise_pct = int(expertise_score * 100)
 
                 result_lines.append(
-                    f"\n• **{name}** (ID: {minion_id[:8]}...)\n"
+                    f"\n• **{name}** (slug: {slug}, ID: {minion_id[:8]}...)\n"
                     f"  - Role: {role}\n"
                     f"  - State: {state}\n"
                     f"  - Expertise: {expertise_pct}% ({expertise_score:.2f})\n"
@@ -1163,12 +1169,13 @@ class LegionMCPTools:
             # Add other minions
             for minion in minions:
                 name = minion.name or minion.session_id[:8]
+                slug = minion.slug or name
                 role = minion.role or "No role specified"
                 state = minion.state.value if hasattr(minion.state, 'value') else str(minion.state)
                 capabilities = ", ".join(minion.capabilities) if minion.capabilities else "None"
 
                 minion_lines.append(
-                    f"• **{name}** (ID: {minion.session_id})\n"
+                    f"• **{name}** (slug: {slug}, ID: {minion.session_id})\n"
                     f"  - Role: {role}\n"
                     f"  - State: {state}\n"
                     f"  - Capabilities: {capabilities}"
@@ -1264,6 +1271,7 @@ class LegionMCPTools:
 
         # Basic info
         profile_lines.append(f"**ID:** {minion.session_id[:8]}...")
+        profile_lines.append(f"**Slug:** {minion.slug or 'N/A'}")
         profile_lines.append(f"**Role:** {minion.role or 'No role specified'}")
 
         # State
@@ -1602,6 +1610,7 @@ class LegionMCPTools:
             # Basic identity
             "minion_id": session.session_id,
             "minion_name": session.name,
+            "minion_slug": session.slug,
             "role": session.role or "",
             # Hierarchy info
             "is_overseer": session.is_overseer,

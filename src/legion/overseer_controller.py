@@ -11,6 +11,8 @@ Responsibilities:
 import uuid
 from typing import TYPE_CHECKING
 
+from src.session_manager import slugify_name
+
 if TYPE_CHECKING:
     from src.legion_system import LegionSystem
 
@@ -95,9 +97,13 @@ class OverseerController:
         if len(legion_minions) >= (project.max_concurrent_minions or 20):
             raise ValueError(f"Legion {legion_id} has reached maximum concurrent minions ({project.max_concurrent_minions or 20})")
 
-        # Validate name uniqueness within legion
-        if any(m.name == name for m in legion_minions):
-            raise ValueError(f"Minion name '{name}' already exists in this legion")
+        # Validate name uniqueness within legion (by slug - issue #546)
+        new_slug = slugify_name(name)
+        if any(m.slug == new_slug for m in legion_minions):
+            raise ValueError(
+                f"Minion name '{name}' (slug: '{new_slug}') conflicts with an existing minion in this legion. "
+                f"Existing slugs: {[m.slug for m in legion_minions if m.slug]}"
+            )
 
         # Generate session ID for the minion
         minion_id = str(uuid.uuid4())
@@ -227,8 +233,12 @@ class OverseerController:
         existing_sessions = await self.system.session_coordinator.session_manager.list_sessions()
         legion_minions = [s for s in existing_sessions if self._belongs_to_legion(s, legion_id)]
 
-        if any(m.name == name for m in legion_minions):
-            raise ValueError(f"Minion name '{name}' already exists in this legion. Choose a different name.")
+        new_slug = slugify_name(name)
+        if any(m.slug == new_slug for m in legion_minions):
+            raise ValueError(
+                f"Minion name '{name}' (slug: '{new_slug}') conflicts with an existing minion. "
+                f"Choose a different name. Existing slugs: {[m.slug for m in legion_minions if m.slug]}"
+            )
 
         # 4. Check minion limit
         if len(legion_minions) >= (project.max_concurrent_minions or 20):
@@ -383,29 +393,29 @@ class OverseerController:
         if not parent_session:
             raise ValueError(f"Parent overseer {parent_overseer_id} not found")
 
-        # 2. Find child by name from parent's children
+        # 2. Find child by slug from parent's children (issue #546)
         child_session = None
         child_minion_id = None
 
         for child_id in (parent_session.child_minion_ids or []):
             session = await self.system.session_coordinator.session_manager.get_session_info(child_id)
-            if session and session.name == child_minion_name:
+            if session and session.slug == child_minion_name:
                 child_session = session
                 child_minion_id = child_id
                 break
 
         if not child_session:
-            # Get names of actual children for helpful error message
-            child_names = []
+            # Get slugs of actual children for helpful error message
+            child_slugs = []
             for cid in (parent_session.child_minion_ids or []):
                 s = await self.system.session_coordinator.session_manager.get_session_info(cid)
                 if s:
-                    child_names.append(s.name)
+                    child_slugs.append(s.slug or s.name)
 
             raise ValueError(
-                f"No child minion named '{child_minion_name}' found. "
+                f"No child minion with slug '{child_minion_name}' found. "
                 f"You can only dispose minions you spawned. "
-                f"Your children: {child_names if child_names else 'none'}"
+                f"Your children: {child_slugs if child_slugs else 'none'}"
             )
 
         # 3. Recursively dispose descendants first (depth-first disposal)

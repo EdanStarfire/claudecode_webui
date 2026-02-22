@@ -38,12 +38,9 @@
         :value="formData.name"
         @input="$emit('update:form-data', 'name', $event.target.value)"
         :placeholder="isTemplateMode ? 'e.g., Code Expert' : 'main'"
-        :pattern="isSessionMode ? '[^\\s]+' : undefined"
-        :title="isSessionMode ? 'Session name must be a single word with no spaces' : undefined"
         required
       />
       <div class="invalid-feedback" v-if="errors.name">{{ errors.name }}</div>
-      <div v-if="isSessionMode" class="form-text">Must be a single word (no spaces) for #nametag matching</div>
     </div>
 
     <!-- Description (template only) -->
