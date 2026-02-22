@@ -152,26 +152,9 @@ const showSlashDropdown = ref(false)
 const slashFilter = ref('')
 const selectedSlashIndex = ref(0)
 
-// Local ref for input text — avoids double-computed reactivity chain through Map
-// that can cause hasContent to not update while typing (issue #561)
-const localInput = ref(sessionStore.currentInput || '')
-
-// Sync store → local when session changes or store is updated externally
-watch(() => sessionStore.currentInput, (storeVal) => {
-  if (storeVal !== localInput.value) {
-    localInput.value = storeVal || ''
-  }
-})
-
-// Sync local → store on every keystroke
-watch(localInput, (val) => {
-  sessionStore.currentInput = val
-})
-
-// inputText alias for template v-model and sendMessage
 const inputText = computed({
-  get: () => localInput.value,
-  set: (value) => { localInput.value = value }
+  get: () => sessionStore.currentInput,
+  set: (value) => { sessionStore.currentInput = value }
 })
 
 const isProcessing = computed(() => sessionStore.currentSession?.is_processing || false)
@@ -180,7 +163,7 @@ const isStarting = computed(() => sessionStore.currentSession?.state === 'starti
 const currentSessionId = computed(() => sessionStore.currentSessionId)
 
 // Check if input has content (text or valid attachments)
-const hasContent = computed(() => !!localInput.value.trim() || attachments.value.filter(a => !a.error).length > 0)
+const hasContent = computed(() => !!inputText.value.trim() || attachments.value.filter(a => !a.error).length > 0)
 
 // Mobile detection based on viewport width
 const isMobile = computed(() => windowWidth.value < 768)
@@ -283,8 +266,17 @@ function handleKeyPress(event) {
 
 /**
  * Auto-resize textarea based on content (matching CommComposer behavior)
+ * Also force-syncs the DOM value to the inputText ref to bypass Vue's
+ * composition guard — mobile predictive keyboards use composition mode
+ * for regular Latin text, which suppresses v-model updates until a space
+ * or punctuation commits the composition (issue #561).
  */
-function autoResizeTextarea() {
+function autoResizeTextarea(event) {
+  // Force-sync DOM value → ref (bypasses Vue v-model composition guard)
+  if (event?.target) {
+    inputText.value = event.target.value
+  }
+
   const textarea = messageTextarea.value
   if (!textarea) return
 
