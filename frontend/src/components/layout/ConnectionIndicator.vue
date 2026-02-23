@@ -5,6 +5,8 @@
       class="indicator"
       :class="getIndicatorClass('ui')"
       :title="getTooltip('ui')"
+      role="status"
+      :aria-label="`UI WebSocket: ${getStatusLabel('ui')}`"
     >
       🌐
     </div>
@@ -14,6 +16,8 @@
       class="indicator"
       :class="getIndicatorClass('session')"
       :title="getTooltip('session')"
+      role="status"
+      :aria-label="`Session WebSocket: ${getStatusLabel('session')}`"
     >
       💬
     </div>
@@ -84,6 +88,22 @@ function getTooltip(type) {
   }
 
   return `${labels[type]}\n${descriptions[type]}\nStatus: ${status}`
+}
+
+/**
+ * Get short status label for aria-label
+ * @param {string} type - 'ui' or 'session'
+ * @returns {string} Status label
+ */
+function getStatusLabel(type) {
+  const connectionMap = {
+    ui: { connected: wsStore.uiConnected, retryCount: wsStore.uiRetryCount },
+    session: { connected: wsStore.sessionConnected, retryCount: wsStore.sessionRetryCount }
+  }
+  const { connected, retryCount } = connectionMap[type]
+  if (connected) return 'Connected'
+  if (retryCount > 0) return 'Reconnecting'
+  return 'Disconnected'
 }
 </script>
 

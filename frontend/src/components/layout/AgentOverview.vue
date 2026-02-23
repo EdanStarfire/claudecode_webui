@@ -8,7 +8,7 @@
       <div class="overview-info">
         <div class="overview-name">{{ session.name || 'Agent' }}</div>
         <div class="overview-role" v-if="session.role">{{ session.role }}</div>
-        <span class="overview-status-badge" :class="statusClass">{{ statusLabel }}</span>
+        <span class="overview-status-badge" :class="statusClass" role="status" :aria-label="`Agent status: ${statusLabel}`">{{ statusLabel }}</span>
       </div>
     </div>
 
@@ -34,13 +34,13 @@
 
     <!-- Action Buttons -->
     <div class="overview-actions">
-      <button class="btn-overview" @click="showInfo" title="View session details">
+      <button class="btn-overview" @click="showInfo" title="View session details" aria-label="View session details">
         Info
       </button>
-      <button class="btn-overview" @click="editSession" title="Edit session settings">
+      <button class="btn-overview" @click="editSession" title="Edit session settings" aria-label="Edit session settings">
         Edit
       </button>
-      <button class="btn-overview" @click="manageSession" title="Manage session lifecycle">
+      <button class="btn-overview" @click="manageSession" title="Manage session lifecycle" aria-label="Manage session lifecycle">
         Manage
       </button>
     </div>

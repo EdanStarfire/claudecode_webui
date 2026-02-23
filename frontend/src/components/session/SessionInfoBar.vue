@@ -1,9 +1,9 @@
 <template>
   <div class="alert alert-info mb-0 rounded-0 d-flex justify-content-between align-items-center">
     <div class="d-flex align-items-center gap-2">
-      <span class="badge" :class="stateClass">{{ displayState }}</span>
-      <span class="fw-semibold">{{ session.name || session.session_id }}</span>
-      <div v-if="session.error_message" class="alert alert-danger mb-0 py-1 px-2">
+      <span class="badge" :class="stateClass" role="status" aria-live="polite">{{ displayState }}</span>
+      <span class="fw-semibold" id="session-name">{{ session.name || session.session_id }}</span>
+      <div v-if="session.error_message" class="alert alert-danger mb-0 py-1 px-2" role="alert">
         {{ session.error_message }}
       </div>
     </div>

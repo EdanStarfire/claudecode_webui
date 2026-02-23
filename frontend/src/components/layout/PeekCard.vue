@@ -1,6 +1,8 @@
 <template>
   <div
     class="peek-card"
+    role="button"
+    :aria-label="`View child agent ${childSession?.name || childSession?.role || 'unknown'}`"
     :style="peekStyle"
     :title="childSession?.name || 'Child agent'"
     @click.stop="$emit('click')"

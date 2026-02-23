@@ -93,6 +93,7 @@
                 <button
                   class="btn btn-sm btn-outline-secondary ms-2"
                   @click="showRawData = !showRawData"
+                  :aria-expanded="showRawData"
                 >
                   {{ showRawData ? 'Hide' : 'Show' }}
                 </button>

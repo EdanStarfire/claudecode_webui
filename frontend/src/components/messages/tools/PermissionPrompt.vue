@@ -101,6 +101,7 @@
               class="guidance-textarea"
               rows="1"
               placeholder="e.g., 'Try using a different approach...'"
+              aria-label="Permission guidance message"
               :disabled="isSubmittingPermission"
               @input="autoResizeGuidance"
             ></textarea>

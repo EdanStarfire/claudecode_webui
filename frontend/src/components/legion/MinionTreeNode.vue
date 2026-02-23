@@ -41,6 +41,7 @@
       <button
         class="btn btn-sm btn-outline-secondary me-1"
         title="Edit minion"
+        aria-label="Edit minion"
         @click.stop="showEditModal"
       >
         ✏️
@@ -48,6 +49,7 @@
       <button
         class="btn btn-sm btn-outline-secondary"
         title="Manage minion"
+        aria-label="Manage minion"
         @click.stop="showManageModal"
       >
         ⚙️
@@ -98,6 +100,7 @@
           <button
             class="btn btn-sm btn-outline-secondary me-1"
             title="Edit minion"
+            aria-label="Edit minion"
             @click.stop="showEditModal"
           >
             ✏️
@@ -105,6 +108,7 @@
           <button
             class="btn btn-sm btn-outline-secondary"
             title="Manage minion"
+            aria-label="Manage minion"
             @click.stop="showManageModal"
           >
             ⚙️

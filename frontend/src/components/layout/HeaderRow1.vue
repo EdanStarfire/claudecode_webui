@@ -11,21 +11,25 @@
         :class="{ 'theme-active': uiStore.isRedBackground }"
         @click="uiStore.toggleBackgroundColor()"
         :title="uiStore.isRedBackground ? 'Disable sensitive environment mode' : 'Enable sensitive environment mode'"
+        :aria-label="uiStore.isRedBackground ? 'Disable sensitive environment mode' : 'Enable sensitive environment mode'"
+        :aria-pressed="uiStore.isRedBackground"
       >
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
         </svg>
       </button>
-      <button class="header-btn" @click="uiStore.showRestartModal()" title="Restart server">
+      <button class="header-btn" @click="uiStore.showRestartModal()" title="Restart server" aria-label="Restart server">
         ↻
       </button>
-      <button class="header-btn" disabled title="Settings (coming soon)" style="opacity: 0.4; cursor: default;">
+      <button class="header-btn" disabled title="Settings (coming soon)" aria-label="Settings" style="opacity: 0.4; cursor: default;">
         ⚙
       </button>
       <button
         class="header-btn panel-toggle-btn"
         @click="uiStore.toggleRightPanel()"
         title="Toggle right panel"
+        aria-label="Toggle right panel"
+        :aria-expanded="uiStore.rightPanelVisible"
         :class="{ 'panel-open': uiStore.rightPanelVisible }"
       >
         ☰

@@ -4,7 +4,7 @@
     <div v-if="!hideRecipientSelector" class="d-flex gap-2 mb-2">
       <!-- Recipient Selection -->
       <div class="flex-grow-1">
-        <select v-model="recipient" class="form-select form-select-sm" :disabled="sending">
+        <select v-model="recipient" class="form-select form-select-sm" :disabled="sending" aria-label="Select recipient">
           <option value="">-- Select Recipient --</option>
           <optgroup label="Minions">
             <option
@@ -20,7 +20,7 @@
 
       <!-- Comm Type -->
       <div style="min-width: 150px;">
-        <select v-model="commType" class="form-select form-select-sm" :disabled="sending">
+        <select v-model="commType" class="form-select form-select-sm" :disabled="sending" aria-label="Communication type">
           <option value="task">Task</option>
           <option value="question">Question</option>
           <option value="info">Info</option>
@@ -39,6 +39,7 @@
           class="form-control form-control-sm"
           rows="1"
           placeholder="Type message... Use # to mention minions"
+          aria-label="Message content"
           :disabled="sending"
           @input="handleAutocomplete"
           @keydown="handleKeydown"

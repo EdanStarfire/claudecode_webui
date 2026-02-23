@@ -6,6 +6,8 @@
       child: variant === 'child',
       'parent-of-active': isParentOfActive
     }"
+    role="button"
+    :aria-label="`Select agent ${displayName}`"
     @click="handleClick"
     @contextmenu.prevent="handleManage"
     @touchstart="onTouchStart"
@@ -19,15 +21,15 @@
       <div class="ac-name">{{ displayName }}</div>
       <div class="ac-status">{{ statusText }}</div>
     </div>
-    <div v-if="alertType" class="ac-alert" :class="alertType">
+    <div v-if="alertType" class="ac-alert" :class="alertType" :aria-label="alertType === 'error' ? 'Error alert' : 'Permission required'">
       {{ alertType === 'error' ? '!' : '?' }}
     </div>
-    <div v-if="hasSchedules" class="ac-schedule-badge" title="Has active schedules">
+    <div v-if="hasSchedules" class="ac-schedule-badge" title="Has active schedules" aria-label="Has active schedules">
       <svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor">
         <path d="M8 0a8 8 0 1 0 0 16A8 8 0 0 0 8 0zm0 14.5A6.5 6.5 0 1 1 8 1.5a6.5 6.5 0 0 1 0 13zM8.5 4H7v5l4.25 2.55.75-1.23L8.5 8.25V4z"/>
       </svg>
     </div>
-    <div v-if="session.docker_enabled" class="ac-docker-badge" title="Running with Docker isolation">
+    <div v-if="session.docker_enabled" class="ac-docker-badge" title="Running with Docker isolation" aria-label="Docker isolated">
       <svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor">
         <rect x="1" y="4" width="5" height="4" rx="0.5" stroke="currentColor" stroke-width="0.8" fill="none"/>
         <rect x="1" y="8" width="14" height="5" rx="1" stroke="currentColor" stroke-width="0.8" fill="none"/>

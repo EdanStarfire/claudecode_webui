@@ -3,6 +3,8 @@
     class="timeline-node"
     :class="[nodeClasses, { 'node-compact': compact }]"
     :title="tooltip"
+    role="button"
+    :aria-label="tooltip"
     @click.stop="$emit('click')"
     @mouseenter="showTooltip = true"
     @mouseleave="showTooltip = false"

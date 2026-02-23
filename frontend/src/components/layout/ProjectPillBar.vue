@@ -7,7 +7,7 @@
       :isActive="project.project_id === activeProjectId"
       :isBrowsing="project.project_id === browsingProjectId"
     />
-    <button class="pill-add-btn" @click="showCreateProjectModal" title="New project">
+    <button class="pill-add-btn" @click="showCreateProjectModal" title="New project" aria-label="Create new project">
       +
     </button>
   </div>

@@ -7,6 +7,7 @@
           class="btn btn-sm btn-outline-secondary"
           @click="cycleMode"
           :disabled="!session"
+          aria-label="Cycle permission mode"
         >
           {{ modeIcon }} <span class="mode-label">{{ modeName }}</span>
         </button>
@@ -14,6 +15,7 @@
           class="btn btn-sm btn-outline-secondary"
           @click="showInfo"
           :disabled="!session"
+          aria-label="View session info"
         >
           ℹ️ <span class="button-label">Info</span>
         </button>
@@ -21,6 +23,7 @@
           class="btn btn-sm btn-outline-secondary"
           @click="showManage"
           :disabled="!session"
+          aria-label="Manage session"
         >
           ⚙️ <span class="button-label">Manage</span>
         </button>
@@ -32,6 +35,8 @@
           class="btn btn-sm"
           :class="uiStore.autoScrollEnabled ? 'btn-primary' : 'btn-outline-secondary'"
           @click="toggleAutoScroll"
+          aria-label="Toggle auto-scroll"
+          :aria-pressed="uiStore.autoScrollEnabled"
         >
           ⬇️ {{ uiStore.autoScrollEnabled ? 'ON' : 'OFF' }}
         </button>

@@ -25,6 +25,9 @@
       <div
         v-if="childIds.length > 0"
         class="stack-count"
+        role="button"
+        :aria-label="`${childIds.length} child agent${childIds.length !== 1 ? 's' : ''}, click to ${isExpanded ? 'collapse' : 'expand'}`"
+        :aria-expanded="isExpanded"
         @click.stop="toggleExpand"
         :title="`${childIds.length} child agent${childIds.length !== 1 ? 's' : ''}`"
       >
