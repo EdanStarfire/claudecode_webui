@@ -1,8 +1,8 @@
 <template>
-  <div class="modal-overlay" @click.self="$emit('close')">
+  <div class="modal-overlay" @click.self="$emit('close')" role="dialog" aria-modal="true" aria-labelledby="schedule-create-title">
     <div class="modal-content">
       <div class="modal-header">
-        <h3>Create Schedule</h3>
+        <h3 id="schedule-create-title">Create Schedule</h3>
         <button class="close-btn" @click="$emit('close')">&times;</button>
       </div>
 

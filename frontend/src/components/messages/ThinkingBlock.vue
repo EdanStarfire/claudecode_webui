@@ -2,6 +2,9 @@
   <div class="thinking-block">
     <div
       class="thinking-header d-flex align-items-center gap-2 p-2 bg-info bg-opacity-10 rounded cursor-pointer"
+      role="button"
+      :aria-expanded="isExpanded"
+      aria-label="Toggle thinking block"
       @click="toggleExpanded"
     >
       <span :aria-label="isExpanded ? 'Collapse' : 'Expand'">{{ isExpanded ? '▾' : '▸' }}</span>

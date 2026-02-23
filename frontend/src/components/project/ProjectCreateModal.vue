@@ -45,6 +45,7 @@
                   class="btn btn-outline-secondary"
                   type="button"
                   @click="openFolderBrowser"
+                  aria-label="Browse for working directory"
                 >
                   Browse...
                 </button>

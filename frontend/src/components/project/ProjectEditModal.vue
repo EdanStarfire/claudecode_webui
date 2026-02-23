@@ -61,6 +61,7 @@
               class="btn btn-outline-danger"
               @click="showDeleteConfirmation = true"
               :disabled="isDeleting"
+              aria-label="Delete project"
             >
               🗑️ Delete Project
             </button>

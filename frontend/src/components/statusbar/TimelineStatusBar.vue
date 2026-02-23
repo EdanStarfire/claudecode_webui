@@ -6,6 +6,8 @@
         class="btn btn-sm"
         :class="uiStore.autoScrollEnabled ? 'btn-primary' : 'btn-outline-secondary'"
         @click="toggleAutoScroll"
+        aria-label="Toggle auto-scroll"
+        :aria-pressed="uiStore.autoScrollEnabled"
       >
         ⬇️ {{ uiStore.autoScrollEnabled ? 'ON' : 'OFF' }}
       </button>

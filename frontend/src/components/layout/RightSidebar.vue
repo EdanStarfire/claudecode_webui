@@ -12,11 +12,13 @@
     <AgentOverview />
 
     <!-- Tab Navigation (Diff, Tasks, Resources, Comms) -->
-    <div class="sidebar-tabs">
+    <div class="sidebar-tabs" role="tablist" aria-label="Sidebar panels">
       <button
         v-for="tab in tabs"
         :key="tab.id"
         class="sidebar-tab"
+        role="tab"
+        :aria-selected="activeTab === tab.id"
         :class="{ active: activeTab === tab.id }"
         @click="uiStore.setRightSidebarTab(tab.id)"
       >
@@ -28,19 +30,19 @@
     <!-- Tab Content -->
     <div class="tab-content-container">
       <!-- Diff Tab -->
-      <DiffPanel v-show="activeTab === 'diff'" />
+      <DiffPanel v-show="activeTab === 'diff'" role="tabpanel" aria-label="Diff panel" />
 
       <!-- Tasks Tab -->
-      <TaskListPanel v-show="activeTab === 'tasks'" />
+      <TaskListPanel v-show="activeTab === 'tasks'" role="tabpanel" aria-label="Tasks panel" />
 
       <!-- Resources Tab -->
-      <ResourceGallery v-show="activeTab === 'resources'" />
+      <ResourceGallery v-show="activeTab === 'resources'" role="tabpanel" aria-label="Resources panel" />
 
       <!-- Comms Tab -->
-      <CommsPanel v-show="activeTab === 'comms'" />
+      <CommsPanel v-show="activeTab === 'comms'" role="tabpanel" aria-label="Comms panel" />
 
       <!-- Schedules Tab (Issue #495) -->
-      <SchedulePanel v-show="activeTab === 'schedules'" />
+      <SchedulePanel v-show="activeTab === 'schedules'" role="tabpanel" aria-label="Schedules panel" />
     </div>
 
     <!-- Resize Handle -->

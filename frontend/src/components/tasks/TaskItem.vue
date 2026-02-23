@@ -2,6 +2,8 @@
   <div
     class="task-item"
     :class="statusClass"
+    role="button"
+    :aria-expanded="isExpanded"
     @click="$emit('toggle')"
   >
     <!-- Task Row -->

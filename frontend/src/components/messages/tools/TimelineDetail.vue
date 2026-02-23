@@ -1,5 +1,5 @@
 <template>
-  <div class="timeline-detail">
+  <div class="timeline-detail" role="region" aria-label="Tool call details">
     <!-- Orphaned Banner -->
     <div v-if="isOrphaned" class="detail-banner detail-banner-warning">
       <span class="banner-icon">⏹️</span>

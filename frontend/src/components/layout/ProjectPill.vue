@@ -5,6 +5,8 @@
       active: isActive,
       browsing: isBrowsing && !isActive
     }"
+    role="button"
+    :aria-label="`Select project ${project.name}`"
     @click="handleClick"
     @contextmenu.prevent="showEditModal"
     :title="project.working_directory || project.name"

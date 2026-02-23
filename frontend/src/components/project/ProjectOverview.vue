@@ -14,6 +14,7 @@
           <button
             class="btn btn-sm btn-outline-secondary"
             title="Edit project"
+            aria-label="Edit project"
             @click="showEditModal"
           >
             ✏️ Edit
@@ -21,6 +22,7 @@
           <button
             class="btn btn-sm btn-outline-primary"
             :title="hasMinions ? 'Create minion' : 'Add session'"
+            :aria-label="hasMinions ? 'Add minion' : 'Add session'"
             @click="showCreateModal"
           >
             ➕ {{ hasMinions ? 'Add Minion' : 'Add Session' }}

@@ -7,6 +7,7 @@
           class="schedule-name"
           :class="{ editable: schedule.status !== 'cancelled' }"
           :title="schedule.status !== 'cancelled' ? 'Click to edit name' : ''"
+          :aria-label="`Schedule name: ${schedule.name}${schedule.status !== 'cancelled' ? ', click to edit' : ''}`"
           @click.stop="schedule.status !== 'cancelled' && startEditName()"
         >{{ schedule.name }}</span>
       </template>
@@ -74,7 +75,7 @@
 
     <!-- Prompt viewer/editor -->
     <div class="prompt-section">
-      <div class="prompt-toggle" @click.stop="showPrompt = !showPrompt">
+      <div class="prompt-toggle" role="button" :aria-expanded="showPrompt" aria-label="Toggle prompt visibility" @click.stop="showPrompt = !showPrompt">
         <span class="prompt-label">Prompt</span>
         <span class="prompt-arrow">{{ showPrompt ? '▾' : '▸' }}</span>
       </div>

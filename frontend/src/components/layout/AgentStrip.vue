@@ -18,7 +18,7 @@
         @select="handleChipSelect"
       />
     </template>
-    <button class="strip-add-btn" @click.stop="showCreateSessionModal" title="Add agent">
+    <button class="strip-add-btn" @click.stop="showCreateSessionModal" title="Add agent" aria-label="Add new agent">
       +
     </button>
     <span v-if="topLevelSessions.length === 0" class="strip-empty">No agents yet</span>

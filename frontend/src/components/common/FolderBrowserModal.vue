@@ -25,7 +25,7 @@
                 @keyup.enter="loadDirectory"
                 placeholder="Enter or select a directory path"
               />
-              <button class="btn btn-outline-secondary" @click="loadDirectory" :disabled="isLoading">
+              <button class="btn btn-outline-secondary" @click="loadDirectory" :disabled="isLoading" aria-label="Refresh directory listing">
                 🔄 Refresh
               </button>
             </div>
@@ -51,6 +51,7 @@
               class="folder-item d-flex align-items-center p-2 border-bottom"
               @click="navigateToParent"
               role="button"
+              aria-label="Navigate to parent directory"
             >
               <span class="me-2 text-secondary">⬆️</span>
               <span class="text-secondary">..</span>

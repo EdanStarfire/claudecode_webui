@@ -60,6 +60,7 @@
         type="button"
         class="btn btn-outline-secondary btn-sm file-picker-btn"
         title="Attach files"
+        aria-label="Attach files"
         :disabled="isStarting || !isConnected"
         @click="openFilePicker"
       >

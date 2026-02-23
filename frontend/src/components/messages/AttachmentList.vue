@@ -30,6 +30,7 @@
         type="button"
         class="btn-remove"
         title="Remove attachment"
+        :aria-label="`Remove attachment: ${file.name}`"
         @click="removeAttachment(index)"
       >
         ✕
