@@ -832,7 +832,11 @@ class ClaudeSDK:
 
         options_kwargs["stderr"] = stderr_handler
 
-        # Issue #571: Register catch-all hook callbacks for all 10 event types
+        # Issue #571: Register catch-all hook callbacks for all supported event types.
+        # The Claude Code CLI does NOT emit hook_started/hook_response SystemMessages
+        # in its stream-json output. We synthesize hook system messages from programmatic
+        # callbacks and emit them through our message_callback so the frontend can render
+        # hook activity as styled pills.
         try:
             from claude_agent_sdk.types import HookMatcher
             hook_events = [
@@ -841,12 +845,55 @@ class ClaudeSDK:
                 "PreCompact", "Notification", "SubagentStart", "PermissionRequest",
             ]
 
-            async def _hook_callback(hook_input, tool_use_id, hook_context):
-                sdk_logger.debug(f"Hook fired: input={hook_input}, tool_use_id={tool_use_id}")
-                return {}
+            def _make_hook_callback(event_name):
+                async def _hook_callback(hook_input, tool_use_id, hook_context):
+                    sdk_logger.debug(
+                        f"Hook fired: event={event_name}, tool_use_id={tool_use_id}"
+                    )
+                    # Extract tool name from hook input if available
+                    tool_name = None
+                    if isinstance(hook_input, dict):
+                        tool_name = hook_input.get("tool_name")
+                    elif hasattr(hook_input, "tool_name"):
+                        tool_name = hook_input.tool_name
+
+                    # Emit synthetic hook_started system message
+                    hook_data = {
+                        "hook_event": event_name,
+                        "hook_name": tool_name or event_name,
+                        "tool_use_id": tool_use_id,
+                    }
+                    started_msg = SystemMessage(
+                        subtype="hook_started",
+                        data={
+                            "type": "system",
+                            "subtype": "hook_started",
+                            **hook_data,
+                        },
+                    )
+                    await self._process_sdk_message(started_msg)
+
+                    # Emit synthetic hook_response system message (success)
+                    response_data = {
+                        **hook_data,
+                        "outcome": "success",
+                        "exit_code": 0,
+                    }
+                    response_msg = SystemMessage(
+                        subtype="hook_response",
+                        data={
+                            "type": "system",
+                            "subtype": "hook_response",
+                            **response_data,
+                        },
+                    )
+                    await self._process_sdk_message(response_msg)
+
+                    return {}
+                return _hook_callback
 
             options_kwargs["hooks"] = {
-                event: [HookMatcher(matcher=None, hooks=[_hook_callback])]
+                event: [HookMatcher(matcher=None, hooks=[_make_hook_callback(event)])]
                 for event in hook_events
             }
             sdk_logger.info("Registered catch-all hook callbacks for all 10 event types")
