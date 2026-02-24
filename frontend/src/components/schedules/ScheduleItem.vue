@@ -24,6 +24,11 @@
       <span class="status-badge" :class="schedule.status">{{ schedule.status }}</span>
     </div>
 
+    <!-- Agent association -->
+    <div class="schedule-agent">
+      <span class="agent-badge">{{ schedule.minion_name || 'Unknown agent' }}</span>
+    </div>
+
     <!-- Cron + next run -->
     <div class="schedule-meta">
       <template v-if="!editingCron">
@@ -492,6 +497,19 @@ async function toggleHistory() {
 .status-badge.cancelled {
   background: #fee2e2;
   color: #991b1b;
+}
+
+.schedule-agent {
+  margin-bottom: 2px;
+}
+
+.agent-badge {
+  font-size: 10px;
+  padding: 0 6px;
+  border-radius: 8px;
+  background: #ede9fe;
+  color: #6d28d9;
+  font-weight: 500;
 }
 
 .schedule-meta {
