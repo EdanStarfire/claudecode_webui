@@ -864,6 +864,11 @@ class ClaudeSDK:
     async def _process_sdk_message(self, sdk_message: Any):
         """Process a single message from the SDK stream."""
         try:
+            # Issue #571: Skip None messages emitted by the SDK (partial/empty messages)
+            if sdk_message is None:
+                sdk_logger.debug("Skipping None SDK message")
+                return
+
             # Check for fatal error messages that indicate immediate CLI failures
             if hasattr(sdk_message, 'type') and sdk_message.type == 'error':
                 error_content = str(sdk_message.content) if hasattr(sdk_message, 'content') else str(sdk_message)
