@@ -150,6 +150,20 @@ class SystemMessageHandler(MessageHandler):
             # Extract init data if available (for Session Info feature)
             if hasattr(sdk_msg, 'data') and sdk_msg.data:
                 extracted["metadata"]["init_data"] = sdk_msg.data
+
+            # Issue #571: Synthesize content for hook messages
+            if subtype in ("hook_started", "hook_response"):
+                hook_data = sdk_msg.data if hasattr(sdk_msg, 'data') and sdk_msg.data else {}
+                hook_name = hook_data.get("hook_name", hook_data.get("hookName", "unknown"))
+                hook_event = hook_data.get("hook_event", hook_data.get("hookEvent", ""))
+                if subtype == "hook_started":
+                    extracted["content"] = f"Hook: {hook_name} ({hook_event})" if hook_event else f"Hook: {hook_name}"
+                else:
+                    outcome = hook_data.get("outcome", hook_data.get("output", "done"))
+                    exit_code = hook_data.get("exit_code", hook_data.get("exitCode"))
+                    extracted["content"] = f"Hook: {hook_name} \u2192 {outcome}"
+                    if exit_code is not None:
+                        extracted["metadata"]["exit_code"] = exit_code
         else:
             # Extract from dictionary data
             # Look for subtype in multiple locations for robustness
@@ -169,6 +183,20 @@ class SystemMessageHandler(MessageHandler):
             else:
                 extracted["content"] = f"System {subtype}: {message_data.get('session_id', 'unknown')}"
             extracted["metadata"]["subtype"] = subtype
+
+            # Issue #571: Synthesize content for stored hook messages
+            if subtype in ("hook_started", "hook_response"):
+                init_data = (message_data.get("metadata") or {}).get("init_data", {})
+                hook_name = init_data.get("hook_name", init_data.get("hookName", "unknown"))
+                hook_event = init_data.get("hook_event", init_data.get("hookEvent", ""))
+                if subtype == "hook_started":
+                    extracted["content"] = f"Hook: {hook_name} ({hook_event})" if hook_event else f"Hook: {hook_name}"
+                else:
+                    outcome = init_data.get("outcome", init_data.get("output", "done"))
+                    exit_code = init_data.get("exit_code", init_data.get("exitCode"))
+                    extracted["content"] = f"Hook: {hook_name} \u2192 {outcome}"
+                    if exit_code is not None:
+                        extracted["metadata"]["exit_code"] = exit_code
             extracted["metadata"]["working_directory"] = message_data.get("cwd")
             extracted["metadata"]["permissions"] = message_data.get("permissionMode")
             extracted["metadata"]["tools"] = message_data.get("tools", [])

@@ -832,6 +832,27 @@ class ClaudeSDK:
 
         options_kwargs["stderr"] = stderr_handler
 
+        # Issue #571: Register catch-all hook callbacks for all 10 event types
+        try:
+            from claude_agent_sdk.types import HookMatcher
+            hook_events = [
+                "PreToolUse", "PostToolUse", "PostToolUseFailure",
+                "UserPromptSubmit", "Stop", "SubagentStop",
+                "PreCompact", "Notification", "SubagentStart", "PermissionRequest",
+            ]
+
+            async def _hook_callback(hook_input, tool_use_id, hook_context):
+                sdk_logger.debug(f"Hook fired: input={hook_input}, tool_use_id={tool_use_id}")
+                return {}
+
+            options_kwargs["hooks"] = {
+                event: [HookMatcher(matcher=None, hooks=[_hook_callback])]
+                for event in hook_events
+            }
+            sdk_logger.info("Registered catch-all hook callbacks for all 10 event types")
+        except ImportError:
+            sdk_logger.debug("HookMatcher not available, skipping hook registration")
+
         sdk_logger.debug(f"Final SDK options keys: {list(options_kwargs.keys())}")
         sdk_logger.debug(f"can_use_tool included: {'can_use_tool' in options_kwargs}")
         sdk_logger.debug(f"mcp_servers included: {'mcp_servers' in options_kwargs}")

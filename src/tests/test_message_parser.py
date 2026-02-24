@@ -448,3 +448,120 @@ class TestParsedMessage:
         assert parsed.error_message == "Command failed with error"
         assert parsed.metadata["is_error"] is True
         assert parsed.session_id == "test-123"
+
+
+class TestHookMessageHandling:
+    """Test cases for hook_started and hook_response system messages (Issue #571)."""
+
+    def test_hook_started_dict_format(self):
+        """Test hook_started message synthesizes content from dict format."""
+        handler = SystemMessageHandler()
+        message_data = {
+            "type": "system",
+            "content": "",
+            "metadata": {
+                "subtype": "hook_started",
+                "init_data": {
+                    "hook_name": "pre-tool-guard",
+                    "hook_event": "PreToolUse",
+                    "hook_id": "hook-001",
+                },
+            },
+            "session_id": "test-hooks",
+            "timestamp": time.time(),
+        }
+        parsed = handler.parse(message_data)
+        assert parsed.type == MessageType.SYSTEM
+        assert parsed.metadata["subtype"] == "hook_started"
+        assert "pre-tool-guard" in parsed.content
+        assert "PreToolUse" in parsed.content
+
+    def test_hook_response_dict_format_success(self):
+        """Test hook_response message with exit_code 0."""
+        handler = SystemMessageHandler()
+        message_data = {
+            "type": "system",
+            "content": "",
+            "metadata": {
+                "subtype": "hook_response",
+                "init_data": {
+                    "hook_name": "pre-tool-guard",
+                    "hook_event": "PreToolUse",
+                    "hook_id": "hook-001",
+                    "outcome": "approved",
+                    "exit_code": 0,
+                },
+            },
+            "session_id": "test-hooks",
+            "timestamp": time.time(),
+        }
+        parsed = handler.parse(message_data)
+        assert parsed.metadata["subtype"] == "hook_response"
+        assert "pre-tool-guard" in parsed.content
+        assert "approved" in parsed.content
+        assert parsed.metadata.get("exit_code") == 0
+
+    def test_hook_response_dict_format_error(self):
+        """Test hook_response message with non-zero exit_code."""
+        handler = SystemMessageHandler()
+        message_data = {
+            "type": "system",
+            "content": "",
+            "metadata": {
+                "subtype": "hook_response",
+                "init_data": {
+                    "hook_name": "post-tool-logger",
+                    "hook_event": "PostToolUse",
+                    "hook_id": "hook-002",
+                    "outcome": "failed",
+                    "exit_code": 1,
+                },
+            },
+            "session_id": "test-hooks",
+            "timestamp": time.time(),
+        }
+        parsed = handler.parse(message_data)
+        assert "post-tool-logger" in parsed.content
+        assert "failed" in parsed.content
+        assert parsed.metadata.get("exit_code") == 1
+
+    def test_hook_started_with_camelcase_fields(self):
+        """Test hook_started handles camelCase field names (hookName, hookEvent)."""
+        handler = SystemMessageHandler()
+        message_data = {
+            "type": "system",
+            "content": "",
+            "metadata": {
+                "subtype": "hook_started",
+                "init_data": {
+                    "hookName": "my-hook",
+                    "hookEvent": "Stop",
+                },
+            },
+            "session_id": "test-hooks",
+            "timestamp": time.time(),
+        }
+        parsed = handler.parse(message_data)
+        assert "my-hook" in parsed.content
+        assert "Stop" in parsed.content
+
+    def test_hook_parser_integration(self):
+        """Test hook messages through the full MessageParser pipeline."""
+        parser = MessageParser()
+        message_data = {
+            "type": "system",
+            "content": "",
+            "metadata": {
+                "subtype": "hook_started",
+                "init_data": {
+                    "hook_name": "guard",
+                    "hook_event": "PreToolUse",
+                },
+            },
+            "session_id": "test-hooks",
+            "timestamp": time.time(),
+        }
+        parsed = parser.parse_message(message_data)
+        assert parsed.type == MessageType.SYSTEM
+        assert "guard" in parsed.content
+        assert "PreToolUse" in parsed.content

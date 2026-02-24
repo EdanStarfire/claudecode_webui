@@ -1,8 +1,14 @@
 <template>
   <div class="msg-wrapper msg-system">
-    <div class="msg-pill" :class="{ 'pill-compaction': isCompactionStatus, 'pill-stderr': isStderr }">
+    <div class="msg-pill" :class="{
+      'pill-compaction': isCompactionStatus,
+      'pill-stderr': isStderr,
+      'pill-hook': isHook && !isHookError,
+      'pill-hook-error': isHookError
+    }">
       <span v-if="isStderr" class="pill-icon">&#x26A0;&#xFE0F;</span>
       <span v-else-if="isCompactionStatus" class="pill-icon">&#x1F5DC;&#xFE0F;</span>
+      <span v-else-if="isHook" class="pill-icon">&#x2699;&#xFE0F;</span>
       <span class="pill-text">{{ displayContent }}</span>
       <span class="pill-sep">&middot;</span>
       <span class="pill-time">{{ formattedTimestamp }}</span>
@@ -35,6 +41,21 @@ const isCompactionStatus = computed(() => {
 const isStderr = computed(() => {
   const subtype = props.message.metadata?.subtype
   return subtype === 'stderr' || subtype === 'session_failed'
+})
+
+// Check if this is a hook message (hook_started or hook_response)
+const isHook = computed(() => {
+  const subtype = props.message.metadata?.subtype
+  return subtype === 'hook_started' || subtype === 'hook_response'
+})
+
+// Check if this is a hook error (non-zero exit code)
+const isHookError = computed(() => {
+  if (!isHook.value) return false
+  const subtype = props.message.metadata?.subtype
+  if (subtype !== 'hook_response') return false
+  const exitCode = props.message.metadata?.exit_code ?? props.message.metadata?.init_data?.exit_code ?? props.message.metadata?.init_data?.exitCode
+  return exitCode !== undefined && exitCode !== null && exitCode !== 0
 })
 
 const displayContent = computed(() => {
@@ -80,6 +101,24 @@ const displayContent = computed(() => {
 .pill-stderr {
   background: #fef2f2;
   border-color: #fecaca;
+}
+
+.pill-hook {
+  background: #eff6ff;
+  border-color: #bfdbfe;
+}
+
+.pill-hook .pill-text {
+  color: #1e40af;
+}
+
+.pill-hook-error {
+  background: #fef2f2;
+  border-color: #fecaca;
+}
+
+.pill-hook-error .pill-text {
+  color: #991b1b;
 }
 
 .pill-stderr .pill-text {
