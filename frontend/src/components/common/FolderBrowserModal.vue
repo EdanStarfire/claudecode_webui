@@ -91,7 +91,7 @@
             type="button"
             class="btn btn-primary"
             @click="confirmSelection"
-            :disabled="!selectedPath"
+            :disabled="!currentPath"
           >
             Select "{{ formatPath(selectedPath || currentPath) }}"
           </button>
