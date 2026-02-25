@@ -1630,6 +1630,20 @@ class SessionCoordinator:
                 if data.get("data"):
                     metadata["init_data"] = data["data"]
 
+                # Issue #571: Synthesize content for hook messages from stored format
+                if subtype in ("hook_started", "hook_response"):
+                    hook_data = data.get("data") or {}
+                    hook_name = hook_data.get("hook_name", hook_data.get("hookName", "unknown"))
+                    hook_event = hook_data.get("hook_event", hook_data.get("hookEvent", ""))
+                    if subtype == "hook_started":
+                        content = f"Hook: {hook_name} ({hook_event})" if hook_event else f"Hook: {hook_name}"
+                    else:
+                        outcome = hook_data.get("outcome", hook_data.get("output", "done"))
+                        exit_code = hook_data.get("exit_code", hook_data.get("exitCode"))
+                        content = f"Hook: {hook_name} \u2192 {outcome}"
+                        if exit_code is not None:
+                            metadata["exit_code"] = exit_code
+
             # Handle ResultMessage
             if _type == "ResultMessage":
                 subtype = data.get("subtype")

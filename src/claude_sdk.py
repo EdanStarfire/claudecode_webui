@@ -832,6 +832,22 @@ class ClaudeSDK:
 
         options_kwargs["stderr"] = stderr_handler
 
+        # Issue #571: Hook integration placeholder.
+        #
+        # The SDK supports programmatic hook callbacks via HookMatcher for 10 event types:
+        #   PreToolUse, PostToolUse, PostToolUseFailure, UserPromptSubmit, Stop,
+        #   SubagentStop, PreCompact, Notification, SubagentStart, PermissionRequest
+        #
+        # Shell hooks (configured in .claude/settings.json) produce hook_started/hook_response
+        # SystemMessages in the SDK stream automatically for events WITHOUT a programmatic
+        # callback. When a programmatic callback IS registered, the CLI suppresses the shell
+        # hook's SystemMessages from the stream — only the callback runs (and must synthesize
+        # its own SystemMessages if UI visibility is desired).
+        #
+        # Currently disabled: shell hooks alone provide sufficient hook visibility.
+        # To enable programmatic hooks in the future, register HookMatcher callbacks here
+        # and synthesize hook_started/hook_response SystemMessages via _process_sdk_message().
+
         sdk_logger.debug(f"Final SDK options keys: {list(options_kwargs.keys())}")
         sdk_logger.debug(f"can_use_tool included: {'can_use_tool' in options_kwargs}")
         sdk_logger.debug(f"mcp_servers included: {'mcp_servers' in options_kwargs}")
@@ -843,6 +859,11 @@ class ClaudeSDK:
     async def _process_sdk_message(self, sdk_message: Any):
         """Process a single message from the SDK stream."""
         try:
+            # Issue #571: Skip None messages emitted by the SDK (partial/empty messages)
+            if sdk_message is None:
+                sdk_logger.debug("Skipping None SDK message")
+                return
+
             # Check for fatal error messages that indicate immediate CLI failures
             if hasattr(sdk_message, 'type') and sdk_message.type == 'error':
                 error_content = str(sdk_message.content) if hasattr(sdk_message, 'content') else str(sdk_message)
