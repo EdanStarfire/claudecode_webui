@@ -1,23 +1,32 @@
 <template>
   <div class="msg-wrapper msg-system">
-    <div class="msg-pill" :class="{
-      'pill-compaction': isCompactionStatus,
-      'pill-stderr': isStderr,
-      'pill-hook': isHook && !isHookError,
-      'pill-hook-error': isHookError
-    }">
+    <div
+      class="msg-pill"
+      :class="{
+        'pill-compaction': isCompactionStatus,
+        'pill-stderr': isStderr,
+        'pill-hook': isHook && !isHookError,
+        'pill-hook-error': isHookError,
+        'pill-expandable': isHook
+      }"
+      @click="toggleExpand"
+    >
       <span v-if="isStderr" class="pill-icon">&#x26A0;&#xFE0F;</span>
       <span v-else-if="isCompactionStatus" class="pill-icon">&#x1F5DC;&#xFE0F;</span>
       <span v-else-if="isHook" class="pill-icon">&#x2699;&#xFE0F;</span>
       <span class="pill-text">{{ displayContent }}</span>
       <span class="pill-sep">&middot;</span>
       <span class="pill-time">{{ formattedTimestamp }}</span>
+      <span v-if="isHook" class="pill-chevron" :class="{ 'chevron-open': expanded }">&#x25B6;</span>
+    </div>
+    <div v-if="isHook && expanded" class="hook-detail">
+      <pre class="hook-json">{{ hookJson }}</pre>
     </div>
   </div>
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { formatTimestamp } from '@/utils/time'
 
 const props = defineProps({
@@ -26,6 +35,8 @@ const props = defineProps({
     required: true
   }
 })
+
+const expanded = ref(false)
 
 const formattedTimestamp = computed(() => {
   return formatTimestamp(props.message.timestamp)
@@ -70,6 +81,23 @@ const displayContent = computed(() => {
   }
   return content
 })
+
+// Raw hook data for expanded view
+const hookJson = computed(() => {
+  const data = props.message.metadata?.init_data
+  if (!data) return '{}'
+  try {
+    return JSON.stringify(data, null, 2)
+  } catch {
+    return String(data)
+  }
+})
+
+function toggleExpand() {
+  if (isHook.value) {
+    expanded.value = !expanded.value
+  }
+}
 </script>
 
 <style scoped>
@@ -79,7 +107,8 @@ const displayContent = computed(() => {
 
 .msg-system {
   display: flex;
-  justify-content: center;
+  flex-direction: column;
+  align-items: center;
 }
 
 .msg-pill {
@@ -91,6 +120,15 @@ const displayContent = computed(() => {
   border: 1px solid #e2e8f0;
   border-radius: 20px;
   max-width: 80%;
+}
+
+.pill-expandable {
+  cursor: pointer;
+  user-select: none;
+}
+
+.pill-expandable:hover {
+  filter: brightness(0.96);
 }
 
 .pill-compaction {
@@ -149,5 +187,38 @@ const displayContent = computed(() => {
   font-size: 11px;
   color: #94a3b8;
   white-space: nowrap;
+}
+
+.pill-chevron {
+  font-size: 8px;
+  color: #94a3b8;
+  transition: transform 0.15s ease;
+  display: inline-block;
+}
+
+.chevron-open {
+  transform: rotate(90deg);
+}
+
+.hook-detail {
+  margin-top: 4px;
+  max-width: 80%;
+  width: 100%;
+}
+
+.hook-json {
+  background: #1e293b;
+  color: #e2e8f0;
+  border: 1px solid #334155;
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  overflow-x: auto;
+  white-space: pre;
+  margin: 0;
+  max-height: 400px;
+  overflow-y: auto;
 }
 </style>
