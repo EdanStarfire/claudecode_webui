@@ -837,55 +837,99 @@ class ClaudeSDK:
         # in its stream-json output. We synthesize hook system messages from programmatic
         # callbacks and emit them through our message_callback so the frontend can render
         # hook activity as styled pills.
+        #
+        # The synthetic messages match the shell hook SystemMessage schema so that
+        # programmatic and shell hooks produce identical stored/rendered data:
+        #   hook_id, hook_name, hook_event, session_id, output, stderr,
+        #   exit_code, outcome, plus all event-specific fields from hook_input.
         try:
+            import uuid as _uuid
+
             from claude_agent_sdk.types import HookMatcher
+
             hook_events = [
                 "PreToolUse", "PostToolUse", "PostToolUseFailure",
                 "UserPromptSubmit", "Stop", "SubagentStop",
                 "PreCompact", "Notification", "SubagentStart", "PermissionRequest",
             ]
 
+            def _extract_hook_input_fields(hook_input):
+                """Extract all fields from hook_input as a plain dict."""
+                if isinstance(hook_input, dict):
+                    return dict(hook_input)
+                # TypedDict instances are dicts at runtime, but handle dataclass/object
+                result = {}
+                for attr in dir(hook_input):
+                    if not attr.startswith("_"):
+                        try:
+                            result[attr] = getattr(hook_input, attr)
+                        except Exception:
+                            pass
+                return result
+
             def _make_hook_callback(event_name):
                 async def _hook_callback(hook_input, tool_use_id, hook_context):
                     sdk_logger.debug(
                         f"Hook fired: event={event_name}, tool_use_id={tool_use_id}"
                     )
-                    # Extract tool name from hook input if available
-                    tool_name = None
-                    if isinstance(hook_input, dict):
-                        tool_name = hook_input.get("tool_name")
-                    elif hasattr(hook_input, "tool_name"):
-                        tool_name = hook_input.tool_name
+                    input_fields = _extract_hook_input_fields(hook_input)
 
-                    # Emit synthetic hook_started system message
-                    hook_data = {
+                    # Derive hook_name: tool_name for tool events, else event name
+                    tool_name = input_fields.get("tool_name")
+                    hook_name = f"{tool_name}" if tool_name else event_name
+
+                    # Generate IDs matching shell hook schema
+                    hook_id = str(_uuid.uuid4())
+                    exec_uuid = str(_uuid.uuid4())
+                    inner_session_id = input_fields.get("session_id", "")
+
+                    # --- hook_started ---
+                    started_data = {
+                        "type": "system",
+                        "subtype": "hook_started",
+                        "hook_id": hook_id,
+                        "hook_name": hook_name,
                         "hook_event": event_name,
-                        "hook_name": tool_name or event_name,
-                        "tool_use_id": tool_use_id,
+                        "uuid": exec_uuid,
+                        "session_id": inner_session_id,
                     }
+                    # Include tool_use_id when present (tool-related events)
+                    if tool_use_id:
+                        started_data["tool_use_id"] = tool_use_id
+                    # Forward all event-specific input fields
+                    for key, val in input_fields.items():
+                        if key not in started_data and key != "hook_event_name":
+                            started_data[key] = val
+
                     started_msg = SystemMessage(
                         subtype="hook_started",
-                        data={
-                            "type": "system",
-                            "subtype": "hook_started",
-                            **hook_data,
-                        },
+                        data=started_data,
                     )
                     await self._process_sdk_message(started_msg)
 
-                    # Emit synthetic hook_response system message (success)
+                    # --- hook_response ---
                     response_data = {
-                        **hook_data,
-                        "outcome": "success",
+                        "type": "system",
+                        "subtype": "hook_response",
+                        "hook_id": hook_id,
+                        "hook_name": hook_name,
+                        "hook_event": event_name,
+                        "uuid": exec_uuid,
+                        "session_id": inner_session_id,
+                        "output": "",
+                        "stderr": "",
                         "exit_code": 0,
+                        "outcome": "success",
                     }
+                    if tool_use_id:
+                        response_data["tool_use_id"] = tool_use_id
+                    for key, val in input_fields.items():
+                        if key not in response_data and key != "hook_event_name":
+                            response_data[key] = val
+
                     response_msg = SystemMessage(
                         subtype="hook_response",
-                        data={
-                            "type": "system",
-                            "subtype": "hook_response",
-                            **response_data,
-                        },
+                        data=response_data,
                     )
                     await self._process_sdk_message(response_msg)
 
