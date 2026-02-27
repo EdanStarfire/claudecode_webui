@@ -1768,6 +1768,36 @@ class SessionCoordinator:
             coord_logger.warning(f"Failed to convert StoredMessage to WebSocket format: {e}")
             return None
 
+    # ==================== ARCHIVE METHODS ====================
+
+    async def get_archives(self, session_id: str) -> list[dict]:
+        """List all archives for a session."""
+        if not self.legion_system:
+            return []
+        return await self.legion_system.archive_manager.get_archives(session_id)
+
+    async def get_archive_messages(
+        self, session_id: str, archive_id: str, offset: int = 0, limit: int | None = 50
+    ) -> dict:
+        """Read paginated messages from an archive."""
+        if not self.legion_system:
+            return {"messages": [], "total_count": 0, "offset": offset, "has_more": False}
+        return await self.legion_system.archive_manager.get_archive_messages(
+            session_id, archive_id, offset=offset, limit=limit
+        )
+
+    async def get_archive_state(self, session_id: str, archive_id: str) -> dict | None:
+        """Read state and metadata from an archive."""
+        if not self.legion_system:
+            return None
+        return await self.legion_system.archive_manager.get_archive_state(session_id, archive_id)
+
+    async def list_project_deleted_agents(self, project_id: str) -> list[dict]:
+        """List deleted agents with archives for a project."""
+        if not self.legion_system:
+            return []
+        return await self.legion_system.archive_manager.list_project_deleted_agents(project_id)
+
     async def get_session_messages(
         self,
         session_id: str,

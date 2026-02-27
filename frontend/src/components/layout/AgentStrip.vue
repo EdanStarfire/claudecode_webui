@@ -18,10 +18,31 @@
         @select="handleChipSelect"
       />
     </template>
+    <!-- Ghost chips for deleted agents -->
+    <template v-for="[agentId, ghost] in sessionStore.ghostAgents" :key="'ghost-' + agentId">
+      <AgentChip
+        :session="{ session_id: agentId, agent_id: agentId, name: ghost.name, role: ghost.role }"
+        :isGhost="true"
+        @select="handleGhostSelect(agentId, ghost)"
+        @dismiss="sessionStore.removeGhostAgent(agentId)"
+      />
+    </template>
+
     <button class="strip-add-btn" @click.stop="showCreateSessionModal" title="Add agent" aria-label="Add new agent">
       +
     </button>
-    <span v-if="topLevelSessions.length === 0" class="strip-empty">No agents yet</span>
+    <!-- Archive/recovery button -->
+    <button
+      class="strip-archive-btn"
+      @click.stop="showDeletedAgentsModal"
+      title="View deleted agents"
+      aria-label="View deleted agents with archives"
+    >
+      <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+        <path d="M8 0a8 8 0 1 0 0 16A8 8 0 0 0 8 0zm0 14.5A6.5 6.5 0 1 1 8 1.5a6.5 6.5 0 0 1 0 13zM8.5 4H7v5l4.25 2.55.75-1.23L8.5 8.25V4z"/>
+      </svg>
+    </button>
+    <span v-if="topLevelSessions.length === 0 && sessionStore.ghostAgents.size === 0" class="strip-empty">No agents yet</span>
   </div>
   <div v-else class="agent-strip agent-strip-empty" :class="{ 'theme-red': uiStore.isRedBackground }">
     <span class="strip-empty">Select a project above</span>
@@ -157,6 +178,19 @@ function showCreateSessionModal() {
     uiStore.showModal('create-minion', { project })
   }
 }
+
+function showDeletedAgentsModal() {
+  const project = browsingProject.value
+  if (project) {
+    uiStore.showModal('deleted-agents', { project })
+  }
+}
+
+function handleGhostSelect(agentId, ghost) {
+  if (ghost.latestArchiveId) {
+    router.push(`/archive/agent/${agentId}/${ghost.latestArchiveId}`)
+  }
+}
 </script>
 
 <style scoped>
@@ -233,6 +267,27 @@ function showCreateSessionModal() {
   border-color: #3b82f6;
   color: #3b82f6;
   background: #eff6ff;
+}
+
+.strip-archive-btn {
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  border: 1px solid #e2e8f0;
+  background: transparent;
+  color: #94a3b8;
+  cursor: pointer;
+  transition: all 0.15s;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.strip-archive-btn:hover {
+  border-color: #94a3b8;
+  color: #64748b;
+  background: #f1f5f9;
 }
 
 .agent-strip.theme-red {

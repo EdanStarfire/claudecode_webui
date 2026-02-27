@@ -8,8 +8,33 @@
       <div class="overview-info">
         <div class="overview-name">{{ session.name || 'Agent' }}</div>
         <div class="overview-role" v-if="session.role">{{ session.role }}</div>
-        <span class="overview-status-badge" :class="statusClass" role="status" :aria-label="`Agent status: ${statusLabel}`">{{ statusLabel }}</span>
+        <span v-if="isArchiveMode" class="overview-status-badge status-archived" role="status" aria-label="Archived">ARCHIVED</span>
+        <span v-else class="overview-status-badge" :class="statusClass" role="status" :aria-label="`Agent status: ${statusLabel}`">{{ statusLabel }}</span>
       </div>
+    </div>
+
+    <!-- Archive Navigation (when viewing archive) -->
+    <div v-if="isArchiveMode" class="archive-nav">
+      <button
+        class="btn-overview"
+        :disabled="!hasPrevArchive"
+        @click="goToPrevArchive"
+        title="Previous archive"
+      >
+        Prev
+      </button>
+      <span class="archive-nav-label">{{ archiveIndex + 1 }} / {{ archives.length }}</span>
+      <button
+        class="btn-overview"
+        :disabled="!hasNextArchive"
+        @click="goToNextArchive"
+        title="Next archive"
+      >
+        Next
+      </button>
+      <button class="btn-overview btn-overview-primary" @click="jumpToActive" title="Jump to active session">
+        Jump to Active
+      </button>
     </div>
 
     <!-- Stats Grid -->
@@ -32,8 +57,27 @@
       </div>
     </div>
 
-    <!-- Action Buttons -->
-    <div class="overview-actions">
+    <!-- Archived Versions Section -->
+    <div v-if="!isArchiveMode && archives.length > 0" class="archive-section">
+      <button class="archive-section-btn" @click="toggleArchiveList">
+        Archived Versions ({{ archives.length }})
+        <span class="archive-chevron" :class="{ expanded: showArchiveList }">&#9656;</span>
+      </button>
+      <div v-if="showArchiveList" class="archive-list">
+        <div
+          v-for="archive in archives"
+          :key="archive.archive_id"
+          class="archive-list-item"
+          @click="openArchive(archive)"
+        >
+          <span class="archive-item-reason">{{ archive.reason || 'snapshot' }}</span>
+          <span class="archive-item-count">{{ archive.messages_count }} msgs</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Action Buttons (hidden in archive mode) -->
+    <div v-if="!isArchiveMode" class="overview-actions">
       <button class="btn-overview" @click="showInfo" title="View session details" aria-label="View session details">
         Info
       </button>
@@ -51,14 +95,20 @@
 </template>
 
 <script setup>
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { useSessionStore } from '@/stores/session'
 import { useMessageStore } from '@/stores/message'
 import { useUIStore } from '@/stores/ui'
 
+const route = useRoute()
+const router = useRouter()
 const sessionStore = useSessionStore()
 const messageStore = useMessageStore()
 const uiStore = useUIStore()
+
+const archives = ref([])
+const showArchiveList = ref(false)
 
 const now = ref(Date.now())
 let interval = null
@@ -162,6 +212,69 @@ const uptime = computed(() => {
   if (hours < 24) return `${hours}h ${mins % 60}m`
   return `${Math.floor(hours / 24)}d ${hours % 24}h`
 })
+
+const isArchiveMode = computed(() => !!route.params.archiveId)
+const currentArchiveId = computed(() => route.params.archiveId)
+
+const archiveIndex = computed(() => {
+  if (!currentArchiveId.value) return -1
+  return archives.value.findIndex(a => a.archive_id === currentArchiveId.value)
+})
+
+const hasPrevArchive = computed(() => archiveIndex.value > 0)
+const hasNextArchive = computed(() => archiveIndex.value < archives.value.length - 1)
+
+async function fetchArchives() {
+  const id = sessionStore.currentSessionId
+  if (!id) return
+  const sess = sessionStore.getSession(id)
+  const pid = sess?.project_id
+  if (!pid) return
+
+  try {
+    const response = await fetch(`/api/projects/${pid}/archives/${id}`)
+    if (response.ok) {
+      const data = await response.json()
+      archives.value = data.archives || []
+    }
+  } catch {
+    archives.value = []
+  }
+}
+
+watch(() => sessionStore.currentSessionId, () => {
+  archives.value = []
+  showArchiveList.value = false
+  fetchArchives()
+}, { immediate: true })
+
+function toggleArchiveList() {
+  showArchiveList.value = !showArchiveList.value
+}
+
+function openArchive(archive) {
+  const sid = sessionStore.currentSessionId
+  router.push(`/session/${sid}/archive/${archive.archive_id}`)
+}
+
+function goToPrevArchive() {
+  if (!hasPrevArchive.value) return
+  const prev = archives.value[archiveIndex.value - 1]
+  const sid = route.params.sessionId || route.params.agentId
+  router.push(`/session/${sid}/archive/${prev.archive_id}`)
+}
+
+function goToNextArchive() {
+  if (!hasNextArchive.value) return
+  const next = archives.value[archiveIndex.value + 1]
+  const sid = route.params.sessionId || route.params.agentId
+  router.push(`/session/${sid}/archive/${next.archive_id}`)
+}
+
+function jumpToActive() {
+  const sid = route.params.sessionId || route.params.agentId
+  router.push(`/session/${sid}`)
+}
 
 function editSession() {
   if (session.value) {
@@ -312,6 +425,102 @@ function showInfo() {
 .btn-overview:hover {
   background: #f1f5f9;
   border-color: #cbd5e1;
+}
+
+.btn-overview:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.btn-overview-primary {
+  background: #eff6ff;
+  border-color: #3b82f6;
+  color: #1d4ed8;
+}
+
+.status-archived { background: #fef3cd; color: #664d03; }
+
+/* Archive Navigation */
+.archive-nav {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.archive-nav-label {
+  font-size: 11px;
+  color: #64748b;
+  flex: 1;
+  text-align: center;
+}
+
+/* Archive Section */
+.archive-section {
+  margin-bottom: 10px;
+}
+
+.archive-section-btn {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  background: #f8fafc;
+  color: #475569;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.archive-section-btn:hover {
+  background: #f1f5f9;
+}
+
+.archive-chevron {
+  margin-left: auto;
+  font-size: 10px;
+  transition: transform 0.15s;
+}
+
+.archive-chevron.expanded {
+  transform: rotate(90deg);
+}
+
+.archive-list {
+  margin-top: 4px;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.archive-list-item {
+  display: flex;
+  justify-content: space-between;
+  padding: 6px 10px;
+  font-size: 11px;
+  cursor: pointer;
+  border-bottom: 1px solid #f1f5f9;
+  transition: background 0.1s;
+}
+
+.archive-list-item:last-child {
+  border-bottom: none;
+}
+
+.archive-list-item:hover {
+  background: #eff6ff;
+}
+
+.archive-item-reason {
+  color: #475569;
+  text-transform: capitalize;
+}
+
+.archive-item-count {
+  color: #94a3b8;
 }
 
 </style>
