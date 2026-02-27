@@ -7,9 +7,11 @@ into a unified system for managing Claude Code sessions.
 
 import asyncio
 import gc
+import json
 import logging
 import os
 import re
+import shutil
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -1436,6 +1438,9 @@ class SessionCoordinator:
                 await self.session_manager.update_claude_code_session_id(session_id, None)
                 coord_logger.info(f"Cleared Claude Code session ID for {session_id}")
 
+            # Archive session data before clearing (Issue #579)
+            await self._archive_session_for_reset(session_id)
+
             # Clear message history
             storage = self._storage_managers.get(session_id)
             if not storage:
@@ -1469,6 +1474,73 @@ class SessionCoordinator:
 
         except Exception as e:
             logger.error(f"Failed to reset session {session_id}: {e}")
+            return False
+
+    async def _archive_session_for_reset(self, session_id: str) -> bool:
+        """Archive session data before a reset so it can be reviewed later.
+
+        Copies messages.jsonl, state.json, and resources/ into
+        data/archives/minions/{session_id}/{timestamp}/ and writes a
+        disposal_metadata.json with reason="reset".
+
+        Returns True on success, False on failure (logged, never raised).
+        """
+        try:
+            session_info = await self.session_manager.get_session_info(session_id)
+            session_dir = self.session_manager.sessions_dir / session_id
+            timestamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
+            archive_dir = (
+                self.session_manager.data_dir / "archives" / "minions" / session_id / timestamp
+            )
+            archive_dir.mkdir(parents=True, exist_ok=True)
+
+            # Copy messages.jsonl
+            messages_file = session_dir / "messages.jsonl"
+            if messages_file.exists():
+                shutil.copy2(messages_file, archive_dir / "messages.jsonl")
+
+            # Copy state.json
+            state_file = session_dir / "state.json"
+            if state_file.exists():
+                shutil.copy2(state_file, archive_dir / "state.json")
+
+            # Copy resources/ directory
+            resources_dir = session_dir / "resources"
+            if resources_dir.exists() and resources_dir.is_dir():
+                shutil.copytree(resources_dir, archive_dir / "resources")
+
+            # Determine project/legion ID for metadata
+            project_id = ""
+            if session_info:
+                for proj in await self.project_manager.list_projects():
+                    if session_id in proj.session_ids:
+                        project_id = proj.project_id
+                        break
+
+            # Write disposal_metadata.json
+            metadata = {
+                "disposed_at": datetime.now(UTC).timestamp(),
+                "reason": "reset",
+                "parent_overseer_id": None,
+                "parent_overseer_name": None,
+                "legion_id": project_id,
+                "final_state": "reset",
+                "minion_id": session_id,
+                "minion_name": session_info.name if session_info else "",
+                "minion_role": None,
+                "overseer_level": 0,
+                "child_minion_ids": [],
+                "descendants_count": 0,
+                "metadata": {},
+            }
+            metadata_path = archive_dir / "disposal_metadata.json"
+            metadata_path.write_text(json.dumps(metadata, indent=2))
+
+            coord_logger.info(f"Archived session {session_id} to {archive_dir}")
+            return True
+
+        except Exception as e:
+            coord_logger.warning(f"Archive before reset failed for {session_id}: {e}")
             return False
 
     async def get_session_info(self, session_id: str) -> dict[str, Any] | None:
