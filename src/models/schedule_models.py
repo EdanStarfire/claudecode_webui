@@ -27,11 +27,11 @@ class Schedule:
     """
     schedule_id: str
     legion_id: str
-    minion_id: str
-    minion_name: str
     name: str
     cron_expression: str
     prompt: str
+    minion_id: str | None = None  # None for ephemeral schedules (issue #578)
+    minion_name: str | None = None  # None for ephemeral schedules (issue #578)
     status: ScheduleStatus = ScheduleStatus.ACTIVE
     reset_session: bool = False
     max_retries: int = 3
@@ -43,10 +43,13 @@ class Schedule:
     last_status: str | None = None
     execution_count: int = 0
     failure_count: int = 0
+    # Ephemeral session support (issue #578)
+    session_config: dict | None = None  # Stored session configuration for ephemeral schedules
+    current_ephemeral_session_id: str | None = None  # Currently running ephemeral session
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization."""
-        return {
+        data = {
             "schedule_id": self.schedule_id,
             "legion_id": self.legion_id,
             "minion_id": self.minion_id,
@@ -66,6 +69,12 @@ class Schedule:
             "execution_count": self.execution_count,
             "failure_count": self.failure_count,
         }
+        # Ephemeral fields (issue #578) - only include when set
+        if self.session_config is not None:
+            data["session_config"] = self.session_config
+        if self.current_ephemeral_session_id is not None:
+            data["current_ephemeral_session_id"] = self.current_ephemeral_session_id
+        return data
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "Schedule":
@@ -73,6 +82,9 @@ class Schedule:
         data = data.copy()
         data["status"] = ScheduleStatus(data["status"])
         data.setdefault("reset_session", False)
+        # Ephemeral fields (issue #578) - default to None if missing
+        data.setdefault("session_config", None)
+        data.setdefault("current_ephemeral_session_id", None)
         return cls(**data)
 
 

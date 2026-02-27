@@ -129,6 +129,9 @@ class SessionInfo:
     thinking_budget_tokens: int | None = None  # Token budget when thinking_mode="enabled" (min 1024)
     effort: str | None = None  # "low", "medium", "high", "max", or None (SDK default)
 
+    # Ephemeral session support (issue #578)
+    is_ephemeral: bool = False  # True for temporary sessions created by ephemeral schedules
+
     def __post_init__(self):
         if self.allowed_tools is None:
             self.allowed_tools = ["bash", "edit", "read"]

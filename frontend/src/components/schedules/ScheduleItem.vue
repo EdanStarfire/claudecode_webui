@@ -21,12 +21,21 @@
           @blur="saveName"
         />
       </template>
-      <span class="status-badge" :class="schedule.status">{{ schedule.status }}</span>
+      <div class="header-badges">
+        <span v-if="isEphemeral" class="type-badge ephemeral" title="Ephemeral — creates a temporary session each run">Ephemeral</span>
+        <span v-if="schedule.current_ephemeral_session_id" class="type-badge running" title="Ephemeral session currently running">Running</span>
+        <span class="status-badge" :class="schedule.status">{{ schedule.status }}</span>
+      </div>
     </div>
 
-    <!-- Agent association -->
+    <!-- Agent association (permanent) or ephemeral indicator -->
     <div class="schedule-agent">
-      <span class="agent-badge">{{ schedule.minion_name || 'Unknown agent' }}</span>
+      <template v-if="!isEphemeral">
+        <span class="agent-badge">{{ schedule.minion_name || 'Unknown agent' }}</span>
+      </template>
+      <template v-else>
+        <span class="agent-badge ephemeral">Temporary session</span>
+      </template>
     </div>
 
     <!-- Cron + next run -->
@@ -111,6 +120,88 @@
       </div>
     </div>
 
+    <!-- Session Config viewer/editor (ephemeral only, issue #578) -->
+    <div v-if="isEphemeral" class="prompt-section">
+      <div class="prompt-toggle" role="button" :aria-expanded="showConfig" aria-label="Toggle session config" @click.stop="showConfig = !showConfig">
+        <span class="prompt-label">Session Config</span>
+        <span class="prompt-arrow">{{ showConfig ? '▾' : '▸' }}</span>
+      </div>
+      <div v-if="showConfig" class="prompt-body">
+        <template v-if="!editingConfig">
+          <div class="config-display">
+            <div v-if="schedule.session_config.working_directory" class="config-row">
+              <span class="config-key">Directory:</span>
+              <span class="config-val">{{ schedule.session_config.working_directory }}</span>
+            </div>
+            <div v-if="schedule.session_config.model" class="config-row">
+              <span class="config-key">Model:</span>
+              <span class="config-val">{{ schedule.session_config.model }}</span>
+            </div>
+            <div v-if="schedule.session_config.permission_mode" class="config-row">
+              <span class="config-key">Permissions:</span>
+              <span class="config-val">{{ schedule.session_config.permission_mode }}</span>
+            </div>
+            <div v-if="schedule.session_config.system_prompt" class="config-row">
+              <span class="config-key">System Prompt:</span>
+              <span class="config-val truncated">{{ schedule.session_config.system_prompt }}</span>
+            </div>
+            <div v-if="schedule.session_config.sandbox_enabled" class="config-row">
+              <span class="config-key">Sandbox:</span>
+              <span class="config-val">Enabled</span>
+            </div>
+            <div v-if="schedule.session_config.thinking_mode" class="config-row">
+              <span class="config-key">Thinking:</span>
+              <span class="config-val">{{ schedule.session_config.thinking_mode }}</span>
+            </div>
+            <div v-if="schedule.session_config.effort" class="config-row">
+              <span class="config-key">Effort:</span>
+              <span class="config-val">{{ schedule.session_config.effort }}</span>
+            </div>
+          </div>
+          <button
+            v-if="schedule.status !== 'cancelled'"
+            class="ctrl-btn edit-prompt"
+            @click.stop="startEditConfig"
+          >Edit Config</button>
+        </template>
+        <template v-else>
+          <div class="config-edit-form">
+            <div class="config-edit-row">
+              <label>Directory</label>
+              <input v-model="editConfig.working_directory" type="text" />
+            </div>
+            <div class="config-edit-row">
+              <label>Model</label>
+              <select v-model="editConfig.model">
+                <option value="">Default</option>
+                <option value="sonnet">Sonnet</option>
+                <option value="opus">Opus</option>
+                <option value="haiku">Haiku</option>
+              </select>
+            </div>
+            <div class="config-edit-row">
+              <label>Permissions</label>
+              <select v-model="editConfig.permission_mode">
+                <option value="acceptEdits">Accept Edits</option>
+                <option value="default">Default</option>
+                <option value="bypassPermissions">Bypass</option>
+              </select>
+            </div>
+            <div class="config-edit-row">
+              <label>System Prompt</label>
+              <textarea v-model="editConfig.system_prompt" rows="2"></textarea>
+            </div>
+          </div>
+          <div class="prompt-edit-controls">
+            <button class="ctrl-btn save" @click.stop="saveConfig" :disabled="saving">
+              {{ saving ? 'Saving...' : 'Save' }}
+            </button>
+            <button class="ctrl-btn" @click.stop="cancelEditConfig">Cancel</button>
+          </div>
+        </template>
+      </div>
+    </div>
+
     <!-- Controls -->
     <div class="schedule-controls">
       <button
@@ -170,6 +261,7 @@ const scheduleStore = useScheduleStore()
 const expanded = ref(false)
 const history = ref([])
 const showPrompt = ref(false)
+const showConfig = ref(false)
 const editingPrompt = ref(false)
 const editPromptText = ref('')
 const saving = ref(false)
@@ -180,6 +272,10 @@ const nameInput = ref(null)
 const editingCron = ref(false)
 const editCronText = ref('')
 const cronInput = ref(null)
+const editingConfig = ref(false)
+const editConfig = ref({})
+
+const isEphemeral = computed(() => !!props.schedule.session_config)
 
 const cronDescription = computed(() => {
   try {
@@ -375,6 +471,38 @@ async function savePrompt() {
   }
 }
 
+function startEditConfig() {
+  editConfig.value = { ...props.schedule.session_config }
+  editingConfig.value = true
+}
+
+function cancelEditConfig() {
+  editingConfig.value = false
+  editConfig.value = {}
+}
+
+async function saveConfig() {
+  saving.value = true
+  try {
+    // Clean up empty string values
+    const cfg = { ...editConfig.value }
+    for (const key of Object.keys(cfg)) {
+      if (cfg[key] === '') cfg[key] = null
+    }
+    await scheduleStore.updateSchedule(
+      props.legionId,
+      props.schedule.schedule_id,
+      { session_config: cfg }
+    )
+    editingConfig.value = false
+    editConfig.value = {}
+  } catch (e) {
+    console.error('Failed to update session config:', e)
+  } finally {
+    saving.value = false
+  }
+}
+
 async function toggleHistory() {
   expanded.value = !expanded.value
   if (expanded.value && history.value.length === 0) {
@@ -412,6 +540,12 @@ async function toggleHistory() {
   justify-content: space-between;
   align-items: center;
   margin-bottom: 4px;
+}
+
+.header-badges {
+  display: flex;
+  gap: 4px;
+  align-items: center;
 }
 
 .schedule-name {
@@ -477,6 +611,29 @@ async function toggleHistory() {
   color: #dc2626;
 }
 
+.type-badge {
+  font-size: 9px;
+  padding: 1px 5px;
+  border-radius: 8px;
+  font-weight: 600;
+}
+
+.type-badge.ephemeral {
+  background: #dbeafe;
+  color: #1e40af;
+}
+
+.type-badge.running {
+  background: #dcfce7;
+  color: #166534;
+  animation: pulse 2s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
 .status-badge {
   font-size: 10px;
   padding: 1px 6px;
@@ -510,6 +667,11 @@ async function toggleHistory() {
   background: #ede9fe;
   color: #6d28d9;
   font-weight: 500;
+}
+
+.agent-badge.ephemeral {
+  background: #dbeafe;
+  color: #1e40af;
 }
 
 .schedule-meta {
@@ -647,6 +809,68 @@ async function toggleHistory() {
 .ctrl-btn.save {
   border-color: #86efac;
   color: #166534;
+}
+
+.config-display {
+  margin-bottom: 4px;
+}
+
+.config-row {
+  display: flex;
+  gap: 6px;
+  padding: 2px 0;
+  font-size: 11px;
+}
+
+.config-key {
+  color: #64748b;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.config-val {
+  color: #334155;
+  word-break: break-all;
+}
+
+.config-val.truncated {
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.config-edit-form {
+  margin-bottom: 4px;
+}
+
+.config-edit-row {
+  margin-bottom: 6px;
+}
+
+.config-edit-row label {
+  display: block;
+  font-size: 10px;
+  font-weight: 600;
+  color: #64748b;
+  margin-bottom: 2px;
+}
+
+.config-edit-row input,
+.config-edit-row select,
+.config-edit-row textarea {
+  width: 100%;
+  font-size: 11px;
+  padding: 4px 6px;
+  border: 1px solid #e2e8f0;
+  border-radius: 4px;
+  color: #334155;
+  box-sizing: border-box;
+}
+
+.config-edit-row textarea {
+  resize: vertical;
+  font-family: inherit;
 }
 
 .schedule-controls {

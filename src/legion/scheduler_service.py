@@ -94,22 +94,28 @@ class SchedulerService:
     async def create_schedule(
         self,
         legion_id: str,
-        minion_id: str,
-        minion_name: str,
         name: str,
         cron_expression: str,
         prompt: str,
+        minion_id: str | None = None,
+        minion_name: str | None = None,
         reset_session: bool = False,
         max_retries: int = 3,
         timeout_seconds: int = 3600,
+        session_config: dict | None = None,
     ) -> Schedule:
         """Create a new schedule.
 
+        Either minion_id (permanent) or session_config (ephemeral) must be provided.
+
         Raises:
-            ValueError: If cron expression is invalid.
+            ValueError: If cron expression is invalid or neither mode specified.
         """
         if not validate_cron_expression(cron_expression):
             raise ValueError(f"Invalid cron expression: {cron_expression}")
+
+        if not minion_id and not session_config:
+            raise ValueError("Either minion_id (permanent) or session_config (ephemeral) is required")
 
         schedule = Schedule(
             schedule_id=str(uuid.uuid4()),
@@ -124,14 +130,18 @@ class SchedulerService:
             max_retries=max_retries,
             timeout_seconds=timeout_seconds,
             next_run=get_next_run(cron_expression),
+            session_config=session_config,
         )
 
         self._schedules[schedule.schedule_id] = schedule
         await self._persist_schedules(legion_id)
         await self._broadcast_schedule_event(legion_id, schedule)
+
+        mode = "ephemeral" if session_config else "permanent"
+        target = minion_id or "ephemeral"
         legion_logger.info(
             f"Schedule created: {schedule.schedule_id} '{name}' "
-            f"for minion {minion_id} in legion {legion_id}"
+            f"({mode}) for {target} in legion {legion_id}"
         )
         return schedule
 
@@ -171,7 +181,7 @@ class SchedulerService:
             if not validate_cron_expression(fields["cron_expression"]):
                 raise ValueError(f"Invalid cron expression: {fields['cron_expression']}")
 
-        allowed = {"name", "cron_expression", "prompt", "max_retries", "timeout_seconds"}
+        allowed = {"name", "cron_expression", "prompt", "max_retries", "timeout_seconds", "session_config"}
         for key, value in fields.items():
             if key in allowed:
                 setattr(schedule, key, value)
@@ -327,7 +337,14 @@ class SchedulerService:
     # ── Execution ──
 
     async def _fire_schedule(self, schedule: Schedule, now: float):
-        """Fire a due schedule by enqueuing the prompt via SessionCoordinator."""
+        """Fire a due schedule — delegates to permanent or ephemeral path."""
+        if schedule.session_config is not None:
+            await self._fire_ephemeral_schedule(schedule, now)
+        else:
+            await self._fire_permanent_schedule(schedule, now)
+
+    async def _fire_permanent_schedule(self, schedule: Schedule, now: float):
+        """Fire a permanent schedule by enqueuing the prompt to an existing minion."""
         legion_logger.info(
             f"Firing schedule {schedule.schedule_id} '{schedule.name}' "
             f"for minion {schedule.minion_id}"
@@ -412,6 +429,207 @@ class SchedulerService:
         await self._append_execution(schedule.legion_id, execution)
         await self._broadcast_schedule_event(schedule.legion_id, schedule)
 
+    async def _fire_ephemeral_schedule(self, schedule: Schedule, now: float):
+        """Fire an ephemeral schedule by creating a temporary session."""
+        # Guard: skip if previous ephemeral run is still active
+        if schedule.current_ephemeral_session_id:
+            legion_logger.info(
+                f"Skipping ephemeral schedule {schedule.schedule_id} '{schedule.name}' — "
+                f"previous run {schedule.current_ephemeral_session_id} still active"
+            )
+            # Still advance next_run to avoid firing every tick
+            schedule.next_run = get_next_run(schedule.cron_expression)
+            schedule.updated_at = datetime.now(UTC).timestamp()
+            await self._persist_schedules(schedule.legion_id)
+            return
+
+        legion_logger.info(
+            f"Firing ephemeral schedule {schedule.schedule_id} '{schedule.name}'"
+        )
+
+        execution = ScheduleExecution(
+            execution_id=str(uuid.uuid4()),
+            schedule_id=schedule.schedule_id,
+            scheduled_time=schedule.next_run or now,
+            actual_time=now,
+            status="queued",
+            minion_state="creating",
+        )
+
+        try:
+            # Create ephemeral session from stored config
+            session_id = await self.system.session_coordinator.create_ephemeral_session(
+                session_config=schedule.session_config,
+                schedule_name=schedule.name,
+                project_id=schedule.legion_id,
+            )
+
+            # Start the session
+            await self.system.session_coordinator.start_session(session_id)
+
+            # Enqueue the scheduled prompt
+            formatted_prompt = (
+                f"**[Scheduled Task: {schedule.name}]**\n\n"
+                f"{schedule.prompt}"
+            )
+            result = await self.system.session_coordinator.enqueue_message(
+                session_id=session_id,
+                content=formatted_prompt,
+                reset_session=False,  # Fresh session, no need to reset
+                metadata={
+                    "source": "cron",
+                    "schedule_id": schedule.schedule_id,
+                    "schedule_name": schedule.name,
+                    "trigger_time": now,
+                    "ephemeral": True,
+                },
+            )
+
+            execution.queue_id = result.get("queue_id")
+            execution.minion_state = "active"
+            execution.status = "queued"
+
+            # Track the running ephemeral session
+            schedule.current_ephemeral_session_id = session_id
+            schedule.last_run = now
+            schedule.last_status = "queued"
+            schedule.execution_count += 1
+            schedule.failure_count = 0
+
+            # Launch monitoring task
+            asyncio.create_task(
+                self._monitor_ephemeral_session(schedule.schedule_id, session_id)
+            )
+
+            legion_logger.info(
+                f"Ephemeral schedule {schedule.schedule_id} fired — "
+                f"session {session_id} created and started"
+            )
+
+        except Exception as e:
+            legion_logger.error(
+                f"Ephemeral schedule {schedule.schedule_id} fire failed: {e}"
+            )
+            execution.status = "failed"
+            execution.error_message = str(e)
+            schedule.last_status = "failed"
+            schedule.failure_count += 1
+
+            if schedule.failure_count <= schedule.max_retries:
+                await self._handle_retry(schedule)
+                execution.status = "retry"
+            else:
+                legion_logger.warning(
+                    f"Ephemeral schedule {schedule.schedule_id} exceeded max retries, pausing"
+                )
+                schedule.status = ScheduleStatus.PAUSED
+                schedule.next_run = None
+
+        # Calculate next run
+        if schedule.status == ScheduleStatus.ACTIVE and schedule.failure_count == 0:
+            schedule.next_run = get_next_run(schedule.cron_expression)
+
+        schedule.updated_at = datetime.now(UTC).timestamp()
+        await self._persist_schedules(schedule.legion_id)
+        await self._append_execution(schedule.legion_id, execution)
+        await self._broadcast_schedule_event(schedule.legion_id, schedule)
+
+    async def _monitor_ephemeral_session(self, schedule_id: str, session_id: str):
+        """Monitor an ephemeral session and clean up when it finishes processing.
+
+        Polls every 10 seconds. Once idle for a grace period, terminates and archives.
+        """
+        poll_interval = 10  # seconds
+        idle_grace = 10  # seconds of idle before cleanup
+        idle_since = None
+
+        legion_logger.info(
+            f"Monitoring ephemeral session {session_id} for schedule {schedule_id}"
+        )
+
+        try:
+            while True:
+                await asyncio.sleep(poll_interval)
+
+                schedule = self._schedules.get(schedule_id)
+                if not schedule:
+                    legion_logger.warning(
+                        f"Schedule {schedule_id} no longer exists — cleaning up ephemeral session"
+                    )
+                    break
+
+                # Check session state
+                session_info = (
+                    await self.system.session_coordinator.session_manager.get_session_info(
+                        session_id
+                    )
+                )
+                if not session_info:
+                    legion_logger.warning(
+                        f"Ephemeral session {session_id} no longer exists — clearing tracking"
+                    )
+                    break
+
+                # If session terminated or errored, clean up
+                if session_info.state.value in ("terminated", "error"):
+                    legion_logger.info(
+                        f"Ephemeral session {session_id} is {session_info.state.value} — cleaning up"
+                    )
+                    break
+
+                # Check if session is idle (not processing and queue empty)
+                is_idle = not session_info.is_processing
+
+                # Also check queue for pending items
+                try:
+                    session_dir = await self.system.session_coordinator.session_manager.get_session_directory(session_id)
+                    if session_dir:
+                        queue_items = await self.system.session_coordinator.queue_manager.get_queue(
+                            session_id, session_dir
+                        )
+                        pending_items = [
+                            q for q in queue_items if q.status == "pending"
+                        ]
+                        if pending_items:
+                            is_idle = False
+                except Exception:
+                    pass  # If we can't check queue, use is_processing only
+
+                if is_idle:
+                    if idle_since is None:
+                        idle_since = asyncio.get_event_loop().time()
+                    elif asyncio.get_event_loop().time() - idle_since >= idle_grace:
+                        legion_logger.info(
+                            f"Ephemeral session {session_id} idle for {idle_grace}s — cleaning up"
+                        )
+                        break
+                else:
+                    idle_since = None
+
+        except asyncio.CancelledError:
+            legion_logger.info(f"Ephemeral monitor for {session_id} cancelled")
+            return
+        except Exception as e:
+            legion_logger.error(
+                f"Error monitoring ephemeral session {session_id}: {e}"
+            )
+
+        # Cleanup
+        try:
+            await self.system.session_coordinator.terminate_and_archive_ephemeral(session_id)
+        except Exception as e:
+            legion_logger.error(
+                f"Failed to clean up ephemeral session {session_id}: {e}"
+            )
+
+        # Clear tracking on the schedule
+        schedule = self._schedules.get(schedule_id)
+        if schedule:
+            schedule.current_ephemeral_session_id = None
+            schedule.updated_at = datetime.now(UTC).timestamp()
+            await self._persist_schedules(schedule.legion_id)
+            await self._broadcast_schedule_event(schedule.legion_id, schedule)
+
     async def _handle_retry(self, schedule: Schedule):
         """Apply exponential backoff for retry: 60s, 120s, 240s, ..."""
         backoff = 60 * (2 ** (schedule.failure_count - 1))
@@ -481,6 +699,63 @@ class SchedulerService:
             1 for s in self._schedules.values() if s.status == ScheduleStatus.ACTIVE
         )
         legion_logger.info(f"Loaded {total} schedules ({active} active) from all legions")
+
+        # Issue #578: Recover orphaned ephemeral sessions on startup
+        await self._recover_orphaned_ephemeral_sessions()
+
+    async def _recover_orphaned_ephemeral_sessions(self):
+        """On startup, clean up any ephemeral sessions left over from a previous run."""
+        recovered = 0
+        for schedule in list(self._schedules.values()):
+            if not schedule.current_ephemeral_session_id:
+                continue
+
+            session_id = schedule.current_ephemeral_session_id
+            session_info = (
+                await self.system.session_coordinator.session_manager.get_session_info(
+                    session_id
+                )
+            )
+
+            # If session doesn't exist or is already terminated/error, clear tracking
+            if not session_info or session_info.state.value in ("terminated", "error"):
+                legion_logger.info(
+                    f"Recovering orphaned ephemeral tracking: schedule {schedule.schedule_id} "
+                    f"had session {session_id} (state: {session_info.state.value if session_info else 'missing'})"
+                )
+                # Try to clean up the session data if it still exists
+                if session_info:
+                    try:
+                        await self.system.session_coordinator.terminate_and_archive_ephemeral(
+                            session_id
+                        )
+                    except Exception as e:
+                        legion_logger.error(
+                            f"Failed to clean up orphaned ephemeral session {session_id}: {e}"
+                        )
+
+                schedule.current_ephemeral_session_id = None
+                schedule.updated_at = datetime.now(UTC).timestamp()
+                recovered += 1
+            else:
+                # Session still exists and is active — restart monitoring
+                legion_logger.info(
+                    f"Re-monitoring orphaned ephemeral session {session_id} "
+                    f"for schedule {schedule.schedule_id}"
+                )
+                asyncio.create_task(
+                    self._monitor_ephemeral_session(schedule.schedule_id, session_id)
+                )
+
+        if recovered > 0:
+            # Persist all changes
+            affected_legions = {
+                s.legion_id for s in self._schedules.values()
+                if s.current_ephemeral_session_id is None
+            }
+            for legion_id in affected_legions:
+                await self._persist_schedules(legion_id)
+            legion_logger.info(f"Recovered {recovered} orphaned ephemeral session references")
 
     async def _append_execution(self, legion_id: str, execution: ScheduleExecution):
         """Append execution record to schedule_history.jsonl."""

@@ -209,23 +209,25 @@ class MinionCreateRequest(BaseModel):
 
 
 class ScheduleCreateRequest(BaseModel):
-    """Request to create a cron schedule (issue #495)."""
-    minion_id: str
+    """Request to create a cron schedule (issue #495, #578)."""
+    minion_id: str | None = None  # Optional for ephemeral schedules (issue #578)
     name: str
     cron_expression: str
     prompt: str
     reset_session: bool = False
     max_retries: int = 3
     timeout_seconds: int = 3600
+    session_config: dict | None = None  # Ephemeral session configuration (issue #578)
 
 
 class ScheduleUpdateRequest(BaseModel):
-    """Request to update a schedule (issue #495)."""
+    """Request to update a schedule (issue #495, #578)."""
     name: str | None = None
     cron_expression: str | None = None
     prompt: str | None = None
     max_retries: int | None = None
     timeout_seconds: int | None = None
+    session_config: dict | None = None  # Ephemeral session configuration (issue #578)
     sandbox_enabled: bool = False  # Enable OS-level sandboxing (issue #319)
     sandbox_config: dict | None = None  # Issue #458: sandbox configuration settings
     setting_sources: list[str] | None = None  # Issue #36: which settings files to load
@@ -2381,29 +2383,41 @@ class ClaudeWebUI:
 
         @self.app.post("/api/legions/{legion_id}/schedules")
         async def create_schedule(legion_id: str, request: ScheduleCreateRequest):
-            """Create a new schedule for a minion."""
+            """Create a new schedule (permanent or ephemeral)."""
             try:
                 project = await self.coordinator.project_manager.get_project(legion_id)
                 if not project:
                     raise HTTPException(status_code=404, detail="Project not found")
 
-                # Get minion name
-                session = await self.coordinator.session_manager.get_session_info(
-                    request.minion_id
-                )
-                if not session:
-                    raise HTTPException(status_code=404, detail="Minion not found")
+                # Determine mode: permanent (minion_id) or ephemeral (session_config)
+                minion_id = request.minion_id
+                minion_name = None
+
+                if minion_id:
+                    # Permanent mode: resolve minion name
+                    session = await self.coordinator.session_manager.get_session_info(
+                        minion_id
+                    )
+                    if not session:
+                        raise HTTPException(status_code=404, detail="Minion not found")
+                    minion_name = session.name or minion_id[:8]
+                elif not request.session_config:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Either minion_id or session_config is required",
+                    )
 
                 schedule = await self.coordinator.legion_system.scheduler_service.create_schedule(
                     legion_id=legion_id,
-                    minion_id=request.minion_id,
-                    minion_name=session.name or request.minion_id[:8],
                     name=request.name,
                     cron_expression=request.cron_expression,
                     prompt=request.prompt,
+                    minion_id=minion_id,
+                    minion_name=minion_name,
                     reset_session=request.reset_session,
                     max_retries=request.max_retries,
                     timeout_seconds=request.timeout_seconds,
+                    session_config=request.session_config,
                 )
                 return {"schedule": schedule.to_dict()}
             except HTTPException:

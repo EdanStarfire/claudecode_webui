@@ -7,8 +7,32 @@
       </div>
 
       <form @submit.prevent="submit">
-        <!-- Minion selector -->
+        <!-- Session Mode Toggle (issue #578) -->
         <div class="form-group">
+          <label>Session Mode</label>
+          <div class="mode-toggle">
+            <button
+              type="button"
+              class="mode-btn"
+              :class="{ active: mode === 'permanent' }"
+              @click="mode = 'permanent'"
+            >Permanent Session</button>
+            <button
+              type="button"
+              class="mode-btn"
+              :class="{ active: mode === 'ephemeral' }"
+              @click="mode = 'ephemeral'"
+            >Ephemeral (Temporary)</button>
+          </div>
+          <div class="mode-hint">
+            {{ mode === 'permanent'
+              ? 'Schedule fires into an existing agent session.'
+              : 'A temporary session is created each time, then cleaned up after completion.' }}
+          </div>
+        </div>
+
+        <!-- Permanent mode: Minion selector -->
+        <div v-if="mode === 'permanent'" class="form-group">
           <label>Agent</label>
           <select v-model="form.minion_id" required>
             <option value="" disabled>Select an agent...</option>
@@ -19,6 +43,98 @@
             >{{ session.name || session.session_id.substring(0, 8) }}</option>
           </select>
         </div>
+
+        <!-- Ephemeral mode: config source -->
+        <template v-if="mode === 'ephemeral'">
+          <div class="form-group">
+            <label>Configuration Source</label>
+            <div class="mode-toggle">
+              <button
+                type="button"
+                class="mode-btn small"
+                :class="{ active: configSource === 'capture' }"
+                @click="configSource = 'capture'"
+              >Capture from Session</button>
+              <button
+                type="button"
+                class="mode-btn small"
+                :class="{ active: configSource === 'manual' }"
+                @click="configSource = 'manual'"
+              >Configure Manually</button>
+            </div>
+          </div>
+
+          <!-- Capture from existing session -->
+          <div v-if="configSource === 'capture'" class="form-group">
+            <label>Source Session</label>
+            <div class="capture-row">
+              <select v-model="captureSessionId">
+                <option value="" disabled>Select a session...</option>
+                <option
+                  v-for="session in projectSessions"
+                  :key="session.session_id"
+                  :value="session.session_id"
+                >{{ session.name || session.session_id.substring(0, 8) }}</option>
+              </select>
+              <button
+                type="button"
+                class="btn-capture"
+                :disabled="!captureSessionId"
+                @click="captureConfig"
+              >Capture</button>
+            </div>
+            <div v-if="configCaptured" class="capture-success">
+              Configuration captured from "{{ capturedSessionName }}"
+            </div>
+          </div>
+
+          <!-- Manual configuration -->
+          <div v-if="configSource === 'manual' || configCaptured" class="config-section">
+            <div class="form-group">
+              <label>Working Directory</label>
+              <input v-model="sessionConfig.working_directory" type="text" placeholder="/path/to/project" :required="mode === 'ephemeral'" />
+            </div>
+            <div class="form-row">
+              <div class="form-group half">
+                <label>Model</label>
+                <select v-model="sessionConfig.model">
+                  <option value="">Default</option>
+                  <option value="sonnet">Sonnet</option>
+                  <option value="opus">Opus</option>
+                  <option value="haiku">Haiku</option>
+                </select>
+              </div>
+              <div class="form-group half">
+                <label>Permission Mode</label>
+                <select v-model="sessionConfig.permission_mode">
+                  <option value="acceptEdits">Accept Edits</option>
+                  <option value="default">Default</option>
+                  <option value="bypassPermissions">Bypass</option>
+                </select>
+              </div>
+            </div>
+            <div class="form-group">
+              <label>System Prompt</label>
+              <textarea
+                v-model="sessionConfig.system_prompt"
+                rows="2"
+                placeholder="Optional custom system prompt..."
+              ></textarea>
+            </div>
+            <div class="form-group toggle-group">
+              <label class="toggle-label">
+                <input type="checkbox" v-model="sessionConfig.override_system_prompt" />
+                <span>Override system prompt (skip Claude Code preset)</span>
+              </label>
+            </div>
+            <div class="form-group toggle-group">
+              <label class="toggle-label">
+                <input type="checkbox" v-model="sessionConfig.sandbox_enabled" />
+                <span>Enable sandbox</span>
+              </label>
+            </div>
+          </div>
+        </template>
 
         <!-- Name -->
         <div class="form-group">
@@ -57,8 +173,8 @@
           ></textarea>
         </div>
 
-        <!-- Reset session toggle -->
-        <div class="form-group toggle-group">
+        <!-- Reset session toggle (only for permanent mode) -->
+        <div v-if="mode === 'permanent'" class="form-group toggle-group">
           <label class="toggle-label">
             <input type="checkbox" v-model="form.reset_session" />
             <span>Reset session before each execution</span>
@@ -72,7 +188,7 @@
         <!-- Actions -->
         <div class="modal-actions">
           <button type="button" class="btn-secondary" @click="$emit('close')">Cancel</button>
-          <button type="submit" class="btn-primary" :disabled="submitting || cronError">
+          <button type="submit" class="btn-primary" :disabled="submitting || cronError || !isValid">
             {{ submitting ? 'Creating...' : 'Create Schedule' }}
           </button>
         </div>
@@ -98,6 +214,11 @@ const scheduleStore = useScheduleStore()
 
 const submitting = ref(false)
 const error = ref('')
+const mode = ref('permanent')  // 'permanent' | 'ephemeral'
+const configSource = ref('capture')  // 'capture' | 'manual'
+const captureSessionId = ref('')
+const configCaptured = ref(false)
+const capturedSessionName = ref('')
 
 const form = ref({
   minion_id: '',
@@ -105,6 +226,15 @@ const form = ref({
   cron_expression: '',
   prompt: '',
   reset_session: false,
+})
+
+const sessionConfig = ref({
+  working_directory: '',
+  model: '',
+  permission_mode: 'acceptEdits',
+  system_prompt: '',
+  override_system_prompt: false,
+  sandbox_enabled: false,
 })
 
 const projectSessions = computed(() => {
@@ -130,23 +260,88 @@ const cronError = computed(() => {
   }
 })
 
+const isValid = computed(() => {
+  if (mode.value === 'permanent') {
+    return !!form.value.minion_id
+  }
+  // Ephemeral: need working directory
+  return !!sessionConfig.value.working_directory
+})
+
 function setCron(expr) {
   form.value.cron_expression = expr
 }
 
+function captureConfig() {
+  const session = projectSessions.value.find(s => s.session_id === captureSessionId.value)
+  if (!session) return
+
+  sessionConfig.value = {
+    working_directory: session.working_directory || '',
+    model: session.model || '',
+    permission_mode: session.current_permission_mode || 'acceptEdits',
+    system_prompt: session.system_prompt || '',
+    override_system_prompt: session.override_system_prompt || false,
+    sandbox_enabled: session.sandbox_enabled || false,
+  }
+  // Include allowed/disallowed tools if present
+  if (session.allowed_tools) {
+    sessionConfig.value.allowed_tools = [...session.allowed_tools]
+  }
+  if (session.disallowed_tools) {
+    sessionConfig.value.disallowed_tools = [...session.disallowed_tools]
+  }
+  if (session.setting_sources) {
+    sessionConfig.value.setting_sources = [...session.setting_sources]
+  }
+  if (session.docker_enabled) {
+    sessionConfig.value.docker_enabled = true
+    sessionConfig.value.docker_image = session.docker_image || null
+    sessionConfig.value.docker_extra_mounts = session.docker_extra_mounts || null
+  }
+  if (session.thinking_mode) {
+    sessionConfig.value.thinking_mode = session.thinking_mode
+    sessionConfig.value.thinking_budget_tokens = session.thinking_budget_tokens || null
+  }
+  if (session.effort) {
+    sessionConfig.value.effort = session.effort
+  }
+
+  configCaptured.value = true
+  capturedSessionName.value = session.name || session.session_id.substring(0, 8)
+}
+
+function buildSessionConfigPayload() {
+  const cfg = { ...sessionConfig.value }
+  // Remove empty string values — let server use defaults
+  for (const key of Object.keys(cfg)) {
+    if (cfg[key] === '' || cfg[key] === null) {
+      delete cfg[key]
+    }
+  }
+  return cfg
+}
+
 async function submit() {
-  if (submitting.value || cronError.value) return
+  if (submitting.value || cronError.value || !isValid.value) return
   error.value = ''
   submitting.value = true
 
   try {
-    const schedule = await scheduleStore.createSchedule(props.legionId, {
-      minion_id: form.value.minion_id,
+    const payload = {
       name: form.value.name,
       cron_expression: form.value.cron_expression,
       prompt: form.value.prompt,
       reset_session: form.value.reset_session,
-    })
+    }
+
+    if (mode.value === 'permanent') {
+      payload.minion_id = form.value.minion_id
+    } else {
+      payload.session_config = buildSessionConfigPayload()
+    }
+
+    const schedule = await scheduleStore.createSchedule(props.legionId, payload)
     emit('created', schedule)
   } catch (e) {
     error.value = e.message || 'Failed to create schedule'
@@ -170,7 +365,7 @@ async function submit() {
 .modal-content {
   background: #fff;
   border-radius: 12px;
-  width: 440px;
+  width: 480px;
   max-width: 95vw;
   max-height: 85vh;
   overflow-y: auto;
@@ -232,6 +427,110 @@ form {
 .form-group textarea {
   resize: vertical;
   font-family: inherit;
+}
+
+.form-row {
+  display: flex;
+  gap: 10px;
+}
+
+.form-group.half {
+  flex: 1;
+}
+
+.mode-toggle {
+  display: flex;
+  gap: 0;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.mode-btn {
+  flex: 1;
+  padding: 7px 12px;
+  font-size: 12px;
+  border: none;
+  background: #f8fafc;
+  color: #64748b;
+  cursor: pointer;
+  font-weight: 500;
+  transition: all 0.15s;
+}
+
+.mode-btn:not(:last-child) {
+  border-right: 1px solid #e2e8f0;
+}
+
+.mode-btn.active {
+  background: #6366f1;
+  color: #fff;
+}
+
+.mode-btn.small {
+  font-size: 11px;
+  padding: 5px 10px;
+}
+
+.mode-hint {
+  font-size: 11px;
+  color: #94a3b8;
+  margin-top: 4px;
+}
+
+.capture-row {
+  display: flex;
+  gap: 6px;
+}
+
+.capture-row select {
+  flex: 1;
+}
+
+.btn-capture {
+  padding: 8px 14px;
+  font-size: 12px;
+  border: 1px solid #6366f1;
+  border-radius: 6px;
+  background: #eef2ff;
+  color: #4338ca;
+  cursor: pointer;
+  white-space: nowrap;
+  font-weight: 500;
+}
+
+.btn-capture:hover:not(:disabled) {
+  background: #e0e7ff;
+}
+
+.btn-capture:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.capture-success {
+  font-size: 11px;
+  color: #16a34a;
+  margin-top: 4px;
+  padding: 4px 6px;
+  background: #f0fdf4;
+  border-radius: 4px;
+}
+
+.config-section {
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 12px;
+  margin-bottom: 14px;
+  background: #f8fafc;
+}
+
+.config-section .form-group {
+  margin-bottom: 10px;
+}
+
+.config-section .form-group:last-child {
+  margin-bottom: 0;
 }
 
 .cron-preview {

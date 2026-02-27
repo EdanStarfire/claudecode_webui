@@ -990,6 +990,97 @@ class SessionCoordinator:
             logger.error(f"Failed to terminate integrated session {session_id}: {e}")
             return False
 
+    # =========================================================================
+    # Ephemeral Session Lifecycle (Issue #578)
+    # =========================================================================
+
+    async def create_ephemeral_session(
+        self,
+        session_config: dict,
+        schedule_name: str,
+        project_id: str,
+        permission_callback=None,
+    ) -> str:
+        """Create a temporary session from a schedule's stored config.
+
+        Args:
+            session_config: Dict with session configuration fields (model, permission_mode, etc.)
+            schedule_name: Name of the schedule (used in session name)
+            project_id: Legion/project ID to add the session to
+
+        Returns:
+            The new session_id
+        """
+        import uuid
+        session_id = str(uuid.uuid4())
+
+        await self.create_session(
+            session_id=session_id,
+            project_id=project_id,
+            permission_mode=session_config.get("permission_mode", "acceptEdits"),
+            system_prompt=session_config.get("system_prompt"),
+            override_system_prompt=session_config.get("override_system_prompt", False),
+            allowed_tools=session_config.get("allowed_tools"),
+            disallowed_tools=session_config.get("disallowed_tools"),
+            model=session_config.get("model"),
+            name=f"[Scheduled] {schedule_name}",
+            permission_callback=permission_callback,
+            working_directory=session_config.get("working_directory"),
+            sandbox_enabled=session_config.get("sandbox_enabled", False),
+            setting_sources=session_config.get("setting_sources"),
+            docker_enabled=session_config.get("docker_enabled", False),
+            docker_image=session_config.get("docker_image"),
+            docker_extra_mounts=session_config.get("docker_extra_mounts"),
+            thinking_mode=session_config.get("thinking_mode"),
+            thinking_budget_tokens=session_config.get("thinking_budget_tokens"),
+            effort=session_config.get("effort"),
+        )
+
+        # Mark session as ephemeral
+        session_info = await self.session_manager.get_session_info(session_id)
+        if session_info:
+            session_info.is_ephemeral = True
+            session_info.updated_at = datetime.now(UTC)
+            await self.session_manager._persist_session_state(session_id)
+
+        coord_logger.info(
+            f"Created ephemeral session {session_id} for schedule '{schedule_name}' "
+            f"in project {project_id}"
+        )
+        return session_id
+
+    async def terminate_and_archive_ephemeral(self, session_id: str) -> bool:
+        """Terminate an ephemeral session and archive its data, then remove it.
+
+        Args:
+            session_id: The ephemeral session to clean up
+
+        Returns:
+            True if cleanup succeeded
+        """
+        try:
+            # Terminate the session first
+            await self.terminate_session(session_id)
+
+            # Archive session data
+            if self.legion_system and self.legion_system.archive_manager:
+                try:
+                    await self.legion_system.archive_manager.archive_minion(
+                        session_id, reason="ephemeral_schedule_complete"
+                    )
+                    coord_logger.info(f"Archived ephemeral session {session_id}")
+                except Exception as e:
+                    coord_logger.error(f"Failed to archive ephemeral session {session_id}: {e}")
+
+            # Remove session from project and delete data
+            result = await self.delete_session(session_id, archive_reason="ephemeral_complete")
+            coord_logger.info(f"Cleaned up ephemeral session {session_id}")
+            return result.get("success", False)
+
+        except Exception as e:
+            logger.error(f"Failed to clean up ephemeral session {session_id}: {e}")
+            return False
+
     async def update_session_name(self, session_id: str, name: str) -> bool:
         """Update session name"""
         try:

@@ -186,16 +186,17 @@ export const useScheduleStore = defineStore('schedule', () => {
     const counts = new Map()
 
     for (const s of schedules) {
-      if (s.status === 'active') {
+      // Skip ephemeral schedules (no minion_id) for minion badge counts
+      if (s.status === 'active' && s.minion_id) {
         counts.set(s.minion_id, (counts.get(s.minion_id) || 0) + 1)
       }
     }
 
     // Include both current and previous minion IDs to clear stale entries
-    const allMinionIds = new Set(schedules.map(s => s.minion_id))
+    const allMinionIds = new Set(schedules.map(s => s.minion_id).filter(Boolean))
     if (previousMinionIds) {
       for (const mid of previousMinionIds) {
-        allMinionIds.add(mid)
+        if (mid) allMinionIds.add(mid)
       }
     }
 
