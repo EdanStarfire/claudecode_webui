@@ -29,6 +29,12 @@ export const useSessionStore = defineStore('session', () => {
   // Deleting sessions tracking
   const deletingSessions = ref(new Set())
 
+  // Ghost agents (deleted agents opened for archive browsing, transient)
+  const ghostAgents = ref(new Map())
+
+  // Last viewed archive per session (so chip clicks restore archive view)
+  const lastViewedArchive = ref(new Map())
+
   // Session selection state (prevents concurrent selectSession calls)
   const selectingSession = ref(false)
   let pendingSelectAbort = null  // AbortController for current selection
@@ -462,6 +468,16 @@ export const useSessionStore = defineStore('session', () => {
     }
   }
 
+  // ========== GHOST AGENT ACTIONS ==========
+
+  function addGhostAgent(agentId, agentData) {
+    ghostAgents.value.set(agentId, agentData)
+  }
+
+  function removeGhostAgent(agentId) {
+    ghostAgents.value.delete(agentId)
+  }
+
   // ========== RETURN ==========
   return {
     // State
@@ -471,6 +487,8 @@ export const useSessionStore = defineStore('session', () => {
     attachmentCache,
     initData,
     deletingSessions,
+    ghostAgents,
+    lastViewedArchive,
 
     // Computed
     currentSession,
@@ -491,6 +509,8 @@ export const useSessionStore = defineStore('session', () => {
     pauseSession,
     terminateSession,
     getSession,
-    storeInitData
+    storeInitData,
+    addGhostAgent,
+    removeGhostAgent
   }
 })

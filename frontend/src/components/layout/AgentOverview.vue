@@ -8,8 +8,34 @@
       <div class="overview-info">
         <div class="overview-name">{{ session.name || 'Agent' }}</div>
         <div class="overview-role" v-if="session.role">{{ session.role }}</div>
-        <span class="overview-status-badge" :class="statusClass" role="status" :aria-label="`Agent status: ${statusLabel}`">{{ statusLabel }}</span>
+        <span v-if="isArchiveMode" class="overview-status-badge status-archived" role="status" aria-label="Archived">ARCHIVED</span>
+        <span v-else class="overview-status-badge" :class="statusClass" role="status" :aria-label="`Agent status: ${statusLabel}`">{{ statusLabel }}</span>
       </div>
+    </div>
+
+    <!-- Archive Navigation (always visible) -->
+    <div class="archive-nav">
+      <button
+        class="btn-overview"
+        :disabled="!hasPrevArchive"
+        @click="goToPrevArchive"
+        title="Previous archive"
+      >
+        Prev
+      </button>
+      <span v-if="isArchiveMode" class="archive-nav-label">{{ archiveIndex + 1 }} / {{ archives.length }}</span>
+      <span v-else class="archive-nav-label">{{ archives.length }} archive{{ archives.length !== 1 ? 's' : '' }}</span>
+      <button
+        class="btn-overview"
+        :disabled="!hasNextArchive"
+        @click="goToNextArchive"
+        title="Next archive"
+      >
+        Next
+      </button>
+      <button class="btn-overview btn-overview-primary" :disabled="isArchiveMode ? false : archives.length === 0" @click="isArchiveMode ? jumpToActive() : viewLatestArchive()" :title="isArchiveMode ? (isDeletedAgent ? 'Jump to latest archive' : 'Jump to active session') : 'View latest archive'">
+        {{ isArchiveMode ? (isDeletedAgent ? 'Latest' : 'Active') : 'View' }}
+      </button>
     </div>
 
     <!-- Stats Grid -->
@@ -32,8 +58,8 @@
       </div>
     </div>
 
-    <!-- Action Buttons -->
-    <div class="overview-actions">
+    <!-- Action Buttons (hidden in archive mode) -->
+    <div v-if="!isArchiveMode" class="overview-actions">
       <button class="btn-overview" @click="showInfo" title="View session details" aria-label="View session details">
         Info
       </button>
@@ -51,14 +77,19 @@
 </template>
 
 <script setup>
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { useSessionStore } from '@/stores/session'
 import { useMessageStore } from '@/stores/message'
 import { useUIStore } from '@/stores/ui'
 
+const route = useRoute()
+const router = useRouter()
 const sessionStore = useSessionStore()
 const messageStore = useMessageStore()
 const uiStore = useUIStore()
+
+const archives = ref([])
 
 const now = ref(Date.now())
 let interval = null
@@ -74,7 +105,14 @@ onUnmounted(() => {
 const session = computed(() => {
   const id = sessionStore.currentSessionId
   if (!id) return null
-  return sessionStore.getSession(id)
+  const sess = sessionStore.getSession(id)
+  if (sess) return sess
+  // Fall back to ghost agent data for deleted agents
+  const ghost = sessionStore.ghostAgents.get(id)
+  if (ghost) {
+    return { session_id: id, name: ghost.name, role: ghost.role, state: 'terminated' }
+  }
+  return null
 })
 
 const avatarLetter = computed(() => {
@@ -162,6 +200,99 @@ const uptime = computed(() => {
   if (hours < 24) return `${hours}h ${mins % 60}m`
   return `${Math.floor(hours / 24)}d ${hours % 24}h`
 })
+
+const isArchiveMode = computed(() => !!route.params.archiveId)
+const currentArchiveId = computed(() => route.params.archiveId)
+
+const archiveIndex = computed(() => {
+  if (!currentArchiveId.value) return -1
+  return archives.value.findIndex(a => a.archive_id === currentArchiveId.value)
+})
+
+const hasPrevArchive = computed(() => {
+  if (!isArchiveMode.value) return archives.value.length > 0
+  return archiveIndex.value > 0
+})
+const hasNextArchive = computed(() => {
+  if (!isArchiveMode.value) return false
+  return archiveIndex.value < archives.value.length - 1
+})
+
+async function fetchArchives() {
+  const id = sessionStore.currentSessionId
+  if (!id) return
+  const sess = sessionStore.getSession(id)
+  const ghost = sessionStore.ghostAgents.get(id)
+  const pid = sess?.project_id || ghost?.projectId
+  if (!pid) return
+
+  try {
+    const response = await fetch(`/api/projects/${pid}/archives/${id}`)
+    if (response.ok) {
+      const data = await response.json()
+      archives.value = data.archives || []
+    }
+  } catch {
+    archives.value = []
+  }
+}
+
+watch(
+  [() => sessionStore.currentSessionId, () => session.value?.project_id],
+  ([newId], [oldId]) => {
+    if (newId !== oldId) archives.value = []
+    fetchArchives()
+  },
+  { immediate: true }
+)
+
+const isDeletedAgent = computed(() => !!route.params.agentId || !!sessionStore.ghostAgents.get(sessionStore.currentSessionId))
+
+function archiveRoute(sid, archiveId) {
+  if (isDeletedAgent.value) {
+    return `/archive/agent/${sid}/${archiveId}`
+  }
+  return `/session/${sid}/archive/${archiveId}`
+}
+
+function viewLatestArchive() {
+  if (archives.value.length === 0) return
+  const latest = archives.value[archives.value.length - 1]
+  const sid = sessionStore.currentSessionId
+  router.push(archiveRoute(sid, latest.archive_id))
+}
+
+function goToPrevArchive() {
+  if (!hasPrevArchive.value) return
+  const sid = route.params.sessionId || route.params.agentId || sessionStore.currentSessionId
+  if (!isArchiveMode.value) {
+    // From active view, "Prev" enters the latest archive
+    const latest = archives.value[archives.value.length - 1]
+    router.push(archiveRoute(sid, latest.archive_id))
+    return
+  }
+  const prev = archives.value[archiveIndex.value - 1]
+  router.push(archiveRoute(sid, prev.archive_id))
+}
+
+function goToNextArchive() {
+  if (!hasNextArchive.value) return
+  const next = archives.value[archiveIndex.value + 1]
+  const sid = route.params.sessionId || route.params.agentId
+  router.push(archiveRoute(sid, next.archive_id))
+}
+
+function jumpToActive() {
+  const sid = route.params.sessionId || route.params.agentId
+  // For deleted agents (no active session), go to latest archive
+  const hasActiveSession = !!sessionStore.getSession(sid)
+  if (!hasActiveSession && archives.value.length > 0) {
+    const latest = archives.value[archives.value.length - 1]
+    router.push(archiveRoute(sid, latest.archive_id))
+    return
+  }
+  router.push(`/session/${sid}`)
+}
 
 function editSession() {
   if (session.value) {
@@ -313,5 +444,34 @@ function showInfo() {
   background: #f1f5f9;
   border-color: #cbd5e1;
 }
+
+.btn-overview:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.btn-overview-primary {
+  background: #eff6ff;
+  border-color: #3b82f6;
+  color: #1d4ed8;
+}
+
+.status-archived { background: #fef3cd; color: #664d03; }
+
+/* Archive Navigation */
+.archive-nav {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.archive-nav-label {
+  font-size: 11px;
+  color: #64748b;
+  flex: 1;
+  text-align: center;
+}
+
 
 </style>

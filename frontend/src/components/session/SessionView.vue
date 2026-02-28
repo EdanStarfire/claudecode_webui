@@ -12,25 +12,33 @@
       <p class="text-secondary">{{ loadingMessage }}</p>
     </div>
 
+    <!-- Archive Banner -->
+    <div v-if="isArchiveMode" class="archive-banner">
+      <span class="archive-badge">ARCHIVED</span>
+      <span class="archive-label">Read-only archived session</span>
+    </div>
+
     <!-- Messages Area -->
     <div class="d-flex flex-column flex-grow-1 overflow-hidden">
       <MessageList />
     </div>
 
     <!-- Input Area -->
-    <InputArea />
+    <InputArea :is-archived="isArchiveMode" />
 
     <!-- Session State Status Line (above status bar) -->
-    <SessionStateStatusLine v-if="currentSession" :session-id="props.sessionId" />
+    <SessionStateStatusLine v-if="currentSession && !isArchiveMode" :session-id="props.sessionId" />
 
     <!-- Session Status Bar (at bottom) -->
-    <SessionStatusBar v-if="currentSession" :session-id="props.sessionId" />
+    <SessionStatusBar v-if="currentSession && !isArchiveMode" :session-id="props.sessionId" />
   </div>
 </template>
 
 <script setup>
 import { computed, onMounted, onUnmounted, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { useSessionStore } from '@/stores/session'
+import { useMessageStore } from '@/stores/message'
 import { useUIStore } from '@/stores/ui'
 import SessionStateStatusLine from './SessionStateStatusLine.vue'
 import SessionStatusBar from '../statusbar/SessionStatusBar.vue'
@@ -41,19 +49,60 @@ const props = defineProps({
   sessionId: {
     type: String,
     required: true
+  },
+  archiveId: {
+    type: String,
+    default: null
+  },
+  isDeletedAgent: {
+    type: Boolean,
+    default: false
   }
 })
 
+const route = useRoute()
 const sessionStore = useSessionStore()
+const messageStore = useMessageStore()
 const uiStore = useUIStore()
 
 const currentSession = computed(() => sessionStore.currentSession)
 const isLoading = computed(() => uiStore.isLoading)
 const loadingMessage = computed(() => uiStore.loadingMessage)
 
+const isArchiveMode = computed(() => !!(props.archiveId || route.params.archiveId))
+const effectiveArchiveId = computed(() => props.archiveId || route.params.archiveId)
+
+async function loadArchiveMessages() {
+  const archiveId = effectiveArchiveId.value
+  if (!archiveId) return
+
+  // Find project ID for this session
+  const session = sessionStore.getSession(props.sessionId)
+  const ghost = sessionStore.ghostAgents.get(props.sessionId)
+  const pid = session?.project_id || ghost?.projectId
+  if (!pid) return
+
+  uiStore.showLoading('Loading archived session...')
+  try {
+    const response = await fetch(`/api/projects/${pid}/archives/${props.sessionId}/${archiveId}/messages?limit=1000&offset=0`)
+    if (response.ok) {
+      const data = await response.json()
+      messageStore.setArchiveMessages(props.sessionId, data.messages || [])
+    }
+  } catch (e) {
+    console.error('Failed to load archive messages:', e)
+  } finally {
+    uiStore.hideLoading()
+  }
+}
+
 onMounted(async () => {
-  // Select this session
-  if (props.sessionId !== sessionStore.currentSessionId) {
+  if (isArchiveMode.value) {
+    // Set currentSessionId so AgentOverview can display for deleted agents
+    sessionStore.currentSessionId = props.sessionId
+    sessionStore.lastViewedArchive.set(props.sessionId, effectiveArchiveId.value)
+    await loadArchiveMessages()
+  } else if (props.sessionId !== sessionStore.currentSessionId) {
     uiStore.showLoading('Loading session...')
     try {
       await sessionStore.selectSession(props.sessionId)
@@ -63,9 +112,28 @@ onMounted(async () => {
   }
 })
 
-// Watch for sessionId prop changes (e.g., when switching minions via sidebar)
-watch(() => props.sessionId, async (newSessionId, oldSessionId) => {
-  if (newSessionId !== oldSessionId && newSessionId !== sessionStore.currentSessionId) {
+watch([() => props.sessionId, () => effectiveArchiveId.value], async ([newSessionId, newArchiveId], [oldSessionId, oldArchiveId]) => {
+  if (newArchiveId) {
+    if (newSessionId !== oldSessionId || newArchiveId !== oldArchiveId) {
+      // Update currentSessionId so AgentOverview shows the correct agent
+      sessionStore.currentSessionId = newSessionId
+      sessionStore.lastViewedArchive.set(newSessionId, newArchiveId)
+      await loadArchiveMessages()
+    }
+  } else if (oldArchiveId && !newArchiveId) {
+    // Leaving archive mode via Active button → clear archive cache and messages
+    sessionStore.lastViewedArchive.delete(newSessionId)
+    messageStore.clearArchiveMessages(newSessionId)
+    // Force selectSession to run by clearing currentSessionId first
+    // (otherwise it bails out because the ID hasn't changed)
+    sessionStore.currentSessionId = null
+    uiStore.showLoading('Loading session...')
+    try {
+      await sessionStore.selectSession(newSessionId)
+    } finally {
+      uiStore.hideLoading()
+    }
+  } else if (newSessionId !== oldSessionId && newSessionId !== sessionStore.currentSessionId) {
     uiStore.showLoading('Loading session...')
     try {
       await sessionStore.selectSession(newSessionId)
@@ -76,7 +144,36 @@ watch(() => props.sessionId, async (newSessionId, oldSessionId) => {
 })
 
 onUnmounted(() => {
-  // Optionally disconnect session websocket on unmount
-  // (Keep it running for now so user can navigate back quickly)
+  if (isArchiveMode.value) {
+    messageStore.clearArchiveMessages(props.sessionId)
+  }
 })
 </script>
+
+<style scoped>
+.archive-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 16px;
+  background: #fef3cd;
+  border-bottom: 1px solid #ffc107;
+  flex-shrink: 0;
+}
+
+.archive-badge {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: #ffc107;
+  color: #664d03;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.archive-label {
+  font-size: 12px;
+  color: #664d03;
+}
+</style>

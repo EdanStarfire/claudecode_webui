@@ -902,6 +902,31 @@ export const useMessageStore = defineStore('message', () => {
     { deep: true }
   )
 
+  // ========== ARCHIVE SUPPORT (Issue #577) ==========
+
+  /**
+   * Set messages for an archived session view (bypasses normal message loading).
+   * Converts raw stored messages to the format expected by MessageList.
+   */
+  function setArchiveMessages(sessionId, rawMessages) {
+    const messages = rawMessages.map(msg => {
+      // Archive messages are in storage format - pass through as-is
+      // since MessageList already handles stored message format
+      return msg
+    })
+    messagesBySession.value.set(sessionId, messages)
+    // Clear tool calls for clean state
+    toolCallsBySession.value.set(sessionId, [])
+  }
+
+  /**
+   * Clear archive messages when leaving archive view.
+   */
+  function clearArchiveMessages(sessionId) {
+    messagesBySession.value.delete(sessionId)
+    toolCallsBySession.value.delete(sessionId)
+  }
+
   // ========== RETURN ==========
   return {
     // State
@@ -941,6 +966,10 @@ export const useMessageStore = defineStore('message', () => {
     backendToolStates: readonly(backendToolStates),
 
     // Launch timestamp tracking (Issue #473)
-    launchTimestampBySession: readonly(launchTimestampBySession)
+    launchTimestampBySession: readonly(launchTimestampBySession),
+
+    // Archive support (Issue #577)
+    setArchiveMessages,
+    clearArchiveMessages
   }
 })

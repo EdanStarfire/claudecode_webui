@@ -23,6 +23,22 @@ const routes = [
     props: true
   },
   {
+    path: '/session/:sessionId/archive/:archiveId',
+    name: 'session-archive',
+    component: SessionView,
+    props: true
+  },
+  {
+    path: '/archive/agent/:agentId/:archiveId',
+    name: 'agent-archive',
+    component: SessionView,
+    props: route => ({
+      sessionId: route.params.agentId,
+      archiveId: route.params.archiveId,
+      isDeletedAgent: true
+    })
+  },
+  {
     path: '/timeline/:legionId',
     name: 'timeline',
     component: TimelineView,

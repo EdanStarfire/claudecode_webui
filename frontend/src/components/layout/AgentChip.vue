@@ -4,7 +4,8 @@
     :class="{
       active: isActive,
       child: variant === 'child',
-      'parent-of-active': isParentOfActive
+      'parent-of-active': isParentOfActive,
+      ghost: isGhost
     }"
     role="button"
     :aria-label="`Select agent ${displayName}`"
@@ -16,12 +17,22 @@
     @touchcancel="onTouchCancel"
     :title="chipTooltip"
   >
-    <div class="ac-dot" :class="statusClass"></div>
+    <div v-if="!isGhost" class="ac-dot" :class="statusClass"></div>
+    <svg v-else class="ac-ghost-icon" width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+      <path d="M8 0a8 8 0 1 0 0 16A8 8 0 0 0 8 0zm0 14.5A6.5 6.5 0 1 1 8 1.5a6.5 6.5 0 0 1 0 13zM8.5 4H7v5l4.25 2.55.75-1.23L8.5 8.25V4z"/>
+    </svg>
     <div class="ac-info">
       <div class="ac-name">{{ displayName }}</div>
-      <div class="ac-status">{{ statusText }}</div>
+      <div class="ac-status">{{ isGhost ? 'Deleted' : statusText }}</div>
     </div>
-    <div v-if="alertType" class="ac-alert" :class="alertType" :aria-label="alertType === 'error' ? 'Error alert' : 'Permission required'">
+    <button
+      v-if="isGhost"
+      class="ac-dismiss"
+      @click.stop="$emit('dismiss', session.session_id || session.agent_id)"
+      title="Remove from strip"
+      aria-label="Dismiss ghost agent"
+    >&times;</button>
+    <div v-if="alertType && !isGhost" class="ac-alert" :class="alertType" :aria-label="alertType === 'error' ? 'Error alert' : 'Permission required'">
       {{ alertType === 'error' ? '!' : '?' }}
     </div>
     <div v-if="hasSchedules" class="ac-schedule-badge" title="Has active schedules" aria-label="Has active schedules">
@@ -51,10 +62,11 @@ const props = defineProps({
   session: { type: Object, required: true },
   isActive: { type: Boolean, default: false },
   isParentOfActive: { type: Boolean, default: false },
-  variant: { type: String, default: 'default' } // 'default' | 'child'
+  variant: { type: String, default: 'default' }, // 'default' | 'child'
+  isGhost: { type: Boolean, default: false }
 })
 
-const emit = defineEmits(['select', 'manage'])
+const emit = defineEmits(['select', 'manage', 'dismiss'])
 
 const sessionStore = useSessionStore()
 const scheduleStore = useScheduleStore()
@@ -116,7 +128,7 @@ function handleClick() {
     fired.value = false
     return
   }
-  emit('select', props.session.session_id)
+  emit('select', props.session.session_id || props.session.agent_id)
 }
 </script>
 
@@ -247,6 +259,39 @@ function handleClick() {
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+/* Ghost chip variant */
+.agent-chip.ghost {
+  opacity: 0.6;
+  border-style: dashed;
+  border-color: #cbd5e1;
+  background: #f8fafc;
+}
+
+.agent-chip.ghost:hover {
+  opacity: 0.8;
+  border-color: #94a3b8;
+}
+
+.ac-ghost-icon {
+  color: #94a3b8;
+  flex-shrink: 0;
+}
+
+.ac-dismiss {
+  background: none;
+  border: none;
+  color: #94a3b8;
+  font-size: 16px;
+  line-height: 1;
+  padding: 0 2px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.ac-dismiss:hover {
+  color: #ef4444;
 }
 
 @keyframes pulse-error {

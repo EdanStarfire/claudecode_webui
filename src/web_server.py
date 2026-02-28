@@ -831,6 +831,75 @@ class ClaudeWebUI:
                 logger.error(f"Failed to reorder project sessions: {e}")
                 raise HTTPException(status_code=500, detail=str(e))
 
+        # ==================== ARCHIVE ENDPOINTS ====================
+
+        @self.app.get("/api/projects/{project_id}/archives/{session_id}")
+        async def list_session_archives(project_id: str, session_id: str):
+            """List all archives for a session within a project."""
+            try:
+                project = await self.coordinator.project_manager.get_project(project_id)
+                if not project:
+                    raise HTTPException(status_code=404, detail="Project not found")
+                archives = await self.coordinator.get_archives(session_id)
+                return {"archives": archives}
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"Failed to list archives: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @self.app.get("/api/projects/{project_id}/archives/{session_id}/{archive_id}/messages")
+        async def get_archive_messages(
+            project_id: str, session_id: str, archive_id: str,
+            limit: int | None = 50, offset: int = 0
+        ):
+            """Get paginated messages from an archive."""
+            try:
+                project = await self.coordinator.project_manager.get_project(project_id)
+                if not project:
+                    raise HTTPException(status_code=404, detail="Project not found")
+                result = await self.coordinator.get_archive_messages(
+                    session_id, archive_id, offset=offset, limit=limit
+                )
+                return result
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"Failed to get archive messages: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @self.app.get("/api/projects/{project_id}/archives/{session_id}/{archive_id}/state")
+        async def get_archive_state(project_id: str, session_id: str, archive_id: str):
+            """Get archive state and disposal metadata."""
+            try:
+                project = await self.coordinator.project_manager.get_project(project_id)
+                if not project:
+                    raise HTTPException(status_code=404, detail="Project not found")
+                result = await self.coordinator.get_archive_state(session_id, archive_id)
+                if result is None:
+                    raise HTTPException(status_code=404, detail="Archive not found")
+                return result
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"Failed to get archive state: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @self.app.get("/api/projects/{project_id}/deleted-agents")
+        async def list_deleted_agents(project_id: str):
+            """List deleted agents with archives for a project."""
+            try:
+                project = await self.coordinator.project_manager.get_project(project_id)
+                if not project:
+                    raise HTTPException(status_code=404, detail="Project not found")
+                agents = await self.coordinator.list_project_deleted_agents(project_id)
+                return {"agents": agents}
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"Failed to list deleted agents: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
         # ==================== SESSION ENDPOINTS ====================
 
         @self.app.post("/api/sessions")

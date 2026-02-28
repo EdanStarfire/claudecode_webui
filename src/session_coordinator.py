@@ -1527,7 +1527,7 @@ class SessionCoordinator:
                 "final_state": "reset",
                 "minion_id": session_id,
                 "minion_name": session_info.name if session_info else "",
-                "minion_role": None,
+                "minion_role": session_info.role if session_info else None,
                 "overseer_level": 0,
                 "child_minion_ids": [],
                 "descendants_count": 0,
@@ -1767,6 +1767,62 @@ class SessionCoordinator:
         except Exception as e:
             coord_logger.warning(f"Failed to convert StoredMessage to WebSocket format: {e}")
             return None
+
+    # ==================== ARCHIVE METHODS ====================
+
+    async def get_archives(self, session_id: str) -> list[dict]:
+        """List all archives for a session."""
+        if not self.legion_system:
+            return []
+        return await self.legion_system.archive_manager.get_archives(session_id)
+
+    async def get_archive_messages(
+        self, session_id: str, archive_id: str, offset: int = 0, limit: int | None = 50
+    ) -> dict:
+        """Read paginated messages from an archive, converted to websocket format."""
+        if not self.legion_system:
+            return {"messages": [], "total_count": 0, "offset": offset, "has_more": False}
+        result = await self.legion_system.archive_manager.get_archive_messages(
+            session_id, archive_id, offset=offset, limit=limit
+        )
+        # Convert raw stored messages to frontend-expected websocket format
+        converted = []
+        for raw_msg in result.get("messages", []):
+            try:
+                ws_data = None
+                if raw_msg.get("_type"):
+                    ws_data = self._convert_stored_message_to_websocket(raw_msg)
+                elif isinstance(raw_msg.get("metadata"), dict) and raw_msg.get("type"):
+                    ws_data = {
+                        "type": raw_msg["type"],
+                        "content": raw_msg.get("content", ""),
+                        "timestamp": raw_msg.get("timestamp"),
+                        "metadata": raw_msg.get("metadata", {}),
+                        "session_id": raw_msg.get("session_id"),
+                    }
+                    if raw_msg.get("metadata", {}).get("subtype"):
+                        ws_data["subtype"] = raw_msg["metadata"]["subtype"]
+                else:
+                    processed = self.message_processor.process_message(raw_msg, source="storage")
+                    ws_data = self.message_processor.prepare_for_websocket(processed)
+                if ws_data:
+                    converted.append(ws_data)
+            except Exception:
+                pass
+        result["messages"] = converted
+        return result
+
+    async def get_archive_state(self, session_id: str, archive_id: str) -> dict | None:
+        """Read state and metadata from an archive."""
+        if not self.legion_system:
+            return None
+        return await self.legion_system.archive_manager.get_archive_state(session_id, archive_id)
+
+    async def list_project_deleted_agents(self, project_id: str) -> list[dict]:
+        """List deleted agents with archives for a project."""
+        if not self.legion_system:
+            return []
+        return await self.legion_system.archive_manager.list_project_deleted_agents(project_id)
 
     async def get_session_messages(
         self,

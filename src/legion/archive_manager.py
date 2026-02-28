@@ -193,3 +193,232 @@ class ArchiveManager:
                 })
 
         return archives
+
+    async def get_archives(self, session_id: str) -> list[dict]:
+        """
+        List all archives for a session with summary info.
+
+        Args:
+            session_id: Session ID to list archives for
+
+        Returns:
+            List of archive summaries with archive_id, timestamp, reason, messages_count
+        """
+        archives = []
+        session_archive_dir = self.archives_dir / session_id
+
+        if not session_archive_dir.exists():
+            return archives
+
+        for archive_dir in sorted(session_archive_dir.iterdir()):
+            if not archive_dir.is_dir():
+                continue
+
+            archive_id = archive_dir.name
+            reason = None
+            disposed_at = None
+
+            # Read disposal metadata
+            metadata_file = archive_dir / "disposal_metadata.json"
+            if metadata_file.exists():
+                try:
+                    with open(metadata_file, encoding='utf-8') as f:
+                        metadata = json.load(f)
+                    reason = metadata.get("reason")
+                    disposed_at = metadata.get("disposed_at")
+                except (json.JSONDecodeError, OSError):
+                    pass
+
+            # Count messages
+            messages_count = 0
+            messages_file = archive_dir / "messages.jsonl"
+            if messages_file.exists():
+                try:
+                    with open(messages_file, encoding='utf-8') as f:
+                        for line in f:
+                            if line.strip():
+                                messages_count += 1
+                except OSError:
+                    pass
+
+            archives.append({
+                "archive_id": archive_id,
+                "timestamp": archive_id,
+                "reason": reason,
+                "disposed_at": disposed_at,
+                "messages_count": messages_count,
+            })
+
+        return archives
+
+    async def get_archive_messages(
+        self, session_id: str, archive_id: str, offset: int = 0, limit: int | None = 50
+    ) -> dict:
+        """
+        Read paginated messages from an archive's messages.jsonl.
+
+        Args:
+            session_id: Session ID
+            archive_id: Archive timestamp directory name
+            offset: Start index
+            limit: Max messages to return (None for all)
+
+        Returns:
+            Dict with messages list, total count, offset, has_more
+        """
+        archive_dir = self.archives_dir / session_id / archive_id
+        messages_file = archive_dir / "messages.jsonl"
+
+        if not messages_file.exists():
+            return {"messages": [], "total_count": 0, "offset": offset, "has_more": False}
+
+        messages = []
+        total_count = 0
+
+        try:
+            with open(messages_file, encoding='utf-8') as f:
+                lines = f.readlines()
+
+            total_count = sum(1 for line in lines if line.strip())
+            start_idx = offset
+            end_idx = start_idx + limit if limit else None
+            selected_lines = lines[start_idx:end_idx]
+
+            for line in selected_lines:
+                line = line.strip()
+                if line:
+                    try:
+                        messages.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        pass
+        except OSError as e:
+            archive_logger.error(f"Failed to read archive messages: {e}")
+
+        return {
+            "messages": messages,
+            "total_count": total_count,
+            "offset": offset,
+            "has_more": (offset + len(messages)) < total_count,
+        }
+
+    async def get_archive_state(self, session_id: str, archive_id: str) -> dict | None:
+        """
+        Read state.json and disposal_metadata.json from an archive.
+
+        Args:
+            session_id: Session ID
+            archive_id: Archive timestamp directory name
+
+        Returns:
+            Dict with state and metadata, or None if archive not found
+        """
+        archive_dir = self.archives_dir / session_id / archive_id
+        if not archive_dir.exists():
+            return None
+
+        result = {"state": None, "metadata": None}
+
+        state_file = archive_dir / "state.json"
+        if state_file.exists():
+            try:
+                with open(state_file, encoding='utf-8') as f:
+                    result["state"] = json.load(f)
+            except (json.JSONDecodeError, OSError):
+                pass
+
+        metadata_file = archive_dir / "disposal_metadata.json"
+        if metadata_file.exists():
+            try:
+                with open(metadata_file, encoding='utf-8') as f:
+                    result["metadata"] = json.load(f)
+            except (json.JSONDecodeError, OSError):
+                pass
+
+        return result
+
+    async def list_project_deleted_agents(self, project_id: str) -> list[dict]:
+        """
+        List deleted agents for a project by scanning archives.
+
+        Filters for agents whose session no longer exists in active sessions
+        (excluding reset snapshots whose sessions still exist).
+
+        Args:
+            project_id: Project/legion ID
+
+        Returns:
+            List of deleted agent summaries with agent_id, name, role,
+            archive_count, last_archived_at
+        """
+        if not self.archives_dir.exists():
+            return []
+
+        # Get active session IDs to exclude reset snapshots
+        active_session_ids = set()
+        sessions_dir = self.system.session_coordinator.session_manager.sessions_dir
+        if sessions_dir.exists():
+            for session_dir in sessions_dir.iterdir():
+                if session_dir.is_dir():
+                    active_session_ids.add(session_dir.name)
+
+        agents: dict[str, dict] = {}
+
+        for minion_dir in self.archives_dir.iterdir():
+            if not minion_dir.is_dir():
+                continue
+
+            session_id = minion_dir.name
+
+            # Skip sessions that still exist (these are reset snapshots)
+            if session_id in active_session_ids:
+                continue
+
+            # Scan archive timestamps for this minion
+            for archive_dir in sorted(minion_dir.iterdir()):
+                if not archive_dir.is_dir():
+                    continue
+
+                metadata_file = archive_dir / "disposal_metadata.json"
+                if not metadata_file.exists():
+                    continue
+
+                try:
+                    with open(metadata_file, encoding='utf-8') as f:
+                        metadata = json.load(f)
+                except (json.JSONDecodeError, OSError):
+                    continue
+
+                # Filter by project/legion ID
+                if metadata.get("legion_id") != project_id:
+                    continue
+
+                if session_id not in agents:
+                    agents[session_id] = {
+                        "agent_id": session_id,
+                        "name": metadata.get("minion_name", "unknown"),
+                        "role": metadata.get("minion_role"),
+                        "archive_count": 0,
+                        "last_archived_at": None,
+                    }
+
+                agents[session_id]["archive_count"] += 1
+                # Update role if not yet set (e.g. first archive was a reset with None role)
+                if not agents[session_id]["role"] and metadata.get("minion_role"):
+                    agents[session_id]["role"] = metadata["minion_role"]
+                # Fallback: read role from state.json if still missing
+                if not agents[session_id]["role"]:
+                    state_file = archive_dir / "state.json"
+                    if state_file.exists():
+                        try:
+                            with open(state_file, encoding='utf-8') as sf:
+                                state = json.load(sf)
+                            if state.get("role"):
+                                agents[session_id]["role"] = state["role"]
+                        except (json.JSONDecodeError, OSError):
+                            pass
+                disposed_at = metadata.get("disposed_at")
+                current_last = agents[session_id]["last_archived_at"]
+                if disposed_at and (current_last is None or disposed_at > current_last):
+                    agents[session_id]["last_archived_at"] = disposed_at
+
+        return list(agents.values())

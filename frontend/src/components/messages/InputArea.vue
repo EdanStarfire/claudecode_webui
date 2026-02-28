@@ -1,8 +1,13 @@
 <template>
   <div class="border-top" :class="uiStore.isRedBackground ? 'theme-red-panel' : 'bg-light'">
+    <!-- Archived session banner (replaces all input controls) -->
+    <div v-if="isArchived" class="archived-input-banner">
+      <span class="archived-input-text">Archived session — read only</span>
+    </div>
+
     <!-- Connection warning banner -->
     <div
-      v-if="!isConnected"
+      v-else-if="!isConnected"
       class="alert alert-danger mb-0 py-2 px-3 small d-flex align-items-center gap-2"
       role="alert"
     >
@@ -12,15 +17,16 @@
       <span>Cannot send messages while reconnecting...</span>
     </div>
 
-    <!-- Attachment list -->
+    <!-- Attachment list (hidden in archive mode) -->
     <AttachmentList
+      v-if="!isArchived"
       :attachments="attachments"
       @remove="removeAttachment"
     />
 
     <!-- Drop zone overlay -->
     <div
-      v-if="isDragging"
+      v-if="isDragging && !isArchived"
       class="drop-zone-overlay"
       @dragover.prevent
       @dragleave="isDragging = false"
@@ -33,6 +39,7 @@
     </div>
 
     <div
+      v-if="!isArchived"
       class="d-flex gap-2 align-items-end px-2 py-1 input-container"
       @dragover.prevent="isDragging = true"
       @dragenter.prevent="isDragging = true"
@@ -124,6 +131,10 @@ import { useResourceStore } from '@/stores/resource'
 import { useUIStore } from '@/stores/ui'
 import AttachmentList from './AttachmentList.vue'
 import SlashCommandDropdown from './SlashCommandDropdown.vue'
+
+const props = defineProps({
+  isArchived: { type: Boolean, default: false }
+})
 
 const sessionStore = useSessionStore()
 const wsStore = useWebSocketStore()
@@ -656,5 +667,18 @@ textarea {
 
 .drop-icon {
   font-size: 2rem;
+}
+
+.archived-input-banner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 10px 16px;
+}
+
+.archived-input-text {
+  font-size: 12px;
+  color: #94a3b8;
+  font-style: italic;
 }
 </style>
