@@ -36,6 +36,10 @@ class MinionTemplate:
     docker_enabled: bool = False
     docker_image: str | None = None
     docker_extra_mounts: list[str] | None = None
+    # Thinking and effort configuration (issue #580)
+    thinking_mode: str | None = None
+    thinking_budget_tokens: int | None = None
+    effort: str | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
 

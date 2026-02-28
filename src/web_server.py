@@ -253,6 +253,10 @@ class TemplateCreateRequest(BaseModel):
     docker_enabled: bool = False
     docker_image: str | None = None
     docker_extra_mounts: list[str] | None = None
+    # Thinking and effort configuration (issue #580)
+    thinking_mode: str | None = None
+    thinking_budget_tokens: int | None = None
+    effort: str | None = None
 
 
 class TemplateUpdateRequest(BaseModel):
@@ -273,6 +277,10 @@ class TemplateUpdateRequest(BaseModel):
     docker_enabled: bool | None = None
     docker_image: str | None = None
     docker_extra_mounts: list[str] | None = None
+    # Thinking and effort configuration (issue #580)
+    thinking_mode: str | None = None
+    thinking_budget_tokens: int | None = None
+    effort: str | None = None
 
 
 class UIWebSocketManager:
@@ -2926,6 +2934,10 @@ class ClaudeWebUI:
                     docker_enabled=request.docker_enabled,
                     docker_image=request.docker_image,
                     docker_extra_mounts=request.docker_extra_mounts,
+                    # Thinking and effort configuration (issue #580)
+                    thinking_mode=request.thinking_mode,
+                    thinking_budget_tokens=request.thinking_budget_tokens,
+                    effort=request.effort,
                 )
                 return template.to_dict()
             except ValueError as e:
@@ -2957,6 +2969,10 @@ class ClaudeWebUI:
                     docker_enabled=request.docker_enabled,
                     docker_image=request.docker_image,
                     docker_extra_mounts=request.docker_extra_mounts,
+                    # Thinking and effort configuration (issue #580)
+                    thinking_mode=request.thinking_mode,
+                    thinking_budget_tokens=request.thinking_budget_tokens,
+                    effort=request.effort,
                 )
                 return template.to_dict()
             except ValueError as e:
