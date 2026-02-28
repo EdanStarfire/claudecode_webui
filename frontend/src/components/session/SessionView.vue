@@ -18,6 +18,12 @@
       <span class="archive-label">Read-only archived session</span>
     </div>
 
+    <!-- Ephemeral Session Banner (schedule-managed, not yet fired) -->
+    <div v-if="isEphemeralIdle" class="ephemeral-banner">
+      <span class="ephemeral-badge">SCHEDULED</span>
+      <span class="ephemeral-label">This agent is managed by a schedule and starts automatically when the schedule fires.</span>
+    </div>
+
     <!-- Messages Area -->
     <div class="d-flex flex-column flex-grow-1 overflow-hidden">
       <MessageList />
@@ -73,6 +79,13 @@ const loadingMessage = computed(() => uiStore.loadingMessage)
 
 const isArchiveMode = computed(() => !!(props.archiveId || route.params.archiveId))
 const effectiveArchiveId = computed(() => props.archiveId || route.params.archiveId)
+
+// Ephemeral session that hasn't fired yet (or has been terminated after firing)
+const isEphemeralIdle = computed(() => {
+  const session = currentSession.value
+  return session?.is_ephemeral && !isArchiveMode.value &&
+    (session.state === 'created' || session.state === 'terminated')
+})
 
 async function loadArchiveMessages() {
   const archiveId = effectiveArchiveId.value
@@ -183,5 +196,31 @@ onUnmounted(() => {
 .archive-label {
   font-size: 12px;
   color: #664d03;
+}
+
+.ephemeral-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 16px;
+  background: #d1ecf1;
+  border-bottom: 1px solid #bee5eb;
+  flex-shrink: 0;
+}
+
+.ephemeral-badge {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: #17a2b8;
+  color: #fff;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.ephemeral-label {
+  font-size: 12px;
+  color: #0c5460;
 }
 </style>
