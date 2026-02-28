@@ -19,6 +19,15 @@
             >
               &larr;
             </button>
+            <button
+              v-if="mode === 'save-as-template' || mode === 'update-template-from-session'"
+              type="button"
+              class="btn btn-link p-0 me-2"
+              @click="returnToEditSession"
+              title="Back to session editor"
+            >
+              &larr;
+            </button>
             {{ modalTitle }}
           </h5>
           <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
@@ -57,6 +66,111 @@
                     </button>
                   </div>
                 </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Save as Template View (issue #580) -->
+          <div v-else-if="mode === 'save-as-template'" class="save-as-template-view">
+            <div class="mb-3">
+              <label for="sat-name" class="form-label">Template Name <span class="text-danger">*</span></label>
+              <input
+                type="text"
+                class="form-control"
+                id="sat-name"
+                v-model="saveAsTemplateName"
+                placeholder="e.g., My Config Template"
+                :class="{ 'is-invalid': saveAsTemplateError && !saveAsTemplateName.trim() }"
+              />
+            </div>
+            <div class="mb-3">
+              <label for="sat-description" class="form-label">Description</label>
+              <input
+                type="text"
+                class="form-control"
+                id="sat-description"
+                v-model="saveAsTemplateDescription"
+                placeholder="Optional description"
+              />
+            </div>
+            <div class="mb-3">
+              <label for="sat-capabilities" class="form-label">Capabilities</label>
+              <input
+                type="text"
+                class="form-control"
+                id="sat-capabilities"
+                v-model="saveAsTemplateCapabilities"
+                placeholder="e.g., python, testing, devops (comma-separated)"
+              />
+            </div>
+            <div class="card">
+              <div class="card-header"><small class="fw-bold">Configuration Summary</small></div>
+              <div class="card-body p-2">
+                <table class="table table-sm table-borderless mb-0">
+                  <tbody>
+                    <tr v-for="field in sessionConfigSummary" :key="field.label">
+                      <td class="text-muted" style="width: 40%"><small>{{ field.label }}</small></td>
+                      <td><small>{{ field.value }}</small></td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <!-- Update Template from Session View (issue #580) -->
+          <div v-else-if="mode === 'update-template-from-session'" class="update-template-view">
+            <div class="mb-3">
+              <label for="utt-select" class="form-label">Select Template to Update</label>
+              <select
+                id="utt-select"
+                class="form-select"
+                v-model="updateTargetTemplateId"
+                @change="computeTemplateDiff"
+              >
+                <option :value="null" disabled>Choose a template...</option>
+                <option v-for="t in templates" :key="t.template_id" :value="t.template_id">
+                  {{ t.name }}
+                </option>
+              </select>
+            </div>
+
+            <div v-if="updateTargetTemplateId && templateDiff !== null">
+              <div v-if="templateDiff.length === 0" class="alert alert-info">
+                Session configuration matches this template &mdash; no changes to apply.
+              </div>
+              <div v-else>
+                <h6 class="mb-2">Changes to apply:</h6>
+                <table class="table table-sm table-bordered">
+                  <thead>
+                    <tr>
+                      <th style="width: 30%">Field</th>
+                      <th style="width: 35%">Template (current)</th>
+                      <th style="width: 35%">Session (new)</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="d in templateDiff" :key="d.field">
+                      <td><small class="fw-bold">{{ d.label }}</small></td>
+                      <td>
+                        <small v-if="d.type === 'list'">
+                          <span v-for="(item, i) in d.removed" :key="'r'+i" class="badge bg-danger me-1 mb-1">- {{ item }}</span>
+                          <span v-for="(item, i) in d.kept" :key="'k'+i" class="badge bg-secondary me-1 mb-1">{{ item }}</span>
+                          <span v-if="!d.removed.length && !d.kept.length" class="text-muted">(empty)</span>
+                        </small>
+                        <small v-else class="text-danger-emphasis">{{ d.oldDisplay }}</small>
+                      </td>
+                      <td>
+                        <small v-if="d.type === 'list'">
+                          <span v-for="(item, i) in d.added" :key="'a'+i" class="badge bg-success me-1 mb-1">+ {{ item }}</span>
+                          <span v-for="(item, i) in d.kept" :key="'k2'+i" class="badge bg-secondary me-1 mb-1">{{ item }}</span>
+                          <span v-if="!d.added.length && !d.kept.length" class="text-muted">(empty)</span>
+                        </small>
+                        <small v-else class="text-success-emphasis">{{ d.newDisplay }}</small>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
               </div>
             </div>
           </div>
@@ -171,6 +285,23 @@
           </small>
         </div>
         <div class="modal-footer">
+          <!-- Issue #580: Save as Template / Update Template buttons in edit-session mode -->
+          <div v-if="mode === 'edit-session'" class="me-auto d-flex gap-2">
+            <button
+              type="button"
+              class="btn btn-outline-info btn-sm"
+              @click="switchToSaveAsTemplate"
+            >
+              Save as Template
+            </button>
+            <button
+              type="button"
+              class="btn btn-outline-info btn-sm"
+              @click="switchToUpdateTemplate"
+            >
+              Update Template
+            </button>
+          </div>
           <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">
             {{ mode === 'template-list' ? 'Close' : 'Cancel' }}
           </button>
@@ -222,7 +353,8 @@ const modalElement = ref(null)
 let modalInstance = null
 const permissionPreviewModal = ref(null)  // Issue #36
 
-// Mode: 'create-session', 'edit-session', 'create-template', 'edit-template', 'configure-ephemeral'
+// Mode: 'create-session', 'edit-session', 'create-template', 'edit-template', 'configure-ephemeral',
+//       'save-as-template', 'update-template-from-session'
 const mode = ref('create-session')
 const activeTab = ref('general')
 
@@ -240,6 +372,16 @@ const selectedTemplateId = ref(null)
 
 // Context for returning to session creation after template management
 const returnContext = ref(null)
+
+// Issue #580: Save-as-template state
+const saveAsTemplateName = ref('')
+const saveAsTemplateDescription = ref('')
+const saveAsTemplateCapabilities = ref('')
+const saveAsTemplateError = ref('')
+
+// Issue #580: Update-template-from-session state
+const updateTargetTemplateId = ref(null)
+const templateDiff = ref(null)
 
 // Track original template values for modification detection
 const templateOriginalValues = ref({
@@ -353,12 +495,16 @@ const modalTitle = computed(() => {
     case 'edit-template': return 'Edit Template'
     case 'template-list': return 'Manage Templates'
     case 'configure-ephemeral': return 'Configure Scheduled Session'
+    case 'save-as-template': return 'Save as Template'
+    case 'update-template-from-session': return 'Update Template from Session'
     default: return 'Configuration'
   }
 })
 
 const submitButtonText = computed(() => {
   if (mode.value === 'configure-ephemeral') return 'Apply Configuration'
+  if (mode.value === 'save-as-template') return isSubmitting.value ? 'Saving...' : 'Save Template'
+  if (mode.value === 'update-template-from-session') return isSubmitting.value ? 'Updating...' : 'Confirm Update'
   if (isSubmitting.value) {
     return isEditMode.value ? 'Saving...' : 'Creating...'
   }
@@ -368,6 +514,12 @@ const submitButtonText = computed(() => {
 const isFormValid = computed(() => {
   // Name is optional for configure-ephemeral mode
   if (mode.value === 'configure-ephemeral') return true
+  // Save as template: name required
+  if (mode.value === 'save-as-template') return !!saveAsTemplateName.value.trim()
+  // Update template: must have selected a template and diff must show changes
+  if (mode.value === 'update-template-from-session') {
+    return updateTargetTemplateId.value && templateDiff.value !== null && templateDiff.value.length > 0
+  }
   // Name is required for all other modes
   if (!formData.name.trim()) return false
   return true
@@ -802,9 +954,217 @@ async function deleteTemplate(template) {
   }
 }
 
+// Issue #580: Build template config object from session data
+function buildTemplateFromSession() {
+  const session = editSession.value
+  if (!session) return {}
+
+  const parseList = (val) => {
+    if (Array.isArray(val)) return val.length > 0 ? val : null
+    if (typeof val === 'string' && val.trim()) return val.split(',').map(s => s.trim()).filter(s => s)
+    return null
+  }
+
+  return {
+    permission_mode: session.current_permission_mode || 'default',
+    allowed_tools: parseList(session.allowed_tools),
+    disallowed_tools: parseList(session.disallowed_tools),
+    model: session.model || null,
+    default_system_prompt: session.system_prompt || null,
+    override_system_prompt: session.override_system_prompt || false,
+    default_role: session.role || null,
+    sandbox_enabled: session.sandbox_enabled || false,
+    sandbox_config: session.sandbox_config || null,
+    cli_path: session.cli_path || null,
+    docker_enabled: session.docker_enabled || false,
+    docker_image: session.docker_image || null,
+    docker_extra_mounts: parseList(session.docker_extra_mounts),
+    thinking_mode: session.thinking_mode || null,
+    thinking_budget_tokens: session.thinking_budget_tokens || null,
+    effort: session.effort || null,
+  }
+}
+
+// Issue #580: Config summary for save-as-template view
+const sessionConfigSummary = computed(() => {
+  const config = buildTemplateFromSession()
+  const fields = []
+  const addField = (label, value) => {
+    if (value !== null && value !== undefined && value !== '' && value !== false) {
+      fields.push({ label, value: Array.isArray(value) ? value.join(', ') : String(value) })
+    }
+  }
+  addField('Permission Mode', config.permission_mode)
+  addField('Model', config.model)
+  addField('Allowed Tools', config.allowed_tools)
+  addField('Disallowed Tools', config.disallowed_tools)
+  addField('System Prompt', config.default_system_prompt ? (config.default_system_prompt.length > 80 ? config.default_system_prompt.substring(0, 80) + '...' : config.default_system_prompt) : null)
+  addField('Override Prompt', config.override_system_prompt)
+  addField('Role', config.default_role)
+  addField('Sandbox', config.sandbox_enabled)
+  addField('CLI Path', config.cli_path)
+  addField('Docker', config.docker_enabled)
+  addField('Thinking Mode', config.thinking_mode)
+  addField('Thinking Budget', config.thinking_budget_tokens)
+  addField('Effort', config.effort)
+  if (fields.length === 0) {
+    fields.push({ label: 'Configuration', value: 'Default settings' })
+  }
+  return fields
+})
+
+function switchToSaveAsTemplate() {
+  saveAsTemplateName.value = ''
+  saveAsTemplateDescription.value = ''
+  saveAsTemplateCapabilities.value = editSession.value?.capabilities?.join(', ') || ''
+  saveAsTemplateError.value = ''
+  errorMessage.value = ''
+  loadTemplates()
+  mode.value = 'save-as-template'
+}
+
+function switchToUpdateTemplate() {
+  updateTargetTemplateId.value = null
+  templateDiff.value = null
+  errorMessage.value = ''
+  loadTemplates()
+  mode.value = 'update-template-from-session'
+}
+
+function returnToEditSession() {
+  errorMessage.value = ''
+  mode.value = 'edit-session'
+}
+
+function computeTemplateDiff() {
+  if (!updateTargetTemplateId.value) {
+    templateDiff.value = null
+    return
+  }
+
+  const template = templates.value.find(t => t.template_id === updateTargetTemplateId.value)
+  if (!template) {
+    errorMessage.value = 'Template not found — it may have been deleted.'
+    templateDiff.value = null
+    return
+  }
+
+  errorMessage.value = ''
+  const sessionConfig = buildTemplateFromSession()
+  const diffs = []
+
+  const normList = (val) => {
+    if (!val || (Array.isArray(val) && val.length === 0)) return []
+    if (Array.isArray(val)) return [...val].sort()
+    return []
+  }
+
+  const normScalar = (val) => (val === null || val === undefined) ? '' : String(val)
+
+  const scalarFields = [
+    { field: 'permission_mode', label: 'Permission Mode' },
+    { field: 'model', label: 'Model' },
+    { field: 'default_system_prompt', label: 'System Prompt' },
+    { field: 'override_system_prompt', label: 'Override Prompt' },
+    { field: 'default_role', label: 'Role' },
+    { field: 'sandbox_enabled', label: 'Sandbox Enabled' },
+    { field: 'cli_path', label: 'CLI Path' },
+    { field: 'docker_enabled', label: 'Docker Enabled' },
+    { field: 'docker_image', label: 'Docker Image' },
+    { field: 'thinking_mode', label: 'Thinking Mode' },
+    { field: 'thinking_budget_tokens', label: 'Thinking Budget' },
+    { field: 'effort', label: 'Effort' },
+  ]
+
+  const listFields = [
+    { field: 'allowed_tools', label: 'Allowed Tools' },
+    { field: 'disallowed_tools', label: 'Disallowed Tools' },
+    { field: 'docker_extra_mounts', label: 'Docker Mounts' },
+  ]
+
+  for (const { field, label } of scalarFields) {
+    const oldVal = normScalar(template[field])
+    const newVal = normScalar(sessionConfig[field])
+    if (oldVal !== newVal) {
+      diffs.push({
+        field,
+        label,
+        type: 'scalar',
+        oldDisplay: oldVal || '(none)',
+        newDisplay: newVal || '(none)',
+      })
+    }
+  }
+
+  for (const { field, label } of listFields) {
+    const oldList = normList(template[field])
+    const newList = normList(sessionConfig[field])
+    const oldSet = new Set(oldList)
+    const newSet = new Set(newList)
+    const added = newList.filter(x => !oldSet.has(x))
+    const removed = oldList.filter(x => !newSet.has(x))
+    const kept = oldList.filter(x => newSet.has(x))
+    if (added.length > 0 || removed.length > 0) {
+      diffs.push({ field, label, type: 'list', added, removed, kept })
+    }
+  }
+
+  templateDiff.value = diffs
+}
+
+async function saveAsTemplate() {
+  const name = saveAsTemplateName.value.trim()
+  if (!name) {
+    saveAsTemplateError.value = 'Name is required'
+    return
+  }
+
+  const config = buildTemplateFromSession()
+  const capsList = saveAsTemplateCapabilities.value
+    .split(',')
+    .map(c => c.trim())
+    .filter(c => c.length > 0)
+
+  const payload = {
+    name,
+    description: saveAsTemplateDescription.value.trim() || null,
+    capabilities: capsList.length > 0 ? capsList : null,
+    ...config,
+  }
+
+  await api.post('/api/templates', payload)
+  await loadTemplates()
+  mode.value = 'edit-session'
+}
+
+async function updateTemplateFromSession() {
+  if (!updateTargetTemplateId.value) return
+
+  const template = templates.value.find(t => t.template_id === updateTargetTemplateId.value)
+  if (!template) {
+    errorMessage.value = 'Template not found — it may have been deleted.'
+    return
+  }
+
+  const config = buildTemplateFromSession()
+  const payload = {
+    name: template.name,
+    description: template.description,
+    capabilities: template.capabilities,
+    ...config,
+  }
+
+  await api.put(`/api/templates/${template.template_id}`, payload)
+  await loadTemplates()
+  mode.value = 'edit-session'
+}
+
 function validate() {
   let isValid = true
   errors.name = ''
+
+  // These modes handle their own validation
+  if (mode.value === 'save-as-template' || mode.value === 'update-template-from-session') return true
 
   // Name is optional for configure-ephemeral mode
   if (mode.value !== 'configure-ephemeral' && !formData.name.trim()) {
@@ -849,10 +1209,22 @@ async function handleSubmit() {
         await updateTemplate()
         // updateTemplate returns to template list, don't close
         break
+      case 'save-as-template':
+        await saveAsTemplate()
+        break
+      case 'update-template-from-session':
+        await updateTemplateFromSession()
+        break
     }
   } catch (error) {
     console.error('Submit failed:', error)
-    errorMessage.value = error.response?.data?.detail || error.message || 'Operation failed. Please try again.'
+    // Issue #580: Show friendly slug conflict message
+    const detail = error.response?.data?.detail || error.message || 'Operation failed. Please try again.'
+    if (mode.value === 'save-as-template' && detail.includes('already exists')) {
+      errorMessage.value = `A template with a similar name already exists. Choose a different name or use Update Template to overwrite it.`
+    } else {
+      errorMessage.value = detail
+    }
   } finally {
     isSubmitting.value = false
   }
@@ -1089,7 +1461,11 @@ async function createTemplate() {
     cli_path: formData.cli_path.trim() || null,  // Issue #489
     docker_enabled: formData.docker_enabled,  // Issue #496
     docker_image: formData.docker_image.trim() || null,
-    docker_extra_mounts: formData.docker_extra_mounts.trim() ? formData.docker_extra_mounts.trim().split('\n').map(m => m.trim()).filter(m => m) : null
+    docker_extra_mounts: formData.docker_extra_mounts.trim() ? formData.docker_extra_mounts.trim().split('\n').map(m => m.trim()).filter(m => m) : null,
+    // Issue #580: Thinking and effort configuration
+    thinking_mode: formData.thinking_mode || null,
+    thinking_budget_tokens: formData.thinking_mode === 'enabled' ? formData.thinking_budget_tokens : null,
+    effort: formData.effort || null,
   }
 
   await api.post('/api/templates', payload)
@@ -1141,7 +1517,11 @@ async function updateTemplate() {
     cli_path: formData.cli_path.trim() || null,  // Issue #489
     docker_enabled: formData.docker_enabled,  // Issue #496
     docker_image: formData.docker_image.trim() || null,
-    docker_extra_mounts: formData.docker_extra_mounts.trim() ? formData.docker_extra_mounts.trim().split('\n').map(m => m.trim()).filter(m => m) : null
+    docker_extra_mounts: formData.docker_extra_mounts.trim() ? formData.docker_extra_mounts.trim().split('\n').map(m => m.trim()).filter(m => m) : null,
+    // Issue #580: Thinking and effort configuration
+    thinking_mode: formData.thinking_mode || null,
+    thinking_budget_tokens: formData.thinking_mode === 'enabled' ? formData.thinking_budget_tokens : null,
+    effort: formData.effort || null,
   }
 
   await api.put(`/api/templates/${editTemplate.value.template_id}`, payload)
@@ -1326,6 +1706,13 @@ function onModalHidden() {
   editSession.value = null
   editTemplate.value = null
   onConfiguredCallback.value = null
+  // Issue #580: Reset save-as/update-template state
+  saveAsTemplateName.value = ''
+  saveAsTemplateDescription.value = ''
+  saveAsTemplateCapabilities.value = ''
+  saveAsTemplateError.value = ''
+  updateTargetTemplateId.value = null
+  templateDiff.value = null
   uiStore.hideModal()
 }
 

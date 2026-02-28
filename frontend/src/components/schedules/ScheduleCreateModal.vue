@@ -190,6 +190,7 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { useSessionStore } from '@/stores/session'
+import { useProjectStore } from '@/stores/project'
 import { useScheduleStore } from '@/stores/schedule'
 import { useUIStore } from '@/stores/ui'
 import { api } from '@/utils/api'
@@ -202,6 +203,7 @@ const props = defineProps({
 const emit = defineEmits(['close', 'created'])
 
 const sessionStore = useSessionStore()
+const projectStore = useProjectStore()
 const scheduleStore = useScheduleStore()
 const uiStore = useUIStore()
 
@@ -326,13 +328,14 @@ function applyTemplate() {
   const tmpl = templates.value.find(t => t.template_id === selectedTemplateId.value)
   if (!tmpl) return
 
+  const project = projectStore.projects.get(props.legionId)
   sessionConfig.value = {
     permission_mode: tmpl.permission_mode || 'default',
     model: tmpl.model || '',
     system_prompt: tmpl.default_system_prompt || '',
     override_system_prompt: tmpl.override_system_prompt || false,
     sandbox_enabled: tmpl.sandbox_enabled || false,
-    working_directory: '',
+    working_directory: project?.working_directory || '',
   }
   if (tmpl.allowed_tools?.length) {
     sessionConfig.value.allowed_tools = [...tmpl.allowed_tools]

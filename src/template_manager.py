@@ -162,6 +162,10 @@ class TemplateManager:
         docker_enabled: bool = False,
         docker_image: str | None = None,
         docker_extra_mounts: list[str] | None = None,
+        # Thinking and effort configuration (issue #580)
+        thinking_mode: str | None = None,
+        thinking_budget_tokens: int | None = None,
+        effort: str | None = None,
     ) -> MinionTemplate:
         """Create a new template."""
         if not name or not name.strip():
@@ -195,6 +199,10 @@ class TemplateManager:
             docker_enabled=docker_enabled,
             docker_image=docker_image,
             docker_extra_mounts=docker_extra_mounts if docker_extra_mounts is not None else [],
+            # Thinking and effort configuration (issue #580)
+            thinking_mode=thinking_mode,
+            thinking_budget_tokens=thinking_budget_tokens,
+            effort=effort,
         )
 
         await self._save_template(template)
@@ -238,6 +246,10 @@ class TemplateManager:
         docker_enabled: bool | None = None,
         docker_image: str | None = None,
         docker_extra_mounts: list[str] | None = None,
+        # Thinking and effort configuration (issue #580)
+        thinking_mode: str | None = None,
+        thinking_budget_tokens: int | None = None,
+        effort: str | None = None,
     ) -> MinionTemplate:
         """Update existing template."""
         template = self.templates.get(template_id)
@@ -298,6 +310,14 @@ class TemplateManager:
             template.docker_image = docker_image
         if docker_extra_mounts is not None:
             template.docker_extra_mounts = docker_extra_mounts
+
+        # Thinking and effort configuration (issue #580)
+        if thinking_mode is not None:
+            template.thinking_mode = thinking_mode
+        if thinking_budget_tokens is not None:
+            template.thinking_budget_tokens = thinking_budget_tokens
+        if effort is not None:
+            template.effort = effort
 
         template.updated_at = datetime.now(UTC)
 
