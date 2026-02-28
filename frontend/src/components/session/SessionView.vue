@@ -121,6 +121,9 @@ watch([() => props.sessionId, () => effectiveArchiveId.value], async ([newSessio
   } else if (oldArchiveId && !newArchiveId) {
     // Leaving archive mode → clear archive messages and reload live session
     messageStore.clearArchiveMessages(newSessionId)
+    // Force selectSession to run by clearing currentSessionId first
+    // (otherwise it bails out because the ID hasn't changed)
+    sessionStore.currentSessionId = null
     uiStore.showLoading('Loading session...')
     try {
       await sessionStore.selectSession(newSessionId)
