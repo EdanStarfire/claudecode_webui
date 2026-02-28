@@ -497,6 +497,14 @@ async function navigateToAgent() {
       const archives = data.archives || []
       if (archives.length > 0) {
         const latest = archives[archives.length - 1]
+        // Add ghost agent so the chip appears in AgentStrip
+        sessionStore.addGhostAgent(agentId, {
+          name: session?.name || props.schedule.name || 'Scheduled agent',
+          role: session?.role || 'ephemeral',
+          archiveCount: archives.length,
+          latestArchiveId: latest.archive_id,
+          projectId: pid
+        })
         router.push(`/session/${agentId}/archive/${latest.archive_id}`)
         return
       }
