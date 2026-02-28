@@ -35,8 +35,8 @@
     <button
       class="strip-archive-btn"
       @click.stop="showDeletedAgentsModal"
-      title="View deleted agents"
-      aria-label="View deleted agents with archives"
+      title="View archived agents"
+      aria-label="View archived agents"
     >
       <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
         <path d="M8 0a8 8 0 1 0 0 16A8 8 0 0 0 8 0zm0 14.5A6.5 6.5 0 1 1 8 1.5a6.5 6.5 0 0 1 0 13zM8.5 4H7v5l4.25 2.55.75-1.23L8.5 8.25V4z"/>
@@ -127,7 +127,7 @@ const projectSessions = computed(() => {
 
   return project.session_ids
     .map(sid => sessionStore.getSession(sid))
-    .filter(Boolean)
+    .filter(s => s && !s.is_ephemeral)
     .sort((a, b) => (a.order || 0) - (b.order || 0))
 })
 

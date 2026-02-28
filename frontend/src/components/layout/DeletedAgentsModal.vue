@@ -10,7 +10,7 @@
     <div class="modal-dialog modal-dialog-centered">
       <div class="modal-content">
         <div class="modal-header">
-          <h5 class="modal-title" id="deletedAgentsModalLabel">Deleted Agents</h5>
+          <h5 class="modal-title" id="deletedAgentsModalLabel">Archived Agents</h5>
           <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
         </div>
         <div class="modal-body">
@@ -22,7 +22,7 @@
           </div>
 
           <div v-else-if="agents.length === 0" class="text-center py-4">
-            <p class="text-muted mb-0">No deleted agents with archives found for this project.</p>
+            <p class="text-muted mb-0">No archived agents found for this project.</p>
           </div>
 
           <div v-else class="deleted-agents-list">

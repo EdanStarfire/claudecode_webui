@@ -354,12 +354,19 @@ class ArchiveManager:
             return []
 
         # Get active session IDs to exclude reset snapshots
+        # But include ephemeral sessions (they persist but should appear here)
         active_session_ids = set()
-        sessions_dir = self.system.session_coordinator.session_manager.sessions_dir
+        ephemeral_session_ids = set()
+        session_manager = self.system.session_coordinator.session_manager
+        sessions_dir = session_manager.sessions_dir
         if sessions_dir.exists():
             for session_dir in sessions_dir.iterdir():
                 if session_dir.is_dir():
                     active_session_ids.add(session_dir.name)
+                    # Check if this session is ephemeral
+                    session_info = session_manager._active_sessions.get(session_dir.name)
+                    if session_info and session_info.is_ephemeral:
+                        ephemeral_session_ids.add(session_dir.name)
 
         agents: dict[str, dict] = {}
 
@@ -369,8 +376,8 @@ class ArchiveManager:
 
             session_id = minion_dir.name
 
-            # Skip sessions that still exist (these are reset snapshots)
-            if session_id in active_session_ids:
+            # Skip sessions that still exist (reset snapshots) — but include ephemeral
+            if session_id in active_session_ids and session_id not in ephemeral_session_ids:
                 continue
 
             # Scan archive timestamps for this minion
