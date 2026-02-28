@@ -98,6 +98,8 @@ async function loadArchiveMessages() {
 
 onMounted(async () => {
   if (isArchiveMode.value) {
+    // Set currentSessionId so AgentOverview can display for deleted agents
+    sessionStore.currentSessionId = props.sessionId
     await loadArchiveMessages()
   } else if (props.sessionId !== sessionStore.currentSessionId) {
     uiStore.showLoading('Loading session...')

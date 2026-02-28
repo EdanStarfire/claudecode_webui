@@ -32,8 +32,8 @@
       >
         Next
       </button>
-      <button class="btn-overview btn-overview-primary" @click="jumpToActive" title="Jump to active session">
-        Jump to Active
+      <button class="btn-overview btn-overview-primary" @click="jumpToActive" :title="isDeletedAgent ? 'Jump to latest archive' : 'Jump to active session'">
+        {{ isDeletedAgent ? 'Latest' : 'Jump to Active' }}
       </button>
     </div>
 
@@ -124,7 +124,14 @@ onUnmounted(() => {
 const session = computed(() => {
   const id = sessionStore.currentSessionId
   if (!id) return null
-  return sessionStore.getSession(id)
+  const sess = sessionStore.getSession(id)
+  if (sess) return sess
+  // Fall back to ghost agent data for deleted agents
+  const ghost = sessionStore.ghostAgents.get(id)
+  if (ghost) {
+    return { session_id: id, name: ghost.name, role: ghost.role, state: 'terminated' }
+  }
+  return null
 })
 
 const avatarLetter = computed(() => {
@@ -228,7 +235,8 @@ async function fetchArchives() {
   const id = sessionStore.currentSessionId
   if (!id) return
   const sess = sessionStore.getSession(id)
-  const pid = sess?.project_id
+  const ghost = sessionStore.ghostAgents.get(id)
+  const pid = sess?.project_id || ghost?.projectId
   if (!pid) return
 
   try {
@@ -252,27 +260,42 @@ function toggleArchiveList() {
   showArchiveList.value = !showArchiveList.value
 }
 
+const isDeletedAgent = computed(() => !!route.params.agentId || !!sessionStore.ghostAgents.get(sessionStore.currentSessionId))
+
+function archiveRoute(sid, archiveId) {
+  if (isDeletedAgent.value) {
+    return `/archive/agent/${sid}/${archiveId}`
+  }
+  return `/session/${sid}/archive/${archiveId}`
+}
+
 function openArchive(archive) {
   const sid = sessionStore.currentSessionId
-  router.push(`/session/${sid}/archive/${archive.archive_id}`)
+  router.push(archiveRoute(sid, archive.archive_id))
 }
 
 function goToPrevArchive() {
   if (!hasPrevArchive.value) return
   const prev = archives.value[archiveIndex.value - 1]
   const sid = route.params.sessionId || route.params.agentId
-  router.push(`/session/${sid}/archive/${prev.archive_id}`)
+  router.push(archiveRoute(sid, prev.archive_id))
 }
 
 function goToNextArchive() {
   if (!hasNextArchive.value) return
   const next = archives.value[archiveIndex.value + 1]
   const sid = route.params.sessionId || route.params.agentId
-  router.push(`/session/${sid}/archive/${next.archive_id}`)
+  router.push(archiveRoute(sid, next.archive_id))
 }
 
 function jumpToActive() {
   const sid = route.params.sessionId || route.params.agentId
+  // For deleted agents, there's no active session — just go to latest archive
+  if (isDeletedAgent.value && archives.value.length > 0) {
+    const latest = archives.value[archives.value.length - 1]
+    router.push(archiveRoute(sid, latest.archive_id))
+    return
+  }
   router.push(`/session/${sid}`)
 }
 
