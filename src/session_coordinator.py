@@ -1929,6 +1929,26 @@ class SessionCoordinator:
             return None
         return await self.legion_system.archive_manager.get_archive_state(session_id, archive_id)
 
+    async def get_archive_resources(
+        self, session_id: str, archive_id: str
+    ) -> list[dict]:
+        """List resource metadata from an archive."""
+        if not self.legion_system:
+            return []
+        return await self.legion_system.archive_manager.get_archive_resources(
+            session_id, archive_id
+        )
+
+    async def get_archive_resource_file(
+        self, session_id: str, archive_id: str, resource_id: str
+    ) -> bytes | None:
+        """Get raw file bytes for a resource in an archive."""
+        if not self.legion_system:
+            return None
+        return await self.legion_system.archive_manager.get_archive_resource_file(
+            session_id, archive_id, resource_id
+        )
+
     async def list_project_deleted_agents(self, project_id: str) -> list[dict]:
         """List deleted agents with archives for a project."""
         if not self.legion_system:

@@ -39,6 +39,7 @@ import { computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useSessionStore } from '@/stores/session'
 import { useMessageStore } from '@/stores/message'
+import { useResourceStore } from '@/stores/resource'
 import { useUIStore } from '@/stores/ui'
 import SessionStateStatusLine from './SessionStateStatusLine.vue'
 import SessionStatusBar from '../statusbar/SessionStatusBar.vue'
@@ -63,6 +64,7 @@ const props = defineProps({
 const route = useRoute()
 const sessionStore = useSessionStore()
 const messageStore = useMessageStore()
+const resourceStore = useResourceStore()
 const uiStore = useUIStore()
 
 const currentSession = computed(() => sessionStore.currentSession)
@@ -89,6 +91,8 @@ async function loadArchiveMessages() {
       const data = await response.json()
       messageStore.setArchiveMessages(props.sessionId, data.messages || [])
     }
+    // Load archived resources
+    await resourceStore.loadArchiveResources(props.sessionId, pid, archiveId)
   } catch (e) {
     console.error('Failed to load archive messages:', e)
   } finally {
@@ -124,6 +128,8 @@ watch([() => props.sessionId, () => effectiveArchiveId.value], async ([newSessio
     // Leaving archive mode via Active button → clear archive cache and messages
     sessionStore.lastViewedArchive.delete(newSessionId)
     messageStore.clearArchiveMessages(newSessionId)
+    resourceStore.clearResources(newSessionId)
+    resourceStore.clearArchiveContext(newSessionId)
     // Force selectSession to run by clearing currentSessionId first
     // (otherwise it bails out because the ID hasn't changed)
     sessionStore.currentSessionId = null
@@ -146,6 +152,8 @@ watch([() => props.sessionId, () => effectiveArchiveId.value], async ([newSessio
 onUnmounted(() => {
   if (isArchiveMode.value) {
     messageStore.clearArchiveMessages(props.sessionId)
+    resourceStore.clearResources(props.sessionId)
+    resourceStore.clearArchiveContext(props.sessionId)
   }
 })
 </script>

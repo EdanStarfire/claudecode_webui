@@ -895,6 +895,79 @@ class ClaudeWebUI:
                 logger.error(f"Failed to get archive state: {e}")
                 raise HTTPException(status_code=500, detail=str(e))
 
+        @self.app.get(
+            "/api/projects/{project_id}/archives/{session_id}/{archive_id}/resources"
+        )
+        async def get_archive_resources(
+            project_id: str, session_id: str, archive_id: str
+        ):
+            """List resource metadata from an archive."""
+            try:
+                project = await self.coordinator.project_manager.get_project(project_id)
+                if not project:
+                    raise HTTPException(status_code=404, detail="Project not found")
+                resources = await self.coordinator.get_archive_resources(
+                    session_id, archive_id
+                )
+                return {"resources": resources, "count": len(resources)}
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"Failed to get archive resources: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @self.app.get(
+            "/api/projects/{project_id}/archives/{session_id}/{archive_id}"
+            "/resources/{resource_id}"
+        )
+        async def get_archive_resource_file(
+            project_id: str, session_id: str, archive_id: str, resource_id: str
+        ):
+            """Get raw file data for a resource in an archive."""
+            from fastapi.responses import Response
+
+            try:
+                project = await self.coordinator.project_manager.get_project(project_id)
+                if not project:
+                    raise HTTPException(status_code=404, detail="Project not found")
+
+                resources = await self.coordinator.get_archive_resources(
+                    session_id, archive_id
+                )
+                resource_meta = next(
+                    (r for r in resources if r.get("resource_id") == resource_id), None
+                )
+                if not resource_meta:
+                    raise HTTPException(status_code=404, detail="Resource not found")
+
+                resource_bytes = await self.coordinator.get_archive_resource_file(
+                    session_id, archive_id, resource_id
+                )
+                if not resource_bytes:
+                    raise HTTPException(
+                        status_code=404, detail="Resource file not found"
+                    )
+
+                content_type = resource_meta.get(
+                    "mime_type", "application/octet-stream"
+                )
+                original_name = resource_meta.get(
+                    "original_name", f"{resource_id}.bin"
+                )
+
+                return Response(
+                    content=resource_bytes,
+                    media_type=content_type,
+                    headers={
+                        "Content-Disposition": f'inline; filename="{original_name}"'
+                    },
+                )
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"Failed to get archive resource: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
         @self.app.get("/api/projects/{project_id}/deleted-agents")
         async def list_deleted_agents(project_id: str):
             """List deleted agents with archives for a project."""

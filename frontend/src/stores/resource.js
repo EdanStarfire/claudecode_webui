@@ -77,6 +77,9 @@ export const useResourceStore = defineStore('resource', () => {
   // Text content cache (resourceId -> { content, loading, error })
   const textContentCache = ref(new Map())
 
+  // Archive context: sessionId -> { projectId, archiveId }
+  const archiveContext = ref(new Map())
+
   // ========== HELPER FUNCTIONS ==========
 
   /**
@@ -300,6 +303,46 @@ export const useResourceStore = defineStore('resource', () => {
   const loadImages = loadResources
 
   /**
+   * Load resources for an archived session from the archive endpoint
+   */
+  async function loadArchiveResources(sessionId, projectId, archiveId) {
+    if (!sessionId || !projectId || !archiveId) return
+
+    loading.value = true
+    try {
+      const response = await apiGet(
+        `/api/projects/${projectId}/archives/${sessionId}/${archiveId}/resources`
+      )
+      const resources = response.resources || []
+
+      resources.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0))
+
+      resourcesBySession.value.set(sessionId, resources)
+      resourcesBySession.value = new Map(resourcesBySession.value)
+
+      // Store archive context so getResourceUrl can build correct URLs
+      archiveContext.value.set(sessionId, { projectId, archiveId })
+      archiveContext.value = new Map(archiveContext.value)
+
+      console.log(`Loaded ${resources.length} archived resources for session ${sessionId}`)
+    } catch (error) {
+      console.error(`Failed to load archive resources for session ${sessionId}:`, error)
+      resourcesBySession.value.set(sessionId, [])
+      resourcesBySession.value = new Map(resourcesBySession.value)
+    } finally {
+      loading.value = false
+    }
+  }
+
+  /**
+   * Clear archive context for a session (when leaving archive mode)
+   */
+  function clearArchiveContext(sessionId) {
+    archiveContext.value.delete(sessionId)
+    archiveContext.value = new Map(archiveContext.value)
+  }
+
+  /**
    * Add a new resource from WebSocket resource_registered event
    */
   function addResource(sessionId, resourceMetadata) {
@@ -334,9 +377,14 @@ export const useResourceStore = defineStore('resource', () => {
   const addImage = addResource
 
   /**
-   * Get the resource URL for displaying/downloading a resource
+   * Get the resource URL for displaying/downloading a resource.
+   * Returns archive endpoint URL when viewing an archived session.
    */
   function getResourceUrl(sessionId, resourceId) {
+    const ctx = archiveContext.value.get(sessionId)
+    if (ctx) {
+      return `/api/projects/${ctx.projectId}/archives/${sessionId}/${ctx.archiveId}/resources/${resourceId}`
+    }
     return `/api/sessions/${sessionId}/resources/${resourceId}`
   }
 
@@ -592,6 +640,8 @@ export const useResourceStore = defineStore('resource', () => {
 
     // Actions
     loadResources,
+    loadArchiveResources,
+    clearArchiveContext,
     addResource,
     removeResource,
     handleResourceRemoved,

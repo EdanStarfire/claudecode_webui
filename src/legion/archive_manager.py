@@ -336,6 +336,77 @@ class ArchiveManager:
 
         return result
 
+    async def get_archive_resources(
+        self, session_id: str, archive_id: str
+    ) -> list[dict]:
+        """
+        Read resource metadata from an archive's resources/resources.jsonl.
+
+        Args:
+            session_id: Session ID
+            archive_id: Archive timestamp directory name
+
+        Returns:
+            List of resource metadata dicts (filtered, sorted by timestamp)
+        """
+        archive_dir = self.archives_dir / session_id / archive_id
+        resources_file = archive_dir / "resources" / "resources.jsonl"
+
+        if not resources_file.exists():
+            return []
+
+        resources = []
+        removed_ids: set[str] = set()
+
+        try:
+            with open(resources_file, encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        try:
+                            entry = json.loads(line)
+                            if entry.get("type") == "remove":
+                                removed_ids.add(entry.get("resource_id", ""))
+                            else:
+                                resources.append(entry)
+                        except json.JSONDecodeError:
+                            pass
+        except OSError as e:
+            archive_logger.error(f"Failed to read archive resources: {e}")
+
+        if removed_ids:
+            resources = [r for r in resources if r.get("resource_id") not in removed_ids]
+
+        resources.sort(key=lambda x: x.get("timestamp", 0))
+        return resources
+
+    async def get_archive_resource_file(
+        self, session_id: str, archive_id: str, resource_id: str
+    ) -> bytes | None:
+        """
+        Read a resource binary file from an archive.
+
+        Args:
+            session_id: Session ID
+            archive_id: Archive timestamp directory name
+            resource_id: Resource identifier
+
+        Returns:
+            Raw file bytes or None if not found
+        """
+        archive_dir = self.archives_dir / session_id / archive_id
+        resource_path = archive_dir / "resources" / f"{resource_id}.bin"
+
+        if not resource_path.exists():
+            return None
+
+        try:
+            with open(resource_path, "rb") as f:
+                return f.read()
+        except OSError as e:
+            archive_logger.error(f"Failed to read archive resource file: {e}")
+            return None
+
     async def list_project_deleted_agents(self, project_id: str) -> list[dict]:
         """
         List deleted agents for a project by scanning archives.
