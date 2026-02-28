@@ -237,10 +237,14 @@ async function fetchArchives() {
   }
 }
 
-watch(() => sessionStore.currentSessionId, () => {
-  archives.value = []
-  fetchArchives()
-}, { immediate: true })
+watch(
+  [() => sessionStore.currentSessionId, () => session.value?.project_id],
+  ([newId], [oldId]) => {
+    if (newId !== oldId) archives.value = []
+    fetchArchives()
+  },
+  { immediate: true }
+)
 
 const isDeletedAgent = computed(() => !!route.params.agentId || !!sessionStore.ghostAgents.get(sessionStore.currentSessionId))
 
