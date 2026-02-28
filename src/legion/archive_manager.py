@@ -402,6 +402,20 @@ class ArchiveManager:
                     }
 
                 agents[session_id]["archive_count"] += 1
+                # Update role if not yet set (e.g. first archive was a reset with None role)
+                if not agents[session_id]["role"] and metadata.get("minion_role"):
+                    agents[session_id]["role"] = metadata["minion_role"]
+                # Fallback: read role from state.json if still missing
+                if not agents[session_id]["role"]:
+                    state_file = archive_dir / "state.json"
+                    if state_file.exists():
+                        try:
+                            with open(state_file, encoding='utf-8') as sf:
+                                state = json.load(sf)
+                            if state.get("role"):
+                                agents[session_id]["role"] = state["role"]
+                        except (json.JSONDecodeError, OSError):
+                            pass
                 disposed_at = metadata.get("disposed_at")
                 current_last = agents[session_id]["last_archived_at"]
                 if disposed_at and (current_last is None or disposed_at > current_last):

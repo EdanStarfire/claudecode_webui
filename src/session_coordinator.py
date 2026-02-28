@@ -1527,7 +1527,7 @@ class SessionCoordinator:
                 "final_state": "reset",
                 "minion_id": session_id,
                 "minion_name": session_info.name if session_info else "",
-                "minion_role": None,
+                "minion_role": session_info.role if session_info else None,
                 "overseer_level": 0,
                 "child_minion_ids": [],
                 "descendants_count": 0,
