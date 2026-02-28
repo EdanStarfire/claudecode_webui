@@ -114,6 +114,8 @@ onMounted(async () => {
 watch([() => props.sessionId, () => effectiveArchiveId.value], async ([newSessionId, newArchiveId], [oldSessionId, oldArchiveId]) => {
   if (newArchiveId) {
     if (newSessionId !== oldSessionId || newArchiveId !== oldArchiveId) {
+      // Update currentSessionId so AgentOverview shows the correct agent
+      sessionStore.currentSessionId = newSessionId
       await loadArchiveMessages()
     }
   } else if (newSessionId !== oldSessionId && newSessionId !== sessionStore.currentSessionId) {
