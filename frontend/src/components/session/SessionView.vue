@@ -118,6 +118,15 @@ watch([() => props.sessionId, () => effectiveArchiveId.value], async ([newSessio
       sessionStore.currentSessionId = newSessionId
       await loadArchiveMessages()
     }
+  } else if (oldArchiveId && !newArchiveId) {
+    // Leaving archive mode → clear archive messages and reload live session
+    messageStore.clearArchiveMessages(newSessionId)
+    uiStore.showLoading('Loading session...')
+    try {
+      await sessionStore.selectSession(newSessionId)
+    } finally {
+      uiStore.hideLoading()
+    }
   } else if (newSessionId !== oldSessionId && newSessionId !== sessionStore.currentSessionId) {
     uiStore.showLoading('Loading session...')
     try {
