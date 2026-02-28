@@ -50,9 +50,11 @@
 
 <script setup>
 import { ref, watch, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
 import { useSessionStore } from '@/stores/session'
 import { useUIStore } from '@/stores/ui'
 
+const router = useRouter()
 const sessionStore = useSessionStore()
 const uiStore = useUIStore()
 
@@ -94,13 +96,19 @@ async function selectAgent(agent) {
       const archives = data.archives || []
       const latest = archives.length > 0 ? archives[archives.length - 1] : null
 
+      const latestArchiveId = latest?.archive_id || null
       sessionStore.addGhostAgent(agent.agent_id, {
         name: agent.name,
         role: agent.role,
         archiveCount: agent.archive_count,
-        latestArchiveId: latest?.archive_id || null,
+        latestArchiveId,
         projectId: currentProjectId
       })
+
+      // Auto-navigate to latest archive
+      if (latestArchiveId) {
+        router.push(`/archive/agent/${agent.agent_id}/${latestArchiveId}`)
+      }
     }
   } catch (e) {
     console.error('Failed to load archives for agent:', e)
