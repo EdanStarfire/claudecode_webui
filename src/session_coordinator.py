@@ -1049,36 +1049,54 @@ class SessionCoordinator:
         )
         return session_id
 
-    async def terminate_and_archive_ephemeral(self, session_id: str) -> bool:
-        """Terminate an ephemeral session and archive its data, then remove it.
+    async def archive_and_clear_session(self, session_id: str) -> bool:
+        """Archive session data and clear messages, then terminate.
+
+        Used by the scheduler after an ephemeral schedule run completes.
+        Archives with the current timestamp (completion time), clears messages,
+        resets display projection, and terminates the session — leaving it in
+        TERMINATED state ready for the next scheduled fire.
+
+        Unlike reset_session(), this does NOT restart the session after clearing.
 
         Args:
-            session_id: The ephemeral session to clean up
+            session_id: The session to archive and clear
 
         Returns:
             True if cleanup succeeded
         """
         try:
-            # Terminate the session first
+            coord_logger.info(f"Archive-and-clear session {session_id}")
+
+            # Archive session data (copies messages, state, resources to timestamped dir)
+            await self._archive_session_for_reset(session_id)
+
+            # Clear message history
+            storage = self._storage_managers.get(session_id)
+            if not storage:
+                session_dir = await self.session_manager.get_session_directory(session_id)
+                storage = DataStorageManager(session_dir)
+                await storage.initialize()
+                self._storage_managers[session_id] = storage
+
+            if storage:
+                await storage.clear_messages()
+                coord_logger.info(f"Cleared message history for session {session_id}")
+
+            # Reset display projection state
+            self._reset_display_projection(session_id)
+
+            # Notify frontend to clear messages
+            await self._notify_session_reset(session_id)
+
+            # Terminate the session (disconnect SDK, set TERMINATED state)
             await self.terminate_session(session_id)
 
-            # Archive session data
-            if self.legion_system and self.legion_system.archive_manager:
-                try:
-                    await self.legion_system.archive_manager.archive_minion(
-                        session_id, reason="ephemeral_schedule_complete"
-                    )
-                    coord_logger.info(f"Archived ephemeral session {session_id}")
-                except Exception as e:
-                    coord_logger.error(f"Failed to archive ephemeral session {session_id}: {e}")
-
-            # Remove session from project and delete data
-            result = await self.delete_session(session_id, archive_reason="ephemeral_complete")
-            coord_logger.info(f"Cleaned up ephemeral session {session_id}")
-            return result.get("success", False)
+            coord_logger.info(f"Archive-and-clear complete for session {session_id}")
+            return True
 
         except Exception as e:
-            logger.error(f"Failed to clean up ephemeral session {session_id}: {e}")
+            logger.error(f"Failed to archive-and-clear session {session_id}: {e}")
             return False
 
     async def update_session_name(self, session_id: str, name: str) -> bool:

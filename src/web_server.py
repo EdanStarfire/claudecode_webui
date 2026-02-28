@@ -2393,6 +2393,8 @@ class ClaudeWebUI:
                 minion_id = request.minion_id
                 minion_name = None
 
+                ephemeral_agent_id = None
+
                 if minion_id:
                     # Permanent mode: resolve minion name
                     session = await self.coordinator.session_manager.get_session_info(
@@ -2401,7 +2403,16 @@ class ClaudeWebUI:
                     if not session:
                         raise HTTPException(status_code=404, detail="Minion not found")
                     minion_name = session.name or minion_id[:8]
-                elif not request.session_config:
+                elif request.session_config:
+                    # Ephemeral mode: create the persistent agent session up front
+                    ephemeral_agent_id = (
+                        await self.coordinator.create_ephemeral_session(
+                            session_config=request.session_config,
+                            schedule_name=request.name,
+                            project_id=legion_id,
+                        )
+                    )
+                else:
                     raise HTTPException(
                         status_code=400,
                         detail="Either minion_id or session_config is required",
@@ -2418,6 +2429,7 @@ class ClaudeWebUI:
                     max_retries=request.max_retries,
                     timeout_seconds=request.timeout_seconds,
                     session_config=request.session_config,
+                    ephemeral_agent_id=ephemeral_agent_id,
                 )
                 return {"schedule": schedule.to_dict()}
             except HTTPException:
@@ -2536,14 +2548,29 @@ class ClaudeWebUI:
                 raise HTTPException(status_code=500, detail=str(e))
 
         @self.app.delete("/api/legions/{legion_id}/schedules/{schedule_id}")
-        async def delete_schedule(legion_id: str, schedule_id: str):
-            """Delete a schedule entirely."""
+        async def delete_schedule(
+            legion_id: str, schedule_id: str, delete_agent: bool = False
+        ):
+            """Delete a schedule entirely. Optionally delete its ephemeral agent."""
             try:
                 schedule = await self.coordinator.legion_system.scheduler_service.get_schedule(
                     schedule_id
                 )
                 if not schedule or schedule.legion_id != legion_id:
                     raise HTTPException(status_code=404, detail="Schedule not found")
+
+                # Optionally delete the ephemeral agent session
+                if delete_agent and schedule.ephemeral_agent_id:
+                    try:
+                        await self.coordinator.delete_session(
+                            schedule.ephemeral_agent_id,
+                            archive_reason="schedule_deleted",
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            f"Failed to delete ephemeral agent "
+                            f"{schedule.ephemeral_agent_id}: {e}"
+                        )
 
                 await self.coordinator.legion_system.scheduler_service.delete_schedule(
                     schedule_id

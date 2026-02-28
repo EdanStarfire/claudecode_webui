@@ -45,7 +45,7 @@ class Schedule:
     failure_count: int = 0
     # Ephemeral session support (issue #578)
     session_config: dict | None = None  # Stored session configuration for ephemeral schedules
-    current_ephemeral_session_id: str | None = None  # Currently running ephemeral session
+    ephemeral_agent_id: str | None = None  # Fixed agent session ID for ephemeral schedules
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization."""
@@ -72,8 +72,8 @@ class Schedule:
         # Ephemeral fields (issue #578) - only include when set
         if self.session_config is not None:
             data["session_config"] = self.session_config
-        if self.current_ephemeral_session_id is not None:
-            data["current_ephemeral_session_id"] = self.current_ephemeral_session_id
+        if self.ephemeral_agent_id is not None:
+            data["ephemeral_agent_id"] = self.ephemeral_agent_id
         return data
 
     @classmethod
@@ -84,7 +84,9 @@ class Schedule:
         data.setdefault("reset_session", False)
         # Ephemeral fields (issue #578) - default to None if missing
         data.setdefault("session_config", None)
-        data.setdefault("current_ephemeral_session_id", None)
+        data.setdefault("ephemeral_agent_id", None)
+        # Discard legacy field from old data
+        data.pop("current_ephemeral_session_id", None)
         return cls(**data)
 
 
