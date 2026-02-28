@@ -24,7 +24,7 @@
         :session="{ session_id: agentId, agent_id: agentId, name: ghost.name, role: ghost.role }"
         :isGhost="true"
         @select="handleGhostSelect(agentId, ghost)"
-        @dismiss="sessionStore.removeGhostAgent(agentId)"
+        @dismiss="handleGhostDismiss(agentId)"
       />
     </template>
 
@@ -56,11 +56,13 @@ import StackedChip from './StackedChip.vue'
 import { useProjectStore } from '@/stores/project'
 import { useSessionStore } from '@/stores/session'
 import { useScheduleStore } from '@/stores/schedule'
+import { useMessageStore } from '@/stores/message'
 import { useUIStore } from '@/stores/ui'
 import { useRouter } from 'vue-router'
 
 const projectStore = useProjectStore()
 const sessionStore = useSessionStore()
+const messageStore = useMessageStore()
 const scheduleStore = useScheduleStore()
 const uiStore = useUIStore()
 const router = useRouter()
@@ -206,6 +208,17 @@ function handleGhostSelect(agentId, ghost) {
   const archiveId = cachedArchive || ghost.latestArchiveId
   if (archiveId) {
     router.push(`/archive/agent/${agentId}/${archiveId}`)
+  }
+}
+
+function handleGhostDismiss(agentId) {
+  const isCurrentlyViewing = sessionStore.currentSessionId === agentId
+  sessionStore.lastViewedArchive.delete(agentId)
+  messageStore.clearArchiveMessages(agentId)
+  sessionStore.removeGhostAgent(agentId)
+  if (isCurrentlyViewing) {
+    sessionStore.currentSessionId = null
+    router.push('/')
   }
 }
 </script>
