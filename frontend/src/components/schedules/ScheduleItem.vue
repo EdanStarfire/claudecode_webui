@@ -298,21 +298,21 @@ function formatRelativeTime(timestamp) {
   const now = Date.now() / 1000
   const diff = timestamp - now
 
-  if (Math.abs(diff) < 60) return 'just now'
+  if (Math.abs(diff) < 60) return '<1 minute'
 
   const absDiff = Math.abs(diff)
   const prefix = diff > 0 ? 'in ' : ''
   const suffix = diff < 0 ? ' ago' : ''
 
   if (absDiff < 3600) {
-    const mins = Math.round(absDiff / 60)
+    const mins = Math.ceil(absDiff / 60)
     return `${prefix}${mins}m${suffix}`
   }
   if (absDiff < 86400) {
-    const hours = Math.round(absDiff / 3600)
+    const hours = Math.ceil(absDiff / 3600)
     return `${prefix}${hours}h${suffix}`
   }
-  const days = Math.round(absDiff / 86400)
+  const days = Math.ceil(absDiff / 86400)
   return `${prefix}${days}d${suffix}`
 }
 
