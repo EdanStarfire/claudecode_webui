@@ -34,11 +34,12 @@
         <span class="agent-badge">{{ schedule.minion_name || 'Unknown agent' }}</span>
       </template>
       <template v-else-if="schedule.ephemeral_agent_id">
-        <router-link
-          :to="`/session/${schedule.ephemeral_agent_id}`"
+        <a
+          href="#"
           class="agent-badge ephemeral agent-link"
-          :title="'View agent session: ' + schedule.ephemeral_agent_id.substring(0, 8)"
-        >{{ ephemeralAgentName }}</router-link>
+          :title="'View agent archives: ' + schedule.ephemeral_agent_id.substring(0, 8)"
+          @click.prevent.stop="navigateToAgent"
+        >{{ ephemeralAgentName }}</a>
       </template>
       <template v-else>
         <span class="agent-badge ephemeral">Scheduled agent</span>
@@ -219,6 +220,7 @@
 
 <script setup>
 import { ref, computed, nextTick } from 'vue'
+import { useRouter } from 'vue-router'
 import { useScheduleStore } from '@/stores/schedule'
 import { useSessionStore } from '@/stores/session'
 import { useUIStore } from '@/stores/ui'
@@ -229,6 +231,7 @@ const props = defineProps({
   legionId: { type: String, required: true },
 })
 
+const router = useRouter()
 const scheduleStore = useScheduleStore()
 const sessionStore = useSessionStore()
 const uiStore = useUIStore()
@@ -479,6 +482,30 @@ function openEditConfig() {
       }
     }
   })
+}
+
+async function navigateToAgent() {
+  const agentId = props.schedule.ephemeral_agent_id
+  if (!agentId) return
+  const session = sessionStore.sessions.get(agentId)
+  const pid = session?.project_id || props.legionId
+  if (!pid) return
+  try {
+    const response = await fetch(`/api/projects/${pid}/archives/${agentId}`)
+    if (response.ok) {
+      const data = await response.json()
+      const archives = data.archives || []
+      if (archives.length > 0) {
+        const latest = archives[archives.length - 1]
+        router.push(`/session/${agentId}/archive/${latest.archive_id}`)
+        return
+      }
+    }
+  } catch (e) {
+    console.error('Failed to fetch archives for agent:', e)
+  }
+  // Fallback: navigate to the session view if no archives exist
+  router.push(`/session/${agentId}`)
 }
 
 async function toggleHistory() {
