@@ -32,6 +32,9 @@ export const useSessionStore = defineStore('session', () => {
   // Ghost agents (deleted agents opened for archive browsing, transient)
   const ghostAgents = ref(new Map())
 
+  // Last viewed archive per session (so chip clicks restore archive view)
+  const lastViewedArchive = ref(new Map())
+
   // Session selection state (prevents concurrent selectSession calls)
   const selectingSession = ref(false)
   let pendingSelectAbort = null  // AbortController for current selection
@@ -485,6 +488,7 @@ export const useSessionStore = defineStore('session', () => {
     initData,
     deletingSessions,
     ghostAgents,
+    lastViewedArchive,
 
     // Computed
     currentSession,

@@ -100,6 +100,7 @@ onMounted(async () => {
   if (isArchiveMode.value) {
     // Set currentSessionId so AgentOverview can display for deleted agents
     sessionStore.currentSessionId = props.sessionId
+    sessionStore.lastViewedArchive.set(props.sessionId, effectiveArchiveId.value)
     await loadArchiveMessages()
   } else if (props.sessionId !== sessionStore.currentSessionId) {
     uiStore.showLoading('Loading session...')
@@ -116,10 +117,12 @@ watch([() => props.sessionId, () => effectiveArchiveId.value], async ([newSessio
     if (newSessionId !== oldSessionId || newArchiveId !== oldArchiveId) {
       // Update currentSessionId so AgentOverview shows the correct agent
       sessionStore.currentSessionId = newSessionId
+      sessionStore.lastViewedArchive.set(newSessionId, newArchiveId)
       await loadArchiveMessages()
     }
   } else if (oldArchiveId && !newArchiveId) {
-    // Leaving archive mode → clear archive messages and reload live session
+    // Leaving archive mode via Active button → clear archive cache and messages
+    sessionStore.lastViewedArchive.delete(newSessionId)
     messageStore.clearArchiveMessages(newSessionId)
     // Force selectSession to run by clearing currentSessionId first
     // (otherwise it bails out because the ID hasn't changed)

@@ -169,8 +169,14 @@ function handleChipSelect(sessionId) {
   if (session) {
     uiStore.setBrowsingProject(session.project_id)
   }
-  sessionStore.selectSession(sessionId)
-  router.push(`/session/${sessionId}`)
+  // Restore last viewed archive if one was remembered
+  const cachedArchive = sessionStore.lastViewedArchive.get(sessionId)
+  if (cachedArchive) {
+    router.push(`/session/${sessionId}/archive/${cachedArchive}`)
+  } else {
+    sessionStore.selectSession(sessionId)
+    router.push(`/session/${sessionId}`)
+  }
 }
 
 function handleStripClick(e) {
@@ -195,8 +201,11 @@ function showDeletedAgentsModal() {
 }
 
 function handleGhostSelect(agentId, ghost) {
-  if (ghost.latestArchiveId) {
-    router.push(`/archive/agent/${agentId}/${ghost.latestArchiveId}`)
+  // Restore last viewed archive or fall back to latest
+  const cachedArchive = sessionStore.lastViewedArchive.get(agentId)
+  const archiveId = cachedArchive || ghost.latestArchiveId
+  if (archiveId) {
+    router.push(`/archive/agent/${agentId}/${archiveId}`)
   }
 }
 </script>
