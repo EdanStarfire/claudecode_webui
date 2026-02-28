@@ -1560,10 +1560,12 @@ class SessionCoordinator:
                 await storage.initialize()
                 self._storage_managers[session_id] = storage
 
-            # Clear messages (storage now guaranteed to exist)
+            # Clear messages and resources (storage now guaranteed to exist)
             if storage:
                 await storage.clear_messages()
                 coord_logger.info(f"Cleared message history for session {session_id}")
+                await storage.clear_resources()
+                coord_logger.info(f"Cleared resources for session {session_id}")
 
             # Issue #310: Reset DisplayProjection state (clears tool tracking)
             self._reset_display_projection(session_id)
@@ -1926,6 +1928,26 @@ class SessionCoordinator:
         if not self.legion_system:
             return None
         return await self.legion_system.archive_manager.get_archive_state(session_id, archive_id)
+
+    async def get_archive_resources(
+        self, session_id: str, archive_id: str
+    ) -> list[dict]:
+        """List resource metadata from an archive."""
+        if not self.legion_system:
+            return []
+        return await self.legion_system.archive_manager.get_archive_resources(
+            session_id, archive_id
+        )
+
+    async def get_archive_resource_file(
+        self, session_id: str, archive_id: str, resource_id: str
+    ) -> bytes | None:
+        """Get raw file bytes for a resource in an archive."""
+        if not self.legion_system:
+            return None
+        return await self.legion_system.archive_manager.get_archive_resource_file(
+            session_id, archive_id, resource_id
+        )
 
     async def list_project_deleted_agents(self, project_id: str) -> list[dict]:
         """List deleted agents with archives for a project."""
