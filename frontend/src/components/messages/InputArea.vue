@@ -129,6 +129,7 @@ import { useSessionStore } from '@/stores/session'
 import { useWebSocketStore } from '@/stores/websocket'
 import { useResourceStore } from '@/stores/resource'
 import { useUIStore } from '@/stores/ui'
+import { api } from '@/utils/api'
 import AttachmentList from './AttachmentList.vue'
 import SlashCommandDropdown from './SlashCommandDropdown.vue'
 
@@ -499,6 +500,12 @@ async function uploadAllFiles() {
  * Send message with attachments
  */
 async function sendMessage() {
+  // Intercept /clear command before normal send path
+  if (inputText.value.trim() === '/clear') {
+    await executeClearCommand()
+    return
+  }
+
   const hasText = inputText.value.trim()
   const hasAttachments = attachments.value.filter(a => !a.error).length > 0
 
@@ -616,6 +623,22 @@ function addResourceAsAttachment(resource) {
   }]
 
   console.log('Added resource as attachment:', resource.resource_id)
+}
+
+/**
+ * Execute /clear command: reset session via REST API and reconnect WebSocket
+ */
+async function executeClearCommand() {
+  const sessionId = currentSessionId.value
+  if (!sessionId) return
+  inputText.value = ''
+  if (messageTextarea.value) messageTextarea.value.style.height = 'auto'
+  const response = await api.post(`/api/sessions/${sessionId}/reset`)
+  if (response.success) {
+    await wsStore.disconnectSession()
+    sessionStore.currentSessionId = null
+    await sessionStore.selectSession(sessionId)
+  }
 }
 
 function interruptSession() {
