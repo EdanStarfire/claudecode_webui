@@ -13,8 +13,8 @@
       </div>
     </div>
 
-    <!-- Archive Navigation (when viewing archive) -->
-    <div v-if="isArchiveMode" class="archive-nav">
+    <!-- Archive Navigation (always visible) -->
+    <div class="archive-nav">
       <button
         class="btn-overview"
         :disabled="!hasPrevArchive"
@@ -23,7 +23,8 @@
       >
         Prev
       </button>
-      <span class="archive-nav-label">{{ archiveIndex + 1 }} / {{ archives.length }}</span>
+      <span v-if="isArchiveMode" class="archive-nav-label">{{ archiveIndex + 1 }} / {{ archives.length }}</span>
+      <span v-else class="archive-nav-label">{{ archives.length }} archive{{ archives.length !== 1 ? 's' : '' }}</span>
       <button
         class="btn-overview"
         :disabled="!hasNextArchive"
@@ -32,8 +33,8 @@
       >
         Next
       </button>
-      <button class="btn-overview btn-overview-primary" @click="jumpToActive" :title="isDeletedAgent ? 'Jump to latest archive' : 'Jump to active session'">
-        {{ isDeletedAgent ? 'Latest' : 'Jump to Active' }}
+      <button class="btn-overview btn-overview-primary" :disabled="isArchiveMode ? false : archives.length === 0" @click="isArchiveMode ? jumpToActive() : viewLatestArchive()" :title="isArchiveMode ? (isDeletedAgent ? 'Jump to latest archive' : 'Jump to active session') : 'View latest archive'">
+        {{ isArchiveMode ? (isDeletedAgent ? 'Latest' : 'Active') : 'View' }}
       </button>
     </div>
 
@@ -54,25 +55,6 @@
       <div class="stat-item">
         <span class="stat-value">{{ uptime }}</span>
         <span class="stat-label">Uptime</span>
-      </div>
-    </div>
-
-    <!-- Archived Versions Section -->
-    <div v-if="!isArchiveMode && archives.length > 0" class="archive-section">
-      <button class="archive-section-btn" @click="toggleArchiveList">
-        Archived Versions ({{ archives.length }})
-        <span class="archive-chevron" :class="{ expanded: showArchiveList }">&#9656;</span>
-      </button>
-      <div v-if="showArchiveList" class="archive-list">
-        <div
-          v-for="archive in archives"
-          :key="archive.archive_id"
-          class="archive-list-item"
-          @click="openArchive(archive)"
-        >
-          <span class="archive-item-reason">{{ archive.reason || 'snapshot' }}</span>
-          <span class="archive-item-count">{{ archive.messages_count }} msgs</span>
-        </div>
       </div>
     </div>
 
@@ -108,7 +90,6 @@ const messageStore = useMessageStore()
 const uiStore = useUIStore()
 
 const archives = ref([])
-const showArchiveList = ref(false)
 
 const now = ref(Date.now())
 let interval = null
@@ -228,8 +209,14 @@ const archiveIndex = computed(() => {
   return archives.value.findIndex(a => a.archive_id === currentArchiveId.value)
 })
 
-const hasPrevArchive = computed(() => archiveIndex.value > 0)
-const hasNextArchive = computed(() => archiveIndex.value < archives.value.length - 1)
+const hasPrevArchive = computed(() => {
+  if (!isArchiveMode.value) return archives.value.length > 0
+  return archiveIndex.value > 0
+})
+const hasNextArchive = computed(() => {
+  if (!isArchiveMode.value) return false
+  return archiveIndex.value < archives.value.length - 1
+})
 
 async function fetchArchives() {
   const id = sessionStore.currentSessionId
@@ -252,13 +239,8 @@ async function fetchArchives() {
 
 watch(() => sessionStore.currentSessionId, () => {
   archives.value = []
-  showArchiveList.value = false
   fetchArchives()
 }, { immediate: true })
-
-function toggleArchiveList() {
-  showArchiveList.value = !showArchiveList.value
-}
 
 const isDeletedAgent = computed(() => !!route.params.agentId || !!sessionStore.ghostAgents.get(sessionStore.currentSessionId))
 
@@ -269,15 +251,23 @@ function archiveRoute(sid, archiveId) {
   return `/session/${sid}/archive/${archiveId}`
 }
 
-function openArchive(archive) {
+function viewLatestArchive() {
+  if (archives.value.length === 0) return
+  const latest = archives.value[archives.value.length - 1]
   const sid = sessionStore.currentSessionId
-  router.push(archiveRoute(sid, archive.archive_id))
+  router.push(archiveRoute(sid, latest.archive_id))
 }
 
 function goToPrevArchive() {
   if (!hasPrevArchive.value) return
+  const sid = route.params.sessionId || route.params.agentId || sessionStore.currentSessionId
+  if (!isArchiveMode.value) {
+    // From active view, "Prev" enters the latest archive
+    const latest = archives.value[archives.value.length - 1]
+    router.push(archiveRoute(sid, latest.archive_id))
+    return
+  }
   const prev = archives.value[archiveIndex.value - 1]
-  const sid = route.params.sessionId || route.params.agentId
   router.push(archiveRoute(sid, prev.archive_id))
 }
 
@@ -478,72 +468,5 @@ function showInfo() {
   text-align: center;
 }
 
-/* Archive Section */
-.archive-section {
-  margin-bottom: 10px;
-}
-
-.archive-section-btn {
-  display: flex;
-  align-items: center;
-  width: 100%;
-  padding: 6px 8px;
-  border: 1px solid #e2e8f0;
-  border-radius: 6px;
-  background: #f8fafc;
-  color: #475569;
-  font-size: 11px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: background 0.15s;
-}
-
-.archive-section-btn:hover {
-  background: #f1f5f9;
-}
-
-.archive-chevron {
-  margin-left: auto;
-  font-size: 10px;
-  transition: transform 0.15s;
-}
-
-.archive-chevron.expanded {
-  transform: rotate(90deg);
-}
-
-.archive-list {
-  margin-top: 4px;
-  border: 1px solid #e2e8f0;
-  border-radius: 6px;
-  overflow: hidden;
-}
-
-.archive-list-item {
-  display: flex;
-  justify-content: space-between;
-  padding: 6px 10px;
-  font-size: 11px;
-  cursor: pointer;
-  border-bottom: 1px solid #f1f5f9;
-  transition: background 0.1s;
-}
-
-.archive-list-item:last-child {
-  border-bottom: none;
-}
-
-.archive-list-item:hover {
-  background: #eff6ff;
-}
-
-.archive-item-reason {
-  color: #475569;
-  text-transform: capitalize;
-}
-
-.archive-item-count {
-  color: #94a3b8;
-}
 
 </style>
