@@ -77,7 +77,7 @@ const props = defineProps({
   maxDepth: { type: Number, default: 0 } // 0 = auto-compute from tree
 })
 
-defineEmits(['select'])
+const emit = defineEmits(['select'])
 
 const sessionStore = useSessionStore()
 const uiStore = useUIStore()
@@ -165,10 +165,11 @@ function toggleExpand() {
   uiStore.toggleStack(props.session.session_id)
 }
 
-function handlePeekClick() {
+function handlePeekClick(childSessionId) {
   if (!isExpanded.value) {
     uiStore.toggleStack(props.session.session_id)
   }
+  emit('select', childSessionId)
 }
 </script>
 
