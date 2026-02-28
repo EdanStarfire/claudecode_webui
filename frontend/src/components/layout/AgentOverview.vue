@@ -284,8 +284,9 @@ function goToNextArchive() {
 
 function jumpToActive() {
   const sid = route.params.sessionId || route.params.agentId
-  // For deleted agents, there's no active session — just go to latest archive
-  if (isDeletedAgent.value && archives.value.length > 0) {
+  // For deleted agents (no active session), go to latest archive
+  const hasActiveSession = !!sessionStore.getSession(sid)
+  if (!hasActiveSession && archives.value.length > 0) {
     const latest = archives.value[archives.value.length - 1]
     router.push(archiveRoute(sid, latest.archive_id))
     return
