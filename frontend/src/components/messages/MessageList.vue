@@ -24,13 +24,15 @@
 </template>
 
 <script setup>
-import { computed, ref, watch, nextTick, onMounted } from 'vue'
+import { computed, ref, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import { useMessageStore } from '@/stores/message'
+import { useSessionStore } from '@/stores/session'
 import { useUIStore } from '@/stores/ui'
 import MessageItem from './MessageItem.vue'
 import CompactionEventGroup from './CompactionEventGroup.vue'
 
 const messageStore = useMessageStore()
+const sessionStore = useSessionStore()
 const uiStore = useUIStore()
 
 const messagesArea = ref(null)
@@ -280,8 +282,69 @@ function isCompactionStart(msg, messages, index) {
 
 const currentToolCalls = computed(() => messageStore.currentToolCalls)
 
+/**
+ * Capture current scroll position as a message index + isAtBottom flag.
+ * Called by session store before switching away from a session.
+ */
+function getScrollPosition() {
+  if (!messagesArea.value || displayableItems.value.length === 0) return null
+  const container = messagesArea.value
+  const scrollTop = container.scrollTop
+  const scrollHeight = container.scrollHeight
+  const clientHeight = container.clientHeight
+
+  // Check if at bottom (within 50px threshold)
+  if (scrollTop + clientHeight >= scrollHeight - 50) {
+    return { index: displayableItems.value.length - 1, isAtBottom: true }
+  }
+
+  // Find topmost visible direct child
+  const children = Array.from(container.children)
+  for (let i = 0; i < children.length; i++) {
+    if (children[i].offsetTop + children[i].offsetHeight > scrollTop) {
+      return { index: i, isAtBottom: false }
+    }
+  }
+  return { index: 0, isAtBottom: false }
+}
+
+/**
+ * Restore scroll position for the current session from saved state.
+ */
+async function restoreScrollPosition() {
+  const pos = sessionStore.scrollPositions.get(sessionStore.currentSessionId)
+  if (!pos || !messagesArea.value) return
+
+  await nextTick()
+  await new Promise(resolve => requestAnimationFrame(resolve))
+
+  if (!messagesArea.value) return
+  const container = messagesArea.value
+
+  if (pos.isAtBottom || pos.index >= displayableItems.value.length - 1) {
+    // Was at bottom — scroll to bottom, keep auto-scroll enabled
+    container.style.scrollBehavior = 'auto'
+    container.scrollTop = container.scrollHeight
+    requestAnimationFrame(() => { if (container) container.style.scrollBehavior = '' })
+    uiStore.setAutoScroll(true)
+  } else {
+    // Restore to specific message index
+    const children = Array.from(container.children)
+    if (pos.index < children.length) {
+      container.style.scrollBehavior = 'auto'
+      container.scrollTop = children[pos.index].offsetTop
+      requestAnimationFrame(() => { if (container) container.style.scrollBehavior = '' })
+    }
+    uiStore.setAutoScroll(false)
+  }
+}
+
 // Auto-scroll function
 async function scrollToBottom() {
+  // Skip auto-scroll when a scroll position restore is pending
+  if (sessionStore.pendingScrollRestoreSessionId === sessionStore.currentSessionId) {
+    return
+  }
   if (uiStore.autoScrollEnabled) {
     await nextTick()
     if (messagesArea.value) {
@@ -290,8 +353,15 @@ async function scrollToBottom() {
   }
 }
 
-// Auto-scroll on new messages (watch displayableItems length changes)
-watch(() => displayableItems.value.length, scrollToBottom)
+// Auto-scroll on new messages, or restore scroll position if pending
+watch(() => displayableItems.value.length, async (newLen) => {
+  if (newLen > 0 && sessionStore.pendingScrollRestoreSessionId === sessionStore.currentSessionId) {
+    sessionStore.clearScrollRestorePending()
+    await restoreScrollPosition()
+    return
+  }
+  scrollToBottom()
+})
 
 // Auto-scroll on tool call updates (for permission requests, status changes, etc.)
 watch(() => messageStore.currentToolCalls.length, scrollToBottom)
@@ -302,12 +372,18 @@ watch(
   scrollToBottom
 )
 
-// Scroll to bottom on initial mount (for when messages are already loaded)
+// Register scroll position getter and scroll to bottom on mount
 onMounted(() => {
+  sessionStore.registerScrollPositionGetter(getScrollPosition)
   // Add a small delay to ensure content is fully rendered
   setTimeout(() => {
     scrollToBottom()
   }, 100)
+})
+
+// Unregister scroll position getter on unmount
+onUnmounted(() => {
+  sessionStore.registerScrollPositionGetter(null)
 })
 
 function shouldDisplayMessage(message) {
