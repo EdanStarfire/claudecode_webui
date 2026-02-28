@@ -222,7 +222,7 @@ const modalElement = ref(null)
 let modalInstance = null
 const permissionPreviewModal = ref(null)  // Issue #36
 
-// Mode: 'create-session', 'edit-session', 'create-template', 'edit-template'
+// Mode: 'create-session', 'edit-session', 'create-template', 'edit-template', 'configure-ephemeral'
 const mode = ref('create-session')
 const activeTab = ref('general')
 
@@ -230,6 +230,9 @@ const activeTab = ref('general')
 const projectId = ref(null)
 const editSession = ref(null)
 const editTemplate = ref(null)
+
+// Ephemeral config callback (issue #578)
+const onConfiguredCallback = ref(null)
 
 // Templates for dropdown
 const templates = ref([])
@@ -337,7 +340,7 @@ const isSubmitting = ref(false)
 const errorMessage = ref('')
 
 // Computed properties
-const isSessionMode = computed(() => mode.value === 'create-session' || mode.value === 'edit-session')
+const isSessionMode = computed(() => mode.value === 'create-session' || mode.value === 'edit-session' || mode.value === 'configure-ephemeral')
 const isTemplateMode = computed(() => mode.value === 'create-template' || mode.value === 'edit-template')
 const isCreateMode = computed(() => mode.value === 'create-session' || mode.value === 'create-template')
 const isEditMode = computed(() => mode.value === 'edit-session' || mode.value === 'edit-template')
@@ -349,11 +352,13 @@ const modalTitle = computed(() => {
     case 'create-template': return 'Create Template'
     case 'edit-template': return 'Edit Template'
     case 'template-list': return 'Manage Templates'
+    case 'configure-ephemeral': return 'Configure Scheduled Session'
     default: return 'Configuration'
   }
 })
 
 const submitButtonText = computed(() => {
+  if (mode.value === 'configure-ephemeral') return 'Apply Configuration'
   if (isSubmitting.value) {
     return isEditMode.value ? 'Saving...' : 'Creating...'
   }
@@ -361,9 +366,10 @@ const submitButtonText = computed(() => {
 })
 
 const isFormValid = computed(() => {
-  // Name is required for all modes
+  // Name is optional for configure-ephemeral mode
+  if (mode.value === 'configure-ephemeral') return true
+  // Name is required for all other modes
   if (!formData.name.trim()) return false
-
   return true
 })
 
@@ -800,7 +806,8 @@ function validate() {
   let isValid = true
   errors.name = ''
 
-  if (!formData.name.trim()) {
+  // Name is optional for configure-ephemeral mode
+  if (mode.value !== 'configure-ephemeral' && !formData.name.trim()) {
     errors.name = 'Name is required'
     isValid = false
   }
@@ -828,6 +835,10 @@ async function handleSubmit() {
       case 'edit-session':
         await updateSession()
         // Close modal after session edit
+        if (modalInstance) modalInstance.hide()
+        break
+      case 'configure-ephemeral':
+        emitEphemeralConfig()
         if (modalInstance) modalInstance.hide()
         break
       case 'create-template':
@@ -911,6 +922,79 @@ async function createSession() {
   } else {
     throw new Error('Failed to create session')
   }
+}
+
+function emitEphemeralConfig() {
+  // Build the same payload shape as createSession but return via callback
+  const toolsList = formData.allowed_tools
+    .split(',')
+    .map(t => t.trim())
+    .filter(t => t.length > 0)
+
+  const deniedList = formData.disallowed_tools
+    .split(',')
+    .map(t => t.trim())
+    .filter(t => t.length > 0)
+
+  const payload = {
+    model: formData.model || null,
+    permission_mode: formData.permission_mode,
+    allowed_tools: toolsList.length > 0 ? toolsList : null,
+    disallowed_tools: deniedList.length > 0 ? deniedList : null,
+    working_directory: formData.working_directory.trim() || null,
+    system_prompt: formData.initialization_context.trim() || null,
+    override_system_prompt: formData.override_system_prompt,
+    sandbox_enabled: formData.sandbox_enabled,
+    sandbox_config: formData.sandbox_enabled ? buildSandboxConfig() : null,
+    setting_sources: formData.setting_sources,
+    cli_path: formData.cli_path.trim() || null,
+    docker_enabled: formData.docker_enabled,
+    docker_image: formData.docker_image.trim() || null,
+    docker_extra_mounts: formData.docker_extra_mounts.trim() ? formData.docker_extra_mounts.trim().split('\n').map(m => m.trim()).filter(m => m) : null,
+    thinking_mode: formData.thinking_mode || null,
+    thinking_budget_tokens: formData.thinking_mode === 'enabled' ? formData.thinking_budget_tokens : null,
+    effort: formData.effort || null,
+  }
+
+  if (onConfiguredCallback.value) {
+    onConfiguredCallback.value(payload)
+  }
+}
+
+function populateFormFromConfig(config) {
+  // Populate form from a session_config dict (used for configure-ephemeral seed)
+  formData.name = config.name || '[Scheduled]'
+  formData.model = config.model || 'sonnet'
+  formData.permission_mode = config.permission_mode || 'default'
+  formData.working_directory = config.working_directory || ''
+  formData.initialization_context = config.system_prompt || ''
+  formData.override_system_prompt = config.override_system_prompt || false
+  formData.allowed_tools = Array.isArray(config.allowed_tools) ? config.allowed_tools.join(', ') : (config.allowed_tools || '')
+  formData.disallowed_tools = Array.isArray(config.disallowed_tools) ? config.disallowed_tools.join(', ') : (config.disallowed_tools || '')
+  formData.sandbox_enabled = config.sandbox_enabled || false
+  formData.cli_path = config.cli_path || ''
+  formData.docker_enabled = config.docker_enabled || false
+  formData.docker_image = config.docker_image || ''
+  formData.docker_extra_mounts = Array.isArray(config.docker_extra_mounts) ? config.docker_extra_mounts.join('\n') : ''
+  formData.thinking_mode = config.thinking_mode || ''
+  formData.thinking_budget_tokens = config.thinking_budget_tokens || 10240
+  formData.effort = config.effort || ''
+  formData.setting_sources = config.setting_sources || ['user', 'project', 'local']
+
+  // Sandbox config
+  const sc = config.sandbox_config || {}
+  formData.sandbox.autoAllowBashIfSandboxed = sc.autoAllowBashIfSandboxed ?? true
+  formData.sandbox.allowUnsandboxedCommands = sc.allowUnsandboxedCommands ?? false
+  formData.sandbox.excludedCommands = (sc.excludedCommands || []).join(', ')
+  formData.sandbox.enableWeakerNestedSandbox = sc.enableWeakerNestedSandbox ?? false
+  const net = sc.network || {}
+  formData.sandbox.network.allowedDomains = (net.allowedDomains || []).join(', ')
+  formData.sandbox.network.allowLocalBinding = net.allowLocalBinding ?? false
+  formData.sandbox.network.allowUnixSockets = (net.allowUnixSockets || []).join(', ')
+  formData.sandbox.network.allowAllUnixSockets = net.allowAllUnixSockets ?? false
+  const iv = sc.ignoreViolations || {}
+  formData.sandbox.ignoreViolations.file = (iv.file || []).join(', ')
+  formData.sandbox.ignoreViolations.network = (iv.network || []).join(', ')
 }
 
 async function updateSession() {
@@ -1241,6 +1325,7 @@ function onModalHidden() {
   projectId.value = null
   editSession.value = null
   editTemplate.value = null
+  onConfiguredCallback.value = null
   uiStore.hideModal()
 }
 
@@ -1260,8 +1345,8 @@ watch(
 
       resetForm()
 
-      // Load templates for session creation
-      if (mode.value === 'create-session') {
+      // Load templates for session creation and configure-ephemeral
+      if (mode.value === 'create-session' || mode.value === 'configure-ephemeral') {
         await loadTemplates()
       }
 
@@ -1270,6 +1355,11 @@ watch(
         populateFormFromSession(editSession.value)
       } else if (mode.value === 'edit-template' && editTemplate.value) {
         populateFormFromTemplate(editTemplate.value)
+      } else if (mode.value === 'configure-ephemeral') {
+        onConfiguredCallback.value = data.onConfigured || null
+        if (data.seedConfig) {
+          populateFormFromConfig(data.seedConfig)
+        }
       }
 
       modalInstance.show()

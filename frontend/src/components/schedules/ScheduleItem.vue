@@ -21,12 +21,29 @@
           @blur="saveName"
         />
       </template>
-      <span class="status-badge" :class="schedule.status">{{ schedule.status }}</span>
+      <div class="header-badges">
+        <span v-if="isEphemeral" class="type-badge ephemeral" title="Ephemeral — dedicated agent for this schedule">Ephemeral</span>
+        <span v-if="isAgentRunning" class="type-badge running" title="Agent session currently active">Running</span>
+        <span class="status-badge" :class="schedule.status">{{ schedule.status }}</span>
+      </div>
     </div>
 
     <!-- Agent association -->
     <div class="schedule-agent">
-      <span class="agent-badge">{{ schedule.minion_name || 'Unknown agent' }}</span>
+      <template v-if="!isEphemeral">
+        <span class="agent-badge">{{ schedule.minion_name || 'Unknown agent' }}</span>
+      </template>
+      <template v-else-if="schedule.ephemeral_agent_id">
+        <a
+          href="#"
+          class="agent-badge ephemeral agent-link"
+          :title="'View agent archives: ' + schedule.ephemeral_agent_id.substring(0, 8)"
+          @click.prevent.stop="navigateToAgent"
+        >{{ ephemeralAgentName }}</a>
+      </template>
+      <template v-else>
+        <span class="agent-badge ephemeral">Scheduled agent</span>
+      </template>
     </div>
 
     <!-- Cron + next run -->
@@ -111,6 +128,51 @@
       </div>
     </div>
 
+    <!-- Session Config viewer (ephemeral only, issue #578) -->
+    <div v-if="isEphemeral && schedule.session_config" class="prompt-section">
+      <div class="prompt-toggle" role="button" :aria-expanded="showConfig" aria-label="Toggle session config" @click.stop="showConfig = !showConfig">
+        <span class="prompt-label">Session Config</span>
+        <span class="prompt-arrow">{{ showConfig ? '▾' : '▸' }}</span>
+      </div>
+      <div v-if="showConfig" class="prompt-body">
+        <div class="config-display">
+          <div v-if="schedule.session_config.working_directory" class="config-row">
+            <span class="config-key">Directory:</span>
+            <span class="config-val">{{ schedule.session_config.working_directory }}</span>
+          </div>
+          <div v-if="schedule.session_config.model" class="config-row">
+            <span class="config-key">Model:</span>
+            <span class="config-val">{{ schedule.session_config.model }}</span>
+          </div>
+          <div v-if="schedule.session_config.permission_mode" class="config-row">
+            <span class="config-key">Permissions:</span>
+            <span class="config-val">{{ schedule.session_config.permission_mode }}</span>
+          </div>
+          <div v-if="schedule.session_config.system_prompt" class="config-row">
+            <span class="config-key">System Prompt:</span>
+            <span class="config-val truncated">{{ schedule.session_config.system_prompt }}</span>
+          </div>
+          <div v-if="schedule.session_config.sandbox_enabled" class="config-row">
+            <span class="config-key">Sandbox:</span>
+            <span class="config-val">Enabled</span>
+          </div>
+          <div v-if="schedule.session_config.thinking_mode" class="config-row">
+            <span class="config-key">Thinking:</span>
+            <span class="config-val">{{ schedule.session_config.thinking_mode }}</span>
+          </div>
+          <div v-if="schedule.session_config.effort" class="config-row">
+            <span class="config-key">Effort:</span>
+            <span class="config-val">{{ schedule.session_config.effort }}</span>
+          </div>
+        </div>
+        <button
+          v-if="schedule.status !== 'cancelled'"
+          class="ctrl-btn edit-prompt"
+          @click.stop="openEditConfig"
+        >Edit Config</button>
+      </div>
+    </div>
+
     <!-- Controls -->
     <div class="schedule-controls">
       <button
@@ -158,7 +220,10 @@
 
 <script setup>
 import { ref, computed, nextTick } from 'vue'
+import { useRouter } from 'vue-router'
 import { useScheduleStore } from '@/stores/schedule'
+import { useSessionStore } from '@/stores/session'
+import { useUIStore } from '@/stores/ui'
 import cronstrue from 'cronstrue'
 
 const props = defineProps({
@@ -166,10 +231,14 @@ const props = defineProps({
   legionId: { type: String, required: true },
 })
 
+const router = useRouter()
 const scheduleStore = useScheduleStore()
+const sessionStore = useSessionStore()
+const uiStore = useUIStore()
 const expanded = ref(false)
 const history = ref([])
 const showPrompt = ref(false)
+const showConfig = ref(false)
 const editingPrompt = ref(false)
 const editPromptText = ref('')
 const saving = ref(false)
@@ -180,6 +249,22 @@ const nameInput = ref(null)
 const editingCron = ref(false)
 const editCronText = ref('')
 const cronInput = ref(null)
+
+const isEphemeral = computed(() => !!props.schedule.ephemeral_agent_id || !!props.schedule.session_config)
+
+const isAgentRunning = computed(() => {
+  const agentId = props.schedule.ephemeral_agent_id
+  if (!agentId) return false
+  const session = sessionStore.sessions.get(agentId)
+  return session && (session.state === 'active' || session.state === 'starting')
+})
+
+const ephemeralAgentName = computed(() => {
+  const agentId = props.schedule.ephemeral_agent_id
+  if (!agentId) return 'Scheduled agent'
+  const session = sessionStore.sessions.get(agentId)
+  return session?.name || agentId.substring(0, 8)
+})
 
 const cronDescription = computed(() => {
   try {
@@ -375,6 +460,62 @@ async function savePrompt() {
   }
 }
 
+function openEditConfig() {
+  uiStore.showModal('configuration', {
+    mode: 'configure-ephemeral',
+    data: {
+      seedConfig: props.schedule.session_config || {},
+      onConfigured: async (config) => {
+        try {
+          await scheduleStore.updateSchedule(
+            props.legionId,
+            props.schedule.schedule_id,
+            { session_config: config }
+          )
+          // Patch the ephemeral agent session if it exists
+          if (props.schedule.ephemeral_agent_id) {
+            await sessionStore.patchSession(props.schedule.ephemeral_agent_id, config)
+          }
+        } catch (e) {
+          console.error('Failed to update session config:', e)
+        }
+      }
+    }
+  })
+}
+
+async function navigateToAgent() {
+  const agentId = props.schedule.ephemeral_agent_id
+  if (!agentId) return
+  const session = sessionStore.sessions.get(agentId)
+  const pid = session?.project_id || props.legionId
+  if (!pid) return
+  try {
+    const response = await fetch(`/api/projects/${pid}/archives/${agentId}`)
+    if (response.ok) {
+      const data = await response.json()
+      const archives = data.archives || []
+      if (archives.length > 0) {
+        const latest = archives[archives.length - 1]
+        // Add ghost agent so the chip appears in AgentStrip
+        sessionStore.addGhostAgent(agentId, {
+          name: session?.name || props.schedule.name || 'Scheduled agent',
+          role: session?.role || 'ephemeral',
+          archiveCount: archives.length,
+          latestArchiveId: latest.archive_id,
+          projectId: pid
+        })
+        router.push(`/session/${agentId}/archive/${latest.archive_id}`)
+        return
+      }
+    }
+  } catch (e) {
+    console.error('Failed to fetch archives for agent:', e)
+  }
+  // Fallback: navigate to the session view if no archives exist
+  router.push(`/session/${agentId}`)
+}
+
 async function toggleHistory() {
   expanded.value = !expanded.value
   if (expanded.value && history.value.length === 0) {
@@ -412,6 +553,12 @@ async function toggleHistory() {
   justify-content: space-between;
   align-items: center;
   margin-bottom: 4px;
+}
+
+.header-badges {
+  display: flex;
+  gap: 4px;
+  align-items: center;
 }
 
 .schedule-name {
@@ -477,6 +624,29 @@ async function toggleHistory() {
   color: #dc2626;
 }
 
+.type-badge {
+  font-size: 9px;
+  padding: 1px 5px;
+  border-radius: 8px;
+  font-weight: 600;
+}
+
+.type-badge.ephemeral {
+  background: #dbeafe;
+  color: #1e40af;
+}
+
+.type-badge.running {
+  background: #dcfce7;
+  color: #166534;
+  animation: pulse 2s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
 .status-badge {
   font-size: 10px;
   padding: 1px 6px;
@@ -510,6 +680,21 @@ async function toggleHistory() {
   background: #ede9fe;
   color: #6d28d9;
   font-weight: 500;
+}
+
+.agent-badge.ephemeral {
+  background: #dbeafe;
+  color: #1e40af;
+}
+
+.agent-badge.agent-link {
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.agent-badge.agent-link:hover {
+  background: #bfdbfe;
+  text-decoration: underline;
 }
 
 .schedule-meta {
@@ -648,6 +833,36 @@ async function toggleHistory() {
   border-color: #86efac;
   color: #166534;
 }
+
+.config-display {
+  margin-bottom: 4px;
+}
+
+.config-row {
+  display: flex;
+  gap: 6px;
+  padding: 2px 0;
+  font-size: 11px;
+}
+
+.config-key {
+  color: #64748b;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.config-val {
+  color: #334155;
+  word-break: break-all;
+}
+
+.config-val.truncated {
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 
 .schedule-controls {
   display: flex;

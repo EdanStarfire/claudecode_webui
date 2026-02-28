@@ -990,6 +990,115 @@ class SessionCoordinator:
             logger.error(f"Failed to terminate integrated session {session_id}: {e}")
             return False
 
+    # =========================================================================
+    # Ephemeral Session Lifecycle (Issue #578)
+    # =========================================================================
+
+    async def create_ephemeral_session(
+        self,
+        session_config: dict,
+        schedule_name: str,
+        project_id: str,
+        permission_callback=None,
+    ) -> str:
+        """Create a temporary session from a schedule's stored config.
+
+        Args:
+            session_config: Dict with session configuration fields (model, permission_mode, etc.)
+            schedule_name: Name of the schedule (used in session name)
+            project_id: Legion/project ID to add the session to
+
+        Returns:
+            The new session_id
+        """
+        import uuid
+        session_id = str(uuid.uuid4())
+
+        await self.create_session(
+            session_id=session_id,
+            project_id=project_id,
+            permission_mode=session_config.get("permission_mode", "acceptEdits"),
+            system_prompt=session_config.get("system_prompt"),
+            override_system_prompt=session_config.get("override_system_prompt", False),
+            allowed_tools=session_config.get("allowed_tools"),
+            disallowed_tools=session_config.get("disallowed_tools"),
+            model=session_config.get("model"),
+            name=f"[Scheduled] {schedule_name}",
+            permission_callback=permission_callback,
+            working_directory=session_config.get("working_directory"),
+            sandbox_enabled=session_config.get("sandbox_enabled", False),
+            setting_sources=session_config.get("setting_sources"),
+            docker_enabled=session_config.get("docker_enabled", False),
+            docker_image=session_config.get("docker_image"),
+            docker_extra_mounts=session_config.get("docker_extra_mounts"),
+            thinking_mode=session_config.get("thinking_mode"),
+            thinking_budget_tokens=session_config.get("thinking_budget_tokens"),
+            effort=session_config.get("effort"),
+        )
+
+        # Mark session as ephemeral
+        session_info = await self.session_manager.get_session_info(session_id)
+        if session_info:
+            session_info.is_ephemeral = True
+            session_info.updated_at = datetime.now(UTC)
+            await self.session_manager._persist_session_state(session_id)
+
+        coord_logger.info(
+            f"Created ephemeral session {session_id} for schedule '{schedule_name}' "
+            f"in project {project_id}"
+        )
+        return session_id
+
+    async def archive_and_clear_session(self, session_id: str) -> bool:
+        """Archive session data and clear messages, then terminate.
+
+        Used by the scheduler after an ephemeral schedule run completes.
+        Archives with the current timestamp (completion time), clears messages,
+        resets display projection, and terminates the session — leaving it in
+        TERMINATED state ready for the next scheduled fire.
+
+        Unlike reset_session(), this does NOT restart the session after clearing.
+
+        Args:
+            session_id: The session to archive and clear
+
+        Returns:
+            True if cleanup succeeded
+        """
+        try:
+            coord_logger.info(f"Archive-and-clear session {session_id}")
+
+            # Archive session data (copies messages, state, resources to timestamped dir)
+            await self._archive_session_for_reset(session_id)
+
+            # Clear message history
+            storage = self._storage_managers.get(session_id)
+            if not storage:
+                session_dir = await self.session_manager.get_session_directory(session_id)
+                storage = DataStorageManager(session_dir)
+                await storage.initialize()
+                self._storage_managers[session_id] = storage
+
+            if storage:
+                await storage.clear_messages()
+                coord_logger.info(f"Cleared message history for session {session_id}")
+
+            # Reset display projection state
+            self._reset_display_projection(session_id)
+
+            # Notify frontend to clear messages
+            await self._notify_session_reset(session_id)
+
+            # Terminate the session (disconnect SDK, set TERMINATED state)
+            await self.terminate_session(session_id)
+
+            coord_logger.info(f"Archive-and-clear complete for session {session_id}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to archive-and-clear session {session_id}: {e}")
+            return False
+
     async def update_session_name(self, session_id: str, name: str) -> bool:
         """Update session name"""
         try:

@@ -28,7 +28,7 @@
     <div class="mb-3">
       <label for="config-name" class="form-label">
         {{ isTemplateMode ? 'Template Name' : 'Session Name' }}
-        <span class="text-danger">*</span>
+        <span v-if="mode !== 'configure-ephemeral'" class="text-danger">*</span>
       </label>
       <input
         id="config-name"
@@ -37,8 +37,8 @@
         :class="{ 'is-invalid': errors.name }"
         :value="formData.name"
         @input="$emit('update:form-data', 'name', $event.target.value)"
-        :placeholder="isTemplateMode ? 'e.g., Code Expert' : 'main'"
-        required
+        :placeholder="mode === 'configure-ephemeral' ? '[Scheduled]' : (isTemplateMode ? 'e.g., Code Expert' : 'main')"
+        :required="mode !== 'configure-ephemeral'"
       />
       <div class="invalid-feedback" v-if="errors.name">{{ errors.name }}</div>
     </div>

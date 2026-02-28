@@ -246,7 +246,14 @@ watch(
   { immediate: true }
 )
 
-const isDeletedAgent = computed(() => !!route.params.agentId || !!sessionStore.ghostAgents.get(sessionStore.currentSessionId))
+const isDeletedAgent = computed(() => {
+  if (route.params.agentId) return true
+  if (sessionStore.ghostAgents.get(sessionStore.currentSessionId)) return true
+  // Ephemeral sessions (schedule-owned) behave like deleted agents for navigation
+  const sess = sessionStore.getSession(sessionStore.currentSessionId)
+  if (sess?.is_ephemeral) return true
+  return false
+})
 
 function archiveRoute(sid, archiveId) {
   if (isDeletedAgent.value) {
@@ -284,9 +291,10 @@ function goToNextArchive() {
 
 function jumpToActive() {
   const sid = route.params.sessionId || route.params.agentId
-  // For deleted agents (no active session), go to latest archive
-  const hasActiveSession = !!sessionStore.getSession(sid)
-  if (!hasActiveSession && archives.value.length > 0) {
+  const sess = sessionStore.getSession(sid)
+  // For deleted or ephemeral agents, go to latest archive instead of live session
+  const shouldShowArchive = !sess || sess.is_ephemeral
+  if (shouldShowArchive && archives.value.length > 0) {
     const latest = archives.value[archives.value.length - 1]
     router.push(archiveRoute(sid, latest.archive_id))
     return
