@@ -18,8 +18,8 @@
         @select="handleChipSelect"
       />
     </template>
-    <!-- Ghost chips for deleted agents -->
-    <template v-for="[agentId, ghost] in sessionStore.ghostAgents" :key="'ghost-' + agentId">
+    <!-- Ghost chips for deleted agents (filtered to current project) -->
+    <template v-for="[agentId, ghost] in projectGhosts" :key="'ghost-' + agentId">
       <AgentChip
         :session="{ session_id: agentId, agent_id: agentId, name: ghost.name, role: ghost.role }"
         :isGhost="true"
@@ -42,7 +42,7 @@
         <path d="M8 0a8 8 0 1 0 0 16A8 8 0 0 0 8 0zm0 14.5A6.5 6.5 0 1 1 8 1.5a6.5 6.5 0 0 1 0 13zM8.5 4H7v5l4.25 2.55.75-1.23L8.5 8.25V4z"/>
       </svg>
     </button>
-    <span v-if="topLevelSessions.length === 0 && sessionStore.ghostAgents.size === 0" class="strip-empty">No agents yet</span>
+    <span v-if="topLevelSessions.length === 0 && projectGhosts.length === 0" class="strip-empty">No agents yet</span>
   </div>
   <div v-else class="agent-strip agent-strip-empty" :class="{ 'theme-red': uiStore.isRedBackground }">
     <span class="strip-empty">Select a project above</span>
@@ -145,6 +145,14 @@ const allChildIds = computed(() => {
 // Only show top-level sessions (not children already shown under a parent)
 const topLevelSessions = computed(() => {
   return projectSessions.value.filter(s => !allChildIds.value.has(s.session_id))
+})
+
+// Ghost agents filtered to the current browsing project
+const projectGhosts = computed(() => {
+  const pid = uiStore.browsingProjectId
+  if (!pid) return []
+  return [...sessionStore.ghostAgents.entries()]
+    .filter(([, ghost]) => ghost.projectId === pid)
 })
 
 function hasChildren(session) {
