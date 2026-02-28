@@ -1036,12 +1036,17 @@ class SessionCoordinator:
             effort=session_config.get("effort"),
         )
 
-        # Mark session as ephemeral
+        # Mark session as ephemeral and broadcast the updated state so the
+        # frontend receives is_ephemeral=True (the initial create_session broadcast
+        # fires before this flag is set, creating a race condition).
         session_info = await self.session_manager.get_session_info(session_id)
         if session_info:
             session_info.is_ephemeral = True
             session_info.updated_at = datetime.now(UTC)
             await self.session_manager._persist_session_state(session_id)
+            await self.session_manager._notify_state_change_callbacks(
+                session_id, session_info.state
+            )
 
         coord_logger.info(
             f"Created ephemeral session {session_id} for schedule '{schedule_name}' "
