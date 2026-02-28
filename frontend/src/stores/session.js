@@ -199,6 +199,53 @@ export const useSessionStore = defineStore('session', () => {
         }
       }
 
+      // Ephemeral sessions (managed by schedules) should never be auto-started by the UI.
+      // Redirect to the latest archive if one exists, or show an informational view.
+      if (session && session.is_ephemeral &&
+          (session.state === 'created' || session.state === 'terminated')) {
+        // Resolve project_id for the archive API
+        const projectId = session.project_id
+        if (projectId) {
+          try {
+            const archiveData = await api.get(`/api/projects/${projectId}/archives/${sessionId}`)
+
+            // Check abort after await
+            if (abortController.signal.aborted) return
+
+            const archives = archiveData.archives || []
+            if (archives.length > 0) {
+              // Navigate to the latest archive
+              const latest = archives[archives.length - 1]
+              const router = useRouter()
+              router.push(`/session/${sessionId}/archive/${latest.archive_id}`)
+              return
+            }
+          } catch (error) {
+            console.warn(`Failed to fetch archives for ephemeral session ${sessionId}:`, error)
+          }
+        }
+
+        // No archives (or no project_id / fetch failed): show informational view
+        // Set currentSessionId but skip auto-start entirely
+        const messageStore = await import('./message')
+        await messageStore.useMessageStore().loadMessages(sessionId)
+
+        if (abortController.signal.aborted) return
+
+        const resourceStore = await import('./resource')
+        await resourceStore.useResourceStore().loadResources(sessionId)
+
+        if (abortController.signal.aborted) return
+
+        const wsStore = await import('./websocket')
+        await wsStore.useWebSocketStore().connectSession(sessionId)
+
+        if (!abortController.signal.aborted) {
+          console.log(`Selected ephemeral session ${sessionId} (no auto-start)`)
+        }
+        return
+      }
+
       // Auto-start sessions in created or terminated states
       if (session && (session.state === 'created' || session.state === 'terminated')) {
         try {
