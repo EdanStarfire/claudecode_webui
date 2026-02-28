@@ -235,7 +235,7 @@ const hasSessionConfig = computed(() => {
 })
 
 const projectSessions = computed(() => {
-  return sessionStore.sessionsInProject(props.legionId).value
+  return sessionStore.sessionsInProject(props.legionId).value.filter(s => !s.is_ephemeral)
 })
 
 const cronPreview = computed(() => {
