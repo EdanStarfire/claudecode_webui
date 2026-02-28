@@ -5,7 +5,7 @@
     :aria-label="`View child agent ${childSession?.name || childSession?.role || 'unknown'}`"
     :style="peekStyle"
     :title="childSession?.name || 'Child agent'"
-    @click.stop="$emit('click')"
+    @click.stop="$emit('click', sessionId)"
   >
     <div class="peek-dot" :class="statusClass"></div>
     <span class="peek-letter">{{ letter }}</span>
