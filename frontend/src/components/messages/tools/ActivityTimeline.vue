@@ -106,14 +106,15 @@ watch(needsPermission, (needs) => {
   }
 })
 
-// Auto-expand when a tool needs permission, auto-collapse when resolved
+// Auto-expand when a tool needs permission; only collapse if tool no longer exists
 watch(sortedTools, (tools) => {
   const permTool = tools.find(t => getEffectiveStatusForTool(t) === 'permission_required')
   if (permTool) {
     expandedNodeId.value = permTool.id
   } else if (expandedNodeId.value) {
-    const expanded = tools.find(t => t.id === expandedNodeId.value)
-    if (expanded && getEffectiveStatusForTool(expanded) !== 'permission_required') {
+    // Only collapse if the expanded tool no longer exists in the list
+    const stillExists = tools.some(t => t.id === expandedNodeId.value)
+    if (!stillExists) {
       expandedNodeId.value = null
     }
   }
