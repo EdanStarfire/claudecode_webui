@@ -1560,10 +1560,12 @@ class SessionCoordinator:
                 await storage.initialize()
                 self._storage_managers[session_id] = storage
 
-            # Clear messages (storage now guaranteed to exist)
+            # Clear messages and resources (storage now guaranteed to exist)
             if storage:
                 await storage.clear_messages()
                 coord_logger.info(f"Cleared message history for session {session_id}")
+                await storage.clear_resources()
+                coord_logger.info(f"Cleared resources for session {session_id}")
 
             # Issue #310: Reset DisplayProjection state (clears tool tracking)
             self._reset_display_projection(session_id)
