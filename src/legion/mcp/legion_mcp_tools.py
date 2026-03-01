@@ -141,10 +141,11 @@ class LegionMCPTools:
 
         @tool(
             "dispose_minion",
-            "Terminate a child minion you created when their task is complete. You can only "
-            "dispose minions you spawned (your children). Use delete=True to permanently remove "
-            "the minion (their data is archived first). Use delete=False (default) for soft "
-            "dispose - the minion can be restarted later by sending it a comm.",
+            "Terminate a minion when their task is complete. You can dispose your direct "
+            "children or any minion in your descendant subtree (grandchildren, etc.). "
+            "Use delete=True to permanently remove the minion (their data is archived first). "
+            "Use delete=False (default) for soft dispose - the minion can be restarted later "
+            "by sending it a comm.",
             {
                 "minion_name": str,  # Name of child minion to dispose
                 "delete": bool       # If True, fully delete after archive (default: False = soft dispose)
@@ -989,10 +990,61 @@ class LegionMCPTools:
                 "is_error": True
             }
 
-        # Attempt to dispose child minion
+        # Resolve the target minion — may be a direct child or a deeper descendant.
+        # If not a direct child, find the target's actual parent so
+        # overseer_controller.dispose_minion() can enforce parent authority.
         try:
+            caller_session = await self.system.session_coordinator.session_manager.get_session_info(
+                parent_overseer_id
+            )
+            if not caller_session:
+                return {
+                    "content": [{"type": "text", "text": "Error: Caller session not found"}],
+                    "is_error": True,
+                }
+
+            # Check direct children first (fast path)
+            from src.session_manager import slugify_name as _slugify
+            target_slug = _slugify(minion_name)
+            effective_parent_id = parent_overseer_id  # default: caller is the parent
+
+            is_direct_child = False
+            for cid in (caller_session.child_minion_ids or []):
+                s = await self.system.session_coordinator.session_manager.get_session_info(cid)
+                if s and s.slug == target_slug:
+                    is_direct_child = True
+                    break
+
+            if not is_direct_child:
+                # Search full descendant subtree for the target
+                descendants = await self.system.session_coordinator.get_descendants(
+                    parent_overseer_id
+                )
+                target_desc = None
+                for d in descendants:
+                    d_slug = _slugify(d["name"])
+                    if d_slug == target_slug:
+                        target_desc = d
+                        break
+
+                if not target_desc:
+                    return {
+                        "content": [{
+                            "type": "text",
+                            "text": (
+                                f"❌ Cannot dispose minion: No minion with name '{minion_name}' "
+                                f"found in your subtree. You can only dispose minions you control "
+                                f"(direct children or deeper descendants)."
+                            )
+                        }],
+                        "is_error": True,
+                    }
+
+                # Use the target's actual parent for disposal
+                effective_parent_id = target_desc["parent_id"]
+
             result = await self.system.overseer_controller.dispose_minion(
-                parent_overseer_id=parent_overseer_id,
+                parent_overseer_id=effective_parent_id,
                 child_minion_name=minion_name,
                 delete_after_archive=delete_after_archive
             )

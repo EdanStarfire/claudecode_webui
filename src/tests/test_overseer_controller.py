@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from src.session_manager import SessionInfo, SessionState
+from src.session_manager import SessionInfo, SessionState, slugify_name
 
 
 def _make_session(session_id, name, project_id="legion-1", parent_id=None, children=None):
@@ -17,7 +17,7 @@ def _make_session(session_id, name, project_id="legion-1", parent_id=None, child
     s = Mock(spec=SessionInfo)
     s.session_id = session_id
     s.name = name
-    s.slug = name
+    s.slug = slugify_name(name)
     s.project_id = project_id
     s.parent_overseer_id = parent_id
     s.child_minion_ids = children or []
@@ -238,3 +238,127 @@ class TestSpawnWithParentName:
 
         call_kwargs = mock_system.overseer_controller.spawn_minion.call_args
         assert call_kwargs.kwargs["parent_overseer_id"] == "caller-id"
+
+
+class TestDisposeDescendant:
+    """Tests for ancestor disposing descendant minions (not just direct children)."""
+
+    @pytest.mark.asyncio
+    async def test_dispose_grandchild_by_grandparent(self, mcp_tools, mock_system):
+        """
+        Grandparent should be able to dispose a grandchild (child of its child).
+        The MCP layer resolves the grandchild's actual parent for disposal.
+        """
+        grandparent = _make_session(
+            "gp-id", "Grandparent", children=["parent-id"]
+        )
+        parent = _make_session(
+            "parent-id", "Parent", parent_id="gp-id", children=["child-id"]
+        )
+        child = _make_session(
+            "child-id", "Child", parent_id="parent-id"
+        )
+
+        session_map = {
+            "gp-id": grandparent,
+            "parent-id": parent,
+            "child-id": child,
+        }
+        sm = mock_system.session_coordinator.session_manager
+        sm.get_session_info = AsyncMock(side_effect=lambda sid: session_map.get(sid))
+
+        # get_descendants returns full subtree under Grandparent
+        mock_system.session_coordinator.get_descendants = AsyncMock(return_value=[
+            {"session_id": "parent-id", "name": "Parent", "role": "worker",
+             "state": "active", "parent_id": "gp-id"},
+            {"session_id": "child-id", "name": "Child", "role": "worker",
+             "state": "active", "parent_id": "parent-id"},
+        ])
+
+        mock_system.overseer_controller.dispose_minion = AsyncMock(
+            return_value={
+                "success": True,
+                "disposed_minion_id": "child-id",
+                "disposed_minion_name": "Child",
+                "descendants_count": 0,
+                "deleted": False,
+            }
+        )
+
+        args = {
+            "_parent_overseer_id": "gp-id",
+            "minion_name": "Child",
+            "delete": False,
+        }
+
+        result = await mcp_tools._handle_dispose_minion(args)
+
+        assert not result.get("is_error", False), f"Expected success, got: {result}"
+
+        # Verify dispose was called with Child's actual parent (Parent), not Grandparent
+        call_kwargs = mock_system.overseer_controller.dispose_minion.call_args
+        assert call_kwargs.kwargs["parent_overseer_id"] == "parent-id", (
+            "Grandchild should be disposed via its actual parent, not the grandparent"
+        )
+        assert call_kwargs.kwargs["child_minion_name"] == "Child"
+
+    @pytest.mark.asyncio
+    async def test_dispose_direct_child_still_works(self, mcp_tools, mock_system):
+        """
+        Disposing a direct child should work as before (no regression).
+        """
+        parent = _make_session("parent-id", "Parent", children=["child-id"])
+        child = _make_session("child-id", "Child", parent_id="parent-id")
+
+        session_map = {"parent-id": parent, "child-id": child}
+        sm = mock_system.session_coordinator.session_manager
+        sm.get_session_info = AsyncMock(side_effect=lambda sid: session_map.get(sid))
+
+        mock_system.overseer_controller.dispose_minion = AsyncMock(
+            return_value={
+                "success": True,
+                "disposed_minion_id": "child-id",
+                "disposed_minion_name": "Child",
+                "descendants_count": 0,
+                "deleted": False,
+            }
+        )
+
+        args = {
+            "_parent_overseer_id": "parent-id",
+            "minion_name": "Child",
+            "delete": False,
+        }
+
+        result = await mcp_tools._handle_dispose_minion(args)
+
+        assert not result.get("is_error", False), f"Expected success, got: {result}"
+
+        # Direct child: dispose called with caller as parent
+        call_kwargs = mock_system.overseer_controller.dispose_minion.call_args
+        assert call_kwargs.kwargs["parent_overseer_id"] == "parent-id"
+
+    @pytest.mark.asyncio
+    async def test_dispose_unrelated_minion_rejected(self, mcp_tools, mock_system):
+        """
+        Caller cannot dispose a minion outside their subtree.
+        """
+        caller = _make_session("caller-id", "Caller", children=[])
+
+        session_map = {"caller-id": caller}
+        sm = mock_system.session_coordinator.session_manager
+        sm.get_session_info = AsyncMock(side_effect=lambda sid: session_map.get(sid))
+
+        # No descendants
+        mock_system.session_coordinator.get_descendants = AsyncMock(return_value=[])
+
+        args = {
+            "_parent_overseer_id": "caller-id",
+            "minion_name": "Unrelated",
+            "delete": False,
+        }
+
+        result = await mcp_tools._handle_dispose_minion(args)
+
+        assert result.get("is_error") is True
+        assert "found in your subtree" in result["content"][0]["text"]
