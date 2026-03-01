@@ -315,6 +315,15 @@ class AssistantMessageHandler(MessageHandler):
         extracted["metadata"]["has_thinking"] = len(thinking_blocks) > 0
         extracted["metadata"]["has_tool_uses"] = len(tool_uses) > 0
 
+        # Issue #195: Extract parent_tool_use_id for subagent tool grouping
+        # Check both top-level (from claude_sdk attribute copy) and sdk_message object
+        parent_tool_use_id = (
+            message_data.get("parent_tool_use_id")
+            or getattr(message_data.get("sdk_message"), "parent_tool_use_id", None)
+        )
+        if parent_tool_use_id:
+            extracted["metadata"]["parent_tool_use_id"] = parent_tool_use_id
+
         return extracted
 
 
