@@ -3518,6 +3518,8 @@ class ClaudeWebUI:
             # Handle tool_use in assistant messages
             if msg_type == 'assistant':
                 tool_uses = metadata.get('tool_uses', [])
+                # Issue #195: Propagate parent_tool_use_id from message to child tool_calls
+                parent_tool_use_id = metadata.get('parent_tool_use_id')
                 for tool_use in tool_uses:
                     tool_id = tool_use.get('id')
                     tool_name = tool_use.get('name')
@@ -3536,6 +3538,9 @@ class ClaudeWebUI:
                         # Emit tool_call message
                         tool_call_data = tool_call.to_dict()
                         tool_call_data["type"] = "tool_call"
+                        # Issue #195: Include parent_tool_use_id so frontend can group subagent tools
+                        if parent_tool_use_id:
+                            tool_call_data["parent_tool_use_id"] = parent_tool_use_id
 
                         websocket_message = {
                             "type": "message",

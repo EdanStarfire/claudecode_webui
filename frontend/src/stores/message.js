@@ -483,7 +483,9 @@ export const useMessageStore = defineStore('message', () => {
         explanation: null,
         timestamp: toolCall.created_at || new Date().toISOString(),
         isExpanded: !['completed', 'failed', 'denied', 'interrupted'].includes(toolCall.status),
-        backendState: toolCall.display
+        backendState: toolCall.display,
+        // Issue #195: Track parent Task tool for subagent grouping
+        parent_tool_use_id: toolCall.parent_tool_use_id || null
       }
 
       if (toolCall.error) {

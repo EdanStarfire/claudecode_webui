@@ -13,11 +13,18 @@
       <!-- Content -->
       <div v-if="hasContent" class="msg-text" v-html="renderedContent"></div>
 
-      <!-- Activity Timeline (compact dot timeline) -->
+      <!-- Activity Timeline (compact dot timeline) — excludes Task tools and child tools -->
       <ActivityTimeline
-        v-if="hasToolUses"
-        :tools="enrichedToolCalls"
+        v-if="mainTimelineTools.length > 0"
+        :tools="mainTimelineTools"
         :messageId="message.id"
+      />
+
+      <!-- Subagent bubbles (one per Task tool call) -->
+      <SubagentTimeline
+        v-for="task in taskToolCalls"
+        :key="task.id"
+        :taskToolCall="task"
       />
     </div>
   </div>
@@ -32,6 +39,7 @@ import { useMessageStore } from '@/stores/message'
 import { useSessionStore } from '@/stores/session'
 import ThinkingBlock from './ThinkingBlock.vue'
 import ActivityTimeline from './tools/ActivityTimeline.vue'
+import SubagentTimeline from './SubagentTimeline.vue'
 
 const props = defineProps({
   message: {
@@ -136,6 +144,22 @@ const enrichedToolCalls = computed(() => {
       isExpanded: true
     }
   })
+})
+
+/**
+ * Issue #195: Main timeline tools — excludes Task tools and child tools (those with parent_tool_use_id)
+ */
+const mainTimelineTools = computed(() => {
+  return enrichedToolCalls.value.filter(tc =>
+    tc.name !== 'Task' && !tc.parent_tool_use_id
+  )
+})
+
+/**
+ * Issue #195: Task tool calls — only Task tools for SubagentTimeline bubbles
+ */
+const taskToolCalls = computed(() => {
+  return enrichedToolCalls.value.filter(tc => tc.name === 'Task')
 })
 </script>
 

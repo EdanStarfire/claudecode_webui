@@ -1789,8 +1789,9 @@ class SessionCoordinator:
                 metadata["has_tool_results"] = True
                 metadata["tool_results"] = tool_results
 
-            # Extract parent_tool_use_id for Task subagent prompt filtering (Issue #384)
-            if _type == "UserMessage" and data.get("parent_tool_use_id"):
+            # Extract parent_tool_use_id for Task subagent filtering (Issue #384, #195)
+            # Present on both UserMessage (prompt) and AssistantMessage (subagent responses)
+            if data.get("parent_tool_use_id"):
                 metadata["parent_tool_use_id"] = data["parent_tool_use_id"]
 
             # Extract thinking blocks
@@ -2051,6 +2052,8 @@ class SessionCoordinator:
 
                     # AssistantMessage with tool_uses → create pending ToolCall messages
                     if metadata.get("has_tool_uses") and metadata.get("tool_uses"):
+                        # Issue #195: Propagate parent_tool_use_id to child tool_calls
+                        parent_tool_use_id = metadata.get("parent_tool_use_id")
                         for tool_use in metadata["tool_uses"]:
                             tool_use_id = tool_use.get("id")
                             if not tool_use_id:
@@ -2075,6 +2078,9 @@ class SessionCoordinator:
                             active_history_tools[tool_use_id] = tool_call
                             tc_data = tool_call.to_dict()
                             tc_data["type"] = "tool_call"
+                            # Issue #195: Include parent_tool_use_id for subagent grouping
+                            if parent_tool_use_id:
+                                tc_data["parent_tool_use_id"] = parent_tool_use_id
                             parsed_messages.append(tc_data)
 
                     # PermissionRequestMessage → update matching ToolCall to awaiting_permission
