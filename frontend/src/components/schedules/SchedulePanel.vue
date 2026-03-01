@@ -8,7 +8,12 @@
         <option value="paused">Paused</option>
         <option value="cancelled">Cancelled</option>
       </select>
-      <button class="create-btn" @click="showCreate = true" title="Create Schedule">+ New</button>
+      <button
+        class="create-btn"
+        :disabled="!projectId"
+        :title="projectId ? 'Create Schedule' : 'Select a session to create a schedule'"
+        @click="showCreate = true"
+      >+ New</button>
     </div>
 
     <!-- Empty state -->
@@ -112,8 +117,15 @@ watch(() => wsStore.legionConnected, (connected) => {
   white-space: nowrap;
 }
 
-.create-btn:hover {
+.create-btn:hover:not(:disabled) {
   background: #4f46e5;
+}
+
+.create-btn:disabled {
+  background: #cbd5e1;
+  border-color: #cbd5e1;
+  color: #94a3b8;
+  cursor: not-allowed;
 }
 
 .empty-placeholder {
