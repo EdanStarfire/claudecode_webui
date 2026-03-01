@@ -63,6 +63,7 @@ const uiStore = useUIStore()
 
 // Local state for this timeline instance
 const expandedNodeId = ref(null)
+const expandedForPermission = ref(false)
 const nodeRefs = ref({})
 const permissionRef = ref(null)
 
@@ -106,17 +107,18 @@ watch(needsPermission, (needs) => {
   }
 })
 
-// Auto-expand when a tool needs permission; only collapse if tool no longer exists
+// Auto-expand when a tool needs permission; auto-collapse when permission resolves
 watch(sortedTools, (tools) => {
   const permTool = tools.find(t => getEffectiveStatusForTool(t) === 'permission_required')
   if (permTool) {
     expandedNodeId.value = permTool.id
+    expandedForPermission.value = true
+  } else if (expandedForPermission.value) {
+    expandedNodeId.value = null
+    expandedForPermission.value = false
   } else if (expandedNodeId.value) {
-    // Only collapse if the expanded tool no longer exists in the list
     const stillExists = tools.some(t => t.id === expandedNodeId.value)
-    if (!stillExists) {
-      expandedNodeId.value = null
-    }
+    if (!stillExists) expandedNodeId.value = null
   }
 }, { deep: true, immediate: true })
 
@@ -137,6 +139,7 @@ function toggleDetail(toolId) {
   } else {
     expandedNodeId.value = toolId
   }
+  expandedForPermission.value = false
 }
 
 </script>
