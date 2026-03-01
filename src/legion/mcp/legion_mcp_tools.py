@@ -74,8 +74,8 @@ class LegionMCPTools:
             "\n\nUse HALT when: critical error/blocker discovered, time-sensitive question needing immediate answer"
             "\nUse PIVOT when: requirements changed, discovered target working on wrong task, need to completely change direction"
             "\nUse NONE when: normal coordination, non-urgent updates, FYI messages (task completion notification)"
-            "\n\n**Visibility Scope:** You can only send comms to minions in your immediate hierarchy group "
-            "(parent, siblings, children). To reach minions outside your group, ask your overseer to relay.",
+            "\n\n**Visibility Scope:** You can only send comms to minions in your full hierarchy chain: "
+            "all ancestors, all descendants, and siblings. To reach minions outside your group, ask your overseer to relay.",
             {
                 "to_minion_name": str,       # Exact name of target minion (case-sensitive)
                 "summary": str,              # Specific one-sentence update (actionable)
@@ -117,14 +117,20 @@ class LegionMCPTools:
             "\n\n**Sandbox Mode (Optional):**"
             "\nEnable OS-level sandboxing to restrict file system and network access:"
             "\n- sandbox_enabled=True - Enable sandboxing (default: False)"
-            "\n- Sandboxed minions have restricted access to files and network",
+            "\n- Sandboxed minions have restricted access to files and network"
+            "\n\n**Parent Name (Optional - Multi-Level Hierarchy):**"
+            "\nDesignate an existing minion in your subtree as the new minion's parent:"
+            "\n- parent_name='TeamLead' - The new minion becomes a child of TeamLead instead of you"
+            "\n- The named parent must be one of your descendants (or yourself)"
+            "\n- If omitted, the new minion is your direct child (default behavior)",
             {
                 "name": str,                           # Unique name for new minion
                 "role": str,                           # Human-readable role description
                 "initialization_context": str,         # System prompt defining expertise
                 "template_name": str,                  # Template to apply for permissions (optional)
                 "working_directory": str,              # Custom working directory (optional)
-                "sandbox_enabled": bool                # Enable OS-level sandboxing (optional, default: False)
+                "sandbox_enabled": bool,               # Enable OS-level sandboxing (optional, default: False)
+                "parent_name": str                     # Name of existing descendant to be parent (optional)
             }
         )
         async def spawn_minion_tool(args: dict[str, Any]) -> dict[str, Any]:
@@ -135,10 +141,11 @@ class LegionMCPTools:
 
         @tool(
             "dispose_minion",
-            "Terminate a child minion you created when their task is complete. You can only "
-            "dispose minions you spawned (your children). Use delete=True to permanently remove "
-            "the minion (their data is archived first). Use delete=False (default) for soft "
-            "dispose - the minion can be restarted later by sending it a comm.",
+            "Terminate a minion when their task is complete. You can dispose your direct "
+            "children or any minion in your descendant subtree (grandchildren, etc.). "
+            "Use delete=True to permanently remove the minion (their data is archived first). "
+            "Use delete=False (default) for soft dispose - the minion can be restarted later "
+            "by sending it a comm.",
             {
                 "minion_name": str,  # Name of child minion to dispose
                 "delete": bool       # If True, fully delete after archive (default: False = soft dispose)
@@ -155,9 +162,9 @@ class LegionMCPTools:
             "Find minions with a specific capability by searching the central capability registry. "
             "Returns ranked list of matching minions sorted by expertise scores. Use keywords like "
             "'database', 'oauth', 'authentication', 'payment_processing', etc."
-            "\n\n**Visibility Scope:** Results are filtered to your immediate hierarchy group "
-            "(parent, siblings, children). If the needed capability exists outside your group, "
-            "ask your overseer to locate it.",
+            "\n\n**Visibility Scope:** Results are filtered to your full hierarchy chain: "
+            "all ancestors, all descendants, and siblings. If the needed capability exists outside "
+            "your group, ask your overseer to locate it.",
             {
                 "capability": str  # Capability keyword to search for
             }
@@ -171,8 +178,9 @@ class LegionMCPTools:
             "list_minions",
             "Get a list of all active minions in your legion with their names, roles, and "
             "current states. Useful for understanding who's available to collaborate with."
-            "\n\n**Visibility Scope:** Returns only minions in your immediate hierarchy group "
-            "(parent, siblings, children). Use your overseer to discover minions outside your group.",
+            "\n\n**Visibility Scope:** Returns only minions in your full hierarchy chain: "
+            "all ancestors, all descendants, and siblings. Use your overseer to discover minions "
+            "outside your group.",
             {}  # No parameters required
         )
         async def list_minions_tool(args: dict[str, Any]) -> dict[str, Any]:
@@ -625,10 +633,11 @@ class LegionMCPTools:
         capabilities = args.get("capabilities", [])
         working_directory_raw = args.get("working_directory")
         sandbox_enabled = args.get("sandbox_enabled", False)
+        parent_name_param = args.get("parent_name", "").strip()
 
-        # Get parent session to determine legion_id
-        parent_session = await self.system.session_coordinator.session_manager.get_session_info(parent_overseer_id)
-        if not parent_session:
+        # Get caller session to determine legion_id
+        caller_session = await self.system.session_coordinator.session_manager.get_session_info(parent_overseer_id)
+        if not caller_session:
             return {
                 "content": [{
                     "type": "text",
@@ -637,7 +646,7 @@ class LegionMCPTools:
                 "is_error": True
             }
 
-        legion_id = parent_session.project_id
+        legion_id = caller_session.project_id
         if not legion_id:
             return {
                 "content": [{
@@ -646,6 +655,54 @@ class LegionMCPTools:
                 }],
                 "is_error": True
             }
+
+        # Resolve parent_name: allow caller to designate a descendant as the new minion's parent
+        actual_parent_id = parent_overseer_id  # default: caller is the parent
+        parent_session = caller_session
+
+        if parent_name_param:
+            # Look up the named minion within the caller's legion
+            named_minion = await self.system.legion_coordinator.get_minion_by_name_in_legion(
+                legion_id, parent_name_param
+            )
+            if not named_minion:
+                return {
+                    "content": [{
+                        "type": "text",
+                        "text": f"Error: parent_name '{parent_name_param}' not found in legion"
+                    }],
+                    "is_error": True
+                }
+
+            # Validate: named minion must be a descendant of the caller (or caller themselves)
+            if named_minion.session_id != parent_overseer_id:
+                caller_descendants = await self.system.session_coordinator.get_descendants(
+                    parent_overseer_id
+                )
+                descendant_ids = {d["session_id"] for d in caller_descendants}
+
+                if named_minion.session_id not in descendant_ids:
+                    return {
+                        "content": [{
+                            "type": "text",
+                            "text": (
+                                f"Error: parent_name '{parent_name_param}' must be a descendant "
+                                f"of the calling minion. You can only place children under minions "
+                                f"in your own subtree."
+                            )
+                        }],
+                        "is_error": True
+                    }
+
+            actual_parent_id = named_minion.session_id
+            parent_session = named_minion
+            coord_logger.info(
+                f"parent_name '{parent_name_param}' resolved to {actual_parent_id} "
+                f"(caller: {parent_overseer_id})"
+            )
+
+        # Override the parent_overseer_id with the resolved actual parent
+        parent_overseer_id = actual_parent_id
 
         # Validate required fields
         if not name:
@@ -933,10 +990,61 @@ class LegionMCPTools:
                 "is_error": True
             }
 
-        # Attempt to dispose child minion
+        # Resolve the target minion — may be a direct child or a deeper descendant.
+        # If not a direct child, find the target's actual parent so
+        # overseer_controller.dispose_minion() can enforce parent authority.
         try:
+            caller_session = await self.system.session_coordinator.session_manager.get_session_info(
+                parent_overseer_id
+            )
+            if not caller_session:
+                return {
+                    "content": [{"type": "text", "text": "Error: Caller session not found"}],
+                    "is_error": True,
+                }
+
+            # Check direct children first (fast path)
+            from src.session_manager import slugify_name as _slugify
+            target_slug = _slugify(minion_name)
+            effective_parent_id = parent_overseer_id  # default: caller is the parent
+
+            is_direct_child = False
+            for cid in (caller_session.child_minion_ids or []):
+                s = await self.system.session_coordinator.session_manager.get_session_info(cid)
+                if s and s.slug == target_slug:
+                    is_direct_child = True
+                    break
+
+            if not is_direct_child:
+                # Search full descendant subtree for the target
+                descendants = await self.system.session_coordinator.get_descendants(
+                    parent_overseer_id
+                )
+                target_desc = None
+                for d in descendants:
+                    d_slug = _slugify(d["name"])
+                    if d_slug == target_slug:
+                        target_desc = d
+                        break
+
+                if not target_desc:
+                    return {
+                        "content": [{
+                            "type": "text",
+                            "text": (
+                                f"❌ Cannot dispose minion: No minion with name '{minion_name}' "
+                                f"found in your subtree. You can only dispose minions you control "
+                                f"(direct children or deeper descendants)."
+                            )
+                        }],
+                        "is_error": True,
+                    }
+
+                # Use the target's actual parent for disposal
+                effective_parent_id = target_desc["parent_id"]
+
             result = await self.system.overseer_controller.dispose_minion(
-                parent_overseer_id=parent_overseer_id,
+                parent_overseer_id=effective_parent_id,
                 child_minion_name=minion_name,
                 delete_after_archive=delete_after_archive
             )
