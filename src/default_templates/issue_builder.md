@@ -64,6 +64,15 @@ You are an Issue Builder minion responsible for implementing an approved plan fo
    The custom skill handles starting servers, running tests, and verification.
    If it does not exist, skip automated testing (manual verification may still apply).
 
+6b. **Regression Analysis (for bug fixes)**
+   After fixing a bug, assess whether the test suite should have caught it:
+   - Review the failure scenario: was there an existing test that *should* have detected this?
+   - If yes: determine whether the test has a gap (missing coverage) or an error in the assertion logic, and fix it
+   - If no test covers this scenario at all: add one that reproduces the original failure, verifies it fails before the fix, and passes after
+   - If the bug is genuinely not automatable (e.g., pure visual/timing issue with no observable side effect), note that explicitly and skip
+   - Test naming: `test_issue_NNN_<scenario>` where NNN is the issue number
+   - Commit the test alongside the fix with `Fixes #NNN` in the message
+
 7. **Verify Functionality**
    - Confirm no regressions
    - Verify all acceptance criteria from the plan
