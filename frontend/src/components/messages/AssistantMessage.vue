@@ -1,5 +1,7 @@
 <template>
-  <div class="msg-wrapper msg-assistant">
+  <!-- Issue #195: Hide assistant bubble entirely when nothing to render
+       (e.g. content-less messages whose only tools were Task calls moved to SubagentTimeline) -->
+  <div v-if="hasAnythingToShow" class="msg-wrapper msg-assistant">
     <div class="msg-meta">
       <span class="msg-role">assistant</span>
       <span class="msg-time">{{ formattedTimestamp }}</span>
@@ -160,6 +162,18 @@ const mainTimelineTools = computed(() => {
  */
 const taskToolCalls = computed(() => {
   return enrichedToolCalls.value.filter(tc => tc.name === 'Task')
+})
+
+/**
+ * Issue #195: Hide the entire assistant bubble when there's nothing to render.
+ * This handles content-less messages whose only tools were Task calls
+ * (now rendered as SubagentTimeline on the parent message).
+ */
+const hasAnythingToShow = computed(() => {
+  return hasContent.value ||
+    hasThinking.value ||
+    mainTimelineTools.value.length > 0 ||
+    taskToolCalls.value.length > 0
 })
 </script>
 
