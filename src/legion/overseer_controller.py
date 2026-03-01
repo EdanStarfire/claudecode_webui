@@ -396,10 +396,11 @@ class OverseerController:
         # 2. Find child by slug from parent's children (issue #546)
         child_session = None
         child_minion_id = None
+        target_slug = slugify_name(child_minion_name)
 
         for child_id in (parent_session.child_minion_ids or []):
             session = await self.system.session_coordinator.session_manager.get_session_info(child_id)
-            if session and session.slug == child_minion_name:
+            if session and session.slug == target_slug:
                 child_session = session
                 child_minion_id = child_id
                 break
@@ -413,7 +414,7 @@ class OverseerController:
                     child_slugs.append(s.slug or s.name)
 
             raise ValueError(
-                f"No child minion with slug '{child_minion_name}' found. "
+                f"No child minion with slug '{target_slug}' found. "
                 f"You can only dispose minions you spawned. "
                 f"Your children: {child_slugs if child_slugs else 'none'}"
             )
