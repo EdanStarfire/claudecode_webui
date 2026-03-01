@@ -3527,20 +3527,19 @@ class ClaudeWebUI:
 
                     if tool_id and tool_name:
                         # Create new ToolCall with PENDING status
+                        # Issue #195: Pass parent_tool_use_id so it's stored in the ToolCall object
                         tool_call = self.coordinator.create_tool_call(
                             session_id=session_id,
                             tool_use_id=tool_id,
                             name=tool_name,
                             input_params=input_params,
                             requires_permission=False,  # Will be updated if permission is requested
+                            parent_tool_use_id=parent_tool_use_id,
                         )
 
-                        # Emit tool_call message
+                        # Emit tool_call message (parent_tool_use_id included via to_dict())
                         tool_call_data = tool_call.to_dict()
                         tool_call_data["type"] = "tool_call"
-                        # Issue #195: Include parent_tool_use_id so frontend can group subagent tools
-                        if parent_tool_use_id:
-                            tool_call_data["parent_tool_use_id"] = parent_tool_use_id
 
                         websocket_message = {
                             "type": "message",

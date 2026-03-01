@@ -2068,6 +2068,7 @@ class SessionCoordinator:
                                 input=tool_use.get("input", {}),
                                 status=ToolState.PENDING,
                                 created_at=msg_timestamp if isinstance(msg_timestamp, (int, float)) else 0.0,
+                                parent_tool_use_id=parent_tool_use_id,
                                 display=ToolDisplayInfo(
                                     state=ToolState.PENDING,
                                     visible=True,
@@ -2078,9 +2079,6 @@ class SessionCoordinator:
                             active_history_tools[tool_use_id] = tool_call
                             tc_data = tool_call.to_dict()
                             tc_data["type"] = "tool_call"
-                            # Issue #195: Include parent_tool_use_id for subagent grouping
-                            if parent_tool_use_id:
-                                tc_data["parent_tool_use_id"] = parent_tool_use_id
                             parsed_messages.append(tc_data)
 
                     # PermissionRequestMessage → update matching ToolCall to awaiting_permission
@@ -2385,6 +2383,7 @@ class SessionCoordinator:
         name: str,
         input_params: dict[str, Any],
         requires_permission: bool = False,
+        parent_tool_use_id: str | None = None,
     ) -> ToolCall:
         """
         Create a new ToolCall when tool_use is detected (Issue #324).
@@ -2402,6 +2401,7 @@ class SessionCoordinator:
             status=ToolState.PENDING,
             created_at=time.time(),
             requires_permission=requires_permission,
+            parent_tool_use_id=parent_tool_use_id,
             display=ToolDisplayInfo(
                 state=ToolState.PENDING,
                 visible=True,

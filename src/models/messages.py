@@ -146,6 +146,9 @@ class ToolCall:
     result: Any = None
     error: str | None = None
 
+    # Issue #195: Parent Task tool that spawned this subagent tool
+    parent_tool_use_id: str | None = None
+
     # Display hints (backend-computed)
     display: "ToolDisplayInfo | None" = None
 
@@ -182,6 +185,10 @@ class ToolCall:
             result["result"] = self.result
         if self.error is not None:
             result["error"] = self.error
+
+        # Issue #195: Parent tool reference
+        if self.parent_tool_use_id is not None:
+            result["parent_tool_use_id"] = self.parent_tool_use_id
 
         # Display hints
         if self.display is not None:
@@ -225,6 +232,7 @@ class ToolCall:
             applied_updates=data.get("applied_updates", []),
             result=data.get("result"),
             error=data.get("error"),
+            parent_tool_use_id=data.get("parent_tool_use_id"),
             display=display,
         )
 
