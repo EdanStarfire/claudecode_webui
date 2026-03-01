@@ -45,11 +45,11 @@ class CommRouter:
 
     async def get_visible_minions(self, caller_id: str) -> list[str]:
         """
-        Return minion IDs visible to the caller based on immediate hierarchy group.
+        Return minion IDs visible to the caller based on full hierarchy chain.
 
         A minion can see:
-        1. Direct children (if overseer)
-        2. Direct parent (overseer that spawned it)
+        1. All ancestors (parent, grandparent, etc.)
+        2. All descendants (children, grandchildren, etc.)
         3. Direct siblings (other children of same parent)
 
         The user always sees all minions (handled separately).
@@ -66,22 +66,35 @@ class CommRouter:
             return []
 
         visible = set()
+        visible.add(caller_id)
 
-        # Direct children
-        if caller.child_minion_ids:
-            visible.update(caller.child_minion_ids)
+        async def add_ancestors(sid: str, visited: set):
+            if sid in visited:
+                return
+            visited.add(sid)
+            s = await session_manager.get_session_info(sid)
+            if s and s.parent_overseer_id:
+                visible.add(s.parent_overseer_id)
+                await add_ancestors(s.parent_overseer_id, visited)
 
-        # Parent overseer + siblings
+        async def add_descendants(sid: str, visited: set):
+            if sid in visited:
+                return
+            visited.add(sid)
+            s = await session_manager.get_session_info(sid)
+            if s and s.child_minion_ids:
+                for child_id in s.child_minion_ids:
+                    visible.add(child_id)
+                    await add_descendants(child_id, visited)
+
+        await add_ancestors(caller_id, set())
+        await add_descendants(caller_id, set())
+
+        # Siblings (children of direct parent)
         if caller.parent_overseer_id:
-            visible.add(caller.parent_overseer_id)
-
-            # Siblings: other children of the same parent
             parent = await session_manager.get_session_info(caller.parent_overseer_id)
             if parent and parent.child_minion_ids:
                 visible.update(parent.child_minion_ids)
-
-        # Include self (minions should see themselves in list_minions/search_capability)
-        visible.add(caller_id)
 
         return list(visible)
 
@@ -90,7 +103,7 @@ class CommRouter:
         Check if sender can directly communicate with recipient.
 
         User (sender_id=None or "user") can always reach anyone.
-        Minions can only reach their immediate hierarchy group.
+        Minions can only reach their full hierarchy chain (ancestors, descendants, siblings).
 
         Args:
             sender_id: Session ID of sender (None for user)
