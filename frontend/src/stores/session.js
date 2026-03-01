@@ -42,6 +42,9 @@ export const useSessionStore = defineStore('session', () => {
   const scrollPositions = ref(new Map())            // sessionId → { index, isAtBottom }
   const pendingScrollRestoreSessionId = ref(null)   // session awaiting scroll restoration
 
+  // Session reset counter (triggers archive re-fetch in AgentOverview)
+  const sessionResets = ref(new Map())              // sessionId → reset count
+
   // Session selection state (prevents concurrent selectSession calls)
   const selectingSession = ref(false)
   let pendingSelectAbort = null  // AbortController for current selection
@@ -555,6 +558,13 @@ export const useSessionStore = defineStore('session', () => {
     pendingScrollRestoreSessionId.value = null
   }
 
+  // ========== SESSION RESET TRACKING ==========
+
+  function recordSessionReset(sessionId) {
+    const current = sessionResets.value.get(sessionId) || 0
+    sessionResets.value.set(sessionId, current + 1)
+  }
+
   // ========== GHOST AGENT ACTIONS ==========
 
   function addGhostAgent(agentId, agentData) {
@@ -578,6 +588,7 @@ export const useSessionStore = defineStore('session', () => {
     lastViewedArchive,
     scrollPositions,
     pendingScrollRestoreSessionId,
+    sessionResets,
 
     // Computed
     currentSession,
@@ -602,6 +613,7 @@ export const useSessionStore = defineStore('session', () => {
     addGhostAgent,
     removeGhostAgent,
     registerScrollPositionGetter,
-    clearScrollRestorePending
+    clearScrollRestorePending,
+    recordSessionReset
   }
 })

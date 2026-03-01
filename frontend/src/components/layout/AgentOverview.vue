@@ -246,6 +246,14 @@ watch(
   { immediate: true }
 )
 
+// Issue #599: Re-fetch archives when a session reset creates new archives
+watch(
+  () => sessionStore.sessionResets.get(sessionStore.currentSessionId),
+  (newVal) => {
+    if (newVal !== undefined) fetchArchives()
+  }
+)
+
 const isDeletedAgent = computed(() => {
   if (route.params.agentId) return true
   if (sessionStore.ghostAgents.get(sessionStore.currentSessionId)) return true

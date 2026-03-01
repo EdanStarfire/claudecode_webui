@@ -535,6 +535,8 @@ export const useWebSocketStore = defineStore('websocket', () => {
           messageStore.clearMessages(resetSessionId)
           const resourceStore = useResourceStore()
           resourceStore.clearResources(resetSessionId)
+          const sessionStore = useSessionStore()
+          sessionStore.recordSessionReset(resetSessionId)
         }
         break
       }
