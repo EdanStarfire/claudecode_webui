@@ -1,5 +1,7 @@
 <template>
-  <div class="msg-wrapper msg-assistant">
+  <!-- Issue #195: Hide assistant bubble entirely when nothing to render
+       (e.g. content-less messages whose only tools were Task calls moved to SubagentTimeline) -->
+  <div v-if="hasAnythingToShow" class="msg-wrapper msg-assistant">
     <div class="msg-meta">
       <span class="msg-role">assistant</span>
       <span class="msg-time">{{ formattedTimestamp }}</span>
@@ -13,11 +15,18 @@
       <!-- Content -->
       <div v-if="hasContent" class="msg-text" v-html="renderedContent"></div>
 
-      <!-- Activity Timeline (compact dot timeline) -->
+      <!-- Activity Timeline (compact dot timeline) — excludes Task tools and child tools -->
       <ActivityTimeline
-        v-if="hasToolUses"
-        :tools="enrichedToolCalls"
+        v-if="mainTimelineTools.length > 0"
+        :tools="mainTimelineTools"
         :messageId="message.id"
+      />
+
+      <!-- Subagent bubbles (one per Task tool call) -->
+      <SubagentTimeline
+        v-for="task in taskToolCalls"
+        :key="task.id"
+        :taskToolCall="task"
       />
     </div>
   </div>
@@ -32,6 +41,7 @@ import { useMessageStore } from '@/stores/message'
 import { useSessionStore } from '@/stores/session'
 import ThinkingBlock from './ThinkingBlock.vue'
 import ActivityTimeline from './tools/ActivityTimeline.vue'
+import SubagentTimeline from './SubagentTimeline.vue'
 
 const props = defineProps({
   message: {
@@ -136,6 +146,34 @@ const enrichedToolCalls = computed(() => {
       isExpanded: true
     }
   })
+})
+
+/**
+ * Issue #195: Main timeline tools — excludes Task tools and child tools (those with parent_tool_use_id)
+ */
+const mainTimelineTools = computed(() => {
+  return enrichedToolCalls.value.filter(tc =>
+    tc.name !== 'Task' && !tc.parent_tool_use_id
+  )
+})
+
+/**
+ * Issue #195: Task tool calls — only Task tools for SubagentTimeline bubbles
+ */
+const taskToolCalls = computed(() => {
+  return enrichedToolCalls.value.filter(tc => tc.name === 'Task')
+})
+
+/**
+ * Issue #195: Hide the entire assistant bubble when there's nothing to render.
+ * This handles content-less messages whose only tools were Task calls
+ * (now rendered as SubagentTimeline on the parent message).
+ */
+const hasAnythingToShow = computed(() => {
+  return hasContent.value ||
+    hasThinking.value ||
+    mainTimelineTools.value.length > 0 ||
+    taskToolCalls.value.length > 0
 })
 </script>
 

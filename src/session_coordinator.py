@@ -1789,8 +1789,9 @@ class SessionCoordinator:
                 metadata["has_tool_results"] = True
                 metadata["tool_results"] = tool_results
 
-            # Extract parent_tool_use_id for Task subagent prompt filtering (Issue #384)
-            if _type == "UserMessage" and data.get("parent_tool_use_id"):
+            # Extract parent_tool_use_id for Task subagent filtering (Issue #384, #195)
+            # Present on both UserMessage (prompt) and AssistantMessage (subagent responses)
+            if data.get("parent_tool_use_id"):
                 metadata["parent_tool_use_id"] = data["parent_tool_use_id"]
 
             # Extract thinking blocks
@@ -2051,6 +2052,8 @@ class SessionCoordinator:
 
                     # AssistantMessage with tool_uses → create pending ToolCall messages
                     if metadata.get("has_tool_uses") and metadata.get("tool_uses"):
+                        # Issue #195: Propagate parent_tool_use_id to child tool_calls
+                        parent_tool_use_id = metadata.get("parent_tool_use_id")
                         for tool_use in metadata["tool_uses"]:
                             tool_use_id = tool_use.get("id")
                             if not tool_use_id:
@@ -2065,6 +2068,7 @@ class SessionCoordinator:
                                 input=tool_use.get("input", {}),
                                 status=ToolState.PENDING,
                                 created_at=msg_timestamp if isinstance(msg_timestamp, (int, float)) else 0.0,
+                                parent_tool_use_id=parent_tool_use_id,
                                 display=ToolDisplayInfo(
                                     state=ToolState.PENDING,
                                     visible=True,
@@ -2379,6 +2383,7 @@ class SessionCoordinator:
         name: str,
         input_params: dict[str, Any],
         requires_permission: bool = False,
+        parent_tool_use_id: str | None = None,
     ) -> ToolCall:
         """
         Create a new ToolCall when tool_use is detected (Issue #324).
@@ -2396,6 +2401,7 @@ class SessionCoordinator:
             status=ToolState.PENDING,
             created_at=time.time(),
             requires_permission=requires_permission,
+            parent_tool_use_id=parent_tool_use_id,
             display=ToolDisplayInfo(
                 state=ToolState.PENDING,
                 visible=True,
