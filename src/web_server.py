@@ -3717,6 +3717,29 @@ class ClaudeWebUI:
                         session_id, tool_name, input_params
                     )
 
+                    # Issue #616: Race condition — ToolCall may not exist yet because
+                    # _process_sdk_message() hasn't finished processing the AssistantMessage.
+                    # Retry with backoff before giving up.
+                    if not tool_call:
+                        for attempt in range(10):
+                            await asyncio.sleep(0.1)
+                            tool_call = self.coordinator.find_tool_call_by_signature(
+                                session_id, tool_name, input_params
+                            )
+                            if tool_call:
+                                logger.debug(
+                                    f"[PERMISSIONS] Race condition resolved: found ToolCall "
+                                    f"for {tool_name} after {attempt + 1} retries "
+                                    f"({(attempt + 1) * 0.1:.1f}s) in session {session_id}"
+                                )
+                                break
+                        else:
+                            logger.warning(
+                                f"[PERMISSIONS] Race condition NOT resolved after 10 retries "
+                                f"(1.0s) for {tool_name} in session {session_id}. "
+                                f"Auto-denying permission to prevent deadlock."
+                            )
+
                     if tool_call:
                         # Create PermissionInfo from suggestions
                         permission_info = PermissionInfo(
@@ -3748,15 +3771,27 @@ class ClaudeWebUI:
                             await self.websocket_manager.send_message(session_id, websocket_message)
                             logger.info(f"Broadcasted tool_call awaiting_permission for {tool_name} in session {session_id}")
                     else:
-                        logger.warning(f"Could not find matching ToolCall for permission request: {tool_name}")
+                        # Issue #616: No ToolCall found after retries — auto-deny to prevent deadlock
+                        logger.warning(
+                            f"Could not find matching ToolCall for permission request: "
+                            f"{tool_name} in session {session_id}. Auto-denying."
+                        )
+                        return {"behavior": "deny"}
 
                     # Issue #491: Legacy permission_request broadcast removed.
                     # Only unified tool_call messages are emitted for permission lifecycle.
                 except Exception as ws_error:
                     logger.error(f"Failed to broadcast permission request to WebSocket: {ws_error}")
+                    # Issue #616: If broadcast failed, auto-deny rather than deadlock
+                    return {"behavior": "deny"}
 
             except Exception as e:
                 logger.error(f"Failed to store permission request message: {e}")
+                return {"behavior": "deny"}
+
+            # Issue #616: Session pause, Future creation, and await are now INSIDE the
+            # successful tool_call path. We only reach here if the permission prompt was
+            # successfully broadcast to the frontend.
 
             # Set session state to PAUSED while waiting for permission response
             # This provides visual feedback that the session is blocked on user input
