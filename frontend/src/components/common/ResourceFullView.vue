@@ -282,9 +282,15 @@ const renderedMarkdown = computed(() => {
 // Direct content mode
 const directTextContent = computed(() => resourceStore.directContent)
 
+// Strip cat -n line number prefixes (e.g. "     1\t" or "     1→") for markdown rendering
+function stripLineNumbers(text) {
+  return text.replace(/^\s*\d+[\t\u2192]/gm, '')
+}
+
 const directRenderedMarkdown = computed(() => {
   if (!directTextContent.value) return ''
-  let html = marked.parse(directTextContent.value)
+  const cleaned = stripLineNumbers(directTextContent.value)
+  let html = marked.parse(cleaned)
   html = html.replace(/\n</g, '<')
   html = html.replace(/\n+$/, '')
   return DOMPurify.sanitize(html)
