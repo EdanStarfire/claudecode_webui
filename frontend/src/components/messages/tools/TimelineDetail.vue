@@ -33,12 +33,19 @@
       :toolCall="toolCall"
     />
 
+    <!-- View Full Result (universal for long results) -->
+    <div v-if="hasLongResult" class="view-full-bar">
+      <a class="view-full-link" @click.stop="openFullResult">View Full Result</a>
+    </div>
+
   </div>
 </template>
 
 <script setup>
 import { ref, computed, toRef } from 'vue'
 import { useToolStatus } from '@/composables/useToolStatus'
+import { useToolResult } from '@/composables/useToolResult'
+import { useResourceStore } from '@/stores/resource'
 import BaseToolHandler from '@/components/tools/BaseToolHandler.vue'
 import ReadToolHandler from '@/components/tools/ReadToolHandler.vue'
 import WriteToolHandler from '@/components/tools/WriteToolHandler.vue'
@@ -64,11 +71,24 @@ const props = defineProps({
   toolCall: { type: Object, required: true }
 })
 
-// Use shared composable for status computation
+// Use shared composables
 const { effectiveStatus, isOrphaned, orphanedInfo } = useToolStatus(toRef(props, 'toolCall'))
+const { resultContent } = useToolResult(toRef(props, 'toolCall'))
+const resourceStore = useResourceStore()
 
 // Local state
 const handlerRef = ref(null)
+
+// View full result
+const hasLongResult = computed(() => {
+  if (!resultContent.value) return false
+  return resultContent.value.length > 500 || resultContent.value.split('\n').length > 15
+})
+
+function openFullResult() {
+  const toolName = props.toolCall.name || 'Tool'
+  resourceStore.openWithDirectContent(`${toolName} Result`, resultContent.value)
+}
 
 // Tool handler registry
 const toolHandlers = {
@@ -231,5 +251,25 @@ function formatSuggestion(suggestion) {
 
 .permission-changes li {
   padding: 1px 0;
+}
+
+/* View Full Result bar */
+.view-full-bar {
+  text-align: right;
+  padding: 4px 8px;
+  border-top: 1px solid #e2e8f0;
+  background: #f8fafc;
+}
+
+.view-full-link {
+  font-size: 11px;
+  font-weight: 500;
+  color: #0d6efd;
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.view-full-link:hover {
+  text-decoration: underline;
 }
 </style>

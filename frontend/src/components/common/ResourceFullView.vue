@@ -23,7 +23,7 @@
 
         <!-- Navigation - Previous -->
         <button
-          v-if="totalResources > 1"
+          v-if="!isDirectContent && totalResources > 1"
           class="nav-btn nav-prev"
           @click.stop="prevResource"
           title="Previous (Left Arrow)"
@@ -33,8 +33,51 @@
           </svg>
         </button>
 
+        <!-- Direct Content Container (for tool output full view) -->
+        <div v-if="isDirectContent" class="text-container" @click.stop>
+          <div class="text-header">
+            <div class="text-header-info">
+              <h5 class="text-filename">{{ resourceStore.directTitle || 'Full Content' }}</h5>
+            </div>
+            <div class="display-mode-toggle" v-if="directTextContent">
+              <button
+                class="toggle-btn"
+                :class="{ active: displayMode === 'raw' }"
+                @click.stop="displayMode = 'raw'"
+                title="Raw text"
+              >Raw</button>
+              <button
+                class="toggle-btn"
+                :class="{ active: displayMode === 'markdown' }"
+                @click.stop="displayMode = 'markdown'"
+                title="Rendered markdown (M)"
+              >Markdown</button>
+            </div>
+            <button
+              class="copy-btn"
+              @click.stop="copyDirectContent"
+              :title="copyFeedback ? 'Copied!' : 'Copy to clipboard'"
+              :disabled="!directTextContent"
+            >
+              <svg v-if="copyFeedback" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="20 6 9 17 4 12"></polyline>
+              </svg>
+              <svg v-else width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+              </svg>
+              <span class="copy-label">{{ copyFeedback ? 'Copied!' : 'Copy' }}</span>
+            </button>
+          </div>
+          <div class="text-body">
+            <pre v-if="directTextContent && displayMode === 'raw'" class="text-content">{{ directTextContent }}</pre>
+            <div v-else-if="directTextContent && displayMode === 'markdown'" class="markdown-content" v-html="directRenderedMarkdown"></div>
+            <div v-else class="text-unavailable">No content available.</div>
+          </div>
+        </div>
+
         <!-- Image Container (for image resources) -->
-        <div v-if="isCurrentImage" class="image-container" @click.stop>
+        <div v-else-if="isCurrentImage" class="image-container" @click.stop>
           <img
             v-if="currentResource"
             :src="getResourceUrl(currentResource.resource_id || currentResource.image_id)"
@@ -140,7 +183,7 @@
 
         <!-- Navigation - Next -->
         <button
-          v-if="totalResources > 1"
+          v-if="!isDirectContent && totalResources > 1"
           class="nav-btn nav-next"
           @click.stop="nextResource"
           title="Next (Right Arrow)"
@@ -151,12 +194,12 @@
         </button>
 
         <!-- Position Indicator -->
-        <div v-if="totalResources > 1" class="position-indicator">
+        <div v-if="!isDirectContent && totalResources > 1" class="position-indicator">
           {{ currentIndex + 1 }} / {{ totalResources }}
         </div>
 
         <!-- Thumbnail Strip (for multiple resources) -->
-        <div v-if="totalResources > 1" class="thumbnail-strip">
+        <div v-if="!isDirectContent && totalResources > 1" class="thumbnail-strip">
           <div
             v-for="(resource, index) in resources"
             :key="resource.resource_id || resource.image_id"
@@ -208,8 +251,10 @@ const resources = computed(() => {
   return resourceStore.resourcesForSession(resourceStore.fullViewSessionId)
 })
 
+const isDirectContent = computed(() => resourceStore.isDirectContentMode)
+
 const isCurrentImage = computed(() => {
-  return resourceStore.isImageResource(currentResource.value)
+  return !isDirectContent.value && resourceStore.isImageResource(currentResource.value)
 })
 
 const isCurrentText = computed(() => {
@@ -229,6 +274,17 @@ const textError = computed(() => textCacheEntry.value?.error || null)
 const renderedMarkdown = computed(() => {
   if (!textContent.value) return ''
   let html = marked.parse(textContent.value)
+  html = html.replace(/\n</g, '<')
+  html = html.replace(/\n+$/, '')
+  return DOMPurify.sanitize(html)
+})
+
+// Direct content mode
+const directTextContent = computed(() => resourceStore.directContent)
+
+const directRenderedMarkdown = computed(() => {
+  if (!directTextContent.value) return ''
+  let html = marked.parse(directTextContent.value)
   html = html.replace(/\n</g, '<')
   html = html.replace(/\n+$/, '')
   return DOMPurify.sanitize(html)
@@ -312,10 +368,26 @@ function handleKeydown(event) {
       goToResource(totalResources.value - 1)
       break
     case 'm':
-      if (!isCurrentImage.value && textContent.value) {
+      if (isDirectContent.value && directTextContent.value) {
+        displayMode.value = displayMode.value === 'raw' ? 'markdown' : 'raw'
+      } else if (!isCurrentImage.value && textContent.value) {
         displayMode.value = displayMode.value === 'raw' ? 'markdown' : 'raw'
       }
       break
+  }
+}
+
+async function copyDirectContent() {
+  if (!directTextContent.value) return
+  try {
+    await navigator.clipboard.writeText(directTextContent.value)
+    copyFeedback.value = true
+    if (copyTimeout) clearTimeout(copyTimeout)
+    copyTimeout = setTimeout(() => {
+      copyFeedback.value = false
+    }, 2000)
+  } catch {
+    console.error('Failed to copy to clipboard')
   }
 }
 

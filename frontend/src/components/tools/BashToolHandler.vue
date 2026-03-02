@@ -23,7 +23,10 @@
     <!-- Result Section -->
     <div v-if="hasResult" class="tool-section">
       <div class="tool-result" :class="resultClass">
-        <strong>Output:</strong>
+        <div class="output-header-row">
+          <strong>Output:</strong>
+          <a v-if="hasLongOutput" class="view-full-link" @click.stop="openFullOutput">View Full</a>
+        </div>
         <pre v-if="resultContent" class="bash-output">{{ resultContent }}</pre>
         <div v-else class="bash-output-empty">No output</div>
       </div>
@@ -34,6 +37,7 @@
 <script setup>
 import { computed, toRef } from 'vue'
 import { useToolResult } from '@/composables/useToolResult'
+import { useResourceStore } from '@/stores/resource'
 
 const props = defineProps({
   toolCall: {
@@ -74,12 +78,24 @@ const flagsText = computed(() => {
   return flags.join(', ')
 })
 
+const resourceStore = useResourceStore()
+
 // Result (shared composable)
 const { hasResult, isError, resultContent } = useToolResult(toRef(props, 'toolCall'))
 
 const resultClass = computed(() => {
   return isError.value ? 'tool-result-error' : 'tool-result-success'
 })
+
+const hasLongOutput = computed(() => {
+  if (!resultContent.value) return false
+  return resultContent.value.length > 500 || resultContent.value.split('\n').length > 15
+})
+
+function openFullOutput() {
+  const cmd = command.value?.substring(0, 60) || 'command'
+  resourceStore.openWithDirectContent(`Bash: ${cmd}`, resultContent.value)
+}
 
 // Expose for parent ToolCallCard
 const summary = computed(() => `Bash: ${command.value?.substring(0, 60) || ''}`)
@@ -201,5 +217,23 @@ defineExpose({ summary, params, result })
   text-align: center;
   background: var(--tool-bg, #f8fafc);
   border-radius: var(--tool-radius, 4px);
+}
+
+.output-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.view-full-link {
+  font-size: 11px;
+  font-weight: 500;
+  color: #0d6efd;
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.view-full-link:hover {
+  text-decoration: underline;
 }
 </style>
