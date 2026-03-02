@@ -2686,8 +2686,10 @@ class SessionCoordinator:
         param_hash = hashlib.md5(first_value.encode()).hexdigest()[:8]
         target_signature = f"{tool_name}:{param_hash}"
 
-        # Search active tools for matching signature
+        # Search active tools for matching signature — collect all matches
+        # to handle parallel subagents with identical tool signatures.
         session_tools = self._active_tool_calls.get(session_id, {})
+        matches = []
         for tool_call in session_tools.values():
             # Compute signature for this tool
             tc_first_value = ""
@@ -2701,8 +2703,24 @@ class SessionCoordinator:
             tc_hash = hashlib.md5(tc_first_value.encode()).hexdigest()[:8]
             tc_signature = f"{tool_call.name}:{tc_hash}"
 
-            if tc_signature == target_signature and tool_call.status in (ToolState.PENDING, ToolState.AWAITING_PERMISSION):
-                return tool_call
+            if tc_signature == target_signature and tool_call.status in (
+                ToolState.PENDING,
+                ToolState.AWAITING_PERMISSION,
+            ):
+                matches.append(tool_call)
+
+        if len(matches) == 1:
+            return matches[0]
+        elif len(matches) > 1:
+            # Multiple signature matches (parallel subagents with same tool).
+            # Return the most recently created one — the permission callback
+            # fires shortly after the tool is created.
+            matches.sort(key=lambda tc: tc.created_at, reverse=True)
+            coord_logger.debug(
+                f"Signature collision: {len(matches)} matches for {target_signature}, "
+                f"selecting most recent (created_at={matches[0].created_at})"
+            )
+            return matches[0]
 
         return None
 
