@@ -1,5 +1,5 @@
 <template>
-  <div class="messages-area flex-grow-1 overflow-auto" :class="{ 'theme-red': uiStore.isRedBackground }" ref="messagesArea" role="log" aria-live="polite" aria-label="Conversation messages">
+  <div class="messages-area flex-grow-1 overflow-auto" :class="{ 'theme-red': uiStore.isRedBackground }" ref="messagesArea" role="log" aria-live="polite" aria-label="Conversation messages" @scroll="onScroll">
     <div v-if="displayableItems.length === 0" class="text-muted text-center py-5">
       No messages yet. Start a conversation!
     </div>
@@ -36,6 +36,8 @@ const sessionStore = useSessionStore()
 const uiStore = useUIStore()
 
 const messagesArea = ref(null)
+const isProgrammaticScroll = ref(false)
+const scrollRafId = ref(null)
 
 /**
  * Group messages into displayable items, detecting compaction event sequences
@@ -323,17 +325,17 @@ async function restoreScrollPosition() {
 
   if (pos.isAtBottom || pos.index >= displayableItems.value.length - 1) {
     // Was at bottom — scroll to bottom, keep auto-scroll enabled
-    container.style.scrollBehavior = 'auto'
+    isProgrammaticScroll.value = true
     container.scrollTop = container.scrollHeight
-    requestAnimationFrame(() => { if (container) container.style.scrollBehavior = '' })
+    requestAnimationFrame(() => { isProgrammaticScroll.value = false })
     uiStore.setAutoScroll(true)
   } else {
     // Restore to specific message index
     const children = Array.from(container.children)
     if (pos.index < children.length) {
-      container.style.scrollBehavior = 'auto'
+      isProgrammaticScroll.value = true
       container.scrollTop = children[pos.index].offsetTop
-      requestAnimationFrame(() => { if (container) container.style.scrollBehavior = '' })
+      requestAnimationFrame(() => { isProgrammaticScroll.value = false })
     }
     uiStore.setAutoScroll(false)
   }
@@ -348,9 +350,28 @@ async function scrollToBottom() {
   if (uiStore.autoScrollEnabled) {
     await nextTick()
     if (messagesArea.value) {
+      isProgrammaticScroll.value = true
       messagesArea.value.scrollTop = messagesArea.value.scrollHeight
+      requestAnimationFrame(() => { isProgrammaticScroll.value = false })
     }
   }
+}
+
+// Scroll event handler: auto-toggle autoscroll based on user scroll position
+function onScroll() {
+  if (isProgrammaticScroll.value) return
+  if (scrollRafId.value) return
+  scrollRafId.value = requestAnimationFrame(() => {
+    scrollRafId.value = null
+    if (!messagesArea.value) return
+    const { scrollTop, scrollHeight, clientHeight } = messagesArea.value
+    const isAtBottom = scrollTop + clientHeight >= scrollHeight - 10
+    if (uiStore.autoScrollEnabled && !isAtBottom) {
+      uiStore.setAutoScroll(false)
+    } else if (!uiStore.autoScrollEnabled && isAtBottom) {
+      uiStore.setAutoScroll(true)
+    }
+  })
 }
 
 // Auto-scroll on new messages, or restore scroll position if pending
@@ -381,9 +402,13 @@ onMounted(() => {
   }, 100)
 })
 
-// Unregister scroll position getter on unmount
+// Unregister scroll position getter and cancel pending rAF on unmount
 onUnmounted(() => {
   sessionStore.registerScrollPositionGetter(null)
+  if (scrollRafId.value) {
+    cancelAnimationFrame(scrollRafId.value)
+    scrollRafId.value = null
+  }
 })
 
 function shouldDisplayMessage(message) {
@@ -493,7 +518,6 @@ function normalizeMessage(message) {
 
 <style scoped>
 .messages-area {
-  scroll-behavior: smooth;
   background: #ffffff;
   padding: 8px 0;
 }
