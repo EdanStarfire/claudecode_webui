@@ -29,7 +29,10 @@
 
       <!-- Task result summary -->
       <div v-if="hasResult && resultSummary" class="subagent-result" :class="{ 'subagent-result-error': isError }">
-        <div class="result-label">{{ isError ? 'Error:' : 'Result:' }}</div>
+        <div class="result-label">
+          {{ isError ? 'Error:' : 'Result:' }}
+          <a v-if="isResultTruncated" class="view-full-link" @click.stop="openFullResult">View Full</a>
+        </div>
         <pre class="result-content">{{ resultSummary }}</pre>
       </div>
     </div>
@@ -40,6 +43,7 @@
 import { computed, ref } from 'vue'
 import { useMessageStore } from '@/stores/message'
 import { useSessionStore } from '@/stores/session'
+import { useResourceStore } from '@/stores/resource'
 import { getEffectiveStatusForTool } from '@/composables/useToolStatus'
 import ActivityTimeline from './tools/ActivityTimeline.vue'
 
@@ -52,6 +56,7 @@ const props = defineProps({
 
 const messageStore = useMessageStore()
 const sessionStore = useSessionStore()
+const resourceStore = useResourceStore()
 const collapsed = ref(false)
 
 // Extract Task tool metadata
@@ -118,12 +123,24 @@ const isError = computed(() => {
   return props.taskToolCall.result?.error === true
 })
 
-const resultSummary = computed(() => {
-  if (!hasResult.value) return null
+const fullResultContent = computed(() => {
+  if (!hasResult.value) return ''
   const content = props.taskToolCall.result?.content || props.taskToolCall.result?.message || ''
   if (typeof content !== 'string') return JSON.stringify(content, null, 2)
+  return content
+})
+
+const resultSummary = computed(() => {
+  if (!hasResult.value) return null
+  const content = fullResultContent.value
   return content.length > 500 ? content.slice(0, 500) + '...' : content
 })
+
+const isResultTruncated = computed(() => fullResultContent.value.length > 500)
+
+function openFullResult() {
+  resourceStore.openWithDirectContent('Task Result', fullResultContent.value)
+}
 </script>
 
 <style scoped>
@@ -284,6 +301,19 @@ const resultSummary = computed(() => {
   overflow-y: auto;
   line-height: 1.4;
   color: #334155;
+}
+
+.view-full-link {
+  float: right;
+  font-size: 11px;
+  font-weight: 500;
+  color: #0d6efd;
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.view-full-link:hover {
+  text-decoration: underline;
 }
 
 /* Status-specific border colors */

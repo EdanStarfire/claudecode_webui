@@ -17,6 +17,7 @@
         <div class="prompt-header">
           <span class="prompt-label">Task Prompt:</span>
           <span class="prompt-length">{{ prompt.length }} characters</span>
+          <a v-if="prompt.length > 500" class="view-full-link" @click.stop="openFullPrompt">View Full</a>
         </div>
         <pre class="prompt-code">{{ prompt }}</pre>
       </div>
@@ -33,6 +34,7 @@
         <div class="output-header">
           <span class="output-label">Agent Output:</span>
           <span v-if="resultLines > 0" class="output-count-badge">{{ resultLines }} lines</span>
+          <a v-if="resultContent && resultContent.length > 500" class="view-full-link" @click.stop="openFullResult">View Full</a>
         </div>
         <div class="output-content">
           <pre class="tool-code">{{ resultContent }}</pre>
@@ -45,6 +47,7 @@
 <script setup>
 import { computed, toRef } from 'vue'
 import { useToolResult } from '@/composables/useToolResult'
+import { useResourceStore } from '@/stores/resource'
 
 const props = defineProps({
   toolCall: {
@@ -52,6 +55,8 @@ const props = defineProps({
     required: true
   }
 })
+
+const resourceStore = useResourceStore()
 
 // Parameters
 const description = computed(() => {
@@ -73,6 +78,14 @@ const resultLines = computed(() => {
   if (!resultContent.value) return 0
   return resultContent.value.split('\n').length
 })
+
+function openFullPrompt() {
+  resourceStore.openWithDirectContent('Task Prompt', prompt.value)
+}
+
+function openFullResult() {
+  resourceStore.openWithDirectContent('Task Result', resultContent.value)
+}
 
 // Expose for ToolCallCard
 const summary = computed(() => `Task: ${description.value || subagentType.value || 'agent'}`)
@@ -243,5 +256,18 @@ defineExpose({ summary, params, result })
   max-height: var(--tool-code-max-height, 200px);
   overflow-y: auto;
   line-height: 1.4;
+}
+
+.view-full-link {
+  margin-left: auto;
+  font-size: 11px;
+  font-weight: 500;
+  color: #0d6efd;
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.view-full-link:hover {
+  text-decoration: underline;
 }
 </style>

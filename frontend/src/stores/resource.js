@@ -71,6 +71,10 @@ export const useResourceStore = defineStore('resource', () => {
   const currentResourceIndex = ref(0)
   const fullViewSessionId = ref(null)
 
+  // Direct content mode (for viewing tool output in full screen)
+  const directContent = ref(null)
+  const directTitle = ref(null)
+
   // Loading state
   const loading = ref(false)
 
@@ -412,8 +416,24 @@ export const useResourceStore = defineStore('resource', () => {
    */
   function closeFullView() {
     fullViewOpen.value = false
-    // Keep session and index for potential re-open
+    directContent.value = null
+    directTitle.value = null
   }
+
+  /**
+   * Open full view with arbitrary text content (no resource required).
+   * Used by tool handlers to show truncated output in full screen.
+   */
+  function openWithDirectContent(title, content) {
+    directTitle.value = title
+    directContent.value = content
+    fullViewOpen.value = true
+  }
+
+  /**
+   * Whether the full view is showing direct content (not a resource)
+   */
+  const isDirectContentMode = computed(() => directContent.value != null)
 
   /**
    * Navigate to next resource in full view
@@ -601,6 +621,8 @@ export const useResourceStore = defineStore('resource', () => {
     fullViewSessionId,
     loading,
     textContentCache,
+    directContent,
+    directTitle,
 
     // Computed - Resources
     currentResources,
@@ -608,6 +630,7 @@ export const useResourceStore = defineStore('resource', () => {
     currentHasResources,
     currentFullViewResource,
     fullViewTotalResources,
+    isDirectContentMode,
 
     // Computed - Images (backward compatibility)
     currentImages,
@@ -646,6 +669,7 @@ export const useResourceStore = defineStore('resource', () => {
     removeResource,
     handleResourceRemoved,
     openFullView,
+    openWithDirectContent,
     closeFullView,
     nextResource,
     prevResource,

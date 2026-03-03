@@ -37,6 +37,7 @@
           <span class="content-label">Content Preview:</span>
           <span class="line-count-badge">{{ lineCount }} lines</span>
           <span v-if="hasMore" class="preview-note">(showing first {{ previewLimit }})</span>
+          <a v-if="hasMore" class="view-full-link" @click.stop="openFullContent">View Full</a>
         </div>
         <pre class="tool-code content-display">{{ previewContent }}</pre>
         <div v-if="hasMore" class="more-indicator">...</div>
@@ -48,6 +49,7 @@
 <script setup>
 import { computed, toRef } from 'vue'
 import { useToolResult } from '@/composables/useToolResult'
+import { useResourceStore } from '@/stores/resource'
 
 const props = defineProps({
   toolCall: {
@@ -57,6 +59,7 @@ const props = defineProps({
 })
 
 const { hasResult, isError, resultContent } = useToolResult(toRef(props, 'toolCall'))
+const resourceStore = useResourceStore()
 
 // Parameters
 const filePath = computed(() => {
@@ -142,6 +145,10 @@ const previewContent = computed(() => {
   const previewLines = lines.value.slice(0, previewLimit)
   return previewLines.join('\n')
 })
+
+function openFullContent() {
+  resourceStore.openWithDirectContent(`Read: ${fileName.value}`, resultContent.value)
+}
 
 const summary = computed(() => `Read: ${filePath.value}`)
 const params = computed(() => ({ file_path: filePath.value, range: hasRange.value ? `${startLine.value}-${endLine.value}` : null }))
@@ -315,5 +322,18 @@ defineExpose({ summary, params, result })
   font-weight: bold;
   background: var(--tool-bg-header, #f1f5f9);
   border-top: 1px solid var(--tool-border, #e2e8f0);
+}
+
+.view-full-link {
+  margin-left: auto;
+  font-size: 11px;
+  font-weight: 500;
+  color: #0d6efd;
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.view-full-link:hover {
+  text-decoration: underline;
 }
 </style>

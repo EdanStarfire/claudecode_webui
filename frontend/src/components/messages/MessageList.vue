@@ -396,6 +396,10 @@ function shouldDisplayMessage(message) {
   // Hide system task_notification messages (background task completion)
   if (message.type === 'system' && subtype === 'task_notification') return false
 
+  // Hide system task_progress and task_started messages (subagent lifecycle updates)
+  // These are SDK internal messages, not displayable — child tool calls handle visibility
+  if (message.type === 'system' && (subtype === 'task_progress' || subtype === 'task_started')) return false
+
   // Note: We do NOT hide 'status' or 'compact_boundary' messages here
   // because they are handled by the compaction event grouping logic above
 
