@@ -907,18 +907,46 @@ export const useMessageStore = defineStore('message', () => {
   // ========== ARCHIVE SUPPORT (Issue #577) ==========
 
   /**
-   * Set messages for an archived session view (bypasses normal message loading).
-   * Converts raw stored messages to the format expected by MessageList.
+   * Set messages for an archived session view.
+   * Issue #621: Process through the same unified tool pipeline as loadMessages()
+   * so that tool_call messages populate toolCallsBySession and are filtered
+   * from the display list. This ensures archived tools show correct completion
+   * status and no blank message bubbles appear.
    */
   function setArchiveMessages(sessionId, rawMessages) {
-    const messages = rawMessages.map(msg => {
-      // Archive messages are in storage format - pass through as-is
-      // since MessageList already handles stored message format
-      return msg
+    const displayMessages = []
+
+    rawMessages.forEach(msg => {
+      // Route tool_call messages through unified handler (same as loadMessages)
+      if (msg.type === 'tool_call') {
+        handleToolCall(sessionId, msg)
+        return // Don't add to display list
+      }
+
+      // Filter UserMessage entries that are purely tool results (no displayable text)
+      if (msg.type === 'user' && Array.isArray(msg.content)) {
+        const hasDisplayableContent = msg.content.some(
+          block => block.type !== 'tool_result'
+        )
+        if (!hasDisplayableContent) {
+          return
+        }
+      }
+
+      // Filter SystemMessage entries with no displayable content
+      if (msg.type === 'system') {
+        const subtype = msg.subtype || msg.metadata?.subtype
+        if (subtype === 'init' && !msg.content) {
+          return
+        }
+      }
+
+      displayMessages.push(msg)
     })
-    messagesBySession.value.set(sessionId, messages)
-    // Clear tool calls for clean state
-    toolCallsBySession.value.set(sessionId, [])
+
+    messagesBySession.value.set(sessionId, displayMessages)
+    // Trigger reactivity
+    messagesBySession.value = new Map(messagesBySession.value)
   }
 
   /**
