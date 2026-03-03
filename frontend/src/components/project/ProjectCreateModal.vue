@@ -111,10 +111,12 @@
 
 <script setup>
 import { ref, watch, onMounted, onUnmounted } from 'vue'
+import { useRouter } from 'vue-router'
 import { useProjectStore } from '@/stores/project'
 import { useSessionStore } from '@/stores/session'
 import { useUIStore } from '@/stores/ui'
 
+const router = useRouter()
 const projectStore = useProjectStore()
 const sessionStore = useSessionStore()
 const uiStore = useUIStore()
@@ -185,8 +187,9 @@ async function handleSubmit() {
     )
 
     // Create initial session/minion if requested
+    let createdSession = null
     if (formData.value.createSession) {
-      await sessionStore.createSession(project.project_id, {
+      createdSession = await sessionStore.createSession(project.project_id, {
         name: formData.value.sessionName || 'main',
         permission_mode: 'default',
         tools: [],
@@ -197,6 +200,11 @@ async function handleSubmit() {
     // Close modal
     if (modalInstance) {
       modalInstance.hide()
+    }
+
+    // Navigate to created session (auto-start handled by selectSession)
+    if (createdSession) {
+      router.push(`/session/${createdSession.session_id}`)
     }
 
     // Reset form
