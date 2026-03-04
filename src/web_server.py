@@ -3915,6 +3915,19 @@ class ClaudeWebUI:
                             except Exception as mode_error:
                                 logger.error(f"Failed to update session mode: {mode_error}")
 
+                        # Issue #630: Persist addDirectories to session configuration
+                        if suggestion_dict['type'] == 'addDirectories' and suggestion_dict.get('directories'):
+                            try:
+                                await self.coordinator.session_manager.update_additional_directories(
+                                    session_id, suggestion_dict['directories']
+                                )
+                                logger.info(
+                                    f"Updated session {session_id} additional_directories "
+                                    f"with {len(suggestion_dict['directories'])} dirs"
+                                )
+                            except Exception as dirs_error:
+                                logger.error(f"Failed to update session directories: {dirs_error}")
+
                     response['updated_permissions'] = updated_permissions
                     response['applied_updates_for_storage'] = applied_updates_for_storage
                     logger.info(f"Built {len(updated_permissions)} permission updates from suggestions")

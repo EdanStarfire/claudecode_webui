@@ -627,6 +627,38 @@ class SessionManager:
                 logger.error(f"Failed to update session {session_id} permission mode: {e}")
                 return False
 
+    async def update_additional_directories(self, session_id: str, dirs_to_add: list[str]) -> bool:
+        """Add directories to session's additional_directories list (deduplicated).
+
+        Issue #630: Persist addDirectories permission suggestions to session configuration.
+        """
+        async with self._get_session_lock(session_id):
+            try:
+                session = self._active_sessions.get(session_id)
+                if not session:
+                    logger.error(f"Session {session_id} not found")
+                    return False
+
+                existing = set(session.additional_directories or [])
+                added = []
+                for d in dirs_to_add:
+                    d = d.strip()
+                    if d and d not in existing:
+                        existing.add(d)
+                        added.append(d)
+
+                if added:
+                    session.additional_directories = list(existing)
+                    session.updated_at = datetime.now(UTC)
+                    await self._persist_session_state(session_id)
+                    session_logger.info(
+                        f"Added {len(added)} directories to session {session_id}: {added}"
+                    )
+                return True
+            except Exception as e:
+                logger.error(f"Failed to update session {session_id} additional_directories: {e}")
+                return False
+
     async def update_allowed_tools(self, session_id: str, tools_to_add: list[str]) -> bool:
         """Add tools to session's allowed_tools list (case-sensitive, deduplicated).
 
