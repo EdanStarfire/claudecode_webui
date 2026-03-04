@@ -4,7 +4,7 @@
     <div class="tool-section">
       <div class="task-header">
         <span class="task-icon">🤖</span>
-        <strong>Agent Task:</strong>
+        <strong>Agent:</strong>
         <span v-if="subagentType" class="agent-type-badge">{{ subagentType }}</span>
       </div>
 
@@ -15,7 +15,7 @@
 
       <div v-if="prompt" class="task-prompt-container">
         <div class="prompt-header">
-          <span class="prompt-label">Task Prompt:</span>
+          <span class="prompt-label">Agent Prompt:</span>
           <span class="prompt-length">{{ prompt.length }} characters</span>
           <a v-if="prompt.length > 500" class="view-full-link" @click.stop="openFullPrompt">View Full</a>
         </div>
@@ -80,15 +80,15 @@ const resultLines = computed(() => {
 })
 
 function openFullPrompt() {
-  resourceStore.openWithDirectContent('Task Prompt', prompt.value)
+  resourceStore.openWithDirectContent('Agent Prompt', prompt.value)
 }
 
 function openFullResult() {
-  resourceStore.openWithDirectContent('Task Result', resultContent.value)
+  resourceStore.openWithDirectContent('Agent Result', resultContent.value)
 }
 
 // Expose for ToolCallCard
-const summary = computed(() => `Task: ${description.value || subagentType.value || 'agent'}`)
+const summary = computed(() => `Agent: ${description.value || subagentType.value || 'agent'}`)
 const params = computed(() => ({ description: description.value, subagent_type: subagentType.value }))
 const result = computed(() => props.toolCall.result || null)
 defineExpose({ summary, params, result })
