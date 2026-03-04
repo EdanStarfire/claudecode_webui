@@ -198,10 +198,13 @@ __Longer-term Goals__
 
 ### Command-Line Options
 ```bash
+# Default: binds to localhost only (127.0.0.1:8000)
+uv run python main.py
+
 # Custom port (default: 8000)
 uv run python main.py --port 8080
 
-# Network access (bind to all interfaces)
+# Allow remote access (bind to all interfaces)
 uv run python main.py --host 0.0.0.0
 
 # Custom data directory (default: ./data)
@@ -211,7 +214,7 @@ uv run python main.py --data-dir /path/to/data
 uv run python main.py --debug-all
 uv run python main.py --debug-sdk --debug-websocket --debug-permissions
 
-# Combined example
+# Combined example: remote access + custom port + debug
 uv run python main.py --host 0.0.0.0 --port 8080 --debug-all
 ```
 
@@ -230,13 +233,13 @@ Choose the right permission level for your workflow:
 
 ### Network Access
 
-Access Claude WebUI from any device on your network:
+By default, the server binds to `127.0.0.1` (localhost only) for security. To access from other devices on your network:
 
-1. Start with `--host 0.0.0.0`
-2. Find your machine's IP address (`ipconfig` on Windows, `ifconfig` on Mac/Linux)
+1. Start with `--host 0.0.0.0` to bind to all interfaces
+2. Find your machine's IP address (`ip addr` on Linux, `ipconfig` on Windows, `ifconfig` on Mac)
 3. Access from other devices at `http://<your-ip>:8000`
 
-**Security Note**: This exposes the server to your local network. Use VPN or firewall rules for internet access.
+**Security Note**: Using `--host 0.0.0.0` exposes the server to your local network. Use VPN or firewall rules for internet access.
 
 ## Documentation
 
