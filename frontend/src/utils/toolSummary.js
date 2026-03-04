@@ -142,13 +142,14 @@ export function generateToolSummary(toolCall, status) {
       return `Skill: ${skillName}`
     }
 
+    case 'Agent':
     case 'Task': {
       const agentType = input.subagent_type || 'general'
-      const description = input.description || 'Task'
+      const description = input.description || 'Agent'
       if (status === 'completed' && result) {
-        return result.error ? `Task: (${agentType}) ${description} (error)` : `Task: (${agentType}) ${description} (completed)`
+        return result.error ? `Agent: (${agentType}) ${description} (error)` : `Agent: (${agentType}) ${description} (completed)`
       }
-      return `Task: (${agentType}) ${description}`
+      return `Agent: (${agentType}) ${description}`
     }
 
     case 'TodoWrite': {
@@ -285,11 +286,12 @@ export function generateShortToolSummary(toolCall) {
       return `Skill: ${skillName}`
     }
 
+    case 'Agent':
     case 'Task': {
       const agentType = input.subagent_type || 'general'
-      const description = input.description || 'Task'
+      const description = input.description || 'Agent'
       const shortDesc = description.length > 40 ? description.substring(0, 40) + '...' : description
-      return `Task: (${agentType}) ${shortDesc}`
+      return `Agent: (${agentType}) ${shortDesc}`
     }
 
     case 'Grep':

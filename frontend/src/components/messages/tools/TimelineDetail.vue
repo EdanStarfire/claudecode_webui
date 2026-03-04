@@ -54,7 +54,7 @@ import TodoToolHandler from '@/components/tools/TodoToolHandler.vue'
 import EditToolHandler from '@/components/tools/EditToolHandler.vue'
 import SearchToolHandler from '@/components/tools/SearchToolHandler.vue'
 import WebToolHandler from '@/components/tools/WebToolHandler.vue'
-import TaskToolHandler from '@/components/tools/TaskToolHandler.vue'
+import AgentToolHandler from '@/components/tools/AgentToolHandler.vue'
 import TaskCreateToolHandler from '@/components/tools/TaskCreateToolHandler.vue'
 import TaskUpdateToolHandler from '@/components/tools/TaskUpdateToolHandler.vue'
 import TaskListToolHandler from '@/components/tools/TaskListToolHandler.vue'
@@ -101,7 +101,8 @@ const toolHandlers = {
   'Glob': SearchToolHandler,
   'WebFetch': WebToolHandler,
   'WebSearch': WebToolHandler,
-  'Task': TaskToolHandler,
+  'Agent': AgentToolHandler,
+  'Task': AgentToolHandler,
   'TaskCreate': TaskCreateToolHandler,
   'TaskUpdate': TaskUpdateToolHandler,
   'TaskList': TaskListToolHandler,

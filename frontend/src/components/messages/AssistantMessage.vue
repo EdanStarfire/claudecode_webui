@@ -153,7 +153,7 @@ const enrichedToolCalls = computed(() => {
  */
 const mainTimelineTools = computed(() => {
   return enrichedToolCalls.value.filter(tc =>
-    tc.name !== 'Task' && !tc.parent_tool_use_id
+    tc.name !== 'Task' && tc.name !== 'Agent' && !tc.parent_tool_use_id
   )
 })
 
@@ -161,7 +161,7 @@ const mainTimelineTools = computed(() => {
  * Issue #195: Task tool calls — only Task tools for SubagentTimeline bubbles
  */
 const taskToolCalls = computed(() => {
-  return enrichedToolCalls.value.filter(tc => tc.name === 'Task')
+  return enrichedToolCalls.value.filter(tc => tc.name === 'Task' || tc.name === 'Agent')
 })
 
 /**
