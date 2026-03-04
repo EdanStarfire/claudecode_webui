@@ -74,6 +74,7 @@ class SessionInfo:
     created_at: datetime
     updated_at: datetime
     working_directory: str | None = None
+    additional_directories: list[str] | None = None  # Extra dirs agent can access (issue #630)
     current_permission_mode: str = "acceptEdits"
     initial_permission_mode: str | None = None
     system_prompt: str | None = None
@@ -133,6 +134,8 @@ class SessionInfo:
     is_ephemeral: bool = False  # True for temporary sessions created by ephemeral schedules
 
     def __post_init__(self):
+        if self.additional_directories is None:
+            self.additional_directories = []
         if self.allowed_tools is None:
             self.allowed_tools = ["bash", "edit", "read"]
         if self.disallowed_tools is None:
@@ -255,6 +258,7 @@ class SessionManager:
         self,
         session_id: str,
         working_directory: str | None = None,
+        additional_directories: list[str] | None = None,
         permission_mode: str = "acceptEdits",
         system_prompt: str | None = None,
         override_system_prompt: bool = False,
@@ -308,6 +312,7 @@ class SessionManager:
             created_at=now,
             updated_at=now,
             working_directory=working_directory,
+            additional_directories=additional_directories if additional_directories is not None else [],
             current_permission_mode=permission_mode,
             initial_permission_mode=permission_mode,
             system_prompt=system_prompt,

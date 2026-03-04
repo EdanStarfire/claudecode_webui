@@ -138,6 +138,7 @@ class ClaudeSDK:
         model: str | None = None,
         resume_session_id: str | None = None,
         mcp_servers: list[Any] | None = None,
+        additional_directories: list[str] | None = None,
         sandbox_enabled: bool = False,
         sandbox_config: dict | None = None,
         setting_sources: list[str] | None = None,
@@ -199,6 +200,7 @@ class ClaudeSDK:
         self.experimental = experimental  # Issue #411: Enable experimental features
         self.cli_path = cli_path  # Issue #489: Custom CLI executable path
         self.stderr_callback = stderr_callback  # Issue #517: stderr callback for system messages
+        self.additional_directories = additional_directories or []  # Issue #630: extra dirs for SDK
         self.extra_env = extra_env or {}  # Issue #496: extra env vars (e.g., Docker wrapper config)
         self.thinking_mode = thinking_mode  # Issue #540: thinking configuration
         self.thinking_budget_tokens = thinking_budget_tokens  # Issue #540: budget when thinking_mode="enabled"
@@ -773,6 +775,11 @@ class ClaudeSDK:
         if self.mcp_servers:
             options_kwargs["mcp_servers"] = self.mcp_servers
             sdk_logger.info(f"Attaching MCP servers to session {self.session_id}: {list(self.mcp_servers.keys()) if isinstance(self.mcp_servers, dict) else 'unknown format'}")
+
+        # Issue #630: Add additional directories
+        if self.additional_directories:
+            options_kwargs["add_dirs"] = [str(d) for d in self.additional_directories]
+            sdk_logger.info(f"Additional directories for session {self.session_id}: {self.additional_directories}")
 
         # Add CLI path override (issue #489)
         if self.cli_path:

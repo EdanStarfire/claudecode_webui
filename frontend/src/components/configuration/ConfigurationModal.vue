@@ -422,6 +422,7 @@ const formData = reactive({
   model: 'sonnet',
   permission_mode: 'default',
   working_directory: '',
+  additional_directories: '',  // newline-separated list (issue #630)
   description: '',  // template only
   default_role: '',  // template only
   startImmediately: true,  // create-session only
@@ -591,12 +592,15 @@ const hasRestartChanges = computed(() => {
   const currentSources = formData.setting_sources || ['user', 'project', 'local']
   const settingSourcesChanged = JSON.stringify([...originalSources].sort()) !== JSON.stringify([...currentSources].sort())
 
+  // Issue #630: Additional directories changes require restart
+  const additionalDirsChanged = (formData.additional_directories || '') !== ((editSession.value.additional_directories || []).join('\n'))
+
   // Issue #540: Thinking and effort changes require restart
   const thinkingModeChanged = (formData.thinking_mode || '') !== (editSession.value.thinking_mode || '')
   const thinkingBudgetChanged = (formData.thinking_budget_tokens || 10240) !== (editSession.value.thinking_budget_tokens || 10240)
   const effortChanged = (formData.effort || '') !== (editSession.value.effort || '')
 
-  return modelChanged || allowedToolsChanged || settingSourcesChanged || thinkingModeChanged || thinkingBudgetChanged || effortChanged
+  return modelChanged || allowedToolsChanged || settingSourcesChanged || additionalDirsChanged || thinkingModeChanged || thinkingBudgetChanged || effortChanged
 })
 
 const warningLevel = computed(() => {
@@ -705,6 +709,7 @@ function applyTemplate() {
     formData.override_system_prompt = false
     formData.sandbox_enabled = false
     formData.cli_path = ''  // Issue #489
+    formData.additional_directories = ''  // Issue #630
     formData.docker_enabled = false  // Issue #496
     formData.docker_image = ''
     formData.docker_extra_mounts = ''
@@ -854,6 +859,9 @@ function applyTemplate() {
 
   // Apply cli_path from template (issue #489, no field-state tracking)
   formData.cli_path = template.cli_path || ''
+
+  // Apply additional_directories from template (issue #630, no field-state tracking)
+  formData.additional_directories = (template.additional_directories || []).join('\n')
 
   // Apply docker config from template (issue #496, no field-state tracking)
   formData.docker_enabled = template.docker_enabled || false
@@ -1079,6 +1087,7 @@ function computeTemplateDiff() {
   const listFields = [
     { field: 'allowed_tools', label: 'Allowed Tools' },
     { field: 'disallowed_tools', label: 'Disallowed Tools' },
+    { field: 'additional_directories', label: 'Additional Directories' },
     { field: 'docker_extra_mounts', label: 'Docker Mounts' },
   ]
 
@@ -1264,6 +1273,9 @@ async function createSession() {
     allowed_tools: toolsList.length > 0 ? toolsList : null,
     disallowed_tools: deniedList.length > 0 ? deniedList : null,
     working_directory: formData.working_directory.trim() || null,
+    additional_directories: formData.additional_directories.trim()
+      ? formData.additional_directories.trim().split('\n').map(d => d.trim()).filter(d => d)
+      : null,
     sandbox_enabled: formData.sandbox_enabled,
     sandbox_config: formData.sandbox_enabled ? buildSandboxConfig() : null,
     setting_sources: formData.setting_sources,  // Issue #36
@@ -1320,6 +1332,9 @@ function emitEphemeralConfig() {
     sandbox_config: formData.sandbox_enabled ? buildSandboxConfig() : null,
     setting_sources: formData.setting_sources,
     cli_path: formData.cli_path.trim() || null,
+    additional_directories: formData.additional_directories.trim()
+      ? formData.additional_directories.trim().split('\n').map(d => d.trim()).filter(d => d)
+      : null,
     docker_enabled: formData.docker_enabled,
     docker_image: formData.docker_image.trim() || null,
     docker_extra_mounts: formData.docker_extra_mounts.trim() ? formData.docker_extra_mounts.trim().split('\n').map(m => m.trim()).filter(m => m) : null,
@@ -1345,6 +1360,7 @@ function populateFormFromConfig(config) {
   formData.disallowed_tools = Array.isArray(config.disallowed_tools) ? config.disallowed_tools.join(', ') : (config.disallowed_tools || '')
   formData.sandbox_enabled = config.sandbox_enabled || false
   formData.cli_path = config.cli_path || ''
+  formData.additional_directories = Array.isArray(config.additional_directories) ? config.additional_directories.join('\n') : ''
   formData.docker_enabled = config.docker_enabled || false
   formData.docker_image = config.docker_image || ''
   formData.docker_extra_mounts = Array.isArray(config.docker_extra_mounts) ? config.docker_extra_mounts.join('\n') : ''
@@ -1410,6 +1426,9 @@ async function updateSession() {
     sandbox_config: formData.sandbox_enabled ? buildSandboxConfig() : null,
     setting_sources: formData.setting_sources,  // Issue #36
     cli_path: formData.cli_path.trim(),  // Issue #489: send empty string to clear, non-empty to set
+    additional_directories: formData.additional_directories.trim()
+      ? formData.additional_directories.trim().split('\n').map(d => d.trim()).filter(d => d)
+      : [],
     // Issue #496: Docker settings are immutable after session creation (no docker_enabled/image/mounts here)
     // Issue #540: Thinking and effort configuration
     thinking_mode: formData.thinking_mode || null,
@@ -1459,6 +1478,9 @@ async function createTemplate() {
     sandbox_enabled: formData.sandbox_enabled,
     sandbox_config: formData.sandbox_enabled ? buildSandboxConfig() : null,
     cli_path: formData.cli_path.trim() || null,  // Issue #489
+    additional_directories: formData.additional_directories.trim()
+      ? formData.additional_directories.trim().split('\n').map(d => d.trim()).filter(d => d)
+      : null,
     docker_enabled: formData.docker_enabled,  // Issue #496
     docker_image: formData.docker_image.trim() || null,
     docker_extra_mounts: formData.docker_extra_mounts.trim() ? formData.docker_extra_mounts.trim().split('\n').map(m => m.trim()).filter(m => m) : null,
@@ -1515,6 +1537,9 @@ async function updateTemplate() {
     sandbox_enabled: formData.sandbox_enabled,
     sandbox_config: formData.sandbox_enabled ? buildSandboxConfig() : null,
     cli_path: formData.cli_path.trim() || null,  // Issue #489
+    additional_directories: formData.additional_directories.trim()
+      ? formData.additional_directories.trim().split('\n').map(d => d.trim()).filter(d => d)
+      : null,
     docker_enabled: formData.docker_enabled,  // Issue #496
     docker_image: formData.docker_image.trim() || null,
     docker_extra_mounts: formData.docker_extra_mounts.trim() ? formData.docker_extra_mounts.trim().split('\n').map(m => m.trim()).filter(m => m) : null,
@@ -1555,6 +1580,7 @@ function resetForm() {
   formData.initialization_context = ''
   formData.sandbox_enabled = false
   formData.cli_path = ''  // Issue #489
+  formData.additional_directories = ''  // Issue #630
   formData.docker_enabled = false  // Issue #496
   formData.docker_image = ''
   formData.docker_extra_mounts = ''
@@ -1623,6 +1649,7 @@ function populateFormFromSession(session) {
   formData.capabilities = session.capabilities?.join(', ') || ''
   formData.sandbox_enabled = session.sandbox_enabled || false
   formData.cli_path = session.cli_path || ''  // Issue #489
+  formData.additional_directories = (session.additional_directories || []).join('\n')  // Issue #630
   formData.docker_enabled = session.docker_enabled || false  // Issue #496
   formData.docker_image = session.docker_image || ''
   formData.docker_extra_mounts = (session.docker_extra_mounts || []).join('\n')
@@ -1662,6 +1689,7 @@ function populateFormFromTemplate(template) {
   formData.override_system_prompt = template.override_system_prompt || false
   formData.sandbox_enabled = template.sandbox_enabled || false
   formData.cli_path = template.cli_path || ''  // Issue #489
+  formData.additional_directories = (template.additional_directories || []).join('\n')  // Issue #630
   formData.docker_enabled = template.docker_enabled || false  // Issue #496
   formData.docker_image = template.docker_image || ''
   formData.docker_extra_mounts = (template.docker_extra_mounts || []).join('\n')

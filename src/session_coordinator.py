@@ -332,6 +332,7 @@ class SessionCoordinator:
         name: str | None = None,
         permission_callback: Callable[[str, dict[str, Any]], bool | dict[str, Any]] | None = None,
         working_directory: str | None = None,  # Custom working directory (defaults to project directory)
+        additional_directories: list[str] | None = None,  # Extra dirs agent can access (issue #630)
         # Multi-agent fields (universal Legion - issue #313, #349)
         role: str | None = None,
         capabilities: list[str] = None,
@@ -374,6 +375,7 @@ class SessionCoordinator:
             await self.session_manager.create_session(
                 session_id=session_id,
                 working_directory=working_directory,
+                additional_directories=additional_directories,
                 permission_mode=permission_mode,
                 system_prompt=system_prompt,
                 override_system_prompt=override_system_prompt,
@@ -841,6 +843,7 @@ class SessionCoordinator:
                 model=session_info.model,
                 resume_session_id=resume_sdk_session,  # Only resume if we have a Claude Code session ID
                 mcp_servers=mcp_servers if mcp_servers else None,
+                additional_directories=session_info.additional_directories,  # Issue #630
                 sandbox_enabled=session_info.sandbox_enabled,
                 sandbox_config=session_info.sandbox_config,
                 setting_sources=session_info.setting_sources,  # Issue #36
