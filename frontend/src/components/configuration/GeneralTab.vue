@@ -215,6 +215,54 @@
       </div>
     </div>
 
+    <!-- Additional Directories (session and template modes) -->
+    <div class="mb-3">
+      <label class="form-label">Additional Directories</label>
+      <div class="additional-dirs-editor">
+        <div v-if="additionalDirsList.length > 0" class="dirs-list mb-2">
+          <div
+            v-for="(dir, index) in additionalDirsList"
+            :key="index"
+            class="dir-entry d-flex align-items-center mb-1"
+          >
+            <code class="flex-grow-1 small text-truncate" :title="dir">{{ dir }}</code>
+            <button
+              type="button"
+              class="btn btn-sm btn-outline-danger ms-2 py-0 px-1"
+              @click="removeDirectory(index)"
+            >&times;</button>
+          </div>
+        </div>
+        <div v-else class="text-muted small mb-2">No additional directories configured</div>
+        <div class="input-group input-group-sm">
+          <input
+            type="text"
+            class="form-control"
+            :class="{ 'is-invalid': newDirError }"
+            v-model="newDirectory"
+            @keydown.enter.prevent="addDirectory"
+            placeholder="/path/to/directory"
+          />
+          <button
+            type="button"
+            class="btn btn-outline-secondary"
+            @click="$emit('browse-additional-dir')"
+            title="Browse for directory"
+          >Browse</button>
+          <button
+            type="button"
+            class="btn btn-outline-primary"
+            @click="addDirectory"
+            :disabled="!newDirectory.trim()"
+          >+</button>
+        </div>
+        <div v-if="newDirError" class="invalid-feedback d-block">{{ newDirError }}</div>
+      </div>
+      <div class="form-text">
+        Extra directories the agent can access beyond the working directory. Requires session restart.
+      </div>
+    </div>
+
     <!-- Session State (edit-session only) -->
     <div v-if="isEditSession && session" class="mb-3">
       <label class="form-label">Current State</label>
@@ -242,7 +290,7 @@
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 
 const props = defineProps({
   mode: {
@@ -278,10 +326,11 @@ const props = defineProps({
   }
 })
 
-defineEmits([
+const emit = defineEmits([
   'update:form-data',
   'update:selected-template-id',
   'open-folder-browser',
+  'browse-additional-dir',
   'open-template-manager'
 ])
 
@@ -325,6 +374,45 @@ const permissionModeFieldClass = computed(() => ({
   'field-autofilled': props.fieldStates.permission_mode === 'autofilled',
   'field-modified': props.fieldStates.permission_mode === 'modified'
 }))
+
+// Additional directories (issue #630)
+const newDirectory = ref('')
+const newDirError = ref('')
+
+const additionalDirsList = computed(() => {
+  const raw = props.formData.additional_directories || ''
+  return raw.split('\n').map(d => d.trim()).filter(d => d)
+})
+
+function addDirectory() {
+  const dir = newDirectory.value.trim()
+  if (!dir) return
+
+  if (!dir.startsWith('/')) {
+    newDirError.value = 'Path must be absolute (start with /)'
+    return
+  }
+
+  newDirError.value = ''
+  addDirectoryPath(dir)
+  newDirectory.value = ''
+}
+
+function addDirectoryPath(dir) {
+  const current = additionalDirsList.value
+  if (!current.includes(dir)) {
+    current.push(dir)
+    emit('update:form-data', 'additional_directories', current.join('\n'))
+  }
+}
+
+defineExpose({ addDirectoryPath })
+
+function removeDirectory(index) {
+  const current = [...additionalDirsList.value]
+  current.splice(index, 1)
+  emit('update:form-data', 'additional_directories', current.join('\n'))
+}
 
 // Methods
 function getStateBadgeClass(state) {
@@ -401,5 +489,12 @@ function getStateBadgeClass(state) {
 .form-control,
 .form-select {
   transition: background-color 0.3s ease, border-color 0.3s ease;
+}
+
+/* Additional directories list */
+.dirs-list .dir-entry {
+  padding: 0.25rem 0.5rem;
+  border-radius: 0.25rem;
+  background: var(--bs-gray-100, #f8f9fa);
 }
 </style>

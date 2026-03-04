@@ -133,6 +133,7 @@ class SessionCreateRequest(BaseModel):
     name: str | None = None
     setting_sources: list[str] | None = None  # Issue #36: which settings files to load
     cli_path: str | None = None  # Issue #489: custom CLI executable path
+    additional_directories: list[str] | None = None  # Issue #630: extra dirs for agent access
     # Docker session isolation (issue #496)
     docker_enabled: bool = False
     docker_image: str | None = None
@@ -161,6 +162,7 @@ class SessionUpdateRequest(BaseModel):
     sandbox_config: dict | None = None  # Issue #458: sandbox configuration settings
     setting_sources: list[str] | None = None  # Issue #36: which settings files to load
     cli_path: str | None = None  # Issue #489: custom CLI executable path
+    additional_directories: list[str] | None = None  # Issue #630: extra dirs for agent access
     # Issue #496: Docker fields intentionally excluded — immutable after session creation
     # Thinking and effort configuration (issue #540)
     thinking_mode: str | None = None  # "adaptive", "enabled", "disabled"
@@ -249,6 +251,7 @@ class TemplateCreateRequest(BaseModel):
     sandbox_enabled: bool = False
     sandbox_config: dict | None = None  # Issue #458: sandbox configuration settings
     cli_path: str | None = None  # Issue #489: custom CLI path
+    additional_directories: list[str] | None = None  # Issue #630
     # Docker session isolation (issue #496)
     docker_enabled: bool = False
     docker_image: str | None = None
@@ -273,6 +276,7 @@ class TemplateUpdateRequest(BaseModel):
     sandbox_enabled: bool | None = None
     sandbox_config: dict | None = None  # Issue #458: sandbox configuration settings
     cli_path: str | None = None  # Issue #489: custom CLI path
+    additional_directories: list[str] | None = None  # Issue #630
     # Docker session isolation (issue #496)
     docker_enabled: bool | None = None
     docker_image: str | None = None
@@ -430,6 +434,28 @@ class LegionWebSocketManager:
         # Clean up dead connections
         for dead_connection in dead_connections:
             self.disconnect(dead_connection, legion_id)
+
+
+def _validate_additional_directories(dirs: list[str] | None, working_directory: str | None) -> list[str]:
+    """Validate additional directories: absolute paths, no duplicates, not same as working_dir."""
+    if not dirs:
+        return []
+    validated = []
+    seen = set()
+    for d in dirs:
+        d = d.strip()
+        if not d:
+            continue
+        if not os.path.isabs(d):
+            raise ValueError(f"Directory must be an absolute path: {d}")
+        normalized = os.path.normpath(d)
+        if normalized in seen:
+            continue
+        if working_directory and normalized == os.path.normpath(working_directory):
+            continue
+        seen.add(normalized)
+        validated.append(normalized)
+    return validated
 
 
 class ClaudeWebUI:
@@ -992,6 +1018,11 @@ class ClaudeWebUI:
                 # Pre-generate session ID so we can pass it to permission callback
                 session_id = str(uuid.uuid4())
 
+                # Issue #630: Validate additional directories
+                validated_dirs = _validate_additional_directories(
+                    request.additional_directories, None
+                )
+
                 session_id = await self.coordinator.create_session(
                     session_id=session_id,
                     project_id=request.project_id,
@@ -1003,6 +1034,7 @@ class ClaudeWebUI:
                     model=request.model,
                     name=request.name,
                     permission_callback=self._create_permission_callback(session_id),
+                    additional_directories=validated_dirs,  # Issue #630
                     setting_sources=request.setting_sources,  # Issue #36
                     cli_path=request.cli_path,  # Issue #489
                     # Docker session isolation (issue #496)
@@ -1204,6 +1236,13 @@ class ClaudeWebUI:
                 # Empty string means clear the custom CLI path
                 if request.cli_path is not None:
                     updates["cli_path"] = request.cli_path if request.cli_path.strip() else None
+
+                # Handle additional_directories update (issue #630)
+                if request.additional_directories is not None:
+                    validated_dirs = _validate_additional_directories(
+                        request.additional_directories, session.working_directory
+                    )
+                    updates["additional_directories"] = validated_dirs
 
                 # Issue #496: Docker fields are immutable after session creation — not updatable here
 
@@ -3003,6 +3042,7 @@ class ClaudeWebUI:
                     sandbox_enabled=request.sandbox_enabled,
                     sandbox_config=request.sandbox_config,
                     cli_path=request.cli_path,
+                    additional_directories=request.additional_directories,
                     # Docker session isolation (issue #496)
                     docker_enabled=request.docker_enabled,
                     docker_image=request.docker_image,
@@ -3038,6 +3078,7 @@ class ClaudeWebUI:
                     sandbox_enabled=request.sandbox_enabled,
                     sandbox_config=request.sandbox_config,
                     cli_path=request.cli_path,
+                    additional_directories=request.additional_directories,
                     # Docker session isolation (issue #496)
                     docker_enabled=request.docker_enabled,
                     docker_image=request.docker_image,
@@ -3873,6 +3914,19 @@ class ClaudeWebUI:
                                 logger.info(f"Updated session {session_id} permission mode to {new_mode}")
                             except Exception as mode_error:
                                 logger.error(f"Failed to update session mode: {mode_error}")
+
+                        # Issue #630: Persist addDirectories to session configuration
+                        if suggestion_dict['type'] == 'addDirectories' and suggestion_dict.get('directories'):
+                            try:
+                                await self.coordinator.session_manager.update_additional_directories(
+                                    session_id, suggestion_dict['directories']
+                                )
+                                logger.info(
+                                    f"Updated session {session_id} additional_directories "
+                                    f"with {len(suggestion_dict['directories'])} dirs"
+                                )
+                            except Exception as dirs_error:
+                                logger.error(f"Failed to update session directories: {dirs_error}")
 
                     response['updated_permissions'] = updated_permissions
                     response['applied_updates_for_storage'] = applied_updates_for_storage

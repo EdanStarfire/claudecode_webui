@@ -74,6 +74,7 @@ class SessionInfo:
     created_at: datetime
     updated_at: datetime
     working_directory: str | None = None
+    additional_directories: list[str] | None = None  # Extra dirs agent can access (issue #630)
     current_permission_mode: str = "acceptEdits"
     initial_permission_mode: str | None = None
     system_prompt: str | None = None
@@ -133,6 +134,8 @@ class SessionInfo:
     is_ephemeral: bool = False  # True for temporary sessions created by ephemeral schedules
 
     def __post_init__(self):
+        if self.additional_directories is None:
+            self.additional_directories = []
         if self.allowed_tools is None:
             self.allowed_tools = ["bash", "edit", "read"]
         if self.disallowed_tools is None:
@@ -255,6 +258,7 @@ class SessionManager:
         self,
         session_id: str,
         working_directory: str | None = None,
+        additional_directories: list[str] | None = None,
         permission_mode: str = "acceptEdits",
         system_prompt: str | None = None,
         override_system_prompt: bool = False,
@@ -308,6 +312,7 @@ class SessionManager:
             created_at=now,
             updated_at=now,
             working_directory=working_directory,
+            additional_directories=additional_directories if additional_directories is not None else [],
             current_permission_mode=permission_mode,
             initial_permission_mode=permission_mode,
             system_prompt=system_prompt,
@@ -620,6 +625,38 @@ class SessionManager:
                 return True
             except Exception as e:
                 logger.error(f"Failed to update session {session_id} permission mode: {e}")
+                return False
+
+    async def update_additional_directories(self, session_id: str, dirs_to_add: list[str]) -> bool:
+        """Add directories to session's additional_directories list (deduplicated).
+
+        Issue #630: Persist addDirectories permission suggestions to session configuration.
+        """
+        async with self._get_session_lock(session_id):
+            try:
+                session = self._active_sessions.get(session_id)
+                if not session:
+                    logger.error(f"Session {session_id} not found")
+                    return False
+
+                existing = set(session.additional_directories or [])
+                added = []
+                for d in dirs_to_add:
+                    d = d.strip()
+                    if d and d not in existing:
+                        existing.add(d)
+                        added.append(d)
+
+                if added:
+                    session.additional_directories = list(existing)
+                    session.updated_at = datetime.now(UTC)
+                    await self._persist_session_state(session_id)
+                    session_logger.info(
+                        f"Added {len(added)} directories to session {session_id}: {added}"
+                    )
+                return True
+            except Exception as e:
+                logger.error(f"Failed to update session {session_id} additional_directories: {e}")
                 return False
 
     async def update_allowed_tools(self, session_id: str, tools_to_add: list[str]) -> bool:

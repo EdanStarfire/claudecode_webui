@@ -158,6 +158,7 @@ class TemplateManager:
         sandbox_enabled: bool = False,
         sandbox_config: dict | None = None,
         cli_path: str | None = None,
+        additional_directories: list[str] | None = None,
         # Docker session isolation (issue #496)
         docker_enabled: bool = False,
         docker_image: str | None = None,
@@ -195,6 +196,7 @@ class TemplateManager:
             sandbox_enabled=sandbox_enabled,
             sandbox_config=sandbox_config,
             cli_path=cli_path,
+            additional_directories=additional_directories if additional_directories is not None else [],
             # Docker session isolation (issue #496)
             docker_enabled=docker_enabled,
             docker_image=docker_image,
@@ -242,6 +244,7 @@ class TemplateManager:
         sandbox_enabled: bool | None = None,
         sandbox_config: dict | None = None,
         cli_path: str | None = None,
+        additional_directories: list[str] | None = None,
         # Docker session isolation (issue #496)
         docker_enabled: bool | None = None,
         docker_image: str | None = None,
@@ -302,6 +305,9 @@ class TemplateManager:
 
         if cli_path is not None:
             template.cli_path = cli_path
+
+        if additional_directories is not None:
+            template.additional_directories = additional_directories
 
         # Docker session isolation (issue #496)
         if docker_enabled is not None:

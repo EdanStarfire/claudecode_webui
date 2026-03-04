@@ -32,6 +32,7 @@ class MinionTemplate:
     sandbox_enabled: bool = False
     sandbox_config: dict | None = None
     cli_path: str | None = None  # Custom CLI executable path (issue #489)
+    additional_directories: list[str] | None = None  # Extra dirs for agent access (issue #630)
     # Docker session isolation (issue #496)
     docker_enabled: bool = False
     docker_image: str | None = None
@@ -55,6 +56,8 @@ class MinionTemplate:
             self.disallowed_tools = []
         if self.capabilities is None:
             self.capabilities = []
+        if self.additional_directories is None:
+            self.additional_directories = []
         if self.docker_extra_mounts is None:
             self.docker_extra_mounts = []
 
