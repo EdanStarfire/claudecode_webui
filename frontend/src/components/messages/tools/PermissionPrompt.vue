@@ -45,6 +45,7 @@
             v-for="(suggestion, index) in toolCall.suggestions"
             :key="index"
             class="suggestion-item"
+            :class="{ 'suggestion-item-editable': suggestion.type === 'addRules' }"
           >
             <input
               type="checkbox"
@@ -52,7 +53,36 @@
               v-model="checkedSuggestions[index]"
               :disabled="isSubmittingPermission"
             />
-            <label :for="`sg-${toolCall.id}-${index}`">
+            <template v-if="suggestion.type === 'addRules' && suggestion.rules?.length">
+              <div class="editable-rules-wrapper">
+                <span class="rule-label">Allow:</span>
+                <div v-for="(rule, ruleIdx) in suggestion.rules" :key="ruleIdx" class="editable-rule-group">
+                  <div class="editable-rule">
+                    <input
+                      type="text"
+                      v-model="editedSuggestions[`${index}-${ruleIdx}`]"
+                      @input="onRuleEdit(index, ruleIdx)"
+                      :disabled="isSubmittingPermission"
+                      class="rule-input"
+                      :class="{
+                        'rule-input-dirty': isDirty(index, ruleIdx) && !validationErrors[`${index}-${ruleIdx}`],
+                        'rule-input-error': !!validationErrors[`${index}-${ruleIdx}`]
+                      }"
+                    />
+                    <button
+                      v-if="isDirty(index, ruleIdx)"
+                      class="reset-btn"
+                      @click="resetRule(index, ruleIdx)"
+                      title="Reset to original"
+                      type="button"
+                    >&#x21BA;</button>
+                    <span v-if="isDirty(index, ruleIdx) && !validationErrors[`${index}-${ruleIdx}`]" class="edited-badge">edited</span>
+                  </div>
+                  <div v-if="validationErrors[`${index}-${ruleIdx}`]" class="validation-error">{{ validationErrors[`${index}-${ruleIdx}`] }}</div>
+                </div>
+              </div>
+            </template>
+            <label v-else :for="`sg-${toolCall.id}-${index}`">
               <code>{{ formatSuggestion(suggestion) }}</code>
             </label>
           </div>
@@ -63,7 +93,7 @@
             v-if="hasSuggestions"
             class="btn-timeline btn-approve"
             @click="handlePermissionDecision('allow', true)"
-            :disabled="isSubmittingPermission"
+            :disabled="isSubmittingPermission || hasValidationErrors"
           >
             {{ isSubmittingPermission && permissionAction === 'approve-apply' ? 'Submitting...' : 'Approve & Apply' }}
           </button>
@@ -151,15 +181,29 @@ const guidanceMessage = ref('')
 const showGuidance = ref(false)
 const guidanceTextarea = ref(null)
 const checkedSuggestions = ref({})
+const editedSuggestions = ref({})
+const validationErrors = ref({})
 const questionHandlerRef = ref(null)
 const currentAnswers = ref({})
 
-// Initialize suggestion checkboxes
+// Initialize suggestion checkboxes and editable rule text
 watch(() => props.toolCall.suggestions, (suggestions) => {
   if (suggestions && suggestions.length > 0) {
     const checked = {}
-    suggestions.forEach((_, index) => { checked[index] = true })
+    const edited = {}
+    suggestions.forEach((sg, index) => {
+      checked[index] = true
+      if (sg.type === 'addRules' && sg.rules?.length) {
+        sg.rules.forEach((rule, ruleIdx) => {
+          edited[`${index}-${ruleIdx}`] = rule.ruleContent
+            ? `${rule.toolName}(${rule.ruleContent})`
+            : rule.toolName
+        })
+      }
+    })
     checkedSuggestions.value = checked
+    editedSuggestions.value = edited
+    validationErrors.value = {}
   }
 }, { immediate: true })
 
@@ -178,6 +222,87 @@ const hasValidAnswers = computed(() => {
 const hasSuggestions = computed(() => {
   return props.toolCall.suggestions && props.toolCall.suggestions.length > 0
 })
+
+const hasValidationErrors = computed(() => {
+  if (!props.toolCall.suggestions) return false
+  for (let sgIdx = 0; sgIdx < props.toolCall.suggestions.length; sgIdx++) {
+    if (!checkedSuggestions.value[sgIdx]) continue
+    const sg = props.toolCall.suggestions[sgIdx]
+    if (sg.type !== 'addRules' || !sg.rules?.length) continue
+    for (let ruleIdx = 0; ruleIdx < sg.rules.length; ruleIdx++) {
+      if (validationErrors.value[`${sgIdx}-${ruleIdx}`]) return true
+    }
+  }
+  return false
+})
+
+// Editable suggestion helpers
+function getOriginalRuleText(sgIdx, ruleIdx) {
+  const rule = props.toolCall.suggestions?.[sgIdx]?.rules?.[ruleIdx]
+  if (!rule) return ''
+  return rule.ruleContent ? `${rule.toolName}(${rule.ruleContent})` : rule.toolName
+}
+
+function isDirty(sgIdx, ruleIdx) {
+  return editedSuggestions.value[`${sgIdx}-${ruleIdx}`] !== getOriginalRuleText(sgIdx, ruleIdx)
+}
+
+function resetRule(sgIdx, ruleIdx) {
+  const key = `${sgIdx}-${ruleIdx}`
+  editedSuggestions.value[key] = getOriginalRuleText(sgIdx, ruleIdx)
+  delete validationErrors.value[key]
+}
+
+function validatePermissionFormat(text) {
+  if (!text || !text.trim()) return 'Permission rule cannot be empty'
+  const trimmed = text.trim()
+  if (!/^[A-Z]/.test(trimmed)) return 'Tool name must start with uppercase letter'
+  const parenIdx = trimmed.indexOf('(')
+  if (parenIdx === -1) {
+    if (!/^[A-Za-z_]+$/.test(trimmed)) return 'Invalid tool name format'
+    return null
+  }
+  if (!trimmed.endsWith(')')) return 'Missing closing parenthesis'
+  const toolName = trimmed.substring(0, parenIdx)
+  if (!/^[A-Za-z_]+$/.test(toolName)) return 'Invalid tool name format'
+  let depth = 0
+  for (let i = parenIdx; i < trimmed.length; i++) {
+    if (trimmed[i] === '(') depth++
+    else if (trimmed[i] === ')') depth--
+    if (depth < 0) return 'Unbalanced parentheses'
+  }
+  if (depth !== 0) return 'Unbalanced parentheses'
+  return null
+}
+
+function onRuleEdit(sgIdx, ruleIdx) {
+  const key = `${sgIdx}-${ruleIdx}`
+  validationErrors.value[key] = validatePermissionFormat(editedSuggestions.value[key])
+}
+
+function parseRuleText(text) {
+  const trimmed = text.trim()
+  const parenIdx = trimmed.indexOf('(')
+  if (parenIdx === -1) return { toolName: trimmed, ruleContent: '' }
+  return {
+    toolName: trimmed.substring(0, parenIdx),
+    ruleContent: trimmed.substring(parenIdx + 1, trimmed.lastIndexOf(')'))
+  }
+}
+
+function reconstructEditedSuggestions(suggestions) {
+  return suggestions.map(sg => {
+    if (sg.type !== 'addRules' || !sg.rules?.length) return sg
+    const sgIdx = props.toolCall.suggestions.indexOf(sg)
+    const editedRules = sg.rules.map((rule, ruleIdx) => {
+      const key = `${sgIdx}-${ruleIdx}`
+      const editedText = editedSuggestions.value[key]
+      if (!editedText || editedText === getOriginalRuleText(sgIdx, ruleIdx)) return rule
+      return parseRuleText(editedText)
+    })
+    return { ...sg, rules: editedRules }
+  })
+}
 
 // Permission handlers
 function handleQuestionAnswer(answers) {
@@ -219,8 +344,12 @@ async function handlePermissionDecision(decision, applySuggestions, guidance = n
   if (isSubmittingPermission.value) return
   isSubmittingPermission.value = true
 
-  const filtered = selectedSuggestions.value
+  // Reconstruct suggestions with any user edits to rule text
+  let filtered = selectedSuggestions.value
   const effectiveApply = applySuggestions && filtered.length > 0
+  if (effectiveApply) {
+    filtered = reconstructEditedSuggestions(filtered)
+  }
 
   if (decision === 'allow') {
     permissionAction.value = effectiveApply ? 'approve-apply' : 'approve'
@@ -412,6 +541,89 @@ function autoResizeGuidance() {
   background: white;
   padding: 1px 4px;
   border-radius: 2px;
+}
+
+.suggestion-item-editable {
+  align-items: flex-start;
+}
+
+.editable-rules-wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+
+.rule-label {
+  font-size: 11px;
+  color: #1e40af;
+  font-weight: 500;
+}
+
+.editable-rule-group {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.editable-rule {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.rule-input {
+  font-family: monospace;
+  font-size: 11px;
+  padding: 1px 4px;
+  border: 1px solid #cbd5e1;
+  border-radius: 2px;
+  background: white;
+  flex: 1;
+  min-width: 120px;
+}
+
+.rule-input:focus {
+  outline: none;
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 1px #3b82f6;
+}
+
+.rule-input-dirty {
+  border-color: #22c55e;
+  background: #f0fdf4;
+}
+
+.rule-input-error {
+  border-color: #ef4444;
+  background: #fef2f2;
+}
+
+.reset-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 14px;
+  padding: 0 2px;
+  color: #64748b;
+  line-height: 1;
+}
+.reset-btn:hover { color: #1e40af; }
+
+.edited-badge {
+  font-size: 9px;
+  background: #dbeafe;
+  color: #1e40af;
+  padding: 0 4px;
+  border-radius: 2px;
+  white-space: nowrap;
+}
+
+.validation-error {
+  font-size: 9px;
+  color: #ef4444;
+  padding-left: 2px;
 }
 
 /* Guidance */
