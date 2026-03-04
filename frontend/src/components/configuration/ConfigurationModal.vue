@@ -237,7 +237,9 @@
                 :field-states="fieldStates"
                 @update:form-data="updateFormData"
                 @update:selected-template-id="updateSelectedTemplate"
+                ref="generalTabRef"
                 @open-folder-browser="openFolderBrowser"
+                @browse-additional-dir="browseAdditionalDir"
                 @open-template-manager="switchToTemplateList"
               />
               <PermissionsTab
@@ -357,6 +359,9 @@ const permissionPreviewModal = ref(null)  // Issue #36
 //       'save-as-template', 'update-template-from-session'
 const mode = ref('create-session')
 const activeTab = ref('general')
+
+// Component refs
+const generalTabRef = ref(null)
 
 // Context
 const projectId = ref(null)
@@ -915,6 +920,21 @@ function openFolderBrowser() {
     currentPath: formData.working_directory || '',
     onSelect: (path) => {
       formData.working_directory = path
+    }
+  })
+}
+
+function browseAdditionalDir() {
+  const project = projectId.value ? projectStore.projects.get(projectId.value) : null
+  const defaultPath = formData.working_directory || project?.working_directory || ''
+
+  uiStore.showModal('folder-browser', {
+    defaultPath: defaultPath,
+    currentPath: '',
+    onSelect: (path) => {
+      if (generalTabRef.value) {
+        generalTabRef.value.addDirectoryPath(path)
+      }
     }
   })
 }

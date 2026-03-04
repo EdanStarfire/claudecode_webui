@@ -245,6 +245,12 @@
           />
           <button
             type="button"
+            class="btn btn-outline-secondary"
+            @click="$emit('browse-additional-dir')"
+            title="Browse for directory"
+          >Browse</button>
+          <button
+            type="button"
             class="btn btn-outline-primary"
             @click="addDirectory"
             :disabled="!newDirectory.trim()"
@@ -324,6 +330,7 @@ const emit = defineEmits([
   'update:form-data',
   'update:selected-template-id',
   'open-folder-browser',
+  'browse-additional-dir',
   'open-template-manager'
 ])
 
@@ -387,13 +394,19 @@ function addDirectory() {
   }
 
   newDirError.value = ''
+  addDirectoryPath(dir)
+  newDirectory.value = ''
+}
+
+function addDirectoryPath(dir) {
   const current = additionalDirsList.value
   if (!current.includes(dir)) {
     current.push(dir)
     emit('update:form-data', 'additional_directories', current.join('\n'))
   }
-  newDirectory.value = ''
 }
+
+defineExpose({ addDirectoryPath })
 
 function removeDirectory(index) {
   const current = [...additionalDirsList.value]
