@@ -3878,6 +3878,36 @@ class ClaudeWebUI:
                     response['applied_updates_for_storage'] = applied_updates_for_storage
                     logger.info(f"Built {len(updated_permissions)} permission updates from suggestions")
 
+                    # Issue #631: Audit log when user edits permission suggestion text
+                    if response.get("selected_suggestions"):
+                        for sg_applied in suggestions_to_apply:
+                            if sg_applied.get('type') != 'addRules':
+                                continue
+                            for rule in sg_applied.get('rules') or []:
+                                tool_name_applied = rule.get('toolName', '')
+                                rule_content_applied = rule.get('ruleContent', '')
+                                applied_text = (
+                                    f"{tool_name_applied}({rule_content_applied})"
+                                    if rule_content_applied else tool_name_applied
+                                )
+                                # Check if this rule differs from any original suggestion
+                                for orig_sg in suggestions:
+                                    if orig_sg.get('type') != 'addRules':
+                                        continue
+                                    for orig_rule in orig_sg.get('rules') or []:
+                                        orig_tool = orig_rule.get('toolName', '')
+                                        orig_content = orig_rule.get('ruleContent', '')
+                                        orig_text = (
+                                            f"{orig_tool}({orig_content})"
+                                            if orig_content else orig_tool
+                                        )
+                                        if orig_tool == tool_name_applied and orig_text != applied_text:
+                                            logger.info(
+                                                f"Permission edited by user: "
+                                                f"original='{orig_text}' → edited='{applied_text}' "
+                                                f"in session {session_id}"
+                                            )
+
                     # Issue #433: Persist approved tool names to session allowed_tools
                     # SDK suggestions split tool spec into toolName + ruleContent,
                     # e.g. toolName="Bash", ruleContent="gh issue view:*"
