@@ -41,6 +41,7 @@
     <MinionViewModal />
     <DeletedAgentsModal />
     <RestartModal />
+    <GlobalConfigModal />
   </div>
 </template>
 
@@ -60,6 +61,7 @@ import SessionInfoModal from './components/session/SessionInfoModal.vue'
 import MinionViewModal from './components/legion/MinionViewModal.vue'
 import DeletedAgentsModal from './components/layout/DeletedAgentsModal.vue'
 import RestartModal from './components/layout/RestartModal.vue'
+import GlobalConfigModal from './components/configuration/GlobalConfigModal.vue'
 import { useUIStore } from './stores/ui'
 import { useWebSocketStore } from './stores/websocket'
 import { useSessionStore } from './stores/session'

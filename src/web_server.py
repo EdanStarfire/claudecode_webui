@@ -668,8 +668,13 @@ class ClaudeWebUI:
 
     async def initialize(self):
         """Initialize the WebUI application"""
+        from .config_manager import load_config
         await self.coordinator.initialize()
-        await self.skill_manager.sync()
+        config = load_config()
+        if config.features.skill_sync_enabled:
+            await self.skill_manager.sync()
+        else:
+            logger.info("Skill syncing disabled by config")
 
         # Templates are now loaded in SessionCoordinator.initialize()
 
@@ -2746,6 +2751,70 @@ class ClaudeWebUI:
             except Exception as e:
                 logger.error(f"Failed to preview permissions: {e}")
                 raise HTTPException(status_code=500, detail=str(e))
+
+        # ==================== CONFIG ENDPOINTS ====================
+
+        @self.app.get("/api/config")
+        async def get_config():
+            """Return full application config."""
+            from .config_manager import load_config
+            config = load_config()
+            return {"config": config.to_dict()}
+
+        @self.app.put("/api/config")
+        async def update_config(request: Request):
+            """Update application config with side effects."""
+            from .config_manager import load_config, save_config
+            body = await request.json()
+            config = load_config()
+            old_sync = config.features.skill_sync_enabled
+
+            # Merge features section
+            if "features" in body:
+                features = body["features"]
+                if "skill_sync_enabled" in features:
+                    config.features.skill_sync_enabled = features["skill_sync_enabled"]
+
+            # Merge networking section
+            if "networking" in body:
+                net = body["networking"]
+                if "allow_network_binding" in net:
+                    config.networking.allow_network_binding = net["allow_network_binding"]
+                if "acknowledged_risk" in net:
+                    config.networking.acknowledged_risk = net["acknowledged_risk"]
+
+            save_config(config)
+
+            # Side effects for skill sync toggle
+            new_sync = config.features.skill_sync_enabled
+            if old_sync and not new_sync:
+                await self.skill_manager.cleanup_symlinks()
+            elif not old_sync and new_sync:
+                await self.skill_manager.sync()
+
+            return {"config": config.to_dict()}
+
+        # ==================== SKILLS ENDPOINTS ====================
+
+        @self.app.post("/api/skills/sync")
+        async def sync_skills():
+            """Manually trigger skill sync."""
+            from .config_manager import load_config
+            config = load_config()
+            if not config.features.skill_sync_enabled:
+                raise HTTPException(status_code=409, detail="Skill syncing is disabled")
+            result = await self.skill_manager.sync()
+            return {"status": "synced", **result}
+
+        @self.app.get("/api/skills/status")
+        async def get_skills_status():
+            """Get skill sync status."""
+            from .config_manager import load_config
+            config = load_config()
+            return {
+                "sync_enabled": config.features.skill_sync_enabled,
+                "last_sync_time": self.skill_manager.last_sync_time,
+            }
 
         # ==================== SYSTEM ENDPOINTS (Issue #434) ====================
 
