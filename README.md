@@ -204,7 +204,7 @@ uv run python main.py
 # Custom port (default: 8000)
 uv run python main.py --port 8080
 
-# Allow remote access (bind to all interfaces)
+# Allow remote access (bind to all interfaces, requires config — see Network Access)
 uv run python main.py --host 0.0.0.0
 
 # Custom data directory (default: ./data)
@@ -233,13 +233,19 @@ Choose the right permission level for your workflow:
 
 ### Network Access
 
-By default, the server binds to `127.0.0.1` (localhost only) for security. To access from other devices on your network:
+By default, the server binds to `127.0.0.1` (localhost only) for security. Non-localhost binding (e.g., `--host 0.0.0.0`) requires explicit opt-in via the config file.
 
-1. Start with `--host 0.0.0.0` to bind to all interfaces
-2. Find your machine's IP address (`ip addr` on Linux, `ipconfig` on Windows, `ifconfig` on Mac)
-3. Access from other devices at `http://<your-ip>:8000`
+**First run** automatically creates `~/.config/cc_webui/config.json` with safe defaults.
 
-**Security Note**: Using `--host 0.0.0.0` exposes the server to your local network. Use VPN or firewall rules for internet access.
+To enable network access:
+
+1. Edit `~/.config/cc_webui/config.json`
+2. Set both `allow_network_binding` and `acknowledged_risk` to `true`
+3. Start with `--host 0.0.0.0` to bind to all interfaces
+4. Find your machine's IP address (`ip addr` on Linux, `ipconfig` on Windows, `ifconfig` on Mac)
+5. Access from other devices at `http://<your-ip>:8000`
+
+**Security Warning**: Binding to `0.0.0.0` exposes the server to your local network, potentially granting anyone with network access full command execution privileges on your machine with your credentials. Use VPN or firewall rules for internet access.
 
 ## Documentation
 

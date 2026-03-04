@@ -12,6 +12,7 @@ import uvicorn
 # Add project root to path (so imports like "from src.legion..." work)
 sys.path.insert(0, str(Path(__file__).parent))
 
+from src.config_manager import check_network_binding, ensure_config_file, load_config
 from src.logging_config import configure_logging
 from src.web_server import create_app, shutdown_event, startup_event
 
@@ -79,6 +80,14 @@ Debug Flags:
     )
 
     args = parser.parse_args()
+
+    # Ensure config file exists (creates with safe defaults on first run)
+    config_file = ensure_config_file()
+    app_config = load_config(config_file)
+
+    # Validate network binding permission
+    if not check_network_binding(args.host, app_config, config_file):
+        sys.exit(1)
 
     # Validate and create data directory
     data_dir_path = Path(args.data_dir).resolve()
