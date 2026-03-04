@@ -302,7 +302,7 @@ See [TOOL_HANDLERS.md](../TOOL_HANDLERS.md) for detailed documentation.
 
 ```bash
 # Terminal 1: Backend
-uv run python main.py --port 8001 --debug-all
+uv run python main.py --host 0.0.0.0 --port 8001 --debug-all
 
 # Terminal 2: Frontend dev server with HMR
 cd frontend && npm run dev   # http://localhost:5173

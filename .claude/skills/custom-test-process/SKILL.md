@@ -32,7 +32,7 @@ This skill owns the full test lifecycle in a single invocation:
 **CRITICAL:** Unset the `CLAUDECODE` environment variable before starting the backend. The Claude Agent SDK includes an undocumented safety check that prevents it from running inside another Claude Code instance. Since the builder agent runs inside Claude Code, this env var is inherited by child processes. Our application launches its own Claude Code SDK instances, so if `CLAUDECODE` is set, those SDK sessions will halt prematurely.
 
 ```bash
-env -u CLAUDECODE uv run python main.py --debug-all --port ${BACKEND_PORT} &
+env -u CLAUDECODE uv run python main.py --host 0.0.0.0 --debug-all --port ${BACKEND_PORT} &
 ```
 
 Wait for server to be ready:
