@@ -37,6 +37,7 @@ Return this context fragment for inclusion in minion initialization:
 ```
 Test Server Configuration:
 - Backend Port: ${BACKEND_PORT} (8000 + issue_number % 1000)
+- Backend Host: 0.0.0.0 (required for network-accessible dev server)
 - Vite Port: ${VITE_PORT} (5000 + issue_number % 1000)
 - Data Directory: Default (data/) - DO NOT use --data-dir flag
 ```

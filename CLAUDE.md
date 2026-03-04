@@ -195,7 +195,7 @@ frontend/
 
 ```bash
 # Terminal 1: Backend (use port 8001 to avoid conflicts with production on 8000)
-uv run python main.py --debug-all --port 8001
+uv run python main.py --host 0.0.0.0 --debug-all --port 8001
 
 # Terminal 2: Frontend dev server with HMR
 cd frontend
@@ -852,7 +852,7 @@ main.py
 
 ```bash
 # Test run
-uv run python main.py --debug-all --data-dir test_data --port 8001
+uv run python main.py --host 0.0.0.0 --debug-all --data-dir test_data --port 8001
 
 # Production run
 uv run python main.py --port 8000
@@ -898,7 +898,7 @@ uv run pytest src/tests/ --cov=src --cov-report=html
 
 ```bash
 # Terminal 1: Backend
-uv run python main.py --port 8001 --debug-all
+uv run python main.py --host 0.0.0.0 --port 8001 --debug-all
 
 # Terminal 2: Frontend dev server
 cd frontend
