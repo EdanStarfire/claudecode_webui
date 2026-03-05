@@ -13,7 +13,12 @@
   >
     <span class="pill-icon">{{ pillIcon }}</span>
     <span class="pill-name">{{ project.name }}</span>
-    <span v-if="sessionCount > 0" class="pill-count">{{ sessionCount }}</span>
+    <span
+      v-if="sessionCount > 0"
+      class="pill-count"
+      @click.stop="navigateToOverview"
+      title="View project overview"
+    >{{ sessionCount }}</span>
     <div class="pill-status-bar">
       <div
         v-for="(seg, idx) in statusSegments"
@@ -28,6 +33,7 @@
 
 <script setup>
 import { computed } from 'vue'
+import { useRouter } from 'vue-router'
 import { useProjectStore } from '@/stores/project'
 import { useSessionStore } from '@/stores/session'
 import { useUIStore } from '@/stores/ui'
@@ -38,6 +44,7 @@ const props = defineProps({
   isBrowsing: { type: Boolean, default: false }
 })
 
+const router = useRouter()
 const projectStore = useProjectStore()
 const sessionStore = useSessionStore()
 const uiStore = useUIStore()
@@ -56,6 +63,10 @@ const statusSegments = computed(() =>
 
 function handleClick() {
   uiStore.setBrowsingProject(props.project.project_id)
+}
+
+function navigateToOverview() {
+  router.push(`/project/${props.project.project_id}`)
 }
 
 function showEditModal() {
@@ -121,11 +132,20 @@ function showEditModal() {
   padding: 0 5px;
   border-radius: 8px;
   line-height: 1.6;
+  cursor: pointer;
+}
+
+.pill-count:hover {
+  background: #cbd5e1;
 }
 
 .project-pill.active .pill-count {
   background: #bfdbfe;
   color: #1d4ed8;
+}
+
+.project-pill.active .pill-count:hover {
+  background: #93c5fd;
 }
 
 .pill-status-bar {
