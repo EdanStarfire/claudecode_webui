@@ -208,7 +208,7 @@ class TestSessionCoordinator:
         success = await coordinator.send_message(session_id, "Hello, Claude!")
 
         assert success is True
-        mock_sdk.send_message.assert_called_once_with("Hello, Claude!")
+        mock_sdk.send_message.assert_called_once_with("Hello, Claude!", metadata=None)
 
     @pytest.mark.asyncio
     async def test_send_message_no_sdk(self, temp_coordinator):

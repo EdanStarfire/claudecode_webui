@@ -47,6 +47,7 @@ import { useSessionStore } from '@/stores/session'
 import { useLegionStore } from '@/stores/legion'
 import { useWebSocketStore } from '@/stores/websocket'
 import { formatTimestamp } from '@/utils/time'
+import { getAgentColor, slugifyAgentName } from '@/composables/useAgentColor'
 import DOMPurify from 'dompurify'
 import { marked } from 'marked'
 
@@ -81,48 +82,20 @@ const comms = computed(() => {
   )
 })
 
-// Color palette for other minions (pastel tints)
-const MINION_COLORS = [
-  { bg: '#fef3c7', border: '#fde68a' }, // amber
-  { bg: '#fce7f3', border: '#fbcfe8' }, // pink
-  { bg: '#e0e7ff', border: '#c7d2fe' }, // indigo (lighter than user)
-  { bg: '#d1fae5', border: '#a7f3d0' }, // emerald
-  { bg: '#ede9fe', border: '#ddd6fe' }, // violet
-  { bg: '#fee2e2', border: '#fecaca' }, // red
-  { bg: '#cffafe', border: '#a5f3fc' }, // cyan
-  { bg: '#fef9c3', border: '#fef08a' }, // yellow
-]
-
-// Stable color assignment per sender name
-const senderColorMap = new Map()
-
-function getColorForSender(senderId) {
-  if (!senderId) return null
-  if (senderColorMap.has(senderId)) return senderColorMap.get(senderId)
-
-  // Simple hash to pick a consistent color index
-  let hash = 0
-  for (let i = 0; i < senderId.length; i++) {
-    hash = ((hash << 5) - hash + senderId.charCodeAt(i)) | 0
-  }
-  const index = Math.abs(hash) % MINION_COLORS.length
-  const color = MINION_COLORS[index]
-  senderColorMap.set(senderId, color)
-  return color
-}
-
 // Determine comm card style based on sender identity
 function commStyle(comm) {
   const senderId = comm.from_minion_id
 
   // System comms: muted gray
   if (senderId === SYSTEM_MINION_ID) {
-    return { background: '#f1f5f9', borderColor: '#e2e8f0', opacity: 0.8 }
+    const c = getAgentColor('system')
+    return { background: c.bg, borderColor: c.border, opacity: 0.8 }
   }
 
   // User comms: indigo tint (matches user chat bubble)
   if (comm.from_user || senderId === USER_MINION_ID) {
-    return { background: '#eef2ff', borderColor: '#e0e7ff' }
+    const c = getAgentColor('user')
+    return { background: c.bg, borderColor: c.border }
   }
 
   // Active session outbound: assistant colors (matches assistant chat bubble)
@@ -130,14 +103,12 @@ function commStyle(comm) {
     return { background: '#f8fafc', borderColor: '#e2e8f0' }
   }
 
-  // Other minions: unique color per sender
-  const color = getColorForSender(senderId)
-  if (color) {
-    return { background: color.bg, borderColor: color.border }
-  }
-
-  // Fallback
-  return { background: '#f8fafc', borderColor: '#e2e8f0' }
+  // Other minions: unique color per sender name
+  const session = sessionStore.sessions.get(senderId)
+  const name = session?.name || comm.from_minion_name || 'unknown'
+  const slug = slugifyAgentName(name)
+  const color = getAgentColor(slug)
+  return { background: color.bg, borderColor: color.border }
 }
 
 // Icon mapping

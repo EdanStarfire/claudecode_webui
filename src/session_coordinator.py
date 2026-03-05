@@ -1349,7 +1349,7 @@ class SessionCoordinator:
         descendants = await self.get_descendants(session_id)
         return len(descendants)
 
-    async def send_message(self, session_id: str, message: str) -> bool:
+    async def send_message(self, session_id: str, message: str, metadata: dict | None = None) -> bool:
         """Send a message through the integrated pipeline"""
         try:
             sdk = self._active_sdks.get(session_id)
@@ -1362,7 +1362,7 @@ class SessionCoordinator:
 
             # Send message through SDK (will be queued and processed)
             # The SDK should echo the user message back through the stream
-            result = await sdk.send_message(message)
+            result = await sdk.send_message(message, metadata=metadata)
 
             # If message sending failed, reset processing state
             if not result:

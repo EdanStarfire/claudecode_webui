@@ -339,12 +339,13 @@ class ClaudeSDK:
                 await self._safe_callback(self.error_callback, "startup_failed", e)
             return False
 
-    async def send_message(self, message: str) -> bool:
+    async def send_message(self, message: str, metadata: dict | None = None) -> bool:
         """
         Queue a message to send to the Claude Code SDK.
 
         Args:
             message: Message text to send
+            metadata: Optional metadata dict to attach to the message
 
         Returns:
             True if queued successfully, False otherwise
@@ -357,11 +358,14 @@ class ClaudeSDK:
             sdk_logger.debug(f"Queuing message: {message[:100]}...")
 
             # Add to message queue
-            await self._message_queue.put({
+            queue_item = {
                 "type": "user_message",
                 "content": message,
                 "timestamp": time.time()
-            })
+            }
+            if metadata:
+                queue_item["metadata"] = metadata
+            await self._message_queue.put(queue_item)
 
             sdk_logger.debug("Message queued successfully")
             return True
@@ -571,6 +575,8 @@ class ClaudeSDK:
                                 "session_id": self.session_id,
                                 "timestamp": datetime.now(UTC).timestamp()
                             }
+                            if message_data.get("metadata"):
+                                user_message["metadata"] = message_data["metadata"]
 
                             # Store user message if storage available
                             if self.storage_manager:
