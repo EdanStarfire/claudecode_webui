@@ -37,6 +37,20 @@
             <!-- Tab content -->
             <div v-if="activeTab === 'features'">
               <FeaturesTab :config="config.features" @update:config="onFeaturesUpdate" />
+
+              <hr class="my-3">
+
+              <h6 class="mb-2">
+                Templates
+                <span class="badge bg-secondary ms-1">{{ templateCount }}</span>
+              </h6>
+              <p class="text-muted small mb-3">
+                Manage minion templates &mdash; create, edit, and delete templates
+                without starting a session.
+              </p>
+              <button class="btn btn-outline-primary btn-sm" @click="openTemplateManager">
+                Manage Templates
+              </button>
             </div>
           </div>
         </div>
@@ -77,6 +91,7 @@ const loadError = ref(null)
 const saving = ref(false)
 const config = ref({})
 const originalConfig = ref({})
+const templateCount = ref(0)
 
 const dirty = computed(() => {
   return JSON.stringify(config.value) !== JSON.stringify(originalConfig.value)
@@ -93,6 +108,12 @@ async function loadConfig() {
     const data = await apiGet('/api/config')
     config.value = data.config
     originalConfig.value = JSON.parse(JSON.stringify(data.config))
+    try {
+      const templates = await apiGet('/api/templates')
+      templateCount.value = templates.length
+    } catch {
+      templateCount.value = 0
+    }
   } catch (e) {
     loadError.value = e.message || 'Unknown error'
   } finally {
@@ -114,6 +135,13 @@ async function saveConfig() {
   } finally {
     saving.value = false
   }
+}
+
+function openTemplateManager() {
+  if (modalInstance) {
+    modalInstance.hide()
+  }
+  uiStore.showModal('configuration', { mode: 'template-list' })
 }
 
 function resetState() {
