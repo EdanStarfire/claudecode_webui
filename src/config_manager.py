@@ -26,8 +26,14 @@ class NetworkingConfig:
 
 
 @dataclass
+class FeaturesConfig:
+    skill_sync_enabled: bool = True
+
+
+@dataclass
 class AppConfig:
     networking: NetworkingConfig = field(default_factory=NetworkingConfig)
+    features: FeaturesConfig = field(default_factory=FeaturesConfig)
 
     @classmethod
     def from_dict(cls, data: dict) -> "AppConfig":
@@ -36,7 +42,11 @@ class AppConfig:
             allow_network_binding=networking_data.get("allow_network_binding", False),
             acknowledged_risk=networking_data.get("acknowledged_risk", False),
         )
-        return cls(networking=networking)
+        features_data = data.get("features", {})
+        features = FeaturesConfig(
+            skill_sync_enabled=features_data.get("skill_sync_enabled", True),
+        )
+        return cls(networking=networking, features=features)
 
     def to_dict(self) -> dict:
         return {
@@ -47,7 +57,10 @@ class AppConfig:
                 ),
                 "allow_network_binding": self.networking.allow_network_binding,
                 "acknowledged_risk": self.networking.acknowledged_risk,
-            }
+            },
+            "features": {
+                "skill_sync_enabled": self.features.skill_sync_enabled,
+            },
         }
 
 
@@ -79,6 +92,12 @@ def load_config(config_file: Path = CONFIG_FILE) -> AppConfig:
         return AppConfig()
     except FileNotFoundError:
         return AppConfig()
+
+
+def save_config(config: AppConfig, config_file: Path = CONFIG_FILE) -> None:
+    """Save config to file."""
+    config_file.parent.mkdir(parents=True, exist_ok=True)
+    config_file.write_text(json.dumps(config.to_dict(), indent=2) + "\n")
 
 
 def check_network_binding(host: str, config: AppConfig, config_file: Path = CONFIG_FILE) -> bool:

@@ -21,7 +21,7 @@
       <button class="header-btn" @click="uiStore.showRestartModal()" title="Restart server" aria-label="Restart server">
         ↻
       </button>
-      <button class="header-btn" disabled title="Settings (coming soon)" aria-label="Settings" style="opacity: 0.4; cursor: default;">
+      <button class="header-btn" @click="uiStore.showModal('global-config')" title="Application Settings" aria-label="Application Settings">
         ⚙
       </button>
       <button

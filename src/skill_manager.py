@@ -2,7 +2,7 @@
 Skill Manager for Claude Code WebUI
 
 Manages global skill deployment outside project directories.
-Skills are stored in src/default_skills/ and synced to ~/.cc_webui/skills/
+Skills are stored in src/default_skills/ and synced to ~/.config/cc_webui/skills/
 at startup, with symlinks created in ~/.claude/skills/.
 
 This avoids injecting skills into user project directories and provides
@@ -13,6 +13,7 @@ import filecmp
 import logging
 import os
 import shutil
+from datetime import UTC, datetime
 from pathlib import Path
 
 from .logging_config import get_logger
@@ -20,36 +21,85 @@ from .logging_config import get_logger
 skill_logger = get_logger("skill_manager", category="SKILL_MANAGER")
 logger = logging.getLogger(__name__)
 
+# Old path (for migration detection)
+OLD_GLOBAL_SKILLS_DIR = Path.home() / ".cc_webui" / "skills"
+# New path
+NEW_GLOBAL_SKILLS_DIR = Path.home() / ".config" / "cc_webui" / "skills"
+
 
 class SkillManager:
     """Manages global skill and plan directories for WebUI infrastructure.
 
     Sync flow:
-    1. Ensure ~/.cc_webui/skills/ and ~/.cc_webui/plans/ exist
-    2. Copy skill directories from src/default_skills/ to ~/.cc_webui/skills/
-    3. Create symlinks in ~/.claude/skills/ pointing to ~/.cc_webui/skills/
-    4. Detect and log conflicts with user-owned files
-    5. Clean up orphaned skills and symlinks
+    1. Migrate skills from ~/.cc_webui/skills/ to ~/.config/cc_webui/skills/ if needed
+    2. Ensure ~/.config/cc_webui/skills/ and ~/.cc_webui/plans/ exist
+    3. Copy skill directories from src/default_skills/ to ~/.config/cc_webui/skills/
+    4. Create symlinks in ~/.claude/skills/ pointing to ~/.config/cc_webui/skills/
+    5. Detect and log conflicts with user-owned files
+    6. Clean up orphaned skills and symlinks
     """
 
     def __init__(self):
         self.source_dir = Path(__file__).parent / "default_skills"
-        self.global_dir = Path.home() / ".cc_webui"
-        self.global_skills_dir = self.global_dir / "skills"
-        self.global_plans_dir = self.global_dir / "plans"
+        self.global_skills_dir = NEW_GLOBAL_SKILLS_DIR
+        self.global_plans_dir = Path.home() / ".cc_webui" / "plans"
         self.claude_skills_dir = Path.home() / ".claude" / "skills"
+        self.last_sync_time: str | None = None
 
         skill_logger.debug(
             f"SkillManager initialized: source={self.source_dir}, "
-            f"global={self.global_dir}, claude={self.claude_skills_dir}"
+            f"global_skills={self.global_skills_dir}, claude={self.claude_skills_dir}"
         )
 
-    async def sync(self):
-        """Orchestrate the full skill sync flow."""
+    def migrate_skills_directory(self):
+        """Migrate skills from ~/.cc_webui/skills/ to ~/.config/cc_webui/skills/.
+
+        Only migrates if old directory exists and new directory does not.
+        """
+        old_dir = OLD_GLOBAL_SKILLS_DIR
+        new_dir = self.global_skills_dir
+
+        if not old_dir.exists():
+            return
+
+        if new_dir.exists():
+            skill_logger.warning(
+                f"Both old ({old_dir}) and new ({new_dir}) skills directories exist. "
+                f"Using new location. Old directory can be removed manually."
+            )
+            return
+
         try:
+            new_dir.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copytree(old_dir, new_dir)
+            shutil.rmtree(old_dir)
+            skill_logger.info(f"Migrated skills directory: {old_dir} -> {new_dir}")
+        except Exception as e:
+            logger.error(f"Failed to migrate skills directory: {e}")
+            skill_logger.warning(
+                f"Migration failed, old directory remains at {old_dir}. "
+                "Will use old location as fallback."
+            )
+            if not new_dir.exists():
+                self.global_skills_dir = old_dir
+
+    async def sync(self):
+        """Orchestrate the full skill sync flow.
+
+        Returns:
+            dict with added, updated, removed, symlinks_created counts.
+        """
+        result = {"added": 0, "updated": 0, "removed": 0, "symlinks_created": 0}
+        try:
+            self.migrate_skills_directory()
             self._ensure_directories()
             added, updated, removed = self._sync_skills()
             created, conflicts, cleaned = self._manage_symlinks()
+            self.last_sync_time = datetime.now(UTC).isoformat()
+
+            result.update(
+                added=added, updated=updated, removed=removed, symlinks_created=created
+            )
 
             skill_logger.info(
                 f"Skill sync complete: "
@@ -64,9 +114,23 @@ class SkillManager:
             )
         except Exception as e:
             logger.error(f"Unexpected error during skill sync: {e}")
+        return result
+
+    async def cleanup_symlinks(self):
+        """Remove all symlinks in ~/.claude/skills/ that point to our skills directory."""
+        cleaned = 0
+        if not self.claude_skills_dir.exists():
+            return cleaned
+        for entry in sorted(self.claude_skills_dir.iterdir()):
+            if entry.is_symlink() and self._is_our_symlink(entry):
+                entry.unlink()
+                cleaned += 1
+                skill_logger.info(f"Cleaned symlink (sync disabled): {entry.name}")
+        skill_logger.info(f"Symlink cleanup complete: {cleaned} removed")
+        return cleaned
 
     def _ensure_directories(self):
-        """Create ~/.cc_webui/skills/ and ~/.cc_webui/plans/ if missing."""
+        """Create ~/.config/cc_webui/skills/ and ~/.cc_webui/plans/ if missing."""
         self.global_skills_dir.mkdir(parents=True, exist_ok=True)
         self.global_plans_dir.mkdir(parents=True, exist_ok=True)
         self.claude_skills_dir.mkdir(parents=True, exist_ok=True)
@@ -179,7 +243,7 @@ class SkillManager:
         return created, conflicts, cleaned
 
     def _is_our_symlink(self, path: Path) -> bool:
-        """Check if a symlink points into ~/.cc_webui/skills/."""
+        """Check if a symlink points into our skills directory (old or new path)."""
         if not path.is_symlink():
             return False
         try:
@@ -189,8 +253,12 @@ class SkillManager:
                 target = (path.parent / target).resolve()
             else:
                 target = target.resolve()
-            global_resolved = self.global_skills_dir.resolve()
-            return str(target).startswith(str(global_resolved) + os.sep) or target == global_resolved
+            # Check both new and old paths during transition
+            for skills_dir in (self.global_skills_dir, OLD_GLOBAL_SKILLS_DIR):
+                resolved = skills_dir.resolve()
+                if str(target).startswith(str(resolved) + os.sep) or target == resolved:
+                    return True
+            return False
         except (OSError, ValueError):
             return False
 
