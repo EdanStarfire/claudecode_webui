@@ -293,10 +293,22 @@ class CommRouter:
                     legion_logger.warning(f"Failed to interrupt session {comm.to_minion_id}: {e}")
                     # Continue anyway - message will queue if interrupt fails
 
+            # Build comm metadata for frontend styling
+            from_name_slug = self._slugify(from_name.replace("Minion #", ""))
+            from_display = from_name.replace("Minion #", "")
+            comm_metadata = {
+                "comm": {
+                    "from_name": from_name_slug,
+                    "from_display_name": from_display,
+                    "comm_type": comm.comm_type.value if hasattr(comm.comm_type, 'value') else str(comm.comm_type),
+                }
+            }
+
             # Send message to target minion via SessionCoordinator
             await self.system.session_coordinator.send_message(
                 session_id=comm.to_minion_id,
-                message=formatted_message
+                message=formatted_message,
+                metadata=comm_metadata
             )
 
             legion_logger.info(f"Delivered comm {comm.comm_id} from {from_name} to minion {comm.to_minion_id}")
@@ -490,6 +502,14 @@ class CommRouter:
             f.write("\n")
 
         legion_logger.debug(f"Appended comm {comm.comm_id} to timeline {timeline_file}")
+
+    @staticmethod
+    def _slugify(name: str) -> str:
+        """Convert agent name to slug for consistent color hashing."""
+        slug = name.lower().strip()
+        slug = re.sub(r'[^a-z0-9]+', '-', slug)
+        slug = slug.strip('-')
+        return slug or 'unknown'
 
     def _extract_tags(self, content: str) -> tuple[list[str], list[str]]:
         """

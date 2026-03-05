@@ -1,10 +1,14 @@
 <template>
-  <div class="msg-wrapper msg-user">
+  <div class="msg-wrapper" :class="isComm ? 'msg-comm' : 'msg-user'">
     <div class="msg-meta">
-      <span class="msg-role">user</span>
+      <span class="msg-role" :style="isComm ? { color: commColor.accent } : {}">{{ isComm ? commSenderName : 'user' }}</span>
       <span class="msg-time">{{ formattedTimestamp }}</span>
     </div>
-    <div class="msg-bubble msg-bubble-user">
+    <div
+      class="msg-bubble"
+      :class="isComm ? 'msg-bubble-comm' : 'msg-bubble-user'"
+      :style="isComm ? { background: commColor.bg, borderColor: commColor.border, borderLeftWidth: '3px', borderLeftStyle: 'solid' } : {}"
+    >
       <!-- Content -->
       <div class="msg-text" v-html="renderedContent"></div>
 
@@ -39,6 +43,7 @@ import { computed } from 'vue'
 import DOMPurify from 'dompurify'
 import { marked } from 'marked'
 import { formatTimestamp } from '@/utils/time'
+import { getAgentColor } from '@/composables/useAgentColor'
 
 const props = defineProps({
   message: {
@@ -56,6 +61,10 @@ marked.setOptions({
 const formattedTimestamp = computed(() => {
   return formatTimestamp(props.message.timestamp)
 })
+
+const isComm = computed(() => !!props.message.metadata?.comm)
+const commColor = computed(() => isComm.value ? getAgentColor(props.message.metadata.comm.from_name) : null)
+const commSenderName = computed(() => props.message.metadata?.comm?.from_display_name || 'agent')
 
 const renderedContent = computed(() => {
   const content = props.message.content || ''
@@ -126,6 +135,19 @@ function truncate(text, maxLength) {
   background: #eef2ff;
   border: 1px solid #e0e7ff;
   border-top-right-radius: 4px;
+}
+
+/* Comm-injected messages: left-aligned with agent color */
+.msg-comm {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.msg-bubble-comm {
+  border: 1px solid;
+  border-top-left-radius: 4px;
+  border-top-right-radius: 12px;
 }
 
 .msg-text {
