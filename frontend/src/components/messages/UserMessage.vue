@@ -1,5 +1,5 @@
 <template>
-  <div class="msg-wrapper" :class="isComm ? 'msg-comm' : 'msg-user'">
+  <div class="msg-wrapper msg-user">
     <div class="msg-meta">
       <span class="msg-role" :style="isComm ? { color: commColor.accent } : {}">{{ isComm ? commSenderName : 'user' }}</span>
       <span class="msg-time">{{ formattedTimestamp }}</span>
@@ -7,7 +7,7 @@
     <div
       class="msg-bubble"
       :class="isComm ? 'msg-bubble-comm' : 'msg-bubble-user'"
-      :style="isComm ? { background: commColor.bg, borderColor: commColor.border, borderLeftWidth: '3px', borderLeftStyle: 'solid' } : {}"
+      :style="isComm ? { background: commColor.bg, borderColor: commColor.border, borderRightWidth: '3px', borderRightStyle: 'solid' } : {}"
     >
       <!-- Content -->
       <div class="msg-text" v-html="renderedContent"></div>
@@ -137,17 +137,10 @@ function truncate(text, maxLength) {
   border-top-right-radius: 4px;
 }
 
-/* Comm-injected messages: left-aligned with agent color */
-.msg-comm {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-}
-
+/* Comm-injected messages: right-aligned with agent-colored right border */
 .msg-bubble-comm {
   border: 1px solid;
-  border-top-left-radius: 4px;
-  border-top-right-radius: 12px;
+  border-top-right-radius: 4px;
 }
 
 .msg-text {
