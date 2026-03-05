@@ -12,7 +12,7 @@
         class="form-check-input"
         type="checkbox"
         id="skillSyncEnabled"
-        :checked="config.skill_sync_enabled"
+        :checked="config?.skill_sync_enabled"
         @change="toggleSync"
       >
       <label class="form-check-label" for="skillSyncEnabled">
@@ -24,7 +24,7 @@
       <button
         class="btn btn-outline-secondary btn-sm"
         @click="syncNow"
-        :disabled="!config.skill_sync_enabled || syncing"
+        :disabled="!config?.skill_sync_enabled || syncing"
       >
         <span v-if="syncing">
           <span class="spinner-border spinner-border-sm" role="status"></span>
@@ -34,7 +34,7 @@
       </button>
 
       <span class="text-muted small">
-        <template v-if="!config.skill_sync_enabled">Syncing disabled</template>
+        <template v-if="!config?.skill_sync_enabled">Syncing disabled</template>
         <template v-else-if="statusLoading">Loading status...</template>
         <template v-else-if="lastSyncTime">Last synced {{ formatRelative(lastSyncTime) }}</template>
         <template v-else>Never synced</template>
@@ -56,7 +56,7 @@ import { ref, onMounted } from 'vue'
 import { apiGet, apiPost } from '@/utils/api'
 
 const props = defineProps({
-  config: { type: Object, required: true }
+  config: { type: Object, default: () => ({}) }
 })
 
 const emit = defineEmits(['update:config'])
