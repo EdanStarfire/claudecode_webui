@@ -196,6 +196,14 @@ function confirmSelection() {
 
 // Handle modal shown event
 function onModalShown() {
+  // Fix backdrop z-index for stacked modals. Bootstrap 5 creates all backdrops
+  // at z-index 1050, which is behind parent modals (z-index 1055). When this modal
+  // opens on top of another modal, its backdrop must sit between the parent modal
+  // (1055) and this modal (1060).
+  const backdrops = document.querySelectorAll('.modal-backdrop')
+  if (backdrops.length > 1) {
+    backdrops[backdrops.length - 1].style.zIndex = '1057'
+  }
   // Always load directory (will use home directory if currentPath is empty)
   loadDirectory()
 }
@@ -252,10 +260,6 @@ onUnmounted(() => {
 /* Higher z-index to appear above other modals */
 .folder-browser-modal {
   z-index: 1060 !important;
-}
-
-.folder-browser-modal ~ .modal-backdrop {
-  z-index: 1055 !important;
 }
 </style>
 

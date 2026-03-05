@@ -1780,8 +1780,8 @@ watch(
 
       resetForm()
 
-      // Load templates for session creation and configure-ephemeral
-      if (mode.value === 'create-session' || mode.value === 'configure-ephemeral') {
+      // Load templates for session creation, configure-ephemeral, and template-list
+      if (mode.value === 'create-session' || mode.value === 'configure-ephemeral' || mode.value === 'template-list') {
         await loadTemplates()
       }
 
