@@ -717,6 +717,14 @@ class UserMessageHandler(MessageHandler):
         if parent_tool_use_id:
             extracted["metadata"]["parent_tool_use_id"] = parent_tool_use_id
 
+        # Preserve custom metadata from the original message (e.g. comm metadata
+        # attached by CommRouter for comm-injected messages)
+        orig_meta = message_data.get("metadata")
+        if isinstance(orig_meta, dict):
+            for key in ("comm",):
+                if key in orig_meta:
+                    extracted["metadata"][key] = orig_meta[key]
+
         return extracted
 
 
