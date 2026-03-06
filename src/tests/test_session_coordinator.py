@@ -511,3 +511,94 @@ class TestSessionCoordinator:
         assert storage_manager is not None
         assert storage_manager.session_dir.exists()
         assert storage_manager.messages_file.exists()
+
+
+class TestDeleteSessionScheduleCancellation:
+    """Tests for schedule cancellation when deleting sessions (Issue #671)."""
+
+    @pytest.mark.asyncio
+    async def test_issue_671_delete_session_cancels_schedules(self, temp_coordinator, sample_session_config):
+        """Deleting a session with active schedules cancels them."""
+        coordinator = temp_coordinator
+        session_id = await coordinator.create_session(**sample_session_config)
+
+        # Mock the legion system with scheduler_service
+        mock_scheduler = AsyncMock()
+        mock_scheduler.cancel_schedules_for_minion = AsyncMock(return_value=2)
+        mock_legion = MagicMock()
+        mock_legion.scheduler_service = mock_scheduler
+        mock_legion.legion_coordinator = MagicMock()
+        mock_legion.legion_coordinator.unregister_minion_capabilities = MagicMock()
+        mock_legion.archive_manager = AsyncMock()
+        mock_legion.archive_manager.archive_minion = AsyncMock(
+            return_value=MagicMock(success=True, archive_path="/tmp/archive")
+        )
+        coordinator.legion_system = mock_legion
+
+        result = await coordinator.delete_session(session_id)
+
+        assert result["success"] is True
+        mock_scheduler.cancel_schedules_for_minion.assert_awaited_once_with(session_id)
+
+    @pytest.mark.asyncio
+    async def test_issue_671_delete_session_no_schedules(self, temp_coordinator, sample_session_config):
+        """Deleting a session with no schedules completes without error."""
+        coordinator = temp_coordinator
+        session_id = await coordinator.create_session(**sample_session_config)
+
+        # Mock legion system where cancel returns 0 (no schedules)
+        mock_scheduler = AsyncMock()
+        mock_scheduler.cancel_schedules_for_minion = AsyncMock(return_value=0)
+        mock_legion = MagicMock()
+        mock_legion.scheduler_service = mock_scheduler
+        mock_legion.legion_coordinator = MagicMock()
+        mock_legion.legion_coordinator.unregister_minion_capabilities = MagicMock()
+        mock_legion.archive_manager = AsyncMock()
+        mock_legion.archive_manager.archive_minion = AsyncMock(
+            return_value=MagicMock(success=True, archive_path="/tmp/archive")
+        )
+        coordinator.legion_system = mock_legion
+
+        result = await coordinator.delete_session(session_id)
+
+        assert result["success"] is True
+        mock_scheduler.cancel_schedules_for_minion.assert_awaited_once_with(session_id)
+
+    @pytest.mark.asyncio
+    async def test_issue_671_delete_session_schedule_error_non_blocking(self, temp_coordinator, sample_session_config):
+        """Schedule cancellation failure does not block session deletion."""
+        coordinator = temp_coordinator
+        session_id = await coordinator.create_session(**sample_session_config)
+
+        # Mock legion system where cancel raises an exception
+        mock_scheduler = AsyncMock()
+        mock_scheduler.cancel_schedules_for_minion = AsyncMock(
+            side_effect=RuntimeError("Scheduler unavailable")
+        )
+        mock_legion = MagicMock()
+        mock_legion.scheduler_service = mock_scheduler
+        mock_legion.legion_coordinator = MagicMock()
+        mock_legion.legion_coordinator.unregister_minion_capabilities = MagicMock()
+        mock_legion.archive_manager = AsyncMock()
+        mock_legion.archive_manager.archive_minion = AsyncMock(
+            return_value=MagicMock(success=True, archive_path="/tmp/archive")
+        )
+        coordinator.legion_system = mock_legion
+
+        result = await coordinator.delete_session(session_id)
+
+        # Deletion should still succeed despite scheduler error
+        assert result["success"] is True
+
+    @pytest.mark.asyncio
+    async def test_issue_671_delete_session_no_legion_system(self, temp_coordinator, sample_session_config):
+        """Deleting a session without legion system skips schedule cancellation."""
+        coordinator = temp_coordinator
+        session_id = await coordinator.create_session(**sample_session_config)
+
+        # Ensure no legion system
+        coordinator.legion_system = None
+
+        result = await coordinator.delete_session(session_id)
+
+        assert result["success"] is True
