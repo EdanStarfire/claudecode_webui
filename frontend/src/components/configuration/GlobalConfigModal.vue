@@ -32,6 +32,15 @@
                   Features
                 </button>
               </li>
+              <li class="nav-item">
+                <button
+                  class="nav-link"
+                  :class="{ active: activeTab === 'notifications' }"
+                  @click="activeTab = 'notifications'"
+                >
+                  Notifications
+                </button>
+              </li>
             </ul>
 
             <!-- Tab content -->
@@ -51,6 +60,9 @@
               <button class="btn btn-outline-primary btn-sm" @click="openTemplateManager">
                 Manage Templates
               </button>
+            </div>
+            <div v-else-if="activeTab === 'notifications'">
+              <NotificationsTab />
             </div>
           </div>
         </div>
@@ -79,6 +91,7 @@ import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useUIStore } from '@/stores/ui'
 import { apiGet, apiPut } from '@/utils/api'
 import FeaturesTab from './FeaturesTab.vue'
+import NotificationsTab from './NotificationsTab.vue'
 
 const uiStore = useUIStore()
 
