@@ -477,6 +477,7 @@ class SchedulerService:
         schedule.updated_at = datetime.now(UTC).timestamp()
         await self._persist_schedules(schedule.legion_id)
         await self._append_execution(schedule.legion_id, execution)
+        await self._broadcast_execution_event(schedule.legion_id, execution)
         await self._broadcast_schedule_event(schedule.legion_id, schedule)
 
     async def _fire_ephemeral_schedule(self, schedule: Schedule, now: float, trigger: str = "cron"):
@@ -616,6 +617,7 @@ class SchedulerService:
         schedule.updated_at = datetime.now(UTC).timestamp()
         await self._persist_schedules(schedule.legion_id)
         await self._append_execution(schedule.legion_id, execution)
+        await self._broadcast_execution_event(schedule.legion_id, execution)
         await self._broadcast_schedule_event(schedule.legion_id, schedule)
 
     async def _migrate_ephemeral_schedule(self, schedule: Schedule) -> str | None:
@@ -895,3 +897,22 @@ class SchedulerService:
             await self._schedule_broadcast_callback(legion_id, event)
         except Exception as e:
             legion_logger.error(f"Failed to broadcast schedule event: {e}")
+
+    async def _broadcast_execution_event(
+        self, legion_id: str, execution: ScheduleExecution
+    ):
+        """Broadcast a schedule execution record to WebSocket clients."""
+        if not self._schedule_broadcast_callback:
+            return
+
+        event = {
+            "type": "schedule_execution",
+            "execution": execution.to_dict(),
+            "schedule_id": execution.schedule_id,
+            "timestamp": datetime.now(UTC).isoformat(),
+        }
+
+        try:
+            await self._schedule_broadcast_callback(legion_id, event)
+        except Exception as e:
+            legion_logger.error(f"Failed to broadcast execution event: {e}")

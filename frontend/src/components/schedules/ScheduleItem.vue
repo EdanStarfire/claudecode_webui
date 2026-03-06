@@ -232,7 +232,7 @@
 </template>
 
 <script setup>
-import { ref, computed, nextTick } from 'vue'
+import { ref, computed, nextTick, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useScheduleStore } from '@/stores/schedule'
 import { useSessionStore } from '@/stores/session'
@@ -558,6 +558,17 @@ async function toggleHistory() {
     )
   }
 }
+
+// Issue #670: Sync real-time execution events from the store to the local history ref
+watch(() => scheduleStore.executionHistory, (storeHistory) => {
+  if (scheduleStore.selectedScheduleId !== props.schedule.schedule_id) return
+  if (storeHistory.length === 0) return
+
+  const newest = storeHistory[0]
+  if (newest && !history.value.some(h => h.execution_id === newest.execution_id)) {
+    history.value = [newest, ...history.value]
+  }
+})
 </script>
 
 <style scoped>
