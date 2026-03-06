@@ -337,16 +337,62 @@ class SchedulerService:
         executions.reverse()
         return executions[offset : offset + limit]
 
+    # ── Manual Trigger ──
+
+    async def run_now(self, schedule_id: str) -> dict:
+        """Manually trigger a schedule execution immediately.
+
+        Reuses existing fire logic with trigger="manual".
+        Does NOT recalculate next_run — preserves cron schedule.
+
+        Raises:
+            ValueError: If schedule not found or cancelled.
+            RuntimeError: If ephemeral agent is currently active.
+        """
+        schedule = self._schedules.get(schedule_id)
+        if not schedule:
+            raise ValueError(f"Schedule {schedule_id} not found")
+
+        if schedule.status == ScheduleStatus.CANCELLED:
+            raise ValueError(f"Schedule {schedule_id} is cancelled")
+
+        # For ephemeral schedules, check if agent is currently active
+        if schedule.session_config is not None and schedule.ephemeral_agent_id:
+            session_info = (
+                await self.system.session_coordinator.session_manager.get_session_info(
+                    schedule.ephemeral_agent_id
+                )
+            )
+            if session_info and session_info.state.value in ("active", "starting"):
+                raise RuntimeError(
+                    f"Ephemeral agent {schedule.ephemeral_agent_id} is currently active"
+                )
+
+        now = datetime.now(UTC).timestamp()
+
+        # Save next_run before firing (fire methods recalculate it for cron)
+        saved_next_run = schedule.next_run
+
+        await self._fire_schedule(schedule, now, trigger="manual")
+
+        # Restore next_run to preserve cron schedule
+        schedule.next_run = saved_next_run
+        schedule.updated_at = datetime.now(UTC).timestamp()
+        await self._persist_schedules(schedule.legion_id)
+
+        legion_logger.info(f"Schedule {schedule_id} manually triggered")
+        return {"status": "queued", "schedule_id": schedule_id}
+
     # ── Execution ──
 
-    async def _fire_schedule(self, schedule: Schedule, now: float):
+    async def _fire_schedule(self, schedule: Schedule, now: float, trigger: str = "cron"):
         """Fire a due schedule — delegates to permanent or ephemeral path."""
         if schedule.session_config is not None:
-            await self._fire_ephemeral_schedule(schedule, now)
+            await self._fire_ephemeral_schedule(schedule, now, trigger=trigger)
         else:
-            await self._fire_permanent_schedule(schedule, now)
+            await self._fire_permanent_schedule(schedule, now, trigger=trigger)
 
-    async def _fire_permanent_schedule(self, schedule: Schedule, now: float):
+    async def _fire_permanent_schedule(self, schedule: Schedule, now: float, trigger: str = "cron"):
         """Fire a permanent schedule by enqueuing the prompt to an existing minion."""
         legion_logger.info(
             f"Firing schedule {schedule.schedule_id} '{schedule.name}' "
@@ -378,6 +424,7 @@ class SchedulerService:
             actual_time=now,
             status="queued",
             minion_state=minion_state,
+            trigger=trigger,
         )
 
         try:
@@ -386,7 +433,7 @@ class SchedulerService:
                 content=formatted_prompt,
                 reset_session=schedule.reset_session,
                 metadata={
-                    "source": "cron",
+                    "source": trigger,
                     "schedule_id": schedule.schedule_id,
                     "schedule_name": schedule.name,
                     "trigger_time": now,
@@ -432,7 +479,7 @@ class SchedulerService:
         await self._append_execution(schedule.legion_id, execution)
         await self._broadcast_schedule_event(schedule.legion_id, schedule)
 
-    async def _fire_ephemeral_schedule(self, schedule: Schedule, now: float):
+    async def _fire_ephemeral_schedule(self, schedule: Schedule, now: float, trigger: str = "cron"):
         """Fire an ephemeral schedule using its static agent session.
 
         The agent is created once at schedule creation. On each fire:
@@ -500,6 +547,7 @@ class SchedulerService:
             actual_time=now,
             status="queued",
             minion_state=session_info.state.value if session_info else "unknown",
+            trigger=trigger,
         )
 
         try:
@@ -516,7 +564,7 @@ class SchedulerService:
                 content=formatted_prompt,
                 reset_session=False,
                 metadata={
-                    "source": "cron",
+                    "source": trigger,
                     "schedule_id": schedule.schedule_id,
                     "schedule_name": schedule.name,
                     "trigger_time": now,

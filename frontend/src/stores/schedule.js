@@ -22,6 +22,9 @@ export const useScheduleStore = defineStore('schedule', () => {
   // Currently selected schedule ID (for detail view)
   const selectedScheduleId = ref(null)
 
+  // Schedules currently being manually triggered (for loading state)
+  const runningSchedules = ref(new Set())
+
   // Execution history for the selected schedule
   const executionHistory = ref([])
 
@@ -39,6 +42,13 @@ export const useScheduleStore = defineStore('schedule', () => {
    */
   function getScheduleCount(minionId) {
     return scheduleCountByMinion.value.get(minionId) || 0
+  }
+
+  /**
+   * Check if a schedule is currently being manually triggered
+   */
+  function isRunning(scheduleId) {
+    return runningSchedules.value.has(scheduleId)
   }
 
   // ========== ACTIONS ==========
@@ -141,6 +151,23 @@ export const useScheduleStore = defineStore('schedule', () => {
   }
 
   /**
+   * Manually trigger a schedule execution
+   */
+  async function runNow(legionId, scheduleId) {
+    runningSchedules.value = new Set([...runningSchedules.value, scheduleId])
+    try {
+      const data = await api.post(
+        `/api/legions/${legionId}/schedules/${scheduleId}/run-now`
+      )
+      return data
+    } finally {
+      const next = new Set(runningSchedules.value)
+      next.delete(scheduleId)
+      runningSchedules.value = next
+    }
+  }
+
+  /**
    * Handle WebSocket schedule_updated event
    */
   function handleScheduleEvent(legionId, event) {
@@ -218,9 +245,11 @@ export const useScheduleStore = defineStore('schedule', () => {
     scheduleCountByMinion,
     selectedScheduleId,
     executionHistory,
+    runningSchedules,
     // Getters
     getSchedules,
     getScheduleCount,
+    isRunning,
     // Actions
     loadSchedules,
     createSchedule,
@@ -230,6 +259,7 @@ export const useScheduleStore = defineStore('schedule', () => {
     cancelSchedule,
     deleteSchedule,
     loadHistory,
+    runNow,
     handleScheduleEvent,
   }
 })

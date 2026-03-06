@@ -2672,6 +2672,30 @@ class ClaudeWebUI:
                 logger.error(f"Failed to cancel schedule: {e}")
                 raise HTTPException(status_code=500, detail=str(e))
 
+        @self.app.post("/api/legions/{legion_id}/schedules/{schedule_id}/run-now")
+        async def run_schedule_now(legion_id: str, schedule_id: str):
+            """Manually trigger a schedule execution immediately."""
+            try:
+                schedule = await self.coordinator.legion_system.scheduler_service.get_schedule(
+                    schedule_id
+                )
+                if not schedule or schedule.legion_id != legion_id:
+                    raise HTTPException(status_code=404, detail="Schedule not found")
+
+                result = await self.coordinator.legion_system.scheduler_service.run_now(
+                    schedule_id
+                )
+                return result
+            except HTTPException:
+                raise
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e))
+            except RuntimeError as e:
+                raise HTTPException(status_code=409, detail=str(e))
+            except Exception as e:
+                logger.error(f"Failed to run schedule now: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
         @self.app.delete("/api/legions/{legion_id}/schedules/{schedule_id}")
         async def delete_schedule(
             legion_id: str, schedule_id: str, delete_agent: bool = False
