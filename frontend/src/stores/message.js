@@ -84,8 +84,9 @@ export const useMessageStore = defineStore('message', () => {
 
       messages.forEach(message => {
         // Route tool_call messages through unified handler (same path as real-time)
+        // Pass silent: true to suppress notifications for historical data
         if (message.type === 'tool_call') {
-          handleToolCall(sessionId, message)
+          handleToolCall(sessionId, message, { silent: true })
           return // Don't add tool_call to message display list
         }
 
@@ -358,7 +359,7 @@ export const useMessageStore = defineStore('message', () => {
    * - error: Error message (when failed)
    * - display: Backend-computed display hints
    */
-  function handleToolCall(sessionId, toolCall) {
+  function handleToolCall(sessionId, toolCall, options = {}) {
     console.log('handleToolCall received:', toolCall)
 
     const toolUseId = toolCall.tool_use_id
@@ -410,8 +411,10 @@ export const useMessageStore = defineStore('message', () => {
       // Populate permissionToToolMap for handlePermissionResponse correlation
       if (toolCall.request_id && toolCall.status === 'awaiting_permission') {
         permissionToToolMap.value.set(toolCall.request_id, toolUseId)
-        // Issue #643: Notify on permission prompt
-        notify('permission_prompt', { toolName: toolCall.name || existing.name })
+        // Issue #643: Notify on permission prompt (skip during history loading)
+        if (!options.silent) {
+          notify('permission_prompt', { toolName: toolCall.name || existing.name })
+        }
       }
       if (toolCall.permission_granted !== null && toolCall.permission_granted !== undefined) {
         existing.permissionDecision = toolCall.permission_granted ? 'allow' : 'deny'
@@ -502,8 +505,10 @@ export const useMessageStore = defineStore('message', () => {
       // Populate permissionToToolMap for handlePermissionResponse correlation
       if (toolCall.request_id && toolCall.status === 'awaiting_permission') {
         permissionToToolMap.value.set(toolCall.request_id, toolUseId)
-        // Issue #643: Notify on permission prompt
-        notify('permission_prompt', { toolName: toolCall.name })
+        // Issue #643: Notify on permission prompt (skip during history loading)
+        if (!options.silent) {
+          notify('permission_prompt', { toolName: toolCall.name })
+        }
       }
       console.log(`Created new tool call ${toolUseId} for ${toolCall.name} with status: ${frontendStatus}`)
     }
@@ -810,9 +815,9 @@ export const useMessageStore = defineStore('message', () => {
         }
       })
 
-      // Route tool_call messages through unified handler
+      // Route tool_call messages through unified handler (silent: skip notifications for synced history)
       newToolCallMessages.forEach(message => {
-        handleToolCall(sessionId, message)
+        handleToolCall(sessionId, message, { silent: true })
       })
 
       // Only merge and sort regular messages if there are any
@@ -922,9 +927,9 @@ export const useMessageStore = defineStore('message', () => {
     const displayMessages = []
 
     rawMessages.forEach(msg => {
-      // Route tool_call messages through unified handler (same as loadMessages)
+      // Route tool_call messages through unified handler (silent: archive data)
       if (msg.type === 'tool_call') {
-        handleToolCall(sessionId, msg)
+        handleToolCall(sessionId, msg, { silent: true })
         return // Don't add to display list
       }
 
