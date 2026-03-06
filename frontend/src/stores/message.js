@@ -42,6 +42,9 @@ export const useMessageStore = defineStore('message', () => {
   // When backend provides display metadata, we store it here for quick lookup
   const backendToolStates = ref(new Map())
 
+  // Issue #662: Track last stop_reason per session for truncation banner
+  const lastStopReasonBySession = ref(new Map())
+
   // ========== COMPUTED ==========
 
   // Current session's messages
@@ -223,6 +226,19 @@ export const useMessageStore = defineStore('message', () => {
     // Track last received timestamp for reconnection sync
     if (message.timestamp) {
       lastReceivedTimestamp.value.set(sessionId, message.timestamp)
+    }
+
+    // Issue #662: Track stop_reason from result messages for truncation banner
+    if (message.type === 'result') {
+      const stopReason = message.metadata?.stop_reason || message.stop_reason || null
+      lastStopReasonBySession.value.set(sessionId, stopReason)
+      lastStopReasonBySession.value = new Map(lastStopReasonBySession.value)
+    }
+
+    // Issue #662: Clear stop_reason when user sends a new message
+    if (message.type === 'user' && !message.metadata?.has_tool_results) {
+      lastStopReasonBySession.value.set(sessionId, null)
+      lastStopReasonBySession.value = new Map(lastStopReasonBySession.value)
     }
 
     // Issue #310: Apply backend display metadata if present
@@ -1010,6 +1026,9 @@ export const useMessageStore = defineStore('message', () => {
 
     // Archive support (Issue #577)
     setArchiveMessages,
-    clearArchiveMessages
+    clearArchiveMessages,
+
+    // Issue #662: Stop reason tracking for truncation banner
+    lastStopReasonBySession: readonly(lastStopReasonBySession)
   }
 })

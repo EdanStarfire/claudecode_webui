@@ -805,6 +805,7 @@ class ResultMessageHandler(MessageHandler):
                 "num_turns": message_data.get("num_turns"),
                 "total_cost_usd": message_data.get("total_cost_usd"),
                 "usage": message_data.get("usage", {}),
+                "stop_reason": message_data.get("stop_reason"),
                 "permission_denials": message_data.get("permission_denials", []),
                 "has_tool_uses": False,
                 "has_tool_results": False,

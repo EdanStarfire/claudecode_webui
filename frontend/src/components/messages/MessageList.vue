@@ -20,6 +20,9 @@
         :messages="item.messages"
       />
     </template>
+
+    <!-- Issue #662: Truncation banner after last assistant message when response was truncated -->
+    <TruncationBanner v-if="showTruncationBanner" :key="'truncation-' + sessionStore.currentSessionId" />
   </div>
 </template>
 
@@ -30,6 +33,7 @@ import { useSessionStore } from '@/stores/session'
 import { useUIStore } from '@/stores/ui'
 import MessageItem from './MessageItem.vue'
 import CompactionEventGroup from './CompactionEventGroup.vue'
+import TruncationBanner from './TruncationBanner.vue'
 
 const messageStore = useMessageStore()
 const sessionStore = useSessionStore()
@@ -283,6 +287,12 @@ function isCompactionStart(msg, messages, index) {
 }
 
 const currentToolCalls = computed(() => messageStore.currentToolCalls)
+
+// Issue #662: Show truncation banner when last stop_reason is max_tokens
+const showTruncationBanner = computed(() => {
+  const stopReason = messageStore.lastStopReasonBySession.get(sessionStore.currentSessionId)
+  return stopReason === 'max_tokens'
+})
 
 /**
  * Capture current scroll position as a message index + isAtBottom flag.
