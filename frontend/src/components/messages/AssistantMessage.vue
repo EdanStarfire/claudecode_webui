@@ -29,6 +29,13 @@
         :taskToolCall="task"
       />
     </div>
+
+    <!-- Outbound comm bubbles (extracted from timeline, rendered as message-level items) -->
+    <SendCommToolHandler
+      v-for="comm in sendCommToolCalls"
+      :key="comm.id"
+      :toolCall="comm"
+    />
   </div>
 </template>
 
@@ -42,6 +49,7 @@ import { useSessionStore } from '@/stores/session'
 import ThinkingBlock from './ThinkingBlock.vue'
 import ActivityTimeline from './tools/ActivityTimeline.vue'
 import SubagentTimeline from './SubagentTimeline.vue'
+import SendCommToolHandler from '@/components/tools/SendCommToolHandler.vue'
 
 const props = defineProps({
   message: {
@@ -153,8 +161,17 @@ const enrichedToolCalls = computed(() => {
  */
 const mainTimelineTools = computed(() => {
   return enrichedToolCalls.value.filter(tc =>
-    tc.name !== 'Task' && tc.name !== 'Agent' && !tc.parent_tool_use_id
+    tc.name !== 'Task' && tc.name !== 'Agent' &&
+    tc.name !== 'mcp__legion__send_comm' &&
+    !tc.parent_tool_use_id
   )
+})
+
+/**
+ * Issue #652: send_comm tool calls — extracted for standalone bubble rendering
+ */
+const sendCommToolCalls = computed(() => {
+  return enrichedToolCalls.value.filter(tc => tc.name === 'mcp__legion__send_comm')
 })
 
 /**
@@ -173,7 +190,8 @@ const hasAnythingToShow = computed(() => {
   return hasContent.value ||
     hasThinking.value ||
     mainTimelineTools.value.length > 0 ||
-    taskToolCalls.value.length > 0
+    taskToolCalls.value.length > 0 ||
+    sendCommToolCalls.value.length > 0
 })
 </script>
 

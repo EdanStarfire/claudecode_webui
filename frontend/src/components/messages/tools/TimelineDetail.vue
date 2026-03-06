@@ -66,6 +66,7 @@ import SkillToolHandler from '@/components/tools/SkillToolHandler.vue'
 import SlashCommandToolHandler from '@/components/tools/SlashCommandToolHandler.vue'
 import ExitPlanModeToolHandler from '@/components/tools/ExitPlanModeToolHandler.vue'
 import AskUserQuestionToolHandler from '@/components/tools/AskUserQuestionToolHandler.vue'
+import SendCommToolHandler from '@/components/tools/SendCommToolHandler.vue'
 
 const props = defineProps({
   toolCall: { type: Object, required: true }
@@ -114,6 +115,7 @@ const toolHandlers = {
   'Skill': SkillToolHandler,
   'ExitPlanMode': ExitPlanModeToolHandler,
   'AskUserQuestion': AskUserQuestionToolHandler,
+  'mcp__legion__send_comm': SendCommToolHandler,
 }
 
 const toolHandlerComponent = computed(() => {
