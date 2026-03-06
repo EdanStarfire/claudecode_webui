@@ -105,6 +105,7 @@ class ScheduleExecution:
     error_message: str | None = None
     retry_number: int = 0
     queue_id: str | None = None
+    trigger: str = "cron"  # "cron" or "manual"
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization."""
@@ -118,6 +119,7 @@ class ScheduleExecution:
             "error_message": self.error_message,
             "retry_number": self.retry_number,
             "queue_id": self.queue_id,
+            "trigger": self.trigger,
         }
 
     @classmethod
@@ -129,6 +131,8 @@ class ScheduleExecution:
             data["queue_id"] = data.pop("comm_id")
         elif "comm_id" in data:
             data.pop("comm_id")
+        # Backward compat: default trigger to "cron" for old records
+        data.setdefault("trigger", "cron")
         return cls(**data)
 
 

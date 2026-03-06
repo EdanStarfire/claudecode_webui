@@ -176,6 +176,18 @@
     <!-- Controls -->
     <div class="schedule-controls">
       <button
+        v-if="schedule.status !== 'cancelled'"
+        class="ctrl-btn run-now"
+        :disabled="runNowLoading"
+        @click.stop="handleRunNow"
+        title="Run this schedule immediately"
+      >
+        <span v-if="runNowLoading" class="spinner-inline"></span>
+        <span v-else-if="runNowSuccess" class="run-now-success">Queued!</span>
+        <span v-else-if="runNowError" class="run-now-error">{{ runNowError }}</span>
+        <span v-else>Run Now</span>
+      </button>
+      <button
         v-if="schedule.status === 'active'"
         class="ctrl-btn pause"
         @click.stop="pause"
@@ -207,6 +219,7 @@
       <div v-for="exec in history" :key="exec.execution_id" class="history-item" :class="exec.status">
         <span class="history-time">{{ formatTimestamp(exec.actual_time) }}</span>
         <span class="history-status">{{ exec.status }}</span>
+        <span v-if="exec.trigger === 'manual'" class="trigger-badge manual">manual</span>
         <span v-if="exec.error_message" class="history-error">{{ exec.error_message }}</span>
       </div>
     </div>
@@ -249,6 +262,9 @@ const nameInput = ref(null)
 const editingCron = ref(false)
 const editCronText = ref('')
 const cronInput = ref(null)
+const runNowLoading = ref(false)
+const runNowSuccess = ref(false)
+const runNowError = ref(null)
 
 const isEphemeral = computed(() => !!props.schedule.ephemeral_agent_id || !!props.schedule.session_config)
 
@@ -352,6 +368,24 @@ async function remove() {
     await scheduleStore.deleteSchedule(props.legionId, props.schedule.schedule_id)
   } catch (e) {
     console.error('Failed to delete schedule:', e)
+  }
+}
+
+async function handleRunNow() {
+  if (runNowLoading.value) return
+  runNowLoading.value = true
+  runNowSuccess.value = false
+  runNowError.value = null
+  try {
+    await scheduleStore.runNow(props.legionId, props.schedule.schedule_id)
+    runNowSuccess.value = true
+    setTimeout(() => { runNowSuccess.value = false }, 2000)
+  } catch (e) {
+    const msg = e?.response?.data?.detail || e?.message || 'Failed'
+    runNowError.value = msg.length > 20 ? msg.substring(0, 20) + '...' : msg
+    setTimeout(() => { runNowError.value = null }, 3000)
+  } finally {
+    runNowLoading.value = false
   }
 }
 
@@ -883,6 +917,40 @@ async function toggleHistory() {
   background: #f1f5f9;
 }
 
+.ctrl-btn.run-now {
+  border-color: #93c5fd;
+  color: #1d4ed8;
+}
+
+.ctrl-btn.run-now:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.spinner-inline {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border: 2px solid #93c5fd;
+  border-top-color: #1d4ed8;
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.run-now-success {
+  color: #16a34a;
+  font-weight: 600;
+}
+
+.run-now-error {
+  color: #dc2626;
+  font-size: 9px;
+}
+
 .ctrl-btn.pause {
   border-color: #fde68a;
   color: #92400e;
@@ -968,6 +1036,18 @@ async function toggleHistory() {
 
 .history-item.retry .history-status {
   color: #d97706;
+}
+
+.trigger-badge {
+  font-size: 9px;
+  padding: 0 4px;
+  border-radius: 6px;
+  font-weight: 500;
+}
+
+.trigger-badge.manual {
+  background: #fef3c7;
+  color: #92400e;
 }
 
 .history-error {
