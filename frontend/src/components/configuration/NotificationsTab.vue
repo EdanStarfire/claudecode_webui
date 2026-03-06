@@ -12,7 +12,7 @@
         class="form-check-input"
         type="checkbox"
         id="soundEnabled"
-        :checked="settings.soundEnabled"
+        :checked="config.soundEnabled"
         @change="toggle('soundEnabled', $event)"
       >
       <label class="form-check-label" for="soundEnabled">
@@ -20,9 +20,9 @@
       </label>
     </div>
 
-    <div v-if="settings.soundEnabled" class="ms-3 mb-3">
+    <div v-if="config.soundEnabled" class="ms-3 mb-3">
       <label class="form-label small mb-1">
-        Volume: {{ settings.volume }}%
+        Volume: {{ config.volume }}%
       </label>
       <input
         type="range"
@@ -30,7 +30,7 @@
         min="0"
         max="100"
         step="5"
-        :value="settings.volume"
+        :value="config.volume"
         @input="updateField('volume', parseInt($event.target.value))"
       >
 
@@ -41,7 +41,7 @@
             class="form-check-input"
             type="checkbox"
             :id="'evt-' + evt.key"
-            :checked="settings.events[evt.key]"
+            :checked="config.events[evt.key]"
             @change="toggleEvent(evt.key, $event)"
           >
           <label class="form-check-label small" :for="'evt-' + evt.key">
@@ -73,7 +73,7 @@
           class="form-check-input"
           type="checkbox"
           id="ttsEnabled"
-          :checked="settings.ttsEnabled"
+          :checked="config.ttsEnabled"
           @change="toggle('ttsEnabled', $event)"
         >
         <label class="form-check-label" for="ttsEnabled">
@@ -81,12 +81,12 @@
         </label>
       </div>
 
-      <div v-if="settings.ttsEnabled" class="ms-3 mb-3">
+      <div v-if="config.ttsEnabled" class="ms-3 mb-3">
         <div class="mb-2">
           <label class="form-label small mb-1">Voice</label>
           <select
             class="form-select form-select-sm"
-            :value="settings.ttsVoice"
+            :value="config.ttsVoice"
             @change="updateField('ttsVoice', $event.target.value)"
           >
             <option value="">Browser default</option>
@@ -102,7 +102,7 @@
 
         <div class="mb-2">
           <label class="form-label small mb-1">
-            Speed: {{ settings.ttsSpeed }}x
+            Speed: {{ config.ttsSpeed }}x
           </label>
           <input
             type="range"
@@ -110,7 +110,7 @@
             min="0.5"
             max="2"
             step="0.25"
-            :value="settings.ttsSpeed"
+            :value="config.ttsSpeed"
             @input="updateField('ttsSpeed', parseFloat($event.target.value))"
           >
         </div>
@@ -134,29 +134,32 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import {
-  getSettings,
-  updateSettings,
   testSound,
   testTTS,
   getVoices,
   isTTSAvailable
 } from '@/composables/useNotifications'
 
-const settings = ref(getSettings())
+const props = defineProps({
+  config: { type: Object, default: () => ({}) }
+})
+
+const emit = defineEmits(['update:config'])
+
 const voices = ref([])
 const ttsAvailable = ref(isTTSAvailable())
 
 function toggle(field, event) {
-  settings.value = updateSettings({ [field]: event.target.checked })
+  emit('update:config', { ...props.config, [field]: event.target.checked })
 }
 
 function updateField(field, value) {
-  settings.value = updateSettings({ [field]: value })
+  emit('update:config', { ...props.config, [field]: value })
 }
 
 function toggleEvent(key, event) {
-  const events = { ...settings.value.events, [key]: event.target.checked }
-  settings.value = updateSettings({ events })
+  const events = { ...props.config.events, [key]: event.target.checked }
+  emit('update:config', { ...props.config, events })
 }
 
 function onTestSound() {
@@ -180,7 +183,6 @@ const eventOptions = [
 
 onMounted(() => {
   loadVoices()
-  // Voices may load asynchronously
   if (window.speechSynthesis) {
     window.speechSynthesis.addEventListener('voiceschanged', loadVoices)
   }
