@@ -217,7 +217,8 @@ const hasAnythingToShow = computed(() => {
 
 .msg-bubble-assistant {
   background: #f8fafc;
-  border: 1px solid #e2e8f0;
+  border: 1px solid #94a3b8;
+  border-left: 3px solid #94a3b8;
   border-top-left-radius: 4px;
 }
 

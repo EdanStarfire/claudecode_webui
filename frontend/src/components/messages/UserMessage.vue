@@ -133,7 +133,8 @@ function truncate(text, maxLength) {
 
 .msg-bubble-user {
   background: #eef2ff;
-  border: 1px solid #e0e7ff;
+  border: 1px solid #a5b4fc;
+  border-right: 3px solid #818cf8;
   border-top-right-radius: 4px;
 }
 
