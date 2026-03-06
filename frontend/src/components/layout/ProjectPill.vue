@@ -26,6 +26,7 @@
         class="seg"
         :class="seg.status"
         :style="{ flex: seg.flex }"
+        :title="segTooltip(seg)"
       ></div>
     </div>
   </div>
@@ -67,6 +68,12 @@ function handleClick() {
 
 function navigateToOverview() {
   router.push(`/project/${props.project.project_id}`)
+}
+
+function segTooltip(seg) {
+  const name = seg.name || 'Session'
+  const state = seg.status.charAt(0).toUpperCase() + seg.status.slice(1)
+  return `${name}: ${state}`
 }
 
 function showEditModal() {
@@ -162,6 +169,7 @@ function showEditModal() {
 
 .seg {
   transition: background-color 0.3s;
+  cursor: help;
 }
 
 .seg.active { background: #8b5cf6; }
