@@ -395,19 +395,20 @@ async def test_dispose_minion_direct_child(legion_test_env):
 
         await asyncio.sleep(poll_interval)
 
-    # Dispose child via MCP tool handler
+    # Dispose child via MCP tool handler (hard delete to remove from parent's child_minion_ids)
     dispose_result = await legion_system.mcp_tools._handle_dispose_minion({
         "_parent_overseer_id": parent.session_id,
         "minion_name": "child",
-        "reason": "Task completed"
+        "reason": "Task completed",
+        "delete": True
     })
 
     # Verify success
     assert dispose_result.get("is_error") is not True, f"Unexpected error: {dispose_result['content'][0]['text']}"
 
-    # SIDE EFFECT 1: Child session terminated
+    # SIDE EFFECT 1: Child session deleted (hard delete removes session entirely)
     child_final = await env["session_coordinator"].session_manager.get_session_info(child_id)
-    assert child_final.state == SessionState.TERMINATED
+    assert child_final is None, "Hard-deleted session should no longer exist"
 
     # SIDE EFFECT 2: Parent's child_minion_ids updated
     parent_updated = await env["session_coordinator"].session_manager.get_session_info(parent.session_id)
@@ -559,9 +560,9 @@ async def test_dispose_minion_error_nonexistent_child(legion_test_env):
     assert result.get("is_error") is True
     error_text = result["content"][0]["text"]
     # Error message should mention the minion was not found
-    assert ("not found" in error_text.lower() or
-            "does not exist" in error_text.lower() or
-            "no child minion named" in error_text.lower())
+    assert ("found in your subtree" in error_text.lower() or
+            "no minion with name" in error_text.lower() or
+            "not found" in error_text.lower())
 
 
 @pytest.mark.asyncio
@@ -625,7 +626,7 @@ async def test_dispose_minion_error_not_your_child(legion_test_env):
     assert result.get("is_error") is True
     error_text = result["content"][0]["text"]
     # Error should indicate the minion is not their child (permission denied)
-    assert ("not your child" in error_text.lower() or
-            "permission denied" in error_text.lower() or
-            "not found" in error_text.lower() or
-            "no child minion named" in error_text.lower())
+    assert ("found in your subtree" in error_text.lower() or
+            "no minion with name" in error_text.lower() or
+            "not your child" in error_text.lower() or
+            "permission denied" in error_text.lower())
