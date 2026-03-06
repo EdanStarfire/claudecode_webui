@@ -32,6 +32,15 @@
                   Features
                 </button>
               </li>
+              <li class="nav-item">
+                <button
+                  class="nav-link"
+                  :class="{ active: activeTab === 'notifications' }"
+                  @click="activeTab = 'notifications'"
+                >
+                  Notifications
+                </button>
+              </li>
             </ul>
 
             <!-- Tab content -->
@@ -51,6 +60,9 @@
               <button class="btn btn-outline-primary btn-sm" @click="openTemplateManager">
                 Manage Templates
               </button>
+            </div>
+            <div v-else-if="activeTab === 'notifications'">
+              <NotificationsTab :config="notificationConfig" @update:config="onNotificationsUpdate" />
             </div>
           </div>
         </div>
@@ -78,7 +90,9 @@
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useUIStore } from '@/stores/ui'
 import { apiGet, apiPut } from '@/utils/api'
+import { getSettings as getNotificationSettings, updateSettings as saveNotificationSettings } from '@/composables/useNotifications'
 import FeaturesTab from './FeaturesTab.vue'
+import NotificationsTab from './NotificationsTab.vue'
 
 const uiStore = useUIStore()
 
@@ -92,13 +106,20 @@ const saving = ref(false)
 const config = ref({})
 const originalConfig = ref({})
 const templateCount = ref(0)
+const notificationConfig = ref({})
+const originalNotificationConfig = ref({})
 
 const dirty = computed(() => {
-  return JSON.stringify(config.value) !== JSON.stringify(originalConfig.value)
+  return JSON.stringify(config.value) !== JSON.stringify(originalConfig.value) ||
+    JSON.stringify(notificationConfig.value) !== JSON.stringify(originalNotificationConfig.value)
 })
 
 function onFeaturesUpdate(features) {
   config.value = { ...config.value, features }
+}
+
+function onNotificationsUpdate(notifications) {
+  notificationConfig.value = notifications
 }
 
 async function loadConfig() {
@@ -108,6 +129,8 @@ async function loadConfig() {
     const data = await apiGet('/api/config')
     config.value = data.config
     originalConfig.value = JSON.parse(JSON.stringify(data.config))
+    notificationConfig.value = getNotificationSettings()
+    originalNotificationConfig.value = JSON.parse(JSON.stringify(notificationConfig.value))
     try {
       const templates = await apiGet('/api/templates')
       templateCount.value = templates.length
@@ -127,6 +150,9 @@ async function saveConfig() {
     const data = await apiPut('/api/config', config.value)
     config.value = data.config
     originalConfig.value = JSON.parse(JSON.stringify(data.config))
+    // Persist notification settings to localStorage
+    saveNotificationSettings(notificationConfig.value)
+    originalNotificationConfig.value = JSON.parse(JSON.stringify(notificationConfig.value))
     if (modalInstance) {
       modalInstance.hide()
     }
@@ -148,6 +174,8 @@ function resetState() {
   activeTab.value = 'features'
   config.value = {}
   originalConfig.value = {}
+  notificationConfig.value = {}
+  originalNotificationConfig.value = {}
   loadError.value = null
   saving.value = false
 }

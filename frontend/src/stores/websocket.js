@@ -5,6 +5,7 @@ import { useProjectStore } from './project'
 import { useMessageStore } from './message'
 import { useResourceStore } from './resource'
 import { useQueueStore } from './queue'
+import { notify } from '@/composables/useNotifications'
 
 /**
  * WebSocket Store - Manages WebSocket connections and message routing
@@ -498,6 +499,10 @@ export const useWebSocketStore = defineStore('websocket', () => {
         // Update specific session state
         // Backend sends: {type: "state_change", data: {session_id: "...", session: {...}, timestamp: "..."}}
         if (payload.data && payload.data.session_id && payload.data.session) {
+          // Capture prior state for notification detection
+          const priorSession = sessionStore.sessions.get(payload.data.session_id)
+          const wasProcessing = priorSession?.is_processing
+
           sessionStore.updateSession(payload.data.session_id, payload.data.session)
 
           // Issue #500: Auto-reconnect session WebSocket when queue processor
@@ -522,6 +527,14 @@ export const useWebSocketStore = defineStore('websocket', () => {
             console.log(`[UI state_change] Session ${changedSessionId} entered error state, reloading messages`)
             const messageStore = useMessageStore()
             messageStore.loadMessages(changedSessionId)
+          }
+
+          // Issue #643: Audio notifications for state transitions
+          if (newState === 'error') {
+            notify('session_error', { sessionName: payload.data.session.name || 'Session' })
+          }
+          if (wasProcessing && !payload.data.session.is_processing) {
+            notify('task_complete', { sessionName: payload.data.session.name || 'Session' })
           }
         }
         break
@@ -759,6 +772,15 @@ export const useWebSocketStore = defineStore('websocket', () => {
           if (payload.comm) {
             legionStore.addComm(legionId, payload.comm)
             console.log('Legion WebSocket: Received new comm', payload.comm)
+
+            // Issue #643: Notify on report/question comms
+            const commType = payload.comm.comm_type || payload.comm.type
+            if (['report', 'question'].includes(commType)) {
+              notify('minion_comm', {
+                commType,
+                fromMinion: payload.comm.from_minion_name || payload.comm.from_name || 'Minion'
+              })
+            }
           }
           break
 
