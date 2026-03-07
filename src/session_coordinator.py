@@ -1698,13 +1698,16 @@ class SessionCoordinator:
             metadata_path.write_text(json.dumps(metadata, indent=2))
 
             # Fire-and-forget distillation of session history into markdown
-            if messages_file.exists():
+            # Use the archived copy of messages.jsonl, not the live file — the live
+            # file gets truncated by clear_messages() right after this method returns.
+            archived_messages = archive_dir / "messages.jsonl"
+            if archived_messages.exists():
                 from src.history_distiller import distill_session_history
 
                 history_output = session_dir / "history" / f"{timestamp}.md"
                 archive_ts = datetime.now(UTC).isoformat()
                 asyncio.create_task(
-                    distill_session_history(messages_file, history_output, session_id, archive_ts)
+                    distill_session_history(archived_messages, history_output, session_id, archive_ts)
                 )
                 coord_logger.debug(f"Launched history distillation for session {session_id}")
 

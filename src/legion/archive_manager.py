@@ -145,12 +145,13 @@ class ArchiveManager:
             )
 
             # Fire-and-forget distillation of session history into markdown
-            if messages_file.exists():
-                sessions_dir = self.system.session_coordinator.session_manager.sessions_dir
-                history_output = sessions_dir / minion_id / "history" / f"{timestamp}.md"
+            # Write into the archive directory — sessions/{id}/ gets deleted after disposal.
+            archived_messages = archive_dir / "messages.jsonl"
+            if archived_messages.exists():
+                history_output = archive_dir / "history.md"
                 archive_ts = datetime.now(UTC).isoformat()
                 asyncio.create_task(
-                    distill_session_history(messages_file, history_output, minion_id, archive_ts)
+                    distill_session_history(archived_messages, history_output, minion_id, archive_ts)
                 )
                 archive_logger.debug(f"Launched history distillation for minion {minion_id}")
 
