@@ -178,6 +178,15 @@ class PermissionModeRequest(BaseModel):
     mode: str
 
 
+class McpToggleRequest(BaseModel):
+    name: str
+    enabled: bool
+
+
+class McpReconnectRequest(BaseModel):
+    name: str
+
+
 class CommSendRequest(BaseModel):
     to_minion_id: str | None = None
     to_user: bool = False
@@ -1641,6 +1650,38 @@ class ClaudeWebUI:
             except Exception as e:
                 logger.error(f"Failed to set permission mode: {e}")
                 raise HTTPException(status_code=500, detail=str(e))
+
+        @self.app.get("/api/sessions/{session_id}/mcp-status")
+        async def get_mcp_status(session_id: str):
+            """Get MCP server status for a session"""
+            try:
+                result = await self.coordinator.get_mcp_status(session_id)
+                return result
+            except Exception as e:
+                logger.error(f"Failed to get MCP status: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @self.app.post("/api/sessions/{session_id}/mcp-toggle")
+        async def toggle_mcp_server(session_id: str, request: McpToggleRequest):
+            """Toggle an MCP server on or off"""
+            try:
+                await self.coordinator.toggle_mcp_server(
+                    session_id, request.name, request.enabled
+                )
+                return {"success": True, "name": request.name, "enabled": request.enabled}
+            except Exception as e:
+                logger.error(f"Failed to toggle MCP server: {e}")
+                raise HTTPException(status_code=400, detail=str(e))
+
+        @self.app.post("/api/sessions/{session_id}/mcp-reconnect")
+        async def reconnect_mcp_server(session_id: str, request: McpReconnectRequest):
+            """Reconnect a failed MCP server"""
+            try:
+                await self.coordinator.reconnect_mcp_server(session_id, request.name)
+                return {"success": True, "name": request.name}
+            except Exception as e:
+                logger.error(f"Failed to reconnect MCP server: {e}")
+                raise HTTPException(status_code=400, detail=str(e))
 
         @self.app.post("/api/sessions/{session_id}/restart")
         async def restart_session(session_id: str):

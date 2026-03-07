@@ -462,6 +462,43 @@ class ClaudeSDK:
                 await self._safe_callback(self.error_callback, "set_permission_mode_failed", e)
             return False
 
+    async def get_mcp_status(self) -> dict:
+        """Get MCP server status for the current session."""
+        try:
+            if not self._sdk_client:
+                logger.warning(f"No active SDK client for session {self.session_id} - cannot get MCP status")
+                return {"servers": []}
+
+            if self.info.state not in [SessionState.RUNNING, SessionState.PROCESSING]:
+                logger.warning(f"Session {self.session_id} not in valid state for MCP status: {self.info.state}")
+                return {"servers": []}
+
+            result = await self._sdk_client.get_mcp_status()
+            return result
+        except Exception as e:
+            logger.error(f"Failed to get MCP status for session {self.session_id}: {e}")
+            return {"servers": []}
+
+    async def toggle_mcp_server(self, name: str, enabled: bool) -> None:
+        """Toggle an MCP server on or off. Raises on failure."""
+        if not self._sdk_client:
+            raise RuntimeError(f"No active SDK client for session {self.session_id}")
+
+        if self.info.state not in [SessionState.RUNNING, SessionState.PROCESSING]:
+            raise RuntimeError(f"Session not in valid state for MCP toggle: {self.info.state}")
+
+        await self._sdk_client.toggle_mcp_server(name, enabled)
+
+    async def reconnect_mcp_server(self, name: str) -> None:
+        """Reconnect a failed MCP server. Raises on failure."""
+        if not self._sdk_client:
+            raise RuntimeError(f"No active SDK client for session {self.session_id}")
+
+        if self.info.state not in [SessionState.RUNNING, SessionState.PROCESSING]:
+            raise RuntimeError(f"Session not in valid state for MCP reconnect: {self.info.state}")
+
+        await self._sdk_client.reconnect_mcp_server(name)
+
     async def disconnect(self) -> bool:
         """
         Disconnect from the Claude SDK session gracefully.

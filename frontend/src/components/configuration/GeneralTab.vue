@@ -273,6 +273,20 @@
       </div>
     </div>
 
+    <!-- MCP Servers (edit-session, active only) -->
+    <div v-if="isEditSession && isSessionActive && mcpServers.length > 0" class="mb-3">
+      <label class="form-label">MCP Servers</label>
+      <div class="mcp-servers-list">
+        <McpServerRow
+          v-for="server in mcpServers"
+          :key="server.name"
+          :server="server"
+          @toggle="handleMcpToggle"
+          @reconnect="handleMcpReconnect"
+        />
+      </div>
+    </div>
+
     <!-- Start Immediately (create-session only) -->
     <div v-if="isCreateSession" class="mb-3 form-check">
       <input
@@ -290,7 +304,11 @@
 </template>
 
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
+import { useMcpStore } from '../../stores/mcp'
+import McpServerRow from './McpServerRow.vue'
+
+const mcpStore = useMcpStore()
 
 const props = defineProps({
   mode: {
@@ -343,6 +361,32 @@ const isEditSession = computed(() => props.mode === 'edit-session')
 const isSessionActive = computed(() => {
   return props.session?.state === 'active' || props.session?.state === 'starting'
 })
+
+// MCP servers for the current session
+const sessionId = computed(() => props.session?.session_id)
+const mcpServers = computed(() => {
+  if (!sessionId.value) return []
+  return mcpStore.mcpServers(sessionId.value)
+})
+
+// Fetch MCP status when session becomes active
+watch([sessionId, isSessionActive], ([id, active]) => {
+  if (id && active) {
+    mcpStore.fetchMcpStatus(id)
+  }
+}, { immediate: true })
+
+function handleMcpToggle(name, enabled) {
+  if (sessionId.value) {
+    mcpStore.toggleServer(sessionId.value, name, enabled)
+  }
+}
+
+function handleMcpReconnect(name) {
+  if (sessionId.value) {
+    mcpStore.reconnectServer(sessionId.value, name)
+  }
+}
 
 const canUseBypassPermissions = computed(() => {
   return props.session?.initial_permission_mode === 'bypassPermissions'

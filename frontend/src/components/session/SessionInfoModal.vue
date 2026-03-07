@@ -52,10 +52,10 @@
             <!-- Pre-Authorized Tools -->
             <div class="mb-3">
               <h6 class="text-muted">Pre-Authorized Tools</h6>
-              <div v-if="(initData.allowed_tools || initData.tools) && (initData.allowed_tools || initData.tools).length > 0">
+              <div v-if="nonMcpTools.length > 0">
                 <div class="d-flex flex-wrap gap-1">
                   <span
-                    v-for="tool in (initData.allowed_tools || initData.tools)"
+                    v-for="tool in nonMcpTools"
                     :key="tool"
                     class="badge bg-secondary"
                   >
@@ -64,6 +64,17 @@
                 </div>
               </div>
               <div v-else class="text-muted small">No pre-authorized tools (will prompt for permissions)</div>
+            </div>
+
+            <!-- MCP Servers -->
+            <div v-if="mcpServers.length > 0" class="mb-3">
+              <h6 class="text-muted">MCP Servers</h6>
+              <McpServerDetail
+                v-for="server in mcpServers"
+                :key="server.name"
+                :server="server"
+                @reconnect="handleReconnect"
+              />
             </div>
 
             <!-- Commands -->
@@ -119,10 +130,13 @@ import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useSessionStore } from '@/stores/session'
 import { useMessageStore } from '@/stores/message'
 import { useUIStore } from '@/stores/ui'
+import { useMcpStore } from '@/stores/mcp'
+import McpServerDetail from './McpServerDetail.vue'
 
 const sessionStore = useSessionStore()
 const messageStore = useMessageStore()
 const uiStore = useUIStore()
+const mcpStore = useMcpStore()
 
 // State
 const sessionId = ref(null)
@@ -160,6 +174,24 @@ const initData = computed(() => {
 
   return initMessage?.metadata?.init_data || null
 })
+
+// Filter out mcp__* tools from pre-authorized list (shown in MCP section instead)
+const nonMcpTools = computed(() => {
+  const tools = initData.value?.allowed_tools || initData.value?.tools || []
+  return tools.filter(t => !t.startsWith('mcp__'))
+})
+
+// MCP servers for the current session
+const mcpServers = computed(() => {
+  if (!sessionId.value) return []
+  return mcpStore.mcpServers(sessionId.value)
+})
+
+function handleReconnect(name) {
+  if (sessionId.value) {
+    mcpStore.reconnectServer(sessionId.value, name)
+  }
+}
 
 // Get human-readable model display name
 function getModelDisplayName(modelId) {
@@ -205,6 +237,13 @@ watch(
       const data = modal.data || {}
       sessionId.value = data.sessionId
       showRawData.value = false  // Reset just the raw data toggle, not sessionId
+      // Fetch MCP status if session is active
+      if (data.sessionId) {
+        const session = sessionStore.sessions.get(data.sessionId)
+        if (session?.state === 'active') {
+          mcpStore.fetchMcpStatus(data.sessionId)
+        }
+      }
       modalInstance.show()
     }
   }

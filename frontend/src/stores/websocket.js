@@ -407,6 +407,15 @@ export const useWebSocketStore = defineStore('websocket', () => {
         content: content
       }))
       console.log('Sent message to session')
+      // Issue #675: Refresh MCP status after sending (debounced via setTimeout)
+      const sid = useSessionStore().currentSessionId
+      if (sid) {
+        setTimeout(() => {
+          import('./mcp').then(({ useMcpStore }) => {
+            useMcpStore().fetchMcpStatus(sid)
+          })
+        }, 2000)
+      }
     } else {
       console.error('Cannot send message: Session WebSocket not connected')
     }
@@ -527,6 +536,14 @@ export const useWebSocketStore = defineStore('websocket', () => {
             console.log(`[UI state_change] Session ${changedSessionId} entered error state, reloading messages`)
             const messageStore = useMessageStore()
             messageStore.loadMessages(changedSessionId)
+          }
+
+          // Issue #675: Fetch MCP status when session becomes active
+          if (newState === 'active') {
+            import('./mcp').then(({ useMcpStore }) => {
+              const mcpStore = useMcpStore()
+              mcpStore.fetchMcpStatus(changedSessionId)
+            })
           }
 
           // Issue #643: Audio notifications for state transitions

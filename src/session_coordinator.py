@@ -1489,6 +1489,35 @@ class SessionCoordinator:
             logger.error(f"Failed to set permission mode for session {session_id}: {e}")
             return False
 
+    async def get_mcp_status(self, session_id: str) -> dict:
+        """Get MCP server status for a session."""
+        try:
+            sdk = self._active_sdks.get(session_id)
+            if not sdk:
+                logger.warning(f"No active SDK found for session {session_id} - cannot get MCP status")
+                return {"servers": []}
+
+            return await sdk.get_mcp_status()
+        except Exception as e:
+            logger.error(f"Failed to get MCP status for session {session_id}: {e}")
+            return {"servers": []}
+
+    async def toggle_mcp_server(self, session_id: str, name: str, enabled: bool) -> None:
+        """Toggle an MCP server on or off for a session. Raises on failure."""
+        sdk = self._active_sdks.get(session_id)
+        if not sdk:
+            raise RuntimeError(f"No active SDK found for session {session_id}")
+
+        await sdk.toggle_mcp_server(name, enabled)
+
+    async def reconnect_mcp_server(self, session_id: str, name: str) -> None:
+        """Reconnect a failed MCP server for a session. Raises on failure."""
+        sdk = self._active_sdks.get(session_id)
+        if not sdk:
+            raise RuntimeError(f"No active SDK found for session {session_id}")
+
+        await sdk.reconnect_mcp_server(name)
+
     async def restart_session(self, session_id: str, permission_callback: Callable | None = None) -> bool:
         """
         Restart a session by disconnecting SDK and resuming with same session ID.
