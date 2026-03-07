@@ -37,6 +37,10 @@ Debug Flags:
   --debug-session-manager   Enable session manager debugging
   --debug-template-manager  Enable template manager debugging
   --debug-skill-manager     Enable skill manager debugging
+  --debug-queue-manager     Enable queue manager debugging
+  --debug-queue-processor   Enable queue processor debugging
+  --debug-archive           Enable archive manager debugging
+  --debug-project-manager   Enable project manager debugging
   --debug-all               Enable all debug logging (excludes ping/pong)
         """
     )
@@ -64,6 +68,10 @@ Debug Flags:
     parser.add_argument('--debug-session-manager', action='store_true', help='Enable session manager debugging')
     parser.add_argument('--debug-template-manager', action='store_true', help='Enable template manager debugging')
     parser.add_argument('--debug-skill-manager', action='store_true', help='Enable skill manager debugging')
+    parser.add_argument('--debug-queue-manager', action='store_true', help='Enable queue manager debugging')
+    parser.add_argument('--debug-queue-processor', action='store_true', help='Enable queue processor debugging')
+    parser.add_argument('--debug-archive', action='store_true', help='Enable archive manager debugging')
+    parser.add_argument('--debug-project-manager', action='store_true', help='Enable project manager debugging')
     parser.add_argument('--debug-all', action='store_true', help='Enable all debug logging (excludes ping/pong)')
 
     # Experimental features
@@ -111,6 +119,10 @@ Debug Flags:
         debug_session_manager=args.debug_session_manager,
         debug_template_manager=args.debug_template_manager,
         debug_skill_manager=args.debug_skill_manager,
+        debug_queue_manager=args.debug_queue_manager,
+        debug_queue_processor=args.debug_queue_processor,
+        debug_archive=args.debug_archive,
+        debug_project_manager=args.debug_project_manager,
         debug_all=args.debug_all,
         log_dir=str(data_dir_path / "logs")
     )

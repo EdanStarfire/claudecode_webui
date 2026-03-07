@@ -19,7 +19,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from src.logging_config import get_logger
+
 logger = logging.getLogger(__name__)
+project_logger = get_logger('project_manager', category='PROJECT_MANAGER')
 
 
 @dataclass
@@ -95,7 +98,7 @@ class ProjectManager:
             self.data_dir.mkdir(exist_ok=True)
             self.projects_dir.mkdir(exist_ok=True)
             await self._load_existing_projects()
-            logger.info(f"ProjectManager initialized with {len(self._active_projects)} existing projects")
+            project_logger.info(f"ProjectManager initialized with {len(self._active_projects)} existing projects")
         except Exception as e:
             logger.error(f"Failed to initialize ProjectManager: {e}")
             raise
@@ -113,7 +116,7 @@ class ProjectManager:
                             project_info = ProjectInfo.from_dict(data)
                             self._active_projects[project_info.project_id] = project_info
                             self._project_locks[project_info.project_id] = asyncio.Lock()
-                            logger.debug(f"Loaded project {project_info.project_id} ({project_info.name})")
+                            project_logger.debug(f"Loaded project {project_info.project_id} ({project_info.name})")
                         except Exception as e:
                             logger.error(f"Failed to load project from {project_dir}: {e}")
         except Exception as e:
@@ -161,7 +164,7 @@ class ProjectManager:
 
             await self._persist_project_state(project_id)
 
-            logger.info(f"Created project {project_id} ({name}) at {working_directory}")
+            project_logger.info(f"Created project {project_id} ({name}) at {working_directory}")
             return project_info
 
         except Exception as e:
@@ -213,7 +216,7 @@ class ProjectManager:
 
                 project.updated_at = datetime.now(UTC)
                 await self._persist_project_state(project_id)
-                logger.info(f"Updated project {project_id}")
+                project_logger.info(f"Updated project {project_id}")
                 return True
 
             except Exception as e:
@@ -234,14 +237,14 @@ class ProjectManager:
                 if project_dir.exists():
                     try:
                         shutil.rmtree(project_dir)
-                        logger.info(f"Deleted project directory: {project_dir}")
+                        project_logger.info(f"Deleted project directory: {project_dir}")
                     except Exception as e:
                         logger.warning(f"Standard deletion failed for {project_dir}: {e}")
 
                         # Try Windows-specific fallback deletion
                         if os.name == 'nt':  # Windows
                             try:
-                                logger.info(f"Attempting Windows-specific deletion for {project_dir}")
+                                project_logger.info(f"Attempting Windows-specific deletion for {project_dir}")
                                 gc.collect()
                                 time.sleep(0.5)
 
@@ -253,13 +256,13 @@ class ProjectManager:
                                 )
 
                                 if result.returncode == 0:
-                                    logger.info(f"Successfully deleted directory using Windows rmdir: {project_dir}")
+                                    project_logger.info(f"Successfully deleted directory using Windows rmdir: {project_dir}")
                                 else:
                                     logger.error(f"Windows rmdir failed: {result.stderr}")
                                     return False
 
-                            except Exception as fallback_e:
-                                logger.error(f"Windows fallback deletion also failed for {project_dir}: {fallback_e}")
+                            except Exception:
+                                logger.exception(f"Windows fallback deletion also failed for {project_dir}")
                                 return False
                         else:
                             logger.error(f"Failed to delete project directory {project_dir}: {e}")
@@ -272,11 +275,11 @@ class ProjectManager:
                 if project_id in self._project_locks:
                     del self._project_locks[project_id]
 
-                logger.info(f"Successfully deleted project {project_id}")
+                project_logger.info(f"Successfully deleted project {project_id}")
                 return True
 
-            except Exception as e:
-                logger.error(f"Failed to delete project {project_id}: {e}")
+            except Exception:
+                logger.exception(f"Failed to delete project {project_id}")
                 return False
 
     async def _delete_project_internal(self, project_id: str) -> bool:
@@ -303,14 +306,14 @@ class ProjectManager:
             if project_dir.exists():
                 try:
                     shutil.rmtree(project_dir)
-                    logger.info(f"Deleted project directory: {project_dir}")
+                    project_logger.info(f"Deleted project directory: {project_dir}")
                 except Exception as e:
                     logger.warning(f"Standard deletion failed for {project_dir}: {e}")
 
                     # Try Windows-specific fallback deletion
                     if os.name == 'nt':  # Windows
                         try:
-                            logger.info(f"Attempting Windows-specific deletion for {project_dir}")
+                            project_logger.info(f"Attempting Windows-specific deletion for {project_dir}")
                             gc.collect()
                             time.sleep(0.5)
 
@@ -322,13 +325,13 @@ class ProjectManager:
                             )
 
                             if result.returncode == 0:
-                                logger.info(f"Successfully deleted directory using Windows rmdir: {project_dir}")
+                                project_logger.info(f"Successfully deleted directory using Windows rmdir: {project_dir}")
                             else:
                                 logger.error(f"Windows rmdir failed: {result.stderr}")
                                 return False
 
-                        except Exception as fallback_e:
-                            logger.error(f"Windows fallback deletion also failed for {project_dir}: {fallback_e}")
+                        except Exception:
+                            logger.exception(f"Windows fallback deletion also failed for {project_dir}")
                             return False
                     else:
                         logger.error(f"Failed to delete project directory {project_dir}: {e}")
@@ -341,11 +344,11 @@ class ProjectManager:
             # The lock will be released when remove_session_from_project() exits
             # and can be garbage collected later
 
-            logger.info(f"Successfully deleted project {project_id} (internal deletion)")
+            project_logger.info(f"Successfully deleted project {project_id} (internal deletion)")
             return True
 
-        except Exception as e:
-            logger.error(f"Failed to delete project {project_id} internally: {e}")
+        except Exception:
+            logger.exception(f"Failed to delete project {project_id} internally")
             return False
 
     async def add_session_to_project(self, project_id: str, session_id: str) -> bool:
@@ -361,7 +364,7 @@ class ProjectManager:
                     project.session_ids.insert(0, session_id)  # Insert at beginning (new sessions at top)
                     project.updated_at = datetime.now(UTC)
                     await self._persist_project_state(project_id)
-                    logger.info(f"Added session {session_id} to project {project_id}")
+                    project_logger.info(f"Added session {session_id} to project {project_id}")
                     return True
                 else:
                     logger.warning(f"Session {session_id} already in project {project_id}")
@@ -392,7 +395,7 @@ class ProjectManager:
                     project.session_ids.remove(session_id)
                     project.updated_at = datetime.now(UTC)
                     await self._persist_project_state(project_id)
-                    logger.info(f"Removed session {session_id} from project {project_id} ({len(project.session_ids)} session(s) remaining)")
+                    project_logger.info(f"Removed session {session_id} from project {project_id} ({len(project.session_ids)} session(s) remaining)")
                     return (True, False)
                 else:
                     logger.warning(f"Session {session_id} not found in project {project_id}")
@@ -423,7 +426,7 @@ class ProjectManager:
                 project.session_ids = session_ids
                 project.updated_at = datetime.now(UTC)
                 await self._persist_project_state(project_id)
-                logger.info(f"Reordered sessions in project {project_id}")
+                project_logger.info(f"Reordered sessions in project {project_id}")
                 return True
 
             except Exception as e:
@@ -433,8 +436,8 @@ class ProjectManager:
     async def reorder_projects(self, project_ids: list[str]) -> bool:
         """Reorder projects by assigning sequential order values"""
         try:
-            logger.debug(f"Reorder request for projects: {project_ids}")
-            logger.debug(f"Active projects: {list(self._active_projects.keys())}")
+            project_logger.debug(f"Reorder request for projects: {project_ids}")
+            project_logger.debug(f"Active projects: {list(self._active_projects.keys())}")
 
             # Validate that all project_ids exist
             valid_project_ids = []
@@ -458,7 +461,7 @@ class ProjectManager:
             # Check if all updates succeeded
             success_count = sum(1 for result in results if result is True)
             if success_count == len(valid_project_ids):
-                logger.info(f"Successfully reordered {success_count} projects")
+                project_logger.info(f"Successfully reordered {success_count} projects")
                 return True
             else:
                 logger.error(f"Reorder partially failed: {success_count}/{len(valid_project_ids)} projects updated")
@@ -480,7 +483,7 @@ class ProjectManager:
                 project.is_expanded = not project.is_expanded
                 project.updated_at = datetime.now(UTC)
                 await self._persist_project_state(project_id)
-                logger.info(f"Toggled expansion for project {project_id} to {project.is_expanded}")
+                project_logger.info(f"Toggled expansion for project {project_id} to {project.is_expanded}")
                 return True
 
             except Exception as e:
@@ -519,7 +522,7 @@ class ProjectManager:
             if tasks:
                 results = await asyncio.gather(*tasks, return_exceptions=True)
                 success_count = sum(1 for result in results if result is True)
-                logger.info(f"Shifted {success_count}/{len(tasks)} existing projects down for new project")
+                project_logger.info(f"Shifted {success_count}/{len(tasks)} existing projects down for new project")
 
         except Exception as e:
             logger.error(f"Failed to shift existing projects down: {e}")

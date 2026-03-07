@@ -51,8 +51,8 @@ class DataStorageManager:
                 storage_logger.info(f"Deleted legacy history.json for session {self.session_dir.name}")
 
             storage_logger.debug(f"Initialized storage for session {self.session_dir.name}")
-        except Exception as e:
-            logger.error(f"Failed to initialize storage: {e}")
+        except Exception:
+            logger.exception("Failed to initialize storage")
             raise
 
     async def append_message(self, message_data: dict[str, Any]):
@@ -69,8 +69,8 @@ class DataStorageManager:
 
 
             storage_logger.debug(f"Appended message to {self.session_dir.name}")
-        except Exception as e:
-            logger.error(f"Failed to append message: {e}")
+        except Exception:
+            logger.exception("Failed to append message")
             raise
 
     async def read_messages(self, limit: int | None = None, offset: int = 0) -> list[dict[str, Any]]:
@@ -99,8 +99,8 @@ class DataStorageManager:
                         logger.warning(f"Failed to parse message line: {line[:100]}... Error: {e}")
 
             return messages
-        except Exception as e:
-            logger.error(f"Failed to read messages: {e}")
+        except Exception:
+            logger.exception("Failed to read messages")
             return []
 
     async def get_message_count(self) -> int:
@@ -116,8 +116,8 @@ class DataStorageManager:
                         count += 1
 
             return count
-        except Exception as e:
-            logger.error(f"Failed to count messages: {e}")
+        except Exception:
+            logger.exception("Failed to count messages")
             return 0
 
     async def clear_messages(self) -> bool:
@@ -136,8 +136,8 @@ class DataStorageManager:
 
             return True
 
-        except Exception as e:
-            logger.error(f"Failed to clear messages: {e}")
+        except Exception:
+            logger.exception("Failed to clear messages")
             return False
 
     async def cleanup(self):
@@ -168,8 +168,8 @@ class DataStorageManager:
                 gc.collect()
 
             storage_logger.debug(f"Cleaned up storage for {session_name}")
-        except Exception as e:
-            logger.error(f"Failed to cleanup storage: {e}")
+        except Exception:
+            logger.exception("Failed to cleanup storage")
             # Still force GC even on error
             gc.collect()
 
@@ -203,8 +203,8 @@ class DataStorageManager:
             )
             return True
 
-        except Exception as e:
-            logger.error(f"Failed to save image file {image_id}: {e}")
+        except Exception:
+            logger.exception(f"Failed to save image file {image_id}")
             return False
 
     async def append_image(self, image_metadata: dict[str, Any]) -> bool:
@@ -236,8 +236,8 @@ class DataStorageManager:
             )
             return True
 
-        except Exception as e:
-            logger.error(f"Failed to append image metadata: {e}")
+        except Exception:
+            logger.exception("Failed to append image metadata")
             return False
 
     async def read_images(self) -> list[dict[str, Any]]:
@@ -268,8 +268,8 @@ class DataStorageManager:
 
             return images
 
-        except Exception as e:
-            logger.error(f"Failed to read images: {e}")
+        except Exception:
+            logger.exception("Failed to read images")
             return []
 
     async def get_image_file(self, image_id: str) -> bytes | None:
@@ -291,8 +291,8 @@ class DataStorageManager:
             with open(image_path, 'rb') as f:
                 return f.read()
 
-        except Exception as e:
-            logger.error(f"Failed to read image file {image_id}: {e}")
+        except Exception:
+            logger.exception(f"Failed to read image file {image_id}")
             return None
 
     async def delete_image(self, image_id: str) -> bool:
@@ -313,8 +313,8 @@ class DataStorageManager:
                 return True
             return False
 
-        except Exception as e:
-            logger.error(f"Failed to delete image {image_id}: {e}")
+        except Exception:
+            logger.exception(f"Failed to delete image {image_id}")
             return False
 
     async def clear_images(self) -> bool:
@@ -333,8 +333,8 @@ class DataStorageManager:
 
             return True
 
-        except Exception as e:
-            logger.error(f"Failed to clear images: {e}")
+        except Exception:
+            logger.exception("Failed to clear images")
             return False
 
     async def get_image_count(self) -> int:
@@ -356,8 +356,8 @@ class DataStorageManager:
 
             return count
 
-        except Exception as e:
-            logger.error(f"Failed to count images: {e}")
+        except Exception:
+            logger.exception("Failed to count images")
             return 0
 
     # =========================================================================
@@ -390,8 +390,8 @@ class DataStorageManager:
             )
             return True
 
-        except Exception as e:
-            logger.error(f"Failed to save resource file {resource_id}: {e}")
+        except Exception:
+            logger.exception(f"Failed to save resource file {resource_id}")
             return False
 
     async def append_resource(self, resource_metadata: dict[str, Any]) -> bool:
@@ -423,8 +423,8 @@ class DataStorageManager:
             )
             return True
 
-        except Exception as e:
-            logger.error(f"Failed to append resource metadata: {e}")
+        except Exception:
+            logger.exception("Failed to append resource metadata")
             return False
 
     async def read_resources(self) -> list[dict[str, Any]]:
@@ -465,8 +465,8 @@ class DataStorageManager:
 
             return resources
 
-        except Exception as e:
-            logger.error(f"Failed to read resources: {e}")
+        except Exception:
+            logger.exception("Failed to read resources")
             return []
 
     async def remove_resource_from_display(self, resource_id: str) -> bool:
@@ -501,8 +501,8 @@ class DataStorageManager:
             )
             return True
 
-        except Exception as e:
-            logger.error(f"Failed to remove resource from display {resource_id}: {e}")
+        except Exception:
+            logger.exception(f"Failed to remove resource from display {resource_id}")
             return False
 
     async def get_resource_file(self, resource_id: str) -> bytes | None:
@@ -524,8 +524,8 @@ class DataStorageManager:
             with open(resource_path, 'rb') as f:
                 return f.read()
 
-        except Exception as e:
-            logger.error(f"Failed to read resource file {resource_id}: {e}")
+        except Exception:
+            logger.exception(f"Failed to read resource file {resource_id}")
             return None
 
     async def delete_resource(self, resource_id: str) -> bool:
@@ -546,8 +546,8 @@ class DataStorageManager:
                 return True
             return False
 
-        except Exception as e:
-            logger.error(f"Failed to delete resource {resource_id}: {e}")
+        except Exception:
+            logger.exception(f"Failed to delete resource {resource_id}")
             return False
 
     async def clear_resources(self) -> bool:
@@ -566,8 +566,8 @@ class DataStorageManager:
 
             return True
 
-        except Exception as e:
-            logger.error(f"Failed to clear resources: {e}")
+        except Exception:
+            logger.exception("Failed to clear resources")
             return False
 
     async def get_resource_count(self) -> int:
@@ -589,6 +589,6 @@ class DataStorageManager:
 
             return count
 
-        except Exception as e:
-            logger.error(f"Failed to count resources: {e}")
+        except Exception:
+            logger.exception("Failed to count resources")
             return 0

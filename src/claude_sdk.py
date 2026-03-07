@@ -103,8 +103,8 @@ class SDKErrorDetectionHandler(logging.Handler):
                     await self.error_callback("immediate_cli_failure", Exception(error_message))
                 else:
                     self.error_callback("immediate_cli_failure", Exception(error_message))
-        except Exception as e:
-            self.logger.error(f"Error in SDK error callback: {e}")
+        except Exception:
+            self.logger.exception("Error in SDK error callback")
 
 
 @dataclass
@@ -272,8 +272,8 @@ class ClaudeSDK:
             sdk_logger.addHandler(self._sdk_error_handler)
 
             sdk_logger.debug(f"SDK error detection handler set up for session {self.session_id}")
-        except Exception as e:
-            logger.error(f"Failed to set up SDK error detection: {e}")
+        except Exception:
+            logger.exception("Failed to set up SDK error detection")
 
     def _cleanup_sdk_error_detection(self):
         """Clean up SDK error detection handler."""
@@ -283,8 +283,8 @@ class ClaudeSDK:
                 sdk_logger.removeHandler(self._sdk_error_handler)
                 self._sdk_error_handler = None
                 sdk_logger.debug(f"SDK error detection handler cleaned up for session {self.session_id}")
-        except Exception as e:
-            logger.error(f"Failed to clean up SDK error detection: {e}")
+        except Exception:
+            logger.exception("Failed to clean up SDK error detection")
 
     async def start(self) -> bool:
         """
@@ -338,7 +338,7 @@ class ClaudeSDK:
             return True
 
         except Exception as e:
-            logger.error(f"Failed to start Claude Code SDK session: {e}")
+            logger.exception("Failed to start Claude Code SDK session")
             self.info.state = SessionState.FAILED
             self.info.error_message = str(e)
             if self.error_callback:
@@ -377,7 +377,7 @@ class ClaudeSDK:
             return True
 
         except Exception as e:
-            logger.error(f"Failed to queue message: {e}")
+            logger.exception("Failed to queue message")
             if self.error_callback:
                 await self._safe_callback(self.error_callback, "message_queue_failed", e)
             return False
@@ -419,7 +419,7 @@ class ClaudeSDK:
             return True
 
         except Exception as e:
-            logger.error(f"Failed to interrupt session {self.session_id}: {e}")
+            logger.exception(f"Failed to interrupt session {self.session_id}")
             if self.error_callback:
                 await self._safe_callback(self.error_callback, "interrupt_failed", e)
             return False
@@ -463,7 +463,7 @@ class ClaudeSDK:
             return True
 
         except Exception as e:
-            logger.error(f"Failed to set permission mode for session {self.session_id}: {e}")
+            logger.exception(f"Failed to set permission mode for session {self.session_id}")
             if self.error_callback:
                 await self._safe_callback(self.error_callback, "set_permission_mode_failed", e)
             return False
@@ -481,8 +481,8 @@ class ClaudeSDK:
 
             result = await self._sdk_client.get_mcp_status()
             return result
-        except Exception as e:
-            logger.error(f"Failed to get MCP status for session {self.session_id}: {e}")
+        except Exception:
+            logger.exception(f"Failed to get MCP status for session {self.session_id}")
             return {"servers": []}
 
     async def toggle_mcp_server(self, name: str, enabled: bool) -> None:
@@ -534,8 +534,8 @@ class ClaudeSDK:
             sdk_logger.info(f"SDK session {self.session_id} disconnected successfully")
             return True
 
-        except Exception as e:
-            logger.error(f"Failed to disconnect SDK session {self.session_id}: {e}")
+        except Exception:
+            logger.exception(f"Failed to disconnect SDK session {self.session_id}")
             return False
 
     async def _message_processing_loop(self):
@@ -588,9 +588,9 @@ class ClaudeSDK:
                             await self._process_sdk_message(response_message)
                             self._session_health_checks["total_responses_received"] += 1
                             self._session_health_checks["last_successful_response"] = time.time()
-                    except Exception as e:
+                    except Exception:
                         if not self._shutdown_event.is_set():
-                            logger.error(f"Error in global response consumer: {e}")
+                            logger.exception("Error in global response consumer")
 
                 # Start response consumer as background task
                 response_consumer_task = asyncio.create_task(consume_all_responses())
@@ -655,8 +655,8 @@ class ClaudeSDK:
                                         "session_id": self.session_id,
                                         "timestamp": time.time()
                                     })
-                            except Exception as e:
-                                logger.error(f"Failed to send interrupt: {e}")
+                            except Exception:
+                                logger.exception("Failed to send interrupt")
 
 
                         self._message_queue.task_done()
@@ -668,7 +668,7 @@ class ClaudeSDK:
                         sdk_logger.info("Message processing loop cancelled")
                         break
                     except Exception as e:
-                        logger.error(f"Error processing message: {e}")
+                        logger.exception("Error processing message")
                         if self.error_callback:
                             await self._safe_callback(self.error_callback, "message_processing_error", e)
 
@@ -679,8 +679,8 @@ class ClaudeSDK:
                     with contextlib.suppress(asyncio.CancelledError):
                         await response_consumer_task
                     sdk_logger.info("Global response consumer cleaned up successfully")
-                except Exception as e:
-                    logger.error(f"Error during response consumer cleanup: {e}")
+                except Exception:
+                    logger.exception("Error during response consumer cleanup")
                     sdk_logger.info("Global response consumer cleanup completed with errors")
 
             # Update health monitoring state
@@ -689,28 +689,16 @@ class ClaudeSDK:
 
         except Exception as e:
             fatal_error_time = time.time()
-            logger.error(f"FATAL ERROR in message processing loop at {fatal_error_time}: {e}")
-            logger.error(f"Exception type: {type(e)}")
-            logger.error(f"Exception details: {e}")
-            logger.error(f"Session state before error: {self.info.state}")
-
-
-            # Comprehensive fatal error tracking
-            import traceback
-            logger.error("FATAL ERROR - Full exception traceback:")
-            for line in traceback.format_exception(type(e), e, e.__traceback__):
-                logger.error(f"{line.rstrip()}")
-
-            logger.error("Fatal error context:")
-            logger.error(f"- Session ID: {self.session_id}")
-            logger.error(f"- Working directory: {self.working_directory}")
-            logger.error(f"- Session state: {self.info.state}")
-            logger.error(f"- Message count: {self.info.message_count}")
-            logger.error(f"- Queue size: {self._message_queue.qsize()}")
-            logger.error(f"- Shutdown event: {self._shutdown_event.is_set()}")
-            logger.error(f"- Context manager was active: {self._session_health_checks.get('context_manager_active', False)}")
-            logger.error(f"- Total queries sent: {self._session_health_checks.get('total_queries_sent', 0)}")
-            logger.error(f"- Total responses received: {self._session_health_checks.get('total_responses_received', 0)}")
+            logger.exception(
+                f"FATAL ERROR in message processing loop at {fatal_error_time}. "
+                f"Context: session={self.session_id}, cwd={self.working_directory}, "
+                f"state={self.info.state}, msg_count={self.info.message_count}, "
+                f"queue_size={self._message_queue.qsize()}, "
+                f"shutdown={self._shutdown_event.is_set()}, "
+                f"ctx_mgr_active={self._session_health_checks.get('context_manager_active', False)}, "
+                f"queries_sent={self._session_health_checks.get('total_queries_sent', 0)}, "
+                f"responses_received={self._session_health_checks.get('total_responses_received', 0)}"
+            )
 
             # Update health monitoring
             self._session_health_checks["context_manager_active"] = False
@@ -719,8 +707,8 @@ class ClaudeSDK:
             # Final health check for fatal error
             try:
                 self._log_session_health(None, "fatal_error")
-            except Exception as health_check_error:
-                logger.error(f"Health check failed during fatal error handling: {health_check_error}")
+            except Exception:
+                logger.exception("Health check failed during fatal error handling")
 
             self.info.state = SessionState.FAILED
             # Include buffered stderr in error message (issue #517)
@@ -976,7 +964,7 @@ class ClaudeSDK:
             sdk_logger.debug(f"Processed SDK message: {converted_message.get('type', 'unknown')}")
 
         except Exception as e:
-            logger.error(f"Failed to process SDK message: {e}")
+            logger.exception("Failed to process SDK message")
             if self.error_callback:
                 await self._safe_callback(self.error_callback, "sdk_message_processing_failed", e)
 
@@ -1017,7 +1005,7 @@ class ClaudeSDK:
             await self.storage_manager.append_message(storage_data)
 
         except Exception as e:
-            logger.error(f"Failed to store SDK message: {e}")
+            logger.exception("Failed to store SDK message")
             # Ultimate fallback - minimal storage format
             storage_message = {
                 "type": converted_message.get("type", "unknown"),
@@ -1124,7 +1112,7 @@ class ClaudeSDK:
                     return PermissionResultDeny(message="Invalid callback response")
 
             except Exception as e:
-                logger.error(f"Error in external permission_callback: {e}")
+                logger.exception("Error in external permission_callback")
                 return PermissionResultDeny(message=f"Permission callback error: {str(e)}")
 
         perm_logger.debug(f"No permission_callback provided. Denying tool use: '{tool_name}'")
@@ -1139,8 +1127,8 @@ class ClaudeSDK:
                 await callback(*args, **kwargs)
             else:
                 callback(*args, **kwargs)
-        except Exception as e:
-            logger.error(f"Error in callback execution: {e}")
+        except Exception:
+            logger.exception("Error in callback execution")
 
     def _convert_sdk_message(self, sdk_message: Any) -> dict[str, Any]:
         """Convert SDK message to a serializable format while preserving type information."""
@@ -1281,8 +1269,8 @@ class ClaudeSDK:
             sdk_logger.info("Claude Code SDK session terminated successfully")
             return True
 
-        except Exception as e:
-            logger.error(f"Error terminating SDK session: {e}")
+        except Exception:
+            logger.exception("Error terminating SDK session")
             # Cleanup SDK error detection handler even on error
             self._cleanup_sdk_error_detection()
             return False
@@ -1404,8 +1392,8 @@ class ClaudeSDK:
             os.close(fd)
             sdk_logger.debug(f"Created system prompt temp file: {path} ({len(content)} chars)")
             return path
-        except Exception as e:
-            logger.error(f"Failed to create system prompt temp file: {e}")
+        except Exception:
+            logger.exception("Failed to create system prompt temp file")
             raise
 
     def _cleanup_system_prompt_temp_file(self):

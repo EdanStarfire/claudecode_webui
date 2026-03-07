@@ -110,6 +110,10 @@ def configure_logging(
     debug_session_manager: bool = False,
     debug_template_manager: bool = False,
     debug_skill_manager: bool = False,
+    debug_queue_manager: bool = False,
+    debug_queue_processor: bool = False,
+    debug_archive: bool = False,
+    debug_project_manager: bool = False,
     debug_all: bool = False,
     log_dir: str = "data/logs"
 ) -> None:
@@ -127,6 +131,10 @@ def configure_logging(
         debug_session_manager: Enable session manager debugging
         debug_template_manager: Enable template manager debugging
         debug_skill_manager: Enable skill manager debugging
+        debug_queue_manager: Enable queue manager debugging
+        debug_queue_processor: Enable queue processor debugging
+        debug_archive: Enable archive manager debugging
+        debug_project_manager: Enable project manager debugging
         debug_all: Enable all debug logging (excludes ping/pong due to excessive noise)
         log_dir: Directory for log files
 
@@ -161,6 +169,10 @@ def configure_logging(
         'debug_session_manager': debug_session_manager or debug_all,
         'debug_template_manager': debug_template_manager or debug_all,
         'debug_skill_manager': debug_skill_manager or debug_all,
+        'debug_queue_manager': debug_queue_manager or debug_all,
+        'debug_queue_processor': debug_queue_processor or debug_all,
+        'debug_archive': debug_archive or debug_all,
+        'debug_project_manager': debug_project_manager or debug_all,
         'log_dir': log_dir
     }
 
@@ -250,6 +262,30 @@ def configure_logging(
             'file': f"{log_dir}/skill_manager.log",
             'enabled': _log_config['debug_skill_manager'],
             'console': _log_config['debug_skill_manager'],
+            'level': logging.DEBUG
+        },
+        'queue_manager': {
+            'file': f"{log_dir}/queue_manager.log",
+            'enabled': _log_config['debug_queue_manager'],
+            'console': _log_config['debug_queue_manager'],
+            'level': logging.DEBUG
+        },
+        'queue_processor': {
+            'file': f"{log_dir}/queue_processor.log",
+            'enabled': _log_config['debug_queue_processor'],
+            'console': _log_config['debug_queue_processor'],
+            'level': logging.DEBUG
+        },
+        'archive': {
+            'file': f"{log_dir}/archive.log",
+            'enabled': _log_config['debug_archive'],
+            'console': _log_config['debug_archive'],
+            'level': logging.DEBUG
+        },
+        'project_manager': {
+            'file': f"{log_dir}/project_manager.log",
+            'enabled': _log_config['debug_project_manager'],
+            'console': _log_config['debug_project_manager'],
             'level': logging.DEBUG
         }
     }
