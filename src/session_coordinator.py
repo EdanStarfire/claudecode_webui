@@ -1697,6 +1697,17 @@ class SessionCoordinator:
             metadata_path = archive_dir / "disposal_metadata.json"
             metadata_path.write_text(json.dumps(metadata, indent=2))
 
+            # Fire-and-forget distillation of session history into markdown
+            if messages_file.exists():
+                from src.history_distiller import distill_session_history
+
+                history_output = session_dir / "history" / f"{timestamp}.md"
+                archive_ts = datetime.now(UTC).isoformat()
+                asyncio.create_task(
+                    distill_session_history(messages_file, history_output, session_id, archive_ts)
+                )
+                coord_logger.debug(f"Launched history distillation for session {session_id}")
+
             coord_logger.info(f"Archived session {session_id} to {archive_dir}")
             return True
 
