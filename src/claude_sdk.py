@@ -1150,7 +1150,7 @@ class ClaudeSDK:
                     message_dict["content"] = " ".join(text_parts) if text_parts else ""
 
             # Copy other common attributes from SDK message
-            for attr in ['message', 'data', 'subtype', 'error', 'usage', 'model', 'duration_ms', 'total_cost_usd', 'parent_tool_use_id']:
+            for attr in ['message', 'data', 'subtype', 'error', 'usage', 'model', 'duration_ms', 'total_cost_usd', 'parent_tool_use_id', 'stop_reason']:
                 if hasattr(sdk_message, attr):
                     value = getattr(sdk_message, attr)
                     # Only add serializable values

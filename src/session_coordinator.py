@@ -1858,6 +1858,9 @@ class SessionCoordinator:
                 for key in ["usage", "duration_ms", "duration_api_ms", "total_cost_usd", "num_turns"]:
                     if key in data:
                         metadata[key] = data[key]
+                # Copy stop_reason for truncation detection
+                if "stop_reason" in data:
+                    metadata["stop_reason"] = data["stop_reason"]
 
             # Handle PermissionRequestMessage
             if _type == "PermissionRequestMessage":
