@@ -45,6 +45,10 @@ export const useMessageStore = defineStore('message', () => {
   // Issue #662: Track last stop_reason per session for truncation banner
   const lastStopReasonBySession = ref(new Map())
 
+  // Issue #689: Latest task activity per tool_use_id for SubagentTimeline display
+  // Map<tool_use_id, { subtype, description, last_tool_name, status, summary, timestamp }>
+  const taskActivityByToolUseId = ref(new Map())
+
   // ========== COMPUTED ==========
 
   // Current session's messages
@@ -128,6 +132,25 @@ export const useMessageStore = defineStore('message', () => {
       // Trigger reactivity
       messagesBySession.value = new Map(messagesBySession.value)
 
+      // Issue #689: Reconstruct task activity from message history for SubagentTimeline
+      regularMessages.forEach(msg => {
+        if (msg.type === 'system') {
+          const subtype = msg.metadata?.subtype
+          const toolUseId = msg.metadata?.tool_use_id
+          if (toolUseId && ['task_started', 'task_progress', 'task_notification'].includes(subtype)) {
+            taskActivityByToolUseId.value.set(toolUseId, {
+              subtype,
+              description: msg.metadata?.description || msg.content,
+              last_tool_name: msg.metadata?.last_tool_name || null,
+              status: msg.metadata?.status || null,
+              summary: msg.metadata?.summary || null,
+              timestamp: msg.timestamp
+            })
+          }
+        }
+      })
+      taskActivityByToolUseId.value = new Map(taskActivityByToolUseId.value)
+
       // Reconstruct task state from message history
       try {
         const taskStore = useTaskStore()
@@ -146,6 +169,13 @@ export const useMessageStore = defineStore('message', () => {
       console.error('Failed to load messages:', error)
       throw error
     }
+  }
+
+  /**
+   * Issue #689: Get task activity data for a tool_use_id (used by SubagentTimeline)
+   */
+  function getTaskActivity(toolUseId) {
+    return taskActivityByToolUseId.value.get(toolUseId) || null
   }
 
   /**
@@ -239,6 +269,23 @@ export const useMessageStore = defineStore('message', () => {
     if (message.type === 'user' && !message.metadata?.has_tool_results) {
       lastStopReasonBySession.value.set(sessionId, null)
       lastStopReasonBySession.value = new Map(lastStopReasonBySession.value)
+    }
+
+    // Issue #689: Intercept task lifecycle messages for SubagentTimeline activity display
+    if (message.type === 'system') {
+      const subtype = message.metadata?.subtype
+      const toolUseId = message.metadata?.tool_use_id
+      if (toolUseId && ['task_started', 'task_progress', 'task_notification'].includes(subtype)) {
+        taskActivityByToolUseId.value.set(toolUseId, {
+          subtype,
+          description: message.metadata?.description || message.content,
+          last_tool_name: message.metadata?.last_tool_name || null,
+          status: message.metadata?.status || null,
+          summary: message.metadata?.summary || null,
+          timestamp: message.timestamp
+        })
+        taskActivityByToolUseId.value = new Map(taskActivityByToolUseId.value)
+      }
     }
 
     // Issue #310: Apply backend display metadata if present
@@ -746,6 +793,9 @@ export const useMessageStore = defineStore('message', () => {
     toolSignatureToId.value.delete(sessionId)
     lastReceivedTimestamp.value.delete(sessionId)
 
+    // Issue #689: Clear task activity (ephemeral, reconstructs from history)
+    taskActivityByToolUseId.value = new Map()
+
     // Trigger reactivity
     messagesBySession.value = new Map(messagesBySession.value)
     toolCallsBySession.value = new Map(toolCallsBySession.value)
@@ -1029,6 +1079,10 @@ export const useMessageStore = defineStore('message', () => {
     clearArchiveMessages,
 
     // Issue #662: Stop reason tracking for truncation banner
-    lastStopReasonBySession: readonly(lastStopReasonBySession)
+    lastStopReasonBySession: readonly(lastStopReasonBySession),
+
+    // Issue #689: Task activity tracking for SubagentTimeline
+    taskActivityByToolUseId: readonly(taskActivityByToolUseId),
+    getTaskActivity
   }
 })

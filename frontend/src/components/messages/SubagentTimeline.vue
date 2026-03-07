@@ -8,6 +8,15 @@
       <span class="subagent-toggle">{{ collapsed ? '\u25B6' : '\u25BC' }}</span>
     </div>
 
+    <!-- Issue #689: Live activity bar from task lifecycle messages -->
+    <div v-if="!collapsed && taskActivity" class="subagent-activity-bar">
+      <span v-if="taskActivity.subtype === 'task_notification'" class="activity-icon activity-done">&#x2714;</span>
+      <span v-else class="activity-spinner"></span>
+      <span class="activity-description">{{ activityDescription }}</span>
+      <span v-if="taskActivity.last_tool_name" class="activity-tool-badge">{{ taskActivity.last_tool_name }}</span>
+      <span class="activity-timestamp">{{ activityTime }}</span>
+    </div>
+
     <div v-if="!collapsed" class="subagent-body">
       <!-- Child tools timeline -->
       <ActivityTimeline
@@ -45,6 +54,7 @@ import { useMessageStore } from '@/stores/message'
 import { useSessionStore } from '@/stores/session'
 import { useResourceStore } from '@/stores/resource'
 import { getEffectiveStatusForTool } from '@/composables/useToolStatus'
+import { getRelativeTime } from '@/utils/time'
 import ActivityTimeline from './tools/ActivityTimeline.vue'
 
 const props = defineProps({
@@ -72,9 +82,30 @@ const taskDescription = computed(() => {
   return 'Subagent task'
 })
 
-// Status computation
+// Issue #689: Task activity from message store
+const taskActivity = computed(() => messageStore.getTaskActivity(props.taskToolCall.id))
+
+const activityDescription = computed(() => {
+  if (!taskActivity.value) return ''
+  const desc = taskActivity.value.description || ''
+  return desc.length > 80 ? desc.slice(0, 80) + '...' : desc
+})
+
+const activityTime = computed(() => {
+  if (!taskActivity.value?.timestamp) return ''
+  return getRelativeTime(taskActivity.value.timestamp)
+})
+
+// Status computation — augmented by task activity (Issue #689 Step 4)
 const effectiveStatus = computed(() => {
-  return getEffectiveStatusForTool(props.taskToolCall)
+  const toolStatus = getEffectiveStatusForTool(props.taskToolCall)
+  // If task_notification arrived with completed status before tool result, show completed early
+  if (taskActivity.value?.subtype === 'task_notification' && taskActivity.value?.status === 'completed') {
+    if (['pending', 'executing'].includes(toolStatus)) {
+      return 'completed'
+    }
+  }
+  return toolStatus
 })
 
 const isRunning = computed(() => {
@@ -232,6 +263,61 @@ function openFullResult() {
   font-size: 10px;
   color: #7c3aed;
   flex-shrink: 0;
+}
+
+/* Issue #689: Activity bar */
+.subagent-activity-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  background: #ede9fe;
+  border-top: 1px solid #d8b4fe;
+  font-size: 12px;
+  color: #4c1d95;
+  min-height: 30px;
+}
+
+.activity-spinner {
+  width: 12px;
+  height: 12px;
+  border: 2px solid #d8b4fe;
+  border-top-color: #7c3aed;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  flex-shrink: 0;
+}
+
+.activity-icon.activity-done {
+  color: #059669;
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+.activity-description {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.activity-tool-badge {
+  background: #7c3aed;
+  color: white;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 600;
+  font-family: 'Courier New', monospace;
+  flex-shrink: 0;
+}
+
+.activity-timestamp {
+  color: #7c3aed;
+  font-size: 11px;
+  flex-shrink: 0;
+  opacity: 0.7;
 }
 
 .subagent-body {
