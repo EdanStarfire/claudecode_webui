@@ -138,6 +138,7 @@ export const useScheduleStore = defineStore('schedule', () => {
    */
   async function loadHistory(legionId, scheduleId, limit = 50, offset = 0) {
     try {
+      selectedScheduleId.value = scheduleId
       const data = await api.get(
         `/api/legions/${legionId}/schedules/${scheduleId}/history?limit=${limit}&offset=${offset}`
       )
@@ -177,6 +178,20 @@ export const useScheduleStore = defineStore('schedule', () => {
       _removeSchedule(legionId, event.schedule.schedule_id)
     } else {
       _upsertSchedule(legionId, event.schedule)
+    }
+  }
+
+  /**
+   * Handle WebSocket schedule_execution event (Issue #670)
+   * Prepends execution to history if the matching schedule is selected.
+   */
+  function handleScheduleExecution(legionId, event) {
+    if (!event || !event.execution) return
+
+    const scheduleId = event.schedule_id || event.execution.schedule_id
+    if (selectedScheduleId.value === scheduleId) {
+      // Prepend new execution to history (newest first)
+      executionHistory.value = [event.execution, ...executionHistory.value]
     }
   }
 
@@ -261,5 +276,6 @@ export const useScheduleStore = defineStore('schedule', () => {
     loadHistory,
     runNow,
     handleScheduleEvent,
+    handleScheduleExecution,
   }
 })
