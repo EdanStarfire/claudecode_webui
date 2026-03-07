@@ -54,7 +54,7 @@ import { useMessageStore } from '@/stores/message'
 import { useSessionStore } from '@/stores/session'
 import { useResourceStore } from '@/stores/resource'
 import { getEffectiveStatusForTool } from '@/composables/useToolStatus'
-import { getRelativeTime } from '@/utils/time'
+import { formatTimestamp } from '@/utils/time'
 import ActivityTimeline from './tools/ActivityTimeline.vue'
 
 const props = defineProps({
@@ -93,7 +93,7 @@ const activityDescription = computed(() => {
 
 const activityTime = computed(() => {
   if (!taskActivity.value?.timestamp) return ''
-  return getRelativeTime(taskActivity.value.timestamp)
+  return formatTimestamp(taskActivity.value.timestamp)
 })
 
 // Status computation — augmented by task activity (Issue #689 Step 4)
