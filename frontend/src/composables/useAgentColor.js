@@ -36,6 +36,8 @@ export function getAgentColor(nameSlug) {
   let hash = 0
   for (let i = 0; i < nameSlug.length; i++) {
     hash = ((hash << 5) - hash + nameSlug.charCodeAt(i)) | 0
+    // Bit mixing to prevent clustering for similar names
+    hash = hash ^ (hash >>> 16)
   }
   const index = Math.abs(hash) % AGENT_COLORS.length
   return AGENT_COLORS[index]
