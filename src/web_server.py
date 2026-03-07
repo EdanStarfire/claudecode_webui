@@ -1715,6 +1715,35 @@ class ClaudeWebUI:
                 logger.error(f"Failed to reset session: {e}")
                 raise HTTPException(status_code=500, detail=str(e))
 
+        @self.app.delete("/api/sessions/{session_id}/history")
+        async def erase_session_history(session_id: str):
+            """Erase distilled history files for a session."""
+            try:
+                success = await self.coordinator.erase_history(session_id)
+                return {"success": success}
+            except Exception as e:
+                logger.error(f"Failed to erase history: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @self.app.delete("/api/sessions/{session_id}/archives")
+        async def erase_session_archives(session_id: str):
+            """Erase archive data for a session."""
+            try:
+                success = await self.coordinator.erase_archives(session_id)
+                return {"success": success}
+            except Exception as e:
+                logger.error(f"Failed to erase archives: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+        @self.app.get("/api/sessions/{session_id}/history-archives-status")
+        async def get_history_archives_status(session_id: str):
+            """Check if history and/or archives exist for a session."""
+            try:
+                return await self.coordinator.check_history_archives(session_id)
+            except Exception as e:
+                logger.error(f"Failed to check history/archives status: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
         @self.app.post("/api/sessions/{session_id}/disconnect")
         async def disconnect_session(session_id: str):
             """Disconnect SDK but keep session state (for end session)"""

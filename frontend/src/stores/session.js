@@ -565,6 +565,22 @@ export const useSessionStore = defineStore('session', () => {
     sessionResets.value.set(sessionId, current + 1)
   }
 
+  // ========== HISTORY & ARCHIVE ACTIONS ==========
+
+  async function eraseHistory(sessionId) {
+    const response = await api.delete(`/api/sessions/${sessionId}/history`)
+    return response
+  }
+
+  async function eraseArchives(sessionId) {
+    const response = await api.delete(`/api/sessions/${sessionId}/archives`)
+    return response
+  }
+
+  async function checkHistoryArchivesStatus(sessionId) {
+    return await api.get(`/api/sessions/${sessionId}/history-archives-status`)
+  }
+
   // ========== GHOST AGENT ACTIONS ==========
 
   function addGhostAgent(agentId, agentData) {
@@ -610,6 +626,9 @@ export const useSessionStore = defineStore('session', () => {
     terminateSession,
     getSession,
     storeInitData,
+    eraseHistory,
+    eraseArchives,
+    checkHistoryArchivesStatus,
     addGhostAgent,
     removeGhostAgent,
     registerScrollPositionGetter,

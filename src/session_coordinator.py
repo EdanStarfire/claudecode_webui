@@ -2058,6 +2058,24 @@ class SessionCoordinator:
             return []
         return await self.legion_system.archive_manager.list_project_deleted_agents(project_id)
 
+    async def erase_history(self, session_id: str) -> bool:
+        """Erase distilled history for a session."""
+        if not self.legion_system:
+            return False
+        return await self.legion_system.archive_manager.erase_history(session_id)
+
+    async def erase_archives(self, session_id: str) -> bool:
+        """Erase archives for a session."""
+        if not self.legion_system:
+            return False
+        return await self.legion_system.archive_manager.erase_archives(session_id)
+
+    async def check_history_archives(self, session_id: str) -> dict:
+        """Check existence of history and archives for a session."""
+        if not self.legion_system:
+            return {"has_history": False, "has_archives": False}
+        return await self.legion_system.archive_manager.check_history_archives_exist(session_id)
+
     async def get_session_messages(
         self,
         session_id: str,
