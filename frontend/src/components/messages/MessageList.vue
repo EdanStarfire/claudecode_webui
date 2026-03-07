@@ -431,8 +431,13 @@ function shouldDisplayMessage(message) {
   // Issue #684: Hide SDK "Tool loaded." messages (internal ToolSearch plumbing)
   if (message.type === 'user' && (message.content || '').trim() === 'Tool loaded.') return false
 
-  // Issue #677: Show task lifecycle messages with enriched rendering (SystemMessage.vue)
-  // task_started, task_progress, and task_notification are now displayed as styled pills
+  // Issue #689: Suppress task lifecycle messages — now displayed inside SubagentTimeline cards
+  if (message.type === 'system') {
+    const taskSubtype = message.metadata?.subtype
+    if (['task_started', 'task_progress', 'task_notification'].includes(taskSubtype)) {
+      return false
+    }
+  }
 
   // Note: We do NOT hide 'status' or 'compact_boundary' messages here
   // because they are handled by the compaction event grouping logic above
