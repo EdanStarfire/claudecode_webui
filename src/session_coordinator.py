@@ -1748,6 +1748,16 @@ class SessionCoordinator:
             logger.error(f"Failed to list sessions: {e}")
             return []
 
+    @staticmethod
+    def _extract_agent_name(description: str | None) -> str:
+        """Extract agent name from task description (e.g., 'alpha: You are...' -> 'alpha')."""
+        if not description:
+            return ""
+        colon_idx = description.find(":")
+        if 0 < colon_idx < 50:
+            return description[:colon_idx].strip()
+        return description[:40] + "..." if len(description) > 40 else description
+
     def _convert_stored_message_to_websocket(self, stored_msg: dict[str, Any]) -> dict[str, Any] | None:
         """
         Convert new StoredMessage format (_type discriminator) to WebSocket format.
@@ -1855,8 +1865,8 @@ class SessionCoordinator:
                     block["content"] for block in thinking_blocks
                 )
 
-            # Handle SystemMessage subtypes
-            if _type == "SystemMessage":
+            # Handle SystemMessage subtypes (including Task* subclasses)
+            if _type in ("SystemMessage", "TaskStartedMessage", "TaskProgressMessage", "TaskNotificationMessage"):
                 subtype = data.get("subtype")
                 if subtype:
                     metadata["subtype"] = subtype
@@ -1864,8 +1874,47 @@ class SessionCoordinator:
                 if data.get("data"):
                     metadata["init_data"] = data["data"]
 
+                # Issue #677: Extract task message metadata from stored format
+                if _type == "TaskStartedMessage":
+                    metadata["subtype"] = "task_started"
+                    metadata["task_id"] = data.get("task_id")
+                    metadata["description"] = data.get("description")
+                    metadata["task_session_id"] = data.get("session_id")
+                    metadata["task_type"] = data.get("task_type")
+                    metadata["uuid"] = data.get("uuid")
+                    metadata["tool_use_id"] = data.get("tool_use_id")
+                    agent_name = self._extract_agent_name(data.get("description"))
+                    content = f"Agent spawned: {agent_name}" if agent_name else "Agent spawned"
+                elif _type == "TaskProgressMessage":
+                    metadata["subtype"] = "task_progress"
+                    metadata["task_id"] = data.get("task_id")
+                    metadata["description"] = data.get("description")
+                    metadata["task_session_id"] = data.get("session_id")
+                    metadata["last_tool_name"] = data.get("last_tool_name")
+                    metadata["uuid"] = data.get("uuid")
+                    metadata["tool_use_id"] = data.get("tool_use_id")
+                    if data.get("usage"):
+                        metadata["usage"] = data["usage"]
+                    agent_name = self._extract_agent_name(data.get("description"))
+                    tool = f" [{data.get('last_tool_name')}]" if data.get("last_tool_name") else ""
+                    content = f"Agent progress: {agent_name}{tool}" if agent_name else f"Agent progress{tool}"
+                elif _type == "TaskNotificationMessage":
+                    metadata["subtype"] = "task_notification"
+                    metadata["task_id"] = data.get("task_id")
+                    metadata["status"] = data.get("status")
+                    metadata["summary"] = data.get("summary")
+                    metadata["task_session_id"] = data.get("session_id")
+                    metadata["output_file"] = data.get("output_file")
+                    metadata["uuid"] = data.get("uuid")
+                    metadata["tool_use_id"] = data.get("tool_use_id")
+                    if data.get("usage"):
+                        metadata["usage"] = data["usage"]
+                    status = data.get("status", "unknown")
+                    summary = data.get("summary") or ""
+                    content = f"Agent {status}: {summary}" if summary else f"Agent {status}"
+
                 # Issue #571: Synthesize content for hook messages from stored format
-                if subtype in ("hook_started", "hook_response"):
+                elif subtype in ("hook_started", "hook_response"):
                     hook_data = data.get("data") or {}
                     hook_name = hook_data.get("hook_name", hook_data.get("hookName", "unknown"))
                     hook_event = hook_data.get("hook_event", hook_data.get("hookEvent", ""))

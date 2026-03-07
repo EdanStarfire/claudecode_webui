@@ -428,12 +428,8 @@ function shouldDisplayMessage(message) {
   // Hide system init messages (but NOT status or compact_boundary messages)
   if (message.type === 'system' && subtype === 'init') return false
 
-  // Hide system task_notification messages (background task completion)
-  if (message.type === 'system' && subtype === 'task_notification') return false
-
-  // Hide system task_progress and task_started messages (subagent lifecycle updates)
-  // These are SDK internal messages, not displayable — child tool calls handle visibility
-  if (message.type === 'system' && (subtype === 'task_progress' || subtype === 'task_started')) return false
+  // Issue #677: Show task lifecycle messages with enriched rendering (SystemMessage.vue)
+  // task_started, task_progress, and task_notification are now displayed as styled pills
 
   // Note: We do NOT hide 'status' or 'compact_boundary' messages here
   // because they are handled by the compaction event grouping logic above

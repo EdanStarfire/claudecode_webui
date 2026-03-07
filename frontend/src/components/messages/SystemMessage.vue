@@ -5,21 +5,21 @@
       :class="pillClass"
       @click="toggleExpand"
     >
-      <!-- Task Started -->
+      <!-- Agent Spawned -->
       <template v-if="subtype === 'task_started'">
         <i class="bi bi-play-circle-fill pill-icon task-icon-started"></i>
         <span class="pill-text">{{ displayContent }}</span>
-        <span v-if="taskType" class="pill-badge pill-badge-muted">{{ taskType }}</span>
+        <span v-if="taskTypeLabel" class="pill-badge pill-badge-muted">{{ taskTypeLabel }}</span>
       </template>
 
-      <!-- Task Progress -->
+      <!-- Agent Progress -->
       <template v-else-if="subtype === 'task_progress'">
         <i class="bi bi-fast-forward-fill pill-icon task-icon-progress"></i>
         <span class="pill-text">{{ displayContent }}</span>
         <span v-if="lastToolName" class="pill-badge pill-badge-muted">{{ lastToolName }}</span>
       </template>
 
-      <!-- Task Notification -->
+      <!-- Agent Completed/Failed/Stopped -->
       <template v-else-if="subtype === 'task_notification'">
         <i class="bi pill-icon" :class="notificationIconClass"></i>
         <span class="pill-text">{{ displayContent }}</span>
@@ -71,6 +71,13 @@ const subtype = computed(() => props.message.metadata?.subtype)
 
 // Task-specific computed properties
 const taskType = computed(() => props.message.metadata?.task_type)
+const taskTypeLabel = computed(() => {
+  const typeMap = {
+    'in_process_teammate': 'teammate',
+    'subprocess': 'subprocess',
+  }
+  return typeMap[taskType.value] || taskType.value
+})
 const lastToolName = computed(() => props.message.metadata?.last_tool_name)
 const taskStatus = computed(() => props.message.metadata?.status)
 const taskSessionId = computed(() => props.message.metadata?.task_session_id)

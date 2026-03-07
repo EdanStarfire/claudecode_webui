@@ -104,6 +104,17 @@ class MessageHandler(ABC):
         return metadata
 
 
+def _extract_agent_name(description: str | None) -> str:
+    """Extract agent name from task description (e.g., 'alpha: You are Agent Alpha...' -> 'alpha')."""
+    if not description:
+        return ""
+    colon_idx = description.find(":")
+    if colon_idx > 0 and colon_idx < 50:
+        return description[:colon_idx].strip()
+    # Truncate long descriptions
+    return description[:40] + "..." if len(description) > 40 else description
+
+
 class TaskStartedHandler(MessageHandler):
     """Handler for SDK TaskStartedMessage (SystemMessage subclass)."""
 
@@ -128,9 +139,8 @@ class TaskStartedHandler(MessageHandler):
             metadata["task_type"] = sdk_msg.task_type
             metadata["uuid"] = sdk_msg.uuid
             metadata["tool_use_id"] = sdk_msg.tool_use_id
-            desc = sdk_msg.description or "task"
-            task_type = f" ({sdk_msg.task_type})" if sdk_msg.task_type else ""
-            content = f"Task started: {desc}{task_type}"
+            agent_name = _extract_agent_name(sdk_msg.description)
+            content = f"Agent spawned: {agent_name}" if agent_name else "Agent spawned"
         else:
             stored_meta = message_data.get("metadata") or {}
             metadata.update({
@@ -183,9 +193,9 @@ class TaskProgressHandler(MessageHandler):
             metadata["tool_use_id"] = sdk_msg.tool_use_id
             if sdk_msg.usage:
                 metadata["usage"] = dict(sdk_msg.usage)
-            desc = sdk_msg.description or "task"
-            tool_info = f" (last tool: {sdk_msg.last_tool_name})" if sdk_msg.last_tool_name else ""
-            content = f"Task progress: {desc}{tool_info}"
+            agent_name = _extract_agent_name(sdk_msg.description)
+            tool_info = f" [{sdk_msg.last_tool_name}]" if sdk_msg.last_tool_name else ""
+            content = f"Agent progress: {agent_name}{tool_info}" if agent_name else f"Agent progress{tool_info}"
         else:
             stored_meta = message_data.get("metadata") or {}
             metadata.update({
@@ -242,7 +252,7 @@ class TaskNotificationHandler(MessageHandler):
                 metadata["usage"] = dict(sdk_msg.usage)
             status = sdk_msg.status or "unknown"
             summary = sdk_msg.summary or ""
-            content = f"Task {status}: {summary}" if summary else f"Task {status}"
+            content = f"Agent {status}: {summary}" if summary else f"Agent {status}"
         else:
             stored_meta = message_data.get("metadata") or {}
             metadata.update({
