@@ -13,6 +13,10 @@ Implementation uses Claude Agent SDK's @tool decorator and create_sdk_mcp_server
 Tools are exposed to minions with names like: mcp__legion__send_comm
 """
 
+import asyncio
+import logging
+import uuid
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 try:
@@ -21,6 +25,8 @@ except ImportError:
     # For testing environments without SDK
     tool = None
     create_sdk_mcp_server = None
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from src.legion_system import LegionSystem
@@ -40,6 +46,7 @@ class LegionMCPTools:
             system: LegionSystem instance for accessing other components
         """
         self.system = system
+        self._pending_restarts: set[str] = set()
 
         # Note: No longer creating a shared MCP server here
         # Each minion session gets its own session-specific server
@@ -344,6 +351,26 @@ class LegionMCPTools:
             args["_from_minion_id"] = session_id
             return await self._handle_cancel_schedule(args)
 
+        # ── Session lifecycle tools (Issue #680) ──
+
+        @tool(
+            "restart_session",
+            "Request a restart of your own session. This is useful when you are stuck, "
+            "have accumulated too much context, or need a fresh start to continue work."
+            "\n\n**IMPORTANT:** After calling this tool, you MUST stop all work immediately. "
+            "Do not execute any more tools or produce further output. The system will "
+            "restart your session and send a continuation message so you can resume."
+            "\n\nParameters:"
+            "\n- reason (optional): Why you need to restart (logged for audit)",
+            {
+                "reason": str,
+            }
+        )
+        async def restart_session_tool(args: dict[str, Any]) -> dict[str, Any]:
+            """Request a session restart."""
+            args["_from_minion_id"] = session_id
+            return await self._handle_restart_session(args)
+
         # Create and return MCP server with all tools
         return create_sdk_mcp_server(
             name="legion",
@@ -363,6 +390,7 @@ class LegionMCPTools:
                 pause_schedule_tool,
                 resume_schedule_tool,
                 cancel_schedule_tool,
+                restart_session_tool,
             ]
         )
 
@@ -2063,3 +2091,143 @@ class LegionMCPTools:
                 "content": [{"type": "text", "text": f"Unexpected error cancelling schedule: {e}"}],
                 "is_error": True,
             }
+
+    # ── Session Lifecycle Handlers (Issue #680) ──
+
+    async def _handle_restart_session(self, args: dict[str, Any]) -> dict[str, Any]:
+        """Handle restart_session tool call."""
+        from src.session_manager import SessionState
+
+        session_id = args.get("_from_minion_id")
+        reason = args.get("reason", "").strip()
+
+        if not session_id:
+            return {
+                "content": [{"type": "text", "text": "Error: Unable to determine session ID"}],
+                "is_error": True,
+            }
+
+        # Check session exists and is active
+        session_info = await self.system.session_coordinator.session_manager.get_session_info(
+            session_id
+        )
+        if not session_info:
+            return {
+                "content": [{"type": "text", "text": "Error: Session not found"}],
+                "is_error": True,
+            }
+        if session_info.state != SessionState.ACTIVE:
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": f"Error: Session is not active (state: {session_info.state.value})"
+                }],
+                "is_error": True,
+            }
+
+        # Prevent duplicate restarts
+        if session_id in self._pending_restarts:
+            return {
+                "content": [{"type": "text", "text": "Error: Restart already in progress"}],
+                "is_error": True,
+            }
+
+        restart_id = str(uuid.uuid4())
+        self._pending_restarts.add(session_id)
+
+        logger.info(
+            f"Session {session_id} restart initiated (restart_id={restart_id}, reason={reason})"
+        )
+
+        # Spawn background monitor task
+        asyncio.create_task(self._restart_monitor(session_id, restart_id, reason))
+
+        return {
+            "content": [{
+                "type": "text",
+                "text": (
+                    "Restart initiated. STOP all work immediately and wait for session restart. "
+                    "Do not execute any more tools or produce further output. "
+                    f"Restart ID: {restart_id}"
+                ),
+            }],
+            "is_error": False,
+        }
+
+    async def _restart_monitor(self, session_id: str, restart_id: str, reason: str) -> None:
+        """Background task that waits for session idle then triggers restart."""
+        timestamp = datetime.now(UTC).isoformat()
+        coordinator = self.system.session_coordinator
+
+        try:
+            # Poll is_processing every 2 seconds for up to 30 seconds
+            for _ in range(15):
+                await asyncio.sleep(2)
+
+                session_info = await coordinator.session_manager.get_session_info(session_id)
+                if not session_info:
+                    logger.warning(f"Session {session_id} disappeared during restart monitor")
+                    return
+
+                if not session_info.is_processing:
+                    # Session is idle — proceed with restart
+                    permission_callback = None
+                    if self.system.permission_callback_factory:
+                        permission_callback = self.system.permission_callback_factory(session_id)
+
+                    success = await coordinator.restart_session(
+                        session_id, permission_callback
+                    )
+
+                    if success:
+                        logger.info(
+                            f"Session {session_id} self-restarted successfully "
+                            f"(restart_id={restart_id}, reason={reason})"
+                        )
+
+                        # Broadcast WebSocket event
+                        if self.system.ui_websocket_manager:
+                            await self.system.ui_websocket_manager.broadcast_to_all({
+                                "type": "session_self_restart",
+                                "data": {
+                                    "session_id": session_id,
+                                    "restart_id": restart_id,
+                                    "reason": reason,
+                                    "timestamp": timestamp,
+                                },
+                            })
+
+                        # Queue continuation message
+                        continuation = (
+                            "Your session has been restarted successfully. "
+                            "Continue with your previous work."
+                        )
+                        if reason:
+                            continuation += f" Restart reason: {reason}"
+
+                        await coordinator.enqueue_message(
+                            session_id=session_id,
+                            content=continuation,
+                            reset_session=False,
+                        )
+                    else:
+                        logger.error(
+                            f"Session {session_id} restart failed (restart_id={restart_id})"
+                        )
+
+                    return
+
+            # Timeout — session still processing after 30 seconds
+            logger.warning(
+                f"Session {session_id} restart timed out (restart_id={restart_id})"
+            )
+            await coordinator.send_message(
+                session_id,
+                "Session restart timed out after 30 seconds — the session was still processing. "
+                "If you still need to restart, call restart_session() again.",
+            )
+
+        except Exception as e:
+            logger.error(f"Restart monitor error for session {session_id}: {e}")
+        finally:
+            self._pending_restarts.discard(session_id)
