@@ -2,19 +2,42 @@
   <div class="msg-wrapper msg-system">
     <div
       class="msg-pill"
-      :class="{
-        'pill-compaction': isCompactionStatus,
-        'pill-stderr': isStderr,
-        'pill-hook': isHook && !isHookError,
-        'pill-hook-error': isHookError,
-        'pill-expandable': isHook
-      }"
+      :class="pillClass"
       @click="toggleExpand"
     >
-      <span v-if="isStderr" class="pill-icon">&#x26A0;&#xFE0F;</span>
-      <span v-else-if="isCompactionStatus" class="pill-icon">&#x1F5DC;&#xFE0F;</span>
-      <span v-else-if="isHook" class="pill-icon">&#x2699;&#xFE0F;</span>
-      <span class="pill-text">{{ displayContent }}</span>
+      <!-- Agent Spawned -->
+      <template v-if="subtype === 'task_started'">
+        <i class="bi bi-play-circle-fill pill-icon task-icon-started"></i>
+        <span class="pill-text">{{ displayContent }}</span>
+        <span v-if="taskTypeLabel" class="pill-badge pill-badge-muted">{{ taskTypeLabel }}</span>
+      </template>
+
+      <!-- Agent Progress -->
+      <template v-else-if="subtype === 'task_progress'">
+        <i class="bi bi-fast-forward-fill pill-icon task-icon-progress"></i>
+        <span class="pill-text">{{ displayContent }}</span>
+        <span v-if="lastToolName" class="pill-badge pill-badge-muted">{{ lastToolName }}</span>
+      </template>
+
+      <!-- Agent Completed/Failed/Stopped -->
+      <template v-else-if="subtype === 'task_notification'">
+        <i class="bi pill-icon" :class="notificationIconClass"></i>
+        <span class="pill-text">{{ displayContent }}</span>
+      </template>
+
+      <!-- Default system messages -->
+      <template v-else>
+        <span v-if="isStderr" class="pill-icon">&#x26A0;&#xFE0F;</span>
+        <span v-else-if="isCompactionStatus" class="pill-icon">&#x1F5DC;&#xFE0F;</span>
+        <span v-else-if="isHook" class="pill-icon">&#x2699;&#xFE0F;</span>
+        <span class="pill-text">{{ displayContent }}</span>
+      </template>
+
+      <!-- Cross-session badge -->
+      <span v-if="isCrossSession" class="pill-badge pill-badge-session" :title="taskSessionId">
+        {{ truncatedSessionId }}
+      </span>
+
       <span class="pill-sep">&middot;</span>
       <span class="pill-time">{{ formattedTimestamp }}</span>
       <span v-if="isHook" class="pill-chevron" :class="{ 'chevron-open': expanded }">&#x25B6;</span>
@@ -28,6 +51,7 @@
 <script setup>
 import { computed, ref } from 'vue'
 import { formatTimestamp } from '@/utils/time'
+import { useSessionStore } from '@/stores/session'
 
 const props = defineProps({
   message: {
@@ -36,35 +60,90 @@ const props = defineProps({
   }
 })
 
+const sessionStore = useSessionStore()
 const expanded = ref(false)
 
 const formattedTimestamp = computed(() => {
   return formatTimestamp(props.message.timestamp)
 })
 
+const subtype = computed(() => props.message.metadata?.subtype)
+
+// Task-specific computed properties
+const taskType = computed(() => props.message.metadata?.task_type)
+const taskTypeLabel = computed(() => {
+  const typeMap = {
+    'in_process_teammate': 'teammate',
+    'subprocess': 'subprocess',
+  }
+  return typeMap[taskType.value] || taskType.value
+})
+const lastToolName = computed(() => props.message.metadata?.last_tool_name)
+const taskStatus = computed(() => props.message.metadata?.status)
+const taskSessionId = computed(() => props.message.metadata?.task_session_id)
+
+// Cross-session detection
+const isCrossSession = computed(() => {
+  if (!taskSessionId.value) return false
+  const currentSession = sessionStore.sessions.get(sessionStore.currentSessionId)
+  const currentCcSessionId = currentSession?.claude_code_session_id
+  if (!currentCcSessionId) return false
+  return taskSessionId.value !== currentCcSessionId
+})
+
+const truncatedSessionId = computed(() => {
+  if (!taskSessionId.value) return ''
+  return taskSessionId.value.length > 12
+    ? taskSessionId.value.substring(0, 12) + '...'
+    : taskSessionId.value
+})
+
+// Task notification icon
+const notificationIconClass = computed(() => {
+  switch (taskStatus.value) {
+    case 'completed': return 'bi-check-circle-fill task-icon-completed'
+    case 'failed': return 'bi-x-circle-fill task-icon-failed'
+    case 'stopped': return 'bi-dash-circle-fill task-icon-stopped'
+    default: return 'bi-info-circle-fill task-icon-progress'
+  }
+})
+
+// Pill class computation
+const pillClass = computed(() => ({
+  'pill-compaction': isCompactionStatus.value,
+  'pill-stderr': isStderr.value,
+  'pill-hook': isHook.value && !isHookError.value,
+  'pill-hook-error': isHookError.value,
+  'pill-expandable': isHook.value,
+  'pill-task-started': subtype.value === 'task_started',
+  'pill-task-progress': subtype.value === 'task_progress',
+  'pill-task-completed': subtype.value === 'task_notification' && taskStatus.value === 'completed',
+  'pill-task-failed': subtype.value === 'task_notification' && taskStatus.value === 'failed',
+  'pill-task-stopped': subtype.value === 'task_notification' && taskStatus.value === 'stopped',
+}))
+
 // Check if this is a compaction status message
 const isCompactionStatus = computed(() => {
-  return props.message.metadata?.subtype === 'status' &&
+  return subtype.value === 'status' &&
          props.message.metadata?.init_data?.status === 'compacting'
 })
 
 // Check if this is an error-class message (stderr or session failure)
 const isStderr = computed(() => {
-  const subtype = props.message.metadata?.subtype
-  return subtype === 'stderr' || subtype === 'session_failed'
+  const st = subtype.value
+  return st === 'stderr' || st === 'session_failed'
 })
 
 // Check if this is a hook message (hook_started or hook_response)
 const isHook = computed(() => {
-  const subtype = props.message.metadata?.subtype
-  return subtype === 'hook_started' || subtype === 'hook_response'
+  const st = subtype.value
+  return st === 'hook_started' || st === 'hook_response'
 })
 
 // Check if this is a hook error (non-zero exit code)
 const isHookError = computed(() => {
   if (!isHook.value) return false
-  const subtype = props.message.metadata?.subtype
-  if (subtype !== 'hook_response') return false
+  if (subtype.value !== 'hook_response') return false
   const exitCode = props.message.metadata?.exit_code ?? props.message.metadata?.init_data?.exit_code ?? props.message.metadata?.init_data?.exitCode
   return exitCode !== undefined && exitCode !== null && exitCode !== 0
 })
@@ -159,6 +238,32 @@ function toggleExpand() {
   color: #991b1b;
 }
 
+/* Task message pill styles */
+.pill-task-started {
+  background: #f0fdf4;
+  border-color: #bbf7d0;
+}
+
+.pill-task-progress {
+  background: #eff6ff;
+  border-color: #bfdbfe;
+}
+
+.pill-task-completed {
+  background: #f0fdf4;
+  border-color: #bbf7d0;
+}
+
+.pill-task-failed {
+  background: #fef2f2;
+  border-color: #fecaca;
+}
+
+.pill-task-stopped {
+  background: #fffbeb;
+  border-color: #fde68a;
+}
+
 .pill-stderr .pill-text {
   font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
   color: #991b1b;
@@ -168,6 +273,27 @@ function toggleExpand() {
 
 .pill-icon {
   font-size: 12px;
+}
+
+/* Task icon colors */
+.task-icon-started {
+  color: #16a34a;
+}
+
+.task-icon-progress {
+  color: #2563eb;
+}
+
+.task-icon-completed {
+  color: #16a34a;
+}
+
+.task-icon-failed {
+  color: #dc2626;
+}
+
+.task-icon-stopped {
+  color: #ca8a04;
 }
 
 .pill-text {
@@ -187,6 +313,24 @@ function toggleExpand() {
   font-size: 11px;
   color: #94a3b8;
   white-space: nowrap;
+}
+
+.pill-badge {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 10px;
+  white-space: nowrap;
+}
+
+.pill-badge-muted {
+  background: #e2e8f0;
+  color: #64748b;
+}
+
+.pill-badge-session {
+  background: #dbeafe;
+  color: #1e40af;
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
 }
 
 .pill-chevron {

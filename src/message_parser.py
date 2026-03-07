@@ -14,6 +14,9 @@ from claude_agent_sdk import (
     AssistantMessage,
     ResultMessage,
     SystemMessage,
+    TaskNotificationMessage,
+    TaskProgressMessage,
+    TaskStartedMessage,
     TextBlock,
     ThinkingBlock,
     ToolResultBlock,
@@ -99,6 +102,183 @@ class MessageHandler(ABC):
     def _standardize_metadata_fields(self, metadata: dict[str, Any], message_data: dict[str, Any]) -> dict[str, Any]:
         """Standardize metadata fields."""
         return metadata
+
+
+def _extract_agent_name(description: str | None) -> str:
+    """Extract agent name from task description (e.g., 'alpha: You are Agent Alpha...' -> 'alpha')."""
+    if not description:
+        return ""
+    colon_idx = description.find(":")
+    if colon_idx > 0 and colon_idx < 50:
+        return description[:colon_idx].strip()
+    # Truncate long descriptions
+    return description[:40] + "..." if len(description) > 40 else description
+
+
+class TaskStartedHandler(MessageHandler):
+    """Handler for SDK TaskStartedMessage (SystemMessage subclass)."""
+
+    def can_handle(self, message_data: dict[str, Any]) -> bool:
+        if "sdk_message" in message_data:
+            return isinstance(message_data["sdk_message"], TaskStartedMessage)
+        return (message_data.get("type") == "system"
+                and (message_data.get("metadata") or {}).get("subtype") == "task_started")
+
+    def _extract_business_data(self, message_data: dict[str, Any]) -> dict[str, Any]:
+        metadata = {
+            "subtype": "task_started",
+            "session_id": message_data.get("session_id"),
+        }
+        content = ""
+
+        if "sdk_message" in message_data and isinstance(message_data["sdk_message"], TaskStartedMessage):
+            sdk_msg = message_data["sdk_message"]
+            metadata["task_id"] = sdk_msg.task_id
+            metadata["description"] = sdk_msg.description
+            metadata["task_session_id"] = sdk_msg.session_id
+            metadata["task_type"] = sdk_msg.task_type
+            metadata["uuid"] = sdk_msg.uuid
+            metadata["tool_use_id"] = sdk_msg.tool_use_id
+            agent_name = _extract_agent_name(sdk_msg.description)
+            content = f"Agent spawned: {agent_name}" if agent_name else "Agent spawned"
+        else:
+            stored_meta = message_data.get("metadata") or {}
+            metadata.update({
+                "task_id": stored_meta.get("task_id"),
+                "description": stored_meta.get("description"),
+                "task_session_id": stored_meta.get("task_session_id"),
+                "task_type": stored_meta.get("task_type"),
+                "uuid": stored_meta.get("uuid"),
+                "tool_use_id": stored_meta.get("tool_use_id"),
+            })
+            content = message_data.get("content", "Task started")
+
+        return {"content": content, "metadata": metadata}
+
+    def parse(self, message_data: dict[str, Any]) -> ParsedMessage:
+        business_data = self._extract_business_data(message_data)
+        return ParsedMessage(
+            type=MessageType.SYSTEM,
+            timestamp=message_data.get("timestamp", time.time()),
+            session_id=message_data.get("session_id"),
+            content=business_data["content"],
+            raw_data=message_data,
+            metadata=self._standardize_metadata_fields(business_data["metadata"], message_data),
+        )
+
+
+class TaskProgressHandler(MessageHandler):
+    """Handler for SDK TaskProgressMessage (SystemMessage subclass)."""
+
+    def can_handle(self, message_data: dict[str, Any]) -> bool:
+        if "sdk_message" in message_data:
+            return isinstance(message_data["sdk_message"], TaskProgressMessage)
+        return (message_data.get("type") == "system"
+                and (message_data.get("metadata") or {}).get("subtype") == "task_progress")
+
+    def _extract_business_data(self, message_data: dict[str, Any]) -> dict[str, Any]:
+        metadata = {
+            "subtype": "task_progress",
+            "session_id": message_data.get("session_id"),
+        }
+        content = ""
+
+        if "sdk_message" in message_data and isinstance(message_data["sdk_message"], TaskProgressMessage):
+            sdk_msg = message_data["sdk_message"]
+            metadata["task_id"] = sdk_msg.task_id
+            metadata["description"] = sdk_msg.description
+            metadata["task_session_id"] = sdk_msg.session_id
+            metadata["last_tool_name"] = sdk_msg.last_tool_name
+            metadata["uuid"] = sdk_msg.uuid
+            metadata["tool_use_id"] = sdk_msg.tool_use_id
+            if sdk_msg.usage:
+                metadata["usage"] = dict(sdk_msg.usage)
+            agent_name = _extract_agent_name(sdk_msg.description)
+            tool_info = f" [{sdk_msg.last_tool_name}]" if sdk_msg.last_tool_name else ""
+            content = f"Agent progress: {agent_name}{tool_info}" if agent_name else f"Agent progress{tool_info}"
+        else:
+            stored_meta = message_data.get("metadata") or {}
+            metadata.update({
+                "task_id": stored_meta.get("task_id"),
+                "description": stored_meta.get("description"),
+                "task_session_id": stored_meta.get("task_session_id"),
+                "last_tool_name": stored_meta.get("last_tool_name"),
+                "uuid": stored_meta.get("uuid"),
+                "tool_use_id": stored_meta.get("tool_use_id"),
+                "usage": stored_meta.get("usage"),
+            })
+            content = message_data.get("content", "Task progress")
+
+        return {"content": content, "metadata": metadata}
+
+    def parse(self, message_data: dict[str, Any]) -> ParsedMessage:
+        business_data = self._extract_business_data(message_data)
+        return ParsedMessage(
+            type=MessageType.SYSTEM,
+            timestamp=message_data.get("timestamp", time.time()),
+            session_id=message_data.get("session_id"),
+            content=business_data["content"],
+            raw_data=message_data,
+            metadata=self._standardize_metadata_fields(business_data["metadata"], message_data),
+        )
+
+
+class TaskNotificationHandler(MessageHandler):
+    """Handler for SDK TaskNotificationMessage (SystemMessage subclass)."""
+
+    def can_handle(self, message_data: dict[str, Any]) -> bool:
+        if "sdk_message" in message_data:
+            return isinstance(message_data["sdk_message"], TaskNotificationMessage)
+        return (message_data.get("type") == "system"
+                and (message_data.get("metadata") or {}).get("subtype") == "task_notification")
+
+    def _extract_business_data(self, message_data: dict[str, Any]) -> dict[str, Any]:
+        metadata = {
+            "subtype": "task_notification",
+            "session_id": message_data.get("session_id"),
+        }
+        content = ""
+
+        if "sdk_message" in message_data and isinstance(message_data["sdk_message"], TaskNotificationMessage):
+            sdk_msg = message_data["sdk_message"]
+            metadata["task_id"] = sdk_msg.task_id
+            metadata["status"] = sdk_msg.status
+            metadata["summary"] = sdk_msg.summary
+            metadata["task_session_id"] = sdk_msg.session_id
+            metadata["output_file"] = sdk_msg.output_file
+            metadata["uuid"] = sdk_msg.uuid
+            metadata["tool_use_id"] = sdk_msg.tool_use_id
+            if sdk_msg.usage:
+                metadata["usage"] = dict(sdk_msg.usage)
+            status = sdk_msg.status or "unknown"
+            summary = sdk_msg.summary or ""
+            content = f"Agent {status}: {summary}" if summary else f"Agent {status}"
+        else:
+            stored_meta = message_data.get("metadata") or {}
+            metadata.update({
+                "task_id": stored_meta.get("task_id"),
+                "status": stored_meta.get("status"),
+                "summary": stored_meta.get("summary"),
+                "task_session_id": stored_meta.get("task_session_id"),
+                "output_file": stored_meta.get("output_file"),
+                "uuid": stored_meta.get("uuid"),
+                "tool_use_id": stored_meta.get("tool_use_id"),
+                "usage": stored_meta.get("usage"),
+            })
+            content = message_data.get("content", "Task notification")
+
+        return {"content": content, "metadata": metadata}
+
+    def parse(self, message_data: dict[str, Any]) -> ParsedMessage:
+        business_data = self._extract_business_data(message_data)
+        return ParsedMessage(
+            type=MessageType.SYSTEM,
+            timestamp=message_data.get("timestamp", time.time()),
+            session_id=message_data.get("session_id"),
+            content=business_data["content"],
+            raw_data=message_data,
+            metadata=self._standardize_metadata_fields(business_data["metadata"], message_data),
+        )
 
 
 class SystemMessageHandler(MessageHandler):
@@ -1273,6 +1453,10 @@ class MessageParser:
     def _register_default_handlers(self) -> None:
         """Register the default set of message handlers."""
         default_handlers = [
+            # Task message handlers (must precede SystemMessageHandler since they are subclasses)
+            TaskStartedHandler(),
+            TaskProgressHandler(),
+            TaskNotificationHandler(),
             # SDK specific handlers
             SystemMessageHandler(),
             AssistantMessageHandler(),

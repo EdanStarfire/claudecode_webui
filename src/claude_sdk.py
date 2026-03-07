@@ -27,6 +27,9 @@ try:
         PermissionResultDeny,
         ResultMessage,
         SystemMessage,
+        TaskNotificationMessage,
+        TaskProgressMessage,
+        TaskStartedMessage,
         TextBlock,
         ToolPermissionContext,
         UserMessage,
@@ -42,6 +45,9 @@ except ImportError:
     UserMessage = None
     SystemMessage = None
     ResultMessage = None
+    TaskStartedMessage = None
+    TaskProgressMessage = None
+    TaskNotificationMessage = None
     TextBlock = None
 
 # Get specialized loggers for SDK debugging
