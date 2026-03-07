@@ -428,6 +428,9 @@ function shouldDisplayMessage(message) {
   // Hide system init messages (but NOT status or compact_boundary messages)
   if (message.type === 'system' && subtype === 'init') return false
 
+  // Issue #684: Hide SDK "Tool loaded." messages (internal ToolSearch plumbing)
+  if (message.type === 'user' && (message.content || '').trim() === 'Tool loaded.') return false
+
   // Issue #677: Show task lifecycle messages with enriched rendering (SystemMessage.vue)
   // task_started, task_progress, and task_notification are now displayed as styled pills
 
