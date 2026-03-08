@@ -462,10 +462,11 @@ class CommRouter:
             except Exception as e:
                 legion_logger.error(f"Failed to broadcast comm {comm.comm_id} to WebSocket: {e}")
 
-        # Issue #699: Push UI notification for report/question comms
-        # This fires on the global UI WebSocket so sounds play regardless of view
+        # Issue #699: Push UI notification for user-facing comms
+        # This fires on the global UI WebSocket so sounds play regardless of view.
+        # Exclude SYSTEM/SPAWN/DISPOSE (internal lifecycle) comms.
         if legion_id and self._ui_notification_callback:
-            if comm.comm_type in (CommType.REPORT, CommType.QUESTION):
+            if comm.comm_type not in (CommType.SYSTEM, CommType.SPAWN, CommType.DISPOSE):
                 try:
                     await self._ui_notification_callback(comm)
                 except Exception as e:
