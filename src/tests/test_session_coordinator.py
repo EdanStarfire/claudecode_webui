@@ -154,18 +154,6 @@ class TestSessionCoordinator:
         assert success is False
 
     @pytest.mark.asyncio
-    async def test_pause_session(self, temp_coordinator, sample_session_config):
-        """Test pausing a session through coordinator."""
-        coordinator = temp_coordinator
-
-        session_id = await coordinator.create_session(**sample_session_config)
-
-        # Mock session manager to simulate successful pause
-        with patch.object(coordinator.session_manager, 'pause_session', return_value=True):
-            success = await coordinator.pause_session(session_id)
-            assert success is True
-
-    @pytest.mark.asyncio
     async def test_terminate_session(self, temp_coordinator, sample_session_config):
         """Test terminating a session through coordinator."""
         coordinator = temp_coordinator

@@ -182,37 +182,6 @@ class TestSessionManager:
         assert success is False
 
     @pytest.mark.asyncio
-    async def test_pause_session(self, temp_session_manager, sample_session_config):
-        """Test session pause functionality."""
-        manager = temp_session_manager
-
-        session_id = str(uuid.uuid4())
-        await manager.create_session(session_id, **sample_session_config)
-        await manager.start_session(session_id)
-
-        # Manually transition to ACTIVE state to simulate SDK fully started
-        await manager._update_session_state(session_id, SessionState.ACTIVE)
-
-        success = await manager.pause_session(session_id)
-
-        assert success is True
-
-        session_info = manager._active_sessions[session_id]
-        assert session_info.state == SessionState.PAUSED
-
-    @pytest.mark.asyncio
-    async def test_pause_invalid_state(self, temp_session_manager, sample_session_config):
-        """Test pausing session in invalid state."""
-        manager = temp_session_manager
-
-        session_id = str(uuid.uuid4())
-        await manager.create_session(session_id, **sample_session_config)
-        # Try to pause without starting
-        success = await manager.pause_session(session_id)
-
-        assert success is False
-
-    @pytest.mark.asyncio
     async def test_terminate_session(self, temp_session_manager, sample_session_config):
         """Test session termination."""
         manager = temp_session_manager
@@ -333,8 +302,8 @@ class TestSessionManager:
         session_id = str(uuid.uuid4())
         await manager.create_session(session_id, **sample_session_config)
 
-        # Try to pause without starting
-        success = await manager.pause_session(session_id)
+        # Try to mark as active without starting — should fail gracefully
+        success = await manager.mark_session_active(session_id)
         assert success is False
 
         session_info = manager._active_sessions[session_id]

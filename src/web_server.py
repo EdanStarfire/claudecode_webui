@@ -1148,16 +1148,6 @@ class ClaudeWebUI:
                 logger.exception("Failed to start session")
                 raise HTTPException(status_code=500, detail=str(e))
 
-        @self.app.post("/api/sessions/{session_id}/pause")
-        async def pause_session(session_id: str):
-            """Pause a session"""
-            try:
-                success = await self.coordinator.pause_session(session_id)
-                return {"success": success}
-            except Exception as e:
-                logger.exception("Failed to pause session")
-                raise HTTPException(status_code=500, detail=str(e))
-
         @self.app.post("/api/sessions/{session_id}/terminate")
         async def terminate_session(session_id: str):
             """Terminate a session"""
