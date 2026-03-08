@@ -621,7 +621,7 @@ class MockClaudeSDK:
                 await self._safe_callback(self.error_callback, "startup_failed", e)
             return False
 
-    async def send_message(self, message: str, **kwargs) -> bool:
+    async def send_message(self, message: str, metadata: dict | None = None) -> bool:
         """
         Process a user message.
 
