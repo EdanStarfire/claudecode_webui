@@ -1,15 +1,18 @@
 """
-Shared fixtures for Legion MCP integration tests.
+Shared fixtures for Legion MCP and REST API integration tests.
 
 Provides:
 - legion_test_env: Complete test environment with real LegionSystem
+- api_integration_env: Full FastAPI app with TestClient for REST API testing
 - --retain-test-data flag for debugging
 """
 
 import shutil
+import uuid
 from pathlib import Path
 
 import pytest
+from httpx import ASGITransport, AsyncClient
 
 from src.session_coordinator import SessionCoordinator
 
@@ -71,7 +74,6 @@ async def legion_test_env(request):
             SessionInfo of created minion (in ACTIVE state)
         """
         import asyncio
-        import uuid
 
         from src.session_manager import SessionState
 
@@ -148,6 +150,126 @@ async def legion_test_env(request):
         except Exception as e:
             # Log but don't fail cleanup
             print(f"Warning: Test cleanup failed: {e}")
+
+
+@pytest.fixture
+async def api_integration_env(request, tmp_path):
+    """
+    Full FastAPI app with httpx.AsyncClient for REST API integration testing.
+
+    Provides:
+    - app: FastAPI application instance (ClaudeWebUI)
+    - client: httpx.AsyncClient for HTTP requests
+    - coordinator: Real SessionCoordinator with MockClaudeSDK factory
+    - project_manager: Real ProjectManager
+    - data_dir: Path to isolated temp data directory
+    - create_test_project: Helper to create a project
+    - create_test_session: Helper to create a session in a project
+    - create_test_legion_project: Helper to create a multi-agent project
+    - create_test_minion: Helper to create a minion in a legion project
+    """
+    from src.mock_sdk import MockClaudeSDK
+    from src.web_server import ClaudeWebUI
+
+    data_dir = tmp_path / "test_data_api"
+    data_dir.mkdir()
+
+    fixtures_dir = Path(__file__).parent.parent / "fixtures"
+
+    webui = ClaudeWebUI(data_dir=data_dir)
+    await webui.initialize()
+
+    # Inject a lenient mock SDK factory: resolves fixture names when available,
+    # falls back to a no-recording mock for CRUD-only sessions.
+    def _lenient_mock_factory(session_id, working_directory, **kwargs):
+        session_name = kwargs.pop("session_name", None)
+        if session_name:
+            candidate = fixtures_dir / session_name
+            if candidate.is_dir():
+                kwargs["session_dir"] = str(candidate)
+        return MockClaudeSDK(
+            session_id=session_id,
+            working_directory=working_directory,
+            **kwargs,
+        )
+
+    webui.coordinator.set_sdk_factory(_lenient_mock_factory)
+
+    coordinator = webui.coordinator
+    project_manager = coordinator.project_manager
+
+    transport = ASGITransport(app=webui.app)
+    client = AsyncClient(transport=transport, base_url="http://testserver")
+
+    # --- Helper functions ---
+
+    async def create_test_project(name="Test Project", **kwargs):
+        """Create a project via the API and return the response dict."""
+        payload = {
+            "name": name,
+            "working_directory": str(tmp_path),
+            **kwargs,
+        }
+        resp = await client.post("/api/projects", json=payload)
+        assert resp.status_code == 200, f"create_test_project failed: {resp.text}"
+        return resp.json()["project"]
+
+    async def create_test_session(project_id, name="Test Session", **kwargs):
+        """Create a session in a project via the API and return the session info dict."""
+        payload = {
+            "project_id": project_id,
+            "name": name,
+            **kwargs,
+        }
+        resp = await client.post("/api/sessions", json=payload)
+        assert resp.status_code == 200, f"create_test_session failed: {resp.text}"
+        session_id = resp.json()["session_id"]
+        # Fetch full session info
+        resp2 = await client.get(f"/api/sessions/{session_id}")
+        assert resp2.status_code == 200
+        return resp2.json()["session"]
+
+    async def create_test_legion_project(name="Test Legion", **kwargs):
+        """Create a multi-agent project via the API and return the response dict."""
+        return await create_test_project(name=name, **kwargs)
+
+    async def create_test_minion(legion_id, name="Test Minion", role="Worker", **kwargs):
+        """Create a minion in a legion project via the API and return the response dict."""
+        payload = {
+            "name": name,
+            "role": role,
+            **kwargs,
+        }
+        resp = await client.post(f"/api/legions/{legion_id}/minions", json=payload)
+        assert resp.status_code == 200, f"create_test_minion failed: {resp.text}"
+        return resp.json()["session"]
+
+    env = {
+        "app": webui.app,
+        "webui": webui,
+        "client": client,
+        "coordinator": coordinator,
+        "project_manager": project_manager,
+        "data_dir": data_dir,
+        "fixtures_dir": fixtures_dir,
+        "create_test_project": create_test_project,
+        "create_test_session": create_test_session,
+        "create_test_legion_project": create_test_legion_project,
+        "create_test_minion": create_test_minion,
+    }
+
+    yield env
+
+    # Cleanup
+    await client.aclose()
+    try:
+        for session_id in list(coordinator._active_sdks.keys()):
+            try:
+                await coordinator.terminate_session(session_id)
+            except Exception:
+                pass
+    except Exception:
+        pass
 
 
 def pytest_addoption(parser):
