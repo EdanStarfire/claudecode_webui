@@ -553,6 +553,12 @@ export const useWebSocketStore = defineStore('websocket', () => {
           if (wasProcessing && !payload.data.session.is_processing) {
             notify('task_complete', { sessionName: payload.data.session.name || 'Session' })
           }
+          // Issue #699: Permission prompt notification from global state change
+          // This fires for ALL sessions (UI WebSocket is always connected),
+          // replacing the session-scoped notify in message.js handleToolCall()
+          if (newState === 'paused') {
+            notify('permission_prompt', { sessionName: payload.data.session.name || 'Session' })
+          }
         }
         break
 
@@ -585,6 +591,16 @@ export const useWebSocketStore = defineStore('websocket', () => {
         // Remove project (payload.data contains {project_id: "..."})
         if (payload.data && payload.data.project_id) {
           projectStore.projects.delete(payload.data.project_id)
+        }
+        break
+
+      // Issue #699: Backend-pushed notification events (reusable pattern)
+      case 'notification':
+        if (payload.data?.event_type === 'minion_comm') {
+          notify('minion_comm', {
+            commType: payload.data.comm_type,
+            fromMinion: payload.data.from_minion_name || 'Minion'
+          })
         }
         break
 
@@ -789,15 +805,8 @@ export const useWebSocketStore = defineStore('websocket', () => {
           if (payload.comm) {
             legionStore.addComm(legionId, payload.comm)
             console.log('Legion WebSocket: Received new comm', payload.comm)
-
-            // Issue #643: Notify on report/question comms
-            const commType = payload.comm.comm_type || payload.comm.type
-            if (['report', 'question'].includes(commType)) {
-              notify('minion_comm', {
-                commType,
-                fromMinion: payload.comm.from_minion_name || payload.comm.from_name || 'Minion'
-              })
-            }
+            // Issue #699: Comm notifications now driven by backend via UI WebSocket
+            // 'notification' event (see handleUIMessage), removing frontend-triggered notify
           }
           break
 

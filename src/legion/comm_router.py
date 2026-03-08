@@ -42,6 +42,7 @@ class CommRouter:
         """
         self.system = system
         self._comm_broadcast_callback = None  # Callback for broadcasting new comms via WebSocket
+        self._ui_notification_callback = None  # Callback for UI notification events (Issue #699)
 
     async def get_visible_minions(self, caller_id: str) -> list[str]:
         """
@@ -124,6 +125,18 @@ class CommRouter:
             callback: Async function(legion_id, comm) to broadcast comm events
         """
         self._comm_broadcast_callback = callback
+
+    def set_ui_notification_callback(self, callback):
+        """
+        Set callback for pushing notification events to the UI WebSocket.
+
+        Issue #699: Decouples comm notifications from Legion WebSocket,
+        ensuring sounds fire even when the timeline view is not open.
+
+        Args:
+            callback: Async function(comm) to broadcast UI notification
+        """
+        self._ui_notification_callback = callback
 
     async def route_comm(self, comm: Comm) -> bool:
         """
@@ -448,6 +461,16 @@ class CommRouter:
                 await self._comm_broadcast_callback(legion_id, comm)
             except Exception as e:
                 legion_logger.error(f"Failed to broadcast comm {comm.comm_id} to WebSocket: {e}")
+
+        # Issue #699: Push UI notification for user-facing comms
+        # This fires on the global UI WebSocket so sounds play regardless of view.
+        # Exclude SYSTEM/SPAWN/DISPOSE (internal lifecycle) comms.
+        if legion_id and self._ui_notification_callback:
+            if comm.comm_type not in (CommType.SYSTEM, CommType.SPAWN, CommType.DISPOSE):
+                try:
+                    await self._ui_notification_callback(comm)
+                except Exception as e:
+                    legion_logger.error(f"Failed to send UI notification for comm {comm.comm_id}: {e}")
 
     async def _append_to_comm_log(
         self,

@@ -509,6 +509,10 @@ class ClaudeWebUI:
         self.coordinator.legion_system.comm_router.set_comm_broadcast_callback(
             self._broadcast_comm_to_legion_websocket
         )
+        # Issue #699: Wire UI notification callback for comm sounds
+        self.coordinator.legion_system.comm_router.set_ui_notification_callback(
+            self._broadcast_comm_notification_to_ui
+        )
         self.coordinator.legion_system.scheduler_service.set_schedule_broadcast_callback(
             self._broadcast_schedule_to_legion_websocket
         )
@@ -594,6 +598,22 @@ class ClaudeWebUI:
             logger.debug(f"Broadcast comm {comm.comm_id} to legion {legion_id} WebSocket clients")
         except Exception:
             logger.exception("Error broadcasting comm to legion WebSocket")
+
+    async def _broadcast_comm_notification_to_ui(self, comm):
+        """Issue #699: Push comm notification event to UI WebSocket for audio alerts."""
+        try:
+            await self.ui_websocket_manager.broadcast_to_all({
+                "type": "notification",
+                "data": {
+                    "event_type": "minion_comm",
+                    "comm_type": comm.comm_type.value if hasattr(comm.comm_type, 'value') else str(comm.comm_type),
+                    "from_minion_name": comm.from_minion_name or "Minion",
+                    "comm_id": comm.comm_id,
+                }
+            })
+            logger.debug(f"Broadcast UI notification for comm {comm.comm_id}")
+        except Exception:
+            logger.exception("Error broadcasting comm notification to UI WebSocket")
 
     async def _broadcast_schedule_to_legion_websocket(self, legion_id: str, event: dict):
         """Broadcast schedule event to WebSocket clients watching this legion."""

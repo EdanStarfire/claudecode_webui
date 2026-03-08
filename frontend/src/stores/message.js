@@ -3,7 +3,6 @@ import { ref, computed, readonly, watch } from 'vue'
 import { api } from '../utils/api'
 import { useSessionStore } from './session'
 import { useTaskStore } from './task'
-import { notify } from '@/composables/useNotifications'
 
 /**
  * Message Store - Manages messages and tool calls per session
@@ -474,10 +473,8 @@ export const useMessageStore = defineStore('message', () => {
       // Populate permissionToToolMap for handlePermissionResponse correlation
       if (toolCall.request_id && toolCall.status === 'awaiting_permission') {
         permissionToToolMap.value.set(toolCall.request_id, toolUseId)
-        // Issue #643: Notify on permission prompt (skip during history loading)
-        if (!options.silent) {
-          notify('permission_prompt', { toolName: toolCall.name || existing.name })
-        }
+        // Issue #699: Permission prompt notifications now driven by UI WebSocket
+        // state_change → paused (see websocket.js handleUIMessage)
       }
       if (toolCall.permission_granted !== null && toolCall.permission_granted !== undefined) {
         existing.permissionDecision = toolCall.permission_granted ? 'allow' : 'deny'
@@ -568,10 +565,8 @@ export const useMessageStore = defineStore('message', () => {
       // Populate permissionToToolMap for handlePermissionResponse correlation
       if (toolCall.request_id && toolCall.status === 'awaiting_permission') {
         permissionToToolMap.value.set(toolCall.request_id, toolUseId)
-        // Issue #643: Notify on permission prompt (skip during history loading)
-        if (!options.silent) {
-          notify('permission_prompt', { toolName: toolCall.name })
-        }
+        // Issue #699: Permission prompt notifications now driven by UI WebSocket
+        // state_change → paused (see websocket.js handleUIMessage)
       }
       console.log(`Created new tool call ${toolUseId} for ${toolCall.name} with status: ${frontendStatus}`)
     }
