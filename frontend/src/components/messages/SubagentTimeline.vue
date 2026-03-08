@@ -39,9 +39,11 @@
       <!-- Task result summary -->
       <div v-if="hasResult" class="subagent-result" :class="{ 'subagent-result-error': isError }">
         <div class="result-label result-toggle" @click.stop="resultCollapsed = !resultCollapsed">
-          <span class="result-chevron">{{ resultCollapsed ? '\u25B6' : '\u25BC' }}</span>
+          <svg class="result-chevron" :class="{ expanded: !resultCollapsed }" width="10" height="10" viewBox="0 0 12 12">
+            <path d="M4.5 2L8.5 6L4.5 10" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+          </svg>
           {{ isError ? 'Error:' : 'Result:' }}
-          <a v-if="!resultCollapsed && isResultTruncated" class="view-full-link" @click.stop="openFullResult">View Full</a>
+          <a v-if="isResultTruncated" class="view-full-link" @click.stop="openFullResult">View Full</a>
         </div>
         <pre v-if="!resultCollapsed && resultSummary" class="result-content">{{ resultSummary }}</pre>
       </div>
@@ -390,9 +392,13 @@ function openFullResult() {
 }
 
 .result-chevron {
-  font-size: 10px;
   color: #64748b;
   flex-shrink: 0;
+  transition: transform 0.2s ease;
+}
+
+.result-chevron.expanded {
+  transform: rotate(90deg);
 }
 
 .subagent-result-error .result-chevron {
