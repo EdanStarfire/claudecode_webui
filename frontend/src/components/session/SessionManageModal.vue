@@ -29,30 +29,29 @@
             <div class="alert alert-danger mb-3">
               <strong>⚠️ Warning: This action cannot be undone</strong>
             </div>
-            <p class="text-muted">This will permanently delete all messages and conversation history for this session.</p>
-            <p class="text-muted">The session settings and configuration will be preserved, but you will start with a completely fresh conversation.</p>
+            <p class="text-muted">This will clear the current conversation and restart the session with a fresh context.</p>
+            <p class="text-muted">Session settings and configuration will be preserved.</p>
           </div>
 
           <div v-else-if="confirmationView === 'erase-history'">
             <div class="alert alert-warning mb-3">
-              <strong>Clear conversation history?</strong>
+              <strong>Forget all past conversations?</strong>
             </div>
-            <p class="text-muted">This will delete all distilled conversation history files for this session. Archives will be preserved.</p>
+            <p class="text-muted">This will delete all distilled conversation history for this session. The agent will no longer have access to past context.</p>
           </div>
 
           <div v-else-if="confirmationView === 'erase-archives'">
             <div class="alert alert-danger mb-3">
-              <strong>Delete archived session data?</strong>
+              <strong>Clear playback records?</strong>
             </div>
-            <p class="text-muted">This will delete all archived raw session data. Distilled history will remain. This cannot be undone.</p>
+            <p class="text-muted">This will delete all full playback records for this session. This cannot be undone.</p>
           </div>
 
           <div v-else-if="confirmationView === 'delete'">
             <div class="alert alert-danger mb-3">
               <strong>⚠️ Warning: This action cannot be undone</strong>
             </div>
-            <p class="text-muted">This will permanently delete session <strong>{{ session?.name }}</strong>.</p>
-            <p class="text-muted">All messages, conversation history, settings, and configuration will be completely destroyed. This is more destructive than Reset Session.</p>
+            <p class="text-muted">This will permanently delete session <strong>{{ session?.name }}</strong> and all archive data.</p>
 
             <!-- Cascading deletion warning for sessions with children -->
             <div v-if="isLoadingDescendants" class="text-center py-2">
@@ -90,7 +89,7 @@
                 :disabled="isPerformingAction"
               >
                 <strong>🔄 Restart Agent</strong>
-                <div class="small text-muted">Disconnect and resume session (keeps all messages)</div>
+                <div class="small text-muted">Disconnect and resume session (keeps conversation)</div>
               </button>
 
               <button
@@ -107,29 +106,8 @@
 
               <!-- Danger Zone -->
               <div class="danger-zone-header">
-                <h6 class="text-danger mb-2">⚠️ Danger Zone</h6>
+                <h6 class="text-danger mb-2">Danger Zone</h6>
               </div>
-
-              <!-- History/Archive erasure (conditional) -->
-              <button
-                v-if="historyArchivesStatus.has_history"
-                class="btn btn-outline-warning text-start"
-                @click="confirmationView = 'erase-history'"
-                :disabled="isPerformingAction"
-              >
-                <strong>Erase History</strong>
-                <div class="small text-muted">Clear distilled conversation history (keeps archives)</div>
-              </button>
-
-              <button
-                v-if="historyArchivesStatus.has_archives"
-                class="btn btn-outline-warning text-start"
-                @click="confirmationView = 'erase-archives'"
-                :disabled="isPerformingAction"
-              >
-                <strong>Erase Archives</strong>
-                <div class="small text-muted">Delete archived session data (keeps distilled history)</div>
-              </button>
 
               <!-- Destructive actions -->
               <button
@@ -137,8 +115,8 @@
                 @click="showResetConfirmation"
                 :disabled="isPerformingAction"
               >
-                <strong>🧹 Reset Session</strong>
-                <div class="small text-muted">Clear all messages and start fresh (keeps settings)</div>
+                <strong>Reset Session</strong>
+                <div class="small text-muted">Clear conversation and restart session</div>
               </button>
 
               <button
@@ -146,13 +124,38 @@
                 @click="showDeleteConfirmation"
                 :disabled="isPerformingAction"
               >
-                <strong>🗑️ Delete Session</strong>
-                <div class="small text-muted">Permanently delete this session and all its data</div>
+                <strong>Delete Session</strong>
+                <div class="small text-muted">Permanently delete session and archive data</div>
               </button>
-            </div>
 
-            <div class="alert alert-warning mt-3 mb-0">
-              <small><strong>Note:</strong> Restart is the recommended option for unsticking the agent.</small>
+              <!-- Knowledge Management (conditional) -->
+              <template v-if="historyArchivesStatus.has_history || historyArchivesStatus.has_archives">
+                <hr class="my-2">
+
+                <div class="knowledge-section-header">
+                  <h6 class="text-secondary mb-2">Knowledge Management</h6>
+                </div>
+
+                <button
+                  v-if="historyArchivesStatus.has_history"
+                  class="btn btn-outline-secondary text-start"
+                  @click="confirmationView = 'erase-history'"
+                  :disabled="isPerformingAction"
+                >
+                  <strong>Delete History</strong>
+                  <div class="small text-muted">Forget all past conversations</div>
+                </button>
+
+                <button
+                  v-if="historyArchivesStatus.has_archives"
+                  class="btn btn-outline-secondary text-start"
+                  @click="confirmationView = 'erase-archives'"
+                  :disabled="isPerformingAction"
+                >
+                  <strong>Delete Archives</strong>
+                  <div class="small text-muted">Clear full playback records for session</div>
+                </button>
+              </template>
             </div>
           </div>
         </div>
@@ -167,8 +170,8 @@
               @click="executeConfirmation"
             >
               {{ confirmationView === 'delete' ? 'Delete Session'
-                 : confirmationView === 'erase-history' ? 'Erase History'
-                 : confirmationView === 'erase-archives' ? 'Erase Archives'
+                 : confirmationView === 'erase-history' ? 'Delete History'
+                 : confirmationView === 'erase-archives' ? 'Delete Archives'
                  : 'Confirm Reset' }}
             </button>
           </template>
@@ -216,8 +219,8 @@ const isLoadingStatus = ref(false)
 const confirmationTitle = computed(() => {
   if (confirmationView.value === 'reset') return 'Reset Session'
   if (confirmationView.value === 'delete') return 'Delete Session'
-  if (confirmationView.value === 'erase-history') return 'Erase History'
-  if (confirmationView.value === 'erase-archives') return 'Erase Archives'
+  if (confirmationView.value === 'erase-history') return 'Delete History'
+  if (confirmationView.value === 'erase-archives') return 'Delete Archives'
   return 'Manage Session'
 })
 
@@ -539,7 +542,8 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
-.danger-zone-header {
+.danger-zone-header,
+.knowledge-section-header {
   margin-top: 0.5rem;
 }
 
