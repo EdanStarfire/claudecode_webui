@@ -415,6 +415,27 @@ class SessionManager:
             logger.error(f"Failed to mark session {session_id} as active: {e}")
             return False
 
+    async def pause_session(self, session_id: str) -> bool:
+        """Pause an active session (used internally for permission prompt waiting)"""
+        async with self._get_session_lock(session_id):
+            try:
+                session = self._active_sessions.get(session_id)
+                if not session:
+                    logger.error(f"Session {session_id} not found")
+                    return False
+
+                if session.state != SessionState.ACTIVE:
+                    session_logger.warning(f"Cannot pause session {session_id} in state {session.state}")
+                    return False
+
+                await self._update_session_state(session_id, SessionState.PAUSED)
+                session_logger.info(f"Paused session {session_id}")
+                return True
+
+            except Exception as e:
+                logger.error(f"Failed to pause session {session_id}: {e}")
+                return False
+
     async def terminate_session(self, session_id: str) -> bool:
         """Terminate a session and cleanup resources"""
         async with self._get_session_lock(session_id):
