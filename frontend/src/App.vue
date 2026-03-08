@@ -107,6 +107,10 @@ watch(() => resourceStore.currentHasResources, (hasResources, hadResources) => {
   }
 })
 
+// Issue #702: Periodic state polling to correct drift from missed WebSocket messages
+const STATE_POLL_INTERVAL_MS = 30000
+let statePollTimer = null
+
 // Initialize app on mount
 onMounted(async () => {
   uiStore.initBackgroundColor()
@@ -144,9 +148,20 @@ onMounted(async () => {
 
   // Handle window resize
   window.addEventListener('resize', uiStore.handleResize)
+
+  // Issue #702: Start periodic state polling
+  statePollTimer = setInterval(() => {
+    if (wsStore.uiConnected) {
+      sessionStore.syncSessionStates()
+    }
+  }, STATE_POLL_INTERVAL_MS)
 })
 
 onUnmounted(() => {
+  if (statePollTimer) {
+    clearInterval(statePollTimer)
+    statePollTimer = null
+  }
   window.removeEventListener('popstate', handlePopState)
   window.removeEventListener('resize', uiStore.handleResize)
   wsStore.disconnectUI()
