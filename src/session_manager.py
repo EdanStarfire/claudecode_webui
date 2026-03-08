@@ -416,7 +416,7 @@ class SessionManager:
             return False
 
     async def pause_session(self, session_id: str) -> bool:
-        """Pause an active session"""
+        """Pause an active session (used internally for permission prompt waiting)"""
         async with self._get_session_lock(session_id):
             try:
                 session = self._active_sessions.get(session_id)

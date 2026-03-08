@@ -183,7 +183,7 @@ class TestSessionManager:
 
     @pytest.mark.asyncio
     async def test_pause_session(self, temp_session_manager, sample_session_config):
-        """Test session pause functionality."""
+        """Test session pause functionality (internal use for permission prompts)."""
         manager = temp_session_manager
 
         session_id = str(uuid.uuid4())
@@ -333,7 +333,7 @@ class TestSessionManager:
         session_id = str(uuid.uuid4())
         await manager.create_session(session_id, **sample_session_config)
 
-        # Try to pause without starting
+        # Try to pause without starting — should fail gracefully
         success = await manager.pause_session(session_id)
         assert success is False
 

@@ -27,7 +27,6 @@ Complete REST and WebSocket API reference for Claude WebUI. For backend architec
 | `GET` | `/api/sessions/{id}/descendants` | Get all descendant sessions (minion tree) |
 | `PATCH` | `/api/sessions/{id}` | Update session fields (model, tools, permissions, cli_path, etc.) |
 | `POST` | `/api/sessions/{id}/start` | Start or resume session |
-| `POST` | `/api/sessions/{id}/pause` | Pause session |
 | `POST` | `/api/sessions/{id}/terminate` | Terminate session |
 | `POST` | `/api/sessions/{id}/restart` | Restart session (keep message history) |
 | `POST` | `/api/sessions/{id}/reset` | Clear messages and fresh start |

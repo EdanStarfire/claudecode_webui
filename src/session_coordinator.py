@@ -948,17 +948,6 @@ class SessionCoordinator:
 
             return False
 
-    async def pause_session(self, session_id: str) -> bool:
-        """Pause a session"""
-        try:
-            success = await self.session_manager.pause_session(session_id)
-            if success:
-                await self._notify_state_change(session_id, SessionState.PAUSED)
-            return success
-        except Exception:
-            logger.exception(f"Failed to pause session {session_id}")
-            return False
-
     async def terminate_session(self, session_id: str) -> bool:
         """Terminate a session and cleanup resources"""
         try:
