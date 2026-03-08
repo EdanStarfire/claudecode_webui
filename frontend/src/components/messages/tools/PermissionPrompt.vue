@@ -42,49 +42,76 @@
         <div v-if="hasSuggestions" class="suggestions-section">
           <p class="suggestions-label">Suggested Permission Updates:</p>
           <div
-            v-for="(suggestion, index) in toolCall.suggestions"
-            :key="index"
-            class="suggestion-item"
-            :class="{ 'suggestion-item-editable': suggestion.type === 'addRules' }"
+            v-for="(suggestion, sgIdx) in toolCall.suggestions"
+            :key="sgIdx"
+            class="suggestion-group"
           >
-            <input
-              type="checkbox"
-              :id="`sg-${toolCall.id}-${index}`"
-              v-model="checkedSuggestions[index]"
-              :disabled="isSubmittingPermission"
-            />
+            <!-- addRules: per-rule checkboxes -->
             <template v-if="suggestion.type === 'addRules' && suggestion.rules?.length">
-              <div class="editable-rules-wrapper">
-                <span class="rule-label">Allow:</span>
-                <div v-for="(rule, ruleIdx) in suggestion.rules" :key="ruleIdx" class="editable-rule-group">
+              <span class="rule-label">Allow:</span>
+              <div v-for="(rule, ruleIdx) in suggestion.rules" :key="ruleIdx" class="suggestion-item suggestion-item-editable">
+                <input
+                  type="checkbox"
+                  :id="`sg-${toolCall.id}-${sgIdx}-${ruleIdx}`"
+                  v-model="checkedItems[`${sgIdx}-${ruleIdx}`]"
+                  :disabled="isSubmittingPermission"
+                />
+                <div class="editable-rule-group">
                   <div class="editable-rule">
                     <input
                       type="text"
-                      v-model="editedSuggestions[`${index}-${ruleIdx}`]"
-                      @input="onRuleEdit(index, ruleIdx)"
+                      v-model="editedSuggestions[`${sgIdx}-${ruleIdx}`]"
+                      @input="onRuleEdit(sgIdx, ruleIdx)"
                       :disabled="isSubmittingPermission"
                       class="rule-input"
                       :class="{
-                        'rule-input-dirty': isDirty(index, ruleIdx) && !validationErrors[`${index}-${ruleIdx}`],
-                        'rule-input-error': !!validationErrors[`${index}-${ruleIdx}`]
+                        'rule-input-dirty': isDirty(sgIdx, ruleIdx) && !validationErrors[`${sgIdx}-${ruleIdx}`],
+                        'rule-input-error': !!validationErrors[`${sgIdx}-${ruleIdx}`]
                       }"
                     />
                     <button
-                      v-if="isDirty(index, ruleIdx)"
+                      v-if="isDirty(sgIdx, ruleIdx)"
                       class="reset-btn"
-                      @click="resetRule(index, ruleIdx)"
+                      @click="resetRule(sgIdx, ruleIdx)"
                       title="Reset to original"
                       type="button"
                     >&#x21BA;</button>
-                    <span v-if="isDirty(index, ruleIdx) && !validationErrors[`${index}-${ruleIdx}`]" class="edited-badge">edited</span>
+                    <span v-if="isDirty(sgIdx, ruleIdx) && !validationErrors[`${sgIdx}-${ruleIdx}`]" class="edited-badge">edited</span>
                   </div>
-                  <div v-if="validationErrors[`${index}-${ruleIdx}`]" class="validation-error">{{ validationErrors[`${index}-${ruleIdx}`] }}</div>
+                  <div v-if="validationErrors[`${sgIdx}-${ruleIdx}`]" class="validation-error">{{ validationErrors[`${sgIdx}-${ruleIdx}`] }}</div>
                 </div>
               </div>
             </template>
-            <label v-else :for="`sg-${toolCall.id}-${index}`">
-              <code>{{ formatSuggestion(suggestion) }}</code>
-            </label>
+
+            <!-- addDirectories: per-directory checkboxes -->
+            <template v-else-if="suggestion.type === 'addDirectories' && suggestion.directories?.length">
+              <div v-for="(dir, dirIdx) in suggestion.directories" :key="dirIdx" class="suggestion-item">
+                <input
+                  type="checkbox"
+                  :id="`sg-${toolCall.id}-${sgIdx}-${dirIdx}`"
+                  v-model="checkedItems[`${sgIdx}-${dirIdx}`]"
+                  :disabled="isSubmittingPermission"
+                />
+                <label :for="`sg-${toolCall.id}-${sgIdx}-${dirIdx}`">
+                  <code>Add directory: {{ dir }}</code>
+                </label>
+              </div>
+            </template>
+
+            <!-- setMode and other single-item types -->
+            <template v-else>
+              <div class="suggestion-item">
+                <input
+                  type="checkbox"
+                  :id="`sg-${toolCall.id}-${sgIdx}-0`"
+                  v-model="checkedItems[`${sgIdx}-0`]"
+                  :disabled="isSubmittingPermission"
+                />
+                <label :for="`sg-${toolCall.id}-${sgIdx}-0`">
+                  <code>{{ formatSuggestion(suggestion) }}</code>
+                </label>
+              </div>
+            </template>
           </div>
         </div>
 
@@ -95,7 +122,7 @@
             @click="handlePermissionDecision('allow', true)"
             :disabled="isSubmittingPermission || hasValidationErrors"
           >
-            {{ isSubmittingPermission && permissionAction === 'approve-apply' ? 'Submitting...' : 'Approve & Apply' }}
+            {{ isSubmittingPermission && permissionAction === 'approve-apply' ? 'Submitting...' : checkedItemCount < totalItemCount ? `Approve & Apply (${checkedItemCount}/${totalItemCount})` : 'Approve & Apply' }}
           </button>
           <button
             class="btn-timeline"
@@ -180,36 +207,70 @@ const permissionAction = ref(null)
 const guidanceMessage = ref('')
 const showGuidance = ref(false)
 const guidanceTextarea = ref(null)
-const checkedSuggestions = ref({})
+const checkedItems = ref({})
 const editedSuggestions = ref({})
 const validationErrors = ref({})
 const questionHandlerRef = ref(null)
 const currentAnswers = ref({})
 
-// Initialize suggestion checkboxes and editable rule text
+// Initialize per-item checkboxes and editable rule text
 watch(() => props.toolCall.suggestions, (suggestions) => {
   if (suggestions && suggestions.length > 0) {
     const checked = {}
     const edited = {}
-    suggestions.forEach((sg, index) => {
-      checked[index] = true
+    suggestions.forEach((sg, sgIdx) => {
       if (sg.type === 'addRules' && sg.rules?.length) {
         sg.rules.forEach((rule, ruleIdx) => {
-          edited[`${index}-${ruleIdx}`] = rule.ruleContent
+          checked[`${sgIdx}-${ruleIdx}`] = true
+          edited[`${sgIdx}-${ruleIdx}`] = rule.ruleContent
             ? `${rule.toolName}(${rule.ruleContent})`
             : rule.toolName
         })
+      } else if (sg.type === 'addDirectories' && sg.directories?.length) {
+        sg.directories.forEach((_, dirIdx) => {
+          checked[`${sgIdx}-${dirIdx}`] = true
+        })
+      } else {
+        checked[`${sgIdx}-0`] = true
       }
     })
-    checkedSuggestions.value = checked
+    checkedItems.value = checked
     editedSuggestions.value = edited
     validationErrors.value = {}
   }
 }, { immediate: true })
 
+// Count total and checked items for button label
+const totalItemCount = computed(() => {
+  if (!props.toolCall.suggestions) return 0
+  let count = 0
+  props.toolCall.suggestions.forEach(sg => {
+    if (sg.type === 'addRules' && sg.rules?.length) count += sg.rules.length
+    else if (sg.type === 'addDirectories' && sg.directories?.length) count += sg.directories.length
+    else count += 1
+  })
+  return count
+})
+
+const checkedItemCount = computed(() => {
+  return Object.values(checkedItems.value).filter(Boolean).length
+})
+
 const selectedSuggestions = computed(() => {
   if (!props.toolCall.suggestions) return []
-  return props.toolCall.suggestions.filter((_, index) => checkedSuggestions.value[index])
+  const result = []
+  props.toolCall.suggestions.forEach((sg, sgIdx) => {
+    if (sg.type === 'addRules' && sg.rules?.length) {
+      const filteredRules = sg.rules.filter((_, ruleIdx) => checkedItems.value[`${sgIdx}-${ruleIdx}`])
+      if (filteredRules.length > 0) result.push({ ...sg, rules: filteredRules, _sgIdx: sgIdx })
+    } else if (sg.type === 'addDirectories' && sg.directories?.length) {
+      const filteredDirs = sg.directories.filter((_, dirIdx) => checkedItems.value[`${sgIdx}-${dirIdx}`])
+      if (filteredDirs.length > 0) result.push({ ...sg, directories: filteredDirs })
+    } else if (checkedItems.value[`${sgIdx}-0`]) {
+      result.push(sg)
+    }
+  })
+  return result
 })
 
 const isAskUserQuestion = computed(() => props.toolCall.name === 'AskUserQuestion')
@@ -226,10 +287,10 @@ const hasSuggestions = computed(() => {
 const hasValidationErrors = computed(() => {
   if (!props.toolCall.suggestions) return false
   for (let sgIdx = 0; sgIdx < props.toolCall.suggestions.length; sgIdx++) {
-    if (!checkedSuggestions.value[sgIdx]) continue
     const sg = props.toolCall.suggestions[sgIdx]
     if (sg.type !== 'addRules' || !sg.rules?.length) continue
     for (let ruleIdx = 0; ruleIdx < sg.rules.length; ruleIdx++) {
+      if (!checkedItems.value[`${sgIdx}-${ruleIdx}`]) continue
       if (validationErrors.value[`${sgIdx}-${ruleIdx}`]) return true
     }
   }
@@ -293,14 +354,20 @@ function parseRuleText(text) {
 function reconstructEditedSuggestions(suggestions) {
   return suggestions.map(sg => {
     if (sg.type !== 'addRules' || !sg.rules?.length) return sg
-    const sgIdx = props.toolCall.suggestions.indexOf(sg)
-    const editedRules = sg.rules.map((rule, ruleIdx) => {
+    const sgIdx = sg._sgIdx
+    if (sgIdx === undefined) return sg
+    const editedRules = sg.rules.map(rule => {
+      // Find this rule's original index in the source suggestion
+      const originalRules = props.toolCall.suggestions[sgIdx]?.rules || []
+      const ruleIdx = originalRules.indexOf(rule)
+      if (ruleIdx === -1) return rule
       const key = `${sgIdx}-${ruleIdx}`
       const editedText = editedSuggestions.value[key]
       if (!editedText || editedText === getOriginalRuleText(sgIdx, ruleIdx)) return rule
       return parseRuleText(editedText)
     })
-    return { ...sg, rules: editedRules }
+    const { _sgIdx, ...rest } = sg
+    return { ...rest, rules: editedRules }
   })
 }
 
@@ -340,15 +407,43 @@ async function submitQuestionAnswers() {
   }
 }
 
+function deduplicateSuggestions(suggestions) {
+  const seenRules = new Set()
+  const seenDirs = new Set()
+  return suggestions.map(sg => {
+    if (sg.type === 'addRules' && sg.rules?.length) {
+      const uniqueRules = sg.rules.filter(rule => {
+        const key = rule.ruleContent ? `${rule.toolName}(${rule.ruleContent})` : rule.toolName
+        if (seenRules.has(key)) return false
+        seenRules.add(key)
+        return true
+      })
+      if (uniqueRules.length === 0) return null
+      return { ...sg, rules: uniqueRules }
+    }
+    if (sg.type === 'addDirectories' && sg.directories?.length) {
+      const uniqueDirs = sg.directories.filter(dir => {
+        if (seenDirs.has(dir)) return false
+        seenDirs.add(dir)
+        return true
+      })
+      if (uniqueDirs.length === 0) return null
+      return { ...sg, directories: uniqueDirs }
+    }
+    return sg
+  }).filter(Boolean)
+}
+
 async function handlePermissionDecision(decision, applySuggestions, guidance = null) {
   if (isSubmittingPermission.value) return
   isSubmittingPermission.value = true
 
-  // Reconstruct suggestions with any user edits to rule text
+  // Reconstruct suggestions with any user edits, then deduplicate
   let filtered = selectedSuggestions.value
   const effectiveApply = applySuggestions && filtered.length > 0
   if (effectiveApply) {
     filtered = reconstructEditedSuggestions(filtered)
+    filtered = deduplicateSuggestions(filtered)
   }
 
   if (decision === 'allow') {
@@ -521,6 +616,18 @@ function autoResizeGuidance() {
   font-weight: 600;
   color: #1e40af;
   margin-bottom: 4px;
+}
+
+.suggestion-group {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 4px;
+  padding: 4px 6px;
+  margin-bottom: 4px;
+}
+
+.suggestion-group:last-child {
+  margin-bottom: 0;
 }
 
 .suggestion-item {
