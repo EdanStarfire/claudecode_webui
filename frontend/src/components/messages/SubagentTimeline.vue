@@ -37,12 +37,15 @@
       </div>
 
       <!-- Task result summary -->
-      <div v-if="hasResult && resultSummary" class="subagent-result" :class="{ 'subagent-result-error': isError }">
-        <div class="result-label">
+      <div v-if="hasResult" class="subagent-result" :class="{ 'subagent-result-error': isError }">
+        <div class="result-label result-toggle" @click.stop="resultCollapsed = !resultCollapsed">
+          <svg class="result-chevron" :class="{ expanded: !resultCollapsed }" width="10" height="10" viewBox="0 0 12 12">
+            <path d="M4.5 2L8.5 6L4.5 10" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+          </svg>
           {{ isError ? 'Error:' : 'Result:' }}
           <a v-if="isResultTruncated" class="view-full-link" @click.stop="openFullResult">View Full</a>
         </div>
-        <pre class="result-content">{{ resultSummary }}</pre>
+        <pre v-if="!resultCollapsed && resultSummary" class="result-content">{{ resultSummary }}</pre>
       </div>
     </div>
   </div>
@@ -68,6 +71,7 @@ const messageStore = useMessageStore()
 const sessionStore = useSessionStore()
 const resourceStore = useResourceStore()
 const collapsed = ref(false)
+const resultCollapsed = ref(true)
 
 // Extract Task tool metadata
 const subagentType = computed(() => {
@@ -369,6 +373,36 @@ function openFullResult() {
   color: #64748b;
   background: #f1f5f9;
   border-bottom: 1px solid #e2e8f0;
+}
+
+.result-toggle {
+  cursor: pointer;
+  user-select: none;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.result-toggle:hover {
+  background: #e2e8f0;
+}
+
+.subagent-result-error .result-toggle:hover {
+  background: #fecaca;
+}
+
+.result-chevron {
+  color: #64748b;
+  flex-shrink: 0;
+  transition: transform 0.2s ease;
+}
+
+.result-chevron.expanded {
+  transform: rotate(90deg);
+}
+
+.subagent-result-error .result-chevron {
+  color: #991b1b;
 }
 
 .subagent-result-error .result-label {
