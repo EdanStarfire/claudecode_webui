@@ -44,6 +44,8 @@ export const useSessionStore = defineStore('session', () => {
 
   // Session reset counter (triggers archive re-fetch in AgentOverview)
   const sessionResets = ref(new Map())              // sessionId → reset count
+  // Archive change counter (triggers archive re-fetch after erasure)
+  const archiveChanges = ref(new Map())             // sessionId → change count
 
   // Session selection state (prevents concurrent selectSession calls)
   const selectingSession = ref(false)
@@ -574,6 +576,9 @@ export const useSessionStore = defineStore('session', () => {
 
   async function eraseArchives(sessionId) {
     const response = await api.delete(`/api/sessions/${sessionId}/archives`)
+    // Bump archive change counter so AgentOverview re-fetches
+    const current = archiveChanges.value.get(sessionId) || 0
+    archiveChanges.value.set(sessionId, current + 1)
     return response
   }
 
@@ -605,6 +610,7 @@ export const useSessionStore = defineStore('session', () => {
     scrollPositions,
     pendingScrollRestoreSessionId,
     sessionResets,
+    archiveChanges,
 
     // Computed
     currentSession,
