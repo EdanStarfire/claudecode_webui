@@ -13,7 +13,6 @@ Tests:
 
 import pytest
 
-pytestmark = pytest.mark.slow
 
 
 async def _create_session(env):

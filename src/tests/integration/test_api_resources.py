@@ -17,7 +17,6 @@ import uuid
 
 import pytest
 
-pytestmark = pytest.mark.slow
 
 
 async def _create_session_with_project(env):

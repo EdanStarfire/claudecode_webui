@@ -15,7 +15,6 @@ import uuid
 
 import pytest
 
-pytestmark = pytest.mark.slow
 
 
 async def _create_and_delete_session(env):

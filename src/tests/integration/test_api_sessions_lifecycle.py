@@ -17,7 +17,6 @@ import asyncio
 
 import pytest
 
-pytestmark = pytest.mark.slow
 
 
 async def _create_named_session(env, name):

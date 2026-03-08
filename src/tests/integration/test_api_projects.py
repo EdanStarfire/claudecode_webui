@@ -17,7 +17,6 @@ import uuid
 
 import pytest
 
-pytestmark = pytest.mark.slow
 
 
 class TestCreateProject:

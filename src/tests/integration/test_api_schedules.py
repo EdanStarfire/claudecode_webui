@@ -18,7 +18,6 @@ import uuid
 
 import pytest
 
-pytestmark = pytest.mark.slow
 
 
 async def _setup_legion_with_minion(env):
