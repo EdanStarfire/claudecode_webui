@@ -180,8 +180,8 @@ class SessionCoordinator:
                 await self.legion_system.scheduler_service.start()
 
             coord_logger.info("Session coordinator initialized successfully")
-        except Exception as e:
-            logger.error(f"Failed to initialize session coordinator: {e}")
+        except Exception:
+            logger.exception("Failed to initialize session coordinator")
             raise
 
     async def _initialize_existing_session_storage(self):
@@ -201,8 +201,8 @@ class SessionCoordinator:
                     self._storage_managers[session_id] = storage_manager
                     # logger.info(f"Initialized storage manager for session {session_id}")
 
-        except Exception as e:
-            logger.error(f"Failed to initialize storage managers for existing sessions: {e}")
+        except Exception:
+            logger.exception("Failed to initialize storage managers for existing sessions")
             # Don't raise - this shouldn't block coordinator initialization
 
     async def _initialize_queues(self):
@@ -219,8 +219,8 @@ class SessionCoordinator:
                         queue_paused = getattr(session, 'queue_paused', False)
                         if not queue_paused:
                             self.queue_processor.ensure_running(session_id)
-        except Exception as e:
-            logger.error(f"Failed to initialize queues: {e}")
+        except Exception:
+            logger.exception("Failed to initialize queues")
 
     # =========================================================================
     # Message Queue Operations (Issue #500)
@@ -501,8 +501,8 @@ class SessionCoordinator:
 
             return session_id
 
-        except Exception as e:
-            logger.error(f"Failed to create integrated session: {e}")
+        except Exception:
+            logger.exception("Failed to create integrated session")
             raise
 
     async def get_session_storage(self, session_id: str):
@@ -704,8 +704,8 @@ class SessionCoordinator:
                     await self._resource_broadcast_callback(session_id, resource_metadata)
                 else:
                     self._resource_broadcast_callback(session_id, resource_metadata)
-            except Exception as e:
-                logger.error(f"Failed to broadcast resource_registered for {session_id}: {e}")
+            except Exception:
+                logger.exception(f"Failed to broadcast resource_registered for {session_id}")
 
     async def start_session(self, session_id: str, permission_callback: Callable[[str, dict[str, Any]], bool | dict[str, Any]] | None = None) -> bool:
         """Start a session with SDK integration"""
@@ -891,8 +891,8 @@ class SessionCoordinator:
                     await self.session_manager.update_processing_state(session_id, False)
                     await self._notify_state_change(session_id, SessionState.ERROR)
                     # logger.info(f"Updated session {session_id} state to ERROR and reset processing state")
-                except Exception as state_error:
-                    logger.error(f"Failed to update session state to ERROR: {state_error}")
+                except Exception:
+                    logger.exception("Failed to update session state to ERROR")
 
                 # Send system message explaining the failure (with raw details)
                 await self._send_session_failure_message(session_id, error_message, raw_error_message)
@@ -917,7 +917,7 @@ class SessionCoordinator:
             return True
 
         except Exception as e:
-            logger.error(f"Failed to start integrated session {session_id}: {e}")
+            logger.exception(f"Failed to start integrated session {session_id}")
 
             # Extract user-friendly error message, preserve raw for details
             raw_error_str = str(e)
@@ -929,8 +929,8 @@ class SessionCoordinator:
                 await self.session_manager.update_processing_state(session_id, False)
                 await self._notify_state_change(session_id, SessionState.ERROR)
                 coord_logger.info(f"Updated session {session_id} state to ERROR after exception")
-            except Exception as state_error:
-                logger.error(f"Failed to update session state to ERROR: {state_error}")
+            except Exception:
+                logger.exception("Failed to update session state to ERROR")
 
             # Send system message explaining the failure (with raw details)
             await self._send_session_failure_message(session_id, error_message, raw_error_str)
@@ -955,8 +955,8 @@ class SessionCoordinator:
             if success:
                 await self._notify_state_change(session_id, SessionState.PAUSED)
             return success
-        except Exception as e:
-            logger.error(f"Failed to pause session {session_id}: {e}")
+        except Exception:
+            logger.exception(f"Failed to pause session {session_id}")
             return False
 
     async def terminate_session(self, session_id: str) -> bool:
@@ -1000,8 +1000,8 @@ class SessionCoordinator:
             coord_logger.info(f"Session {session_id} stopped")
             return success
 
-        except Exception as e:
-            logger.error(f"Failed to terminate integrated session {session_id}: {e}")
+        except Exception:
+            logger.exception(f"Failed to terminate integrated session {session_id}")
             return False
 
     # =========================================================================
@@ -1114,8 +1114,8 @@ class SessionCoordinator:
             coord_logger.info(f"Archive-and-clear complete for session {session_id}")
             return True
 
-        except Exception as e:
-            logger.error(f"Failed to archive-and-clear session {session_id}: {e}")
+        except Exception:
+            logger.exception(f"Failed to archive-and-clear session {session_id}")
             return False
 
     async def update_session_name(self, session_id: str, name: str) -> bool:
@@ -1129,8 +1129,8 @@ class SessionCoordinator:
                     await self._notify_state_change(session_id, session_info.state)
             coord_logger.info(f"Updated session {session_id} name to '{name}'")
             return success
-        except Exception as e:
-            logger.error(f"Failed to update session {session_id} name: {e}")
+        except Exception:
+            logger.exception(f"Failed to update session {session_id} name")
             return False
 
     async def delete_session(self, session_id: str, archive_reason: str = "user_deleted") -> dict:
@@ -1256,8 +1256,8 @@ class SessionCoordinator:
                         coord_logger.info(f"Archived session {session_id} to {archive_result.archive_path} before deletion")
                     else:
                         coord_logger.warning(f"Failed to archive session {session_id}: {archive_result.error_message}")
-                except Exception as e:
-                    coord_logger.error(f"Error archiving session {session_id} before deletion: {e}")
+                except Exception:
+                    coord_logger.exception(f"Error archiving session {session_id} before deletion")
 
             # Step 1.8: Legion-specific cleanup (issue #349: all sessions are minions)
             if session_info and project and self.legion_system:
@@ -1271,8 +1271,8 @@ class SessionCoordinator:
                         import shutil
                         shutil.rmtree(minion_dir)
                         coord_logger.info(f"Deleted Legion minion directory: {minion_dir}")
-                    except Exception as e:
-                        coord_logger.error(f"Failed to delete Legion minion directory {minion_dir}: {e}")
+                    except Exception:
+                        coord_logger.exception(f"Failed to delete Legion minion directory {minion_dir}")
                 else:
                     coord_logger.debug(f"Legion minion directory does not exist (already cleaned): {minion_dir}")
 
@@ -1317,8 +1317,8 @@ class SessionCoordinator:
 
             return {"success": success, "deleted_session_ids": deleted_ids}
 
-        except Exception as e:
-            logger.error(f"Failed to delete integrated session {session_id}: {e}")
+        except Exception:
+            logger.exception(f"Failed to delete integrated session {session_id}")
             return {"success": False, "deleted_session_ids": deleted_ids}
 
     async def _find_project_for_session(self, session_id: str) -> ProjectInfo | None:
@@ -1394,8 +1394,8 @@ class SessionCoordinator:
 
             return result
 
-        except Exception as e:
-            logger.error(f"Failed to send message to session {session_id}: {e}")
+        except Exception:
+            logger.exception(f"Failed to send message to session {session_id}")
             # Reset processing state on error
             try:
                 await self.session_manager.update_processing_state(session_id, False)
@@ -1452,8 +1452,8 @@ class SessionCoordinator:
 
             return result
 
-        except Exception as e:
-            logger.error(f"Failed to interrupt session {session_id}: {e}")
+        except Exception:
+            logger.exception(f"Failed to interrupt session {session_id}")
             return False
 
     async def set_permission_mode(self, session_id: str, mode: str) -> bool:
@@ -1496,8 +1496,8 @@ class SessionCoordinator:
 
             return sdk_result
 
-        except Exception as e:
-            logger.error(f"Failed to set permission mode for session {session_id}: {e}")
+        except Exception:
+            logger.exception(f"Failed to set permission mode for session {session_id}")
             return False
 
     async def get_mcp_status(self, session_id: str) -> dict:
@@ -1509,8 +1509,8 @@ class SessionCoordinator:
                 return {"servers": []}
 
             return await sdk.get_mcp_status()
-        except Exception as e:
-            logger.error(f"Failed to get MCP status for session {session_id}: {e}")
+        except Exception:
+            logger.exception(f"Failed to get MCP status for session {session_id}")
             return {"servers": []}
 
     async def toggle_mcp_server(self, session_id: str, name: str, enabled: bool) -> None:
@@ -1571,8 +1571,8 @@ class SessionCoordinator:
 
             return success
 
-        except Exception as e:
-            logger.error(f"Failed to restart session {session_id}: {e}")
+        except Exception:
+            logger.exception(f"Failed to restart session {session_id}")
             return False
 
     async def reset_session(self, session_id: str, permission_callback: Callable | None = None, _from_queue_processor: bool = False) -> bool:
@@ -1644,8 +1644,8 @@ class SessionCoordinator:
 
             return success
 
-        except Exception as e:
-            logger.error(f"Failed to reset session {session_id}: {e}")
+        except Exception:
+            logger.exception(f"Failed to reset session {session_id}")
             return False
 
     async def _archive_session_for_reset(self, session_id: str) -> bool:
@@ -1760,8 +1760,8 @@ class SessionCoordinator:
                 "storage": storage_info
             }
 
-        except Exception as e:
-            logger.error(f"Failed to get session info for {session_id}: {e}")
+        except Exception:
+            logger.exception(f"Failed to get session info for {session_id}")
             return None
 
     async def list_sessions(self) -> list[dict[str, Any]]:
@@ -1769,8 +1769,8 @@ class SessionCoordinator:
         try:
             sessions = await self.session_manager.list_sessions()
             return [session.to_dict() for session in sessions]
-        except Exception as e:
-            logger.error(f"Failed to list sessions: {e}")
+        except Exception:
+            logger.exception("Failed to list sessions")
             return []
 
     @staticmethod
@@ -2385,8 +2385,8 @@ class SessionCoordinator:
                 "has_more": has_more
             }
 
-        except Exception as e:
-            logger.error(f"Failed to get messages for session {session_id}: {e}")
+        except Exception:
+            logger.exception(f"Failed to get messages for session {session_id}")
             return {
                 "messages": [],
                 "total_count": 0,
@@ -2428,8 +2428,8 @@ class SessionCoordinator:
                     await cb(session_id)
                 else:
                     cb(session_id)
-            except Exception as e:
-                logger.error(f"Error in session reset callback: {e}")
+            except Exception:
+                logger.exception("Error in session reset callback")
 
     def _get_display_projection(self, session_id: str) -> DisplayProjection:
         """
@@ -2491,9 +2491,9 @@ class SessionCoordinator:
             stored_dict = StoredMessage.from_tool_call_update(
                 tool_call, triggering_message
             ).to_dict()
-        except Exception as e:
-            coord_logger.error(
-                f"Failed to build ToolCallUpdate for {tool_call.tool_use_id}: {e}"
+        except Exception:
+            coord_logger.exception(
+                f"Failed to build ToolCallUpdate for {tool_call.tool_use_id}"
             )
             return
         asyncio.ensure_future(self._write_tool_call_update(storage, stored_dict, tool_call.tool_use_id))
@@ -2507,9 +2507,9 @@ class SessionCoordinator:
         """Write a pre-built ToolCallUpdate dict to storage (Issue #494)."""
         try:
             await storage.append_message(stored_dict)
-        except Exception as e:
-            coord_logger.error(
-                f"Failed to store ToolCallUpdate for {tool_use_id}: {e}"
+        except Exception:
+            coord_logger.exception(
+                f"Failed to store ToolCallUpdate for {tool_use_id}"
             )
 
     # ============================================================
@@ -2777,8 +2777,8 @@ class SessionCoordinator:
                 for cb in self._tool_call_broadcast_callbacks:
                     try:
                         cb(session_id, tool_call_data)
-                    except Exception as e:
-                        logger.error(f"Error in tool_call broadcast callback: {e}")
+                    except Exception:
+                        logger.exception("Error in tool_call broadcast callback")
 
         return interrupted
 
@@ -2881,8 +2881,8 @@ class SessionCoordinator:
             else:
                 logger.warning(f"No storage manager found for session {session_id}")
 
-        except Exception as e:
-            logger.error(f"Failed to store processed message for session {session_id}: {e}")
+        except Exception:
+            logger.exception(f"Failed to store processed message for session {session_id}")
             # Fallback to direct storage
             storage = self._storage_managers.get(session_id)
             if storage:
@@ -3029,16 +3029,16 @@ class SessionCoordinator:
                     try:
                         await self.session_manager.update_processing_state(session_id, False)
                         # logger.info(f"Reset processing state for session {session_id} after result message")
-                    except Exception as e:
-                        logger.error(f"Failed to reset processing state for session {session_id}: {e}")
+                    except Exception:
+                        logger.exception(f"Failed to reset processing state for session {session_id}")
 
                 # Also reset processing state on interrupt_success
                 if parsed_message.type.value == 'system' and parsed_message.metadata.get('subtype') == 'interrupt_success':
                     try:
                         await self.session_manager.update_processing_state(session_id, False)
                         coord_logger.info(f"Reset processing state for session {session_id} after interrupt")
-                    except Exception as e:
-                        logger.error(f"Failed to reset processing state after interrupt for session {session_id}: {e}")
+                    except Exception:
+                        logger.exception(f"Failed to reset processing state after interrupt for session {session_id}")
 
                 # Call registered callbacks with processed message (maintain backward compatibility)
                 callbacks = self._message_callbacks.get(session_id, [])
@@ -3056,11 +3056,11 @@ class SessionCoordinator:
                             await cb(session_id, parsed_message)
                         else:
                             cb(session_id, parsed_message)
-                    except Exception as e:
-                        logger.error(f"Error in message callback: {e}")
+                    except Exception:
+                        logger.exception("Error in message callback")
 
-            except Exception as e:
-                logger.error(f"Error processing message callback for {session_id}: {e}")
+            except Exception:
+                logger.exception(f"Error processing message callback for {session_id}")
 
         return callback
 
@@ -3081,8 +3081,8 @@ class SessionCoordinator:
                 try:
                     await self.session_manager.update_processing_state(session_id, False)
                     # logger.info(f"Reset processing state for session {session_id} after error: {error_type}")
-                except Exception as e:
-                    logger.error(f"Failed to reset processing state for session {session_id}: {e}")
+                except Exception:
+                    logger.exception(f"Failed to reset processing state for session {session_id}")
 
                 # Handle critical errors that require session state updates
                 if error_type in ["startup_failed", "message_processing_loop_error", "immediate_cli_failure"]:
@@ -3099,8 +3099,8 @@ class SessionCoordinator:
                         await self.session_manager.update_processing_state(session_id, False)
                         await self._notify_state_change(session_id, SessionState.ERROR)
                         # logger.info(f"Updated session {session_id} state to ERROR and reset processing state due to SDK error")
-                    except Exception as state_error:
-                        logger.error(f"Failed to update session state to ERROR: {state_error}")
+                    except Exception:
+                        logger.exception("Failed to update session state to ERROR")
 
                     # Send system message explaining the runtime failure (with raw details)
                     await self._send_session_failure_message(session_id, user_error_message, raw_error_str)
@@ -3118,11 +3118,11 @@ class SessionCoordinator:
                             await cb(session_id, error_data)
                         else:
                             cb(session_id, error_data)
-                    except Exception as e:
-                        logger.error(f"Error in error callback: {e}")
+                    except Exception:
+                        logger.exception("Error in error callback")
 
-            except Exception as e:
-                logger.error(f"Error processing error callback for {session_id}: {e}")
+            except Exception:
+                logger.exception(f"Error processing error callback for {session_id}")
 
         return callback
 
@@ -3145,8 +3145,8 @@ class SessionCoordinator:
                     "timestamp": get_unix_timestamp()
                 }
                 await message_callback(stderr_message)
-            except Exception as e:
-                logger.error(f"Error in stderr callback for session {session_id}: {e}")
+            except Exception:
+                logger.exception(f"Error in stderr callback for session {session_id}")
 
         return callback
 
@@ -3178,10 +3178,8 @@ class SessionCoordinator:
 
             # logger.info(f"SUCCESS: Sent client launched message for session {session_id}")
 
-        except Exception as e:
-            logger.error(f"ERROR: Failed to send client launched message for {session_id}: {e}")
-            import traceback
-            logger.error(f"ERROR: Traceback: {traceback.format_exc()}")
+        except Exception:
+            logger.exception(f"Failed to send client launched message for {session_id}")
 
     async def _send_session_failure_message(self, session_id: str, error_message: str,
                                                raw_error: str | None = None):
@@ -3211,8 +3209,8 @@ class SessionCoordinator:
             await callback(message_data)
 
             coord_logger.info(f"Session failure message sent for session {session_id}")
-        except Exception as e:
-            logger.error(f"Failed to send session failure message for {session_id}: {e}")
+        except Exception:
+            logger.exception(f"Failed to send session failure message for {session_id}")
 
     async def _send_interrupt_message(self, session_id: str):
         """Send interrupt system message via callback system (following client_launched pattern)"""
@@ -3236,8 +3234,8 @@ class SessionCoordinator:
 
             coord_logger.info(f"Interrupt message sent for session {session_id}")
 
-        except Exception as e:
-            logger.error(f"Failed to send interrupt message for {session_id}: {e}")
+        except Exception:
+            logger.exception(f"Failed to send interrupt message for {session_id}")
 
     def _format_failure_content(self, friendly_error: str, raw_error: str | None) -> str:
         """Format failure message content, extracting stderr when available.
@@ -3332,11 +3330,11 @@ class SessionCoordinator:
                         await callback(state_data)
                     else:
                         callback(state_data)
-                except Exception as e:
-                    logger.error(f"Error in state change callback: {e}")
+                except Exception:
+                    logger.exception("Error in state change callback")
 
-        except Exception as e:
-            logger.error(f"Error notifying state change for {session_id}: {e}")
+        except Exception:
+            logger.exception(f"Error notifying state change for {session_id}")
 
     async def _on_session_manager_state_change(self, session_id: str, new_state: SessionState):
         """Handle state changes from session manager"""
@@ -3415,8 +3413,8 @@ class SessionCoordinator:
             else:
                 coord_logger.info("Startup validation complete: no orphaned data found")
 
-        except Exception as e:
-            logger.error(f"Error during startup project validation: {e}")
+        except Exception:
+            logger.exception("Error during startup project validation")
             # Don't raise - this shouldn't block startup
 
     # ==================== FILE UPLOAD TRACKING (Issue #403) ====================
@@ -3558,5 +3556,5 @@ class SessionCoordinator:
 
             coord_logger.info("Session coordinator cleanup completed")
 
-        except Exception as e:
-            logger.error(f"Error during session coordinator cleanup: {e}")
+        except Exception:
+            logger.exception("Error during session coordinator cleanup")
