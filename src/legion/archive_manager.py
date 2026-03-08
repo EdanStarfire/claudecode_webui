@@ -7,6 +7,7 @@ Responsibilities:
 - Support later analysis and debugging of disposed minions
 """
 
+import asyncio
 import json
 import logging
 import shutil
@@ -14,6 +15,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from src.history_distiller import distill_session_history
 from src.logging_config import get_logger
 from src.models.archive_models import ArchiveResult, DisposalMetadata
 
@@ -141,6 +143,17 @@ class ArchiveManager:
             archive_logger.info(
                 f"Archived minion {session_info.name} ({minion_id}) to {archive_dir}"
             )
+
+            # Fire-and-forget distillation of session history into markdown
+            # Write into the archive directory — sessions/{id}/ gets deleted after disposal.
+            archived_messages = archive_dir / "messages.jsonl"
+            if archived_messages.exists():
+                history_output = archive_dir / "history.md"
+                archive_ts = datetime.now(UTC).isoformat()
+                asyncio.create_task(
+                    distill_session_history(archived_messages, history_output, minion_id, archive_ts)
+                )
+                archive_logger.debug(f"Launched history distillation for minion {minion_id}")
 
             return ArchiveResult(
                 success=True,
@@ -500,3 +513,41 @@ class ArchiveManager:
                     agents[session_id]["last_archived_at"] = disposed_at
 
         return list(agents.values())
+
+    async def erase_history(self, session_id: str) -> bool:
+        """Delete all distilled history .md files for a session."""
+        sessions_dir = self.system.session_coordinator.session_manager.sessions_dir
+        history_dir = sessions_dir / session_id / "history"
+        if not history_dir.exists():
+            return False
+        try:
+            shutil.rmtree(history_dir)
+            archive_logger.info(f"Erased history for session {session_id}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to erase history for {session_id}: {e}")
+            return False
+
+    async def erase_archives(self, session_id: str) -> bool:
+        """Delete all archives for a session."""
+        session_archive_dir = self.archives_dir / session_id
+        if not session_archive_dir.exists():
+            return False
+        try:
+            shutil.rmtree(session_archive_dir)
+            archive_logger.info(f"Erased archives for session {session_id}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to erase archives for {session_id}: {e}")
+            return False
+
+    async def check_history_archives_exist(self, session_id: str) -> dict:
+        """Check if history and/or archives exist for a session."""
+        sessions_dir = self.system.session_coordinator.session_manager.sessions_dir
+        history_dir = sessions_dir / session_id / "history"
+        has_history = history_dir.exists() and any(history_dir.glob("*.md"))
+
+        session_archive_dir = self.archives_dir / session_id
+        has_archives = session_archive_dir.exists() and any(session_archive_dir.iterdir())
+
+        return {"has_history": has_history, "has_archives": has_archives}

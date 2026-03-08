@@ -44,6 +44,8 @@ export const useSessionStore = defineStore('session', () => {
 
   // Session reset counter (triggers archive re-fetch in AgentOverview)
   const sessionResets = ref(new Map())              // sessionId → reset count
+  // Archive change counter (triggers archive re-fetch after erasure)
+  const archiveChanges = ref(new Map())             // sessionId → change count
 
   // Session selection state (prevents concurrent selectSession calls)
   const selectingSession = ref(false)
@@ -565,6 +567,25 @@ export const useSessionStore = defineStore('session', () => {
     sessionResets.value.set(sessionId, current + 1)
   }
 
+  // ========== HISTORY & ARCHIVE ACTIONS ==========
+
+  async function eraseHistory(sessionId) {
+    const response = await api.delete(`/api/sessions/${sessionId}/history`)
+    return response
+  }
+
+  async function eraseArchives(sessionId) {
+    const response = await api.delete(`/api/sessions/${sessionId}/archives`)
+    // Bump archive change counter so AgentOverview re-fetches
+    const current = archiveChanges.value.get(sessionId) || 0
+    archiveChanges.value.set(sessionId, current + 1)
+    return response
+  }
+
+  async function checkHistoryArchivesStatus(sessionId) {
+    return await api.get(`/api/sessions/${sessionId}/history-archives-status`)
+  }
+
   // ========== GHOST AGENT ACTIONS ==========
 
   function addGhostAgent(agentId, agentData) {
@@ -589,6 +610,7 @@ export const useSessionStore = defineStore('session', () => {
     scrollPositions,
     pendingScrollRestoreSessionId,
     sessionResets,
+    archiveChanges,
 
     // Computed
     currentSession,
@@ -610,6 +632,9 @@ export const useSessionStore = defineStore('session', () => {
     terminateSession,
     getSession,
     storeInitData,
+    eraseHistory,
+    eraseArchives,
+    checkHistoryArchivesStatus,
     addGhostAgent,
     removeGhostAgent,
     registerScrollPositionGetter,

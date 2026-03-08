@@ -29,16 +29,29 @@
             <div class="alert alert-danger mb-3">
               <strong>⚠️ Warning: This action cannot be undone</strong>
             </div>
-            <p class="text-muted">This will permanently delete all messages and conversation history for this session.</p>
-            <p class="text-muted">The session settings and configuration will be preserved, but you will start with a completely fresh conversation.</p>
+            <p class="text-muted">This will clear the current conversation and restart the session with a fresh context.</p>
+            <p class="text-muted">Session settings and configuration will be preserved.</p>
+          </div>
+
+          <div v-else-if="confirmationView === 'erase-history'">
+            <div class="alert alert-warning mb-3">
+              <strong>Forget all past conversations?</strong>
+            </div>
+            <p class="text-muted">This will delete all distilled conversation history for this session. The agent will no longer have access to past context.</p>
+          </div>
+
+          <div v-else-if="confirmationView === 'erase-archives'">
+            <div class="alert alert-danger mb-3">
+              <strong>Clear playback records?</strong>
+            </div>
+            <p class="text-muted">This will delete all full playback records for this session. This cannot be undone.</p>
           </div>
 
           <div v-else-if="confirmationView === 'delete'">
             <div class="alert alert-danger mb-3">
               <strong>⚠️ Warning: This action cannot be undone</strong>
             </div>
-            <p class="text-muted">This will permanently delete session <strong>{{ session?.name }}</strong>.</p>
-            <p class="text-muted">All messages, conversation history, settings, and configuration will be completely destroyed. This is more destructive than Reset Session.</p>
+            <p class="text-muted">This will permanently delete session <strong>{{ session?.name }}</strong> and all archive data.</p>
 
             <!-- Cascading deletion warning for sessions with children -->
             <div v-if="isLoadingDescendants" class="text-center py-2">
@@ -76,7 +89,7 @@
                 :disabled="isPerformingAction"
               >
                 <strong>🔄 Restart Agent</strong>
-                <div class="small text-muted">Disconnect and resume session (keeps all messages)</div>
+                <div class="small text-muted">Disconnect and resume session (keeps conversation)</div>
               </button>
 
               <button
@@ -93,7 +106,7 @@
 
               <!-- Danger Zone -->
               <div class="danger-zone-header">
-                <h6 class="text-danger mb-2">⚠️ Danger Zone</h6>
+                <h6 class="text-danger mb-2">Danger Zone</h6>
               </div>
 
               <!-- Destructive actions -->
@@ -102,8 +115,8 @@
                 @click="showResetConfirmation"
                 :disabled="isPerformingAction"
               >
-                <strong>🧹 Reset Session</strong>
-                <div class="small text-muted">Clear all messages and start fresh (keeps settings)</div>
+                <strong>Reset Session</strong>
+                <div class="small text-muted">Clear conversation and restart session</div>
               </button>
 
               <button
@@ -111,13 +124,38 @@
                 @click="showDeleteConfirmation"
                 :disabled="isPerformingAction"
               >
-                <strong>🗑️ Delete Session</strong>
-                <div class="small text-muted">Permanently delete this session and all its data</div>
+                <strong>Delete Session</strong>
+                <div class="small text-muted">Permanently delete session and archive data</div>
               </button>
-            </div>
 
-            <div class="alert alert-warning mt-3 mb-0">
-              <small><strong>Note:</strong> Restart is the recommended option for unsticking the agent.</small>
+              <!-- Knowledge Management (conditional) -->
+              <template v-if="historyArchivesStatus.has_history || historyArchivesStatus.has_archives">
+                <hr class="my-2">
+
+                <div class="knowledge-section-header">
+                  <h6 class="text-secondary mb-2">Knowledge Management</h6>
+                </div>
+
+                <button
+                  v-if="historyArchivesStatus.has_history"
+                  class="btn btn-outline-secondary text-start"
+                  @click="confirmationView = 'erase-history'"
+                  :disabled="isPerformingAction"
+                >
+                  <strong>Delete History</strong>
+                  <div class="small text-muted">Forget all past conversations</div>
+                </button>
+
+                <button
+                  v-if="historyArchivesStatus.has_archives"
+                  class="btn btn-outline-secondary text-start"
+                  @click="confirmationView = 'erase-archives'"
+                  :disabled="isPerformingAction"
+                >
+                  <strong>Delete Archives</strong>
+                  <div class="small text-muted">Clear full playback records for session</div>
+                </button>
+              </template>
             </div>
           </div>
         </div>
@@ -131,7 +169,10 @@
               :class="confirmationView === 'delete' ? 'btn-danger' : 'btn-warning'"
               @click="executeConfirmation"
             >
-              {{ confirmationView === 'delete' ? 'Delete Session' : 'Confirm Reset' }}
+              {{ confirmationView === 'delete' ? 'Delete Session'
+                 : confirmationView === 'erase-history' ? 'Delete History'
+                 : confirmationView === 'erase-archives' ? 'Delete Archives'
+                 : 'Confirm Reset' }}
             </button>
           </template>
           <!-- Default Button -->
@@ -162,7 +203,7 @@ const session = ref(null)
 const isPerformingAction = ref(false)
 const loadingMessage = ref('')
 const errorMessage = ref('')
-const confirmationView = ref(null) // 'reset', 'delete', or null
+const confirmationView = ref(null) // 'reset', 'delete', 'erase-history', 'erase-archives', or null
 const modalElement = ref(null)
 let modalInstance = null
 
@@ -170,10 +211,16 @@ let modalInstance = null
 const descendants = ref([])
 const isLoadingDescendants = ref(false)
 
+// History/archives status
+const historyArchivesStatus = ref({ has_history: false, has_archives: false })
+const isLoadingStatus = ref(false)
+
 // Computed
 const confirmationTitle = computed(() => {
   if (confirmationView.value === 'reset') return 'Reset Session'
   if (confirmationView.value === 'delete') return 'Delete Session'
+  if (confirmationView.value === 'erase-history') return 'Delete History'
+  if (confirmationView.value === 'erase-archives') return 'Delete Archives'
   return 'Manage Session'
 })
 
@@ -214,6 +261,10 @@ async function executeConfirmation() {
     await confirmResetSession()
   } else if (confirmationView.value === 'delete') {
     await confirmDeleteSession()
+  } else if (confirmationView.value === 'erase-history') {
+    await confirmEraseHistory()
+  } else if (confirmationView.value === 'erase-archives') {
+    await confirmEraseArchives()
   }
 }
 
@@ -382,6 +433,46 @@ async function confirmDeleteSession() {
   }
 }
 
+// Confirm erase history
+async function confirmEraseHistory() {
+  if (!session.value) return
+
+  isPerformingAction.value = true
+  loadingMessage.value = 'Erasing history...'
+
+  try {
+    await sessionStore.eraseHistory(session.value.session_id)
+    historyArchivesStatus.value.has_history = false
+    confirmationView.value = null
+  } catch (error) {
+    console.error('Error erasing history:', error)
+    errorMessage.value = `Error erasing history: ${error.message || 'Unknown error'}`
+    confirmationView.value = null
+  } finally {
+    isPerformingAction.value = false
+  }
+}
+
+// Confirm erase archives
+async function confirmEraseArchives() {
+  if (!session.value) return
+
+  isPerformingAction.value = true
+  loadingMessage.value = 'Erasing archives...'
+
+  try {
+    await sessionStore.eraseArchives(session.value.session_id)
+    historyArchivesStatus.value.has_archives = false
+    confirmationView.value = null
+  } catch (error) {
+    console.error('Error erasing archives:', error)
+    errorMessage.value = `Error erasing archives: ${error.message || 'Unknown error'}`
+    confirmationView.value = null
+  } finally {
+    isPerformingAction.value = false
+  }
+}
+
 // Reset state
 function resetState() {
   confirmationView.value = null
@@ -390,6 +481,8 @@ function resetState() {
   errorMessage.value = ''
   descendants.value = []
   isLoadingDescendants.value = false
+  historyArchivesStatus.value = { has_history: false, has_archives: false }
+  isLoadingStatus.value = false
 }
 
 // Handle modal hidden event
@@ -408,6 +501,21 @@ watch(
       session.value = data.session
       resetState()
       modalInstance.show()
+
+      // Fetch history/archives status
+      if (session.value?.session_id) {
+        isLoadingStatus.value = true
+        sessionStore.checkHistoryArchivesStatus(session.value.session_id)
+          .then(status => {
+            historyArchivesStatus.value = status
+          })
+          .catch(err => {
+            console.warn('Failed to check history/archives status:', err)
+          })
+          .finally(() => {
+            isLoadingStatus.value = false
+          })
+      }
     }
   }
 )
@@ -434,7 +542,8 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
-.danger-zone-header {
+.danger-zone-header,
+.knowledge-section-header {
   margin-top: 0.5rem;
 }
 

@@ -300,6 +300,145 @@ class TestArchiveManager:
         assert archives_dir == temp_path / "archives" / "minions"
 
 
+class TestArchiveManagerErasure:
+    """Tests for erase_history, erase_archives, and check_history_archives_exist."""
+
+    @pytest.mark.asyncio
+    async def test_issue_691_erase_history(self, mock_system):
+        """Erase history clears history/ directory."""
+        system, temp_path = mock_system
+        session_id = "test-session-1"
+
+        # Create history files
+        history_dir = temp_path / "sessions" / session_id / "history"
+        history_dir.mkdir(parents=True)
+        (history_dir / "20240101_120000.md").write_text("# History")
+
+        manager = ArchiveManager(system)
+        result = await manager.erase_history(session_id)
+
+        assert result is True
+        assert not history_dir.exists()
+
+    @pytest.mark.asyncio
+    async def test_issue_691_erase_history_no_history(self, mock_system):
+        """Erase history returns False when no history exists."""
+        system, temp_path = mock_system
+        manager = ArchiveManager(system)
+        result = await manager.erase_history("nonexistent")
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_issue_691_erase_archives(self, mock_system):
+        """Erase archives clears archives/{session_id}/ directory."""
+        system, temp_path = mock_system
+        session_id = "test-session-1"
+
+        manager = ArchiveManager(system)
+        # Create archive directory
+        archive_dir = manager.archives_dir / session_id / "20240101_120000"
+        archive_dir.mkdir(parents=True)
+        (archive_dir / "messages.jsonl").write_text('{"test": true}\n')
+
+        result = await manager.erase_archives(session_id)
+
+        assert result is True
+        assert not (manager.archives_dir / session_id).exists()
+
+    @pytest.mark.asyncio
+    async def test_issue_691_erase_archives_no_archives(self, mock_system):
+        """Erase archives returns False when no archives exist."""
+        system, temp_path = mock_system
+        manager = ArchiveManager(system)
+        result = await manager.erase_archives("nonexistent")
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_issue_691_erase_history_preserves_archives(self, mock_system):
+        """Erasing history does not affect archives."""
+        system, temp_path = mock_system
+        session_id = "test-session-1"
+
+        # Create both history and archives
+        history_dir = temp_path / "sessions" / session_id / "history"
+        history_dir.mkdir(parents=True)
+        (history_dir / "test.md").write_text("# History")
+
+        manager = ArchiveManager(system)
+        archive_dir = manager.archives_dir / session_id / "20240101_120000"
+        archive_dir.mkdir(parents=True)
+        (archive_dir / "messages.jsonl").write_text('{"test": true}\n')
+
+        await manager.erase_history(session_id)
+
+        assert not history_dir.exists()
+        assert archive_dir.exists()
+
+    @pytest.mark.asyncio
+    async def test_issue_691_erase_archives_preserves_history(self, mock_system):
+        """Erasing archives does not affect history."""
+        system, temp_path = mock_system
+        session_id = "test-session-1"
+
+        # Create both
+        history_dir = temp_path / "sessions" / session_id / "history"
+        history_dir.mkdir(parents=True)
+        (history_dir / "test.md").write_text("# History")
+
+        manager = ArchiveManager(system)
+        archive_dir = manager.archives_dir / session_id / "20240101_120000"
+        archive_dir.mkdir(parents=True)
+        (archive_dir / "messages.jsonl").write_text('{"test": true}\n')
+
+        await manager.erase_archives(session_id)
+
+        assert history_dir.exists()
+        assert not (manager.archives_dir / session_id).exists()
+
+    @pytest.mark.asyncio
+    async def test_issue_691_check_status_both_exist(self, mock_system):
+        """Status check returns True for both when both exist."""
+        system, temp_path = mock_system
+        session_id = "test-session-1"
+
+        # Create history
+        history_dir = temp_path / "sessions" / session_id / "history"
+        history_dir.mkdir(parents=True)
+        (history_dir / "test.md").write_text("# History")
+
+        # Create archives
+        manager = ArchiveManager(system)
+        archive_dir = manager.archives_dir / session_id / "20240101_120000"
+        archive_dir.mkdir(parents=True)
+
+        status = await manager.check_history_archives_exist(session_id)
+        assert status["has_history"] is True
+        assert status["has_archives"] is True
+
+    @pytest.mark.asyncio
+    async def test_issue_691_check_status_neither_exist(self, mock_system):
+        """Status check returns False for both when neither exists."""
+        system, temp_path = mock_system
+        manager = ArchiveManager(system)
+        status = await manager.check_history_archives_exist("nonexistent")
+        assert status["has_history"] is False
+        assert status["has_archives"] is False
+
+    @pytest.mark.asyncio
+    async def test_issue_691_check_status_empty_history_dir(self, mock_system):
+        """Empty history dir (no .md files) returns has_history=False."""
+        system, temp_path = mock_system
+        session_id = "test-session-1"
+
+        history_dir = temp_path / "sessions" / session_id / "history"
+        history_dir.mkdir(parents=True)
+        # Dir exists but no .md files
+
+        manager = ArchiveManager(system)
+        status = await manager.check_history_archives_exist(session_id)
+        assert status["has_history"] is False
+
+
 class TestArchiveManagerInLegionSystem:
     """Test ArchiveManager integration with LegionSystem."""
 

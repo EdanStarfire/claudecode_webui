@@ -254,6 +254,14 @@ watch(
   }
 )
 
+// Issue #691: Re-fetch archives when archives are erased via manage modal
+watch(
+  () => sessionStore.archiveChanges.get(sessionStore.currentSessionId),
+  (newVal) => {
+    if (newVal !== undefined) fetchArchives()
+  }
+)
+
 const isDeletedAgent = computed(() => {
   if (route.params.agentId) return true
   if (sessionStore.ghostAgents.get(sessionStore.currentSessionId)) return true

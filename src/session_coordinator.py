@@ -790,10 +790,21 @@ class SessionCoordinator:
 
             # Issue #349: All sessions are minions - always prepend legion guide
             legion_guide = get_legion_guide_only()
+
+            # Issue #691: Append session history reference so agents can check past context
+            history_dir = session_dir / "history"
+            history_note = (
+                f"\n\n## Session History\n"
+                f"Distilled history from previous conversations is available at "
+                f"`{history_dir}/` (read-only). Before answering questions about past "
+                f"context, identity, or decisions, check this folder for relevant "
+                f"archived conversations."
+            )
+
             if session_info.system_prompt:
-                minion_system_prompt = f"{legion_guide}\n\n---\n\n{session_info.system_prompt}"
+                minion_system_prompt = f"{legion_guide}{history_note}\n\n---\n\n{session_info.system_prompt}"
             else:
-                minion_system_prompt = legion_guide
+                minion_system_prompt = f"{legion_guide}{history_note}"
             coord_logger.info(f"Built minion system prompt for start (guide + context): {len(minion_system_prompt)} chars")
 
             # Escape special characters in system_prompt for subprocess command-line safety
@@ -1697,6 +1708,20 @@ class SessionCoordinator:
             metadata_path = archive_dir / "disposal_metadata.json"
             metadata_path.write_text(json.dumps(metadata, indent=2))
 
+            # Fire-and-forget distillation of session history into markdown
+            # Use the archived copy of messages.jsonl, not the live file — the live
+            # file gets truncated by clear_messages() right after this method returns.
+            archived_messages = archive_dir / "messages.jsonl"
+            if archived_messages.exists():
+                from src.history_distiller import distill_session_history
+
+                history_output = session_dir / "history" / f"{timestamp}.md"
+                archive_ts = datetime.now(UTC).isoformat()
+                asyncio.create_task(
+                    distill_session_history(archived_messages, history_output, session_id, archive_ts)
+                )
+                coord_logger.debug(f"Launched history distillation for session {session_id}")
+
             coord_logger.info(f"Archived session {session_id} to {archive_dir}")
             return True
 
@@ -2057,6 +2082,24 @@ class SessionCoordinator:
         if not self.legion_system:
             return []
         return await self.legion_system.archive_manager.list_project_deleted_agents(project_id)
+
+    async def erase_history(self, session_id: str) -> bool:
+        """Erase distilled history for a session."""
+        if not self.legion_system:
+            return False
+        return await self.legion_system.archive_manager.erase_history(session_id)
+
+    async def erase_archives(self, session_id: str) -> bool:
+        """Erase archives for a session."""
+        if not self.legion_system:
+            return False
+        return await self.legion_system.archive_manager.erase_archives(session_id)
+
+    async def check_history_archives(self, session_id: str) -> dict:
+        """Check existence of history and archives for a session."""
+        if not self.legion_system:
+            return {"has_history": False, "has_archives": False}
+        return await self.legion_system.archive_manager.check_history_archives_exist(session_id)
 
     async def get_session_messages(
         self,
