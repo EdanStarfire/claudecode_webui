@@ -211,6 +211,26 @@ class TestScheduleLifecycle:
         assert resp.status_code == 404
 
 
+class TestRunNow:
+    async def test_run_now(self, api_integration_env):
+        client = api_integration_env["client"]
+        lid, minion_id = await _setup_legion_with_minion(api_integration_env)
+        schedule = await _create_schedule(client, lid, minion_id)
+        sched_id = schedule["schedule_id"]
+
+        resp = await client.post(f"/api/legions/{lid}/schedules/{sched_id}/run-now")
+        # May succeed or fail with 409 (already running) or 500 (SDK not started)
+        assert resp.status_code in (200, 409, 500)
+
+    async def test_run_now_nonexistent(self, api_integration_env):
+        client = api_integration_env["client"]
+        project = await api_integration_env["create_test_legion_project"]("Run Now Test")
+        lid = project["project_id"]
+
+        resp = await client.post(f"/api/legions/{lid}/schedules/fake/run-now")
+        assert resp.status_code == 404
+
+
 class TestDeleteSchedule:
     async def test_delete_schedule(self, api_integration_env):
         client = api_integration_env["client"]

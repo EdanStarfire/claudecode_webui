@@ -112,6 +112,41 @@ class TestArchiveResources:
             )
             assert resp.status_code == 200
 
+    async def test_get_archive_resource_file(self, api_integration_env):
+        """GET /api/projects/{pid}/archives/{sid}/{aid}/resources/{rid} — raw file."""
+        client = api_integration_env["client"]
+        pid, sid = await _create_and_delete_session(api_integration_env)
+
+        resp = await client.get(f"/api/projects/{pid}/archives/{sid}")
+        archives = resp.json().get("archives", [])
+
+        if archives:
+            archive_id = archives[0]["archive_id"]
+            res_resp = await client.get(
+                f"/api/projects/{pid}/archives/{sid}/{archive_id}/resources"
+            )
+            resources = res_resp.json().get("resources", [])
+            if resources:
+                rid = resources[0]["resource_id"]
+                resp = await client.get(
+                    f"/api/projects/{pid}/archives/{sid}/{archive_id}/resources/{rid}"
+                )
+                assert resp.status_code == 200
+
+    async def test_get_archive_resource_file_nonexistent(self, api_integration_env):
+        client = api_integration_env["client"]
+        pid, sid = await _create_and_delete_session(api_integration_env)
+
+        resp = await client.get(f"/api/projects/{pid}/archives/{sid}")
+        archives = resp.json().get("archives", [])
+
+        if archives:
+            archive_id = archives[0]["archive_id"]
+            resp = await client.get(
+                f"/api/projects/{pid}/archives/{sid}/{archive_id}/resources/nonexistent"
+            )
+            assert resp.status_code == 404
+
 
 class TestDeletedAgents:
     async def test_deleted_agents_empty(self, api_integration_env):

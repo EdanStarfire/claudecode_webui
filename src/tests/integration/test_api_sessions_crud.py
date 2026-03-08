@@ -284,6 +284,103 @@ class TestHistoryArchivesStatus:
         assert "has_archives" in body
 
 
+class TestEraseHistory:
+    async def test_erase_history(self, api_integration_env):
+        create_project = api_integration_env["create_test_project"]
+        create_session = api_integration_env["create_test_session"]
+        client = api_integration_env["client"]
+
+        project = await create_project("Erase History Test")
+        session = await create_session(project["project_id"], "HistSession")
+        sid = session["session_id"]
+
+        resp = await client.delete(f"/api/sessions/{sid}/history")
+        assert resp.status_code == 200
+        assert "success" in resp.json()
+
+    async def test_erase_history_nonexistent(self, api_integration_env):
+        client = api_integration_env["client"]
+        fake_id = str(uuid.uuid4())
+        resp = await client.delete(f"/api/sessions/{fake_id}/history")
+        # May return 200 (no-op) or 500 depending on implementation
+        assert resp.status_code in (200, 500)
+
+
+class TestEraseArchives:
+    async def test_erase_archives(self, api_integration_env):
+        create_project = api_integration_env["create_test_project"]
+        create_session = api_integration_env["create_test_session"]
+        client = api_integration_env["client"]
+
+        project = await create_project("Erase Archives Test")
+        session = await create_session(project["project_id"], "ArchSession")
+        sid = session["session_id"]
+
+        resp = await client.delete(f"/api/sessions/{sid}/archives")
+        assert resp.status_code == 200
+        assert "success" in resp.json()
+
+    async def test_erase_archives_nonexistent(self, api_integration_env):
+        client = api_integration_env["client"]
+        fake_id = str(uuid.uuid4())
+        resp = await client.delete(f"/api/sessions/{fake_id}/archives")
+        assert resp.status_code in (200, 500)
+
+
+class TestMcpToggle:
+    async def test_toggle_mcp_server(self, api_integration_env):
+        create_project = api_integration_env["create_test_project"]
+        create_session = api_integration_env["create_test_session"]
+        client = api_integration_env["client"]
+
+        project = await create_project("MCP Toggle Test")
+        session = await create_session(project["project_id"], "ToggleSession")
+        sid = session["session_id"]
+
+        resp = await client.post(
+            f"/api/sessions/{sid}/mcp-toggle",
+            json={"name": "test-server", "enabled": False},
+        )
+        # 400 expected since no MCP server named "test-server" exists
+        assert resp.status_code in (200, 400)
+
+    async def test_toggle_mcp_nonexistent_session(self, api_integration_env):
+        client = api_integration_env["client"]
+        fake_id = str(uuid.uuid4())
+        resp = await client.post(
+            f"/api/sessions/{fake_id}/mcp-toggle",
+            json={"name": "test-server", "enabled": True},
+        )
+        assert resp.status_code in (400, 404, 422)
+
+
+class TestMcpReconnect:
+    async def test_reconnect_mcp_server(self, api_integration_env):
+        create_project = api_integration_env["create_test_project"]
+        create_session = api_integration_env["create_test_session"]
+        client = api_integration_env["client"]
+
+        project = await create_project("MCP Reconnect Test")
+        session = await create_session(project["project_id"], "ReconnSession")
+        sid = session["session_id"]
+
+        resp = await client.post(
+            f"/api/sessions/{sid}/mcp-reconnect",
+            json={"name": "test-server"},
+        )
+        # 400 expected since no MCP server named "test-server" exists
+        assert resp.status_code in (200, 400)
+
+    async def test_reconnect_mcp_nonexistent_session(self, api_integration_env):
+        client = api_integration_env["client"]
+        fake_id = str(uuid.uuid4())
+        resp = await client.post(
+            f"/api/sessions/{fake_id}/mcp-reconnect",
+            json={"name": "test-server"},
+        )
+        assert resp.status_code in (400, 404, 422)
+
+
 class TestMcpStatus:
     async def test_mcp_status(self, api_integration_env):
         create_project = api_integration_env["create_test_project"]

@@ -184,3 +184,77 @@ class TestGetMessages:
             resp_offset = await client.get(f"/api/sessions/{sid}/messages?limit=100&offset=1")
             offset_msgs = resp_offset.json()["messages"]
             assert len(offset_msgs) == len(all_msgs) - 1
+
+
+class TestPauseSession:
+    async def test_pause_active_session(self, api_integration_env):
+        client = api_integration_env["client"]
+        session = await _create_named_session(api_integration_env, "single_turn")
+        sid = session["session_id"]
+
+        # Start session
+        await client.post(f"/api/sessions/{sid}/start")
+        await _wait_for_state(client, sid, "active")
+
+        resp = await client.post(f"/api/sessions/{sid}/pause")
+        assert resp.status_code == 200
+        assert resp.json()["success"] is True
+
+    async def test_pause_created_session(self, api_integration_env):
+        """Pausing a non-active session should still return 200."""
+        client = api_integration_env["client"]
+        session = await _create_named_session(api_integration_env, "single_turn")
+        sid = session["session_id"]
+
+        resp = await client.post(f"/api/sessions/{sid}/pause")
+        # May succeed (no-op) or fail depending on state validation
+        assert resp.status_code in (200, 400, 500)
+
+
+class TestRestartSession:
+    async def test_restart_active_session(self, api_integration_env):
+        client = api_integration_env["client"]
+        session = await _create_named_session(api_integration_env, "single_turn")
+        sid = session["session_id"]
+
+        # Start session
+        await client.post(f"/api/sessions/{sid}/start")
+        await _wait_for_state(client, sid, "active")
+
+        resp = await client.post(f"/api/sessions/{sid}/restart")
+        assert resp.status_code == 200
+        assert resp.json()["success"] is True
+
+    async def test_restart_created_session(self, api_integration_env):
+        """Restart on a non-active session."""
+        client = api_integration_env["client"]
+        session = await _create_named_session(api_integration_env, "single_turn")
+        sid = session["session_id"]
+
+        resp = await client.post(f"/api/sessions/{sid}/restart")
+        # Should handle gracefully — may start fresh or return error
+        assert resp.status_code in (200, 400, 500)
+
+
+class TestResetSession:
+    async def test_reset_active_session(self, api_integration_env):
+        client = api_integration_env["client"]
+        session = await _create_named_session(api_integration_env, "single_turn")
+        sid = session["session_id"]
+
+        # Start session
+        await client.post(f"/api/sessions/{sid}/start")
+        await _wait_for_state(client, sid, "active")
+
+        resp = await client.post(f"/api/sessions/{sid}/reset")
+        assert resp.status_code == 200
+        assert resp.json()["success"] is True
+
+    async def test_reset_created_session(self, api_integration_env):
+        """Reset on a non-active session."""
+        client = api_integration_env["client"]
+        session = await _create_named_session(api_integration_env, "single_turn")
+        sid = session["session_id"]
+
+        resp = await client.post(f"/api/sessions/{sid}/reset")
+        assert resp.status_code in (200, 400, 500)

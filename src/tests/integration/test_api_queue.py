@@ -125,6 +125,34 @@ class TestCancelQueueItem:
         assert resp.status_code == 404
 
 
+class TestRequeueItem:
+    async def test_requeue_cancelled_item(self, api_integration_env):
+        client = api_integration_env["client"]
+        session = await _create_session(api_integration_env)
+        sid = session["session_id"]
+
+        # Enqueue then cancel
+        enqueue_resp = await client.post(
+            f"/api/sessions/{sid}/queue-message",
+            json={"content": "To requeue"},
+        )
+        queue_id = enqueue_resp.json()["queue_id"]
+        await client.delete(f"/api/sessions/{sid}/queue/{queue_id}")
+
+        # Requeue — item is cancelled (not sent/failed), so may return 404
+        resp = await client.post(f"/api/sessions/{sid}/queue/{queue_id}/requeue")
+        # Requeue only works on sent/failed items; cancelled items may 404
+        assert resp.status_code in (200, 404)
+
+    async def test_requeue_nonexistent_item(self, api_integration_env):
+        client = api_integration_env["client"]
+        session = await _create_session(api_integration_env)
+        sid = session["session_id"]
+
+        resp = await client.post(f"/api/sessions/{sid}/queue/nonexistent/requeue")
+        assert resp.status_code == 404
+
+
 class TestClearQueue:
     async def test_clear_queue(self, api_integration_env):
         client = api_integration_env["client"]
