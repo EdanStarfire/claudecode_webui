@@ -101,17 +101,79 @@ export const useSessionStore = defineStore('session', () => {
     try {
       const data = await api.get('/api/sessions')
 
-      // Clear and rebuild sessions map
-      sessions.value.clear()
+      // Merge-based update: preserves reactivity and avoids brief empty Map (#702)
+      const returnedIds = new Set()
       data.sessions.forEach(session => {
-        sessions.value.set(session.session_id, session)
+        returnedIds.add(session.session_id)
+        const existing = sessions.value.get(session.session_id)
+        if (existing) {
+          Object.assign(existing, session)
+        } else {
+          sessions.value.set(session.session_id, session)
+        }
       })
+
+      // Remove sessions no longer in backend (disposed minions, deletions)
+      for (const id of sessions.value.keys()) {
+        if (!returnedIds.has(id)) {
+          sessions.value.delete(id)
+        }
+      }
+
+      // Trigger reactivity
+      sessions.value = new Map(sessions.value)
 
       console.log(`Loaded ${sessions.value.size} sessions`)
       return data.sessions
     } catch (error) {
       console.error('Failed to fetch sessions:', error)
       throw error
+    }
+  }
+
+  /**
+   * Lightweight state sync — polls /api/sessions and merges into existing Map.
+   * Used by periodic polling to detect and correct state drift from missed WebSocket messages.
+   */
+  async function syncSessionStates() {
+    try {
+      const data = await api.get('/api/sessions')
+      let corrections = 0
+
+      const returnedIds = new Set()
+      data.sessions.forEach(session => {
+        returnedIds.add(session.session_id)
+        const existing = sessions.value.get(session.session_id)
+        if (existing) {
+          // Detect state corrections for debugging
+          if (existing.state !== session.state || existing.is_processing !== session.is_processing) {
+            console.log(`[syncSessionStates] Correcting session ${session.session_id}: state ${existing.state}→${session.state}, processing ${existing.is_processing}→${session.is_processing}`)
+            corrections++
+          }
+          Object.assign(existing, session)
+        } else {
+          sessions.value.set(session.session_id, session)
+          corrections++
+        }
+      })
+
+      // Remove sessions no longer in backend
+      for (const id of sessions.value.keys()) {
+        if (!returnedIds.has(id)) {
+          sessions.value.delete(id)
+          corrections++
+        }
+      }
+
+      if (corrections > 0) {
+        // Trigger reactivity only when corrections were made
+        sessions.value = new Map(sessions.value)
+      }
+
+      return corrections
+    } catch (error) {
+      console.error('Failed to sync session states:', error)
+      return 0
     }
   }
 
@@ -608,6 +670,7 @@ export const useSessionStore = defineStore('session', () => {
 
     // Actions
     fetchSessions,
+    syncSessionStates,
     createSession,
     selectSession,
     updateSession,
