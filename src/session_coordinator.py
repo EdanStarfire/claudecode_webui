@@ -790,10 +790,21 @@ class SessionCoordinator:
 
             # Issue #349: All sessions are minions - always prepend legion guide
             legion_guide = get_legion_guide_only()
+
+            # Issue #691: Append session history reference so agents can check past context
+            history_dir = session_dir / "history"
+            history_note = (
+                f"\n\n## Session History\n"
+                f"Distilled history from previous conversations is available at "
+                f"`{history_dir}/` (read-only). Before answering questions about past "
+                f"context, identity, or decisions, check this folder for relevant "
+                f"archived conversations."
+            )
+
             if session_info.system_prompt:
-                minion_system_prompt = f"{legion_guide}\n\n---\n\n{session_info.system_prompt}"
+                minion_system_prompt = f"{legion_guide}{history_note}\n\n---\n\n{session_info.system_prompt}"
             else:
-                minion_system_prompt = legion_guide
+                minion_system_prompt = f"{legion_guide}{history_note}"
             coord_logger.info(f"Built minion system prompt for start (guide + context): {len(minion_system_prompt)} chars")
 
             # Escape special characters in system_prompt for subprocess command-line safety
