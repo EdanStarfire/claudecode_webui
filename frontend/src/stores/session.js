@@ -505,19 +505,6 @@ export const useSessionStore = defineStore('session', () => {
   }
 
   /**
-   * Pause a session
-   */
-  async function pauseSession(sessionId) {
-    try {
-      await api.post(`/api/sessions/${sessionId}/pause`)
-      console.log(`Paused session ${sessionId}`)
-    } catch (error) {
-      console.error('Failed to pause session:', error)
-      throw error
-    }
-  }
-
-  /**
    * Terminate a session
    */
   async function terminateSession(sessionId) {
@@ -628,7 +615,6 @@ export const useSessionStore = defineStore('session', () => {
     patchSession,
     setPermissionMode,
     startSession,
-    pauseSession,
     terminateSession,
     getSession,
     storeInitData,
