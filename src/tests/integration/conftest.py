@@ -272,6 +272,111 @@ async def api_integration_env(request, tmp_path):
         pass
 
 
+@pytest.fixture
+def ws_integration_env(tmp_path):
+    """
+    WebSocket integration test environment with Starlette TestClient.
+
+    Provides both REST and WebSocket access to the FastAPI app
+    with MockClaudeSDK for deterministic message replay.
+    """
+    import time
+
+    from starlette.testclient import TestClient
+
+    from src.mock_sdk import MockClaudeSDK
+    from src.web_server import ClaudeWebUI
+
+    data_dir = tmp_path / "test_data_ws"
+    data_dir.mkdir()
+    fixtures_dir = Path(__file__).parent.parent / "fixtures"
+
+    import asyncio
+
+    webui = ClaudeWebUI(data_dir=data_dir)
+
+    # Initialize app (creates data directories, loads templates, etc.)
+    # Must happen before TestClient starts, since there's no lifespan event.
+    asyncio.run(webui.initialize())
+
+    test_client = TestClient(webui.app)
+    test_client.__enter__()
+
+    # Inject mock SDK factory (same pattern as api_integration_env)
+    def _lenient_mock_factory(session_id, working_directory, **kwargs):
+        session_name = kwargs.pop("session_name", None)
+        if session_name:
+            candidate = fixtures_dir / session_name
+            if candidate.is_dir():
+                kwargs["session_dir"] = str(candidate)
+        return MockClaudeSDK(
+            session_id=session_id,
+            working_directory=working_directory,
+            **kwargs,
+        )
+
+    webui.coordinator.set_sdk_factory(_lenient_mock_factory)
+
+    def create_project(name="Test Project"):
+        resp = test_client.post("/api/projects", json={
+            "name": name,
+            "working_directory": str(tmp_path),
+        })
+        assert resp.status_code == 200
+        return resp.json()["project"]
+
+    def create_session(project_id, name="Test Session", fixture_name=None):
+        # When fixture_name is provided, use it as the session name so the
+        # mock SDK factory can resolve it to the fixtures directory.
+        session_name = fixture_name if fixture_name else name
+        payload = {"project_id": project_id, "name": session_name}
+        resp = test_client.post("/api/sessions", json=payload)
+        assert resp.status_code == 200
+        session_id = resp.json()["session_id"]
+        resp2 = test_client.get(f"/api/sessions/{session_id}")
+        return resp2.json()["session"]
+
+    def start_session(session_id):
+        resp = test_client.post(f"/api/sessions/{session_id}/start")
+        assert resp.status_code == 200
+        return resp
+
+    def wait_for_state(session_id, target_state, timeout=10):
+        for _ in range(int(timeout / 0.2)):
+            resp = test_client.get(f"/api/sessions/{session_id}")
+            if resp.json()["session"]["state"] == target_state:
+                return True
+            time.sleep(0.2)
+        return False
+
+    env = {
+        "test_client": test_client,
+        "webui": webui,
+        "coordinator": webui.coordinator,
+        "data_dir": data_dir,
+        "fixtures_dir": fixtures_dir,
+        "create_project": create_project,
+        "create_session": create_session,
+        "start_session": start_session,
+        "wait_for_state": wait_for_state,
+    }
+
+    yield env
+
+    # Cleanup: close TestClient first (stops background thread), then terminate SDKs
+    test_client.__exit__(None, None, None)
+    try:
+        async def _cleanup():
+            for sid in list(webui.coordinator._active_sdks.keys()):
+                try:
+                    await webui.coordinator.terminate_session(sid)
+                except Exception:
+                    pass
+        asyncio.run(_cleanup())
+    except Exception:
+        pass
+
+
 def pytest_addoption(parser):
     """Add --retain-test-data flag for debugging."""
     parser.addoption(
