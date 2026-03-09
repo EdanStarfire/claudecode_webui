@@ -15,6 +15,7 @@
 
 /* Reduce default font size */
 :root {
+    color-scheme: light;
     --bs-body-font-size: 0.875rem; /* 14px if base is 16px */
 }
 
