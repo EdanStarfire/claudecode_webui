@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+from src.session_config import SessionConfig
 from src.session_coordinator import SessionCoordinator
 
 
@@ -81,9 +82,10 @@ async def legion_test_env(request):
         session_id = str(uuid.uuid4())
 
         # Create session (issue #349: is_minion removed - all sessions are minions)
+        config = SessionConfig(working_directory=str(Path.cwd()))
         await session_coordinator.session_manager.create_session(
             session_id=session_id,
-            working_directory=str(Path.cwd()),
+            config=config,
             name=name,
             role=role,
             project_id=legion_id,

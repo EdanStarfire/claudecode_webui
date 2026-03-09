@@ -26,6 +26,8 @@ except ImportError:
     tool = None
     create_sdk_mcp_server = None
 
+from src.session_config import SessionConfig
+
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
@@ -872,24 +874,26 @@ class LegionMCPTools:
         # Attempt to spawn child minion
         try:
             # Map initialization_context to system_prompt (initialization_context is semantic UI term)
+            spawn_config = SessionConfig(
+                permission_mode=permission_mode or "default",
+                system_prompt=initialization_context,
+                override_system_prompt=override_system_prompt,
+                allowed_tools=allowed_tools,
+                disallowed_tools=disallowed_tools,
+                model=model,
+                working_directory=working_directory,
+                cli_path=cli_path,
+                sandbox_enabled=sandbox_enabled,
+                docker_enabled=docker_enabled,
+                docker_image=docker_image,
+                docker_extra_mounts=docker_extra_mounts,
+            )
             spawn_result = await self.system.overseer_controller.spawn_minion(
                 parent_overseer_id=parent_overseer_id,
                 name=name,
                 role=role,
-                system_prompt=initialization_context,
+                config=spawn_config,
                 capabilities=capabilities,
-                permission_mode=permission_mode,
-                allowed_tools=allowed_tools,
-                disallowed_tools=disallowed_tools,
-                working_directory=working_directory,
-                sandbox_enabled=sandbox_enabled,
-                model=model,
-                override_system_prompt=override_system_prompt,
-                cli_path=cli_path,  # Issue #489: from template only
-                # Docker session isolation (issue #496): from template only
-                docker_enabled=docker_enabled,
-                docker_image=docker_image,
-                docker_extra_mounts=docker_extra_mounts,
             )
 
             child_minion_id = spawn_result["minion_id"]

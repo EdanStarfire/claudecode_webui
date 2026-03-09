@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 
+from ..session_config import SessionConfig
 from ..session_coordinator import SessionCoordinator
 from ..session_manager import SessionState
 
@@ -36,10 +37,12 @@ async def sample_session_config(temp_coordinator):
     return {
         "session_id": str(uuid.uuid4()),
         "project_id": project.project_id,
-        "permission_mode": "acceptEdits",
-        "system_prompt": "Test system prompt",
-        "allowed_tools": ["bash", "edit", "read"],
-        "model": "claude-3-sonnet-20241022"
+        "config": SessionConfig(
+            permission_mode="acceptEdits",
+            system_prompt="Test system prompt",
+            allowed_tools=["bash", "edit", "read"],
+            model="claude-3-sonnet-20241022",
+        ),
     }
 
 
@@ -91,7 +94,8 @@ class TestSessionCoordinator:
         session_id = str(uuid.uuid4())
         returned_session_id = await coordinator.create_session(
             session_id=session_id,
-            project_id=project.project_id
+            project_id=project.project_id,
+            config=SessionConfig(),
         )
 
         assert returned_session_id == session_id

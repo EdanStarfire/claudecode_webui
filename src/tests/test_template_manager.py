@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 
 from src.models.minion_template import MinionTemplate
+from src.session_config import SessionConfig
 from src.template_manager import TemplateManager
 
 
@@ -113,24 +114,26 @@ class TestCreateTemplate:
     async def test_create_with_all_fields(self, manager):
         template = await manager.create_template(
             name="Full Template",
-            permission_mode="acceptEdits",
-            allowed_tools=["bash"],
-            disallowed_tools=["write"],
+            config=SessionConfig(
+                permission_mode="acceptEdits",
+                allowed_tools=["bash"],
+                disallowed_tools=["write"],
+                model="claude-sonnet-4-20250514",
+                override_system_prompt=True,
+                sandbox_enabled=True,
+                sandbox_config={"network": False},
+                cli_path="/usr/bin/claude",
+                docker_enabled=True,
+                docker_image="claude-code:local",
+                docker_extra_mounts=["/data:/data:ro"],
+                thinking_mode="enabled",
+                thinking_budget_tokens=8000,
+                effort="high",
+            ),
             default_role="developer",
             default_system_prompt="You are a developer.",
             description="Full-featured template",
-            model="claude-sonnet-4-20250514",
             capabilities=["python"],
-            override_system_prompt=True,
-            sandbox_enabled=True,
-            sandbox_config={"network": False},
-            cli_path="/usr/bin/claude",
-            docker_enabled=True,
-            docker_image="claude-code:local",
-            docker_extra_mounts=["/data:/data:ro"],
-            thinking_mode="enabled",
-            thinking_budget_tokens=8000,
-            effort="high",
         )
 
         assert template.name == "Full Template"
@@ -145,10 +148,12 @@ class TestCreateTemplate:
         """Fields must survive create -> load cycle."""
         await manager.create_template(
             name="Persist Test",
-            permission_mode="default",
-            thinking_mode="enabled",
-            thinking_budget_tokens=4000,
-            effort="medium",
+            config=SessionConfig(
+                permission_mode="default",
+                thinking_mode="enabled",
+                thinking_budget_tokens=4000,
+                effort="medium",
+            ),
         )
 
         # Create new manager pointing at same directory, reload from disk
@@ -168,7 +173,7 @@ class TestCreateTemplate:
         """Create with only required fields should not raise."""
         template = await manager.create_template(
             name="Minimal",
-            permission_mode="default",
+            config=SessionConfig(permission_mode="default"),
         )
 
         assert template.thinking_mode is None
@@ -186,7 +191,7 @@ class TestUpdateTemplate:
     async def test_update_thinking_fields(self, manager):
         template = await manager.create_template(
             name="Update Test",
-            permission_mode="default",
+            config=SessionConfig(permission_mode="default"),
         )
 
         updated = await manager.update_template(
@@ -205,7 +210,7 @@ class TestUpdateTemplate:
         """Updated fields must survive reload from disk."""
         template = await manager.create_template(
             name="Update Persist",
-            permission_mode="default",
+            config=SessionConfig(permission_mode="default"),
         )
 
         await manager.update_template(
@@ -229,7 +234,7 @@ class TestUpdateTemplate:
         """Every field accepted by create must also be accepted by update."""
         template = await manager.create_template(
             name="Update All",
-            permission_mode="default",
+            config=SessionConfig(permission_mode="default"),
         )
 
         updated = await manager.update_template(
@@ -284,13 +289,24 @@ class TestSignatureParity:
         } - self.AUTO_FIELDS
 
     def test_create_accepts_all_template_fields(self):
-        """create_template() must accept every settable MinionTemplate field."""
+        """create_template() must accept every settable MinionTemplate field.
+
+        Config-level fields (permission_mode, model, etc.) are now passed via
+        the ``config: SessionConfig`` parameter rather than as individual kwargs.
+        We verify that every template field is covered by either a direct
+        create_template() parameter or a SessionConfig field.
+        """
+        import dataclasses
         import inspect
+
         sig = inspect.signature(TemplateManager.create_template)
         create_params = set(sig.parameters.keys()) - {"self"}
+        session_config_fields = {f.name for f in dataclasses.fields(SessionConfig)}
         template_fields = self._get_template_field_names()
 
-        missing = template_fields - create_params
+        # Fields covered by direct params OR SessionConfig
+        covered = (create_params | session_config_fields) - {"config"}
+        missing = template_fields - covered
         assert missing == set(), (
             f"create_template() is missing parameters for MinionTemplate fields: {missing}"
         )

@@ -11,6 +11,7 @@ import uuid
 import pytest
 
 from ..claude_sdk import ClaudeSDK, SessionState
+from ..session_config import SessionConfig
 
 
 @pytest.fixture
@@ -25,8 +26,8 @@ def make_sdk(
     message_callback=None,
     error_callback=None,
     permission_callback=None,
-    permissions="acceptEdits",
-    tools=None,
+    permission_mode="acceptEdits",
+    allowed_tools=None,
     model="sonnet",
     system_prompt="Reply in 10 words or fewer.",
 ):
@@ -34,13 +35,15 @@ def make_sdk(
     return ClaudeSDK(
         session_id=str(uuid.uuid4()),
         working_directory=tmp_working_dir,
+        config=SessionConfig(
+            permission_mode=permission_mode,
+            allowed_tools=allowed_tools if allowed_tools is not None else [],
+            model=model,
+            system_prompt=system_prompt,
+        ),
         message_callback=message_callback,
         error_callback=error_callback,
         permission_callback=permission_callback,
-        permissions=permissions,
-        tools=tools if tools is not None else [],
-        model=model,
-        system_prompt=system_prompt,
     )
 
 
@@ -113,8 +116,8 @@ class TestClaudeSDKIntegration:
 
         sdk = make_sdk(
             tmp_working_dir,
-            permissions="default",
-            tools=[],
+            permission_mode="default",
+            allowed_tools=[],
             permission_callback=on_permission,
         )
         try:
@@ -147,8 +150,8 @@ class TestClaudeSDKIntegration:
 
         sdk = make_sdk(
             tmp_working_dir,
-            permissions="default",
-            tools=[],
+            permission_mode="default",
+            allowed_tools=[],
             permission_callback=on_permission,
         )
         try:
@@ -224,7 +227,7 @@ class TestClaudeSDKIntegration:
 
     async def test_set_permission_mode(self, tmp_working_dir):
         """Permission mode can be changed at runtime."""
-        sdk = make_sdk(tmp_working_dir, permissions="default")
+        sdk = make_sdk(tmp_working_dir, permission_mode="default")
         try:
             await sdk.start()
             await wait_for_running(sdk)
@@ -245,7 +248,7 @@ class TestClaudeSDKIntegration:
         sdk = make_sdk(
             tmp_working_dir,
             message_callback=on_message,
-            permissions="acceptEdits",
+            permission_mode="acceptEdits",
             system_prompt="Reply with ONLY the single letter requested. No other text.",
         )
         try:

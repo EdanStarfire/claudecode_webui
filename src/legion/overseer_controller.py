@@ -11,6 +11,7 @@ Responsibilities:
 import uuid
 from typing import TYPE_CHECKING
 
+from src.session_config import SessionConfig
 from src.session_manager import slugify_name
 
 if TYPE_CHECKING:
@@ -33,28 +34,9 @@ class OverseerController:
         self,
         legion_id: str,
         name: str,
+        config: SessionConfig,
         role: str = "",
-        system_prompt: str = "",
-        override_system_prompt: bool = False,
         capabilities: list[str] | None = None,
-        permission_mode: str = "default",
-        allowed_tools: list[str] | None = None,
-        disallowed_tools: list[str] | None = None,
-        working_directory: str | None = None,
-        model: str | None = None,
-        sandbox_enabled: bool = False,
-        sandbox_config: dict | None = None,
-        setting_sources: list[str] | None = None,
-        cli_path: str | None = None,
-        # Docker session isolation (issue #496)
-        docker_enabled: bool = False,
-        docker_image: str | None = None,
-        docker_extra_mounts: list[str] | None = None,
-        # Thinking and effort configuration (issue #540)
-        thinking_mode: str | None = None,
-        thinking_budget_tokens: int | None = None,
-        effort: str | None = None,
-        knowledge_management_enabled: bool = True,
     ) -> str:
         """
         Create a minion for the user (root overseer).
@@ -62,17 +44,9 @@ class OverseerController:
         Args:
             legion_id: ID of the legion (project) this minion belongs to
             name: Minion name (must be unique within legion)
+            config: Bundled configuration (permission, tools, model, etc.)
             role: Optional role description (e.g., "Code Expert")
-            system_prompt: Instructions/context for the minion (appended to Claude Code preset unless override is True)
-            override_system_prompt: If True, use only custom prompt (no Claude Code preset or legion guide)
             capabilities: List of capability keywords for discovery
-            permission_mode: Permission mode (default, acceptEdits, plan, bypassPermissions)
-            allowed_tools: List of pre-authorized tools (e.g., ["edit", "read", "bash"])
-            working_directory: Optional custom working directory (defaults to project directory)
-            model: Model selection (sonnet, opus, haiku, opusplan)
-            sandbox_enabled: Enable OS-level sandboxing (issue #319)
-            sandbox_config: Optional sandbox configuration settings (issue #458)
-            setting_sources: Which settings files to load (issue #36)
 
         Returns:
             str: The created minion's session_id
@@ -87,8 +61,8 @@ class OverseerController:
 
         # Validate permission_mode
         valid_modes = ["default", "acceptEdits", "plan", "bypassPermissions"]
-        if permission_mode not in valid_modes:
-            raise ValueError(f"Invalid permission_mode '{permission_mode}'. Must be one of: {', '.join(valid_modes)}")
+        if config.permission_mode not in valid_modes:
+            raise ValueError(f"Invalid permission_mode '{config.permission_mode}'. Must be one of: {', '.join(valid_modes)}")
 
         # Check minion limit (max 20 concurrent minions per legion)
         # Issue #349: All sessions are minions
@@ -110,38 +84,14 @@ class OverseerController:
         minion_id = str(uuid.uuid4())
 
         # Create session via SessionCoordinator
-        # Convert None to empty list for allowed_tools (safe default: no pre-authorized tools)
         await self.system.session_coordinator.create_session(
             session_id=minion_id,
             project_id=legion_id,
+            config=config,
             name=name,
-            permission_mode=permission_mode,
-            allowed_tools=allowed_tools if allowed_tools is not None else [],
-            disallowed_tools=disallowed_tools if disallowed_tools is not None else [],
-            system_prompt=system_prompt,
-            override_system_prompt=override_system_prompt,
-            working_directory=working_directory,
-            model=model,  # Model selection (sonnet, opus, haiku, opusplan)
-            # Multi-agent fields (issue #313, #349)
             role=role,
             capabilities=capabilities or [],
             can_spawn_minions=True,  # User-created minion can spawn by default
-            # Sandbox mode (issue #319)
-            sandbox_enabled=sandbox_enabled,
-            sandbox_config=sandbox_config,
-            # Settings sources (issue #36)
-            setting_sources=setting_sources,
-            # CLI path override (issue #489)
-            cli_path=cli_path,
-            # Docker session isolation (issue #496)
-            docker_enabled=docker_enabled,
-            docker_image=docker_image,
-            docker_extra_mounts=docker_extra_mounts,
-            # Thinking and effort configuration (issue #540)
-            thinking_mode=thinking_mode,
-            thinking_budget_tokens=thinking_budget_tokens,
-            effort=effort,
-            knowledge_management_enabled=knowledge_management_enabled,
         )
 
         # Register capabilities in capability registry
@@ -170,20 +120,8 @@ class OverseerController:
         parent_overseer_id: str,
         name: str,
         role: str,
-        system_prompt: str,
+        config: SessionConfig,
         capabilities: list[str] | None = None,
-        permission_mode: str | None = None,
-        allowed_tools: list[str] | None = None,
-        disallowed_tools: list[str] | None = None,
-        working_directory: str | None = None,
-        sandbox_enabled: bool = False,
-        model: str | None = None,
-        override_system_prompt: bool = False,
-        cli_path: str | None = None,
-        # Docker session isolation (issue #496)
-        docker_enabled: bool = False,
-        docker_image: str | None = None,
-        docker_extra_mounts: list[str] | None = None,
     ) -> dict[str, any]:
         """
         Spawn a child minion autonomously by a parent overseer.
@@ -194,17 +132,11 @@ class OverseerController:
             parent_overseer_id: Session ID of parent minion
             name: Unique name for child (provided by LLM)
             role: Role description for child
-            system_prompt: System prompt/instructions for child (appended to Claude Code preset)
+            config: Bundled configuration (permission, tools, model, etc.)
             capabilities: Capability keywords for discovery
-            permission_mode: Permission mode (from template or safe default)
-            allowed_tools: List of allowed tools (from template or safe default)
-            working_directory: Optional custom working directory (defaults to parent's directory)
-            sandbox_enabled: Enable OS-level sandboxing (issue #319)
 
         Returns:
-            dict: {
-                "minion_id": str  # Child minion's session_id
-            }
+            dict: {"minion_id": str}
 
         Raises:
             ValueError: If parent doesn't exist, name duplicate, or legion at capacity
@@ -253,32 +185,16 @@ class OverseerController:
         overseer_level = (parent_session.overseer_level or 0) + 1
 
         # 7. Create child session via SessionCoordinator
-        # Use provided permission_mode/allowed_tools (from template or safe defaults)
         await self.system.session_coordinator.create_session(
             session_id=child_minion_id,
             project_id=legion_id,
+            config=config,
             name=name,
-            permission_mode=permission_mode or "default",
-            allowed_tools=allowed_tools,  # Now uses consistent parameter name
-            disallowed_tools=disallowed_tools,
-            system_prompt=system_prompt,
-            override_system_prompt=override_system_prompt,
-            model=model,
-            working_directory=working_directory,  # Custom working directory for git worktrees/multi-repo
-            # Multi-agent fields (issue #313, #349)
             role=role,
             capabilities=capabilities or [],
             parent_overseer_id=parent_overseer_id,
             overseer_level=overseer_level,
             can_spawn_minions=True,  # Child can spawn by default
-            # Sandbox mode (issue #319)
-            sandbox_enabled=sandbox_enabled,
-            # CLI path override (issue #489)
-            cli_path=cli_path,
-            # Docker session isolation (issue #496)
-            docker_enabled=docker_enabled,
-            docker_image=docker_image,
-            docker_extra_mounts=docker_extra_mounts,
         )
 
         # 8. Update parent: mark as overseer, add child to child_minion_ids

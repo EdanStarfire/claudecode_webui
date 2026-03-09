@@ -441,8 +441,13 @@ class MockClaudeSDK:
             self.message_callback = None
 
         # Compatibility attributes that ClaudeSDK has
-        self.current_permission_mode = kwargs.get("permissions", "default")
-        self.model = kwargs.get("model")
+        config = kwargs.get("config")
+        if config is not None:
+            self.current_permission_mode = getattr(config, "permission_mode", "default")
+            self.model = getattr(config, "model", None)
+        else:
+            self.current_permission_mode = kwargs.get("permissions", "default")
+            self.model = kwargs.get("model")
         self.storage_manager = kwargs.get("storage_manager")
         self.session_manager = kwargs.get("session_manager")
 

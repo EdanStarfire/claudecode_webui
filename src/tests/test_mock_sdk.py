@@ -24,6 +24,7 @@ from src.mock_sdk import (
     ReplayEngine,
     SessionRecording,
 )
+from src.session_config import SessionConfig
 
 # Fixture directory
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
@@ -437,33 +438,36 @@ class TestMockClaudeSDK:
     @pytest.mark.asyncio
     async def test_accepts_all_claude_sdk_kwargs(self):
         """MockClaudeSDK accepts all ClaudeSDK constructor kwargs without error."""
+        config = SessionConfig(
+            permission_mode="acceptEdits",
+            system_prompt="test",
+            override_system_prompt=True,
+            allowed_tools=["bash"],
+            disallowed_tools=[],
+            model="claude-sonnet-4-5-20250929",
+            sandbox_enabled=False,
+            sandbox_config=None,
+            setting_sources=None,
+            cli_path=None,
+            thinking_mode=None,
+            thinking_budget_tokens=None,
+            effort=None,
+        )
         mock = MockClaudeSDK(
             session_id="test-kwargs",
             working_directory="/tmp/test",
             session_dir=str(FIXTURES_DIR / "single_turn"),
+            config=config,
             storage_manager=None,
             session_manager=None,
             message_callback=None,
             error_callback=None,
             permission_callback=None,
-            permissions="acceptEdits",
-            system_prompt="test",
-            override_system_prompt=True,
-            tools=["bash"],
-            disallowed_tools=[],
-            model="claude-sonnet-4-5-20250929",
             resume_session_id=None,
             mcp_servers=None,
-            sandbox_enabled=False,
-            sandbox_config=None,
-            setting_sources=None,
             experimental=False,
-            cli_path=None,
             stderr_callback=None,
             extra_env=None,
-            thinking_mode=None,
-            thinking_budget_tokens=None,
-            effort=None,
         )
         assert mock.session_id == "test-kwargs"
         assert mock.current_permission_mode == "acceptEdits"

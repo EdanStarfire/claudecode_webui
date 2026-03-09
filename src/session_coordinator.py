@@ -35,6 +35,7 @@ from .models.messages import (
 from .project_manager import ProjectInfo, ProjectManager
 from .queue_manager import QueueManager
 from .queue_processor import QueueProcessor
+from .session_config import SessionConfig
 from .session_manager import SessionManager, SessionState
 from .timestamp_utils import get_unix_timestamp
 
@@ -323,38 +324,14 @@ class SessionCoordinator:
         self,
         session_id: str,
         project_id: str,
-        permission_mode: str = "acceptEdits",
-        system_prompt: str | None = None,
-        override_system_prompt: bool = False,
-        allowed_tools: list[str] = None,
-        disallowed_tools: list[str] = None,
-        model: str | None = None,
+        config: SessionConfig,
         name: str | None = None,
         permission_callback: Callable[[str, dict[str, Any]], bool | dict[str, Any]] | None = None,
-        working_directory: str | None = None,  # Custom working directory (defaults to project directory)
-        additional_directories: list[str] | None = None,  # Extra dirs agent can access (issue #630)
-        # Multi-agent fields (universal Legion - issue #313, #349)
         role: str | None = None,
         capabilities: list[str] = None,
         parent_overseer_id: str | None = None,
         overseer_level: int = 0,
-        can_spawn_minions: bool = True,  # If False, no MCP spawn tools attached
-        # Sandbox mode (issue #319)
-        sandbox_enabled: bool = False,
-        sandbox_config: dict | None = None,
-        # Settings sources (issue #36)
-        setting_sources: list[str] | None = None,
-        # CLI path override (issue #489)
-        cli_path: str | None = None,
-        # Docker session isolation (issue #496)
-        docker_enabled: bool = False,
-        docker_image: str | None = None,
-        docker_extra_mounts: list[str] | None = None,
-        # Thinking and effort configuration (issue #540)
-        thinking_mode: str | None = None,
-        thinking_budget_tokens: int | None = None,
-        effort: str | None = None,
-        knowledge_management_enabled: bool = True,
+        can_spawn_minions: bool = True,
     ) -> str:
         """Create a new Claude Code session with integrated components (within a project)"""
         try:
@@ -364,50 +341,49 @@ class SessionCoordinator:
                 raise ValueError(f"Project {project_id} not found")
 
             # Use custom working directory if provided, otherwise use project directory
-            working_directory = working_directory or project.working_directory
+            effective_working_directory = config.working_directory or project.working_directory
 
             # Calculate order based on existing sessions in project
             order = len(project.session_ids)
 
             # Issue #349: All sessions are minions (is_minion field removed)
 
+            # Build a config copy with resolved working directory for session manager
+            sm_config = SessionConfig(
+                permission_mode=config.permission_mode,
+                system_prompt=config.system_prompt,
+                override_system_prompt=config.override_system_prompt,
+                allowed_tools=config.allowed_tools,
+                disallowed_tools=config.disallowed_tools,
+                model=config.model,
+                working_directory=effective_working_directory,
+                additional_directories=config.additional_directories,
+                cli_path=config.cli_path,
+                setting_sources=config.setting_sources,
+                sandbox_enabled=config.sandbox_enabled,
+                sandbox_config=config.sandbox_config,
+                docker_enabled=config.docker_enabled,
+                docker_image=config.docker_image,
+                docker_extra_mounts=config.docker_extra_mounts,
+                thinking_mode=config.thinking_mode,
+                thinking_budget_tokens=config.thinking_budget_tokens,
+                effort=config.effort,
+                knowledge_management_enabled=config.knowledge_management_enabled,
+            )
+
             # Create session through session manager
             # Store raw system_prompt (guide will be prepended later in start_session)
             await self.session_manager.create_session(
                 session_id=session_id,
-                working_directory=working_directory,
-                additional_directories=additional_directories,
-                permission_mode=permission_mode,
-                system_prompt=system_prompt,
-                override_system_prompt=override_system_prompt,
-                allowed_tools=allowed_tools,
-                disallowed_tools=disallowed_tools,
-                model=model,
+                config=sm_config,
                 name=name,
                 order=order,
                 project_id=project_id,
-                # Multi-agent fields (universal Legion - issue #313, #349)
                 role=role or "assistant",
                 capabilities=capabilities,
                 parent_overseer_id=parent_overseer_id,
                 overseer_level=overseer_level,
                 can_spawn_minions=can_spawn_minions,
-                # Sandbox mode (issue #319)
-                sandbox_enabled=sandbox_enabled,
-                sandbox_config=sandbox_config,
-                # Settings sources (issue #36)
-                setting_sources=setting_sources,
-                # CLI path override (issue #489)
-                cli_path=cli_path,
-                # Docker session isolation (issue #496)
-                docker_enabled=docker_enabled,
-                docker_image=docker_image,
-                docker_extra_mounts=docker_extra_mounts,
-                # Thinking and effort configuration (issue #540)
-                thinking_mode=thinking_mode,
-                thinking_budget_tokens=thinking_budget_tokens,
-                effort=effort,
-                knowledge_management_enabled=knowledge_management_enabled,
             )
 
             # Add session to project
@@ -418,6 +394,10 @@ class SessionCoordinator:
             storage_manager = DataStorageManager(session_dir)
             await storage_manager.initialize()
             self._storage_managers[session_id] = storage_manager
+
+            # Extract frequently-used fields from config for readability
+            allowed_tools = sm_config.allowed_tools
+            system_prompt = sm_config.system_prompt
 
             # Issue #313: Attach MCP tools based on can_spawn_minions flag (universal Legion)
             # All sessions can have Legion MCP tools if can_spawn_minions=True
@@ -467,30 +447,33 @@ class SessionCoordinator:
                 coord_logger.info(f"Escaped system prompt in create: {len(escaped_system_prompt)} chars (original: {len(system_prompt)})")
 
             # Create SDK instance (uses factory for testability — issue #559)
+            # Build SDK config from session config with resolved tools and prompt
+            sdk_config = SessionConfig(
+                permission_mode=sm_config.permission_mode,
+                system_prompt=escaped_system_prompt,
+                override_system_prompt=sm_config.override_system_prompt,
+                allowed_tools=all_tools,
+                disallowed_tools=sm_config.disallowed_tools,
+                model=sm_config.model,
+                sandbox_enabled=sm_config.sandbox_enabled,
+                sandbox_config=sm_config.sandbox_config,
+                thinking_mode=sm_config.thinking_mode,
+                thinking_budget_tokens=sm_config.thinking_budget_tokens,
+                effort=sm_config.effort,
+            )
             sdk = self._sdk_factory(
                 session_id=session_id,
-                working_directory=working_directory,
+                working_directory=effective_working_directory,
                 session_name=name,  # For mock SDK fixture resolution (issue #561)
+                config=sdk_config,
                 storage_manager=storage_manager,
                 session_manager=self.session_manager,
                 message_callback=self._create_message_callback(session_id),
                 error_callback=self._create_error_callback(session_id),
                 permission_callback=permission_callback,
-                permissions=permission_mode,
-                system_prompt=escaped_system_prompt,
-                override_system_prompt=override_system_prompt,
-                tools=all_tools,
-                disallowed_tools=disallowed_tools,
-                model=model,
                 mcp_servers=mcp_servers if mcp_servers else None,
-                sandbox_enabled=sandbox_enabled,
-                sandbox_config=sandbox_config,
                 experimental=self.experimental,
                 stderr_callback=self._create_stderr_callback(session_id),
-                # Thinking and effort configuration (issue #540)
-                thinking_mode=thinking_mode,
-                thinking_budget_tokens=thinking_budget_tokens,
-                effort=effort,
             )
             self._active_sdks[session_id] = sdk
 
@@ -842,36 +825,38 @@ class SessionCoordinator:
                 )
 
             # Create/recreate SDK instance with session parameters (uses factory for testability — issue #559)
-            # system_prompt is used for both regular sessions and minions (SDK appends to Claude Code preset unless override is set)
+            # Build SessionConfig from SessionInfo for SDK factory
+            sdk_config = SessionConfig(
+                permission_mode=session_info.current_permission_mode,
+                system_prompt=minion_system_prompt,
+                override_system_prompt=session_info.override_system_prompt,
+                allowed_tools=all_tools,
+                disallowed_tools=session_info.disallowed_tools,
+                model=session_info.model,
+                additional_directories=session_info.additional_directories,
+                sandbox_enabled=session_info.sandbox_enabled,
+                sandbox_config=session_info.sandbox_config,
+                setting_sources=session_info.setting_sources,
+                cli_path=effective_cli_path,
+                thinking_mode=session_info.thinking_mode,
+                thinking_budget_tokens=session_info.thinking_budget_tokens,
+                effort=session_info.effort,
+            )
             sdk = self._sdk_factory(
                 session_id=session_id,
                 working_directory=session_info.working_directory,
                 session_name=session_info.name,  # For mock SDK fixture resolution (issue #561)
+                config=sdk_config,
                 storage_manager=storage_manager,
                 session_manager=self.session_manager,
                 message_callback=self._create_message_callback(session_id),
                 error_callback=self._create_error_callback(session_id),
-                permission_callback=permission_callback,  # Use provided permission callback for resumed sessions
-                permissions=session_info.current_permission_mode,
-                system_prompt=minion_system_prompt,
-                override_system_prompt=session_info.override_system_prompt,
-                tools=all_tools,
-                disallowed_tools=session_info.disallowed_tools,
-                model=session_info.model,
-                resume_session_id=resume_sdk_session,  # Only resume if we have a Claude Code session ID
+                permission_callback=permission_callback,
+                resume_session_id=resume_sdk_session,
                 mcp_servers=mcp_servers if mcp_servers else None,
-                additional_directories=session_info.additional_directories,  # Issue #630
-                sandbox_enabled=session_info.sandbox_enabled,
-                sandbox_config=session_info.sandbox_config,
-                setting_sources=session_info.setting_sources,  # Issue #36
                 experimental=self.experimental,
-                cli_path=effective_cli_path,  # Issue #489, #496: may be auto-resolved for Docker
                 stderr_callback=self._create_stderr_callback(session_id),
-                extra_env=docker_env_vars if docker_env_vars else None,  # Issue #496: Docker wrapper env
-                # Thinking and effort configuration (issue #540)
-                thinking_mode=session_info.thinking_mode,
-                thinking_budget_tokens=session_info.thinking_budget_tokens,
-                effort=session_info.effort,
+                extra_env=docker_env_vars if docker_env_vars else None,
             )
             self._active_sdks[session_id] = sdk
 

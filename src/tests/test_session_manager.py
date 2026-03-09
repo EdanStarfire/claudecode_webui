@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from ..session_config import SessionConfig
 from ..session_manager import SessionInfo, SessionManager, SessionState
 
 
@@ -24,13 +25,13 @@ async def temp_session_manager():
 @pytest.fixture
 def sample_session_config():
     """Sample session configuration for testing."""
-    return {
-        "working_directory": "/test/project",
-        "permission_mode": "acceptEdits",
-        "system_prompt": "Test system prompt",
-        "allowed_tools": ["bash", "edit", "read"],
-        "model": "claude-3-sonnet-20241022"
-    }
+    return SessionConfig(
+        working_directory="/test/project",
+        permission_mode="acceptEdits",
+        system_prompt="Test system prompt",
+        allowed_tools=["bash", "edit", "read"],
+        model="claude-3-sonnet-20241022",
+    )
 
 
 class TestSessionInfo:
@@ -126,7 +127,7 @@ class TestSessionManager:
         manager = temp_session_manager
 
         session_id = str(uuid.uuid4())
-        await manager.create_session(session_id, **sample_session_config)
+        await manager.create_session(session_id, config=sample_session_config)
 
         assert session_id is not None
         assert len(session_id) > 0
@@ -135,8 +136,8 @@ class TestSessionManager:
         session_info = manager._active_sessions[session_id]
         assert session_info.session_id == session_id
         assert session_info.state == SessionState.CREATED
-        assert session_info.working_directory == sample_session_config["working_directory"]
-        assert session_info.current_permission_mode == sample_session_config["permission_mode"]
+        assert session_info.working_directory == sample_session_config.working_directory
+        assert session_info.current_permission_mode == sample_session_config.permission_mode
 
         # Check that session directory and state file were created
         session_dir = manager.sessions_dir / session_id
@@ -151,7 +152,7 @@ class TestSessionManager:
         manager = temp_session_manager
 
         session_id = str(uuid.uuid4())
-        await manager.create_session(session_id)
+        await manager.create_session(session_id, config=SessionConfig())
 
         session_info = manager._active_sessions[session_id]
         assert session_info.current_permission_mode == "acceptEdits"
@@ -164,7 +165,7 @@ class TestSessionManager:
         manager = temp_session_manager
 
         session_id = str(uuid.uuid4())
-        await manager.create_session(session_id, **sample_session_config)
+        await manager.create_session(session_id, config=sample_session_config)
         success = await manager.start_session(session_id)
 
         assert success is True
@@ -187,7 +188,7 @@ class TestSessionManager:
         manager = temp_session_manager
 
         session_id = str(uuid.uuid4())
-        await manager.create_session(session_id, **sample_session_config)
+        await manager.create_session(session_id, config=sample_session_config)
         await manager.start_session(session_id)
 
         # Manually transition to ACTIVE state to simulate SDK fully started
@@ -206,7 +207,7 @@ class TestSessionManager:
         manager = temp_session_manager
 
         session_id = str(uuid.uuid4())
-        await manager.create_session(session_id, **sample_session_config)
+        await manager.create_session(session_id, config=sample_session_config)
         # Try to pause without starting
         success = await manager.pause_session(session_id)
 
@@ -218,7 +219,7 @@ class TestSessionManager:
         manager = temp_session_manager
 
         session_id = str(uuid.uuid4())
-        await manager.create_session(session_id, **sample_session_config)
+        await manager.create_session(session_id, config=sample_session_config)
         await manager.start_session(session_id)
         success = await manager.terminate_session(session_id)
 
@@ -233,7 +234,7 @@ class TestSessionManager:
         manager = temp_session_manager
 
         session_id = str(uuid.uuid4())
-        await manager.create_session(session_id, **sample_session_config)
+        await manager.create_session(session_id, config=sample_session_config)
         session_info = await manager.get_session_info(session_id)
 
         assert session_info is not None
@@ -255,9 +256,9 @@ class TestSessionManager:
 
         # Create multiple sessions
         session_id_1 = str(uuid.uuid4())
-        await manager.create_session(session_id_1, **sample_session_config)
+        await manager.create_session(session_id_1, config=sample_session_config)
         session_id_2 = str(uuid.uuid4())
-        await manager.create_session(session_id_2, **sample_session_config)
+        await manager.create_session(session_id_2, config=sample_session_config)
 
         sessions = await manager.list_sessions()
 
@@ -272,7 +273,7 @@ class TestSessionManager:
         manager = temp_session_manager
 
         session_id = str(uuid.uuid4())
-        await manager.create_session(session_id, **sample_session_config)
+        await manager.create_session(session_id, config=sample_session_config)
         session_dir = await manager.get_session_directory(session_id)
 
         assert session_dir is not None
@@ -290,7 +291,7 @@ class TestSessionManager:
             await manager1.initialize()
 
             session_id = str(uuid.uuid4())
-            await manager1.create_session(session_id, **sample_session_config)
+            await manager1.create_session(session_id, config=sample_session_config)
             await manager1.start_session(session_id)
 
             # Create second manager (simulating restart)
@@ -301,7 +302,7 @@ class TestSessionManager:
             assert session_id in manager2._active_sessions
             session_info = manager2._active_sessions[session_id]
             assert session_info.session_id == session_id
-            assert session_info.working_directory == sample_session_config["working_directory"]
+            assert session_info.working_directory == sample_session_config.working_directory
 
     @pytest.mark.asyncio
     async def test_concurrent_session_operations(self, temp_session_manager, sample_session_config):
@@ -310,7 +311,7 @@ class TestSessionManager:
 
         # Create session
         session_id = str(uuid.uuid4())
-        await manager.create_session(session_id, **sample_session_config)
+        await manager.create_session(session_id, config=sample_session_config)
 
         # Run concurrent operations
         tasks = [
@@ -331,7 +332,7 @@ class TestSessionManager:
         manager = temp_session_manager
 
         session_id = str(uuid.uuid4())
-        await manager.create_session(session_id, **sample_session_config)
+        await manager.create_session(session_id, config=sample_session_config)
 
         # Try to pause without starting — should fail gracefully
         success = await manager.pause_session(session_id)
@@ -346,7 +347,7 @@ class TestSessionManager:
         manager = temp_session_manager
 
         session_id = str(uuid.uuid4())
-        await manager.create_session(session_id, **sample_session_config)
+        await manager.create_session(session_id, config=sample_session_config)
         session_dir = manager.sessions_dir / session_id
         state_file = session_dir / "state.json"
 
