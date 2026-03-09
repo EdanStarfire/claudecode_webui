@@ -1,0 +1,766 @@
+<template>
+  <div class="advanced-panel">
+    <!-- Back button -->
+    <button class="back-btn" type="button" @click="$emit('show-quick')">
+      <i class="bi bi-arrow-left"></i> Back to Quick Settings
+    </button>
+
+    <!-- Card 1: Model Tuning (Blue) -->
+    <div class="priority-card priority-blue">
+      <button
+        class="card-header-btn"
+        :class="{ collapsed: !cardStates.tuning }"
+        type="button"
+        @click="cardStates.tuning = !cardStates.tuning"
+      >
+        <span class="dot dot-blue"></span>
+        Model Tuning
+        <span class="chevron"><i class="bi bi-chevron-down"></i></span>
+      </button>
+      <div v-show="cardStates.tuning" class="card-body-inner">
+        <div class="mb-2">
+          <label class="form-label">Model</label>
+          <select
+            class="form-select form-select-sm"
+            :value="formData.model"
+            @change="$emit('update:form-data', 'model', $event.target.value)"
+          >
+            <option value="sonnet">Sonnet (Recommended)</option>
+            <option value="opus">Opus</option>
+            <option value="haiku">Haiku</option>
+            <option value="opusplan">OpusPlan</option>
+          </select>
+        </div>
+        <div class="row g-2 mb-2">
+          <div class="col-6">
+            <label class="form-label">Thinking Mode</label>
+            <select
+              class="form-select form-select-sm"
+              :value="formData.thinking_mode"
+              @change="$emit('update:form-data', 'thinking_mode', $event.target.value)"
+            >
+              <option value="">Default</option>
+              <option value="adaptive">Adaptive</option>
+              <option value="enabled">Enabled</option>
+              <option value="disabled">Disabled</option>
+            </select>
+          </div>
+          <div class="col-6">
+            <label class="form-label">Effort</label>
+            <select
+              class="form-select form-select-sm"
+              :value="formData.effort"
+              @change="$emit('update:form-data', 'effort', $event.target.value)"
+            >
+              <option value="">Default</option>
+              <option value="low">Low</option>
+              <option value="medium">Medium</option>
+              <option value="high">High</option>
+              <option value="max">Max</option>
+            </select>
+          </div>
+        </div>
+        <div v-if="formData.thinking_mode === 'enabled'">
+          <label class="form-label">Budget Tokens</label>
+          <div class="budget-slider-group">
+            <input
+              type="range"
+              class="form-range"
+              min="1024"
+              max="32768"
+              step="1024"
+              :value="formData.thinking_budget_tokens || 10240"
+              @input="$emit('update:form-data', 'thinking_budget_tokens', parseInt($event.target.value))"
+            />
+            <span class="budget-value">{{ (formData.thinking_budget_tokens || 10240).toLocaleString() }}</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Card 2: Tools & Permissions (Indigo) -->
+    <div class="priority-card priority-indigo">
+      <button
+        class="card-header-btn"
+        :class="{ collapsed: !cardStates.tools }"
+        type="button"
+        @click="cardStates.tools = !cardStates.tools"
+      >
+        <span class="dot dot-indigo"></span>
+        Tools & Permissions
+        <span class="chevron"><i class="bi bi-chevron-down"></i></span>
+      </button>
+      <div v-show="cardStates.tools" class="card-body-inner">
+        <!-- Allowed Tools -->
+        <div class="mb-2">
+          <label class="form-label">
+            Allowed Tools
+            <span v-if="fieldStates.allowed_tools === 'autofilled'" class="field-indicator autofilled">&lt;</span>
+            <span v-if="fieldStates.allowed_tools === 'modified'" class="field-indicator modified">*</span>
+          </label>
+          <div class="tag-editor" @click="focusInput('allowedToolInput')">
+            <span
+              v-for="(tool, index) in toolsList"
+              :key="'a-' + index"
+              class="tag tag-allowed"
+            >
+              {{ tool }}
+              <span class="tag-remove" @click.stop="removeTool(index)"><i class="bi bi-x"></i></span>
+            </span>
+            <input
+              ref="allowedToolInput"
+              type="text"
+              class="tag-input"
+              placeholder="Add tool..."
+              v-model="newTool"
+              @keydown.enter.prevent="addTool"
+            />
+          </div>
+          <div class="quick-add-btns">
+            <button
+              v-for="tool in commonTools"
+              :key="tool"
+              type="button"
+              class="btn btn-sm"
+              :class="toolsList.includes(tool) ? 'btn-success' : 'btn-outline-success'"
+              @click="toggleTool(tool)"
+            >{{ toolsList.includes(tool) ? tool : '+' + tool }}</button>
+          </div>
+        </div>
+
+        <!-- Disallowed Tools -->
+        <div class="mb-2">
+          <label class="form-label">
+            Disallowed Tools
+            <span v-if="fieldStates.disallowed_tools === 'autofilled'" class="field-indicator autofilled">&lt;</span>
+            <span v-if="fieldStates.disallowed_tools === 'modified'" class="field-indicator modified">*</span>
+          </label>
+          <div class="tag-editor" @click="focusInput('disallowedToolInput')">
+            <span
+              v-for="(tool, index) in deniedToolsList"
+              :key="'d-' + index"
+              class="tag tag-disallowed"
+            >
+              {{ tool }}
+              <span class="tag-remove" @click.stop="removeDeniedTool(index)"><i class="bi bi-x"></i></span>
+            </span>
+            <input
+              ref="disallowedToolInput"
+              type="text"
+              class="tag-input"
+              placeholder="Add tool..."
+              v-model="newDeniedTool"
+              @keydown.enter.prevent="addDeniedTool"
+            />
+          </div>
+          <div class="quick-add-btns">
+            <button
+              v-for="tool in commonDeniedTools"
+              :key="tool"
+              type="button"
+              class="btn btn-sm"
+              :class="deniedToolsList.includes(tool) ? 'btn-danger' : 'btn-outline-danger'"
+              @click="toggleDeniedTool(tool)"
+            >{{ deniedToolsList.includes(tool) ? tool : '+' + tool }}</button>
+          </div>
+        </div>
+
+        <!-- Settings Sources (session modes only) -->
+        <div v-if="isSessionMode" class="mb-2">
+          <label class="form-label">Settings Sources</label>
+          <div class="d-flex gap-3">
+            <div class="form-check">
+              <input class="form-check-input" type="checkbox" id="adv-src-user"
+                :checked="settingSourcesArray.includes('user')"
+                @change="toggleSettingSource('user')" />
+              <label class="form-check-label" for="adv-src-user" style="text-transform: none; letter-spacing: normal;">User</label>
+            </div>
+            <div class="form-check">
+              <input class="form-check-input" type="checkbox" id="adv-src-project"
+                :checked="settingSourcesArray.includes('project')"
+                @change="toggleSettingSource('project')" />
+              <label class="form-check-label" for="adv-src-project" style="text-transform: none; letter-spacing: normal;">Project</label>
+            </div>
+            <div class="form-check">
+              <input class="form-check-input" type="checkbox" id="adv-src-local"
+                :checked="settingSourcesArray.includes('local')"
+                @change="toggleSettingSource('local')" />
+              <label class="form-check-label" for="adv-src-local" style="text-transform: none; letter-spacing: normal;">Local</label>
+            </div>
+          </div>
+        </div>
+
+        <!-- Permission Preview (session modes only) -->
+        <button
+          v-if="isSessionMode"
+          type="button"
+          class="btn btn-sm btn-outline-info w-100"
+          @click="$emit('preview-permissions')"
+        >
+          <i class="bi bi-eye me-1"></i> Preview Effective Permissions
+        </button>
+      </div>
+    </div>
+
+    <!-- Card 3: System Prompt & Context (Teal) -->
+    <div class="priority-card priority-teal">
+      <button
+        class="card-header-btn"
+        :class="{ collapsed: !cardStates.prompt }"
+        type="button"
+        @click="cardStates.prompt = !cardStates.prompt"
+      >
+        <span class="dot dot-teal"></span>
+        System Prompt & Context
+        <span class="chevron"><i class="bi bi-chevron-down"></i></span>
+      </button>
+      <div v-show="cardStates.prompt" class="card-body-inner">
+        <div class="mb-2">
+          <label class="form-label">
+            {{ isTemplateMode ? 'Default System Prompt' : 'Initialization Context' }}
+            <span v-if="fieldStates.initialization_context === 'autofilled'" class="field-indicator autofilled">&lt;</span>
+            <span v-if="fieldStates.initialization_context === 'modified'" class="field-indicator modified">*</span>
+          </label>
+          <textarea
+            class="form-control form-control-sm"
+            :value="formData.initialization_context"
+            @input="$emit('update:form-data', 'initialization_context', $event.target.value)"
+            rows="3"
+            :placeholder="isTemplateMode ? 'Optional default system prompt' : 'Instructions and context for the session...'"
+          ></textarea>
+        </div>
+        <div class="form-check mb-2">
+          <input
+            class="form-check-input"
+            type="checkbox"
+            id="adv-override-prompt"
+            :checked="formData.override_system_prompt"
+            @change="$emit('update:form-data', 'override_system_prompt', $event.target.checked)"
+          />
+          <label class="form-check-label" for="adv-override-prompt" style="text-transform: none; letter-spacing: normal;">
+            Override System Prompt
+          </label>
+        </div>
+        <div class="form-check form-switch">
+          <input
+            class="form-check-input"
+            type="checkbox"
+            id="adv-knowledge-mgmt"
+            :checked="formData.knowledge_management_enabled"
+            @change="$emit('update:form-data', 'knowledge_management_enabled', $event.target.checked)"
+          />
+          <label class="form-check-label" for="adv-knowledge-mgmt" style="text-transform: none; letter-spacing: normal;">
+            Knowledge Management
+          </label>
+        </div>
+      </div>
+    </div>
+
+    <!-- Card 4: Extra Options (Gray, collapsed by default) -->
+    <div class="priority-card priority-gray">
+      <button
+        class="card-header-btn"
+        :class="{ collapsed: !cardStates.extra }"
+        type="button"
+        @click="cardStates.extra = !cardStates.extra"
+      >
+        <span class="dot dot-gray"></span>
+        Extra Options
+        <span class="chevron"><i class="bi bi-chevron-down"></i></span>
+      </button>
+      <div v-show="cardStates.extra" class="card-body-inner">
+        <!-- MCP Servers (edit-session, active only) -->
+        <div v-if="isEditSession && isSessionActive && mcpServers.length > 0" class="mb-2">
+          <label class="form-label">MCP Servers</label>
+          <McpServerRow
+            v-for="server in mcpServers"
+            :key="server.name"
+            :server="server"
+            @toggle="handleMcpToggle"
+            @reconnect="handleMcpReconnect"
+          />
+        </div>
+
+        <!-- CLI Path -->
+        <div class="mb-2">
+          <label class="form-label">CLI Path</label>
+          <input
+            type="text"
+            class="form-control form-control-sm"
+            :value="formData.cli_path"
+            @input="$emit('update:form-data', 'cli_path', $event.target.value)"
+            :disabled="formData.docker_enabled"
+            placeholder="/path/to/claude-cli"
+          />
+        </div>
+
+        <!-- Additional Directories -->
+        <div class="mb-2">
+          <label class="form-label">Additional Directories</label>
+          <div v-if="additionalDirsList.length > 0">
+            <div
+              v-for="(dir, index) in additionalDirsList"
+              :key="index"
+              class="dir-list-item"
+            >
+              <span class="dir-path">{{ dir }}</span>
+              <span class="dir-remove" @click="removeDirectory(index)"><i class="bi bi-x-lg"></i></span>
+            </div>
+          </div>
+          <div class="d-flex gap-2 mt-1">
+            <input
+              type="text"
+              class="form-control form-control-sm"
+              v-model="newDirectory"
+              @keydown.enter.prevent="addDirectory"
+              placeholder="Add directory path..."
+              style="flex: 1;"
+            />
+            <button
+              type="button"
+              class="btn btn-sm btn-outline-secondary"
+              @click="$emit('browse-additional-dir')"
+              title="Browse"
+            ><i class="bi bi-folder2-open"></i></button>
+            <button
+              type="button"
+              class="btn btn-sm btn-outline-primary"
+              @click="addDirectory"
+              :disabled="!newDirectory.trim()"
+            ><i class="bi bi-plus"></i></button>
+          </div>
+        </div>
+
+        <!-- Capabilities -->
+        <div class="mb-2">
+          <label class="form-label">Capabilities</label>
+          <div class="tag-editor" @click="focusInput('capabilityInput')">
+            <span
+              v-for="(cap, index) in capabilitiesList"
+              :key="'c-' + index"
+              class="tag tag-capability"
+            >
+              {{ cap }}
+              <span class="tag-remove" @click.stop="removeCapability(index)"><i class="bi bi-x"></i></span>
+            </span>
+            <input
+              ref="capabilityInput"
+              type="text"
+              class="tag-input"
+              placeholder="Add capability..."
+              v-model="newCapability"
+              @keydown.enter.prevent="addCapability"
+            />
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Card 5: Sandbox & Security (Red, collapsed by default) -->
+    <div class="priority-card priority-danger">
+      <button
+        class="card-header-btn"
+        :class="{ collapsed: !cardStates.sandbox }"
+        type="button"
+        @click="cardStates.sandbox = !cardStates.sandbox"
+      >
+        <span class="dot dot-danger"></span>
+        <i class="bi bi-shield-exclamation text-danger" style="font-size: 0.8rem;"></i>
+        Sandbox & Security
+        <span class="chevron"><i class="bi bi-chevron-down"></i></span>
+      </button>
+      <div v-show="cardStates.sandbox" class="card-body-inner">
+        <!-- Docker Isolation -->
+        <div class="form-check mb-2">
+          <input
+            class="form-check-input"
+            type="checkbox"
+            id="adv-docker-toggle"
+            :checked="formData.docker_enabled"
+            @change="handleDockerToggle($event.target.checked)"
+            :disabled="isEditSession"
+          />
+          <label class="form-check-label" for="adv-docker-toggle" style="text-transform: none; letter-spacing: normal;">
+            Docker Isolation
+          </label>
+        </div>
+        <!-- Docker status warnings -->
+        <div v-if="formData.docker_enabled && dockerStatus && !dockerStatus.available && !isEditSession" class="alert alert-warning py-1 mb-2">
+          <small>Docker is not available on this system.</small>
+        </div>
+        <div v-if="formData.docker_enabled && !isEditSession" class="ms-4 mb-2">
+          <div class="mb-2">
+            <label class="form-label">Docker Image</label>
+            <input type="text" class="form-control form-control-sm"
+              :value="formData.docker_image"
+              @input="$emit('update:form-data', 'docker_image', $event.target.value)"
+              :disabled="isEditSession" placeholder="claude-code:local" />
+          </div>
+          <div class="mb-2">
+            <label class="form-label">Mounts</label>
+            <textarea class="form-control form-control-sm"
+              :value="formData.docker_extra_mounts"
+              @input="$emit('update:form-data', 'docker_extra_mounts', $event.target.value)"
+              :disabled="isEditSession" rows="2" placeholder="/host/path:/container/path:ro (one per line)" />
+          </div>
+        </div>
+
+        <!-- Sandbox Enable -->
+        <div class="form-check mb-2">
+          <input
+            class="form-check-input"
+            type="checkbox"
+            id="adv-sandbox-enable"
+            :checked="formData.sandbox_enabled"
+            @change="$emit('update:form-data', 'sandbox_enabled', $event.target.checked)"
+          />
+          <label class="form-check-label fw-semibold" for="adv-sandbox-enable" style="text-transform: none; letter-spacing: normal;">
+            Enable Sandbox Mode
+          </label>
+        </div>
+
+        <div v-if="formData.sandbox_enabled">
+          <!-- Bash Permissions -->
+          <div class="sandbox-section-label">Bash Permissions</div>
+          <div class="form-check mb-1 ms-3">
+            <input class="form-check-input" type="checkbox" id="adv-sb-auto-bash"
+              :checked="formData.sandbox.autoAllowBashIfSandboxed"
+              @change="updateSandboxField('autoAllowBashIfSandboxed', $event.target.checked)" />
+            <label class="form-check-label" for="adv-sb-auto-bash" style="text-transform: none; letter-spacing: normal;">Auto-allow Bash when sandboxed</label>
+          </div>
+          <div class="form-check mb-1 ms-3">
+            <input class="form-check-input" type="checkbox" id="adv-sb-unsandboxed"
+              :checked="formData.sandbox.allowUnsandboxedCommands"
+              @change="updateSandboxField('allowUnsandboxedCommands', $event.target.checked)" />
+            <label class="form-check-label" for="adv-sb-unsandboxed" style="text-transform: none; letter-spacing: normal;">Allow unsandboxed commands</label>
+          </div>
+          <div class="mb-2 ms-3">
+            <label class="form-label">Excluded Commands</label>
+            <input type="text" class="form-control form-control-sm"
+              :value="formData.sandbox.excludedCommands"
+              @input="updateSandboxField('excludedCommands', $event.target.value)"
+              placeholder="rm, dd, mkfs..." />
+          </div>
+          <div class="form-check mb-1 ms-3">
+            <input class="form-check-input" type="checkbox" id="adv-sb-weaker"
+              :checked="formData.sandbox.enableWeakerNestedSandbox"
+              @change="updateSandboxField('enableWeakerNestedSandbox', $event.target.checked)" />
+            <label class="form-check-label" for="adv-sb-weaker" style="text-transform: none; letter-spacing: normal;">Enable weaker nested sandbox</label>
+          </div>
+
+          <!-- Network -->
+          <div class="sandbox-section-label">Network</div>
+          <div class="mb-1 ms-3">
+            <label class="form-label">Allowed Domains</label>
+            <input type="text" class="form-control form-control-sm"
+              :value="formData.sandbox.network.allowedDomains"
+              @input="updateNetworkField('allowedDomains', $event.target.value)"
+              placeholder="github.com, api.example.com" />
+          </div>
+          <div class="form-check mb-1 ms-3">
+            <input class="form-check-input" type="checkbox" id="adv-sb-local-binding"
+              :checked="formData.sandbox.network.allowLocalBinding"
+              @change="updateNetworkField('allowLocalBinding', $event.target.checked)" />
+            <label class="form-check-label" for="adv-sb-local-binding" style="text-transform: none; letter-spacing: normal;">Allow local binding</label>
+          </div>
+          <div class="mb-1 ms-3">
+            <label class="form-label">Allow Unix Sockets</label>
+            <input type="text" class="form-control form-control-sm"
+              :value="formData.sandbox.network.allowUnixSockets"
+              @input="updateNetworkField('allowUnixSockets', $event.target.value)"
+              placeholder="/var/run/docker.sock" />
+          </div>
+          <div class="form-check mb-1 ms-3">
+            <input class="form-check-input" type="checkbox" id="adv-sb-all-unix"
+              :checked="formData.sandbox.network.allowAllUnixSockets"
+              @change="updateNetworkField('allowAllUnixSockets', $event.target.checked)" />
+            <label class="form-check-label" for="adv-sb-all-unix" style="text-transform: none; letter-spacing: normal;">Allow all Unix sockets</label>
+          </div>
+
+          <!-- Violation Handling -->
+          <div class="sandbox-section-label">Violation Handling</div>
+          <div class="mb-1 ms-3">
+            <label class="form-label">Ignore File Violations</label>
+            <input type="text" class="form-control form-control-sm"
+              :value="formData.sandbox.ignoreViolations.file"
+              @input="updateViolationField('file', $event.target.value)"
+              placeholder="File paths to ignore" />
+          </div>
+          <div class="mb-1 ms-3">
+            <label class="form-label">Ignore Network Violations</label>
+            <input type="text" class="form-control form-control-sm"
+              :value="formData.sandbox.ignoreViolations.network"
+              @input="updateViolationField('network', $event.target.value)"
+              placeholder="Network patterns to ignore" />
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</template>
+
+<script setup>
+import { ref, reactive, computed, onMounted, watch, useTemplateRef } from 'vue'
+import { api } from '@/utils/api'
+import { useMcpStore } from '../../stores/mcp'
+import McpServerRow from './McpServerRow.vue'
+
+const mcpStore = useMcpStore()
+
+const props = defineProps({
+  mode: {
+    type: String,
+    required: true
+  },
+  formData: {
+    type: Object,
+    required: true
+  },
+  errors: {
+    type: Object,
+    required: true
+  },
+  session: {
+    type: Object,
+    default: null
+  },
+  fieldStates: {
+    type: Object,
+    default: () => ({
+      allowed_tools: 'normal',
+      disallowed_tools: 'normal',
+      initialization_context: 'normal'
+    })
+  }
+})
+
+const emit = defineEmits([
+  'update:form-data',
+  'preview-permissions',
+  'show-quick',
+  'browse-additional-dir'
+])
+
+// Card collapse states (expanded by default for first 3, collapsed for 4 & 5)
+const cardStates = reactive({
+  tuning: true,
+  tools: true,
+  prompt: true,
+  extra: false,
+  sandbox: false
+})
+
+// Local state
+const newTool = ref('')
+const newDeniedTool = ref('')
+const newCapability = ref('')
+const newDirectory = ref('')
+const dockerStatus = ref(null)
+
+// Template refs for focusing
+const allowedToolInput = ref(null)
+const disallowedToolInput = ref(null)
+const capabilityInput = ref(null)
+
+// Common tools
+const commonTools = ['Bash', 'Read', 'Edit', 'Write', 'Glob', 'Grep', 'WebFetch']
+const commonDeniedTools = ['Bash', 'Write', 'WebFetch']
+
+// Computed
+const isSessionMode = computed(() => props.mode === 'create-session' || props.mode === 'edit-session')
+const isTemplateMode = computed(() => props.mode === 'create-template' || props.mode === 'edit-template')
+const isEditSession = computed(() => props.mode === 'edit-session')
+
+const isSessionActive = computed(() => {
+  return props.session?.state === 'active' || props.session?.state === 'starting'
+})
+
+const sessionId = computed(() => props.session?.session_id)
+const mcpServers = computed(() => {
+  if (!sessionId.value) return []
+  return mcpStore.mcpServers(sessionId.value)
+})
+
+// Fetch MCP status when session becomes active
+watch([sessionId, isSessionActive], ([id, active]) => {
+  if (id && active) {
+    mcpStore.fetchMcpStatus(id)
+  }
+}, { immediate: true })
+
+const settingSourcesArray = computed(() => {
+  return props.formData.setting_sources || ['user', 'project', 'local']
+})
+
+const toolsList = computed(() => {
+  if (!props.formData.allowed_tools || !props.formData.allowed_tools.trim()) return []
+  return props.formData.allowed_tools.split(',').map(t => t.trim()).filter(t => t.length > 0)
+})
+
+const deniedToolsList = computed(() => {
+  if (!props.formData.disallowed_tools || !props.formData.disallowed_tools.trim()) return []
+  return props.formData.disallowed_tools.split(',').map(t => t.trim()).filter(t => t.length > 0)
+})
+
+const capabilitiesList = computed(() => {
+  if (!props.formData.capabilities || !props.formData.capabilities.trim()) return []
+  return props.formData.capabilities.split(',').map(c => c.trim()).filter(c => c.length > 0)
+})
+
+const additionalDirsList = computed(() => {
+  const raw = props.formData.additional_directories || ''
+  return raw.split('\n').map(d => d.trim()).filter(d => d)
+})
+
+// Docker status fetch
+onMounted(async () => {
+  try {
+    dockerStatus.value = await api.get('/api/system/docker-status')
+  } catch {
+    dockerStatus.value = { available: false }
+  }
+})
+
+// Methods
+function focusInput(refName) {
+  if (refName === 'allowedToolInput' && allowedToolInput.value) allowedToolInput.value.focus()
+  else if (refName === 'disallowedToolInput' && disallowedToolInput.value) disallowedToolInput.value.focus()
+  else if (refName === 'capabilityInput' && capabilityInput.value) capabilityInput.value.focus()
+}
+
+function addTool() {
+  const tool = newTool.value.trim()
+  if (!tool || toolsList.value.includes(tool)) { newTool.value = ''; return }
+  emit('update:form-data', 'allowed_tools', [...toolsList.value, tool].join(', '))
+  newTool.value = ''
+}
+
+function removeTool(index) {
+  const list = [...toolsList.value]
+  list.splice(index, 1)
+  emit('update:form-data', 'allowed_tools', list.join(', '))
+}
+
+function toggleTool(tool) {
+  if (toolsList.value.includes(tool)) {
+    removeTool(toolsList.value.indexOf(tool))
+  } else {
+    emit('update:form-data', 'allowed_tools', [...toolsList.value, tool].join(', '))
+  }
+}
+
+function addDeniedTool() {
+  const tool = newDeniedTool.value.trim()
+  if (!tool || deniedToolsList.value.includes(tool)) { newDeniedTool.value = ''; return }
+  emit('update:form-data', 'disallowed_tools', [...deniedToolsList.value, tool].join(', '))
+  newDeniedTool.value = ''
+}
+
+function removeDeniedTool(index) {
+  const list = [...deniedToolsList.value]
+  list.splice(index, 1)
+  emit('update:form-data', 'disallowed_tools', list.join(', '))
+}
+
+function toggleDeniedTool(tool) {
+  if (deniedToolsList.value.includes(tool)) {
+    removeDeniedTool(deniedToolsList.value.indexOf(tool))
+  } else {
+    emit('update:form-data', 'disallowed_tools', [...deniedToolsList.value, tool].join(', '))
+  }
+}
+
+function addCapability() {
+  const cap = newCapability.value.trim().toLowerCase()
+  if (!cap || capabilitiesList.value.includes(cap)) { newCapability.value = ''; return }
+  emit('update:form-data', 'capabilities', [...capabilitiesList.value, cap].join(', '))
+  newCapability.value = ''
+}
+
+function removeCapability(index) {
+  const list = [...capabilitiesList.value]
+  list.splice(index, 1)
+  emit('update:form-data', 'capabilities', list.join(', '))
+}
+
+function toggleSettingSource(source) {
+  const current = [...settingSourcesArray.value]
+  const index = current.indexOf(source)
+  if (index >= 0) current.splice(index, 1)
+  else current.push(source)
+  emit('update:form-data', 'setting_sources', current)
+}
+
+function addDirectory() {
+  const dir = newDirectory.value.trim()
+  if (!dir) return
+  const current = additionalDirsList.value
+  if (!current.includes(dir)) {
+    current.push(dir)
+    emit('update:form-data', 'additional_directories', current.join('\n'))
+  }
+  newDirectory.value = ''
+}
+
+function addDirectoryPath(dir) {
+  const current = additionalDirsList.value
+  if (!current.includes(dir)) {
+    current.push(dir)
+    emit('update:form-data', 'additional_directories', current.join('\n'))
+  }
+}
+
+defineExpose({ addDirectoryPath })
+
+function removeDirectory(index) {
+  const current = [...additionalDirsList.value]
+  current.splice(index, 1)
+  emit('update:form-data', 'additional_directories', current.join('\n'))
+}
+
+function handleDockerToggle(checked) {
+  emit('update:form-data', 'docker_enabled', checked)
+  if (checked) {
+    emit('update:form-data', 'cli_path', '')
+  }
+}
+
+function updateSandboxField(field, value) {
+  props.formData.sandbox[field] = value
+}
+
+function updateNetworkField(field, value) {
+  props.formData.sandbox.network[field] = value
+}
+
+function updateViolationField(field, value) {
+  props.formData.sandbox.ignoreViolations[field] = value
+}
+
+function handleMcpToggle(name, enabled) {
+  if (sessionId.value) mcpStore.toggleServer(sessionId.value, name, enabled)
+}
+
+function handleMcpReconnect(name) {
+  if (sessionId.value) mcpStore.reconnectServer(sessionId.value, name)
+}
+</script>
+
+<style scoped>
+.field-indicator {
+  margin-left: 0.25rem;
+  font-size: 0.75rem;
+  font-weight: bold;
+  cursor: help;
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+.field-indicator.autofilled {
+  color: #856404;
+}
+
+.field-indicator.modified {
+  color: #cc5500;
+}
+</style>

@@ -175,59 +175,11 @@
             </div>
           </div>
 
-          <!-- Form View (create/edit session or template) -->
-          <div v-else>
-            <!-- Tab Navigation -->
-            <ul class="nav nav-tabs nav-tabs-responsive mb-3" role="tablist">
-              <li class="nav-item" role="presentation">
-                <button
-                  class="nav-link"
-                  :class="{ active: activeTab === 'general', 'has-error': tabErrors.general }"
-                  type="button"
-                  @click="activeTab = 'general'"
-                >
-                  General
-                  <span v-if="tabErrors.general" class="error-indicator" title="This tab has validation errors"></span>
-                </button>
-              </li>
-              <li class="nav-item" role="presentation">
-                <button
-                  class="nav-link"
-                  :class="{ active: activeTab === 'permissions', 'has-error': tabErrors.permissions }"
-                  type="button"
-                  @click="activeTab = 'permissions'"
-                >
-                  Permissions
-                  <span v-if="tabErrors.permissions" class="error-indicator" title="This tab has validation errors"></span>
-                </button>
-              </li>
-              <li class="nav-item" role="presentation">
-                <button
-                  class="nav-link"
-                  :class="{ active: activeTab === 'advanced', 'has-error': tabErrors.advanced }"
-                  type="button"
-                  @click="activeTab = 'advanced'"
-                >
-                  Advanced
-                  <span v-if="tabErrors.advanced" class="error-indicator" title="This tab has validation errors"></span>
-                </button>
-              </li>
-              <li class="nav-item" role="presentation">
-                <button
-                  class="nav-link"
-                  :class="{ active: activeTab === 'sandbox' }"
-                  type="button"
-                  @click="activeTab = 'sandbox'"
-                >
-                  Sandbox
-                </button>
-              </li>
-            </ul>
-
-            <!-- Tab Content -->
-            <div class="tab-content">
-              <GeneralTab
-                v-show="activeTab === 'general'"
+          <!-- Form View (create/edit session or template) — Slide Layout -->
+          <div v-else class="config-slide-body">
+            <div class="slide-container" :class="{ 'show-advanced': showAdvanced }">
+              <QuickSettingsPanel
+                class="slide-panel"
                 :mode="mode"
                 :form-data="formData"
                 :errors="errors"
@@ -237,13 +189,13 @@
                 :field-states="fieldStates"
                 @update:form-data="updateFormData"
                 @update:selected-template-id="updateSelectedTemplate"
-                ref="generalTabRef"
                 @open-folder-browser="openFolderBrowser"
-                @browse-additional-dir="browseAdditionalDir"
                 @open-template-manager="switchToTemplateList"
+                @show-advanced="showAdvanced = true"
               />
-              <PermissionsTab
-                v-show="activeTab === 'permissions'"
+              <AdvancedSettingsPanel
+                class="slide-panel"
+                ref="advancedPanelRef"
                 :mode="mode"
                 :form-data="formData"
                 :errors="errors"
@@ -251,24 +203,8 @@
                 :field-states="fieldStates"
                 @update:form-data="updateFormData"
                 @preview-permissions="showPermissionPreview"
-              />
-              <AdvancedTab
-                v-show="activeTab === 'advanced'"
-                :mode="mode"
-                :form-data="formData"
-                :errors="errors"
-                :session="editSession"
-                :field-states="fieldStates"
-                @update:form-data="updateFormData"
-              />
-              <SandboxTab
-                v-show="activeTab === 'sandbox'"
-                :mode="mode"
-                :form-data="formData"
-                :errors="errors"
-                :session="editSession"
-                :field-states="fieldStates"
-                @update:form-data="updateFormData"
+                @show-quick="showAdvanced = false"
+                @browse-additional-dir="browseAdditionalDir"
               />
             </div>
           </div>
@@ -339,10 +275,8 @@ import { useProjectStore } from '@/stores/project'
 import { useSessionStore } from '@/stores/session'
 import { useUIStore } from '@/stores/ui'
 import { api } from '@/utils/api'
-import GeneralTab from './GeneralTab.vue'
-import PermissionsTab from './PermissionsTab.vue'
-import AdvancedTab from './AdvancedTab.vue'
-import SandboxTab from './SandboxTab.vue'
+import QuickSettingsPanel from './QuickSettingsPanel.vue'
+import AdvancedSettingsPanel from './AdvancedSettingsPanel.vue'
 import PermissionPreviewModal from './PermissionPreviewModal.vue'
 
 const router = useRouter()
@@ -358,10 +292,10 @@ const permissionPreviewModal = ref(null)  // Issue #36
 // Mode: 'create-session', 'edit-session', 'create-template', 'edit-template', 'configure-ephemeral',
 //       'save-as-template', 'update-template-from-session'
 const mode = ref('create-session')
-const activeTab = ref('general')
+const showAdvanced = ref(false)
 
 // Component refs
-const generalTabRef = ref(null)
+const advancedPanelRef = ref(null)
 
 // Context
 const projectId = ref(null)
@@ -479,12 +413,8 @@ const errors = reactive({
   name: ''
 })
 
-// Track errors per tab
-const tabErrors = computed(() => ({
-  general: !!errors.name,
-  permissions: false,
-  advanced: false
-}))
+// Track if form has errors (used in validation)
+const hasFormErrors = computed(() => !!errors.name)
 
 const isSubmitting = ref(false)
 const errorMessage = ref('')
@@ -940,8 +870,8 @@ function browseAdditionalDir() {
     defaultPath: defaultPath,
     currentPath: '',
     onSelect: (path) => {
-      if (generalTabRef.value) {
-        generalTabRef.value.addDirectoryPath(path)
+      if (advancedPanelRef.value) {
+        advancedPanelRef.value.addDirectoryPath(path)
       }
     }
   })
@@ -965,7 +895,7 @@ function switchToTemplateList() {
 function switchToCreateTemplate() {
   mode.value = 'create-template'
   resetForm()
-  activeTab.value = 'general'
+  showAdvanced.value = false
 }
 
 function switchToEditTemplate(template) {
@@ -973,7 +903,7 @@ function switchToEditTemplate(template) {
   editTemplate.value = template
   resetForm()
   populateFormFromTemplate(template)
-  activeTab.value = 'general'
+  showAdvanced.value = false
 }
 
 async function deleteTemplate(template) {
@@ -1214,8 +1144,8 @@ function validate() {
 
 async function handleSubmit() {
   if (!validate()) {
-    // Switch to tab with error
-    if (errors.name) activeTab.value = 'general'
+    // Switch to quick panel if there's a name error
+    if (errors.name) showAdvanced.value = false
     return
   }
 
@@ -1666,7 +1596,7 @@ function resetForm() {
 
   selectedTemplateId.value = null
   errorMessage.value = ''
-  activeTab.value = 'general'
+  showAdvanced.value = false
 }
 
 function populateFormFromSession(session) {
@@ -1956,35 +1886,6 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
-.nav-tabs-responsive {
-  flex-wrap: nowrap;
-  overflow-x: auto;
-  -webkit-overflow-scrolling: touch;
-}
-
-.nav-tabs-responsive .nav-item {
-  flex-shrink: 0;
-}
-
-.nav-link {
-  position: relative;
-  white-space: nowrap;
-}
-
-.nav-link.has-error {
-  color: var(--bs-danger);
-}
-
-.error-indicator {
-  display: inline-block;
-  width: 8px;
-  height: 8px;
-  background-color: var(--bs-danger);
-  border-radius: 50%;
-  margin-left: 6px;
-  vertical-align: middle;
-}
-
 .spinner-border-sm {
   width: 1rem;
   height: 1rem;
@@ -2007,26 +1908,5 @@ onUnmounted(() => {
   background-color: #fffbea;
   border-color: #f0e6c0;
   color: #664d03;
-}
-
-/* Mobile responsive tabs */
-@media (max-width: 576px) {
-  .nav-tabs-responsive {
-    border-bottom: none;
-  }
-
-  .nav-tabs-responsive .nav-link {
-    border: 1px solid var(--bs-border-color);
-    border-radius: 0.375rem;
-    margin-right: 0.5rem;
-    padding: 0.375rem 0.75rem;
-    font-size: 0.875rem;
-  }
-
-  .nav-tabs-responsive .nav-link.active {
-    background-color: var(--bs-primary);
-    color: white;
-    border-color: var(--bs-primary);
-  }
 }
 </style>

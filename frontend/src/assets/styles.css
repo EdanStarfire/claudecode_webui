@@ -969,6 +969,353 @@ button:focus {
     color: #334155;
 }
 
+/* ========== CONFIGURATION MODAL SLIDE LAYOUT ========== */
+
+/* Slide container for Quick/Advanced panels */
+.slide-container {
+    display: flex;
+    width: 200%;
+    transition: transform 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.slide-container.show-advanced {
+    transform: translateX(-50%);
+}
+.slide-panel {
+    width: 50%;
+    flex-shrink: 0;
+    padding: 20px;
+    box-sizing: border-box;
+}
+
+/* Quick settings panel labels */
+.quick-panel .form-label {
+    font-size: 0.8rem;
+    font-weight: 500;
+    color: #adb5bd;
+    margin-bottom: 6px;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+}
+
+/* Permission mode button group */
+.perm-btn-group {
+    display: flex;
+    gap: 0;
+    border-radius: 6px;
+    overflow: hidden;
+    border: 1px solid #444;
+}
+.perm-btn-group .perm-btn {
+    flex: 1;
+    padding: 8px 4px;
+    font-size: 0.78rem;
+    font-weight: 500;
+    border: none;
+    background: #2a2a3e;
+    color: #adb5bd;
+    cursor: pointer;
+    transition: all 0.15s;
+    text-align: center;
+    border-right: 1px solid #444;
+}
+.perm-btn-group .perm-btn:last-child {
+    border-right: none;
+}
+.perm-btn-group .perm-btn:hover {
+    background: #3a3a5e;
+    color: #fff;
+}
+.perm-btn-group .perm-btn.active {
+    background: #0d6efd;
+    color: #fff;
+}
+.perm-btn-group .perm-btn.active.perm-bypass {
+    background: #dc3545;
+}
+.perm-btn-group .perm-btn.active.perm-plan {
+    background: #6f42c1;
+}
+.perm-btn-group .perm-btn.active.perm-accept {
+    background: #198754;
+}
+.perm-btn-group .perm-btn.disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+/* Advanced settings link */
+.advanced-link {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 12px;
+    margin-top: 16px;
+    border: 1px dashed #444;
+    border-radius: 8px;
+    color: #6ea8fe;
+    font-size: 0.88rem;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+.advanced-link:hover {
+    background: rgba(13,110,253,0.08);
+    border-color: #0d6efd;
+    color: #9ec5fe;
+}
+
+/* Back button */
+.back-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: #6ea8fe;
+    font-size: 0.85rem;
+    cursor: pointer;
+    margin-bottom: 16px;
+    padding: 4px 0;
+    border: none;
+    background: none;
+}
+.back-btn:hover {
+    color: #9ec5fe;
+}
+
+/* Priority cards (collapsible color-coded) */
+.priority-card {
+    background: #16213e;
+    border: 1px solid #2a2a4a;
+    border-radius: 0.5rem;
+    margin-bottom: 0.65rem;
+    overflow: hidden;
+}
+.priority-card .card-header-btn {
+    background: none;
+    border: none;
+    color: #e0e0e0;
+    width: 100%;
+    text-align: left;
+    padding: 0.6rem 0.85rem;
+    font-weight: 600;
+    font-size: 0.85rem;
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    cursor: pointer;
+    transition: background 0.15s;
+}
+.priority-card .card-header-btn:hover {
+    background: rgba(255,255,255,0.04);
+}
+.priority-card .card-header-btn .chevron {
+    margin-left: auto;
+    transition: transform 0.2s;
+    font-size: 0.7rem;
+    color: #6c757d;
+}
+.priority-card .card-header-btn.collapsed .chevron {
+    transform: rotate(-90deg);
+}
+.priority-card .card-body-inner {
+    padding: 0.65rem 0.85rem 0.85rem;
+    border-top: 1px solid #2a2a4a;
+}
+.priority-card .form-label {
+    font-size: 0.8rem;
+    color: #adb5bd;
+    margin-bottom: 4px;
+}
+
+/* Color-coded left borders */
+.priority-blue    { border-left: 4px solid #0d6efd !important; }
+.priority-indigo  { border-left: 4px solid #6f42c1 !important; }
+.priority-gray    { border-left: 4px solid #6c757d !important; }
+.priority-teal    { border-left: 4px solid #20c997 !important; }
+.priority-danger  { border-left: 4px solid #dc3545 !important; background: rgba(220, 53, 69, 0.03); }
+
+/* Dot indicators */
+.dot {
+    display: inline-block;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+.dot-blue    { background: #0d6efd; }
+.dot-indigo  { background: #6f42c1; }
+.dot-gray    { background: #6c757d; }
+.dot-teal    { background: #20c997; }
+.dot-danger  { background: #dc3545; }
+
+/* Tag editor */
+.tag-editor {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 8px;
+    background: #2a2a3e;
+    border: 1px solid #444;
+    border-radius: 6px;
+    min-height: 38px;
+    align-items: center;
+}
+.tag-editor .tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 0.75rem;
+    font-weight: 500;
+}
+.tag-editor .tag.tag-allowed {
+    background: rgba(25,135,84,0.2);
+    color: #75b798;
+    border: 1px solid rgba(25,135,84,0.3);
+}
+.tag-editor .tag.tag-disallowed {
+    background: rgba(220,53,69,0.2);
+    color: #ea868f;
+    border: 1px solid rgba(220,53,69,0.3);
+}
+.tag-editor .tag.tag-capability {
+    background: rgba(13,202,240,0.2);
+    color: #6edff6;
+    border: 1px solid rgba(13,202,240,0.3);
+}
+.tag-editor .tag .tag-remove {
+    cursor: pointer;
+    font-size: 0.65rem;
+    opacity: 0.7;
+    margin-left: 2px;
+}
+.tag-editor .tag .tag-remove:hover {
+    opacity: 1;
+}
+.tag-editor .tag-input {
+    border: none;
+    background: none;
+    color: #fff;
+    outline: none;
+    font-size: 0.8rem;
+    flex: 1;
+    min-width: 80px;
+}
+
+.quick-add-btns {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-top: 6px;
+}
+.quick-add-btns .btn {
+    font-size: 0.7rem;
+    padding: 2px 8px;
+}
+
+/* Working dir display */
+.workdir-display {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.workdir-display .workdir-path {
+    flex: 1;
+    background: #2a2a3e;
+    border: 1px solid #444;
+    border-radius: 6px;
+    padding: 7px 12px;
+    font-size: 0.85rem;
+    color: #adb5bd;
+    font-family: monospace;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* Budget slider group */
+.budget-slider-group {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+.budget-slider-group input[type="range"] {
+    flex: 1;
+}
+.budget-slider-group .budget-value {
+    font-family: monospace;
+    font-size: 0.82rem;
+    color: #6ea8fe;
+    min-width: 50px;
+    text-align: right;
+}
+
+/* Sandbox sub-section labels */
+.sandbox-section-label {
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: #6c757d;
+    margin-top: 0.6rem;
+    margin-bottom: 0.3rem;
+    font-weight: 600;
+}
+
+/* Additional dirs list items */
+.dir-list-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 8px;
+    background: #2a2a3e;
+    border: 1px solid #444;
+    border-radius: 4px;
+    margin-bottom: 4px;
+    font-size: 0.82rem;
+}
+.dir-list-item .dir-path {
+    flex: 1;
+    color: #e9ecef;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.dir-list-item .dir-remove {
+    color: #ea868f;
+    cursor: pointer;
+    font-size: 0.75rem;
+}
+
+/* Scrollable advanced panel */
+.advanced-panel {
+    max-height: 75vh;
+    overflow-y: auto;
+}
+.advanced-panel::-webkit-scrollbar {
+    width: 6px;
+}
+.advanced-panel::-webkit-scrollbar-track {
+    background: transparent;
+}
+.advanced-panel::-webkit-scrollbar-thumb {
+    background: #444;
+    border-radius: 3px;
+}
+
+/* Configuration modal body for slide layout */
+.config-slide-body {
+    position: relative;
+    overflow: hidden;
+    padding: 0 !important;
+}
+
+/* Responsive overrides for configuration modal */
+@media (max-width: 575px) {
+    .slide-panel { padding: 16px 14px; }
+    .perm-btn-group .perm-btn { font-size: 0.68rem; padding: 7px 2px; }
+    .quick-add-btns .btn { font-size: 0.65rem; }
+}
+
 /* ========== TIMELINE ACCORDION STYLES ========== */
 
 /* Timeline accordion buttons - minimal styling */
