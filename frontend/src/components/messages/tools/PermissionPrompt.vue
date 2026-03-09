@@ -535,6 +535,7 @@ function autoResizeGuidance() {
 /* Permission UI */
 .permission-section {
   margin-top: 0;
+  width: 100%;
 }
 
 .permission-buttons {
@@ -605,10 +606,12 @@ function autoResizeGuidance() {
 /* Suggestions */
 .suggestions-section {
   margin: 8px 0;
-  padding: 6px 8px;
+  padding: 8px 10px;
   background: #eff6ff;
   border: 1px solid #bfdbfe;
   border-radius: 4px;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .suggestions-label {
@@ -622,8 +625,10 @@ function autoResizeGuidance() {
   background: #f8fafc;
   border: 1px solid #e2e8f0;
   border-radius: 4px;
-  padding: 4px 6px;
+  padding: 6px 8px;
   margin-bottom: 4px;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .suggestion-group:last-child {
@@ -688,7 +693,7 @@ function autoResizeGuidance() {
   border-radius: 2px;
   background: white;
   flex: 1;
-  min-width: 120px;
+  min-width: 180px;
 }
 
 .rule-input:focus {
@@ -752,5 +757,29 @@ function autoResizeGuidance() {
   resize: none;
   min-height: 28px;
   margin-top: 4px;
+}
+
+/* Issue #716: Responsive overrides for small screens */
+@media (max-width: 375px) {
+  .rule-input {
+    min-width: 100px;
+  }
+
+  .suggestions-section {
+    padding: 4px 6px;
+  }
+
+  .suggestion-item {
+    font-size: 11px;
+  }
+
+  .permission-buttons {
+    gap: 4px;
+  }
+
+  .btn-timeline {
+    padding: 4px 8px;
+    font-size: 11px;
+  }
 }
 </style>
