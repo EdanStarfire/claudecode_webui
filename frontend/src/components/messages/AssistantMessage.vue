@@ -6,7 +6,7 @@
       <span class="msg-role">assistant</span>
       <span class="msg-time">{{ formattedTimestamp }}</span>
     </div>
-    <div class="msg-bubble msg-bubble-assistant">
+    <div class="msg-bubble msg-bubble-assistant" :class="{ 'has-permission-prompt': hasActivePermission }">
       <!-- Thinking Block (collapsible) -->
       <div v-if="hasThinking" class="thinking-block mb-2">
         <ThinkingBlock :thinking="thinkingContent" />
@@ -44,6 +44,7 @@ import { computed } from 'vue'
 import DOMPurify from 'dompurify'
 import { marked } from 'marked'
 import { formatTimestamp } from '@/utils/time'
+import { getEffectiveStatusForTool } from '@/composables/useToolStatus'
 import { useMessageStore } from '@/stores/message'
 import { useSessionStore } from '@/stores/session'
 import ThinkingBlock from './ThinkingBlock.vue'
@@ -186,6 +187,15 @@ const taskToolCalls = computed(() => {
  * This handles content-less messages whose only tools were Task calls
  * (now rendered as SubagentTimeline on the parent message).
  */
+/**
+ * Issue #716: Expand bubble to full width when a permission prompt is active
+ */
+const hasActivePermission = computed(() => {
+  return enrichedToolCalls.value.some(tc =>
+    getEffectiveStatusForTool(tc) === 'permission_required'
+  )
+})
+
 const hasAnythingToShow = computed(() => {
   return hasContent.value ||
     hasThinking.value ||
@@ -312,10 +322,19 @@ const hasAnythingToShow = computed(() => {
   font-weight: 600;
 }
 
+/* Issue #716: Force bubble to full allowed width when permission prompt is active */
+.msg-bubble.has-permission-prompt {
+  width: 85%;
+}
+
 /* Mobile */
 @media (max-width: 768px) {
   .msg-bubble {
     max-width: 95%;
+  }
+
+  .msg-bubble.has-permission-prompt {
+    width: 95%;
   }
 }
 </style>
