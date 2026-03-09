@@ -24,6 +24,7 @@ from pathlib import Path
 
 from .logging_config import get_logger
 from .models.minion_template import MinionTemplate
+from .session_config import SessionConfig
 
 # Get specialized logger for template operations
 template_logger = get_logger('template_manager', category='TEMPLATE_MANAGER')
@@ -146,30 +147,22 @@ class TemplateManager:
     async def create_template(
         self,
         name: str,
-        permission_mode: str,
-        allowed_tools: list[str] | None = None,
-        disallowed_tools: list[str] | None = None,
+        config: SessionConfig,
         default_role: str | None = None,
         default_system_prompt: str | None = None,
         description: str | None = None,
-        model: str | None = None,
         capabilities: list[str] | None = None,
-        override_system_prompt: bool = False,
-        sandbox_enabled: bool = False,
-        sandbox_config: dict | None = None,
-        cli_path: str | None = None,
-        additional_directories: list[str] | None = None,
-        # Docker session isolation (issue #496)
-        docker_enabled: bool = False,
-        docker_image: str | None = None,
-        docker_extra_mounts: list[str] | None = None,
-        # Thinking and effort configuration (issue #580)
-        thinking_mode: str | None = None,
-        thinking_budget_tokens: int | None = None,
-        effort: str | None = None,
-        knowledge_management_enabled: bool = True,
     ) -> MinionTemplate:
-        """Create a new template."""
+        """Create a new template.
+
+        Args:
+            name: Template display name
+            config: Bundled configuration (permission_mode, tools, model, etc.)
+            default_role: Default role for minions using this template
+            default_system_prompt: System prompt content
+            description: Template description
+            capabilities: Capability tags
+        """
         if not name or not name.strip():
             raise ValueError("Template name cannot be empty")
 
@@ -177,7 +170,7 @@ class TemplateManager:
             raise ValueError(f"Template with name '{name}' already exists")
 
         valid_modes = ["default", "acceptEdits", "plan", "bypassPermissions"]
-        if permission_mode not in valid_modes:
+        if config.permission_mode not in valid_modes:
             raise ValueError(
                 f"Invalid permission_mode. Must be one of: {', '.join(valid_modes)}"
             )
@@ -185,28 +178,26 @@ class TemplateManager:
         template = MinionTemplate(
             template_id=str(uuid.uuid4()),
             name=name.strip(),
-            permission_mode=permission_mode,
-            allowed_tools=allowed_tools if allowed_tools is not None else [],
-            disallowed_tools=disallowed_tools if disallowed_tools is not None else [],
+            permission_mode=config.permission_mode,
+            allowed_tools=config.allowed_tools if config.allowed_tools is not None else [],
+            disallowed_tools=config.disallowed_tools if config.disallowed_tools is not None else [],
             default_role=default_role,
             default_system_prompt=default_system_prompt,
             description=description,
-            model=model,
+            model=config.model,
             capabilities=capabilities if capabilities is not None else [],
-            override_system_prompt=override_system_prompt,
-            sandbox_enabled=sandbox_enabled,
-            sandbox_config=sandbox_config,
-            cli_path=cli_path,
-            additional_directories=additional_directories if additional_directories is not None else [],
-            # Docker session isolation (issue #496)
-            docker_enabled=docker_enabled,
-            docker_image=docker_image,
-            docker_extra_mounts=docker_extra_mounts if docker_extra_mounts is not None else [],
-            # Thinking and effort configuration (issue #580)
-            thinking_mode=thinking_mode,
-            thinking_budget_tokens=thinking_budget_tokens,
-            effort=effort,
-            knowledge_management_enabled=knowledge_management_enabled,
+            override_system_prompt=config.override_system_prompt,
+            sandbox_enabled=config.sandbox_enabled,
+            sandbox_config=config.sandbox_config,
+            cli_path=config.cli_path,
+            additional_directories=config.additional_directories if config.additional_directories is not None else [],
+            docker_enabled=config.docker_enabled,
+            docker_image=config.docker_image,
+            docker_extra_mounts=config.docker_extra_mounts if config.docker_extra_mounts is not None else [],
+            thinking_mode=config.thinking_mode,
+            thinking_budget_tokens=config.thinking_budget_tokens,
+            effort=config.effort,
+            knowledge_management_enabled=config.knowledge_management_enabled,
         )
 
         await self._save_template(template)
@@ -443,10 +434,13 @@ class TemplateManager:
                             )
                     continue
 
-                await self.create_template(
-                    name=data["name"],
+                seed_config = SessionConfig(
                     permission_mode=data["permission_mode"],
                     allowed_tools=data.get("allowed_tools"),
+                )
+                await self.create_template(
+                    name=data["name"],
+                    config=seed_config,
                     default_role=data.get("default_role"),
                     default_system_prompt=source_prompt,
                     description=data.get("description"),

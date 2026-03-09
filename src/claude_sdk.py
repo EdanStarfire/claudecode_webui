@@ -16,6 +16,7 @@ from .data_storage import DataStorageManager
 from .logging_config import get_logger
 from .message_parser import MessageParser, MessageProcessor
 from .models.messages import sdk_message_to_stored
+from .session_config import SessionConfig
 
 # Import SDK components
 try:
@@ -131,31 +132,17 @@ class ClaudeSDK:
         self,
         session_id: str,
         working_directory: str,
+        config: SessionConfig | None = None,
         storage_manager: DataStorageManager | None = None,
         session_manager: Any | None = None,
         message_callback: Callable[[dict[str, Any]], None] | None = None,
         error_callback: Callable[[str, Exception], None] | None = None,
         permission_callback: Callable[[str, dict[str, Any]], bool | dict[str, Any]] | None = None,
-        permissions: str = "acceptEdits",
-        system_prompt: str | None = None,
-        override_system_prompt: bool = False,
-        tools: list[str] = None,
-        disallowed_tools: list[str] = None,
-        model: str | None = None,
         resume_session_id: str | None = None,
         mcp_servers: list[Any] | None = None,
-        additional_directories: list[str] | None = None,
-        sandbox_enabled: bool = False,
-        sandbox_config: dict | None = None,
-        setting_sources: list[str] | None = None,
         experimental: bool = False,
-        cli_path: str | None = None,
         stderr_callback: Callable[[str], Any] | None = None,
         extra_env: dict[str, str] | None = None,
-        # Thinking and effort configuration (issue #540)
-        thinking_mode: str | None = None,
-        thinking_budget_tokens: int | None = None,
-        effort: str | None = None,
     ):
         """
         Initialize enhanced Claude Code SDK wrapper.
@@ -163,23 +150,20 @@ class ClaudeSDK:
         Args:
             session_id: Unique session identifier
             working_directory: Directory where Claude Code should run
+            config: Bundled configuration (permission, tools, model, etc.)
             storage_manager: Data storage manager for persistence
+            session_manager: Session manager for state updates
             message_callback: Called when new messages are received
             error_callback: Called when errors occur
             permission_callback: Called to check for tool permissions
-            permissions: SDK permission mode
-            system_prompt: Custom system prompt
-            override_system_prompt: If True, use only custom prompt (no Claude Code preset)
-            tools: List of allowed tools
-            model: Model to use
+            resume_session_id: SDK session ID to resume
             mcp_servers: List of MCP servers to attach (for multi-agent)
-            sandbox_enabled: Enable OS-level sandboxing (issue #319)
-            sandbox_config: Optional SandboxSettings configuration dict
-            setting_sources: List of settings sources to load (issue #36)
             experimental: Enable experimental features like Agent Teams (issue #411)
-            cli_path: Custom CLI executable path for tool execution (issue #489)
             stderr_callback: Called with each stderr line from SDK subprocess (issue #517)
+            extra_env: Extra environment variables (e.g., Docker wrapper config)
         """
+        if config is None:
+            config = SessionConfig()
         self.session_id = session_id
         self.working_directory = Path(working_directory)
         self.storage_manager = storage_manager
@@ -192,26 +176,26 @@ class ClaudeSDK:
             sdk_logger.debug(f"Permission callback type: {type(permission_callback)}")
         else:
             logger.warning("No permission callback provided to ClaudeSDK!")
-        self.current_permission_mode = permissions
-        self.system_prompt = system_prompt
-        self.override_system_prompt = override_system_prompt
-        self.tools = tools if tools is not None else []
-        self.disallowed_tools = disallowed_tools if disallowed_tools is not None else []
-        self.model = model
+        self.current_permission_mode = config.permission_mode
+        self.system_prompt = config.system_prompt
+        self.override_system_prompt = config.override_system_prompt
+        self.tools = config.allowed_tools if config.allowed_tools is not None else []
+        self.disallowed_tools = config.disallowed_tools if config.disallowed_tools is not None else []
+        self.model = config.model
         self.resume_session_id = resume_session_id
         self.mcp_servers = mcp_servers if mcp_servers is not None else []
-        self.sandbox_enabled = sandbox_enabled
-        self.sandbox_config = sandbox_config
-        self.setting_sources = setting_sources  # Issue #36: which settings files to load
-        self.experimental = experimental  # Issue #411: Enable experimental features
-        self.cli_path = cli_path  # Issue #489: Custom CLI executable path
-        self.stderr_callback = stderr_callback  # Issue #517: stderr callback for system messages
-        self.additional_directories = additional_directories or []  # Issue #630: extra dirs for SDK
-        self.extra_env = extra_env or {}  # Issue #496: extra env vars (e.g., Docker wrapper config)
-        self.thinking_mode = thinking_mode  # Issue #540: thinking configuration
-        self.thinking_budget_tokens = thinking_budget_tokens  # Issue #540: budget when thinking_mode="enabled"
-        self.effort = effort  # Issue #540: effort level
-        self._stderr_buffer: list[str] = []  # Issue #517: buffer stderr lines for error reporting
+        self.sandbox_enabled = config.sandbox_enabled
+        self.sandbox_config = config.sandbox_config
+        self.setting_sources = config.setting_sources
+        self.experimental = experimental
+        self.cli_path = config.cli_path
+        self.stderr_callback = stderr_callback
+        self.additional_directories = config.additional_directories or []
+        self.extra_env = extra_env or {}
+        self.thinking_mode = config.thinking_mode
+        self.thinking_budget_tokens = config.thinking_budget_tokens
+        self.effort = config.effort
+        self._stderr_buffer: list[str] = []
 
         self.info = SessionInfo(session_id=session_id, working_directory=str(self.working_directory))
 

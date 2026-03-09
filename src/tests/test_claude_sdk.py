@@ -6,6 +6,7 @@ import tempfile
 import pytest
 
 from ..claude_sdk import ClaudeSDK, SessionInfo, SessionState
+from ..session_config import SessionConfig
 
 
 class TestClaudeSDK:
@@ -28,7 +29,7 @@ class TestClaudeSDK:
         return ClaudeSDK(
             session_id=session_id,
             working_directory=temp_dir,
-            system_prompt="Hello, test!"
+            config=SessionConfig(system_prompt="Hello, test!"),
         )
 
     def test_initialization(self, sdk_instance, session_id, temp_dir):

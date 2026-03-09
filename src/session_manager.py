@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from .logging_config import get_logger
+from .session_config import SessionConfig
 
 # Get specialized logger for session manager actions
 session_logger = get_logger('session_manager', category='SESSION_MANAGER')
@@ -260,14 +261,7 @@ class SessionManager:
     async def create_session(
         self,
         session_id: str,
-        working_directory: str | None = None,
-        additional_directories: list[str] | None = None,
-        permission_mode: str = "acceptEdits",
-        system_prompt: str | None = None,
-        override_system_prompt: bool = False,
-        allowed_tools: list[str] = None,
-        disallowed_tools: list[str] = None,
-        model: str | None = None,
+        config: SessionConfig,
         name: str | None = None,
         order: int | None = None,
         project_id: str | None = None,
@@ -277,24 +271,21 @@ class SessionManager:
         parent_overseer_id: str | None = None,
         overseer_level: int = 0,
         can_spawn_minions: bool = True,  # If False, no MCP spawn tools attached
-        # Sandbox mode (issue #319)
-        sandbox_enabled: bool = False,
-        sandbox_config: dict | None = None,
-        # Settings sources (issue #36)
-        setting_sources: list[str] | None = None,
-        # CLI path override (issue #489)
-        cli_path: str | None = None,
-        # Docker session isolation (issue #496)
-        docker_enabled: bool = False,
-        docker_image: str | None = None,
-        docker_extra_mounts: list[str] | None = None,
-        # Thinking and effort configuration (issue #540)
-        thinking_mode: str | None = None,
-        thinking_budget_tokens: int | None = None,
-        effort: str | None = None,
-        knowledge_management_enabled: bool = True,
     ) -> None:
-        """Create a new session (all sessions are minions - issue #349)"""
+        """Create a new session (all sessions are minions - issue #349)
+
+        Args:
+            session_id: Unique session identifier
+            config: Bundled configuration toggles (permission, tools, model, etc.)
+            name: Display name (defaults to timestamp)
+            order: Display order (defaults to 0)
+            project_id: Parent project ID
+            role: Minion role description
+            capabilities: Capability tags for discovery
+            parent_overseer_id: Parent minion session ID (None if user-created)
+            overseer_level: Hierarchy depth (0=user-created)
+            can_spawn_minions: If False, no MCP spawn tools attached
+        """
         # Validate session_id is not reserved
         from src.models.legion_models import RESERVED_MINION_IDS
         if session_id in RESERVED_MINION_IDS:
@@ -315,15 +306,15 @@ class SessionManager:
             state=SessionState.CREATED,
             created_at=now,
             updated_at=now,
-            working_directory=working_directory,
-            additional_directories=additional_directories if additional_directories is not None else [],
-            current_permission_mode=permission_mode,
-            initial_permission_mode=permission_mode,
-            system_prompt=system_prompt,
-            override_system_prompt=override_system_prompt,
-            allowed_tools=allowed_tools if allowed_tools is not None else [],
-            disallowed_tools=disallowed_tools if disallowed_tools is not None else [],
-            model=model,
+            working_directory=config.working_directory,
+            additional_directories=config.additional_directories if config.additional_directories is not None else [],
+            current_permission_mode=config.permission_mode,
+            initial_permission_mode=config.permission_mode,
+            system_prompt=config.system_prompt,
+            override_system_prompt=config.override_system_prompt,
+            allowed_tools=config.allowed_tools if config.allowed_tools is not None else [],
+            disallowed_tools=config.disallowed_tools if config.disallowed_tools is not None else [],
+            model=config.model,
             name=name,
             slug=slugify_name(name) if name else None,
             order=order,
@@ -335,21 +326,21 @@ class SessionManager:
             overseer_level=overseer_level,
             can_spawn_minions=can_spawn_minions,
             # Sandbox mode (issue #319)
-            sandbox_enabled=sandbox_enabled,
-            sandbox_config=sandbox_config,
+            sandbox_enabled=config.sandbox_enabled,
+            sandbox_config=config.sandbox_config,
             # Settings sources (issue #36)
-            setting_sources=setting_sources,
+            setting_sources=config.setting_sources,
             # CLI path override (issue #489)
-            cli_path=cli_path,
+            cli_path=config.cli_path,
             # Docker session isolation (issue #496)
-            docker_enabled=docker_enabled,
-            docker_image=docker_image,
-            docker_extra_mounts=docker_extra_mounts if docker_extra_mounts is not None else [],
+            docker_enabled=config.docker_enabled,
+            docker_image=config.docker_image,
+            docker_extra_mounts=config.docker_extra_mounts if config.docker_extra_mounts is not None else [],
             # Thinking and effort configuration (issue #540)
-            thinking_mode=thinking_mode,
-            thinking_budget_tokens=thinking_budget_tokens,
-            effort=effort,
-            knowledge_management_enabled=knowledge_management_enabled,
+            thinking_mode=config.thinking_mode,
+            thinking_budget_tokens=config.thinking_budget_tokens,
+            effort=config.effort,
+            knowledge_management_enabled=config.knowledge_management_enabled,
         )
 
         try:

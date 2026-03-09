@@ -41,6 +41,7 @@ from .models.messages import (
     StoredMessage,
 )
 from .permission_resolver import resolve_effective_permissions
+from .session_config import SessionConfig, SessionConfigBase
 from .session_coordinator import SessionCoordinator
 from .session_manager import SessionState
 from .skill_manager import SkillManager
@@ -122,24 +123,9 @@ class ProjectReorderRequest(BaseModel):
     project_ids: list[str]
 
 
-class SessionCreateRequest(BaseModel):
+class SessionCreateRequest(SessionConfigBase):
     project_id: str
-    permission_mode: str = "acceptEdits"
-    system_prompt: str | None = None
-    override_system_prompt: bool = False
-    allowed_tools: list[str] | None = None
-    disallowed_tools: list[str] | None = None  # Issue #461: tools to deny
-    model: str | None = None
     name: str | None = None
-    setting_sources: list[str] | None = None  # Issue #36: which settings files to load
-    cli_path: str | None = None  # Issue #489: custom CLI executable path
-    additional_directories: list[str] | None = None  # Issue #630: extra dirs for agent access
-    # Docker session isolation (issue #496)
-    docker_enabled: bool = False
-    docker_image: str | None = None
-    docker_extra_mounts: list[str] | None = None
-    # Knowledge management toggle (issue #710)
-    knowledge_management_enabled: bool = True
 
 
 class MessageRequest(BaseModel):
@@ -198,31 +184,13 @@ class CommSendRequest(BaseModel):
     comm_type: str = "task"
 
 
-class MinionCreateRequest(BaseModel):
+class MinionCreateRequest(SessionConfigBase):
     name: str
-    model: str | None = None  # Model selection (sonnet, opus, haiku, opusplan)
     role: str | None = ""
     initialization_context: str | None = ""
-    override_system_prompt: bool = False
     capabilities: list[str] | None = None
-    permission_mode: str = "default"
-    allowed_tools: list[str] | None = None  # None or empty list means no pre-authorized tools
-    disallowed_tools: list[str] | None = None  # Issue #461: tools to deny
     working_directory: str | None = None  # Optional custom working directory for this minion
-    sandbox_enabled: bool | None = None  # Enable OS-level sandboxing (issue #319)
-    sandbox_config: dict | None = None  # Issue #458: sandbox configuration settings
-    setting_sources: list[str] | None = None  # Issue #36: which settings files to load
-    cli_path: str | None = None  # Issue #489: custom CLI executable path
-    # Docker session isolation (issue #496)
-    docker_enabled: bool = False
-    docker_image: str | None = None
-    docker_extra_mounts: list[str] | None = None
-    # Thinking and effort configuration (issue #540)
-    thinking_mode: str | None = None  # "adaptive", "enabled", "disabled"
-    thinking_budget_tokens: int | None = None  # Token budget (min 1024)
-    effort: str | None = None  # "low", "medium", "high", "max"
-    # Knowledge management toggle (issue #710)
-    knowledge_management_enabled: bool = True
+    permission_mode: str = "default"  # Override default from SessionConfigBase
 
 
 class ScheduleCreateRequest(BaseModel):
@@ -252,31 +220,18 @@ class ScheduleUpdateRequest(BaseModel):
 
 
 
-class TemplateCreateRequest(BaseModel):
+class TemplateCreateRequest(SessionConfigBase):
     name: str
-    permission_mode: str
-    allowed_tools: list[str] | None = None
-    disallowed_tools: list[str] | None = None  # Issue #461: tools to deny
     default_role: str | None = None
     default_system_prompt: str | None = None
     description: str | None = None
-    model: str | None = None
     capabilities: list[str] | None = None
-    override_system_prompt: bool = False
-    sandbox_enabled: bool = False
-    sandbox_config: dict | None = None  # Issue #458: sandbox configuration settings
-    cli_path: str | None = None  # Issue #489: custom CLI path
-    additional_directories: list[str] | None = None  # Issue #630
-    # Docker session isolation (issue #496)
-    docker_enabled: bool = False
-    docker_image: str | None = None
-    docker_extra_mounts: list[str] | None = None
-    # Thinking and effort configuration (issue #580)
-    thinking_mode: str | None = None
-    thinking_budget_tokens: int | None = None
-    effort: str | None = None
-    # Knowledge management toggle (issue #710)
-    knowledge_management_enabled: bool = True
+
+    def to_session_config(self, **overrides) -> SessionConfig:
+        """Map default_system_prompt to system_prompt for SessionConfig."""
+        if self.default_system_prompt and "system_prompt" not in overrides:
+            overrides["system_prompt"] = self.default_system_prompt
+        return super().to_session_config(**overrides)
 
 
 class TemplateUpdateRequest(BaseModel):
@@ -1067,25 +1022,13 @@ class ClaudeWebUI:
                     request.additional_directories, None
                 )
 
+                config = request.to_session_config(additional_directories=validated_dirs)
                 session_id = await self.coordinator.create_session(
                     session_id=session_id,
                     project_id=request.project_id,
-                    permission_mode=request.permission_mode,
-                    system_prompt=request.system_prompt,
-                    override_system_prompt=request.override_system_prompt,
-                    allowed_tools=request.allowed_tools,
-                    disallowed_tools=request.disallowed_tools,
-                    model=request.model,
+                    config=config,
                     name=request.name,
                     permission_callback=self._create_permission_callback(session_id),
-                    additional_directories=validated_dirs,  # Issue #630
-                    setting_sources=request.setting_sources,  # Issue #36
-                    cli_path=request.cli_path,  # Issue #489
-                    # Docker session isolation (issue #496)
-                    docker_enabled=request.docker_enabled,
-                    docker_image=request.docker_image,
-                    docker_extra_mounts=request.docker_extra_mounts,
-                    knowledge_management_enabled=request.knowledge_management_enabled,
                 )
 
                 # Broadcast session creation to all UI clients
@@ -2470,31 +2413,16 @@ class ClaudeWebUI:
 
                 # Create minion via OverseerController
                 # Map initialization_context to system_prompt (initialization_context is just UI semantics)
+                config = request.to_session_config(
+                    system_prompt=request.initialization_context,
+                    working_directory=str(working_dir),
+                )
                 minion_id = await self.coordinator.legion_system.overseer_controller.create_minion_for_user(
                     legion_id=legion_id,
                     name=request.name,
+                    config=config,
                     role=request.role,
-                    system_prompt=request.initialization_context,
-                    override_system_prompt=request.override_system_prompt,
                     capabilities=request.capabilities,
-                    permission_mode=request.permission_mode,
-                    allowed_tools=request.allowed_tools,
-                    disallowed_tools=request.disallowed_tools,
-                    working_directory=str(working_dir),
-                    model=request.model,
-                    sandbox_enabled=request.sandbox_enabled,
-                    sandbox_config=request.sandbox_config,
-                    setting_sources=request.setting_sources,  # Issue #36
-                    cli_path=request.cli_path,  # Issue #489
-                    # Docker session isolation (issue #496)
-                    docker_enabled=request.docker_enabled,
-                    docker_image=request.docker_image,
-                    docker_extra_mounts=request.docker_extra_mounts,
-                    # Thinking and effort configuration (issue #540)
-                    thinking_mode=request.thinking_mode,
-                    thinking_budget_tokens=request.thinking_budget_tokens,
-                    effort=request.effort,
-                    knowledge_management_enabled=request.knowledge_management_enabled,
                 )
 
                 # Get the created minion info
@@ -3216,30 +3144,13 @@ class ClaudeWebUI:
         async def create_template(request: TemplateCreateRequest):
             """Create new template"""
             try:
+                config = request.to_session_config()
                 template = await self.coordinator.template_manager.create_template(
                     name=request.name,
-                    permission_mode=request.permission_mode,
-                    allowed_tools=request.allowed_tools,
-                    disallowed_tools=request.disallowed_tools,
+                    config=config,
                     default_role=request.default_role,
-                    default_system_prompt=request.default_system_prompt,
                     description=request.description,
-                    model=request.model,
                     capabilities=request.capabilities,
-                    override_system_prompt=request.override_system_prompt,
-                    sandbox_enabled=request.sandbox_enabled,
-                    sandbox_config=request.sandbox_config,
-                    cli_path=request.cli_path,
-                    additional_directories=request.additional_directories,
-                    # Docker session isolation (issue #496)
-                    docker_enabled=request.docker_enabled,
-                    docker_image=request.docker_image,
-                    docker_extra_mounts=request.docker_extra_mounts,
-                    # Thinking and effort configuration (issue #580)
-                    thinking_mode=request.thinking_mode,
-                    thinking_budget_tokens=request.thinking_budget_tokens,
-                    effort=request.effort,
-                    knowledge_management_enabled=request.knowledge_management_enabled,
                 )
                 return template.to_dict()
             except ValueError as e:
