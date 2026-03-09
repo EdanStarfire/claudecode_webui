@@ -1085,7 +1085,6 @@ class ClaudeWebUI:
                     docker_enabled=request.docker_enabled,
                     docker_image=request.docker_image,
                     docker_extra_mounts=request.docker_extra_mounts,
-                    # Knowledge management toggle (issue #710)
                     knowledge_management_enabled=request.knowledge_management_enabled,
                 )
 
@@ -1290,7 +1289,6 @@ class ClaudeWebUI:
                 if request.effort is not None:
                     updates["effort"] = request.effort if request.effort else None
 
-                # Knowledge management toggle (issue #710)
                 if request.knowledge_management_enabled is not None:
                     updates["knowledge_management_enabled"] = request.knowledge_management_enabled
 
@@ -2496,7 +2494,6 @@ class ClaudeWebUI:
                     thinking_mode=request.thinking_mode,
                     thinking_budget_tokens=request.thinking_budget_tokens,
                     effort=request.effort,
-                    # Knowledge management toggle (issue #710)
                     knowledge_management_enabled=request.knowledge_management_enabled,
                 )
 
@@ -3242,7 +3239,6 @@ class ClaudeWebUI:
                     thinking_mode=request.thinking_mode,
                     thinking_budget_tokens=request.thinking_budget_tokens,
                     effort=request.effort,
-                    # Knowledge management toggle (issue #710)
                     knowledge_management_enabled=request.knowledge_management_enabled,
                 )
                 return template.to_dict()
@@ -3280,7 +3276,6 @@ class ClaudeWebUI:
                     thinking_mode=request.thinking_mode,
                     thinking_budget_tokens=request.thinking_budget_tokens,
                     effort=request.effort,
-                    # Knowledge management toggle (issue #710)
                     knowledge_management_enabled=request.knowledge_management_enabled,
                 )
                 return template.to_dict()

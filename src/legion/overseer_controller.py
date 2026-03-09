@@ -54,7 +54,6 @@ class OverseerController:
         thinking_mode: str | None = None,
         thinking_budget_tokens: int | None = None,
         effort: str | None = None,
-        # Knowledge management toggle (issue #710)
         knowledge_management_enabled: bool = True,
     ) -> str:
         """
@@ -142,7 +141,6 @@ class OverseerController:
             thinking_mode=thinking_mode,
             thinking_budget_tokens=thinking_budget_tokens,
             effort=effort,
-            # Knowledge management toggle (issue #710)
             knowledge_management_enabled=knowledge_management_enabled,
         )
 

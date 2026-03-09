@@ -726,7 +726,7 @@ function applyTemplate() {
     formData.thinking_mode = ''  // Issue #540
     formData.thinking_budget_tokens = 10240
     formData.effort = ''
-    formData.knowledge_management_enabled = true  // Issue #710
+    formData.knowledge_management_enabled = true
 
     // Reset sandbox config
     formData.sandbox.autoAllowBashIfSandboxed = true
@@ -879,7 +879,6 @@ function applyTemplate() {
   formData.docker_image = template.docker_image || ''
   formData.docker_extra_mounts = (template.docker_extra_mounts || []).join('\n')
 
-  // Apply knowledge management toggle from template (issue #710)
   formData.knowledge_management_enabled = template.knowledge_management_enabled ?? true
 
   // Apply sandbox config fields
@@ -1316,7 +1315,6 @@ async function createSession() {
     thinking_mode: formData.thinking_mode || null,
     thinking_budget_tokens: formData.thinking_mode === 'enabled' ? formData.thinking_budget_tokens : null,
     effort: formData.effort || null,
-    // Issue #710: Knowledge management toggle
     knowledge_management_enabled: formData.knowledge_management_enabled,
   }
 
@@ -1372,7 +1370,6 @@ function emitEphemeralConfig() {
     thinking_mode: formData.thinking_mode || null,
     thinking_budget_tokens: formData.thinking_mode === 'enabled' ? formData.thinking_budget_tokens : null,
     effort: formData.effort || null,
-    // Issue #710: Knowledge management toggle
     knowledge_management_enabled: formData.knowledge_management_enabled,
   }
 
@@ -1401,7 +1398,7 @@ function populateFormFromConfig(config) {
   formData.thinking_budget_tokens = config.thinking_budget_tokens || 10240
   formData.effort = config.effort || ''
   formData.setting_sources = config.setting_sources || ['user', 'project', 'local']
-  formData.knowledge_management_enabled = config.knowledge_management_enabled ?? true  // Issue #710
+  formData.knowledge_management_enabled = config.knowledge_management_enabled ?? true
 
   // Sandbox config
   const sc = config.sandbox_config || {}
@@ -1468,7 +1465,6 @@ async function updateSession() {
     thinking_mode: formData.thinking_mode || null,
     thinking_budget_tokens: formData.thinking_mode === 'enabled' ? formData.thinking_budget_tokens : null,
     effort: formData.effort || null,
-    // Issue #710: Knowledge management toggle
     knowledge_management_enabled: formData.knowledge_management_enabled,
   }
 
@@ -1524,7 +1520,6 @@ async function createTemplate() {
     thinking_mode: formData.thinking_mode || null,
     thinking_budget_tokens: formData.thinking_mode === 'enabled' ? formData.thinking_budget_tokens : null,
     effort: formData.effort || null,
-    // Issue #710: Knowledge management toggle
     knowledge_management_enabled: formData.knowledge_management_enabled,
   }
 
@@ -1585,7 +1580,6 @@ async function updateTemplate() {
     thinking_mode: formData.thinking_mode || null,
     thinking_budget_tokens: formData.thinking_mode === 'enabled' ? formData.thinking_budget_tokens : null,
     effort: formData.effort || null,
-    // Issue #710: Knowledge management toggle
     knowledge_management_enabled: formData.knowledge_management_enabled,
   }
 
@@ -1624,7 +1618,7 @@ function resetForm() {
   formData.docker_enabled = false  // Issue #496
   formData.docker_image = ''
   formData.docker_extra_mounts = ''
-  formData.knowledge_management_enabled = true  // Issue #710
+  formData.knowledge_management_enabled = true
 
   // Reset sandbox config (issue #458)
   formData.sandbox.autoAllowBashIfSandboxed = true
@@ -1700,7 +1694,6 @@ function populateFormFromSession(session) {
   formData.effort = session.effort || ''
   // Issue #36: Load setting_sources, default to all enabled if not set
   formData.setting_sources = session.setting_sources || ['user', 'project', 'local']
-  // Issue #710: Knowledge management toggle
   formData.knowledge_management_enabled = session.knowledge_management_enabled ?? true
 
   // Issue #458: Load sandbox config
@@ -1740,7 +1733,6 @@ function populateFormFromTemplate(template) {
   formData.thinking_mode = template.thinking_mode || ''
   formData.thinking_budget_tokens = template.thinking_budget_tokens || 10240
   formData.effort = template.effort || ''
-  // Issue #710: Knowledge management toggle
   formData.knowledge_management_enabled = template.knowledge_management_enabled ?? true
 
   // Issue #458: Load sandbox config from template

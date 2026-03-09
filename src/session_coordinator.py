@@ -354,7 +354,6 @@ class SessionCoordinator:
         thinking_mode: str | None = None,
         thinking_budget_tokens: int | None = None,
         effort: str | None = None,
-        # Knowledge management toggle (issue #710)
         knowledge_management_enabled: bool = True,
     ) -> str:
         """Create a new Claude Code session with integrated components (within a project)"""
@@ -408,7 +407,6 @@ class SessionCoordinator:
                 thinking_mode=thinking_mode,
                 thinking_budget_tokens=thinking_budget_tokens,
                 effort=effort,
-                # Knowledge management toggle (issue #710)
                 knowledge_management_enabled=knowledge_management_enabled,
             )
 
@@ -1708,8 +1706,8 @@ class SessionCoordinator:
             # Fire-and-forget distillation of session history into markdown
             # Use the archived copy of messages.jsonl, not the live file — the live
             # file gets truncated by clear_messages() right after this method returns.
-            # Issue #710: Skip distillation when knowledge management is disabled
-            if session_info and session_info.knowledge_management_enabled:
+            # Skip distillation when knowledge management is disabled
+            if session_info.knowledge_management_enabled:
                 archived_messages = archive_dir / "messages.jsonl"
                 if archived_messages.exists():
                     from src.history_distiller import distill_session_history
