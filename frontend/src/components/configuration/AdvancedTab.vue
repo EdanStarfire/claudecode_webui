@@ -42,6 +42,25 @@
       </div>
     </div>
 
+    <!-- Knowledge Management (issue #710) -->
+    <div class="mb-3">
+      <div class="form-check form-switch">
+        <input
+          type="checkbox"
+          class="form-check-input"
+          id="config-knowledge-management"
+          :checked="formData.knowledge_management_enabled"
+          @change="$emit('update:form-data', 'knowledge_management_enabled', $event.target.checked)"
+        />
+        <label class="form-check-label" for="config-knowledge-management">
+          Enable Knowledge Management
+        </label>
+      </div>
+      <div class="form-text">
+        When enabled, archived sessions are distilled into searchable history and the agent receives a reference to past conversations in its system prompt. Disable for simple or private sessions.
+      </div>
+    </div>
+
     <!-- Docker Session Isolation (issue #496) -->
     <div class="mb-3">
       <div class="docker-section">

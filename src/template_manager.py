@@ -167,6 +167,8 @@ class TemplateManager:
         thinking_mode: str | None = None,
         thinking_budget_tokens: int | None = None,
         effort: str | None = None,
+        # Knowledge management toggle (issue #710)
+        knowledge_management_enabled: bool = True,
     ) -> MinionTemplate:
         """Create a new template."""
         if not name or not name.strip():
@@ -205,6 +207,8 @@ class TemplateManager:
             thinking_mode=thinking_mode,
             thinking_budget_tokens=thinking_budget_tokens,
             effort=effort,
+            # Knowledge management toggle (issue #710)
+            knowledge_management_enabled=knowledge_management_enabled,
         )
 
         await self._save_template(template)
@@ -253,6 +257,8 @@ class TemplateManager:
         thinking_mode: str | None = None,
         thinking_budget_tokens: int | None = None,
         effort: str | None = None,
+        # Knowledge management toggle (issue #710)
+        knowledge_management_enabled: bool | None = None,
     ) -> MinionTemplate:
         """Update existing template."""
         template = self.templates.get(template_id)
@@ -324,6 +330,10 @@ class TemplateManager:
             template.thinking_budget_tokens = thinking_budget_tokens
         if effort is not None:
             template.effort = effort
+
+        # Knowledge management toggle (issue #710)
+        if knowledge_management_enabled is not None:
+            template.knowledge_management_enabled = knowledge_management_enabled
 
         template.updated_at = datetime.now(UTC)
 
