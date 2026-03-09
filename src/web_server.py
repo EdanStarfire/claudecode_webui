@@ -138,6 +138,8 @@ class SessionCreateRequest(BaseModel):
     docker_enabled: bool = False
     docker_image: str | None = None
     docker_extra_mounts: list[str] | None = None
+    # Knowledge management toggle (issue #710)
+    knowledge_management_enabled: bool = True
 
 
 class MessageRequest(BaseModel):
@@ -168,6 +170,8 @@ class SessionUpdateRequest(BaseModel):
     thinking_mode: str | None = None  # "adaptive", "enabled", "disabled"
     thinking_budget_tokens: int | None = None  # Token budget (min 1024)
     effort: str | None = None  # "low", "medium", "high", "max"
+    # Knowledge management toggle (issue #710)
+    knowledge_management_enabled: bool | None = None
 
 
 class SessionReorderRequest(BaseModel):
@@ -217,6 +221,8 @@ class MinionCreateRequest(BaseModel):
     thinking_mode: str | None = None  # "adaptive", "enabled", "disabled"
     thinking_budget_tokens: int | None = None  # Token budget (min 1024)
     effort: str | None = None  # "low", "medium", "high", "max"
+    # Knowledge management toggle (issue #710)
+    knowledge_management_enabled: bool = True
 
 
 class ScheduleCreateRequest(BaseModel):
@@ -269,6 +275,8 @@ class TemplateCreateRequest(BaseModel):
     thinking_mode: str | None = None
     thinking_budget_tokens: int | None = None
     effort: str | None = None
+    # Knowledge management toggle (issue #710)
+    knowledge_management_enabled: bool = True
 
 
 class TemplateUpdateRequest(BaseModel):
@@ -294,6 +302,8 @@ class TemplateUpdateRequest(BaseModel):
     thinking_mode: str | None = None
     thinking_budget_tokens: int | None = None
     effort: str | None = None
+    # Knowledge management toggle (issue #710)
+    knowledge_management_enabled: bool | None = None
 
 
 class UIWebSocketManager:
@@ -1075,6 +1085,7 @@ class ClaudeWebUI:
                     docker_enabled=request.docker_enabled,
                     docker_image=request.docker_image,
                     docker_extra_mounts=request.docker_extra_mounts,
+                    knowledge_management_enabled=request.knowledge_management_enabled,
                 )
 
                 # Broadcast session creation to all UI clients
@@ -1277,6 +1288,9 @@ class ClaudeWebUI:
                     updates["thinking_budget_tokens"] = request.thinking_budget_tokens
                 if request.effort is not None:
                     updates["effort"] = request.effort if request.effort else None
+
+                if request.knowledge_management_enabled is not None:
+                    updates["knowledge_management_enabled"] = request.knowledge_management_enabled
 
                 if not updates:
                     return {"success": True, "message": "No fields to update"}
@@ -2480,6 +2494,7 @@ class ClaudeWebUI:
                     thinking_mode=request.thinking_mode,
                     thinking_budget_tokens=request.thinking_budget_tokens,
                     effort=request.effort,
+                    knowledge_management_enabled=request.knowledge_management_enabled,
                 )
 
                 # Get the created minion info
@@ -3224,6 +3239,7 @@ class ClaudeWebUI:
                     thinking_mode=request.thinking_mode,
                     thinking_budget_tokens=request.thinking_budget_tokens,
                     effort=request.effort,
+                    knowledge_management_enabled=request.knowledge_management_enabled,
                 )
                 return template.to_dict()
             except ValueError as e:
@@ -3260,6 +3276,7 @@ class ClaudeWebUI:
                     thinking_mode=request.thinking_mode,
                     thinking_budget_tokens=request.thinking_budget_tokens,
                     effort=request.effort,
+                    knowledge_management_enabled=request.knowledge_management_enabled,
                 )
                 return template.to_dict()
             except ValueError as e:

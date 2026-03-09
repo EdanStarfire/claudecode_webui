@@ -54,6 +54,7 @@ class OverseerController:
         thinking_mode: str | None = None,
         thinking_budget_tokens: int | None = None,
         effort: str | None = None,
+        knowledge_management_enabled: bool = True,
     ) -> str:
         """
         Create a minion for the user (root overseer).
@@ -140,6 +141,7 @@ class OverseerController:
             thinking_mode=thinking_mode,
             thinking_budget_tokens=thinking_budget_tokens,
             effort=effort,
+            knowledge_management_enabled=knowledge_management_enabled,
         )
 
         # Register capabilities in capability registry

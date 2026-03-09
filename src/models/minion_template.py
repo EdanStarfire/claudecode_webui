@@ -41,6 +41,8 @@ class MinionTemplate:
     thinking_mode: str | None = None
     thinking_budget_tokens: int | None = None
     effort: str | None = None
+    # Knowledge management toggle (issue #710)
+    knowledge_management_enabled: bool = True
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
@@ -73,4 +75,6 @@ class MinionTemplate:
         """Create from dictionary loaded from JSON."""
         data['created_at'] = datetime.fromisoformat(data['created_at'])
         data['updated_at'] = datetime.fromisoformat(data['updated_at'])
+        # Issue #710: Backward compat for old templates missing the field
+        data.setdefault("knowledge_management_enabled", True)
         return cls(**data)

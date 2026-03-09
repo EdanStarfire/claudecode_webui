@@ -354,6 +354,7 @@ class SessionCoordinator:
         thinking_mode: str | None = None,
         thinking_budget_tokens: int | None = None,
         effort: str | None = None,
+        knowledge_management_enabled: bool = True,
     ) -> str:
         """Create a new Claude Code session with integrated components (within a project)"""
         try:
@@ -406,6 +407,7 @@ class SessionCoordinator:
                 thinking_mode=thinking_mode,
                 thinking_budget_tokens=thinking_budget_tokens,
                 effort=effort,
+                knowledge_management_enabled=knowledge_management_enabled,
             )
 
             # Add session to project
@@ -792,14 +794,18 @@ class SessionCoordinator:
             legion_guide = get_legion_guide_only()
 
             # Issue #691: Append session history reference so agents can check past context
-            history_dir = session_dir / "history"
-            history_note = (
-                f"\n\n## Session History\n"
-                f"Distilled history from previous conversations is available at "
-                f"`{history_dir}/` (read-only). Before answering questions about past "
-                f"context, identity, or decisions, check this folder for relevant "
-                f"archived conversations."
-            )
+            # Issue #710: Skip history reference when knowledge management is disabled
+            if session_info.knowledge_management_enabled:
+                history_dir = session_dir / "history"
+                history_note = (
+                    f"\n\n## Session History\n"
+                    f"Distilled history from previous conversations is available at "
+                    f"`{history_dir}/` (read-only). Before answering questions about past "
+                    f"context, identity, or decisions, check this folder for relevant "
+                    f"archived conversations."
+                )
+            else:
+                history_note = ""
 
             if session_info.system_prompt:
                 minion_system_prompt = f"{legion_guide}{history_note}\n\n---\n\n{session_info.system_prompt}"
@@ -1700,16 +1706,18 @@ class SessionCoordinator:
             # Fire-and-forget distillation of session history into markdown
             # Use the archived copy of messages.jsonl, not the live file — the live
             # file gets truncated by clear_messages() right after this method returns.
-            archived_messages = archive_dir / "messages.jsonl"
-            if archived_messages.exists():
-                from src.history_distiller import distill_session_history
+            # Skip distillation when knowledge management is disabled
+            if session_info.knowledge_management_enabled:
+                archived_messages = archive_dir / "messages.jsonl"
+                if archived_messages.exists():
+                    from src.history_distiller import distill_session_history
 
-                history_output = session_dir / "history" / f"{timestamp}.md"
-                archive_ts = datetime.now(UTC).isoformat()
-                asyncio.create_task(
-                    distill_session_history(archived_messages, history_output, session_id, archive_ts)
-                )
-                coord_logger.debug(f"Launched history distillation for session {session_id}")
+                    history_output = session_dir / "history" / f"{timestamp}.md"
+                    archive_ts = datetime.now(UTC).isoformat()
+                    asyncio.create_task(
+                        distill_session_history(archived_messages, history_output, session_id, archive_ts)
+                    )
+                    coord_logger.debug(f"Launched history distillation for session {session_id}")
 
             coord_logger.info(f"Archived session {session_id} to {archive_dir}")
             return True
