@@ -991,7 +991,7 @@ button:focus {
 .quick-panel .form-label {
     font-size: 0.8rem;
     font-weight: 500;
-    color: #adb5bd;
+    color: #495057;
     margin-bottom: 6px;
     text-transform: uppercase;
     letter-spacing: 0.3px;
@@ -1003,7 +1003,7 @@ button:focus {
     gap: 0;
     border-radius: 6px;
     overflow: hidden;
-    border: 1px solid #444;
+    border: 1px solid #ced4da;
 }
 .perm-btn-group .perm-btn {
     flex: 1;
@@ -1011,19 +1011,19 @@ button:focus {
     font-size: 0.78rem;
     font-weight: 500;
     border: none;
-    background: #2a2a3e;
-    color: #adb5bd;
+    background: #f8f9fa;
+    color: #6c757d;
     cursor: pointer;
     transition: all 0.15s;
     text-align: center;
-    border-right: 1px solid #444;
+    border-right: 1px solid #ced4da;
 }
 .perm-btn-group .perm-btn:last-child {
     border-right: none;
 }
 .perm-btn-group .perm-btn:hover {
-    background: #3a3a5e;
-    color: #fff;
+    background: #e9ecef;
+    color: #212529;
 }
 .perm-btn-group .perm-btn.active {
     background: #0d6efd;
@@ -1051,17 +1051,17 @@ button:focus {
     gap: 8px;
     padding: 12px;
     margin-top: 16px;
-    border: 1px dashed #444;
+    border: 1px dashed #ced4da;
     border-radius: 8px;
-    color: #6ea8fe;
+    color: #0d6efd;
     font-size: 0.88rem;
     cursor: pointer;
     transition: all 0.2s;
 }
 .advanced-link:hover {
-    background: rgba(13,110,253,0.08);
+    background: rgba(13,110,253,0.06);
     border-color: #0d6efd;
-    color: #9ec5fe;
+    color: #0a58ca;
 }
 
 /* Back button */
@@ -1069,7 +1069,7 @@ button:focus {
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    color: #6ea8fe;
+    color: #0d6efd;
     font-size: 0.85rem;
     cursor: pointer;
     margin-bottom: 16px;
@@ -1078,13 +1078,13 @@ button:focus {
     background: none;
 }
 .back-btn:hover {
-    color: #9ec5fe;
+    color: #0a58ca;
 }
 
 /* Priority cards (collapsible color-coded) */
 .priority-card {
-    background: #16213e;
-    border: 1px solid #2a2a4a;
+    background: #fff;
+    border: 1px solid #dee2e6;
     border-radius: 0.5rem;
     margin-bottom: 0.65rem;
     overflow: hidden;
@@ -1092,7 +1092,7 @@ button:focus {
 .priority-card .card-header-btn {
     background: none;
     border: none;
-    color: #e0e0e0;
+    color: #212529;
     width: 100%;
     text-align: left;
     padding: 0.6rem 0.85rem;
@@ -1105,7 +1105,7 @@ button:focus {
     transition: background 0.15s;
 }
 .priority-card .card-header-btn:hover {
-    background: rgba(255,255,255,0.04);
+    background: #f8f9fa;
 }
 .priority-card .card-header-btn .chevron {
     margin-left: auto;
@@ -1118,11 +1118,11 @@ button:focus {
 }
 .priority-card .card-body-inner {
     padding: 0.65rem 0.85rem 0.85rem;
-    border-top: 1px solid #2a2a4a;
+    border-top: 1px solid #dee2e6;
 }
 .priority-card .form-label {
     font-size: 0.8rem;
-    color: #adb5bd;
+    color: #495057;
     margin-bottom: 4px;
 }
 
@@ -1131,7 +1131,7 @@ button:focus {
 .priority-indigo  { border-left: 4px solid #6f42c1 !important; }
 .priority-gray    { border-left: 4px solid #6c757d !important; }
 .priority-teal    { border-left: 4px solid #20c997 !important; }
-.priority-danger  { border-left: 4px solid #dc3545 !important; background: rgba(220, 53, 69, 0.03); }
+.priority-danger  { border-left: 4px solid #dc3545 !important; background: rgba(220, 53, 69, 0.02); }
 
 /* Dot indicators */
 .dot {
@@ -1153,8 +1153,8 @@ button:focus {
     flex-wrap: wrap;
     gap: 6px;
     padding: 8px;
-    background: #2a2a3e;
-    border: 1px solid #444;
+    background: #f8f9fa;
+    border: 1px solid #ced4da;
     border-radius: 6px;
     min-height: 38px;
     align-items: center;
@@ -1169,19 +1169,19 @@ button:focus {
     font-weight: 500;
 }
 .tag-editor .tag.tag-allowed {
-    background: rgba(25,135,84,0.2);
-    color: #75b798;
-    border: 1px solid rgba(25,135,84,0.3);
+    background: #d1e7dd;
+    color: #0f5132;
+    border: 1px solid #badbcc;
 }
 .tag-editor .tag.tag-disallowed {
-    background: rgba(220,53,69,0.2);
-    color: #ea868f;
-    border: 1px solid rgba(220,53,69,0.3);
+    background: #f8d7da;
+    color: #842029;
+    border: 1px solid #f5c2c7;
 }
 .tag-editor .tag.tag-capability {
-    background: rgba(13,202,240,0.2);
-    color: #6edff6;
-    border: 1px solid rgba(13,202,240,0.3);
+    background: #cff4fc;
+    color: #055160;
+    border: 1px solid #b6effb;
 }
 .tag-editor .tag .tag-remove {
     cursor: pointer;
@@ -1195,7 +1195,7 @@ button:focus {
 .tag-editor .tag-input {
     border: none;
     background: none;
-    color: #fff;
+    color: #212529;
     outline: none;
     font-size: 0.8rem;
     flex: 1;
@@ -1221,12 +1221,12 @@ button:focus {
 }
 .workdir-display .workdir-path {
     flex: 1;
-    background: #2a2a3e;
-    border: 1px solid #444;
+    background: #f8f9fa;
+    border: 1px solid #ced4da;
     border-radius: 6px;
     padding: 7px 12px;
     font-size: 0.85rem;
-    color: #adb5bd;
+    color: #495057;
     font-family: monospace;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -1245,7 +1245,7 @@ button:focus {
 .budget-slider-group .budget-value {
     font-family: monospace;
     font-size: 0.82rem;
-    color: #6ea8fe;
+    color: #0d6efd;
     min-width: 50px;
     text-align: right;
 }
@@ -1267,21 +1267,21 @@ button:focus {
     align-items: center;
     gap: 6px;
     padding: 4px 8px;
-    background: #2a2a3e;
-    border: 1px solid #444;
+    background: #f8f9fa;
+    border: 1px solid #ced4da;
     border-radius: 4px;
     margin-bottom: 4px;
     font-size: 0.82rem;
 }
 .dir-list-item .dir-path {
     flex: 1;
-    color: #e9ecef;
+    color: #212529;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
 }
 .dir-list-item .dir-remove {
-    color: #ea868f;
+    color: #dc3545;
     cursor: pointer;
     font-size: 0.75rem;
 }
@@ -1298,7 +1298,7 @@ button:focus {
     background: transparent;
 }
 .advanced-panel::-webkit-scrollbar-thumb {
-    background: #444;
+    background: #ced4da;
     border-radius: 3px;
 }
 
