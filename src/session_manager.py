@@ -137,6 +137,9 @@ class SessionInfo:
     # Knowledge management toggle (issue #710)
     knowledge_management_enabled: bool = True  # When False, skip distillation and history references
 
+    # Auto-memory toggle (issue #708)
+    disable_auto_memory: bool = False  # When True, set CLAUDE_CODE_DISABLE_AUTO_MEMORY=1 in SDK env
+
     def __post_init__(self):
         if self.additional_directories is None:
             self.additional_directories = []
@@ -202,6 +205,7 @@ class SessionInfo:
         data.setdefault('effort', None)
         data.setdefault('is_ephemeral', False)
         data.setdefault('knowledge_management_enabled', True)
+        data.setdefault('disable_auto_memory', False)
         return cls(**data)
 
 
@@ -365,6 +369,7 @@ class SessionManager:
             thinking_budget_tokens=config.thinking_budget_tokens,
             effort=config.effort,
             knowledge_management_enabled=config.knowledge_management_enabled,
+            disable_auto_memory=config.disable_auto_memory,
         )
 
         try:

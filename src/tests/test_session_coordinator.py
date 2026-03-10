@@ -107,6 +107,34 @@ class TestSessionCoordinator:
         assert session_info.model is None  # No default model set
 
     @pytest.mark.asyncio
+    async def test_issue_708_disable_auto_memory_preserved_on_create(self, temp_coordinator):
+        """Test that disable_auto_memory set at creation is persisted to SessionInfo.
+
+        Regression test: SessionCoordinator.create_session() builds an intermediate
+        SessionConfig copy (sm_config). If disable_auto_memory is omitted from that
+        copy, the field silently defaults to False regardless of what the caller passed.
+        """
+        import uuid
+        coordinator = temp_coordinator
+
+        project = await coordinator.project_manager.create_project(
+            name="Test Project",
+            working_directory="/test/project"
+        )
+
+        session_id = str(uuid.uuid4())
+        await coordinator.create_session(
+            session_id=session_id,
+            project_id=project.project_id,
+            config=SessionConfig(disable_auto_memory=True),
+        )
+
+        session_info = await coordinator.session_manager.get_session_info(session_id)
+        assert session_info.disable_auto_memory is True, (
+            "disable_auto_memory=True must survive create_session config copy"
+        )
+
+    @pytest.mark.asyncio
     async def test_start_session(self, temp_coordinator, sample_session_config):
         """Test starting a session through coordinator."""
         coordinator = temp_coordinator

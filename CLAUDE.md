@@ -133,6 +133,37 @@ Ruff configuration is in `pyproject.toml`:
 - Target Python: 3.11+
 - Unused imports in `__init__.py` are allowed
 
+# Memory and Context Persistence - IMPORTANT
+
+## Do NOT Use Built-in Auto-Memory for Session/Legion Workflows
+
+Claude Code's built-in memory (`/memory` command, auto-memory in `~/.claude/`) is
+**working-directory-specific**, not session-specific. This is unsuitable when:
+
+- **Multiple minions share the same working directory** — memory cross-contaminates
+- **Sessions persist across context resets** — working-directory memory doesn't travel with the session
+- **Session archival/recovery** — built-in memory is not captured in session archives
+
+### Disabling Auto-Memory
+
+Sessions have a `disable_auto_memory` config flag (default: `False`). When enabled, the SDK
+subprocess receives `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`, preventing Claude Code from reading
+or writing to its working-directory memory store.
+
+Enable this for multi-agent (Legion) workflows or any session where isolated context is required.
+
+### Recommended Alternatives
+
+1. **Session History Distillation** (#691): Distilled history markdown for context continuity
+2. **Task/Agent Messages**: Structured messages within the session
+3. **Custom Session State**: Context in session `state.json` (persists with archives)
+4. **Archive-Based Recovery**: Restore context from archived session data
+
+### When Built-in Memory IS Acceptable
+
+Built-in memory is fine for single-agent, single-session use where no archival,
+multi-agent isolation, or cross-reset persistence is needed.
+
 # Frontend Architecture - Vue 3 + Pinia + Vite (PRODUCTION)
 
 ## Current Status

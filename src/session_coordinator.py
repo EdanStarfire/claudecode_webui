@@ -369,6 +369,7 @@ class SessionCoordinator:
                 thinking_budget_tokens=config.thinking_budget_tokens,
                 effort=config.effort,
                 knowledge_management_enabled=config.knowledge_management_enabled,
+                disable_auto_memory=config.disable_auto_memory,
             )
 
             # Create session through session manager
@@ -841,6 +842,7 @@ class SessionCoordinator:
                 thinking_mode=session_info.thinking_mode,
                 thinking_budget_tokens=session_info.thinking_budget_tokens,
                 effort=session_info.effort,
+                disable_auto_memory=session_info.disable_auto_memory,
             )
             sdk = self._sdk_factory(
                 session_id=session_id,
