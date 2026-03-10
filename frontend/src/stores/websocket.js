@@ -6,6 +6,7 @@ import { useMessageStore } from './message'
 import { useResourceStore } from './resource'
 import { useQueueStore } from './queue'
 import { notify } from '@/composables/useNotifications'
+import { getAuthToken } from '@/utils/api'
 
 /**
  * WebSocket Store - Manages WebSocket connections and message routing
@@ -76,7 +77,14 @@ export const useWebSocketStore = defineStore('websocket', () => {
    */
   function getWebSocketUrl(path) {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    return `${protocol}//${window.location.host}${path}`
+    let url = `${protocol}//${window.location.host}${path}`
+    // Append auth token as query param (issue #728)
+    const token = getAuthToken()
+    if (token) {
+      const separator = url.includes('?') ? '&' : '?'
+      url += `${separator}token=${encodeURIComponent(token)}`
+    }
+    return url
   }
 
   /**

@@ -4,6 +4,7 @@ Main entry point for Claude Code WebUI server.
 """
 
 import argparse
+import secrets
 import sys
 from pathlib import Path
 
@@ -77,6 +78,20 @@ Debug Flags:
     # Experimental features
     parser.add_argument('--experimental', action='store_true', help='Enable experimental features (Agent Teams)')
 
+    # Authentication options (issue #728)
+    parser.add_argument(
+        '--no-auth', action='store_true',
+        help='Disable authentication even when binding to non-localhost addresses'
+    )
+    parser.add_argument(
+        '--token', type=str, default=None,
+        help='Use a specific auth token instead of generating a random one'
+    )
+    parser.add_argument(
+        '--force-auth', action='store_true',
+        help='Force authentication even when binding to localhost'
+    )
+
     # Mock SDK mode (for browser automation testing — issue #561)
     parser.add_argument(
         '--mock-sdk', action='store_true',
@@ -144,6 +159,28 @@ Debug Flags:
         fixtures_path = None
         available_fixtures = None
 
+    # Determine authentication settings (issue #728)
+    is_localhost = args.host in ('127.0.0.1', 'localhost', '::1')
+    if args.force_auth:
+        auth_enabled = True
+    elif args.no_auth:
+        auth_enabled = False
+    else:
+        auth_enabled = not is_localhost
+
+    auth_token = args.token or secrets.token_urlsafe(32)
+
+    if auth_enabled:
+        print("\n" + "=" * 60)
+        print("  AUTHENTICATION ENABLED")
+        print(f"  Token: {auth_token}")
+        print()
+        print("  Open in browser with token:")
+        print(f"  http://{args.host}:{args.port}/?token={auth_token}")
+        print("=" * 60 + "\n")
+    else:
+        print("Authentication disabled (localhost binding)")
+
     # Create FastAPI app
     app = create_app(
         data_dir=data_dir_path,
@@ -151,6 +188,8 @@ Debug Flags:
         mock_sdk=args.mock_sdk,
         fixtures_dir=fixtures_path if args.mock_sdk else None,
         available_fixtures=available_fixtures,
+        auth_token=auth_token if auth_enabled else None,
+        auth_enabled=auth_enabled,
     )
 
     # Add startup/shutdown events
