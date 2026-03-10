@@ -1,8 +1,14 @@
-"""Tests for PreToolUse hook handler (issue #707)."""
+"""Tests for internal permission handler (issue #707).
+
+Tests the suggestion-based auto-approval logic that evaluates CLI permission
+suggestions against internal path rules (history, plans, skills).
+"""
+
+from dataclasses import dataclass
 
 import pytest
 
-from src.hooks.pretooluse_handler import PreToolUseHandler
+from src.hooks.pretooluse_handler import InternalPermissionHandler, _extract_dir_from_rule_content
 
 
 @pytest.fixture
@@ -31,7 +37,7 @@ def tmp_dirs(tmp_path):
 @pytest.fixture
 def handler_km_enabled(tmp_dirs):
     """Handler with knowledge management enabled."""
-    return PreToolUseHandler(
+    return InternalPermissionHandler(
         session_data_dir=tmp_dirs["session_dir"],
         plans_dir=tmp_dirs["plans_dir"],
         skills_dirs=tmp_dirs["skills_dirs"],
@@ -42,7 +48,7 @@ def handler_km_enabled(tmp_dirs):
 @pytest.fixture
 def handler_km_disabled(tmp_dirs):
     """Handler with knowledge management disabled."""
-    return PreToolUseHandler(
+    return InternalPermissionHandler(
         session_data_dir=tmp_dirs["session_dir"],
         plans_dir=tmp_dirs["plans_dir"],
         skills_dirs=tmp_dirs["skills_dirs"],
@@ -50,139 +56,282 @@ def handler_km_disabled(tmp_dirs):
     )
 
 
-def _make_hook_input(tool_name: str, tool_input: dict) -> dict:
-    """Create a minimal PreToolUseHookInput-compatible dict."""
-    return {
-        "tool_name": tool_name,
-        "tool_input": tool_input,
-        "tool_use_id": "test-id",
-        "session_id": "test-session",
-        "cwd": "/tmp",
-        "permission_mode": "default",
-    }
+@dataclass
+class FakePermissionRuleValue:
+    """Minimal stand-in for claude_agent_sdk.types.PermissionRuleValue."""
+
+    tool_name: str
+    rule_content: str | None = None
 
 
-class TestHistoryRules:
-    """Tests for history file access rules."""
+@dataclass
+class FakePermissionUpdate:
+    """Minimal stand-in for claude_agent_sdk.types.PermissionUpdate."""
 
-    @pytest.mark.asyncio
-    async def test_issue_707_history_read_allowed(self, handler_km_enabled, tmp_dirs):
-        """Read tool on history path should be auto-approved when KM enabled."""
-        history_file = str(tmp_dirs["history_dir"] / "2024-01-01.md")
-        hook_input = _make_hook_input("Read", {"file_path": history_file})
-        result = await handler_km_enabled.handle(hook_input, None, {})
-        assert result.get("hookSpecificOutput", {}).get("permissionDecision") == "allow"
-
-    @pytest.mark.asyncio
-    async def test_issue_707_history_read_fallthrough_when_km_disabled(self, handler_km_disabled, tmp_dirs):
-        """Read on history path should fall through when KM disabled."""
-        history_file = str(tmp_dirs["history_dir"] / "2024-01-01.md")
-        hook_input = _make_hook_input("Read", {"file_path": history_file})
-        result = await handler_km_disabled.handle(hook_input, None, {})
-        # No hookSpecificOutput means no opinion — falls through to normal permissions
-        assert "hookSpecificOutput" not in result or result.get("hookSpecificOutput") is None
-
-    @pytest.mark.asyncio
-    async def test_issue_707_history_write_denied(self, handler_km_enabled, tmp_dirs):
-        """Write tool on history path should be denied (read-only)."""
-        history_file = str(tmp_dirs["history_dir"] / "2024-01-01.md")
-        hook_input = _make_hook_input("Write", {"file_path": history_file})
-        result = await handler_km_enabled.handle(hook_input, None, {})
-        assert result.get("hookSpecificOutput", {}).get("permissionDecision") == "deny"
-
-    @pytest.mark.asyncio
-    async def test_issue_707_history_edit_denied(self, handler_km_enabled, tmp_dirs):
-        """Edit tool on history path should be denied (read-only)."""
-        history_file = str(tmp_dirs["history_dir"] / "2024-01-01.md")
-        hook_input = _make_hook_input("Edit", {"file_path": history_file})
-        result = await handler_km_enabled.handle(hook_input, None, {})
-        assert result.get("hookSpecificOutput", {}).get("permissionDecision") == "deny"
-
-    @pytest.mark.asyncio
-    async def test_issue_707_history_write_denied_even_when_km_disabled(self, handler_km_disabled, tmp_dirs):
-        """Write to history should be denied even when KM is disabled."""
-        history_file = str(tmp_dirs["history_dir"] / "2024-01-01.md")
-        hook_input = _make_hook_input("Write", {"file_path": history_file})
-        result = await handler_km_disabled.handle(hook_input, None, {})
-        assert result.get("hookSpecificOutput", {}).get("permissionDecision") == "deny"
+    type: str
+    rules: list[FakePermissionRuleValue] | None = None
+    behavior: str | None = None
+    destination: str = "session"
 
 
-class TestPlanRules:
-    """Tests for plan file access rules."""
+class TestExtractDirFromRuleContent:
+    """Tests for _extract_dir_from_rule_content helper."""
 
-    @pytest.mark.asyncio
-    async def test_issue_707_plan_read_allowed(self, handler_km_enabled, tmp_dirs):
-        """Read on plan file should be auto-approved."""
-        plan_file = str(tmp_dirs["plans_dir"] / "issue-42.md")
-        hook_input = _make_hook_input("Read", {"file_path": plan_file})
-        result = await handler_km_enabled.handle(hook_input, None, {})
-        assert result.get("hookSpecificOutput", {}).get("permissionDecision") == "allow"
+    def test_double_slash_glob(self):
+        assert _extract_dir_from_rule_content("//var/home/user/history/**") == "/var/home/user/history"
 
-    @pytest.mark.asyncio
-    async def test_issue_707_plan_write_allowed(self, handler_km_enabled, tmp_dirs):
-        """Write on plan file should be auto-approved."""
-        plan_file = str(tmp_dirs["plans_dir"] / "issue-42.md")
-        hook_input = _make_hook_input("Write", {"file_path": plan_file})
-        result = await handler_km_enabled.handle(hook_input, None, {})
-        assert result.get("hookSpecificOutput", {}).get("permissionDecision") == "allow"
+    def test_single_slash_glob(self):
+        assert _extract_dir_from_rule_content("/var/home/user/plans/**") == "/var/home/user/plans"
 
+    def test_no_glob(self):
+        assert _extract_dir_from_rule_content("/var/home/user/plans") == "/var/home/user/plans"
 
-class TestSkillRules:
-    """Tests for skill file access rules."""
+    def test_empty(self):
+        assert _extract_dir_from_rule_content("") is None
 
-    @pytest.mark.asyncio
-    async def test_issue_707_skill_read_allowed(self, handler_km_enabled, tmp_dirs):
-        """Read on skill file should be auto-approved."""
-        skill_file = str(tmp_dirs["skills_dirs"][0] / "plan-manager" / "SKILL.md")
-        hook_input = _make_hook_input("Read", {"file_path": skill_file})
-        result = await handler_km_enabled.handle(hook_input, None, {})
-        assert result.get("hookSpecificOutput", {}).get("permissionDecision") == "allow"
+    def test_only_slashes(self):
+        assert _extract_dir_from_rule_content("//") is None
 
-    @pytest.mark.asyncio
-    async def test_issue_707_skill_read_second_dir(self, handler_km_enabled, tmp_dirs):
-        """Read on skill file in second skills dir should be auto-approved."""
-        skill_file = str(tmp_dirs["skills_dirs"][1] / "custom-skill" / "SKILL.md")
-        hook_input = _make_hook_input("Read", {"file_path": skill_file})
-        result = await handler_km_enabled.handle(hook_input, None, {})
-        assert result.get("hookSpecificOutput", {}).get("permissionDecision") == "allow"
-
-    @pytest.mark.asyncio
-    async def test_issue_707_skill_write_denied(self, handler_km_enabled, tmp_dirs):
-        """Write on skill file should be denied."""
-        skill_file = str(tmp_dirs["skills_dirs"][0] / "plan-manager" / "SKILL.md")
-        hook_input = _make_hook_input("Write", {"file_path": skill_file})
-        result = await handler_km_enabled.handle(hook_input, None, {})
-        assert result.get("hookSpecificOutput", {}).get("permissionDecision") == "deny"
-
-    @pytest.mark.asyncio
-    async def test_issue_707_skill_edit_denied(self, handler_km_enabled, tmp_dirs):
-        """Edit on skill file should be denied."""
-        skill_file = str(tmp_dirs["skills_dirs"][0] / "plan-manager" / "SKILL.md")
-        hook_input = _make_hook_input("Edit", {"file_path": skill_file})
-        result = await handler_km_enabled.handle(hook_input, None, {})
-        assert result.get("hookSpecificOutput", {}).get("permissionDecision") == "deny"
+    def test_nested_glob(self):
+        assert _extract_dir_from_rule_content("//home/user/.claude/skills/**/*") == "/home/user/.claude/skills"
 
 
-class TestFallthrough:
-    """Tests for non-matching cases (normal permission flow)."""
+class TestSuggestionEvaluation:
+    """Tests for evaluate_suggestion (single rule evaluation)."""
 
-    @pytest.mark.asyncio
-    async def test_issue_707_unrelated_path_fallthrough(self, handler_km_enabled):
-        """Read on unrelated path should produce empty output (no opinion)."""
-        hook_input = _make_hook_input("Read", {"file_path": "/home/user/project/src/main.py"})
-        result = await handler_km_enabled.handle(hook_input, None, {})
-        assert "hookSpecificOutput" not in result or result.get("hookSpecificOutput") is None
+    def test_issue_707_read_history_allowed(self, handler_km_enabled, tmp_dirs):
+        """CLI suggestion to allow Read on history path should be auto-approved."""
+        history_dir = str(tmp_dirs["history_dir"])
+        result = handler_km_enabled.evaluate_suggestion(
+            "Read", f"//{history_dir}/**", "allow"
+        )
+        assert result is not None
+        assert result[0] == "allow"
 
-    @pytest.mark.asyncio
-    async def test_issue_707_bash_tool_fallthrough(self, handler_km_enabled):
-        """Bash tool should fall through (no file_path extracted)."""
-        hook_input = _make_hook_input("Bash", {"command": "ls -la"})
-        result = await handler_km_enabled.handle(hook_input, None, {})
-        assert "hookSpecificOutput" not in result or result.get("hookSpecificOutput") is None
+    def test_issue_707_write_history_denied(self, handler_km_enabled, tmp_dirs):
+        """CLI suggestion to allow Write on history should be denied (our rule overrides)."""
+        history_dir = str(tmp_dirs["history_dir"])
+        result = handler_km_enabled.evaluate_suggestion(
+            "Write", f"//{history_dir}/**", "allow"
+        )
+        assert result is not None
+        assert result[0] == "deny"
 
-    @pytest.mark.asyncio
-    async def test_issue_707_no_file_path_in_read(self, handler_km_enabled):
-        """Read without file_path should fall through."""
-        hook_input = _make_hook_input("Read", {})
-        result = await handler_km_enabled.handle(hook_input, None, {})
-        assert "hookSpecificOutput" not in result or result.get("hookSpecificOutput") is None
+    def test_issue_707_read_plan_allowed(self, handler_km_enabled, tmp_dirs):
+        """CLI suggestion to allow Read on plans should be auto-approved."""
+        plans_dir = str(tmp_dirs["plans_dir"])
+        result = handler_km_enabled.evaluate_suggestion(
+            "Read", f"//{plans_dir}/**", "allow"
+        )
+        assert result is not None
+        assert result[0] == "allow"
+
+    def test_issue_707_write_plan_allowed(self, handler_km_enabled, tmp_dirs):
+        """CLI suggestion to allow Write on plans should be auto-approved."""
+        plans_dir = str(tmp_dirs["plans_dir"])
+        result = handler_km_enabled.evaluate_suggestion(
+            "Write", f"//{plans_dir}/**", "allow"
+        )
+        assert result is not None
+        assert result[0] == "allow"
+
+    def test_issue_707_read_skill_allowed(self, handler_km_enabled, tmp_dirs):
+        """CLI suggestion to allow Read on skills should be auto-approved."""
+        skills_dir = str(tmp_dirs["skills_dirs"][0])
+        result = handler_km_enabled.evaluate_suggestion(
+            "Read", f"//{skills_dir}/**", "allow"
+        )
+        assert result is not None
+        assert result[0] == "allow"
+
+    def test_issue_707_write_skill_denied(self, handler_km_enabled, tmp_dirs):
+        """CLI suggestion to allow Write on skills should be denied."""
+        skills_dir = str(tmp_dirs["skills_dirs"][0])
+        result = handler_km_enabled.evaluate_suggestion(
+            "Write", f"//{skills_dir}/**", "allow"
+        )
+        assert result is not None
+        assert result[0] == "deny"
+
+    def test_issue_707_unrelated_path_no_match(self, handler_km_enabled):
+        """Suggestion for unrelated path should return None (no opinion)."""
+        result = handler_km_enabled.evaluate_suggestion(
+            "Read", "//home/user/project/src/**", "allow"
+        )
+        assert result is None
+
+    def test_issue_707_no_rule_content(self, handler_km_enabled):
+        """Suggestion without rule_content should return None."""
+        result = handler_km_enabled.evaluate_suggestion("Read", None, "allow")
+        assert result is None
+
+    def test_issue_707_read_history_km_disabled(self, handler_km_disabled, tmp_dirs):
+        """Suggestion for Read on history should return None when KM disabled."""
+        history_dir = str(tmp_dirs["history_dir"])
+        result = handler_km_disabled.evaluate_suggestion(
+            "Read", f"//{history_dir}/**", "allow"
+        )
+        assert result is None
+
+    def test_issue_707_read_second_skills_dir(self, handler_km_enabled, tmp_dirs):
+        """Suggestion for Read on second skills dir should be auto-approved."""
+        skills_dir = str(tmp_dirs["skills_dirs"][1])
+        result = handler_km_enabled.evaluate_suggestion(
+            "Read", f"//{skills_dir}/**", "allow"
+        )
+        assert result is not None
+        assert result[0] == "allow"
+
+
+class TestEvaluateSuggestions:
+    """Tests for evaluate_suggestions (full suggestion list evaluation)."""
+
+    def test_issue_707_allow_single_rule(self, handler_km_enabled, tmp_dirs):
+        """Single addRules suggestion matching allow should return allow."""
+        history_dir = str(tmp_dirs["history_dir"])
+        suggestions = [
+            FakePermissionUpdate(
+                type="addRules",
+                rules=[FakePermissionRuleValue("Read", f"//{history_dir}/**")],
+                behavior="allow",
+            )
+        ]
+        result = handler_km_enabled.evaluate_suggestions(suggestions)
+        assert result is not None
+        assert result[0] == "allow"
+
+    def test_issue_707_deny_overrides_allow(self, handler_km_enabled, tmp_dirs):
+        """If any rule matches deny, entire result should be deny."""
+        history_dir = str(tmp_dirs["history_dir"])
+        suggestions = [
+            FakePermissionUpdate(
+                type="addRules",
+                rules=[
+                    FakePermissionRuleValue("Read", f"//{history_dir}/**"),
+                    FakePermissionRuleValue("Write", f"//{history_dir}/**"),
+                ],
+                behavior="allow",
+            )
+        ]
+        result = handler_km_enabled.evaluate_suggestions(suggestions)
+        assert result is not None
+        assert result[0] == "deny"
+
+    def test_issue_707_non_addrules_skipped(self, handler_km_enabled):
+        """Non-addRules suggestions should be skipped."""
+        suggestions = [
+            FakePermissionUpdate(type="setMode", behavior="allow")
+        ]
+        result = handler_km_enabled.evaluate_suggestions(suggestions)
+        assert result is None
+
+    def test_issue_707_no_match(self, handler_km_enabled):
+        """Suggestions with no matching paths should return None."""
+        suggestions = [
+            FakePermissionUpdate(
+                type="addRules",
+                rules=[FakePermissionRuleValue("Read", "//home/user/project/**")],
+                behavior="allow",
+            )
+        ]
+        result = handler_km_enabled.evaluate_suggestions(suggestions)
+        assert result is None
+
+    def test_issue_707_empty_list(self, handler_km_enabled):
+        """Empty suggestions list should return None."""
+        result = handler_km_enabled.evaluate_suggestions([])
+        assert result is None
+
+    def test_issue_707_multiple_suggestions_first_match_wins(self, handler_km_enabled, tmp_dirs):
+        """First matching suggestion should win."""
+        plans_dir = str(tmp_dirs["plans_dir"])
+        history_dir = str(tmp_dirs["history_dir"])
+        suggestions = [
+            FakePermissionUpdate(
+                type="addRules",
+                rules=[FakePermissionRuleValue("Read", f"//{plans_dir}/**")],
+                behavior="allow",
+            ),
+            FakePermissionUpdate(
+                type="addRules",
+                rules=[FakePermissionRuleValue("Read", f"//{history_dir}/**")],
+                behavior="allow",
+            ),
+        ]
+        result = handler_km_enabled.evaluate_suggestions(suggestions)
+        assert result is not None
+        assert result[0] == "allow"
+        assert "plan" in result[1].lower()
+
+    def test_issue_707_suggestion_with_empty_rules(self, handler_km_enabled):
+        """Suggestion with empty rules list should be skipped."""
+        suggestions = [
+            FakePermissionUpdate(type="addRules", rules=[], behavior="allow")
+        ]
+        result = handler_km_enabled.evaluate_suggestions(suggestions)
+        assert result is None
+
+    def test_issue_707_suggestion_with_none_rules(self, handler_km_enabled):
+        """Suggestion with None rules should be skipped."""
+        suggestions = [
+            FakePermissionUpdate(type="addRules", rules=None, behavior="allow")
+        ]
+        result = handler_km_enabled.evaluate_suggestions(suggestions)
+        assert result is None
+
+
+class TestDictFormatSuggestions:
+    """Tests for dict-format suggestions (as sent by CLI on the wire)."""
+
+    def test_issue_707_dict_allow_history_read(self, handler_km_enabled, tmp_dirs):
+        """Dict suggestion with camelCase keys should be auto-approved."""
+        history_dir = str(tmp_dirs["history_dir"])
+        suggestions = [{
+            "type": "addRules",
+            "rules": [{"toolName": "Read", "ruleContent": f"//{history_dir}/**"}],
+            "behavior": "allow",
+            "destination": "session",
+        }]
+        result = handler_km_enabled.evaluate_suggestions(suggestions)
+        assert result is not None
+        assert result[0] == "allow"
+
+    def test_issue_707_dict_deny_history_write(self, handler_km_enabled, tmp_dirs):
+        """Dict suggestion for Write on history should be denied."""
+        history_dir = str(tmp_dirs["history_dir"])
+        suggestions = [{
+            "type": "addRules",
+            "rules": [
+                {"toolName": "Read", "ruleContent": f"//{history_dir}/**"},
+                {"toolName": "Write", "ruleContent": f"//{history_dir}/**"},
+            ],
+            "behavior": "allow",
+            "destination": "session",
+        }]
+        result = handler_km_enabled.evaluate_suggestions(suggestions)
+        assert result is not None
+        assert result[0] == "deny"
+
+    def test_issue_707_dict_unrelated_path_no_match(self, handler_km_enabled):
+        """Dict suggestion for unrelated path should return None."""
+        suggestions = [{
+            "type": "addRules",
+            "rules": [{"toolName": "Read", "ruleContent": "//home/user/project/**"}],
+            "behavior": "allow",
+            "destination": "session",
+        }]
+        result = handler_km_enabled.evaluate_suggestions(suggestions)
+        assert result is None
+
+    def test_issue_707_dict_plan_write_allowed(self, handler_km_enabled, tmp_dirs):
+        """Dict suggestion for Write on plans should be auto-approved."""
+        plans_dir = str(tmp_dirs["plans_dir"])
+        suggestions = [{
+            "type": "addRules",
+            "rules": [{"toolName": "Write", "ruleContent": f"//{plans_dir}/**"}],
+            "behavior": "allow",
+            "destination": "session",
+        }]
+        result = handler_km_enabled.evaluate_suggestions(suggestions)
+        assert result is not None
+        assert result[0] == "allow"

@@ -44,6 +44,9 @@ const approvalIndicator = computed(() => {
   if (isOrphaned.value) {
     return { icon: '⚠', color: '#f97316', ariaLabel: 'Orphaned - tool execution was interrupted' }
   }
+  if (props.tool.autoApprovedReason) {
+    return { icon: '⚡', color: '#a78bfa', ariaLabel: `Auto-approved: ${props.tool.autoApprovedReason}` }
+  }
   if (props.tool.permissionDecision === 'allow') {
     return { icon: '✓', color: '#22c55e', ariaLabel: 'Approved by user' }
   }

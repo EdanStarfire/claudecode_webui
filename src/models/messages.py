@@ -149,6 +149,9 @@ class ToolCall:
     # Issue #195: Parent Task tool that spawned this subagent tool
     parent_tool_use_id: str | None = None
 
+    # Issue #707: Auto-approval reason (set when suggestion-based auto-approval fires)
+    auto_approved_reason: str | None = None
+
     # Display hints (backend-computed)
     display: "ToolDisplayInfo | None" = None
 
@@ -189,6 +192,10 @@ class ToolCall:
         # Issue #195: Parent tool reference
         if self.parent_tool_use_id is not None:
             result["parent_tool_use_id"] = self.parent_tool_use_id
+
+        # Issue #707: Auto-approval reason
+        if self.auto_approved_reason is not None:
+            result["auto_approved_reason"] = self.auto_approved_reason
 
         # Display hints
         if self.display is not None:
@@ -233,6 +240,7 @@ class ToolCall:
             result=data.get("result"),
             error=data.get("error"),
             parent_tool_use_id=data.get("parent_tool_use_id"),
+            auto_approved_reason=data.get("auto_approved_reason"),
             display=display,
         )
 

@@ -2,6 +2,7 @@
 
 import asyncio
 import contextlib
+import json
 import logging
 import tempfile
 import time
@@ -143,7 +144,7 @@ class ClaudeSDK:
         experimental: bool = False,
         stderr_callback: Callable[[str], Any] | None = None,
         extra_env: dict[str, str] | None = None,
-        pretooluse_handler: Any | None = None,
+        permission_handler: Any | None = None,
     ):
         """
         Initialize enhanced Claude Code SDK wrapper.
@@ -162,7 +163,7 @@ class ClaudeSDK:
             experimental: Enable experimental features like Agent Teams (issue #411)
             stderr_callback: Called with each stderr line from SDK subprocess (issue #517)
             extra_env: Extra environment variables (e.g., Docker wrapper config)
-            pretooluse_handler: PreToolUseHandler for internal tool access control (issue #707)
+            permission_handler: InternalPermissionHandler for suggestion-based auto-approval (issue #707)
         """
         if config is None:
             config = SessionConfig()
@@ -198,7 +199,8 @@ class ClaudeSDK:
         self.thinking_budget_tokens = config.thinking_budget_tokens
         self.effort = config.effort
         self.disable_auto_memory = config.disable_auto_memory
-        self.pretooluse_handler = pretooluse_handler
+        self.permission_handler = permission_handler
+        self._auto_approved: dict[str, str] = {}  # Issue #707: tool_signature → reason
         self._stderr_buffer: list[str] = []
 
         self.info = SessionInfo(session_id=session_id, working_directory=str(self.working_directory))
@@ -867,14 +869,6 @@ class ClaudeSDK:
 
         options_kwargs["stderr"] = stderr_handler
 
-        # Issue #707: PreToolUse hook for internal tool access control
-        # Auto-approves/denies tool operations for internal features (history, plans, skills)
-        if self.pretooluse_handler:
-            from claude_agent_sdk import HookMatcher
-            options_kwargs["hooks"] = {
-                "PreToolUse": [HookMatcher(matcher=None, hooks=[self.pretooluse_handler.handle])]
-            }
-
         sdk_logger.debug(f"Final SDK options keys: {list(options_kwargs.keys())}")
         sdk_logger.debug(f"can_use_tool included: {'can_use_tool' in options_kwargs}")
         sdk_logger.debug(f"mcp_servers included: {'mcp_servers' in options_kwargs}")
@@ -1045,7 +1039,13 @@ class ClaudeSDK:
     ) -> PermissionResultAllow | PermissionResultDeny:
         """
         Callback to decide if a tool can be used using new PermissionResult types.
-        Delegates the decision to an external callback if provided.
+
+        First checks CLI permission suggestions against internal rules (issue #707).
+        The CLI infers permission mappings (e.g., Bash accessing history → Read rule)
+        and we auto-approve/deny if the suggested path matches an internal managed
+        directory. This avoids prompting the user for operations on internal files.
+
+        Falls back to the external permission callback for all other cases.
 
         Returns:
             PermissionResultAllow or PermissionResultDeny object
@@ -1054,8 +1054,23 @@ class ClaudeSDK:
         perm_logger.info("Permission callback triggered")
         perm_logger.info(f"Tool: {tool_name}")
         perm_logger.info(f"Input: {input_params}")
-        perm_logger.info(f"Context: {context}")
+        perm_logger.info(f"Context suggestions: {getattr(context, 'suggestions', [])}")
         perm_logger.info("=======================================")
+
+        # Check CLI suggestions against internal rules (issue #707)
+        if self.permission_handler and hasattr(context, "suggestions") and context.suggestions:
+            result = self.permission_handler.evaluate_suggestions(context.suggestions)
+            if result is not None:
+                decision, reason = result
+                if decision == "allow":
+                    perm_logger.info(f"Auto-approved via suggestion: {reason}")
+                    # Store for UI indicator — coordinator will attach to the ToolCall
+                    sig = f"{tool_name}:{json.dumps(input_params, sort_keys=True)}"
+                    self._auto_approved[sig] = reason
+                    return PermissionResultAllow(updated_input=input_params)
+                else:
+                    perm_logger.info(f"Auto-denied via suggestion: {reason}")
+                    return PermissionResultDeny(message=reason)
 
         if self.permission_callback:
             perm_logger.debug(f"Delegating permission check for tool '{tool_name}' to external callback")
@@ -1101,7 +1116,10 @@ class ClaudeSDK:
         perm_logger.debug(f"No permission_callback provided. Denying tool use: '{tool_name}'")
         return PermissionResultDeny(message="No permission callback configured")
 
-
+    def pop_auto_approval(self, tool_name: str, input_params: dict[str, Any]) -> str | None:
+        """Pop and return auto-approval reason if this tool was auto-approved (issue #707)."""
+        sig = f"{tool_name}:{json.dumps(input_params, sort_keys=True)}"
+        return self._auto_approved.pop(sig, None)
 
     async def _safe_callback(self, callback: Callable, *args, **kwargs):
         """Safely execute callback with error handling"""

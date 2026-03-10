@@ -21,7 +21,7 @@ from src.legion.minion_system_prompts import get_legion_guide_only
 
 from .claude_sdk import ClaudeSDK
 from .data_storage import DataStorageManager
-from .hooks.pretooluse_handler import PreToolUseHandler
+from .hooks.pretooluse_handler import InternalPermissionHandler
 from .logging_config import get_logger
 from .message_parser import MessageParser, MessageProcessor
 from .models.messages import (
@@ -465,7 +465,7 @@ class SessionCoordinator:
                 effort=sm_config.effort,
             )
             # Issue #707: Build PreToolUse handler for internal tool access control
-            pretooluse_handler = self._build_pretooluse_handler(
+            permission_handler = self._build_permission_handler(
                 session_dir, config.knowledge_management_enabled
             )
 
@@ -482,7 +482,7 @@ class SessionCoordinator:
                 mcp_servers=mcp_servers if mcp_servers else None,
                 experimental=self.experimental,
                 stderr_callback=self._create_stderr_callback(session_id),
-                pretooluse_handler=pretooluse_handler,
+                permission_handler=permission_handler,
             )
             self._active_sdks[session_id] = sdk
 
@@ -854,7 +854,7 @@ class SessionCoordinator:
             )
 
             # Issue #707: Build PreToolUse handler for internal tool access control
-            pretooluse_handler = self._build_pretooluse_handler(
+            permission_handler = self._build_permission_handler(
                 session_dir, session_info.knowledge_management_enabled
             )
 
@@ -873,7 +873,7 @@ class SessionCoordinator:
                 experimental=self.experimental,
                 stderr_callback=self._create_stderr_callback(session_id),
                 extra_env=docker_env_vars if docker_env_vars else None,
-                pretooluse_handler=pretooluse_handler,
+                permission_handler=permission_handler,
             )
             self._active_sdks[session_id] = sdk
 
@@ -2532,6 +2532,12 @@ class SessionCoordinator:
         """
         import time
 
+        # Issue #707: Check if this tool was auto-approved via suggestion
+        auto_approved_reason = None
+        sdk = self._active_sdks.get(session_id)
+        if sdk:
+            auto_approved_reason = sdk.pop_auto_approval(name, input_params)
+
         tool_call = ToolCall(
             tool_use_id=tool_use_id,
             session_id=session_id,
@@ -2541,6 +2547,7 @@ class SessionCoordinator:
             created_at=time.time(),
             requires_permission=requires_permission,
             parent_tool_use_id=parent_tool_use_id,
+            auto_approved_reason=auto_approved_reason,
             display=ToolDisplayInfo(
                 state=ToolState.PENDING,
                 visible=True,
@@ -2887,11 +2894,11 @@ class SessionCoordinator:
             if storage:
                 await storage.append_message(message_data)
 
-    def _build_pretooluse_handler(
+    def _build_permission_handler(
         self, session_dir: Path, knowledge_mgmt_enabled: bool
-    ) -> PreToolUseHandler:
-        """Build PreToolUse handler with consistent path configuration (issue #707)."""
-        return PreToolUseHandler(
+    ) -> InternalPermissionHandler:
+        """Build internal permission handler with consistent path configuration (issue #707)."""
+        return InternalPermissionHandler(
             session_data_dir=session_dir,
             plans_dir=Path.home() / ".cc_webui" / "plans",
             skills_dirs=[
