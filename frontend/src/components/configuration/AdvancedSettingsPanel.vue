@@ -253,6 +253,21 @@
             Knowledge Management
           </label>
         </div>
+        <div class="form-check form-switch">
+          <input
+            class="form-check-input"
+            type="checkbox"
+            id="adv-disable-auto-memory"
+            :checked="formData.disable_auto_memory"
+            @change="$emit('update:form-data', 'disable_auto_memory', $event.target.checked)"
+          />
+          <label class="form-check-label" for="adv-disable-auto-memory" style="text-transform: none; letter-spacing: normal;">
+            Disable Auto-Memory
+          </label>
+          <small class="form-text text-muted d-block">
+            Prevents Claude Code's working-directory memory. Recommended for multi-agent workflows.
+          </small>
+        </div>
       </div>
     </div>
 

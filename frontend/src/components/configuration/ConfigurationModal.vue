@@ -388,6 +388,8 @@ const formData = reactive({
   docker_extra_mounts: '',
   // Knowledge management toggle (issue #710)
   knowledge_management_enabled: true,
+  // Auto-memory toggle (issue #708)
+  disable_auto_memory: false,
 
   // Sandbox tab (issue #458)
   sandbox: {
@@ -540,7 +542,10 @@ const hasRestartChanges = computed(() => {
   // Issue #710: Knowledge management toggle changes require restart (affects system prompt)
   const knowledgeMgmtChanged = (formData.knowledge_management_enabled ?? true) !== (editSession.value.knowledge_management_enabled ?? true)
 
-  return modelChanged || allowedToolsChanged || settingSourcesChanged || additionalDirsChanged || thinkingModeChanged || thinkingBudgetChanged || effortChanged || knowledgeMgmtChanged
+  // Issue #708: Auto-memory toggle changes require restart (affects SDK env)
+  const autoMemoryChanged = (formData.disable_auto_memory ?? false) !== (editSession.value.disable_auto_memory ?? false)
+
+  return modelChanged || allowedToolsChanged || settingSourcesChanged || additionalDirsChanged || thinkingModeChanged || thinkingBudgetChanged || effortChanged || knowledgeMgmtChanged || autoMemoryChanged
 })
 
 const warningLevel = computed(() => {
@@ -657,6 +662,7 @@ function applyTemplate() {
     formData.thinking_budget_tokens = 10240
     formData.effort = ''
     formData.knowledge_management_enabled = true
+    formData.disable_auto_memory = false
 
     // Reset sandbox config
     formData.sandbox.autoAllowBashIfSandboxed = true
@@ -810,6 +816,7 @@ function applyTemplate() {
   formData.docker_extra_mounts = (template.docker_extra_mounts || []).join('\n')
 
   formData.knowledge_management_enabled = template.knowledge_management_enabled ?? true
+  formData.disable_auto_memory = template.disable_auto_memory ?? false
 
   // Apply sandbox config fields
   const sc = template.sandbox_config || {}
@@ -1246,6 +1253,7 @@ async function createSession() {
     thinking_budget_tokens: formData.thinking_mode === 'enabled' ? formData.thinking_budget_tokens : null,
     effort: formData.effort || null,
     knowledge_management_enabled: formData.knowledge_management_enabled,
+    disable_auto_memory: formData.disable_auto_memory,
   }
 
   const response = await api.post(`/api/legions/${projectId.value}/minions`, payload)
@@ -1301,6 +1309,7 @@ function emitEphemeralConfig() {
     thinking_budget_tokens: formData.thinking_mode === 'enabled' ? formData.thinking_budget_tokens : null,
     effort: formData.effort || null,
     knowledge_management_enabled: formData.knowledge_management_enabled,
+    disable_auto_memory: formData.disable_auto_memory,
   }
 
   if (onConfiguredCallback.value) {
@@ -1329,6 +1338,7 @@ function populateFormFromConfig(config) {
   formData.effort = config.effort || ''
   formData.setting_sources = config.setting_sources || ['user', 'project', 'local']
   formData.knowledge_management_enabled = config.knowledge_management_enabled ?? true
+  formData.disable_auto_memory = config.disable_auto_memory ?? false
 
   // Sandbox config
   const sc = config.sandbox_config || {}
@@ -1396,6 +1406,7 @@ async function updateSession() {
     thinking_budget_tokens: formData.thinking_mode === 'enabled' ? formData.thinking_budget_tokens : null,
     effort: formData.effort || null,
     knowledge_management_enabled: formData.knowledge_management_enabled,
+    disable_auto_memory: formData.disable_auto_memory,
   }
 
   // Update session via PATCH (takes effect on next restart if session is active)
@@ -1451,6 +1462,7 @@ async function createTemplate() {
     thinking_budget_tokens: formData.thinking_mode === 'enabled' ? formData.thinking_budget_tokens : null,
     effort: formData.effort || null,
     knowledge_management_enabled: formData.knowledge_management_enabled,
+    disable_auto_memory: formData.disable_auto_memory,
   }
 
   await api.post('/api/templates', payload)
@@ -1511,6 +1523,7 @@ async function updateTemplate() {
     thinking_budget_tokens: formData.thinking_mode === 'enabled' ? formData.thinking_budget_tokens : null,
     effort: formData.effort || null,
     knowledge_management_enabled: formData.knowledge_management_enabled,
+    disable_auto_memory: formData.disable_auto_memory,
   }
 
   await api.put(`/api/templates/${editTemplate.value.template_id}`, payload)
@@ -1625,6 +1638,7 @@ function populateFormFromSession(session) {
   // Issue #36: Load setting_sources, default to all enabled if not set
   formData.setting_sources = session.setting_sources || ['user', 'project', 'local']
   formData.knowledge_management_enabled = session.knowledge_management_enabled ?? true
+  formData.disable_auto_memory = session.disable_auto_memory ?? false
 
   // Issue #458: Load sandbox config
   const sc = session.sandbox_config || {}
@@ -1664,6 +1678,7 @@ function populateFormFromTemplate(template) {
   formData.thinking_budget_tokens = template.thinking_budget_tokens || 10240
   formData.effort = template.effort || ''
   formData.knowledge_management_enabled = template.knowledge_management_enabled ?? true
+  formData.disable_auto_memory = template.disable_auto_memory ?? false
 
   // Issue #458: Load sandbox config from template
   const sc = template.sandbox_config || {}

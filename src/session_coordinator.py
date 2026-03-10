@@ -841,6 +841,7 @@ class SessionCoordinator:
                 thinking_mode=session_info.thinking_mode,
                 thinking_budget_tokens=session_info.thinking_budget_tokens,
                 effort=session_info.effort,
+                disable_auto_memory=session_info.disable_auto_memory,
             )
             sdk = self._sdk_factory(
                 session_id=session_id,

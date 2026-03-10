@@ -43,6 +43,8 @@ class MinionTemplate:
     effort: str | None = None
     # Knowledge management toggle (issue #710)
     knowledge_management_enabled: bool = True
+    # Auto-memory toggle (issue #708)
+    disable_auto_memory: bool = False
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
@@ -89,4 +91,5 @@ class MinionTemplate:
         data.setdefault('thinking_budget_tokens', None)
         data.setdefault('effort', None)
         data.setdefault('knowledge_management_enabled', True)
+        data.setdefault('disable_auto_memory', False)
         return cls(**data)

@@ -195,6 +195,7 @@ class ClaudeSDK:
         self.thinking_mode = config.thinking_mode
         self.thinking_budget_tokens = config.thinking_budget_tokens
         self.effort = config.effort
+        self.disable_auto_memory = config.disable_auto_memory
         self._stderr_buffer: list[str] = []
 
         self.info = SessionInfo(session_id=session_id, working_directory=str(self.working_directory))
@@ -838,6 +839,9 @@ class ClaudeSDK:
         if self.experimental:
             env_vars["CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"] = "1"
             sdk_logger.info(f"Experimental Agent Teams enabled for session {self.session_id}")
+        # Issue #708: Disable auto-memory when configured
+        if self.disable_auto_memory:
+            env_vars["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "1"
         # Issue #496: Merge extra env vars (e.g., Docker wrapper config like CLAUDE_DOCKER_*)
         if self.extra_env:
             env_vars.update(self.extra_env)
