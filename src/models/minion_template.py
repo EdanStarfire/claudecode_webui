@@ -75,6 +75,18 @@ class MinionTemplate:
         """Create from dictionary loaded from JSON."""
         data['created_at'] = datetime.fromisoformat(data['created_at'])
         data['updated_at'] = datetime.fromisoformat(data['updated_at'])
-        # Issue #710: Backward compat for old templates missing the field
-        data.setdefault("knowledge_management_enabled", True)
+        # Backward-compat defaults for fields added after initial schema
+        data.setdefault('disallowed_tools', None)
+        data.setdefault('override_system_prompt', False)
+        data.setdefault('sandbox_enabled', False)
+        data.setdefault('sandbox_config', None)
+        data.setdefault('cli_path', None)
+        data.setdefault('additional_directories', None)
+        data.setdefault('docker_enabled', False)
+        data.setdefault('docker_image', None)
+        data.setdefault('docker_extra_mounts', None)
+        data.setdefault('thinking_mode', None)
+        data.setdefault('thinking_budget_tokens', None)
+        data.setdefault('effort', None)
+        data.setdefault('knowledge_management_enabled', True)
         return cls(**data)
