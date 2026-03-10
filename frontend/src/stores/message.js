@@ -519,6 +519,10 @@ export const useMessageStore = defineStore('message', () => {
       if (toolCall.display) {
         existing.backendState = toolCall.display
       }
+      // Issue #707: Auto-approval indicator
+      if (toolCall.auto_approved_reason) {
+        existing.autoApprovedReason = toolCall.auto_approved_reason
+      }
 
       console.log(`Updated tool call ${toolUseId} to status: ${frontendStatus} (backend: ${toolCall.status})`)
     } else {
@@ -551,7 +555,9 @@ export const useMessageStore = defineStore('message', () => {
         isExpanded: !['completed', 'failed', 'denied', 'interrupted'].includes(toolCall.status),
         backendState: toolCall.display,
         // Issue #195: Track parent Task tool for subagent grouping
-        parent_tool_use_id: toolCall.parent_tool_use_id || null
+        parent_tool_use_id: toolCall.parent_tool_use_id || null,
+        // Issue #707: Auto-approval indicator
+        autoApprovedReason: toolCall.auto_approved_reason || null
       }
 
       if (toolCall.error) {

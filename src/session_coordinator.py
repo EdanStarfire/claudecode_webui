@@ -21,6 +21,7 @@ from src.legion.minion_system_prompts import get_legion_guide_only
 
 from .claude_sdk import ClaudeSDK
 from .data_storage import DataStorageManager
+from .hooks.pretooluse_handler import InternalPermissionHandler
 from .logging_config import get_logger
 from .message_parser import MessageParser, MessageProcessor
 from .models.messages import (
@@ -37,6 +38,7 @@ from .queue_manager import QueueManager
 from .queue_processor import QueueProcessor
 from .session_config import SessionConfig
 from .session_manager import SessionManager, SessionState
+from .skill_manager import NEW_GLOBAL_SKILLS_DIR
 from .timestamp_utils import get_unix_timestamp
 
 # Get specialized logger for coordinator actions
@@ -462,6 +464,11 @@ class SessionCoordinator:
                 thinking_budget_tokens=sm_config.thinking_budget_tokens,
                 effort=sm_config.effort,
             )
+            # Issue #707: Build PreToolUse handler for internal tool access control
+            permission_handler = self._build_permission_handler(
+                session_dir, config.knowledge_management_enabled
+            )
+
             sdk = self._sdk_factory(
                 session_id=session_id,
                 working_directory=effective_working_directory,
@@ -475,7 +482,10 @@ class SessionCoordinator:
                 mcp_servers=mcp_servers if mcp_servers else None,
                 experimental=self.experimental,
                 stderr_callback=self._create_stderr_callback(session_id),
+                permission_handler=permission_handler,
             )
+            # Issue #707: Set auto-approval callback so can_use_tool can notify us
+            sdk.auto_approval_callback = self._create_auto_approval_callback(session_id)
             self._active_sdks[session_id] = sdk
 
             # Initialize callback lists
@@ -786,7 +796,9 @@ class SessionCoordinator:
                     f"Distilled history from previous conversations is available at "
                     f"`{history_dir}/` (read-only). Before answering questions about past "
                     f"context, identity, or decisions, check this folder for relevant "
-                    f"archived conversations."
+                    f"archived conversations.\n"
+                    f"Use Read, Glob, or Grep to access history files. "
+                    f"Do NOT use Bash (e.g. `ls`, `cat`) for history access."
                 )
             else:
                 history_note = ""
@@ -844,6 +856,12 @@ class SessionCoordinator:
                 effort=session_info.effort,
                 disable_auto_memory=session_info.disable_auto_memory,
             )
+
+            # Issue #707: Build PreToolUse handler for internal tool access control
+            permission_handler = self._build_permission_handler(
+                session_dir, session_info.knowledge_management_enabled
+            )
+
             sdk = self._sdk_factory(
                 session_id=session_id,
                 working_directory=session_info.working_directory,
@@ -859,7 +877,10 @@ class SessionCoordinator:
                 experimental=self.experimental,
                 stderr_callback=self._create_stderr_callback(session_id),
                 extra_env=docker_env_vars if docker_env_vars else None,
+                permission_handler=permission_handler,
             )
+            # Issue #707: Set auto-approval callback so can_use_tool can notify us
+            sdk.auto_approval_callback = self._create_auto_approval_callback(session_id)
             self._active_sdks[session_id] = sdk
 
             # Initialize callback lists if not exists (preserve existing callbacks)
@@ -2497,6 +2518,44 @@ class SessionCoordinator:
             )
 
     # ============================================================
+    # Issue #707: Auto-Approval Callback
+    # ============================================================
+
+    def _create_auto_approval_callback(self, session_id: str) -> Callable:
+        """
+        Create a callback that can_use_tool calls when it auto-approves a tool.
+
+        The ToolCall already exists (created from the AssistantMessage tool_use block
+        before can_use_tool fires), so we find it by tool_name, set the reason,
+        store a new ToolCallUpdate, and broadcast via the existing tool_call
+        broadcast mechanism.
+        """
+        def callback(tool_name: str, input_params: dict[str, Any], reason: str) -> None:
+            tool_calls = self._active_tool_calls.get(session_id, {})
+            for tool_call in tool_calls.values():
+                if (
+                    tool_call.name == tool_name
+                    and tool_call.auto_approved_reason is None
+                    and tool_call.status == ToolState.PENDING
+                ):
+                    tool_call.auto_approved_reason = reason
+                    coord_logger.info(
+                        f"[707] Auto-approved {tool_call.tool_use_id} ({tool_name}): {reason}"
+                    )
+                    # Store a new ToolCallUpdate with the reason attached
+                    self._schedule_tool_call_update_storage(session_id, tool_call)
+                    # Broadcast via existing tool_call broadcast mechanism
+                    tool_call_data = tool_call.to_dict()
+                    tool_call_data["type"] = "tool_call"
+                    for cb in self._tool_call_broadcast_callbacks:
+                        try:
+                            cb(session_id, tool_call_data)
+                        except Exception:
+                            coord_logger.exception("Error in auto-approval broadcast callback")
+                    break
+        return callback
+
+    # ============================================================
     # Issue #324: Unified ToolCall Lifecycle Management
     # ============================================================
 
@@ -2871,6 +2930,20 @@ class SessionCoordinator:
             storage = self._storage_managers.get(session_id)
             if storage:
                 await storage.append_message(message_data)
+
+    def _build_permission_handler(
+        self, session_dir: Path, knowledge_mgmt_enabled: bool
+    ) -> InternalPermissionHandler:
+        """Build internal permission handler with consistent path configuration (issue #707)."""
+        return InternalPermissionHandler(
+            session_data_dir=session_dir,
+            plans_dir=Path.home() / ".cc_webui" / "plans",
+            skills_dirs=[
+                Path.home() / ".claude" / "skills",
+                NEW_GLOBAL_SKILLS_DIR,
+            ],
+            knowledge_mgmt_enabled=knowledge_mgmt_enabled,
+        )
 
     def _create_message_callback(self, session_id: str) -> Callable:
         """Create message callback for a session using unified MessageProcessor"""

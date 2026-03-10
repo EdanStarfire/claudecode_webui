@@ -9,8 +9,16 @@
       </div>
     </div>
 
+    <!-- Auto-Approval Details (shown for internally auto-approved tools) -->
+    <div v-if="toolCall.autoApprovedReason" class="permission-details permission-auto-approved">
+      <div class="permission-status">
+        <span class="permission-status-icon" style="color: #a78bfa">⚡</span>
+        <span>Auto-approved: {{ toolCall.autoApprovedReason }}</span>
+      </div>
+    </div>
+
     <!-- Permission Details (shown after permission resolved) -->
-    <div v-if="hasPermissionInfo" class="permission-details" :class="permissionDetailsClass">
+    <div v-if="hasPermissionInfo && !toolCall.autoApprovedReason" class="permission-details" :class="permissionDetailsClass">
       <div class="permission-status">
         <span class="permission-status-icon" :style="{ color: permissionStatusColor }">{{ permissionStatusIcon }}</span>
         <span>{{ permissionStatusLabel }}</span>
@@ -218,6 +226,11 @@ function formatSuggestion(suggestion) {
 .permission-denied {
   background: #fef2f2;
   border-left-color: #ef4444;
+}
+
+.permission-auto-approved {
+  background: #f5f3ff;
+  border-left-color: #a78bfa;
 }
 
 .permission-status {
