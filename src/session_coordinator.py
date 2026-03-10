@@ -369,6 +369,7 @@ class SessionCoordinator:
                 thinking_budget_tokens=config.thinking_budget_tokens,
                 effort=config.effort,
                 knowledge_management_enabled=config.knowledge_management_enabled,
+                disable_auto_memory=config.disable_auto_memory,
             )
 
             # Create session through session manager
