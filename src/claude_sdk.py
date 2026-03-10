@@ -143,6 +143,7 @@ class ClaudeSDK:
         experimental: bool = False,
         stderr_callback: Callable[[str], Any] | None = None,
         extra_env: dict[str, str] | None = None,
+        pretooluse_handler: Any | None = None,
     ):
         """
         Initialize enhanced Claude Code SDK wrapper.
@@ -161,6 +162,7 @@ class ClaudeSDK:
             experimental: Enable experimental features like Agent Teams (issue #411)
             stderr_callback: Called with each stderr line from SDK subprocess (issue #517)
             extra_env: Extra environment variables (e.g., Docker wrapper config)
+            pretooluse_handler: PreToolUseHandler for internal tool access control (issue #707)
         """
         if config is None:
             config = SessionConfig()
@@ -196,6 +198,7 @@ class ClaudeSDK:
         self.thinking_budget_tokens = config.thinking_budget_tokens
         self.effort = config.effort
         self.disable_auto_memory = config.disable_auto_memory
+        self.pretooluse_handler = pretooluse_handler
         self._stderr_buffer: list[str] = []
 
         self.info = SessionInfo(session_id=session_id, working_directory=str(self.working_directory))
@@ -864,21 +867,13 @@ class ClaudeSDK:
 
         options_kwargs["stderr"] = stderr_handler
 
-        # Issue #571: Hook integration placeholder.
-        #
-        # The SDK supports programmatic hook callbacks via HookMatcher for 10 event types:
-        #   PreToolUse, PostToolUse, PostToolUseFailure, UserPromptSubmit, Stop,
-        #   SubagentStop, PreCompact, Notification, SubagentStart, PermissionRequest
-        #
-        # Shell hooks (configured in .claude/settings.json) produce hook_started/hook_response
-        # SystemMessages in the SDK stream automatically for events WITHOUT a programmatic
-        # callback. When a programmatic callback IS registered, the CLI suppresses the shell
-        # hook's SystemMessages from the stream — only the callback runs (and must synthesize
-        # its own SystemMessages if UI visibility is desired).
-        #
-        # Currently disabled: shell hooks alone provide sufficient hook visibility.
-        # To enable programmatic hooks in the future, register HookMatcher callbacks here
-        # and synthesize hook_started/hook_response SystemMessages via _process_sdk_message().
+        # Issue #707: PreToolUse hook for internal tool access control
+        # Auto-approves/denies tool operations for internal features (history, plans, skills)
+        if self.pretooluse_handler:
+            from claude_agent_sdk import HookMatcher
+            options_kwargs["hooks"] = {
+                "PreToolUse": [HookMatcher(matcher=None, hooks=[self.pretooluse_handler.handle])]
+            }
 
         sdk_logger.debug(f"Final SDK options keys: {list(options_kwargs.keys())}")
         sdk_logger.debug(f"can_use_tool included: {'can_use_tool' in options_kwargs}")

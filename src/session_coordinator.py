@@ -21,6 +21,7 @@ from src.legion.minion_system_prompts import get_legion_guide_only
 
 from .claude_sdk import ClaudeSDK
 from .data_storage import DataStorageManager
+from .hooks.pretooluse_handler import PreToolUseHandler
 from .logging_config import get_logger
 from .message_parser import MessageParser, MessageProcessor
 from .models.messages import (
@@ -462,6 +463,17 @@ class SessionCoordinator:
                 thinking_budget_tokens=sm_config.thinking_budget_tokens,
                 effort=sm_config.effort,
             )
+            # Issue #707: Build PreToolUse handler for internal tool access control
+            pretooluse_handler = PreToolUseHandler(
+                session_data_dir=session_dir,
+                plans_dir=Path.home() / ".cc_webui" / "plans",
+                skills_dirs=[
+                    Path.home() / ".claude" / "skills",
+                    Path.home() / ".config" / "cc_webui" / "skills",
+                ],
+                knowledge_mgmt_enabled=config.knowledge_management_enabled,
+            )
+
             sdk = self._sdk_factory(
                 session_id=session_id,
                 working_directory=effective_working_directory,
@@ -475,6 +487,7 @@ class SessionCoordinator:
                 mcp_servers=mcp_servers if mcp_servers else None,
                 experimental=self.experimental,
                 stderr_callback=self._create_stderr_callback(session_id),
+                pretooluse_handler=pretooluse_handler,
             )
             self._active_sdks[session_id] = sdk
 
@@ -844,6 +857,18 @@ class SessionCoordinator:
                 effort=session_info.effort,
                 disable_auto_memory=session_info.disable_auto_memory,
             )
+
+            # Issue #707: Build PreToolUse handler for internal tool access control
+            pretooluse_handler = PreToolUseHandler(
+                session_data_dir=session_dir,
+                plans_dir=Path.home() / ".cc_webui" / "plans",
+                skills_dirs=[
+                    Path.home() / ".claude" / "skills",
+                    Path.home() / ".config" / "cc_webui" / "skills",
+                ],
+                knowledge_mgmt_enabled=session_info.knowledge_management_enabled,
+            )
+
             sdk = self._sdk_factory(
                 session_id=session_id,
                 working_directory=session_info.working_directory,
@@ -859,6 +884,7 @@ class SessionCoordinator:
                 experimental=self.experimental,
                 stderr_callback=self._create_stderr_callback(session_id),
                 extra_env=docker_env_vars if docker_env_vars else None,
+                pretooluse_handler=pretooluse_handler,
             )
             self._active_sdks[session_id] = sdk
 
