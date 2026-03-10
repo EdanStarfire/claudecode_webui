@@ -1562,6 +1562,7 @@ function resetForm() {
   formData.docker_image = ''
   formData.docker_extra_mounts = ''
   formData.knowledge_management_enabled = true
+  formData.disable_auto_memory = false
 
   // Reset sandbox config (issue #458)
   formData.sandbox.autoAllowBashIfSandboxed = true
