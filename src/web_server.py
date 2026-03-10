@@ -437,9 +437,11 @@ class ClaudeWebUI:
 
     def __init__(self, data_dir: Path = None, experimental: bool = False,
                  mock_sdk: bool = False, fixtures_dir: Path | None = None,
-                 available_fixtures: list[str] | None = None):
+                 available_fixtures: list[str] | None = None,
+                 config_file: Path | None = None):
         self.app = FastAPI(title="Claude Code WebUI", version="1.0.0")
         self.coordinator = SessionCoordinator(data_dir, experimental=experimental)
+        self.config_file = config_file
 
         # Wire mock SDK factory if mock mode active (issue #561)
         if mock_sdk and fixtures_dir:
@@ -664,7 +666,7 @@ class ClaudeWebUI:
         """Initialize the WebUI application"""
         from .config_manager import load_config
         await self.coordinator.initialize()
-        config = load_config()
+        config = load_config(self.config_file) if self.config_file else load_config()
         if config.features.skill_sync_enabled:
             await self.skill_manager.sync()
         else:
@@ -2805,7 +2807,7 @@ class ClaudeWebUI:
         async def get_config():
             """Return full application config."""
             from .config_manager import load_config
-            config = load_config()
+            config = load_config(self.config_file) if self.config_file else load_config()
             return {"config": config.to_dict()}
 
         @self.app.put("/api/config")
@@ -2813,7 +2815,7 @@ class ClaudeWebUI:
             """Update application config with side effects."""
             from .config_manager import load_config, save_config
             body = await request.json()
-            config = load_config()
+            config = load_config(self.config_file) if self.config_file else load_config()
             old_sync = config.features.skill_sync_enabled
 
             # Merge features section
@@ -2830,7 +2832,10 @@ class ClaudeWebUI:
                 if "acknowledged_risk" in net:
                     config.networking.acknowledged_risk = net["acknowledged_risk"]
 
-            save_config(config)
+            if self.config_file:
+                save_config(config, self.config_file)
+            else:
+                save_config(config)
 
             # Side effects for skill sync toggle
             new_sync = config.features.skill_sync_enabled
@@ -2847,7 +2852,7 @@ class ClaudeWebUI:
         async def sync_skills():
             """Manually trigger skill sync."""
             from .config_manager import load_config
-            config = load_config()
+            config = load_config(self.config_file) if self.config_file else load_config()
             if not config.features.skill_sync_enabled:
                 raise HTTPException(status_code=409, detail="Skill syncing is disabled")
             result = await self.skill_manager.sync()
@@ -2857,7 +2862,7 @@ class ClaudeWebUI:
         async def get_skills_status():
             """Get skill sync status."""
             from .config_manager import load_config
-            config = load_config()
+            config = load_config(self.config_file) if self.config_file else load_config()
             return {
                 "sync_enabled": config.features.skill_sync_enabled,
                 "last_sync_time": self.skill_manager.last_sync_time,
