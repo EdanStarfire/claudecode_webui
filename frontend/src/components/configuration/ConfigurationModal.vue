@@ -472,8 +472,8 @@ const hasResetChanges = computed(() => {
   if (!editSession.value) return false
 
   const initContextChanged = (formData.initialization_context || '') !== (editSession.value.system_prompt || '')
-  const overrideChanged = (formData.override_system_prompt || false) !== (editSession.value.override_system_prompt || false)
-  const sandboxEnabledChanged = (formData.sandbox_enabled || false) !== (editSession.value.sandbox_enabled || false)
+  const overrideChanged = (formData.override_system_prompt ?? false) !== (editSession.value.override_system_prompt ?? false)
+  const sandboxEnabledChanged = (formData.sandbox_enabled ?? false) !== (editSession.value.sandbox_enabled ?? false)
 
   if (initContextChanged || overrideChanged || sandboxEnabledChanged) return true
 
@@ -793,10 +793,10 @@ function applyTemplate() {
   }
 
   // Apply override_system_prompt (boolean, no field-state tracking)
-  formData.override_system_prompt = template.override_system_prompt || false
+  formData.override_system_prompt = template.override_system_prompt ?? false
 
   // Apply sandbox_enabled (boolean, no field-state tracking)
-  formData.sandbox_enabled = template.sandbox_enabled || false
+  formData.sandbox_enabled = template.sandbox_enabled ?? false
 
   // Apply cli_path from template (issue #489, no field-state tracking)
   formData.cli_path = template.cli_path || ''
@@ -805,7 +805,7 @@ function applyTemplate() {
   formData.additional_directories = (template.additional_directories || []).join('\n')
 
   // Apply docker config from template (issue #496, no field-state tracking)
-  formData.docker_enabled = template.docker_enabled || false
+  formData.docker_enabled = template.docker_enabled ?? false
   formData.docker_image = template.docker_image || ''
   formData.docker_extra_mounts = (template.docker_extra_mounts || []).join('\n')
 
@@ -937,12 +937,12 @@ function buildTemplateFromSession() {
     disallowed_tools: parseList(session.disallowed_tools),
     model: session.model || null,
     default_system_prompt: session.system_prompt || null,
-    override_system_prompt: session.override_system_prompt || false,
+    override_system_prompt: session.override_system_prompt ?? false,
     default_role: session.role || null,
-    sandbox_enabled: session.sandbox_enabled || false,
+    sandbox_enabled: session.sandbox_enabled ?? false,
     sandbox_config: session.sandbox_config || null,
     cli_path: session.cli_path || null,
-    docker_enabled: session.docker_enabled || false,
+    docker_enabled: session.docker_enabled ?? false,
     docker_image: session.docker_image || null,
     docker_extra_mounts: parseList(session.docker_extra_mounts),
     thinking_mode: session.thinking_mode || null,
@@ -1315,13 +1315,13 @@ function populateFormFromConfig(config) {
   formData.permission_mode = config.permission_mode || 'default'
   formData.working_directory = config.working_directory || ''
   formData.initialization_context = config.system_prompt || ''
-  formData.override_system_prompt = config.override_system_prompt || false
+  formData.override_system_prompt = config.override_system_prompt ?? false
   formData.allowed_tools = Array.isArray(config.allowed_tools) ? config.allowed_tools.join(', ') : (config.allowed_tools || '')
   formData.disallowed_tools = Array.isArray(config.disallowed_tools) ? config.disallowed_tools.join(', ') : (config.disallowed_tools || '')
-  formData.sandbox_enabled = config.sandbox_enabled || false
+  formData.sandbox_enabled = config.sandbox_enabled ?? false
   formData.cli_path = config.cli_path || ''
   formData.additional_directories = Array.isArray(config.additional_directories) ? config.additional_directories.join('\n') : ''
-  formData.docker_enabled = config.docker_enabled || false
+  formData.docker_enabled = config.docker_enabled ?? false
   formData.docker_image = config.docker_image || ''
   formData.docker_extra_mounts = Array.isArray(config.docker_extra_mounts) ? config.docker_extra_mounts.join('\n') : ''
   formData.thinking_mode = config.thinking_mode || ''
@@ -1607,15 +1607,15 @@ function populateFormFromSession(session) {
   formData.default_role = session.role || ''
   // Backend stores the prompt as system_prompt, UI shows it as initialization_context
   formData.initialization_context = session.system_prompt || ''
-  formData.override_system_prompt = session.override_system_prompt || false
+  formData.override_system_prompt = session.override_system_prompt ?? false
   formData.system_prompt = ''  // Not used for sessions (only templates have separate additional instructions)
   formData.allowed_tools = session.allowed_tools?.join(', ') || ''
   formData.disallowed_tools = session.disallowed_tools?.join(', ') || ''
   formData.capabilities = session.capabilities?.join(', ') || ''
-  formData.sandbox_enabled = session.sandbox_enabled || false
+  formData.sandbox_enabled = session.sandbox_enabled ?? false
   formData.cli_path = session.cli_path || ''  // Issue #489
   formData.additional_directories = (session.additional_directories || []).join('\n')  // Issue #630
-  formData.docker_enabled = session.docker_enabled || false  // Issue #496
+  formData.docker_enabled = session.docker_enabled ?? false  // Issue #496
   formData.docker_image = session.docker_image || ''
   formData.docker_extra_mounts = (session.docker_extra_mounts || []).join('\n')
   // Issue #540: Thinking and effort configuration
@@ -1652,11 +1652,11 @@ function populateFormFromTemplate(template) {
   formData.disallowed_tools = template.disallowed_tools?.join(', ') || ''
   formData.model = template.model || 'sonnet'
   formData.capabilities = template.capabilities?.join(', ') || ''
-  formData.override_system_prompt = template.override_system_prompt || false
-  formData.sandbox_enabled = template.sandbox_enabled || false
+  formData.override_system_prompt = template.override_system_prompt ?? false
+  formData.sandbox_enabled = template.sandbox_enabled ?? false
   formData.cli_path = template.cli_path || ''  // Issue #489
   formData.additional_directories = (template.additional_directories || []).join('\n')  // Issue #630
-  formData.docker_enabled = template.docker_enabled || false  // Issue #496
+  formData.docker_enabled = template.docker_enabled ?? false  // Issue #496
   formData.docker_image = template.docker_image || ''
   formData.docker_extra_mounts = (template.docker_extra_mounts || []).join('\n')
   // Issue #540: Thinking and effort configuration
