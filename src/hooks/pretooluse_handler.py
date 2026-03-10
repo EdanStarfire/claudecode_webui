@@ -4,9 +4,10 @@ Evaluates hardcoded rules derived from session configuration to auto-approve
 or deny tool operations for internal features (history, plans, skills).
 """
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from claude_agent_sdk.types import (
     HookContext,
@@ -15,16 +16,41 @@ from claude_agent_sdk.types import (
     SyncHookJSONOutput,
 )
 
+PermissionDecision = Literal["allow", "deny"]
+
+_RESOLVE_CACHE: dict[str, str] = {}
+
+
+def _resolve_path(path_str: str) -> str:
+    """Resolve path, expanding ~ and resolving symlinks. Results are cached."""
+    cached = _RESOLVE_CACHE.get(path_str)
+    if cached is not None:
+        return cached
+    resolved = str(Path(path_str).expanduser().resolve())
+    _RESOLVE_CACHE[path_str] = resolved
+    return resolved
+
 
 @dataclass
 class InternalRule:
     """A hardcoded rule for internal tool access control."""
 
-    tool_names: list[str]
-    path_patterns: list[str]
-    decision: str  # "allow" or "deny"
+    tool_names: frozenset[str]
+    path_prefixes: list[str]  # Pre-resolved path prefixes with trailing os.sep
+    decision: PermissionDecision
     reason: str
     enabled: bool = True
+
+
+def _resolve_prefixes(dirs: list[str]) -> list[str]:
+    """Resolve directory paths and append os.sep for safe prefix matching."""
+    prefixes = []
+    for d in dirs:
+        resolved = _resolve_path(d)
+        if not resolved.endswith(os.sep):
+            resolved += os.sep
+        prefixes.append(resolved)
+    return prefixes
 
 
 class PreToolUseHandler:
@@ -48,14 +74,14 @@ class PreToolUseHandler:
         skills_dirs: list[Path],
         knowledge_mgmt_enabled: bool,
     ) -> list[InternalRule]:
-        """Build internal rule set from session configuration."""
+        """Build internal rule set from session configuration. Paths are resolved once here."""
         rules: list[InternalRule] = []
-        history_dir = str(session_data_dir / "history")
+        history_prefixes = _resolve_prefixes([str(session_data_dir / "history")])
 
         # Rule: Allow reading history files (when knowledge management enabled)
         rules.append(InternalRule(
-            tool_names=["Read"],
-            path_patterns=[history_dir],
+            tool_names=frozenset(["Read"]),
+            path_prefixes=history_prefixes,
             decision="allow",
             reason="Auto-approved: internal history file read (knowledge management)",
             enabled=knowledge_mgmt_enabled,
@@ -63,28 +89,28 @@ class PreToolUseHandler:
 
         # Rule: Deny writing to history folder (always — it's read-only)
         rules.append(InternalRule(
-            tool_names=["Write", "Edit"],
-            path_patterns=[history_dir],
+            tool_names=frozenset(["Write", "Edit"]),
+            path_prefixes=history_prefixes,
             decision="deny",
             reason="Denied: history folder is read-only",
             enabled=True,
         ))
 
         # Rule: Allow reading/writing plan files
-        plans_str = str(plans_dir)
+        plan_prefixes = _resolve_prefixes([str(plans_dir)])
         rules.append(InternalRule(
-            tool_names=["Read", "Write"],
-            path_patterns=[plans_str],
+            tool_names=frozenset(["Read", "Write"]),
+            path_prefixes=plan_prefixes,
             decision="allow",
             reason="Auto-approved: internal plan file access",
             enabled=True,
         ))
 
         # Rule: Allow reading skill files
-        skill_strs = [str(d) for d in skills_dirs]
+        skill_prefixes = _resolve_prefixes([str(d) for d in skills_dirs])
         rules.append(InternalRule(
-            tool_names=["Read"],
-            path_patterns=skill_strs,
+            tool_names=frozenset(["Read"]),
+            path_prefixes=skill_prefixes,
             decision="allow",
             reason="Auto-approved: internal skill file read",
             enabled=True,
@@ -92,8 +118,8 @@ class PreToolUseHandler:
 
         # Rule: Deny writing to skill directories (managed by SkillManager)
         rules.append(InternalRule(
-            tool_names=["Write", "Edit"],
-            path_patterns=skill_strs,
+            tool_names=frozenset(["Write", "Edit"]),
+            path_prefixes=skill_prefixes,
             decision="deny",
             reason="Denied: skill files are managed by SkillManager",
             enabled=True,
@@ -107,16 +133,11 @@ class PreToolUseHandler:
             return tool_input.get("file_path")
         return None
 
-    def _resolve_path(self, path_str: str) -> str:
-        """Resolve path, expanding ~ and resolving symlinks."""
-        return str(Path(path_str).expanduser().resolve())
-
-    def _matches_path(self, file_path: str, patterns: list[str]) -> bool:
-        """Check if file_path starts with any of the path patterns."""
-        resolved = self._resolve_path(file_path)
-        for pattern in patterns:
-            resolved_pattern = self._resolve_path(pattern)
-            if resolved.startswith(resolved_pattern):
+    def _matches_path(self, file_path: str, prefixes: list[str]) -> bool:
+        """Check if resolved file_path starts with any pre-resolved prefix."""
+        resolved = _resolve_path(file_path)
+        for prefix in prefixes:
+            if resolved.startswith(prefix):
                 return True
         return False
 
@@ -139,7 +160,7 @@ class PreToolUseHandler:
                 continue
             if tool_name not in rule.tool_names:
                 continue
-            if not self._matches_path(file_path, rule.path_patterns):
+            if not self._matches_path(file_path, rule.path_prefixes):
                 continue
 
             return SyncHookJSONOutput(

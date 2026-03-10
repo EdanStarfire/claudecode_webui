@@ -38,6 +38,7 @@ from .queue_manager import QueueManager
 from .queue_processor import QueueProcessor
 from .session_config import SessionConfig
 from .session_manager import SessionManager, SessionState
+from .skill_manager import NEW_GLOBAL_SKILLS_DIR
 from .timestamp_utils import get_unix_timestamp
 
 # Get specialized logger for coordinator actions
@@ -464,14 +465,8 @@ class SessionCoordinator:
                 effort=sm_config.effort,
             )
             # Issue #707: Build PreToolUse handler for internal tool access control
-            pretooluse_handler = PreToolUseHandler(
-                session_data_dir=session_dir,
-                plans_dir=Path.home() / ".cc_webui" / "plans",
-                skills_dirs=[
-                    Path.home() / ".claude" / "skills",
-                    Path.home() / ".config" / "cc_webui" / "skills",
-                ],
-                knowledge_mgmt_enabled=config.knowledge_management_enabled,
+            pretooluse_handler = self._build_pretooluse_handler(
+                session_dir, config.knowledge_management_enabled
             )
 
             sdk = self._sdk_factory(
@@ -859,14 +854,8 @@ class SessionCoordinator:
             )
 
             # Issue #707: Build PreToolUse handler for internal tool access control
-            pretooluse_handler = PreToolUseHandler(
-                session_data_dir=session_dir,
-                plans_dir=Path.home() / ".cc_webui" / "plans",
-                skills_dirs=[
-                    Path.home() / ".claude" / "skills",
-                    Path.home() / ".config" / "cc_webui" / "skills",
-                ],
-                knowledge_mgmt_enabled=session_info.knowledge_management_enabled,
+            pretooluse_handler = self._build_pretooluse_handler(
+                session_dir, session_info.knowledge_management_enabled
             )
 
             sdk = self._sdk_factory(
@@ -2897,6 +2886,20 @@ class SessionCoordinator:
             storage = self._storage_managers.get(session_id)
             if storage:
                 await storage.append_message(message_data)
+
+    def _build_pretooluse_handler(
+        self, session_dir: Path, knowledge_mgmt_enabled: bool
+    ) -> PreToolUseHandler:
+        """Build PreToolUse handler with consistent path configuration (issue #707)."""
+        return PreToolUseHandler(
+            session_data_dir=session_dir,
+            plans_dir=Path.home() / ".cc_webui" / "plans",
+            skills_dirs=[
+                Path.home() / ".claude" / "skills",
+                NEW_GLOBAL_SKILLS_DIR,
+            ],
+            knowledge_mgmt_enabled=knowledge_mgmt_enabled,
+        )
 
     def _create_message_callback(self, session_id: str) -> Callable:
         """Create message callback for a session using unified MessageProcessor"""
