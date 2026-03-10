@@ -178,7 +178,8 @@ async def api_integration_env(request, tmp_path):
 
     fixtures_dir = Path(__file__).parent.parent / "fixtures"
 
-    webui = ClaudeWebUI(data_dir=data_dir)
+    config_file = tmp_path / "config.json"
+    webui = ClaudeWebUI(data_dir=data_dir, config_file=config_file)
     await webui.initialize()
 
     # Inject a lenient mock SDK factory: resolves fixture names when available,
@@ -295,7 +296,8 @@ def ws_integration_env(tmp_path):
 
     import asyncio
 
-    webui = ClaudeWebUI(data_dir=data_dir)
+    config_file = tmp_path / "config.json"
+    webui = ClaudeWebUI(data_dir=data_dir, config_file=config_file)
 
     # Initialize app (creates data directories, loads templates, etc.)
     # Must happen before TestClient starts, since there's no lifespan event.
