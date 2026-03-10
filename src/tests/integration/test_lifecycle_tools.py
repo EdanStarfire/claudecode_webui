@@ -41,7 +41,7 @@ async def test_spawn_minion_minimal(legion_test_env):
         "_parent_overseer_id": parent.session_id,
         "name": "child",
         "role": "Child Worker",
-        "initialization_context": "You are a test child minion for integration testing."
+        "system_prompt": "You are a test child minion for integration testing."
     })
 
     # Verify success response (not an error)
@@ -126,7 +126,7 @@ async def test_spawn_minion_with_template(legion_test_env):
 
     Verifies:
     - Template permissions applied to child
-    - default_system_prompt prepended
+    - system_prompt prepended
     """
     env = legion_test_env
     legion_system = env["legion_system"]
@@ -147,7 +147,7 @@ async def test_spawn_minion_with_template(legion_test_env):
         "_parent_overseer_id": parent.session_id,
         "name": "child",
         "role": "Child Worker",
-        "initialization_context": "Test child with template.",
+        "system_prompt": "Test child with template.",
         "template_name": template_name
     })
 
@@ -183,7 +183,7 @@ async def test_spawn_minion_with_template(legion_test_env):
     # Verify template was applied (system_prompt should include template)
     # Note: Template application affects permissions and system prompt
     assert child_info.system_prompt is not None
-    # The system prompt should include the initialization_context we provided
+    # The system prompt should include the system_prompt we provided
     assert "Test child with template" in child_info.system_prompt
 
     # SECURITY CRITICAL: Verify template permissions were applied
@@ -198,10 +198,10 @@ async def test_spawn_minion_with_template(legion_test_env):
         template_tools = set(template.allowed_tools)
         assert template_tools.issubset(child_tools), \
             f"Child should have template's allowed_tools: {template.allowed_tools}"
-    # Verify template's default_system_prompt was prepended
-    if template.default_system_prompt:
-        assert template.default_system_prompt in child_info.system_prompt, \
-            "Child system_prompt should include template's default_system_prompt"
+    # Verify template's system_prompt was prepended
+    if template.system_prompt:
+        assert template.system_prompt in child_info.system_prompt, \
+            "Child system_prompt should include template's system_prompt"
 
 
 @pytest.mark.asyncio
@@ -223,7 +223,7 @@ async def test_spawn_minion_with_capabilities(legion_test_env):
         "_parent_overseer_id": parent.session_id,
         "name": "child",
         "role": "Data Scientist",
-        "initialization_context": "Test child with capabilities.",
+        "system_prompt": "Test child with capabilities.",
         "capabilities": ["python", "data analysis", "machine learning"]
     })
 
@@ -292,7 +292,7 @@ async def test_spawn_minion_error_duplicate_name(legion_test_env):
         "_parent_overseer_id": parent.session_id,
         "name": "duplicate",
         "role": "Worker",
-        "initialization_context": "First test child."
+        "system_prompt": "First test child."
     })
     assert result1.get("is_error") is not True
 
@@ -301,7 +301,7 @@ async def test_spawn_minion_error_duplicate_name(legion_test_env):
         "_parent_overseer_id": parent.session_id,
         "name": "duplicate",
         "role": "Worker",
-        "initialization_context": "Second test child (should fail)."
+        "system_prompt": "Second test child (should fail)."
     })
 
     # Verify error response
@@ -329,7 +329,7 @@ async def test_spawn_minion_error_nonexistent_template(legion_test_env):
         "_parent_overseer_id": parent.session_id,
         "name": "child",
         "role": "Worker",
-        "initialization_context": "Test child with invalid template.",
+        "system_prompt": "Test child with invalid template.",
         "template_name": "nonexistent_template_12345"
     })
 
@@ -365,7 +365,7 @@ async def test_dispose_minion_direct_child(legion_test_env):
         "_parent_overseer_id": parent.session_id,
         "name": "child",
         "role": "Worker",
-        "initialization_context": "Test child for disposal."
+        "system_prompt": "Test child for disposal."
     })
     assert spawn_result.get("is_error") is not True
 
@@ -455,7 +455,7 @@ async def test_dispose_minion_with_descendants(legion_test_env):
         "_parent_overseer_id": parent.session_id,
         "name": "child",
         "role": "Worker",
-        "initialization_context": "Test child for recursive disposal."
+        "system_prompt": "Test child for recursive disposal."
     })
     assert child_result.get("is_error") is not True
 
@@ -489,7 +489,7 @@ async def test_dispose_minion_with_descendants(legion_test_env):
         "_parent_overseer_id": child_id,
         "name": "grandchild",
         "role": "Sub-worker",
-        "initialization_context": "Test grandchild for recursive disposal."
+        "system_prompt": "Test grandchild for recursive disposal."
     })
     assert grandchild_result.get("is_error") is not True
 
@@ -583,7 +583,7 @@ async def test_dispose_minion_error_not_your_child(legion_test_env):
         "_parent_overseer_id": parent1.session_id,
         "name": "child",
         "role": "Worker",
-        "initialization_context": "Test child for permission test."
+        "system_prompt": "Test child for permission test."
     })
     assert spawn_result.get("is_error") is not True
 

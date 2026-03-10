@@ -91,7 +91,7 @@ The skill will:
 - **template_name**: `Issue Planner`
 - **working_directory**: Full absolute path to `worktrees/issue-{suffix}/`
 - **role**: `Issue Planner for #{suffix} - User story and design specialist`
-- **initialization_context**:
+- **system_prompt**:
   ```
   You are Planner-{suffix}, responsible for planning issue #$1.
 

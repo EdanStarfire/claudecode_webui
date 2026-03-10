@@ -23,8 +23,8 @@ class MinionTemplate:
     permission_mode: str  # default, acceptEdits, plan, bypassPermissions
     allowed_tools: list[str] | None = None
     disallowed_tools: list[str] | None = None  # Tools explicitly denied (issue #461)
-    default_role: str | None = None
-    default_system_prompt: str | None = None
+    role: str | None = None
+    system_prompt: str | None = None
     description: str | None = None
     model: str | None = None
     capabilities: list[str] | None = None
@@ -92,4 +92,9 @@ class MinionTemplate:
         data.setdefault('effort', None)
         data.setdefault('knowledge_management_enabled', True)
         data.setdefault('disable_auto_memory', False)
+        # Backward-compat renames (issue #731)
+        if 'default_role' in data:
+            data.setdefault('role', data.pop('default_role'))
+        if 'default_system_prompt' in data:
+            data.setdefault('system_prompt', data.pop('default_system_prompt'))
         return cls(**data)

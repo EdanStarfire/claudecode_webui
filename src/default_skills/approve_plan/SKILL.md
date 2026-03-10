@@ -99,7 +99,7 @@ Extract the absolute path for the Builder's working directory.
 - **template_name**: `Issue Builder`
 - **working_directory**: Full absolute path to `worktrees/issue-{suffix}/`
 - **role**: `Issue Builder for #{suffix} - Implementation specialist`
-- **initialization_context**:
+- **system_prompt**:
   ```
   You are Builder-{suffix}, responsible for implementing issue #$1.
 

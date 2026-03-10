@@ -322,76 +322,174 @@ const saveAsTemplateError = ref('')
 const updateTargetTemplateId = ref(null)
 const templateDiff = ref(null)
 
-// Track original template values for modification detection
-const templateOriginalValues = ref({
-  default_role: null,
-  initialization_context: null,
-  permission_mode: null,
-  allowed_tools: null,
-  disallowed_tools: null,
-  model: null,
-  capabilities: null,
-  sandbox_excludedCommands: null,
-  sandbox_network_allowedDomains: null,
-  sandbox_network_allowUnixSockets: null,
-  sandbox_ignoreViolations_file: null,
-  sandbox_ignoreViolations_network: null
-})
+// --- CONFIG_FIELDS schema (issue #731) ---
+// Each field: { default, change, contexts, trackState?, toPayload?, toUpdatePayload?, fromSource?, compare? }
+const CONFIG_FIELDS = {
+  name: {
+    default: '',
+    change: null,
+    contexts: ['session', 'template', 'update'],
+    toPayload: (v) => v.trim(),
+  },
+  model: {
+    default: 'sonnet',
+    change: 'restart',
+    contexts: ['session', 'template', 'ephemeral', 'update'],
+    trackState: true,
+    toPayload: (v) => v || null,
+  },
+  permission_mode: {
+    default: 'default',
+    change: null,
+    contexts: ['session', 'template', 'ephemeral', 'update'],
+    trackState: true,
+  },
+  working_directory: {
+    default: '',
+    change: null,
+    contexts: ['session', 'ephemeral'],
+    toPayload: (v) => v.trim() || null,
+  },
+  description: {
+    default: '',
+    change: null,
+    contexts: ['template'],
+    toPayload: (v) => v.trim() || null,
+  },
+  role: {
+    default: '',
+    change: null,
+    contexts: ['session', 'template', 'update'],
+    trackState: true,
+    toPayload: (v) => v.trim() || null,
+  },
+  startImmediately: {
+    default: true,
+    change: null,
+    contexts: [],
+  },
+  thinking_mode: {
+    default: '',
+    change: 'restart',
+    contexts: ['session', 'template', 'ephemeral', 'update'],
+    toPayload: (v) => v || null,
+  },
+  thinking_budget_tokens: {
+    default: 10240,
+    change: 'restart',
+    contexts: ['session', 'template', 'ephemeral', 'update'],
+    toPayload: (v, fd) => fd.thinking_mode === 'enabled' ? v : null,
+  },
+  effort: {
+    default: '',
+    change: 'restart',
+    contexts: ['session', 'template', 'ephemeral', 'update'],
+    toPayload: (v) => v || null,
+  },
+  allowed_tools: {
+    default: '',
+    change: 'restart',
+    contexts: ['session', 'template', 'ephemeral', 'update'],
+    trackState: true,
+    toPayload: (v) => { const l = v.split(',').map(s => s.trim()).filter(Boolean); return l.length ? l : null },
+    fromSource: (s) => s.allowed_tools?.join?.(', ') ?? (s.allowed_tools || ''),
+  },
+  disallowed_tools: {
+    default: '',
+    change: null,
+    contexts: ['session', 'template', 'ephemeral', 'update'],
+    trackState: true,
+    toPayload: (v) => { const l = v.split(',').map(s => s.trim()).filter(Boolean); return l.length ? l : null },
+    fromSource: (s) => s.disallowed_tools?.join?.(', ') ?? (s.disallowed_tools || ''),
+  },
+  capabilities: {
+    default: '',
+    change: null,
+    contexts: ['session', 'template', 'update'],
+    trackState: true,
+    toPayload: (v) => { const l = v.split(',').map(s => s.trim()).filter(Boolean); return l.length ? l : null },
+    fromSource: (s) => s.capabilities?.join?.(', ') || '',
+  },
+  setting_sources: {
+    default: ['user', 'project', 'local'],
+    change: 'restart',
+    contexts: ['session', 'ephemeral', 'update'],
+    compare: (form, orig) => JSON.stringify([...form].sort()) !== JSON.stringify([...(orig || ['user', 'project', 'local'])].sort()),
+  },
+  system_prompt: {
+    default: '',
+    change: 'reset',
+    contexts: ['session', 'template', 'ephemeral', 'update'],
+    trackState: true,
+    toPayload: (v) => v.trim() || null,
+  },
+  override_system_prompt: {
+    default: false,
+    change: 'reset',
+    contexts: ['session', 'template', 'ephemeral', 'update'],
+  },
+  sandbox_enabled: {
+    default: false,
+    change: 'reset',
+    contexts: ['session', 'template', 'ephemeral', 'update'],
+  },
+  cli_path: {
+    default: '',
+    change: 'restart',
+    contexts: ['session', 'template', 'ephemeral', 'update'],
+    toPayload: (v) => v.trim() || null,
+    toUpdatePayload: (v) => v.trim(),
+  },
+  additional_directories: {
+    default: '',
+    change: 'restart',
+    contexts: ['session', 'template', 'ephemeral', 'update'],
+    toPayload: (v) => v.trim() ? v.trim().split('\n').map(d => d.trim()).filter(Boolean) : null,
+    toUpdatePayload: (v) => v.trim() ? v.trim().split('\n').map(d => d.trim()).filter(Boolean) : [],
+    fromSource: (s) => Array.isArray(s.additional_directories) ? s.additional_directories.join('\n') : '',
+    compare: (form, orig) => (form || '') !== ((orig || []).join?.('\n') ?? ''),
+  },
+  docker_enabled: {
+    default: false,
+    change: null,
+    contexts: ['session', 'template', 'ephemeral'],
+  },
+  docker_image: {
+    default: '',
+    change: null,
+    contexts: ['session', 'template', 'ephemeral'],
+    toPayload: (v) => v.trim() || null,
+  },
+  docker_extra_mounts: {
+    default: '',
+    change: null,
+    contexts: ['session', 'template', 'ephemeral'],
+    toPayload: (v) => v.trim() ? v.trim().split('\n').map(m => m.trim()).filter(Boolean) : null,
+    fromSource: (s) => Array.isArray(s.docker_extra_mounts) ? s.docker_extra_mounts.join('\n') : '',
+  },
+  knowledge_management_enabled: {
+    default: true,
+    change: 'restart',
+    contexts: ['session', 'template', 'ephemeral', 'update'],
+  },
+  disable_auto_memory: {
+    default: false,
+    change: 'restart',
+    contexts: ['session', 'template', 'ephemeral', 'update'],
+  },
+}
 
-// Track field states: 'normal', 'autofilled', or 'modified'
-const fieldStates = reactive({
-  default_role: 'normal',
-  initialization_context: 'normal',
-  permission_mode: 'normal',
-  allowed_tools: 'normal',
-  disallowed_tools: 'normal',
-  model: 'normal',
-  capabilities: 'normal',
-  sandbox_excludedCommands: 'normal',
-  sandbox_network_allowedDomains: 'normal',
-  sandbox_network_allowUnixSockets: 'normal',
-  sandbox_ignoreViolations_file: 'normal',
-  sandbox_ignoreViolations_network: 'normal'
-})
+// Derive fieldStates and templateOriginalValues from schema
+const fieldStates = reactive(
+  Object.fromEntries(Object.entries(CONFIG_FIELDS).filter(([, m]) => m.trackState).map(([k]) => [k, 'normal']))
+)
+const templateOriginalValues = ref(
+  Object.fromEntries(Object.entries(CONFIG_FIELDS).filter(([, m]) => m.trackState).map(([k]) => [k, null]))
+)
 
-// Form data (shared across tabs)
+// Form data — defaults from schema + sandbox (nested, out of scope for schema)
 const formData = reactive({
-  // General tab
-  name: '',
-  model: 'sonnet',
-  permission_mode: 'default',
-  working_directory: '',
-  additional_directories: '',  // newline-separated list (issue #630)
-  description: '',  // template only
-  default_role: '',  // template only
-  startImmediately: true,  // create-session only
-
-  // Thinking and effort (issue #540)
-  thinking_mode: '',           // '', 'adaptive', 'enabled', 'disabled'
-  thinking_budget_tokens: 10240,  // default 10240
-  effort: '',                  // '', 'low', 'medium', 'high', 'max'
-
-  // Permissions tab
-  allowed_tools: '',
-  disallowed_tools: '',  // Issue #461: denied tools
-  capabilities: '',  // template only
-  setting_sources: ['user', 'project', 'local'],  // Issue #36: settings sources to load
-
-  // Advanced tab
-  system_prompt: '',
-  override_system_prompt: false,
-  initialization_context: '',  // template only
-  sandbox_enabled: false,  // session only
-  cli_path: '',  // Issue #489: custom CLI executable path
-  docker_enabled: false,  // Issue #496: Docker session isolation
-  docker_image: '',
-  docker_extra_mounts: '',
-  // Knowledge management toggle (issue #710)
-  knowledge_management_enabled: true,
-  // Auto-memory toggle (issue #708)
-  disable_auto_memory: false,
-
-  // Sandbox tab (issue #458)
+  ...Object.fromEntries(Object.entries(CONFIG_FIELDS).map(([k, m]) => [k, structuredClone(m.default)])),
   sandbox: {
     autoAllowBashIfSandboxed: true,
     allowUnsandboxedCommands: false,
@@ -409,6 +507,98 @@ const formData = reactive({
     }
   }
 })
+
+// --- Schema helper functions (issue #731) ---
+
+function resetFormFields() {
+  for (const [field, meta] of Object.entries(CONFIG_FIELDS)) {
+    formData[field] = structuredClone(meta.default)
+  }
+}
+
+function populateFormFromSource(source) {
+  for (const [field, meta] of Object.entries(CONFIG_FIELDS)) {
+    if (meta.fromSource) {
+      formData[field] = meta.fromSource(source)
+    } else {
+      formData[field] = source[field] ?? meta.default
+    }
+  }
+}
+
+function extractPayload(context) {
+  const payload = {}
+  for (const [field, meta] of Object.entries(CONFIG_FIELDS)) {
+    if (!meta.contexts.includes(context)) continue
+    const transform = (context === 'update' && meta.toUpdatePayload) ? meta.toUpdatePayload : meta.toPayload
+    payload[field] = transform ? transform(formData[field], formData) : formData[field]
+  }
+  return payload
+}
+
+function hasSchemaChanges(changeType) {
+  if (!editSession.value) return false
+  for (const [field, meta] of Object.entries(CONFIG_FIELDS)) {
+    if (meta.change !== changeType) continue
+    if (meta.compare) {
+      if (meta.compare(formData[field], editSession.value[field])) return true
+    } else {
+      const formVal = formData[field] ?? meta.default
+      const origVal = editSession.value[field] ?? meta.default
+      if (formVal !== origVal) return true
+    }
+  }
+  return false
+}
+
+function resetFieldStates() {
+  for (const [field, meta] of Object.entries(CONFIG_FIELDS)) {
+    if (meta.trackState) {
+      fieldStates[field] = 'normal'
+      templateOriginalValues.value[field] = null
+    }
+  }
+}
+
+function setupFieldStateWatchers() {
+  for (const [field, meta] of Object.entries(CONFIG_FIELDS)) {
+    if (!meta.trackState) continue
+    watch(() => formData[field], (newVal) => {
+      if (templateOriginalValues.value[field] !== null) {
+        fieldStates[field] = newVal === templateOriginalValues.value[field] ? 'autofilled' : 'modified'
+      }
+    })
+  }
+}
+
+function populateSandboxFromSource(source) {
+  const sc = source.sandbox_config || {}
+  formData.sandbox.autoAllowBashIfSandboxed = sc.autoAllowBashIfSandboxed ?? true
+  formData.sandbox.allowUnsandboxedCommands = sc.allowUnsandboxedCommands ?? false
+  formData.sandbox.excludedCommands = (sc.excludedCommands || []).join(', ')
+  formData.sandbox.enableWeakerNestedSandbox = sc.enableWeakerNestedSandbox ?? false
+  const net = sc.network || {}
+  formData.sandbox.network.allowedDomains = (net.allowedDomains || []).join(', ')
+  formData.sandbox.network.allowLocalBinding = net.allowLocalBinding ?? false
+  formData.sandbox.network.allowUnixSockets = (net.allowUnixSockets || []).join(', ')
+  formData.sandbox.network.allowAllUnixSockets = net.allowAllUnixSockets ?? false
+  const iv = sc.ignoreViolations || {}
+  formData.sandbox.ignoreViolations.file = (iv.file || []).join(', ')
+  formData.sandbox.ignoreViolations.network = (iv.network || []).join(', ')
+}
+
+function resetSandboxFields() {
+  formData.sandbox.autoAllowBashIfSandboxed = true
+  formData.sandbox.allowUnsandboxedCommands = false
+  formData.sandbox.excludedCommands = ''
+  formData.sandbox.enableWeakerNestedSandbox = false
+  formData.sandbox.network.allowedDomains = ''
+  formData.sandbox.network.allowLocalBinding = false
+  formData.sandbox.network.allowUnixSockets = ''
+  formData.sandbox.network.allowAllUnixSockets = false
+  formData.sandbox.ignoreViolations.file = ''
+  formData.sandbox.ignoreViolations.network = ''
+}
 
 // Validation errors
 const errors = reactive({
@@ -471,16 +661,9 @@ const isSessionActive = computed(() => {
 })
 
 const hasResetChanges = computed(() => {
-  if (!editSession.value) return false
-
-  const initContextChanged = (formData.initialization_context || '') !== (editSession.value.system_prompt || '')
-  const overrideChanged = (formData.override_system_prompt ?? false) !== (editSession.value.override_system_prompt ?? false)
-  const sandboxEnabledChanged = (formData.sandbox_enabled ?? false) !== (editSession.value.sandbox_enabled ?? false)
-
-  if (initContextChanged || overrideChanged || sandboxEnabledChanged) return true
-
+  if (hasSchemaChanges('reset')) return true
   // Compare sandbox config fields if sandbox is enabled
-  if (formData.sandbox_enabled) {
+  if (formData.sandbox_enabled && editSession.value) {
     const sc = editSession.value.sandbox_config || {}
     const fd = formData.sandbox
     const origStr = JSON.stringify({
@@ -517,36 +700,10 @@ const hasResetChanges = computed(() => {
     })
     if (origStr !== currStr) return true
   }
-
   return false
 })
 
-const hasRestartChanges = computed(() => {
-  if (!editSession.value) return false
-
-  const modelChanged = (formData.model || 'sonnet') !== (editSession.value.model || 'sonnet')
-  const allowedToolsChanged = (formData.allowed_tools || '') !== (editSession.value.allowed_tools?.join(', ') || '')
-
-  const originalSources = editSession.value.setting_sources || ['user', 'project', 'local']
-  const currentSources = formData.setting_sources || ['user', 'project', 'local']
-  const settingSourcesChanged = JSON.stringify([...originalSources].sort()) !== JSON.stringify([...currentSources].sort())
-
-  // Issue #630: Additional directories changes require restart
-  const additionalDirsChanged = (formData.additional_directories || '') !== ((editSession.value.additional_directories || []).join('\n'))
-
-  // Issue #540: Thinking and effort changes require restart
-  const thinkingModeChanged = (formData.thinking_mode || '') !== (editSession.value.thinking_mode || '')
-  const thinkingBudgetChanged = (formData.thinking_budget_tokens || 10240) !== (editSession.value.thinking_budget_tokens || 10240)
-  const effortChanged = (formData.effort || '') !== (editSession.value.effort || '')
-
-  // Issue #710: Knowledge management toggle changes require restart (affects system prompt)
-  const knowledgeMgmtChanged = (formData.knowledge_management_enabled ?? true) !== (editSession.value.knowledge_management_enabled ?? true)
-
-  // Issue #708: Auto-memory toggle changes require restart (affects SDK env)
-  const autoMemoryChanged = (formData.disable_auto_memory ?? false) !== (editSession.value.disable_auto_memory ?? false)
-
-  return modelChanged || allowedToolsChanged || settingSourcesChanged || additionalDirsChanged || thinkingModeChanged || thinkingBudgetChanged || effortChanged || knowledgeMgmtChanged || autoMemoryChanged
-})
+const hasRestartChanges = computed(() => hasSchemaChanges('restart'))
 
 const warningLevel = computed(() => {
   if (hasResetChanges.value) return 'reset'
@@ -644,67 +801,9 @@ async function loadTemplates() {
 function applyTemplate() {
   if (!selectedTemplateId.value) {
     // Clear template-derived fields when "[None]" selected
-    formData.default_role = ''
-    formData.initialization_context = ''
-    formData.permission_mode = 'default'
-    formData.allowed_tools = ''
-    formData.disallowed_tools = ''
-    formData.model = 'sonnet'
-    formData.capabilities = ''
-    formData.override_system_prompt = false
-    formData.sandbox_enabled = false
-    formData.cli_path = ''  // Issue #489
-    formData.additional_directories = ''  // Issue #630
-    formData.docker_enabled = false  // Issue #496
-    formData.docker_image = ''
-    formData.docker_extra_mounts = ''
-    formData.thinking_mode = ''  // Issue #540
-    formData.thinking_budget_tokens = 10240
-    formData.effort = ''
-    formData.knowledge_management_enabled = true
-    formData.disable_auto_memory = false
-
-    // Reset sandbox config
-    formData.sandbox.autoAllowBashIfSandboxed = true
-    formData.sandbox.allowUnsandboxedCommands = false
-    formData.sandbox.excludedCommands = ''
-    formData.sandbox.enableWeakerNestedSandbox = false
-    formData.sandbox.network.allowedDomains = ''
-    formData.sandbox.network.allowLocalBinding = false
-    formData.sandbox.network.allowUnixSockets = ''
-    formData.sandbox.network.allowAllUnixSockets = false
-    formData.sandbox.ignoreViolations.file = ''
-    formData.sandbox.ignoreViolations.network = ''
-
-    // Reset all field states to normal
-    fieldStates.default_role = 'normal'
-    fieldStates.initialization_context = 'normal'
-    fieldStates.permission_mode = 'normal'
-    fieldStates.allowed_tools = 'normal'
-    fieldStates.disallowed_tools = 'normal'
-    fieldStates.model = 'normal'
-    fieldStates.capabilities = 'normal'
-    fieldStates.sandbox_excludedCommands = 'normal'
-    fieldStates.sandbox_network_allowedDomains = 'normal'
-    fieldStates.sandbox_network_allowUnixSockets = 'normal'
-    fieldStates.sandbox_ignoreViolations_file = 'normal'
-    fieldStates.sandbox_ignoreViolations_network = 'normal'
-
-    // Clear template values
-    templateOriginalValues.value = {
-      default_role: null,
-      initialization_context: null,
-      permission_mode: null,
-      allowed_tools: null,
-      disallowed_tools: null,
-      model: null,
-      capabilities: null,
-      sandbox_excludedCommands: null,
-      sandbox_network_allowedDomains: null,
-      sandbox_network_allowUnixSockets: null,
-      sandbox_ignoreViolations_file: null,
-      sandbox_ignoreViolations_network: null
-    }
+    resetFormFields()
+    resetSandboxFields()
+    resetFieldStates()
     return
   }
 
@@ -712,148 +811,54 @@ function applyTemplate() {
   if (!template) return
 
   // Reset field states before applying new template
-  fieldStates.default_role = 'normal'
-  fieldStates.initialization_context = 'normal'
-  fieldStates.permission_mode = 'normal'
-  fieldStates.allowed_tools = 'normal'
-  fieldStates.disallowed_tools = 'normal'
-  fieldStates.model = 'normal'
-  fieldStates.capabilities = 'normal'
-  fieldStates.sandbox_excludedCommands = 'normal'
-  fieldStates.sandbox_network_allowedDomains = 'normal'
-  fieldStates.sandbox_network_allowUnixSockets = 'normal'
-  fieldStates.sandbox_ignoreViolations_file = 'normal'
-  fieldStates.sandbox_ignoreViolations_network = 'normal'
+  resetFieldStates()
 
-  // Apply and track role
-  if (template.default_role) {
-    formData.default_role = template.default_role
-    templateOriginalValues.value.default_role = template.default_role
-    fieldStates.default_role = 'autofilled'
-  } else {
-    formData.default_role = ''
-    templateOriginalValues.value.default_role = null
+  // Apply schema fields from template with field-state tracking
+  for (const [field, meta] of Object.entries(CONFIG_FIELDS)) {
+    if (!meta.trackState) {
+      // Non-tracked fields: just populate
+      if (meta.fromSource) {
+        formData[field] = meta.fromSource(template)
+      } else {
+        formData[field] = template[field] ?? meta.default
+      }
+      continue
+    }
+    // Tracked fields: populate + set autofilled state
+    let value
+    if (meta.fromSource) {
+      value = meta.fromSource(template)
+    } else {
+      value = template[field] ?? null
+    }
+    if (value !== null && value !== '' && value !== meta.default) {
+      formData[field] = value
+      templateOriginalValues.value[field] = value
+      fieldStates[field] = 'autofilled'
+    } else {
+      formData[field] = meta.default
+      templateOriginalValues.value[field] = null
+    }
   }
 
-  // Apply and track initialization context
-  if (template.default_system_prompt) {
-    formData.initialization_context = template.default_system_prompt
-    templateOriginalValues.value.initialization_context = template.default_system_prompt
-    fieldStates.initialization_context = 'autofilled'
-  } else {
-    formData.initialization_context = ''
-    templateOriginalValues.value.initialization_context = null
-  }
-
-  // Apply and track permission mode
-  if (template.permission_mode) {
-    formData.permission_mode = template.permission_mode
-    templateOriginalValues.value.permission_mode = template.permission_mode
-    fieldStates.permission_mode = 'autofilled'
-  } else {
-    formData.permission_mode = 'default'
-    templateOriginalValues.value.permission_mode = null
-  }
-
-  // Apply and track allowed tools
-  if (template.allowed_tools && template.allowed_tools.length > 0) {
-    const toolsStr = template.allowed_tools.join(', ')
-    formData.allowed_tools = toolsStr
-    templateOriginalValues.value.allowed_tools = toolsStr
-    fieldStates.allowed_tools = 'autofilled'
-  } else {
-    formData.allowed_tools = ''
-    templateOriginalValues.value.allowed_tools = null
-  }
-
-  // Apply and track disallowed tools
-  if (template.disallowed_tools && template.disallowed_tools.length > 0) {
-    const toolsStr = template.disallowed_tools.join(', ')
-    formData.disallowed_tools = toolsStr
-    templateOriginalValues.value.disallowed_tools = toolsStr
-    fieldStates.disallowed_tools = 'autofilled'
-  } else {
-    formData.disallowed_tools = ''
-    templateOriginalValues.value.disallowed_tools = null
-  }
-
-  // Apply and track model
-  if (template.model) {
-    formData.model = template.model
-    templateOriginalValues.value.model = template.model
-    fieldStates.model = 'autofilled'
-  } else {
-    formData.model = 'sonnet'
-    templateOriginalValues.value.model = null
-  }
-
-  // Apply and track capabilities (array → comma-separated string)
-  if (template.capabilities && template.capabilities.length > 0) {
-    const capsStr = template.capabilities.join(', ')
-    formData.capabilities = capsStr
-    templateOriginalValues.value.capabilities = capsStr
-    fieldStates.capabilities = 'autofilled'
-  } else {
-    formData.capabilities = ''
-    templateOriginalValues.value.capabilities = null
-  }
-
-  // Apply override_system_prompt (boolean, no field-state tracking)
-  formData.override_system_prompt = template.override_system_prompt ?? false
-
-  // Apply sandbox_enabled (boolean, no field-state tracking)
-  formData.sandbox_enabled = template.sandbox_enabled ?? false
-
-  // Apply cli_path from template (issue #489, no field-state tracking)
-  formData.cli_path = template.cli_path || ''
-
-  // Apply additional_directories from template (issue #630, no field-state tracking)
-  formData.additional_directories = (template.additional_directories || []).join('\n')
-
-  // Apply docker config from template (issue #496, no field-state tracking)
-  formData.docker_enabled = template.docker_enabled ?? false
-  formData.docker_image = template.docker_image || ''
-  formData.docker_extra_mounts = (template.docker_extra_mounts || []).join('\n')
-
-  formData.knowledge_management_enabled = template.knowledge_management_enabled ?? true
-  formData.disable_auto_memory = template.disable_auto_memory ?? false
-
-  // Apply sandbox config fields
-  const sc = template.sandbox_config || {}
-  formData.sandbox.autoAllowBashIfSandboxed = sc.autoAllowBashIfSandboxed ?? true
-  formData.sandbox.allowUnsandboxedCommands = sc.allowUnsandboxedCommands ?? false
-  formData.sandbox.enableWeakerNestedSandbox = sc.enableWeakerNestedSandbox ?? false
-
-  const net = sc.network || {}
-  formData.sandbox.network.allowLocalBinding = net.allowLocalBinding ?? false
-  formData.sandbox.network.allowAllUnixSockets = net.allowAllUnixSockets ?? false
+  // Apply sandbox config from template
+  populateSandboxFromSource(template)
 
   // Sandbox string fields with field-state tracking (array → comma-separated)
-  const excludedStr = (sc.excludedCommands || []).join(', ')
-  formData.sandbox.excludedCommands = excludedStr
-  templateOriginalValues.value.sandbox_excludedCommands = excludedStr || null
-  if (excludedStr) fieldStates.sandbox_excludedCommands = 'autofilled'
-
-  const domainsStr = (net.allowedDomains || []).join(', ')
-  formData.sandbox.network.allowedDomains = domainsStr
-  templateOriginalValues.value.sandbox_network_allowedDomains = domainsStr || null
-  if (domainsStr) fieldStates.sandbox_network_allowedDomains = 'autofilled'
-
-  const unixSocketsStr = (net.allowUnixSockets || []).join(', ')
-  formData.sandbox.network.allowUnixSockets = unixSocketsStr
-  templateOriginalValues.value.sandbox_network_allowUnixSockets = unixSocketsStr || null
-  if (unixSocketsStr) fieldStates.sandbox_network_allowUnixSockets = 'autofilled'
-
+  const sc = template.sandbox_config || {}
+  const net = sc.network || {}
   const iv = sc.ignoreViolations || {}
-  const ivFileStr = (iv.file || []).join(', ')
-  formData.sandbox.ignoreViolations.file = ivFileStr
-  templateOriginalValues.value.sandbox_ignoreViolations_file = ivFileStr || null
-  if (ivFileStr) fieldStates.sandbox_ignoreViolations_file = 'autofilled'
-
-  const ivNetStr = (iv.network || []).join(', ')
-  formData.sandbox.ignoreViolations.network = ivNetStr
-  templateOriginalValues.value.sandbox_ignoreViolations_network = ivNetStr || null
-  if (ivNetStr) fieldStates.sandbox_ignoreViolations_network = 'autofilled'
+  const sandboxTracked = [
+    ['sandbox_excludedCommands', (sc.excludedCommands || []).join(', ')],
+    ['sandbox_network_allowedDomains', (net.allowedDomains || []).join(', ')],
+    ['sandbox_network_allowUnixSockets', (net.allowUnixSockets || []).join(', ')],
+    ['sandbox_ignoreViolations_file', (iv.file || []).join(', ')],
+    ['sandbox_ignoreViolations_network', (iv.network || []).join(', ')],
+  ]
+  for (const [key, value] of sandboxTracked) {
+    templateOriginalValues.value[key] = value || null
+    if (value) fieldStates[key] = 'autofilled'
+  }
 }
 
 function openFolderBrowser() {
@@ -943,9 +948,9 @@ function buildTemplateFromSession() {
     allowed_tools: parseList(session.allowed_tools),
     disallowed_tools: parseList(session.disallowed_tools),
     model: session.model || null,
-    default_system_prompt: session.system_prompt || null,
+    system_prompt: session.system_prompt || null,
     override_system_prompt: session.override_system_prompt ?? false,
-    default_role: session.role || null,
+    role: session.role || null,
     sandbox_enabled: session.sandbox_enabled ?? false,
     sandbox_config: session.sandbox_config || null,
     cli_path: session.cli_path || null,
@@ -971,9 +976,9 @@ const sessionConfigSummary = computed(() => {
   addField('Model', config.model)
   addField('Allowed Tools', config.allowed_tools)
   addField('Disallowed Tools', config.disallowed_tools)
-  addField('System Prompt', config.default_system_prompt ? (config.default_system_prompt.length > 80 ? config.default_system_prompt.substring(0, 80) + '...' : config.default_system_prompt) : null)
+  addField('System Prompt', config.system_prompt ? (config.system_prompt.length > 80 ? config.system_prompt.substring(0, 80) + '...' : config.system_prompt) : null)
   addField('Override Prompt', config.override_system_prompt)
-  addField('Role', config.default_role)
+  addField('Role', config.role)
   addField('Sandbox', config.sandbox_enabled)
   addField('CLI Path', config.cli_path)
   addField('Docker', config.docker_enabled)
@@ -1037,9 +1042,9 @@ function computeTemplateDiff() {
   const scalarFields = [
     { field: 'permission_mode', label: 'Permission Mode' },
     { field: 'model', label: 'Model' },
-    { field: 'default_system_prompt', label: 'System Prompt' },
+    { field: 'system_prompt', label: 'System Prompt' },
     { field: 'override_system_prompt', label: 'Override Prompt' },
-    { field: 'default_role', label: 'Role' },
+    { field: 'role', label: 'Role' },
     { field: 'sandbox_enabled', label: 'Sandbox Enabled' },
     { field: 'cli_path', label: 'CLI Path' },
     { field: 'docker_enabled', label: 'Docker Enabled' },
@@ -1209,51 +1214,9 @@ async function createSession() {
     throw new Error('Project ID is missing')
   }
 
-  // Parse allowed_tools from comma-separated string
-  const toolsList = formData.allowed_tools
-    .split(',')
-    .map(t => t.trim())
-    .filter(t => t.length > 0)
-
-  // Parse disallowed_tools
-  const deniedList = formData.disallowed_tools
-    .split(',')
-    .map(t => t.trim())
-    .filter(t => t.length > 0)
-
-  // Parse capabilities
-  const capsList = formData.capabilities
-    .split(',')
-    .map(c => c.trim())
-    .filter(c => c.length > 0)
-
   const payload = {
-    name: formData.name.trim(),
-    model: formData.model || null,
-    role: formData.default_role.trim() || null,
-    initialization_context: formData.initialization_context.trim() || null,
-    override_system_prompt: formData.override_system_prompt,
-    capabilities: capsList.length > 0 ? capsList : null,
-    permission_mode: formData.permission_mode,
-    allowed_tools: toolsList.length > 0 ? toolsList : null,
-    disallowed_tools: deniedList.length > 0 ? deniedList : null,
-    working_directory: formData.working_directory.trim() || null,
-    additional_directories: formData.additional_directories.trim()
-      ? formData.additional_directories.trim().split('\n').map(d => d.trim()).filter(d => d)
-      : null,
-    sandbox_enabled: formData.sandbox_enabled,
+    ...extractPayload('session'),
     sandbox_config: formData.sandbox_enabled ? buildSandboxConfig() : null,
-    setting_sources: formData.setting_sources,  // Issue #36
-    cli_path: formData.cli_path.trim() || null,  // Issue #489
-    docker_enabled: formData.docker_enabled,  // Issue #496
-    docker_image: formData.docker_image.trim() || null,
-    docker_extra_mounts: formData.docker_extra_mounts.trim() ? formData.docker_extra_mounts.trim().split('\n').map(m => m.trim()).filter(m => m) : null,
-    // Issue #540: Thinking and effort configuration
-    thinking_mode: formData.thinking_mode || null,
-    thinking_budget_tokens: formData.thinking_mode === 'enabled' ? formData.thinking_budget_tokens : null,
-    effort: formData.effort || null,
-    knowledge_management_enabled: formData.knowledge_management_enabled,
-    disable_auto_memory: formData.disable_auto_memory,
   }
 
   const response = await api.post(`/api/legions/${projectId.value}/minions`, payload)
@@ -1276,40 +1239,9 @@ async function createSession() {
 }
 
 function emitEphemeralConfig() {
-  // Build the same payload shape as createSession but return via callback
-  const toolsList = formData.allowed_tools
-    .split(',')
-    .map(t => t.trim())
-    .filter(t => t.length > 0)
-
-  const deniedList = formData.disallowed_tools
-    .split(',')
-    .map(t => t.trim())
-    .filter(t => t.length > 0)
-
   const payload = {
-    model: formData.model || null,
-    permission_mode: formData.permission_mode,
-    allowed_tools: toolsList.length > 0 ? toolsList : null,
-    disallowed_tools: deniedList.length > 0 ? deniedList : null,
-    working_directory: formData.working_directory.trim() || null,
-    system_prompt: formData.initialization_context.trim() || null,
-    override_system_prompt: formData.override_system_prompt,
-    sandbox_enabled: formData.sandbox_enabled,
+    ...extractPayload('ephemeral'),
     sandbox_config: formData.sandbox_enabled ? buildSandboxConfig() : null,
-    setting_sources: formData.setting_sources,
-    cli_path: formData.cli_path.trim() || null,
-    additional_directories: formData.additional_directories.trim()
-      ? formData.additional_directories.trim().split('\n').map(d => d.trim()).filter(d => d)
-      : null,
-    docker_enabled: formData.docker_enabled,
-    docker_image: formData.docker_image.trim() || null,
-    docker_extra_mounts: formData.docker_extra_mounts.trim() ? formData.docker_extra_mounts.trim().split('\n').map(m => m.trim()).filter(m => m) : null,
-    thinking_mode: formData.thinking_mode || null,
-    thinking_budget_tokens: formData.thinking_mode === 'enabled' ? formData.thinking_budget_tokens : null,
-    effort: formData.effort || null,
-    knowledge_management_enabled: formData.knowledge_management_enabled,
-    disable_auto_memory: formData.disable_auto_memory,
   }
 
   if (onConfiguredCallback.value) {
@@ -1318,42 +1250,8 @@ function emitEphemeralConfig() {
 }
 
 function populateFormFromConfig(config) {
-  // Populate form from a session_config dict (used for configure-ephemeral seed)
-  formData.name = config.name || '[Scheduled]'
-  formData.model = config.model || 'sonnet'
-  formData.permission_mode = config.permission_mode || 'default'
-  formData.working_directory = config.working_directory || ''
-  formData.initialization_context = config.system_prompt || ''
-  formData.override_system_prompt = config.override_system_prompt ?? false
-  formData.allowed_tools = Array.isArray(config.allowed_tools) ? config.allowed_tools.join(', ') : (config.allowed_tools || '')
-  formData.disallowed_tools = Array.isArray(config.disallowed_tools) ? config.disallowed_tools.join(', ') : (config.disallowed_tools || '')
-  formData.sandbox_enabled = config.sandbox_enabled ?? false
-  formData.cli_path = config.cli_path || ''
-  formData.additional_directories = Array.isArray(config.additional_directories) ? config.additional_directories.join('\n') : ''
-  formData.docker_enabled = config.docker_enabled ?? false
-  formData.docker_image = config.docker_image || ''
-  formData.docker_extra_mounts = Array.isArray(config.docker_extra_mounts) ? config.docker_extra_mounts.join('\n') : ''
-  formData.thinking_mode = config.thinking_mode || ''
-  formData.thinking_budget_tokens = config.thinking_budget_tokens || 10240
-  formData.effort = config.effort || ''
-  formData.setting_sources = config.setting_sources || ['user', 'project', 'local']
-  formData.knowledge_management_enabled = config.knowledge_management_enabled ?? true
-  formData.disable_auto_memory = config.disable_auto_memory ?? false
-
-  // Sandbox config
-  const sc = config.sandbox_config || {}
-  formData.sandbox.autoAllowBashIfSandboxed = sc.autoAllowBashIfSandboxed ?? true
-  formData.sandbox.allowUnsandboxedCommands = sc.allowUnsandboxedCommands ?? false
-  formData.sandbox.excludedCommands = (sc.excludedCommands || []).join(', ')
-  formData.sandbox.enableWeakerNestedSandbox = sc.enableWeakerNestedSandbox ?? false
-  const net = sc.network || {}
-  formData.sandbox.network.allowedDomains = (net.allowedDomains || []).join(', ')
-  formData.sandbox.network.allowLocalBinding = net.allowLocalBinding ?? false
-  formData.sandbox.network.allowUnixSockets = (net.allowUnixSockets || []).join(', ')
-  formData.sandbox.network.allowAllUnixSockets = net.allowAllUnixSockets ?? false
-  const iv = sc.ignoreViolations || {}
-  formData.sandbox.ignoreViolations.file = (iv.file || []).join(', ')
-  formData.sandbox.ignoreViolations.network = (iv.network || []).join(', ')
+  populateFormFromSource(config)
+  populateSandboxFromSource(config)
 }
 
 async function updateSession() {
@@ -1364,49 +1262,9 @@ async function updateSession() {
   const sessionId = editSession.value.session_id
   const isActive = editSession.value.state === 'active' || editSession.value.state === 'starting'
 
-  // Parse allowed tools from input
-  const toolsList = formData.allowed_tools
-    .split(',')
-    .map(t => t.trim())
-    .filter(t => t.length > 0)
-
-  // Parse disallowed tools from input
-  const deniedList = formData.disallowed_tools
-    .split(',')
-    .map(t => t.trim())
-    .filter(t => t.length > 0)
-
-  // Parse capabilities from input
-  const capsList = formData.capabilities
-    .split(',')
-    .map(c => c.trim())
-    .filter(c => c.length > 0)
-
-  // Build updates object with all changed fields
-  // Note: UI uses initialization_context, backend stores as system_prompt
   const updates = {
-    name: formData.name.trim(),
-    model: formData.model,
-    role: formData.default_role.trim() || null,
-    system_prompt: formData.initialization_context.trim() || null,
-    override_system_prompt: formData.override_system_prompt,
-    allowed_tools: toolsList.length > 0 ? toolsList : null,
-    disallowed_tools: deniedList.length > 0 ? deniedList : null,
-    capabilities: capsList.length > 0 ? capsList : null,
-    sandbox_enabled: formData.sandbox_enabled,
+    ...extractPayload('update'),
     sandbox_config: formData.sandbox_enabled ? buildSandboxConfig() : null,
-    setting_sources: formData.setting_sources,  // Issue #36
-    cli_path: formData.cli_path.trim(),  // Issue #489: send empty string to clear, non-empty to set
-    additional_directories: formData.additional_directories.trim()
-      ? formData.additional_directories.trim().split('\n').map(d => d.trim()).filter(d => d)
-      : [],
-    // Issue #496: Docker settings are immutable after session creation (no docker_enabled/image/mounts here)
-    // Issue #540: Thinking and effort configuration
-    thinking_mode: formData.thinking_mode || null,
-    thinking_budget_tokens: formData.thinking_mode === 'enabled' ? formData.thinking_budget_tokens : null,
-    effort: formData.effort || null,
-    knowledge_management_enabled: formData.knowledge_management_enabled,
-    disable_auto_memory: formData.disable_auto_memory,
   }
 
   // Update session via PATCH (takes effect on next restart if session is active)
@@ -1419,50 +1277,9 @@ async function updateSession() {
 }
 
 async function createTemplate() {
-  // Parse allowed tools from input
-  const toolsList = formData.allowed_tools
-    .split(',')
-    .map(t => t.trim())
-    .filter(t => t.length > 0)
-
-  // Parse disallowed tools
-  const deniedList = formData.disallowed_tools
-    .split(',')
-    .map(t => t.trim())
-    .filter(t => t.length > 0)
-
-  // Parse capabilities
-  const capsList = formData.capabilities
-    .split(',')
-    .map(c => c.trim())
-    .filter(c => c.length > 0)
-
   const payload = {
-    name: formData.name.trim(),
-    description: formData.description.trim() || null,
-    permission_mode: formData.permission_mode,
-    allowed_tools: toolsList.length > 0 ? toolsList : null,
-    disallowed_tools: deniedList.length > 0 ? deniedList : null,
-    default_role: formData.default_role.trim() || null,
-    default_system_prompt: formData.initialization_context.trim() || null,
-    model: formData.model || null,
-    capabilities: capsList.length > 0 ? capsList : null,
-    override_system_prompt: formData.override_system_prompt,
-    sandbox_enabled: formData.sandbox_enabled,
+    ...extractPayload('template'),
     sandbox_config: formData.sandbox_enabled ? buildSandboxConfig() : null,
-    cli_path: formData.cli_path.trim() || null,  // Issue #489
-    additional_directories: formData.additional_directories.trim()
-      ? formData.additional_directories.trim().split('\n').map(d => d.trim()).filter(d => d)
-      : null,
-    docker_enabled: formData.docker_enabled,  // Issue #496
-    docker_image: formData.docker_image.trim() || null,
-    docker_extra_mounts: formData.docker_extra_mounts.trim() ? formData.docker_extra_mounts.trim().split('\n').map(m => m.trim()).filter(m => m) : null,
-    // Issue #580: Thinking and effort configuration
-    thinking_mode: formData.thinking_mode || null,
-    thinking_budget_tokens: formData.thinking_mode === 'enabled' ? formData.thinking_budget_tokens : null,
-    effort: formData.effort || null,
-    knowledge_management_enabled: formData.knowledge_management_enabled,
-    disable_auto_memory: formData.disable_auto_memory,
   }
 
   await api.post('/api/templates', payload)
@@ -1480,50 +1297,9 @@ async function updateTemplate() {
     throw new Error('Template data is missing')
   }
 
-  // Parse allowed tools from input
-  const toolsList = formData.allowed_tools
-    .split(',')
-    .map(t => t.trim())
-    .filter(t => t.length > 0)
-
-  // Parse disallowed tools
-  const deniedList = formData.disallowed_tools
-    .split(',')
-    .map(t => t.trim())
-    .filter(t => t.length > 0)
-
-  // Parse capabilities
-  const capsList = formData.capabilities
-    .split(',')
-    .map(c => c.trim())
-    .filter(c => c.length > 0)
-
   const payload = {
-    name: formData.name.trim(),
-    description: formData.description.trim() || null,
-    permission_mode: formData.permission_mode,
-    allowed_tools: toolsList.length > 0 ? toolsList : null,
-    disallowed_tools: deniedList.length > 0 ? deniedList : null,
-    default_role: formData.default_role.trim() || null,
-    default_system_prompt: formData.initialization_context.trim() || null,
-    model: formData.model || null,
-    capabilities: capsList.length > 0 ? capsList : null,
-    override_system_prompt: formData.override_system_prompt,
-    sandbox_enabled: formData.sandbox_enabled,
+    ...extractPayload('template'),
     sandbox_config: formData.sandbox_enabled ? buildSandboxConfig() : null,
-    cli_path: formData.cli_path.trim() || null,  // Issue #489
-    additional_directories: formData.additional_directories.trim()
-      ? formData.additional_directories.trim().split('\n').map(d => d.trim()).filter(d => d)
-      : null,
-    docker_enabled: formData.docker_enabled,  // Issue #496
-    docker_image: formData.docker_image.trim() || null,
-    docker_extra_mounts: formData.docker_extra_mounts.trim() ? formData.docker_extra_mounts.trim().split('\n').map(m => m.trim()).filter(m => m) : null,
-    // Issue #580: Thinking and effort configuration
-    thinking_mode: formData.thinking_mode || null,
-    thinking_budget_tokens: formData.thinking_mode === 'enabled' ? formData.thinking_budget_tokens : null,
-    effort: formData.effort || null,
-    knowledge_management_enabled: formData.knowledge_management_enabled,
-    disable_auto_memory: formData.disable_auto_memory,
   }
 
   await api.put(`/api/templates/${editTemplate.value.template_id}`, payload)
@@ -1538,163 +1314,23 @@ async function updateTemplate() {
 }
 
 function resetForm() {
-  formData.name = ''
-  formData.model = 'sonnet'
-  formData.permission_mode = 'default'
-  formData.working_directory = ''
-  formData.description = ''
-  formData.default_role = ''
-  formData.startImmediately = true
-  formData.thinking_mode = ''  // Issue #540
-  formData.thinking_budget_tokens = 10240  // Issue #540
-  formData.effort = ''  // Issue #540
-  formData.allowed_tools = ''
-  formData.disallowed_tools = ''
-  formData.capabilities = ''
-  formData.setting_sources = ['user', 'project', 'local']  // Issue #36
-  formData.system_prompt = ''
-  formData.override_system_prompt = false
-  formData.initialization_context = ''
-  formData.sandbox_enabled = false
-  formData.cli_path = ''  // Issue #489
-  formData.additional_directories = ''  // Issue #630
-  formData.docker_enabled = false  // Issue #496
-  formData.docker_image = ''
-  formData.docker_extra_mounts = ''
-  formData.knowledge_management_enabled = true
-  formData.disable_auto_memory = false
-
-  // Reset sandbox config (issue #458)
-  formData.sandbox.autoAllowBashIfSandboxed = true
-  formData.sandbox.allowUnsandboxedCommands = false
-  formData.sandbox.excludedCommands = ''
-  formData.sandbox.enableWeakerNestedSandbox = false
-  formData.sandbox.network.allowedDomains = ''
-  formData.sandbox.network.allowLocalBinding = false
-  formData.sandbox.network.allowUnixSockets = ''
-  formData.sandbox.network.allowAllUnixSockets = false
-  formData.sandbox.ignoreViolations.file = ''
-  formData.sandbox.ignoreViolations.network = ''
-
+  resetFormFields()
+  resetSandboxFields()
   errors.name = ''
-
-  // Reset field states
-  fieldStates.default_role = 'normal'
-  fieldStates.initialization_context = 'normal'
-  fieldStates.permission_mode = 'normal'
-  fieldStates.allowed_tools = 'normal'
-  fieldStates.disallowed_tools = 'normal'
-  fieldStates.model = 'normal'
-  fieldStates.capabilities = 'normal'
-  fieldStates.sandbox_excludedCommands = 'normal'
-  fieldStates.sandbox_network_allowedDomains = 'normal'
-  fieldStates.sandbox_network_allowUnixSockets = 'normal'
-  fieldStates.sandbox_ignoreViolations_file = 'normal'
-  fieldStates.sandbox_ignoreViolations_network = 'normal'
-
-  // Clear template original values
-  templateOriginalValues.value = {
-    default_role: null,
-    initialization_context: null,
-    permission_mode: null,
-    allowed_tools: null,
-    disallowed_tools: null,
-    model: null,
-    capabilities: null,
-    sandbox_excludedCommands: null,
-    sandbox_network_allowedDomains: null,
-    sandbox_network_allowUnixSockets: null,
-    sandbox_ignoreViolations_file: null,
-    sandbox_ignoreViolations_network: null
-  }
-
+  resetFieldStates()
   selectedTemplateId.value = null
   errorMessage.value = ''
   showAdvanced.value = false
 }
 
 function populateFormFromSession(session) {
-  formData.name = session.name || ''
-  formData.model = session.model || 'sonnet'
-  formData.permission_mode = session.current_permission_mode || 'default'
-  formData.working_directory = session.working_directory || ''
-  formData.default_role = session.role || ''
-  // Backend stores the prompt as system_prompt, UI shows it as initialization_context
-  formData.initialization_context = session.system_prompt || ''
-  formData.override_system_prompt = session.override_system_prompt ?? false
-  formData.system_prompt = ''  // Not used for sessions (only templates have separate additional instructions)
-  formData.allowed_tools = session.allowed_tools?.join(', ') || ''
-  formData.disallowed_tools = session.disallowed_tools?.join(', ') || ''
-  formData.capabilities = session.capabilities?.join(', ') || ''
-  formData.sandbox_enabled = session.sandbox_enabled ?? false
-  formData.cli_path = session.cli_path || ''  // Issue #489
-  formData.additional_directories = (session.additional_directories || []).join('\n')  // Issue #630
-  formData.docker_enabled = session.docker_enabled ?? false  // Issue #496
-  formData.docker_image = session.docker_image || ''
-  formData.docker_extra_mounts = (session.docker_extra_mounts || []).join('\n')
-  // Issue #540: Thinking and effort configuration
-  formData.thinking_mode = session.thinking_mode || ''
-  formData.thinking_budget_tokens = session.thinking_budget_tokens || 10240
-  formData.effort = session.effort || ''
-  // Issue #36: Load setting_sources, default to all enabled if not set
-  formData.setting_sources = session.setting_sources || ['user', 'project', 'local']
-  formData.knowledge_management_enabled = session.knowledge_management_enabled ?? true
-  formData.disable_auto_memory = session.disable_auto_memory ?? false
-
-  // Issue #458: Load sandbox config
-  const sc = session.sandbox_config || {}
-  formData.sandbox.autoAllowBashIfSandboxed = sc.autoAllowBashIfSandboxed ?? true
-  formData.sandbox.allowUnsandboxedCommands = sc.allowUnsandboxedCommands ?? false
-  formData.sandbox.excludedCommands = (sc.excludedCommands || []).join(', ')
-  formData.sandbox.enableWeakerNestedSandbox = sc.enableWeakerNestedSandbox ?? false
-  const net = sc.network || {}
-  formData.sandbox.network.allowedDomains = (net.allowedDomains || []).join(', ')
-  formData.sandbox.network.allowLocalBinding = net.allowLocalBinding ?? false
-  formData.sandbox.network.allowUnixSockets = (net.allowUnixSockets || []).join(', ')
-  formData.sandbox.network.allowAllUnixSockets = net.allowAllUnixSockets ?? false
-  const iv = sc.ignoreViolations || {}
-  formData.sandbox.ignoreViolations.file = (iv.file || []).join(', ')
-  formData.sandbox.ignoreViolations.network = (iv.network || []).join(', ')
+  populateFormFromSource(session)
+  populateSandboxFromSource(session)
 }
 
 function populateFormFromTemplate(template) {
-  formData.name = template.name || ''
-  formData.description = template.description || ''
-  formData.permission_mode = template.permission_mode || 'default'
-  formData.default_role = template.default_role || ''
-  formData.initialization_context = template.default_system_prompt || ''
-  formData.allowed_tools = template.allowed_tools?.join(', ') || ''
-  formData.disallowed_tools = template.disallowed_tools?.join(', ') || ''
-  formData.model = template.model || 'sonnet'
-  formData.capabilities = template.capabilities?.join(', ') || ''
-  formData.override_system_prompt = template.override_system_prompt ?? false
-  formData.sandbox_enabled = template.sandbox_enabled ?? false
-  formData.cli_path = template.cli_path || ''  // Issue #489
-  formData.additional_directories = (template.additional_directories || []).join('\n')  // Issue #630
-  formData.docker_enabled = template.docker_enabled ?? false  // Issue #496
-  formData.docker_image = template.docker_image || ''
-  formData.docker_extra_mounts = (template.docker_extra_mounts || []).join('\n')
-  // Issue #540: Thinking and effort configuration
-  formData.thinking_mode = template.thinking_mode || ''
-  formData.thinking_budget_tokens = template.thinking_budget_tokens || 10240
-  formData.effort = template.effort || ''
-  formData.knowledge_management_enabled = template.knowledge_management_enabled ?? true
-  formData.disable_auto_memory = template.disable_auto_memory ?? false
-
-  // Issue #458: Load sandbox config from template
-  const sc = template.sandbox_config || {}
-  formData.sandbox.autoAllowBashIfSandboxed = sc.autoAllowBashIfSandboxed ?? true
-  formData.sandbox.allowUnsandboxedCommands = sc.allowUnsandboxedCommands ?? false
-  formData.sandbox.excludedCommands = (sc.excludedCommands || []).join(', ')
-  formData.sandbox.enableWeakerNestedSandbox = sc.enableWeakerNestedSandbox ?? false
-  const net = sc.network || {}
-  formData.sandbox.network.allowedDomains = (net.allowedDomains || []).join(', ')
-  formData.sandbox.network.allowLocalBinding = net.allowLocalBinding ?? false
-  formData.sandbox.network.allowUnixSockets = (net.allowUnixSockets || []).join(', ')
-  formData.sandbox.network.allowAllUnixSockets = net.allowAllUnixSockets ?? false
-  const iv = sc.ignoreViolations || {}
-  formData.sandbox.ignoreViolations.file = (iv.file || []).join(', ')
-  formData.sandbox.ignoreViolations.network = (iv.network || []).join(', ')
+  populateFormFromSource(template)
+  populateSandboxFromSource(template)
 }
 
 function onModalShown() {
@@ -1805,73 +1441,30 @@ watch(
   }
 )
 
-// Watch for modifications to auto-filled fields
-watch(() => formData.default_role, (newVal) => {
-  if (templateOriginalValues.value.default_role !== null) {
-    fieldStates.default_role = newVal === templateOriginalValues.value.default_role ? 'autofilled' : 'modified'
-  }
-})
+// Setup schema-driven field-state watchers (issue #731)
+setupFieldStateWatchers()
 
-watch(() => formData.initialization_context, (newVal) => {
-  if (templateOriginalValues.value.initialization_context !== null) {
-    fieldStates.initialization_context = newVal === templateOriginalValues.value.initialization_context ? 'autofilled' : 'modified'
-  }
-})
-
-watch(() => formData.permission_mode, (newVal) => {
-  if (templateOriginalValues.value.permission_mode !== null) {
-    fieldStates.permission_mode = newVal === templateOriginalValues.value.permission_mode ? 'autofilled' : 'modified'
-  }
-})
-
-watch(() => formData.allowed_tools, (newVal) => {
-  if (templateOriginalValues.value.allowed_tools !== null) {
-    fieldStates.allowed_tools = newVal === templateOriginalValues.value.allowed_tools ? 'autofilled' : 'modified'
-  }
-})
-
-watch(() => formData.disallowed_tools, (newVal) => {
-  if (templateOriginalValues.value.disallowed_tools !== null) {
-    fieldStates.disallowed_tools = newVal === templateOriginalValues.value.disallowed_tools ? 'autofilled' : 'modified'
-  }
-})
-
-watch(() => formData.model, (newVal) => {
-  if (templateOriginalValues.value.model !== null) {
-    fieldStates.model = newVal === templateOriginalValues.value.model ? 'autofilled' : 'modified'
-  }
-})
-
-watch(() => formData.capabilities, (newVal) => {
-  if (templateOriginalValues.value.capabilities !== null) {
-    fieldStates.capabilities = newVal === templateOriginalValues.value.capabilities ? 'autofilled' : 'modified'
-  }
-})
-
+// Sandbox field-state watchers (not in schema, stays manual)
 watch(() => formData.sandbox.excludedCommands, (newVal) => {
   if (templateOriginalValues.value.sandbox_excludedCommands !== null) {
     fieldStates.sandbox_excludedCommands = newVal === templateOriginalValues.value.sandbox_excludedCommands ? 'autofilled' : 'modified'
   }
 })
-
 watch(() => formData.sandbox.network.allowedDomains, (newVal) => {
   if (templateOriginalValues.value.sandbox_network_allowedDomains !== null) {
     fieldStates.sandbox_network_allowedDomains = newVal === templateOriginalValues.value.sandbox_network_allowedDomains ? 'autofilled' : 'modified'
   }
 })
-
 watch(() => formData.sandbox.network.allowUnixSockets, (newVal) => {
   if (templateOriginalValues.value.sandbox_network_allowUnixSockets !== null) {
     fieldStates.sandbox_network_allowUnixSockets = newVal === templateOriginalValues.value.sandbox_network_allowUnixSockets ? 'autofilled' : 'modified'
   }
 })
-
 watch(() => formData.sandbox.ignoreViolations.file, (newVal) => {
   if (templateOriginalValues.value.sandbox_ignoreViolations_file !== null) {
     fieldStates.sandbox_ignoreViolations_file = newVal === templateOriginalValues.value.sandbox_ignoreViolations_file ? 'autofilled' : 'modified'
   }
 })
-
 watch(() => formData.sandbox.ignoreViolations.network, (newVal) => {
   if (templateOriginalValues.value.sandbox_ignoreViolations_network !== null) {
     fieldStates.sandbox_ignoreViolations_network = newVal === templateOriginalValues.value.sandbox_ignoreViolations_network ? 'autofilled' : 'modified'

@@ -67,14 +67,14 @@
               <div v-else class="text-muted small">None</div>
             </div>
 
-            <!-- Initialization Context -->
+            <!-- System Prompt -->
             <div class="mb-3">
-              <h6 class="text-muted">Initialization Context</h6>
+              <h6 class="text-muted">System Prompt</h6>
               <div
-                v-if="session.initialization_context"
+                v-if="session.system_prompt"
                 class="bg-light p-2 rounded small"
                 style="max-height: 200px; overflow-y: auto; white-space: pre-wrap;"
-              >{{ session.initialization_context }}</div>
+              >{{ session.system_prompt }}</div>
               <div v-else class="text-muted small">Not specified</div>
             </div>
 
