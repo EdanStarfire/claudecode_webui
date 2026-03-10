@@ -484,6 +484,8 @@ class SessionCoordinator:
                 stderr_callback=self._create_stderr_callback(session_id),
                 permission_handler=permission_handler,
             )
+            # Issue #707: Set auto-approval callback so can_use_tool can notify us
+            sdk.auto_approval_callback = self._create_auto_approval_callback(session_id)
             self._active_sdks[session_id] = sdk
 
             # Initialize callback lists
@@ -794,7 +796,9 @@ class SessionCoordinator:
                     f"Distilled history from previous conversations is available at "
                     f"`{history_dir}/` (read-only). Before answering questions about past "
                     f"context, identity, or decisions, check this folder for relevant "
-                    f"archived conversations."
+                    f"archived conversations.\n"
+                    f"Use Read, Glob, or Grep to access history files. "
+                    f"Do NOT use Bash (e.g. `ls`, `cat`) for history access."
                 )
             else:
                 history_note = ""
@@ -875,6 +879,8 @@ class SessionCoordinator:
                 extra_env=docker_env_vars if docker_env_vars else None,
                 permission_handler=permission_handler,
             )
+            # Issue #707: Set auto-approval callback so can_use_tool can notify us
+            sdk.auto_approval_callback = self._create_auto_approval_callback(session_id)
             self._active_sdks[session_id] = sdk
 
             # Initialize callback lists if not exists (preserve existing callbacks)
@@ -2512,6 +2518,44 @@ class SessionCoordinator:
             )
 
     # ============================================================
+    # Issue #707: Auto-Approval Callback
+    # ============================================================
+
+    def _create_auto_approval_callback(self, session_id: str) -> Callable:
+        """
+        Create a callback that can_use_tool calls when it auto-approves a tool.
+
+        The ToolCall already exists (created from the AssistantMessage tool_use block
+        before can_use_tool fires), so we find it by tool_name, set the reason,
+        store a new ToolCallUpdate, and broadcast via the existing tool_call
+        broadcast mechanism.
+        """
+        def callback(tool_name: str, input_params: dict[str, Any], reason: str) -> None:
+            tool_calls = self._active_tool_calls.get(session_id, {})
+            for tool_call in tool_calls.values():
+                if (
+                    tool_call.name == tool_name
+                    and tool_call.auto_approved_reason is None
+                    and tool_call.status == ToolState.PENDING
+                ):
+                    tool_call.auto_approved_reason = reason
+                    coord_logger.info(
+                        f"[707] Auto-approved {tool_call.tool_use_id} ({tool_name}): {reason}"
+                    )
+                    # Store a new ToolCallUpdate with the reason attached
+                    self._schedule_tool_call_update_storage(session_id, tool_call)
+                    # Broadcast via existing tool_call broadcast mechanism
+                    tool_call_data = tool_call.to_dict()
+                    tool_call_data["type"] = "tool_call"
+                    for cb in self._tool_call_broadcast_callbacks:
+                        try:
+                            cb(session_id, tool_call_data)
+                        except Exception:
+                            coord_logger.exception("Error in auto-approval broadcast callback")
+                    break
+        return callback
+
+    # ============================================================
     # Issue #324: Unified ToolCall Lifecycle Management
     # ============================================================
 
@@ -2532,12 +2576,6 @@ class SessionCoordinator:
         """
         import time
 
-        # Issue #707: Check if this tool was auto-approved via suggestion
-        auto_approved_reason = None
-        sdk = self._active_sdks.get(session_id)
-        if sdk:
-            auto_approved_reason = sdk.pop_auto_approval(name, input_params)
-
         tool_call = ToolCall(
             tool_use_id=tool_use_id,
             session_id=session_id,
@@ -2547,7 +2585,6 @@ class SessionCoordinator:
             created_at=time.time(),
             requires_permission=requires_permission,
             parent_tool_use_id=parent_tool_use_id,
-            auto_approved_reason=auto_approved_reason,
             display=ToolDisplayInfo(
                 state=ToolState.PENDING,
                 visible=True,

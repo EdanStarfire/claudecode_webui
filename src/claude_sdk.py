@@ -2,7 +2,6 @@
 
 import asyncio
 import contextlib
-import json
 import logging
 import tempfile
 import time
@@ -200,7 +199,7 @@ class ClaudeSDK:
         self.effort = config.effort
         self.disable_auto_memory = config.disable_auto_memory
         self.permission_handler = permission_handler
-        self._auto_approved: dict[str, str] = {}  # Issue #707: tool_signature → reason
+        self.auto_approval_callback: Callable | None = None  # Issue #707: notifies coordinator
         self._stderr_buffer: list[str] = []
 
         self.info = SessionInfo(session_id=session_id, working_directory=str(self.working_directory))
@@ -1064,9 +1063,9 @@ class ClaudeSDK:
                 decision, reason = result
                 if decision == "allow":
                     perm_logger.info(f"Auto-approved via suggestion: {reason}")
-                    # Store for UI indicator — coordinator will attach to the ToolCall
-                    sig = f"{tool_name}:{json.dumps(input_params, sort_keys=True)}"
-                    self._auto_approved[sig] = reason
+                    # Issue #707: Notify coordinator to update the already-created ToolCall
+                    if self.auto_approval_callback:
+                        self.auto_approval_callback(tool_name, input_params, reason)
                     return PermissionResultAllow(updated_input=input_params)
                 else:
                     perm_logger.info(f"Auto-denied via suggestion: {reason}")
@@ -1116,10 +1115,6 @@ class ClaudeSDK:
         perm_logger.debug(f"No permission_callback provided. Denying tool use: '{tool_name}'")
         return PermissionResultDeny(message="No permission callback configured")
 
-    def pop_auto_approval(self, tool_name: str, input_params: dict[str, Any]) -> str | None:
-        """Pop and return auto-approval reason if this tool was auto-approved (issue #707)."""
-        sig = f"{tool_name}:{json.dumps(input_params, sort_keys=True)}"
-        return self._auto_approved.pop(sig, None)
 
     async def _safe_callback(self, callback: Callable, *args, **kwargs):
         """Safely execute callback with error handling"""
