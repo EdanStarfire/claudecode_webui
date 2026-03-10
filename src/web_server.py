@@ -41,7 +41,7 @@ from .models.messages import (
     StoredMessage,
 )
 from .permission_resolver import resolve_effective_permissions
-from .session_config import SessionConfig, SessionConfigBase
+from .session_config import SessionConfigBase
 from .session_coordinator import SessionCoordinator
 from .session_manager import SessionState
 from .skill_manager import SkillManager
@@ -143,7 +143,7 @@ class SessionUpdateRequest(BaseModel):
     allowed_tools: list[str] | None = None  # List of tool names to allow
     disallowed_tools: list[str] | None = None  # Issue #461: tools to deny
     role: str | None = None
-    system_prompt: str | None = None  # UI calls this "initialization_context"
+    system_prompt: str | None = None
     override_system_prompt: bool | None = None
     capabilities: list[str] | None = None
     sandbox_enabled: bool | None = None
@@ -189,7 +189,7 @@ class CommSendRequest(BaseModel):
 class MinionCreateRequest(SessionConfigBase):
     name: str
     role: str | None = ""
-    initialization_context: str | None = ""
+    system_prompt: str | None = ""
     capabilities: list[str] | None = None
     working_directory: str | None = None  # Optional custom working directory for this minion
     permission_mode: str = "default"  # Override default from SessionConfigBase
@@ -224,16 +224,10 @@ class ScheduleUpdateRequest(BaseModel):
 
 class TemplateCreateRequest(SessionConfigBase):
     name: str
-    default_role: str | None = None
-    default_system_prompt: str | None = None
+    role: str | None = None
+    system_prompt: str | None = None
     description: str | None = None
     capabilities: list[str] | None = None
-
-    def to_session_config(self, **overrides) -> SessionConfig:
-        """Map default_system_prompt to system_prompt for SessionConfig."""
-        if self.default_system_prompt and "system_prompt" not in overrides:
-            overrides["system_prompt"] = self.default_system_prompt
-        return super().to_session_config(**overrides)
 
 
 class TemplateUpdateRequest(BaseModel):
@@ -241,8 +235,8 @@ class TemplateUpdateRequest(BaseModel):
     permission_mode: str | None = None
     allowed_tools: list[str] | None = None
     disallowed_tools: list[str] | None = None  # Issue #461: tools to deny
-    default_role: str | None = None
-    default_system_prompt: str | None = None
+    role: str | None = None
+    system_prompt: str | None = None
     description: str | None = None
     model: str | None = None
     capabilities: list[str] | None = None
@@ -1192,7 +1186,7 @@ class ClaudeWebUI:
                 if request.role is not None:
                     updates["role"] = request.role
 
-                # Handle system_prompt update (UI calls this "initialization_context")
+                # Handle system_prompt update
                 if request.system_prompt is not None:
                     updates["system_prompt"] = request.system_prompt
 
@@ -2421,9 +2415,8 @@ class ClaudeWebUI:
                     raise HTTPException(status_code=400, detail=str(e))
 
                 # Create minion via OverseerController
-                # Map initialization_context to system_prompt (initialization_context is just UI semantics)
                 config = request.to_session_config(
-                    system_prompt=request.initialization_context,
+                    system_prompt=request.system_prompt,
                     working_directory=str(working_dir),
                 )
                 minion_id = await self.coordinator.legion_system.overseer_controller.create_minion_for_user(
@@ -3160,7 +3153,8 @@ class ClaudeWebUI:
                 template = await self.coordinator.template_manager.create_template(
                     name=request.name,
                     config=config,
-                    default_role=request.default_role,
+                    role=request.role,
+                    system_prompt=request.system_prompt,
                     description=request.description,
                     capabilities=request.capabilities,
                 )
@@ -3181,8 +3175,8 @@ class ClaudeWebUI:
                     permission_mode=request.permission_mode,
                     allowed_tools=request.allowed_tools,
                     disallowed_tools=request.disallowed_tools,
-                    default_role=request.default_role,
-                    default_system_prompt=request.default_system_prompt,
+                    role=request.role,
+                    system_prompt=request.system_prompt,
                     description=request.description,
                     model=request.model,
                     capabilities=request.capabilities,

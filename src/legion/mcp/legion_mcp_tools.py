@@ -108,12 +108,12 @@ class LegionMCPTools:
             "\nAfter spawning, you MUST send a comm message to the minion to start them working. "
             "The minion will NOT begin work automatically - they wait for explicit task instructions."
             "\n\nWorkflow:"
-            "\n1. spawn_minion(name='Helper', template_name='Code Expert', initialization_context='Review auth code')"
+            "\n1. spawn_minion(name='Helper', template_name='Code Expert', system_prompt='Review auth code')"
             "\n2. send_comm(to_minion_name='Helper', summary='Begin task', content='Task details...', comm_type='task')"
             "\n\n**Using Templates (Recommended):**"
             "\nUse a template to spawn with specific permissions:"
             "\n- First, use list_templates() to see available templates"
-            "\n- Then spawn: spawn_minion(name='Helper', template_name='Code Expert', initialization_context='Review auth code')"
+            "\n- Then spawn: spawn_minion(name='Helper', template_name='Code Expert', system_prompt='Review auth code')"
             "\n- Template enforces permission_mode and allowed_tools (secure, user-controlled)"
             "\n\n**Without Template:**"
             "\nIf no template specified, child gets default restricted permissions:"
@@ -135,7 +135,7 @@ class LegionMCPTools:
             {
                 "name": str,                           # Unique name for new minion
                 "role": str,                           # Human-readable role description
-                "initialization_context": str,         # System prompt defining expertise
+                "system_prompt": str,                   # System prompt defining expertise
                 "template_name": str,                  # Template to apply for permissions (optional)
                 "working_directory": str,              # Custom working directory (optional)
                 "sandbox_enabled": bool,               # Enable OS-level sandboxing (optional, default: False)
@@ -633,7 +633,7 @@ class LegionMCPTools:
                 "_parent_overseer_id": str,  # Injected by tool wrapper
                 "name": str,
                 "role": str,
-                "initialization_context": str,
+                "system_prompt": str,
                 "template_name": str,  # Optional - if provided, enforces template permissions
                 "capabilities": List[str]  # Optional
             }
@@ -658,7 +658,7 @@ class LegionMCPTools:
         # Extract parameters
         name = args.get("name", "").strip()
         role = args.get("role", "").strip()
-        initialization_context = args.get("initialization_context", "").strip()
+        system_prompt = args.get("system_prompt", "").strip()
         template_name = args.get("template_name", "").strip()
         capabilities = args.get("capabilities", [])
         working_directory_raw = args.get("working_directory")
@@ -744,11 +744,11 @@ class LegionMCPTools:
                 "is_error": True
             }
 
-        if not initialization_context:
+        if not system_prompt:
             return {
                 "content": [{
                     "type": "text",
-                    "text": "Error: 'initialization_context' parameter is required and cannot be empty. Provide clear instructions for what this minion should do."
+                    "text": "Error: 'system_prompt' parameter is required and cannot be empty. Provide clear instructions for what this minion should do."
                 }],
                 "is_error": True
             }
@@ -781,13 +781,13 @@ class LegionMCPTools:
                 allowed_tools = template.allowed_tools
                 disallowed_tools = template.disallowed_tools
 
-                # Use template's default_role if role not provided
-                if not role and template.default_role:
-                    role = template.default_role
+                # Use template's role if role not provided
+                if not role and template.role:
+                    role = template.role
 
-                # Prepend template's default_system_prompt if exists
-                if template.default_system_prompt:
-                    initialization_context = f"{template.default_system_prompt}\n\n{initialization_context}"
+                # Prepend template's system_prompt if exists
+                if template.system_prompt:
+                    system_prompt = f"{template.system_prompt}\n\n{system_prompt}"
 
                 # Apply model from template if set
                 if template.model:
@@ -845,7 +845,7 @@ class LegionMCPTools:
             return {
                 "content": [{
                     "type": "text",
-                    "text": "Error: 'role' parameter is required (or use a template with default_role)"
+                    "text": "Error: 'role' parameter is required (or use a template with a role)"
                 }],
                 "is_error": True
             }
@@ -873,10 +873,9 @@ class LegionMCPTools:
 
         # Attempt to spawn child minion
         try:
-            # Map initialization_context to system_prompt (initialization_context is semantic UI term)
             spawn_config = SessionConfig(
                 permission_mode=permission_mode or "default",
-                system_prompt=initialization_context,
+                system_prompt=system_prompt,
                 override_system_prompt=override_system_prompt,
                 allowed_tools=allowed_tools,
                 disallowed_tools=disallowed_tools,
@@ -1538,7 +1537,7 @@ class LegionMCPTools:
                     f"  - Description: {template.description or 'No description'}\n"
                     f"  - Permission Mode: {template.permission_mode}\n"
                     f"  - Allowed Tools: {tools_str}\n"
-                    f"  - Default Role: {template.default_role or 'Not specified'}\n"
+                    f"  - Role: {template.role or 'Not specified'}\n"
                 )
 
             # Add usage hint

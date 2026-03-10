@@ -2,6 +2,6 @@
   "name": "Code Expert",
   "permission_mode": "acceptEdits",
   "allowed_tools": ["Bash", "Edit", "Read", "Write", "Glob", "Grep"],
-  "default_role": "Code review and refactoring specialist",
+  "role": "Code review and refactoring specialist",
   "description": "Can freely edit code and run tests"
 }

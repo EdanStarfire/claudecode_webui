@@ -8,6 +8,6 @@
     "mcp__legion__search_capability",
     "mcp__resources__register_resource"
   ],
-  "default_role": "Issue Planner - User story and design specialist",
+  "role": "Issue Planner - User story and design specialist",
   "description": "Read-only focus for planning phase. Conducts user Q&A, builds user stories, creates diagrams, and writes finalized plans to file. Write access limited to ~/.cc_webui/plans/ directory. No project file modification unless user explicitly requests."
 }

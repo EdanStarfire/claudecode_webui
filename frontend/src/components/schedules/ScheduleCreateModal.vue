@@ -332,7 +332,7 @@ function applyTemplate() {
   sessionConfig.value = {
     permission_mode: tmpl.permission_mode || 'default',
     model: tmpl.model || '',
-    system_prompt: tmpl.default_system_prompt || '',
+    system_prompt: tmpl.system_prompt || '',
     override_system_prompt: tmpl.override_system_prompt || false,
     sandbox_enabled: tmpl.sandbox_enabled || false,
     working_directory: project?.working_directory || '',

@@ -19,7 +19,7 @@ async def test_list_templates_with_templates(legion_test_env):
 
     Verifies:
     - Tool returns success with template list
-    - Response includes template details (name, description, permission_mode, allowed_tools, default_role)
+    - Response includes template details (name, description, permission_mode, allowed_tools, role)
     - Templates sorted alphabetically
     """
     env = legion_test_env

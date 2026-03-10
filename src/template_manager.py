@@ -4,7 +4,7 @@ Template Manager for Claude Code WebUI
 Manages minion templates storage and retrieval with full CRUD operations.
 Templates are stored as JSON+MD file pairs in data/templates/:
   - <slug>.json: Configuration (name, permission_mode, allowed_tools, etc.)
-  - <slug>.md: System prompt (optional, loaded as default_system_prompt)
+  - <slug>.md: System prompt (optional, loaded as system_prompt)
 
 File names are derived from the template name (e.g., "Coding Minion" ->
 "coding_minion.json" / "coding_minion.md") so users can easily identify
@@ -80,14 +80,14 @@ class TemplateManager:
                 with open(template_file) as f:
                     data = json.load(f)
 
-                # Load companion .md file as default_system_prompt
+                # Load companion .md file as system_prompt
                 md_file = template_file.with_suffix(".md")
                 if md_file.exists():
-                    data["default_system_prompt"] = md_file.read_text(
+                    data["system_prompt"] = md_file.read_text(
                         encoding="utf-8"
                     ).strip()
-                elif "default_system_prompt" not in data:
-                    data["default_system_prompt"] = None
+                elif "system_prompt" not in data:
+                    data["system_prompt"] = None
 
                 template = MinionTemplate.from_dict(data)
                 self.templates[template.template_id] = template
@@ -148,8 +148,8 @@ class TemplateManager:
         self,
         name: str,
         config: SessionConfig,
-        default_role: str | None = None,
-        default_system_prompt: str | None = None,
+        role: str | None = None,
+        system_prompt: str | None = None,
         description: str | None = None,
         capabilities: list[str] | None = None,
     ) -> MinionTemplate:
@@ -158,8 +158,8 @@ class TemplateManager:
         Args:
             name: Template display name
             config: Bundled configuration (permission_mode, tools, model, etc.)
-            default_role: Default role for minions using this template
-            default_system_prompt: System prompt content
+            role: Default role for minions using this template
+            system_prompt: System prompt content
             description: Template description
             capabilities: Capability tags
         """
@@ -181,8 +181,8 @@ class TemplateManager:
             permission_mode=config.permission_mode,
             allowed_tools=config.allowed_tools if config.allowed_tools is not None else [],
             disallowed_tools=config.disallowed_tools if config.disallowed_tools is not None else [],
-            default_role=default_role,
-            default_system_prompt=default_system_prompt,
+            role=role,
+            system_prompt=system_prompt,
             description=description,
             model=config.model,
             capabilities=capabilities if capabilities is not None else [],
@@ -228,8 +228,8 @@ class TemplateManager:
         permission_mode: str | None = None,
         allowed_tools: list[str] | None = None,
         disallowed_tools: list[str] | None = None,
-        default_role: str | None = None,
-        default_system_prompt: str | None = None,
+        role: str | None = None,
+        system_prompt: str | None = None,
         description: str | None = None,
         model: str | None = None,
         capabilities: list[str] | None = None,
@@ -274,11 +274,11 @@ class TemplateManager:
         if disallowed_tools is not None:
             template.disallowed_tools = disallowed_tools
 
-        if default_role is not None:
-            template.default_role = default_role
+        if role is not None:
+            template.role = role
 
-        if default_system_prompt is not None:
-            template.default_system_prompt = default_system_prompt
+        if system_prompt is not None:
+            template.system_prompt = system_prompt
 
         if description is not None:
             template.description = description
@@ -367,9 +367,9 @@ class TemplateManager:
         """
         slug = _slugify(template.name)
 
-        # Build dict for JSON, excluding default_system_prompt
+        # Build dict for JSON, excluding system_prompt (stored in .md file)
         data = template.to_dict()
-        system_prompt = data.pop("default_system_prompt", None)
+        system_prompt = data.pop("system_prompt", None)
 
         # Write JSON config
         template_file = self.templates_dir / f"{slug}.json"
@@ -426,12 +426,12 @@ class TemplateManager:
                 existing = existing_by_name.get(name)
                 if existing:
                     # Template exists — seed .md prompt file if missing
-                    if source_prompt and not existing.default_system_prompt:
+                    if source_prompt and not existing.system_prompt:
                         slug = _slugify(existing.name)
                         runtime_md = self.templates_dir / f"{slug}.md"
                         if not runtime_md.exists():
                             runtime_md.write_text(source_prompt, encoding="utf-8")
-                            existing.default_system_prompt = source_prompt
+                            existing.system_prompt = source_prompt
                             prompt_seeded_count += 1
                             template_logger.info(
                                 f"Seeded system prompt for existing template: {name}"
@@ -445,8 +445,8 @@ class TemplateManager:
                 await self.create_template(
                     name=data["name"],
                     config=seed_config,
-                    default_role=data.get("default_role"),
-                    default_system_prompt=source_prompt,
+                    role=data.get("role") or data.get("default_role"),
+                    system_prompt=source_prompt,
                     description=data.get("description"),
                 )
                 existing_by_name[name] = await self.get_template_by_name(name)

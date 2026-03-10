@@ -90,7 +90,7 @@ async def test_spawn_minion_handler_requires_parent_id(mcp_tools):
     result = await mcp_tools._handle_spawn_minion({
         "name": "NewMinion",
         "role": "Test Role",
-        "initialization_context": "Test context"
+        "system_prompt": "Test context"
     })
 
     assert "content" in result

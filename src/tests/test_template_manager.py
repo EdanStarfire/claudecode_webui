@@ -44,8 +44,8 @@ class TestMinionTemplateRoundTrip:
             permission_mode="default",
             allowed_tools=["bash", "read"],
             disallowed_tools=["write"],
-            default_role="tester",
-            default_system_prompt="You are a tester.",
+            role="tester",
+            system_prompt="You are a tester.",
             description="A test template",
             model="claude-sonnet-4-20250514",
             capabilities=["python", "testing"],
@@ -69,8 +69,8 @@ class TestMinionTemplateRoundTrip:
         assert restored.permission_mode == "default"
         assert restored.allowed_tools == ["bash", "read"]
         assert restored.disallowed_tools == ["write"]
-        assert restored.default_role == "tester"
-        assert restored.default_system_prompt == "You are a tester."
+        assert restored.role == "tester"
+        assert restored.system_prompt == "You are a tester."
         assert restored.description == "A test template"
         assert restored.model == "claude-sonnet-4-20250514"
         assert restored.capabilities == ["python", "testing"]
@@ -130,8 +130,8 @@ class TestCreateTemplate:
                 thinking_budget_tokens=8000,
                 effort="high",
             ),
-            default_role="developer",
-            default_system_prompt="You are a developer.",
+            role="developer",
+            system_prompt="You are a developer.",
             description="Full-featured template",
             capabilities=["python"],
         )
@@ -243,8 +243,8 @@ class TestUpdateTemplate:
             permission_mode="acceptEdits",
             allowed_tools=["bash"],
             disallowed_tools=["write"],
-            default_role="architect",
-            default_system_prompt="Updated prompt.",
+            role="architect",
+            system_prompt="Updated prompt.",
             description="Updated description",
             model="claude-sonnet-4-20250514",
             capabilities=["architecture"],

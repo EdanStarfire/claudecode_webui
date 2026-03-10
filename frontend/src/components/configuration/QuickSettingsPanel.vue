@@ -107,10 +107,10 @@
     <div class="mb-3">
       <label for="config-role" class="form-label">
         {{ isTemplateMode ? 'Default Role' : 'Role' }}
-        <span v-if="fieldStates.default_role === 'autofilled'" class="field-indicator autofilled" title="Auto-filled from template">
+        <span v-if="fieldStates.role === 'autofilled'" class="field-indicator autofilled" title="Auto-filled from template">
           &lt;
         </span>
-        <span v-if="fieldStates.default_role === 'modified'" class="field-indicator modified" title="Modified from template">
+        <span v-if="fieldStates.role === 'modified'" class="field-indicator modified" title="Modified from template">
           *
         </span>
       </label>
@@ -118,8 +118,8 @@
         id="config-role"
         type="text"
         class="form-control form-control-sm"
-        :value="formData.default_role"
-        @input="$emit('update:form-data', 'default_role', $event.target.value)"
+        :value="formData.role"
+        @input="$emit('update:form-data', 'role', $event.target.value)"
         :placeholder="isTemplateMode ? 'e.g., Code review specialist' : 'Optional role description'"
       />
     </div>
@@ -213,7 +213,7 @@ const props = defineProps({
   fieldStates: {
     type: Object,
     default: () => ({
-      default_role: 'normal',
+      role: 'normal',
       permission_mode: 'normal'
     })
   }

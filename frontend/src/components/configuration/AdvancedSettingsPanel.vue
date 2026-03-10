@@ -217,14 +217,14 @@
       <div v-show="cardStates.prompt" class="card-body-inner">
         <div class="mb-2">
           <label class="form-label">
-            {{ isTemplateMode ? 'Default System Prompt' : 'Initialization Context' }}
-            <span v-if="fieldStates.initialization_context === 'autofilled'" class="field-indicator autofilled">&lt;</span>
-            <span v-if="fieldStates.initialization_context === 'modified'" class="field-indicator modified">*</span>
+            System Prompt
+            <span v-if="fieldStates.system_prompt === 'autofilled'" class="field-indicator autofilled">&lt;</span>
+            <span v-if="fieldStates.system_prompt === 'modified'" class="field-indicator modified">*</span>
           </label>
           <textarea
             class="form-control form-control-sm"
-            :value="formData.initialization_context"
-            @input="$emit('update:form-data', 'initialization_context', $event.target.value)"
+            :value="formData.system_prompt"
+            @input="$emit('update:form-data', 'system_prompt', $event.target.value)"
             rows="3"
             :placeholder="isTemplateMode ? 'Optional default system prompt' : 'Instructions and context for the session...'"
           ></textarea>
@@ -544,7 +544,7 @@ const props = defineProps({
     default: () => ({
       allowed_tools: 'normal',
       disallowed_tools: 'normal',
-      initialization_context: 'normal'
+      system_prompt: 'normal'
     })
   }
 })

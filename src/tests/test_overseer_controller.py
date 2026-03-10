@@ -91,7 +91,7 @@ class TestSpawnWithParentName:
             "_parent_overseer_id": "gp-id",
             "name": "Child",
             "role": "Worker",
-            "initialization_context": "Do work",
+            "system_prompt": "Do work",
             "parent_name": "Parent",
         }
 
@@ -129,7 +129,7 @@ class TestSpawnWithParentName:
             "_parent_overseer_id": "caller-id",
             "name": "Child",
             "role": "Worker",
-            "initialization_context": "Do work",
+            "system_prompt": "Do work",
             "parent_name": "Unrelated",
         }
 
@@ -161,7 +161,7 @@ class TestSpawnWithParentName:
             "_parent_overseer_id": "caller-id",
             "name": "Child",
             "role": "Worker",
-            "initialization_context": "Do work",
+            "system_prompt": "Do work",
             # No parent_name
         }
 
@@ -192,7 +192,7 @@ class TestSpawnWithParentName:
             "_parent_overseer_id": "caller-id",
             "name": "Child",
             "role": "Worker",
-            "initialization_context": "Do work",
+            "system_prompt": "Do work",
             "parent_name": "NonExistent",
         }
 
@@ -228,7 +228,7 @@ class TestSpawnWithParentName:
             "_parent_overseer_id": "caller-id",
             "name": "Child",
             "role": "Worker",
-            "initialization_context": "Do work",
+            "system_prompt": "Do work",
             "parent_name": "Caller",
         }
 
