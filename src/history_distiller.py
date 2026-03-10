@@ -49,6 +49,41 @@ def _extract_content(msg: dict) -> str:
     return str(content) if content else ""
 
 
+def _extract_stored_message_content(data: dict) -> str:
+    """Extract text content from StoredMessage data dict.
+
+    StoredMessage data.content is a list of content blocks like
+    [{"text": "..."}, {"thinking": "..."}, {"signature": "..."}].
+    Only text fields are extracted; thinking and other block types are skipped.
+    """
+    content = data.get("content", [])
+    if not isinstance(content, list):
+        return str(content) if content else ""
+    parts = []
+    for block in content:
+        if isinstance(block, dict):
+            text = block.get("text")
+            if text:
+                parts.append(text)
+        elif isinstance(block, str):
+            parts.append(block)
+    return "\n".join(parts)
+
+
+def _is_tool_result_user_message(data: dict) -> bool:
+    """Check if a StoredMessage UserMessage is a tool result (not human speech).
+
+    Tool result UserMessages have content blocks containing tool_use_id fields.
+    """
+    content = data.get("content", [])
+    if not isinstance(content, list):
+        return False
+    return any(
+        isinstance(block, dict) and "tool_use_id" in block
+        for block in content
+    )
+
+
 async def distill_session_history(
     messages_jsonl_path: Path,
     output_path: Path,
@@ -94,8 +129,6 @@ async def distill_session_history(
                 except json.JSONDecodeError:
                     continue
 
-                msg_type = msg.get("type", "")
-                metadata = msg.get("metadata", {}) or {}
                 timestamp = msg.get("timestamp")
 
                 # Track first/last timestamps for duration
@@ -107,54 +140,133 @@ async def distill_session_history(
                         last_ts = ts_val
 
                 formatted_ts = _format_timestamp(timestamp)
-                content = _extract_content(msg)
 
-                if msg_type == "user":
-                    if metadata.get("comm"):
-                        # Inbound comm
-                        comm_data = metadata["comm"]
-                        sender = comm_data.get("from_display_name", "unknown")
-                        entries.append(
-                            f"## {formatted_ts} - Comm (Inbound from {sender})\n{content}\n"
-                        )
-                        stats["comm_inbound"] += 1
-                        stats["total"] += 1
-                    else:
-                        entries.append(f"## {formatted_ts} - User\n{content}\n")
-                        stats["user"] += 1
+                # Detect StoredMessage format (has _type field) vs legacy format
+                stored_type = msg.get("_type")
+
+                if stored_type:
+                    # --- StoredMessage format ---
+                    data = msg.get("data", {}) or {}
+
+                    if stored_type == "AssistantMessage":
+                        content = _extract_stored_message_content(data)
+                        if content:
+                            entries.append(f"## {formatted_ts} - Agent\n{content}\n")
+                            stats["agent"] += 1
+                            stats["total"] += 1
+
+                    elif stored_type == "UserMessage":
+                        if _is_tool_result_user_message(data):
+                            continue  # Skip tool result UserMessages
+                        content = _extract_stored_message_content(data)
+                        if not content:
+                            continue
+                        # Check for comm metadata
+                        metadata = msg.get("metadata", {}) or {}
+                        if metadata.get("comm"):
+                            comm_data = metadata["comm"]
+                            sender = comm_data.get("from_display_name", "unknown")
+                            entries.append(
+                                f"## {formatted_ts} - Comm (Inbound from {sender})\n"
+                                f"{content}\n"
+                            )
+                            stats["comm_inbound"] += 1
+                            stats["total"] += 1
+                        else:
+                            entries.append(f"## {formatted_ts} - User\n{content}\n")
+                            stats["user"] += 1
+                            stats["total"] += 1
+
+                    elif stored_type == "SystemMessage":
+                        subtype = data.get("subtype", "")
+                        if subtype not in _EXCLUDED_SYSTEM_SUBTYPES:
+                            content = _extract_stored_message_content(data)
+                            if content:
+                                entries.append(
+                                    f"## {formatted_ts} - System\n{content}\n"
+                                )
+                                stats["system"] += 1
+                                stats["total"] += 1
+
+                    elif stored_type == "ToolCallUpdate":
+                        tool_name = data.get("name", "")
+                        if tool_name == "mcp__legion__send_comm":
+                            tool_input = data.get("input", {}) or {}
+                            recipient = tool_input.get("to_minion_name", "unknown")
+                            summary = tool_input.get("summary", "")
+                            comm_content = tool_input.get("content", "")
+                            body = ""
+                            if summary:
+                                body += f"**Summary:** {summary}\n"
+                            if comm_content:
+                                body += f"{comm_content}\n"
+                            if not body:
+                                body = "(no content)\n"
+                            entries.append(
+                                f"## {formatted_ts} - Comm (Outbound to {recipient})\n"
+                                f"{body}"
+                            )
+                            stats["comm_outbound"] += 1
+                            stats["total"] += 1
+
+                    # All other StoredMessage _types (ResultMessage, TaskStartedMessage,
+                    # PermissionRequestMessage, etc.) are silently skipped.
+
+                else:
+                    # --- Legacy flat-dict format ---
+                    msg_type = msg.get("type", "")
+                    metadata = msg.get("metadata", {}) or {}
+                    content = _extract_content(msg)
+
+                    if msg_type == "user":
+                        if metadata.get("comm"):
+                            comm_data = metadata["comm"]
+                            sender = comm_data.get("from_display_name", "unknown")
+                            entries.append(
+                                f"## {formatted_ts} - Comm (Inbound from {sender})\n"
+                                f"{content}\n"
+                            )
+                            stats["comm_inbound"] += 1
+                            stats["total"] += 1
+                        else:
+                            entries.append(f"## {formatted_ts} - User\n{content}\n")
+                            stats["user"] += 1
+                            stats["total"] += 1
+
+                    elif msg_type == "assistant":
+                        entries.append(f"## {formatted_ts} - Agent\n{content}\n")
+                        stats["agent"] += 1
                         stats["total"] += 1
 
-                elif msg_type == "assistant":
-                    entries.append(f"## {formatted_ts} - Agent\n{content}\n")
-                    stats["agent"] += 1
-                    stats["total"] += 1
+                    elif msg_type == "system":
+                        subtype = metadata.get("subtype", "")
+                        if subtype not in _EXCLUDED_SYSTEM_SUBTYPES:
+                            entries.append(
+                                f"## {formatted_ts} - System\n{content}\n"
+                            )
+                            stats["system"] += 1
+                            stats["total"] += 1
 
-                elif msg_type == "system":
-                    subtype = metadata.get("subtype", "")
-                    if subtype not in _EXCLUDED_SYSTEM_SUBTYPES:
-                        entries.append(f"## {formatted_ts} - System\n{content}\n")
-                        stats["system"] += 1
-                        stats["total"] += 1
-
-                elif msg_type == "tool_use":
-                    tool_name = metadata.get("tool_name", "")
-                    if tool_name == "mcp__legion__send_comm":
-                        tool_input = metadata.get("tool_input", {}) or {}
-                        recipient = tool_input.get("to_minion_name", "unknown")
-                        summary = tool_input.get("summary", "")
-                        comm_content = tool_input.get("content", "")
-                        body = ""
-                        if summary:
-                            body += f"**Summary:** {summary}\n"
-                        if comm_content:
-                            body += f"{comm_content}\n"
-                        if not body:
-                            body = content + "\n"
-                        entries.append(
-                            f"## {formatted_ts} - Comm (Outbound to {recipient})\n{body}"
-                        )
-                        stats["comm_outbound"] += 1
-                        stats["total"] += 1
+                    elif msg_type == "tool_use":
+                        tool_name = metadata.get("tool_name", "")
+                        if tool_name == "mcp__legion__send_comm":
+                            tool_input = metadata.get("tool_input", {}) or {}
+                            recipient = tool_input.get("to_minion_name", "unknown")
+                            summary = tool_input.get("summary", "")
+                            comm_content = tool_input.get("content", "")
+                            body = ""
+                            if summary:
+                                body += f"**Summary:** {summary}\n"
+                            if comm_content:
+                                body += f"{comm_content}\n"
+                            if not body:
+                                body = content + "\n"
+                            entries.append(
+                                f"## {formatted_ts} - Comm (Outbound to {recipient})\n"
+                                f"{body}"
+                            )
+                            stats["comm_outbound"] += 1
+                            stats["total"] += 1
 
         # Calculate duration
         duration_str = "unknown"
