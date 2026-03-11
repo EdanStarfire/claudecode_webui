@@ -29,8 +29,18 @@
         </button>
       </div>
 
-      <!-- Right side: Autoscroll -->
-      <div>
+      <!-- Right side: Read Aloud + Autoscroll -->
+      <div class="d-flex gap-2">
+        <button
+          class="btn btn-sm"
+          :class="uiStore.ttsReadAloudEnabled ? 'btn-primary' : 'btn-outline-secondary'"
+          @click="toggleReadAloud"
+          aria-label="Toggle read aloud"
+          :aria-pressed="uiStore.ttsReadAloudEnabled"
+        >
+          {{ uiStore.ttsReadAloudEnabled ? '\uD83D\uDD0A' : '\uD83D\uDD07' }}
+          <span class="button-label">{{ uiStore.ttsReadAloudEnabled ? 'ON' : 'OFF' }}</span>
+        </button>
         <button
           class="btn btn-sm"
           :class="uiStore.autoScrollEnabled ? 'btn-primary' : 'btn-outline-secondary'"
@@ -110,6 +120,10 @@ const showInfo = () => {
 
 const showManage = () => {
   uiStore.showModal('manage-session', { session: session.value })
+}
+
+const toggleReadAloud = () => {
+  uiStore.setTTSReadAloud(!uiStore.ttsReadAloudEnabled)
 }
 
 const toggleAutoScroll = () => {

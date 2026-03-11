@@ -1319,6 +1319,37 @@ button:focus {
     .quick-add-btns .btn { font-size: 0.65rem; }
 }
 
+/* ========== TTS READ ALOUD STYLES (Issue #735) ========== */
+
+/* Glow on currently-playing assistant message */
+.msg-bubble-assistant.tts-playing {
+    border-left-color: #198754;
+    box-shadow: 0 0 14px 5px rgba(25, 135, 84, 0.3);
+}
+
+/* Floating playback controls — positioned over the scroll container */
+.tts-floating-controls {
+    position: absolute;
+    bottom: 12px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    gap: 8px;
+    padding: 6px 12px;
+    background: rgba(255, 255, 255, 0.95);
+    border: 1px solid #dee2e6;
+    border-radius: 20px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+    z-index: 10;
+    pointer-events: auto;
+}
+
+.tts-floating-controls .btn {
+    min-width: 36px;
+    font-size: 1rem;
+    line-height: 1;
+}
+
 /* ========== TIMELINE ACCORDION STYLES ========== */
 
 /* Timeline accordion buttons - minimal styling */

@@ -1,39 +1,58 @@
 <template>
-  <div class="messages-area flex-grow-1 overflow-auto" :class="{ 'theme-red': uiStore.isRedBackground }" ref="messagesArea" role="log" aria-live="polite" aria-label="Conversation messages" @scroll="onScroll">
-    <div v-if="displayableItems.length === 0" class="text-muted text-center py-5">
-      No messages yet. Start a conversation!
+  <div class="messages-area-wrapper flex-grow-1">
+    <div class="messages-area overflow-auto" :class="{ 'theme-red': uiStore.isRedBackground }" ref="messagesArea" role="log" aria-live="polite" aria-label="Conversation messages" @scroll="onScroll">
+      <div v-if="displayableItems.length === 0" class="text-muted text-center py-5">
+        No messages yet. Start a conversation!
+      </div>
+
+      <!-- Messages and compaction events using new component architecture -->
+      <!-- Tool cards are embedded within AssistantMessage components -->
+      <template v-for="(item, index) in displayableItems" :key="`item-${index}`">
+        <!-- Regular message -->
+        <MessageItem
+          v-if="item.type === 'message'"
+          :message="normalizeMessage(item.message)"
+          :attachedTools="item.attachedTools || []"
+        />
+
+        <!-- Compaction event group -->
+        <CompactionEventGroup
+          v-else-if="item.type === 'compaction'"
+          :messages="item.messages"
+        />
+      </template>
+
+      <!-- Issue #662: Truncation banner after last assistant message when response was truncated -->
+      <TruncationBanner v-if="showTruncationBanner" :key="'truncation-' + sessionStore.currentSessionId" />
     </div>
 
-    <!-- Messages and compaction events using new component architecture -->
-    <!-- Tool cards are embedded within AssistantMessage components -->
-    <template v-for="(item, index) in displayableItems" :key="`item-${index}`">
-      <!-- Regular message -->
-      <MessageItem
-        v-if="item.type === 'message'"
-        :message="normalizeMessage(item.message)"
-        :attachedTools="item.attachedTools || []"
-      />
-
-      <!-- Compaction event group -->
-      <CompactionEventGroup
-        v-else-if="item.type === 'compaction'"
-        :messages="item.messages"
-      />
-    </template>
-
-    <!-- Issue #662: Truncation banner after last assistant message when response was truncated -->
-    <TruncationBanner v-if="showTruncationBanner" :key="'truncation-' + sessionStore.currentSessionId" />
+    <!-- TTS Floating Controls (issue #735) — outside scroll container to avoid layout shift -->
+    <div v-if="tts.isPlaying.value" class="tts-floating-controls">
+      <button
+        class="btn btn-sm btn-outline-secondary"
+        @click="tts.isPaused.value ? tts.resume() : tts.pause()"
+        :aria-label="tts.isPaused.value ? 'Resume reading' : 'Pause reading'"
+      >
+        {{ tts.isPaused.value ? '\u25B6' : '\u23F8' }}
+      </button>
+      <button
+        class="btn btn-sm btn-outline-danger"
+        @click="tts.stop()"
+        aria-label="Stop reading"
+      >&#x23F9;</button>
+    </div>
   </div>
 </template>
 
 <script setup>
-import { computed, ref, watch, nextTick, onMounted, onUnmounted } from 'vue'
+import { computed, ref, watch, nextTick, onMounted, onUnmounted, provide } from 'vue'
 import { useMessageStore } from '@/stores/message'
 import { useSessionStore } from '@/stores/session'
 import { useUIStore } from '@/stores/ui'
 import MessageItem from './MessageItem.vue'
 import CompactionEventGroup from './CompactionEventGroup.vue'
 import TruncationBanner from './TruncationBanner.vue'
+import { useTTSReadAloud } from '@/composables/useTTSReadAloud'
 
 const messageStore = useMessageStore()
 const sessionStore = useSessionStore()
@@ -42,6 +61,14 @@ const uiStore = useUIStore()
 const messagesArea = ref(null)
 const isProgrammaticScroll = ref(false)
 const scrollRafId = ref(null)
+
+// TTS Read Aloud (issue #735)
+const tts = useTTSReadAloud()
+provide('ttsReadAloud', tts)
+
+// Provide all messages for play-from-here navigation
+const allMessages = computed(() => messageStore.currentMessages)
+provide('allMessages', allMessages)
 
 /**
  * Group messages into displayable items, detecting compaction event sequences
@@ -384,6 +411,42 @@ function onScroll() {
   })
 }
 
+// TTS: Auto-queue new assistant messages when read aloud is enabled.
+// Watch raw message list (not displayableItems) because groupToolsToParentMessages
+// can merge/hide messages, making displayableItems.length unreliable for detection.
+// Use ttsInitialized flag to skip the initial message load (page reload / session switch)
+// so historical messages don't get queued for reading.
+const lastSeenMessageCount = ref(messageStore.currentMessages.length)
+const ttsInitialized = ref(false)
+watch(() => messageStore.currentMessages.length, (newLen) => {
+  if (!ttsInitialized.value) {
+    // First change after mount or session switch — treat as initial load, don't queue
+    lastSeenMessageCount.value = newLen
+    ttsInitialized.value = true
+    return
+  }
+  if (newLen > lastSeenMessageCount.value && uiStore.ttsReadAloudEnabled) {
+    const msgs = messageStore.currentMessages
+    for (let i = lastSeenMessageCount.value; i < newLen; i++) {
+      const msg = msgs[i]
+      if (msg?.type === 'assistant') {
+        const content = msg.content || ''
+        if (content.trim() && content !== 'Assistant response') {
+          tts.queueNewMessage(msg)
+        }
+      }
+    }
+  }
+  lastSeenMessageCount.value = newLen
+})
+
+// Reset TTS message counter on session switch — mark as uninitialized
+// so the next batch of messages is treated as initial load
+watch(() => sessionStore.currentSessionId, () => {
+  lastSeenMessageCount.value = messageStore.currentMessages.length
+  ttsInitialized.value = false
+})
+
 // Auto-scroll on new messages, or restore scroll position if pending
 watch(() => displayableItems.value.length, async (newLen) => {
   if (newLen > 0 && sessionStore.pendingScrollRestoreSessionId === sessionStore.currentSessionId) {
@@ -511,6 +574,8 @@ function shouldDisplayMessage(message) {
  */
 function normalizeMessage(message) {
   return {
+    id: message.id,
+    message_id: message.message_id,
     type: message.type || 'unknown',
     content: message.content || '',
     timestamp: message.timestamp || Date.now() / 1000,
@@ -531,7 +596,16 @@ function normalizeMessage(message) {
 </script>
 
 <style scoped>
+.messages-area-wrapper {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
 .messages-area {
+  flex: 1;
+  overflow: auto;
   background: #ffffff;
   padding: 8px 0;
 }
