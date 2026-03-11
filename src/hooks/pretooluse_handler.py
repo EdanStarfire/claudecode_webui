@@ -109,9 +109,10 @@ class InternalPermissionHandler:
         self._rules = self._build_rules(
             session_data_dir, plans_dir, skills_dirs, knowledge_mgmt_enabled, memory_dir
         )
-        # Collect all "allow" path prefixes for addDirectories auto-approval
-        self._managed_prefixes = [
-            prefix for rule in self._rules
+        # Collect (prefix, reason) pairs from allow rules for addDirectories auto-approval
+        self._managed_prefix_reasons: list[tuple[str, str]] = [
+            (prefix, rule.reason)
+            for rule in self._rules
             if rule.enabled and rule.decision == "allow"
             for prefix in rule.path_prefixes
         ]
@@ -201,20 +202,25 @@ class InternalPermissionHandler:
                 return True
         return False
 
-    def _check_directories_managed(self, directories: list[str]) -> bool:
+    def _check_directories_managed(self, directories: list[str]) -> str | None:
         """Check if all directories in an addDirectories suggestion are managed paths.
 
-        Returns True only if every directory matches a managed prefix, meaning
-        the suggestion is for internally managed directories and can be auto-approved.
+        Returns the reason from the first matched rule if every directory matches,
+        or None if any directory is unmanaged.
         """
+        first_reason = None
         for dir_path in directories:
             resolved = _resolve_path(dir_path)
-            if not any(
-                resolved.startswith(prefix.rstrip(os.sep))
-                for prefix in self._managed_prefixes
-            ):
-                return False
-        return True
+            matched_reason = None
+            for prefix, reason in self._managed_prefix_reasons:
+                if resolved.startswith(prefix.rstrip(os.sep)):
+                    matched_reason = reason
+                    break
+            if matched_reason is None:
+                return None
+            if first_reason is None:
+                first_reason = matched_reason
+        return first_reason
 
     def evaluate_suggestion(
         self, tool_name: str, rule_content: str | None, behavior: str | None
@@ -276,8 +282,10 @@ class InternalPermissionHandler:
             # Handle addDirectories: auto-approve if all directories are managed paths
             if sug_type == "addDirectories":
                 directories = _get_field(suggestion, "directories", "directories")
-                if directories and self._check_directories_managed(directories):
-                    return ("allow", "Auto-approved: directory is internally managed")
+                if directories:
+                    reason = self._check_directories_managed(directories)
+                    if reason:
+                        return ("allow", reason)
                 continue
 
             if sug_type != "addRules":

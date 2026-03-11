@@ -359,6 +359,7 @@ class TestAddDirectoriesSuggestion:
         result = handler.evaluate_suggestions(suggestions)
         assert result is not None
         assert result[0] == "allow"
+        assert result[1] == "Auto-approved: session memory file access"
 
     def test_issue_709_add_unmanaged_dir_not_approved(self, tmp_dirs):
         """addDirectories for an unmanaged dir should not be auto-approved."""
@@ -408,6 +409,7 @@ class TestAddDirectoriesSuggestion:
         result = handler_km_enabled.evaluate_suggestions(suggestions)
         assert result is not None
         assert result[0] == "allow"
+        assert result[1] == "Auto-approved: internal plan file access"
 
     def test_issue_709_add_dir_without_memory_configured(self, handler_km_enabled, tmp_dirs):
         """addDirectories for a session memory path should not auto-approve when memory not configured."""
