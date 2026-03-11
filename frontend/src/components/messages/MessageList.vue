@@ -37,9 +37,7 @@
         class="btn btn-sm btn-outline-danger"
         @click="tts.stop()"
         aria-label="Stop reading"
-      >
-        \u23F9
-      </button>
+      >&#x23F9;</button>
     </div>
   </div>
 </template>
