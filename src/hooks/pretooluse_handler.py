@@ -109,6 +109,12 @@ class InternalPermissionHandler:
         self._rules = self._build_rules(
             session_data_dir, plans_dir, skills_dirs, knowledge_mgmt_enabled, memory_dir
         )
+        # Collect all "allow" path prefixes for addDirectories auto-approval
+        self._managed_prefixes = [
+            prefix for rule in self._rules
+            if rule.enabled and rule.decision == "allow"
+            for prefix in rule.path_prefixes
+        ]
 
     def _build_rules(
         self,
@@ -195,6 +201,21 @@ class InternalPermissionHandler:
                 return True
         return False
 
+    def _check_directories_managed(self, directories: list[str]) -> bool:
+        """Check if all directories in an addDirectories suggestion are managed paths.
+
+        Returns True only if every directory matches a managed prefix, meaning
+        the suggestion is for internally managed directories and can be auto-approved.
+        """
+        for dir_path in directories:
+            resolved = _resolve_path(dir_path)
+            if not any(
+                resolved.startswith(prefix.rstrip(os.sep))
+                for prefix in self._managed_prefixes
+            ):
+                return False
+        return True
+
     def evaluate_suggestion(
         self, tool_name: str, rule_content: str | None, behavior: str | None
     ) -> tuple[PermissionDecision, str] | None:
@@ -251,6 +272,14 @@ class InternalPermissionHandler:
         """
         for suggestion in suggestions:
             sug_type = _get_field(suggestion, "type", "type")
+
+            # Handle addDirectories: auto-approve if all directories are managed paths
+            if sug_type == "addDirectories":
+                directories = _get_field(suggestion, "directories", "directories")
+                if directories and self._check_directories_managed(directories):
+                    return ("allow", "Auto-approved: directory is internally managed")
+                continue
+
             if sug_type != "addRules":
                 continue
 
