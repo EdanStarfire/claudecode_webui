@@ -5,16 +5,6 @@ let mermaidLoadPromise = null
 let diagramCounter = 0
 
 /**
- * Detect whether dark mode is active.
- */
-function isDarkMode() {
-  return (
-    document.documentElement.classList.contains('dark') ||
-    window.matchMedia('(prefers-color-scheme: dark)').matches
-  )
-}
-
-/**
  * Lazily load and initialize mermaid.
  */
 async function loadMermaid() {
@@ -26,7 +16,7 @@ async function loadMermaid() {
     mermaidModule.initialize({
       startOnLoad: false,
       securityLevel: 'strict',
-      theme: isDarkMode() ? 'dark' : 'default'
+      theme: 'default'
     })
     return mermaidModule
   })
@@ -187,41 +177,4 @@ export function useMermaid(containerRef) {
     }
   })
 
-  // Listen for theme changes and re-render
-  const themeMediaQuery = window.matchMedia('(prefers-color-scheme: dark)')
-  function onThemeChange() {
-    if (mermaidModule) {
-      mermaidModule.initialize({
-        startOnLoad: false,
-        securityLevel: 'strict',
-        theme: isDarkMode() ? 'dark' : 'default'
-      })
-    }
-    // Re-render all existing diagrams in this container
-    if (containerRef.value) {
-      const containers = containerRef.value.querySelectorAll('.mermaid-container')
-      containers.forEach((wrapper) => {
-        const source = wrapper.dataset.mermaidSource
-        if (!source) return
-        // Restore original code block for re-processing
-        const pre = document.createElement('pre')
-        const code = document.createElement('code')
-        code.className = 'language-mermaid'
-        code.textContent = source
-        pre.appendChild(code)
-        wrapper.replaceWith(pre)
-      })
-      // Remove any error banners
-      containerRef.value
-        .querySelectorAll('.mermaid-error')
-        .forEach((el) => el.remove())
-      // Re-process
-      debouncedProcess()
-    }
-  }
-
-  themeMediaQuery.addEventListener('change', onThemeChange)
-  onUnmounted(() => {
-    themeMediaQuery.removeEventListener('change', onThemeChange)
-  })
 }

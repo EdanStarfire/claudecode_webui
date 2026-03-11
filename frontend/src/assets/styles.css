@@ -1434,37 +1434,6 @@ button:focus {
     border: 1px solid #fed7aa;
 }
 
-/* Dark mode support via prefers-color-scheme */
-@media (prefers-color-scheme: dark) {
-    .mermaid-container {
-        background: #1e1e2e;
-        border-color: #3e3e5e;
-    }
-
-    .mermaid-toggle {
-        color: #c9d1d9;
-        background: rgba(30, 30, 46, 0.85);
-        border-color: #3e3e5e;
-    }
-
-    .mermaid-toggle:hover {
-        background: #2d2d44;
-        color: #e6edf3;
-    }
-
-    .mermaid-code-view pre {
-        background: #161b22;
-        border-color: #3e3e5e;
-        color: #c9d1d9;
-    }
-
-    .mermaid-error {
-        color: #fbbf24;
-        background: #1c1917;
-        border-color: #78350f;
-    }
-}
-
 /* Responsive: ensure diagrams don't overflow on mobile */
 @media (max-width: 768px) {
     .mermaid-container {
