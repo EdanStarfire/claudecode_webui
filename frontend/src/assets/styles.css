@@ -1321,10 +1321,10 @@ button:focus {
 
 /* ========== TTS READ ALOUD STYLES (Issue #735) ========== */
 
-/* Highlight on currently-playing assistant message */
+/* Glow on currently-playing assistant message */
 .msg-bubble-assistant.tts-playing {
-    border-left: 3px solid #0d6efd;
-    background: #eff6ff;
+    border-left-color: #0d6efd;
+    box-shadow: 0 0 8px 2px rgba(13, 110, 253, 0.25);
 }
 
 /* Floating playback controls */
