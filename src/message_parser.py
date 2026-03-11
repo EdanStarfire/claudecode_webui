@@ -588,10 +588,10 @@ class AssistantMessageHandler(MessageHandler):
                         # Parse tool input more safely
                         try:
                             tool_input = ast.literal_eval(tool_input_str)
-                        except:
+                        except Exception:
                             try:
                                 tool_input = json.loads(tool_input_str.replace("'", '"'))
-                            except:
+                            except Exception:
                                 tool_input = {"raw": tool_input_str}
 
                         blocks.append((block_type, {
@@ -708,12 +708,12 @@ class AssistantMessageHandler(MessageHandler):
                 # Try to parse as Python literal
                 try:
                     tool_input = ast.literal_eval(input_str)
-                except:
+                except Exception:
                     try:
                         # Try as JSON
                         json_str = input_str.replace("'", '"')
                         tool_input = json.loads(json_str)
-                    except:
+                    except Exception:
                         # Fallback
                         tool_input = {"raw": input_str}
             else:

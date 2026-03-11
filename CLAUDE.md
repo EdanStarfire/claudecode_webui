@@ -103,29 +103,17 @@ options = ClaudeAgentOptions(
    uv run ruff check src/module_name.py
    ```
 
-3. **AVOID running on entire codebase**: Do NOT run `uv run ruff check --fix src/` as this will auto-fix 684+ unrelated violations across the codebase, creating massive unrelated changes in your PR.
+### Zero Violation Policy
 
-### Progressive Strictness Strategy
-The project uses **Option 3: Progressive Strictness** to manage existing technical debt:
-
-**Current State** (as of initial Ruff integration):
-- 791 total violations identified
-- 684 auto-fixable with `--fix`
-- Rule sets enabled: E (pycodestyle errors), W (warnings), F (pyflakes), I (isort), N (pep8-naming), UP (pyupgrade), B (flake8-bugbear)
+The codebase maintains **zero ruff violations**. `uv run ruff check src/` must pass with no errors.
 
 **Requirements**:
-1. **New code MUST NOT introduce new violations**
-2. **Changed code SHOULD fix existing violations when touched**
-3. **Auto-fix safe violations** in files you modify
-4. **Legacy code** with violations is acceptable until modified
+1. **All code must pass `uv run ruff check src/` with zero violations**
+2. **No `# noqa` comments without PR-level justification**
+3. **Run `uv run ruff check --fix <file>` before committing** to auto-fix safe violations
+4. **CI enforcement**: Any violation fails the check
 
-### When Working on Files
-1. Run `uv run ruff check --fix <file>` before committing
-2. Review and commit auto-fixes separately if desired
-3. For unfixable violations (marked with `[ ]`), either:
-   - Fix manually if straightforward
-   - Add inline `# noqa: <code>` with justification if needed
-   - Document in PR why violation remains
+**Rule sets enabled**: E (pycodestyle errors), W (warnings), F (pyflakes), I (isort), N (pep8-naming), UP (pyupgrade), B (flake8-bugbear)
 
 ### Configuration
 Ruff configuration is in `pyproject.toml`:

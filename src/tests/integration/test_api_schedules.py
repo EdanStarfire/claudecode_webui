@@ -16,9 +16,6 @@ Tests:
 
 import uuid
 
-import pytest
-
-
 
 async def _setup_legion_with_minion(env):
     """Create a legion project with a minion for schedule testing."""

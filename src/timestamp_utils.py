@@ -6,8 +6,7 @@ All message timestamps should use Unix timestamps (seconds since epoch) to avoid
 parsing overhead and format inconsistencies.
 """
 
-from datetime import datetime, timezone
-from typing import Union
+from datetime import UTC, datetime
 
 
 def get_unix_timestamp() -> float:
@@ -17,10 +16,10 @@ def get_unix_timestamp() -> float:
     Returns:
         float: Current time in seconds since epoch (e.g., 1761781369.1559327)
     """
-    return datetime.now(timezone.utc).timestamp()
+    return datetime.now(UTC).timestamp()
 
 
-def normalize_timestamp(timestamp: Union[float, str, datetime]) -> float:
+def normalize_timestamp(timestamp: float | str | datetime) -> float:
     """
     Normalize various timestamp formats to Unix timestamp (float).
 

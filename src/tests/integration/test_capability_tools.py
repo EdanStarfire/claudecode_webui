@@ -32,7 +32,7 @@ async def test_list_templates_with_templates(legion_test_env):
         pytest.skip("No templates available for testing")
 
     # Create a minion to call the tool
-    minion = await env["create_minion"]("caller", role="Template Viewer")
+    await env["create_minion"]("caller", role="Template Viewer")
 
     # Call list_templates tool
     result = await legion_system.mcp_tools._handle_list_templates({})
@@ -72,7 +72,7 @@ async def test_list_templates_empty(legion_test_env):
         pytest.skip("Test requires no templates, but templates exist")
 
     # Create a minion to call the tool
-    minion = await env["create_minion"]("caller", role="Template Viewer")
+    await env["create_minion"]("caller", role="Template Viewer")
 
     # Call list_templates tool
     result = await legion_system.mcp_tools._handle_list_templates({})
@@ -107,7 +107,7 @@ async def test_list_templates_format(legion_test_env):
         pytest.skip("No templates available for testing")
 
     # Create a minion to call the tool
-    minion = await env["create_minion"]("caller", role="Template Viewer")
+    await env["create_minion"]("caller", role="Template Viewer")
 
     # Call list_templates tool
     result = await legion_system.mcp_tools._handle_list_templates({})

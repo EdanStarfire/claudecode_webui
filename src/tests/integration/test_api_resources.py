@@ -15,9 +15,6 @@ Tests:
 
 import uuid
 
-import pytest
-
-
 
 async def _create_session_with_project(env):
     project = await env["create_test_project"]("Resource Test")

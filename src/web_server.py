@@ -13,7 +13,7 @@ import time
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 
 from claude_agent_sdk import PermissionUpdate
 from claude_agent_sdk.types import PermissionRuleValue
@@ -795,7 +795,7 @@ class ClaudeWebUI:
                 return {"project": project.to_dict()}
             except Exception as e:
                 logger.exception("Failed to create project")
-                raise HTTPException(status_code=500, detail=str(e))
+                raise HTTPException(status_code=500, detail=str(e)) from e
 
         @self.app.get("/api/projects")
         async def list_projects():
@@ -805,7 +805,7 @@ class ClaudeWebUI:
                 return {"projects": [p.to_dict() for p in projects]}
             except Exception as e:
                 logger.exception("Failed to list projects")
-                raise HTTPException(status_code=500, detail=str(e))
+                raise HTTPException(status_code=500, detail=str(e)) from e
 
         @self.app.get("/api/projects/{project_id}")
         async def get_project(project_id: str):
@@ -826,7 +826,7 @@ class ClaudeWebUI:
                 raise
             except Exception as e:
                 logger.exception("Failed to get project")
-                raise HTTPException(status_code=500, detail=str(e))
+                raise HTTPException(status_code=500, detail=str(e)) from e
 
         @self.app.put("/api/projects/reorder")
         async def reorder_projects(request: ProjectReorderRequest):
@@ -840,7 +840,7 @@ class ClaudeWebUI:
                 raise
             except Exception as e:
                 logger.exception("Failed to reorder projects")
-                raise HTTPException(status_code=500, detail=str(e))
+                raise HTTPException(status_code=500, detail=str(e)) from e
 
         @self.app.put("/api/projects/{project_id}")
         async def update_project(project_id: str, request: ProjectUpdateRequest):
@@ -866,7 +866,7 @@ class ClaudeWebUI:
                 raise
             except Exception as e:
                 logger.exception("Failed to update project")
-                raise HTTPException(status_code=500, detail=str(e))
+                raise HTTPException(status_code=500, detail=str(e)) from e
 
         @self.app.delete("/api/projects/{project_id}")
         async def delete_project(project_id: str):
@@ -896,7 +896,7 @@ class ClaudeWebUI:
                 raise
             except Exception as e:
                 logger.exception("Failed to delete project")
-                raise HTTPException(status_code=500, detail=str(e))
+                raise HTTPException(status_code=500, detail=str(e)) from e
 
         @self.app.put("/api/projects/{project_id}/toggle-expansion")
         async def toggle_project_expansion(project_id: str):
@@ -918,7 +918,7 @@ class ClaudeWebUI:
                 raise
             except Exception as e:
                 logger.exception("Failed to toggle expansion")
-                raise HTTPException(status_code=500, detail=str(e))
+                raise HTTPException(status_code=500, detail=str(e)) from e
 
         @self.app.put("/api/projects/{project_id}/sessions/reorder")
         async def reorder_project_sessions(project_id: str, request: SessionReorderRequest):
@@ -947,7 +947,7 @@ class ClaudeWebUI:
                 raise
             except Exception as e:
                 logger.exception("Failed to reorder project sessions")
-                raise HTTPException(status_code=500, detail=str(e))
+                raise HTTPException(status_code=500, detail=str(e)) from e
 
         # ==================== ARCHIVE ENDPOINTS ====================
 
@@ -964,7 +964,7 @@ class ClaudeWebUI:
                 raise
             except Exception as e:
                 logger.exception("Failed to list archives")
-                raise HTTPException(status_code=500, detail=str(e))
+                raise HTTPException(status_code=500, detail=str(e)) from e
 
         @self.app.get("/api/projects/{project_id}/archives/{session_id}/{archive_id}/messages")
         async def get_archive_messages(
@@ -984,7 +984,7 @@ class ClaudeWebUI:
                 raise
             except Exception as e:
                 logger.exception("Failed to get archive messages")
-                raise HTTPException(status_code=500, detail=str(e))
+                raise HTTPException(status_code=500, detail=str(e)) from e
 
         @self.app.get("/api/projects/{project_id}/archives/{session_id}/{archive_id}/state")
         async def get_archive_state(project_id: str, session_id: str, archive_id: str):
@@ -1001,7 +1001,7 @@ class ClaudeWebUI:
                 raise
             except Exception as e:
                 logger.exception("Failed to get archive state")
-                raise HTTPException(status_code=500, detail=str(e))
+                raise HTTPException(status_code=500, detail=str(e)) from e
 
         @self.app.get(
             "/api/projects/{project_id}/archives/{session_id}/{archive_id}/resources"
@@ -1022,7 +1022,7 @@ class ClaudeWebUI:
                 raise
             except Exception as e:
                 logger.exception("Failed to get archive resources")
-                raise HTTPException(status_code=500, detail=str(e))
+                raise HTTPException(status_code=500, detail=str(e)) from e
 
         @self.app.get(
             "/api/projects/{project_id}/archives/{session_id}/{archive_id}"
@@ -1074,7 +1074,7 @@ class ClaudeWebUI:
                 raise
             except Exception as e:
                 logger.exception("Failed to get archive resource")
-                raise HTTPException(status_code=500, detail=str(e))
+                raise HTTPException(status_code=500, detail=str(e)) from e
 
         @self.app.get("/api/projects/{project_id}/deleted-agents")
         async def list_deleted_agents(project_id: str):
@@ -1089,7 +1089,7 @@ class ClaudeWebUI:
                 raise
             except Exception as e:
                 logger.exception("Failed to list deleted agents")
-                raise HTTPException(status_code=500, detail=str(e))
+                raise HTTPException(status_code=500, detail=str(e)) from e
 
         # ==================== SESSION ENDPOINTS ====================
 
@@ -1140,7 +1140,7 @@ class ClaudeWebUI:
 
             except Exception as e:
                 logger.exception("Failed to create session")
-                raise HTTPException(status_code=500, detail=str(e))
+                raise HTTPException(status_code=500, detail=str(e)) from e
 
         @self.app.get("/api/sessions")
         async def list_sessions():
@@ -1150,7 +1150,7 @@ class ClaudeWebUI:
                 return {"sessions": sessions}
             except Exception as e:
                 logger.exception("Failed to list sessions")
-                raise HTTPException(status_code=500, detail=str(e))
+                raise HTTPException(status_code=500, detail=str(e)) from e
 
         @self.app.get("/api/sessions/{session_id}")
         async def get_session_info(session_id: str):
@@ -1169,7 +1169,7 @@ class ClaudeWebUI:
                 raise
             except Exception as e:
                 logger.exception("Failed to get session info")
-                raise HTTPException(status_code=500, detail=str(e))
+                raise HTTPException(status_code=500, detail=str(e)) from e
 
         @self.app.get("/api/sessions/{session_id}/descendants")
         async def get_session_descendants(session_id: str):
@@ -1183,7 +1183,7 @@ class ClaudeWebUI:
                 }
             except Exception as e:
                 logger.exception(f"Failed to get descendants for session {session_id}")
-                raise HTTPException(status_code=500, detail=str(e))
+                raise HTTPException(status_code=500, detail=str(e)) from e
 
         @self.app.post("/api/sessions/{session_id}/start")
         async def start_session(session_id: str):
@@ -1203,7 +1203,7 @@ class ClaudeWebUI:
                 return {"success": success}
             except Exception as e:
                 logger.exception("Failed to start session")
-                raise HTTPException(status_code=500, detail=str(e))
+                raise HTTPException(status_code=500, detail=str(e)) from e
 
         @self.app.post("/api/sessions/{session_id}/terminate")
         async def terminate_session(session_id: str):
@@ -1216,7 +1216,7 @@ class ClaudeWebUI:
                 return {"success": success}
             except Exception as e:
                 logger.exception("Failed to terminate session")
-                raise HTTPException(status_code=500, detail=str(e))
+                raise HTTPException(status_code=500, detail=str(e)) from e
 
         @self.app.put("/api/sessions/{session_id}/name")
         async def update_session_name(session_id: str, request: SessionNameUpdateRequest):
@@ -1230,7 +1230,7 @@ class ClaudeWebUI:
                 raise
             except Exception as e:
                 logger.exception("Failed to update session name")
-                raise HTTPException(status_code=500, detail=str(e))
+                raise HTTPException(status_code=500, detail=str(e)) from e
 
         @self.app.patch("/api/sessions/{session_id}")
         async def update_session(session_id: str, request: SessionUpdateRequest):
@@ -1240,7 +1240,6 @@ class ClaudeWebUI:
                 if not session:
                     raise HTTPException(status_code=404, detail="Session not found")
 
-                is_active = session.state.value in ["active", "starting"]
                 updates = {}
 
                 # Handle name update
@@ -1333,7 +1332,7 @@ class ClaudeWebUI:
                 raise
             except Exception as e:
                 logger.exception("Failed to update session")
-                raise HTTPException(status_code=500, detail=str(e))
+                raise HTTPException(status_code=500, detail=str(e)) from e
 
         @self.app.delete("/api/sessions/{session_id}")
         async def delete_session(session_id: str):
@@ -1389,7 +1388,7 @@ class ClaudeWebUI:
                 raise
             except Exception as e:
                 logger.exception("Failed to delete session")
-                raise HTTPException(status_code=500, detail=str(e))
+                raise HTTPException(status_code=500, detail=str(e)) from e
 
         @self.app.post("/api/sessions/{session_id}/messages")
         async def send_message(session_id: str, request: MessageRequest):
@@ -1399,7 +1398,7 @@ class ClaudeWebUI:
                 return {"success": success}
             except Exception as e:
                 logger.exception("Failed to send message")
-                raise HTTPException(status_code=500, detail=str(e))
+                raise HTTPException(status_code=500, detail=str(e)) from e
 
         @self.app.get("/api/sessions/{session_id}/messages")
         async def get_messages(session_id: str, limit: int | None = 50, offset: int = 0):
@@ -1411,12 +1410,12 @@ class ClaudeWebUI:
                 return result
             except Exception as e:
                 logger.exception("Failed to get messages")
-                raise HTTPException(status_code=500, detail=str(e))
+                raise HTTPException(status_code=500, detail=str(e)) from e
 
         # ==================== FILE UPLOAD ENDPOINTS ====================
 
         @self.app.post("/api/sessions/{session_id}/files")
-        async def upload_file(session_id: str, file: UploadFile = File(...)):
+        async def upload_file(session_id: str, file: Annotated[UploadFile, File(...)]):
             """
             Upload a file for a session.
 
@@ -1471,12 +1470,12 @@ class ClaudeWebUI:
 
             except FileUploadError as e:
                 logger.warning(f"File upload validation failed: {e.message}")
-                raise HTTPException(status_code=400, detail=e.message)
+                raise HTTPException(status_code=400, detail=e.message) from e
             except HTTPException:
                 raise
             except Exception as e:
                 logger.exception("Failed to upload file")
-                raise HTTPException(status_code=500, detail=str(e))
+                raise HTTPException(status_code=500, detail=str(e)) from e
 
         @self.app.get("/api/sessions/{session_id}/files")
         async def list_session_files(session_id: str):
@@ -1498,7 +1497,7 @@ class ClaudeWebUI:
                 raise
             except Exception as e:
                 logger.exception("Failed to list files")
-                raise HTTPException(status_code=500, detail=str(e))
+                raise HTTPException(status_code=500, detail=str(e)) from e
 
         @self.app.delete("/api/sessions/{session_id}/files/{file_id}")
         async def delete_file(session_id: str, file_id: str):
@@ -1527,7 +1526,7 @@ class ClaudeWebUI:
                 raise
             except Exception as e:
                 logger.exception("Failed to delete file")
-                raise HTTPException(status_code=500, detail=str(e))
+                raise HTTPException(status_code=500, detail=str(e)) from e
 
         # Issue #404: Resource gallery endpoints
         @self.app.get("/api/sessions/{session_id}/resources")
@@ -1538,7 +1537,7 @@ class ClaudeWebUI:
                 return {"resources": resources, "count": len(resources)}
             except Exception as e:
                 logger.exception("Failed to get resources")
-                raise HTTPException(status_code=500, detail=str(e))
+                raise HTTPException(status_code=500, detail=str(e)) from e
 
         @self.app.get("/api/sessions/{session_id}/resources/{resource_id}")
         async def get_session_resource(session_id: str, resource_id: str):
@@ -1573,7 +1572,7 @@ class ClaudeWebUI:
                 raise
             except Exception as e:
                 logger.exception("Failed to get resource")
-                raise HTTPException(status_code=500, detail=str(e))
+                raise HTTPException(status_code=500, detail=str(e)) from e
 
         @self.app.get("/api/sessions/{session_id}/resources/{resource_id}/download")
         async def download_session_resource(session_id: str, resource_id: str):
@@ -1607,7 +1606,7 @@ class ClaudeWebUI:
                 raise
             except Exception as e:
                 logger.exception("Failed to download resource")
-                raise HTTPException(status_code=500, detail=str(e))
+                raise HTTPException(status_code=500, detail=str(e)) from e
 
         # Issue #423: Remove resource from session display (soft-remove)
         @self.app.delete("/api/sessions/{session_id}/resources/{resource_id}")
@@ -1629,7 +1628,7 @@ class ClaudeWebUI:
                 raise
             except Exception as e:
                 logger.exception("Failed to remove resource")
-                raise HTTPException(status_code=500, detail=str(e))
+                raise HTTPException(status_code=500, detail=str(e)) from e
 
         # Issue #404: Legacy image endpoints (backward compatibility)
         @self.app.get("/api/sessions/{session_id}/images")
@@ -1640,7 +1639,7 @@ class ClaudeWebUI:
                 return {"images": images, "count": len(images)}
             except Exception as e:
                 logger.exception("Failed to get images")
-                raise HTTPException(status_code=500, detail=str(e))
+                raise HTTPException(status_code=500, detail=str(e)) from e
 
         @self.app.get("/api/sessions/{session_id}/images/{image_id}")
         async def get_session_image(session_id: str, image_id: str):
@@ -1681,7 +1680,7 @@ class ClaudeWebUI:
                 raise
             except Exception as e:
                 logger.exception("Failed to get image")
-                raise HTTPException(status_code=500, detail=str(e))
+                raise HTTPException(status_code=500, detail=str(e)) from e
 
         # ==================== PERMISSION MODE ENDPOINT ====================
 
@@ -1702,7 +1701,7 @@ class ClaudeWebUI:
                 raise
             except Exception as e:
                 logger.exception("Failed to set permission mode")
-                raise HTTPException(status_code=500, detail=str(e))
+                raise HTTPException(status_code=500, detail=str(e)) from e
 
         @self.app.get("/api/sessions/{session_id}/mcp-status")
         async def get_mcp_status(session_id: str):
@@ -1712,7 +1711,7 @@ class ClaudeWebUI:
                 return result
             except Exception as e:
                 logger.exception("Failed to get MCP status")
-                raise HTTPException(status_code=500, detail=str(e))
+                raise HTTPException(status_code=500, detail=str(e)) from e
 
         @self.app.post("/api/sessions/{session_id}/mcp-toggle")
         async def toggle_mcp_server(session_id: str, request: McpToggleRequest):
@@ -1724,7 +1723,7 @@ class ClaudeWebUI:
                 return {"success": True, "name": request.name, "enabled": request.enabled}
             except Exception as e:
                 logger.exception("Failed to toggle MCP server")
-                raise HTTPException(status_code=400, detail=str(e))
+                raise HTTPException(status_code=400, detail=str(e)) from e
 
         @self.app.post("/api/sessions/{session_id}/mcp-reconnect")
         async def reconnect_mcp_server(session_id: str, request: McpReconnectRequest):
@@ -1734,7 +1733,7 @@ class ClaudeWebUI:
                 return {"success": True, "name": request.name}
             except Exception as e:
                 logger.exception("Failed to reconnect MCP server")
-                raise HTTPException(status_code=400, detail=str(e))
+                raise HTTPException(status_code=400, detail=str(e)) from e
 
         @self.app.post("/api/sessions/{session_id}/restart")
         async def restart_session(session_id: str):
@@ -1750,7 +1749,7 @@ class ClaudeWebUI:
                 return {"success": success}
             except Exception as e:
                 logger.exception("Failed to restart session")
-                raise HTTPException(status_code=500, detail=str(e))
+                raise HTTPException(status_code=500, detail=str(e)) from e
 
         @self.app.post("/api/sessions/{session_id}/reset")
         async def reset_session(session_id: str):
@@ -1766,7 +1765,7 @@ class ClaudeWebUI:
                 return {"success": success}
             except Exception as e:
                 logger.exception("Failed to reset session")
-                raise HTTPException(status_code=500, detail=str(e))
+                raise HTTPException(status_code=500, detail=str(e)) from e
 
         @self.app.delete("/api/sessions/{session_id}/history")
         async def erase_session_history(session_id: str):
@@ -1776,7 +1775,7 @@ class ClaudeWebUI:
                 return {"success": success}
             except Exception as e:
                 logger.error(f"Failed to erase history: {e}")
-                raise HTTPException(status_code=500, detail=str(e))
+                raise HTTPException(status_code=500, detail=str(e)) from e
 
         @self.app.delete("/api/sessions/{session_id}/archives")
         async def erase_session_archives(session_id: str):
@@ -1786,7 +1785,7 @@ class ClaudeWebUI:
                 return {"success": success}
             except Exception as e:
                 logger.error(f"Failed to erase archives: {e}")
-                raise HTTPException(status_code=500, detail=str(e))
+                raise HTTPException(status_code=500, detail=str(e)) from e
 
         @self.app.get("/api/sessions/{session_id}/history-archives-status")
         async def get_history_archives_status(session_id: str):
@@ -1795,7 +1794,7 @@ class ClaudeWebUI:
                 return await self.coordinator.check_history_archives(session_id)
             except Exception as e:
                 logger.error(f"Failed to check history/archives status: {e}")
-                raise HTTPException(status_code=500, detail=str(e))
+                raise HTTPException(status_code=500, detail=str(e)) from e
 
         @self.app.post("/api/sessions/{session_id}/disconnect")
         async def disconnect_session(session_id: str):
@@ -1810,7 +1809,7 @@ class ClaudeWebUI:
                 return {"success": True}  # Already disconnected
             except Exception as e:
                 logger.exception("Failed to disconnect session")
-                raise HTTPException(status_code=500, detail=str(e))
+                raise HTTPException(status_code=500, detail=str(e)) from e
 
         # ==================== DIFF ENDPOINTS (Issue #435) ====================
 
@@ -2094,7 +2093,7 @@ class ClaudeWebUI:
                 raise
             except Exception as e:
                 logger.exception(f"Failed to get diff for session {session_id}")
-                raise HTTPException(status_code=500, detail=str(e))
+                raise HTTPException(status_code=500, detail=str(e)) from e
 
         @self.app.get("/api/sessions/{session_id}/diff/file")
         async def get_session_diff_file(
@@ -2214,7 +2213,7 @@ class ClaudeWebUI:
                 raise
             except Exception as e:
                 logger.exception(f"Failed to get file diff for {path}")
-                raise HTTPException(status_code=500, detail=str(e))
+                raise HTTPException(status_code=500, detail=str(e)) from e
 
         # ==================== QUEUE ENDPOINTS (Issue #500) ====================
 
@@ -2243,12 +2242,12 @@ class ClaudeWebUI:
                     "item": item,
                 }
             except ValueError as e:
-                raise HTTPException(status_code=400, detail=str(e))
+                raise HTTPException(status_code=400, detail=str(e)) from e
             except HTTPException:
                 raise
             except Exception as e:
                 logger.exception("Failed to enqueue message")
-                raise HTTPException(status_code=500, detail=str(e))
+                raise HTTPException(status_code=500, detail=str(e)) from e
 
         @self.app.get("/api/sessions/{session_id}/queue")
         async def get_queue(session_id: str):
@@ -2262,7 +2261,7 @@ class ClaudeWebUI:
                 }
             except Exception as e:
                 logger.exception("Failed to get queue")
-                raise HTTPException(status_code=500, detail=str(e))
+                raise HTTPException(status_code=500, detail=str(e)) from e
 
         @self.app.delete("/api/sessions/{session_id}/queue/{queue_id}")
         async def cancel_queue_item(session_id: str, queue_id: str):
@@ -2278,7 +2277,7 @@ class ClaudeWebUI:
                 raise
             except Exception as e:
                 logger.exception("Failed to cancel queue item")
-                raise HTTPException(status_code=500, detail=str(e))
+                raise HTTPException(status_code=500, detail=str(e)) from e
 
         @self.app.post("/api/sessions/{session_id}/queue/{queue_id}/requeue")
         async def requeue_item(session_id: str, queue_id: str):
@@ -2294,7 +2293,7 @@ class ClaudeWebUI:
                 raise
             except Exception as e:
                 logger.exception("Failed to requeue item")
-                raise HTTPException(status_code=500, detail=str(e))
+                raise HTTPException(status_code=500, detail=str(e)) from e
 
         @self.app.delete("/api/sessions/{session_id}/queue")
         async def clear_queue(session_id: str):
@@ -2305,7 +2304,7 @@ class ClaudeWebUI:
                 return {"cancelled_count": count}
             except Exception as e:
                 logger.exception("Failed to clear queue")
-                raise HTTPException(status_code=500, detail=str(e))
+                raise HTTPException(status_code=500, detail=str(e)) from e
 
         @self.app.put("/api/sessions/{session_id}/queue/pause")
         async def pause_queue(session_id: str, request: Request):
@@ -2324,7 +2323,7 @@ class ClaudeWebUI:
                 raise
             except Exception as e:
                 logger.exception("Failed to pause/resume queue")
-                raise HTTPException(status_code=500, detail=str(e))
+                raise HTTPException(status_code=500, detail=str(e)) from e
 
         @self.app.put("/api/sessions/{session_id}/queue/config")
         async def update_queue_config(session_id: str, request: Request):
@@ -2339,7 +2338,7 @@ class ClaudeWebUI:
                 raise
             except Exception as e:
                 logger.exception("Failed to update queue config")
-                raise HTTPException(status_code=500, detail=str(e))
+                raise HTTPException(status_code=500, detail=str(e)) from e
 
         # ==================== LEGION ENDPOINTS ====================
         # All projects support Legion capabilities (issue #313)
@@ -2408,7 +2407,7 @@ class ClaudeWebUI:
                 raise
             except Exception as e:
                 logger.exception("Failed to get timeline")
-                raise HTTPException(status_code=500, detail=str(e))
+                raise HTTPException(status_code=500, detail=str(e)) from e
 
         @self.app.get("/api/legions/{legion_id}/hierarchy")
         async def get_legion_hierarchy(legion_id: str):
@@ -2433,7 +2432,7 @@ class ClaudeWebUI:
                 raise
             except Exception as e:
                 logger.exception("Failed to get minion hierarchy")
-                raise HTTPException(status_code=500, detail=str(e))
+                raise HTTPException(status_code=500, detail=str(e)) from e
 
         @self.app.post("/api/legions/{legion_id}/comms")
         async def send_comm_to_legion(legion_id: str, request: CommSendRequest):
@@ -2477,7 +2476,7 @@ class ClaudeWebUI:
                 raise
             except Exception as e:
                 logger.exception("Failed to send comm")
-                raise HTTPException(status_code=500, detail=str(e))
+                raise HTTPException(status_code=500, detail=str(e)) from e
 
         @self.app.post("/api/legions/{legion_id}/minions")
         async def create_minion(legion_id: str, request: MinionCreateRequest):
@@ -2495,7 +2494,7 @@ class ClaudeWebUI:
                         str(project.working_directory)
                     )
                 except ValueError as e:
-                    raise HTTPException(status_code=400, detail=str(e))
+                    raise HTTPException(status_code=400, detail=str(e)) from e
 
                 # Create minion via OverseerController
                 config = request.to_session_config(
@@ -2522,12 +2521,12 @@ class ClaudeWebUI:
             except ValueError as e:
                 # OverseerController raises ValueError for validation errors
                 logger.exception("Validation error creating minion")
-                raise HTTPException(status_code=400, detail=str(e))
+                raise HTTPException(status_code=400, detail=str(e)) from e
             except HTTPException:
                 raise
             except Exception as e:
                 logger.exception("Failed to create minion")
-                raise HTTPException(status_code=500, detail=str(e))
+                raise HTTPException(status_code=500, detail=str(e)) from e
 
         # ==================== FLEET CONTROL ENDPOINTS ====================
 
@@ -2554,7 +2553,7 @@ class ClaudeWebUI:
                 raise
             except Exception as e:
                 logger.exception("Failed to halt all minions")
-                raise HTTPException(status_code=500, detail=str(e))
+                raise HTTPException(status_code=500, detail=str(e)) from e
 
         @self.app.post("/api/legions/{legion_id}/resume-all")
         async def resume_all(legion_id: str):
@@ -2579,7 +2578,7 @@ class ClaudeWebUI:
                 raise
             except Exception as e:
                 logger.exception("Failed to resume all minions")
-                raise HTTPException(status_code=500, detail=str(e))
+                raise HTTPException(status_code=500, detail=str(e)) from e
 
         # ==================== SCHEDULE ENDPOINTS (Issue #495) ====================
 
@@ -2602,7 +2601,7 @@ class ClaudeWebUI:
                         raise HTTPException(
                             status_code=400,
                             detail=f"Invalid status: {status}. Use active, paused, or cancelled",
-                        )
+                        ) from None
 
                 schedules = await self.coordinator.legion_system.scheduler_service.list_schedules(
                     legion_id=legion_id, minion_id=minion_id, status=status_filter
@@ -2612,7 +2611,7 @@ class ClaudeWebUI:
                 raise
             except Exception as e:
                 logger.exception("Failed to list schedules")
-                raise HTTPException(status_code=500, detail=str(e))
+                raise HTTPException(status_code=500, detail=str(e)) from e
 
         @self.app.post("/api/legions/{legion_id}/schedules")
         async def create_schedule(legion_id: str, request: ScheduleCreateRequest):
@@ -2668,10 +2667,10 @@ class ClaudeWebUI:
             except HTTPException:
                 raise
             except ValueError as e:
-                raise HTTPException(status_code=400, detail=str(e))
+                raise HTTPException(status_code=400, detail=str(e)) from e
             except Exception as e:
                 logger.exception("Failed to create schedule")
-                raise HTTPException(status_code=500, detail=str(e))
+                raise HTTPException(status_code=500, detail=str(e)) from e
 
         @self.app.get("/api/legions/{legion_id}/schedules/{schedule_id}")
         async def get_schedule(legion_id: str, schedule_id: str):
@@ -2687,7 +2686,7 @@ class ClaudeWebUI:
                 raise
             except Exception as e:
                 logger.exception("Failed to get schedule")
-                raise HTTPException(status_code=500, detail=str(e))
+                raise HTTPException(status_code=500, detail=str(e)) from e
 
         @self.app.put("/api/legions/{legion_id}/schedules/{schedule_id}")
         async def update_schedule(
@@ -2709,10 +2708,10 @@ class ClaudeWebUI:
             except HTTPException:
                 raise
             except ValueError as e:
-                raise HTTPException(status_code=400, detail=str(e))
+                raise HTTPException(status_code=400, detail=str(e)) from e
             except Exception as e:
                 logger.exception("Failed to update schedule")
-                raise HTTPException(status_code=500, detail=str(e))
+                raise HTTPException(status_code=500, detail=str(e)) from e
 
         @self.app.post("/api/legions/{legion_id}/schedules/{schedule_id}/pause")
         async def pause_schedule(legion_id: str, schedule_id: str):
@@ -2731,10 +2730,10 @@ class ClaudeWebUI:
             except HTTPException:
                 raise
             except ValueError as e:
-                raise HTTPException(status_code=400, detail=str(e))
+                raise HTTPException(status_code=400, detail=str(e)) from e
             except Exception as e:
                 logger.exception("Failed to pause schedule")
-                raise HTTPException(status_code=500, detail=str(e))
+                raise HTTPException(status_code=500, detail=str(e)) from e
 
         @self.app.post("/api/legions/{legion_id}/schedules/{schedule_id}/resume")
         async def resume_schedule(legion_id: str, schedule_id: str):
@@ -2753,10 +2752,10 @@ class ClaudeWebUI:
             except HTTPException:
                 raise
             except ValueError as e:
-                raise HTTPException(status_code=400, detail=str(e))
+                raise HTTPException(status_code=400, detail=str(e)) from e
             except Exception as e:
                 logger.exception("Failed to resume schedule")
-                raise HTTPException(status_code=500, detail=str(e))
+                raise HTTPException(status_code=500, detail=str(e)) from e
 
         @self.app.post("/api/legions/{legion_id}/schedules/{schedule_id}/cancel")
         async def cancel_schedule(legion_id: str, schedule_id: str):
@@ -2775,10 +2774,10 @@ class ClaudeWebUI:
             except HTTPException:
                 raise
             except ValueError as e:
-                raise HTTPException(status_code=400, detail=str(e))
+                raise HTTPException(status_code=400, detail=str(e)) from e
             except Exception as e:
                 logger.exception("Failed to cancel schedule")
-                raise HTTPException(status_code=500, detail=str(e))
+                raise HTTPException(status_code=500, detail=str(e)) from e
 
         @self.app.post("/api/legions/{legion_id}/schedules/{schedule_id}/run-now")
         async def run_schedule_now(legion_id: str, schedule_id: str):
@@ -2797,12 +2796,12 @@ class ClaudeWebUI:
             except HTTPException:
                 raise
             except ValueError as e:
-                raise HTTPException(status_code=400, detail=str(e))
+                raise HTTPException(status_code=400, detail=str(e)) from e
             except RuntimeError as e:
-                raise HTTPException(status_code=409, detail=str(e))
+                raise HTTPException(status_code=409, detail=str(e)) from e
             except Exception as e:
                 logger.exception("Failed to run schedule now")
-                raise HTTPException(status_code=500, detail=str(e))
+                raise HTTPException(status_code=500, detail=str(e)) from e
 
         @self.app.delete("/api/legions/{legion_id}/schedules/{schedule_id}")
         async def delete_schedule(
@@ -2836,10 +2835,10 @@ class ClaudeWebUI:
             except HTTPException:
                 raise
             except ValueError as e:
-                raise HTTPException(status_code=400, detail=str(e))
+                raise HTTPException(status_code=400, detail=str(e)) from e
             except Exception as e:
                 logger.exception("Failed to delete schedule")
-                raise HTTPException(status_code=500, detail=str(e))
+                raise HTTPException(status_code=500, detail=str(e)) from e
 
         @self.app.get("/api/legions/{legion_id}/schedules/{schedule_id}/history")
         async def get_schedule_history(
@@ -2862,7 +2861,7 @@ class ClaudeWebUI:
                 }
             except Exception as e:
                 logger.exception("Failed to get schedule history")
-                raise HTTPException(status_code=500, detail=str(e))
+                raise HTTPException(status_code=500, detail=str(e)) from e
 
         # ==================== PERMISSION PREVIEW ENDPOINT (Issue #36) ====================
 
@@ -2882,7 +2881,7 @@ class ClaudeWebUI:
                 return {"permissions": permissions}
             except Exception as e:
                 logger.exception("Failed to preview permissions")
-                raise HTTPException(status_code=500, detail=str(e))
+                raise HTTPException(status_code=500, detail=str(e)) from e
 
         # ==================== CONFIG ENDPOINTS ====================
 
@@ -3200,7 +3199,7 @@ class ClaudeWebUI:
                 raise
             except Exception as e:
                 logger.exception("Failed to browse filesystem")
-                raise HTTPException(status_code=500, detail=str(e))
+                raise HTTPException(status_code=500, detail=str(e)) from e
 
         # ========== Template Endpoints ==========
 
@@ -3212,7 +3211,7 @@ class ClaudeWebUI:
                 return [t.to_dict() for t in templates]
             except Exception as e:
                 logger.exception("Failed to list templates")
-                raise HTTPException(status_code=500, detail=str(e))
+                raise HTTPException(status_code=500, detail=str(e)) from e
 
         @self.app.get("/api/templates/{template_id}")
         async def get_template(template_id: str):
@@ -3226,7 +3225,7 @@ class ClaudeWebUI:
                 raise
             except Exception as e:
                 logger.exception("Failed to get template")
-                raise HTTPException(status_code=500, detail=str(e))
+                raise HTTPException(status_code=500, detail=str(e)) from e
 
         @self.app.post("/api/templates")
         async def create_template(request: TemplateCreateRequest):
@@ -3243,10 +3242,10 @@ class ClaudeWebUI:
                 )
                 return template.to_dict()
             except ValueError as e:
-                raise HTTPException(status_code=400, detail=str(e))
+                raise HTTPException(status_code=400, detail=str(e)) from e
             except Exception as e:
                 logger.exception("Failed to create template")
-                raise HTTPException(status_code=500, detail=str(e))
+                raise HTTPException(status_code=500, detail=str(e)) from e
 
         @self.app.put("/api/templates/{template_id}")
         async def update_template(template_id: str, request: TemplateUpdateRequest):
@@ -3281,10 +3280,10 @@ class ClaudeWebUI:
                 )
                 return template.to_dict()
             except ValueError as e:
-                raise HTTPException(status_code=400, detail=str(e))
+                raise HTTPException(status_code=400, detail=str(e)) from e
             except Exception as e:
                 logger.exception("Failed to update template")
-                raise HTTPException(status_code=500, detail=str(e))
+                raise HTTPException(status_code=500, detail=str(e)) from e
 
         @self.app.delete("/api/templates/{template_id}")
         async def delete_template(template_id: str):
@@ -3298,7 +3297,7 @@ class ClaudeWebUI:
                 raise
             except Exception as e:
                 logger.exception("Failed to delete template")
-                raise HTTPException(status_code=500, detail=str(e))
+                raise HTTPException(status_code=500, detail=str(e)) from e
 
         @self.app.websocket("/ws/ui")
         async def ui_websocket_endpoint(websocket: WebSocket):
@@ -3662,7 +3661,6 @@ class ClaudeWebUI:
                         ws_verbose_logger.debug(f"WebSocket timeout for session {session_id} at {timeout_time} - sending ping")
 
                         try:
-                            ping_start_time = time.time()
                             await websocket.send_text(json.dumps({"type": "ping", "timestamp": datetime.now(UTC).isoformat()}))
 
                             ping_sent_time = time.time()
