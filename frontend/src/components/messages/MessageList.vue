@@ -23,17 +23,36 @@
 
     <!-- Issue #662: Truncation banner after last assistant message when response was truncated -->
     <TruncationBanner v-if="showTruncationBanner" :key="'truncation-' + sessionStore.currentSessionId" />
+
+    <!-- TTS Floating Controls (issue #735) -->
+    <div v-if="tts.isPlaying.value" class="tts-floating-controls">
+      <button
+        class="btn btn-sm btn-outline-secondary"
+        @click="tts.isPaused.value ? tts.resume() : tts.pause()"
+        :aria-label="tts.isPaused.value ? 'Resume reading' : 'Pause reading'"
+      >
+        {{ tts.isPaused.value ? '\u25B6' : '\u23F8' }}
+      </button>
+      <button
+        class="btn btn-sm btn-outline-danger"
+        @click="tts.stop()"
+        aria-label="Stop reading"
+      >
+        \u23F9
+      </button>
+    </div>
   </div>
 </template>
 
 <script setup>
-import { computed, ref, watch, nextTick, onMounted, onUnmounted } from 'vue'
+import { computed, ref, watch, nextTick, onMounted, onUnmounted, provide } from 'vue'
 import { useMessageStore } from '@/stores/message'
 import { useSessionStore } from '@/stores/session'
 import { useUIStore } from '@/stores/ui'
 import MessageItem from './MessageItem.vue'
 import CompactionEventGroup from './CompactionEventGroup.vue'
 import TruncationBanner from './TruncationBanner.vue'
+import { useTTSReadAloud } from '@/composables/useTTSReadAloud'
 
 const messageStore = useMessageStore()
 const sessionStore = useSessionStore()
@@ -42,6 +61,14 @@ const uiStore = useUIStore()
 const messagesArea = ref(null)
 const isProgrammaticScroll = ref(false)
 const scrollRafId = ref(null)
+
+// TTS Read Aloud (issue #735)
+const tts = useTTSReadAloud()
+provide('ttsReadAloud', tts)
+
+// Provide all messages for play-from-here navigation
+const allMessages = computed(() => messageStore.currentMessages)
+provide('allMessages', allMessages)
 
 /**
  * Group messages into displayable items, detecting compaction event sequences
@@ -383,6 +410,17 @@ function onScroll() {
     }
   })
 }
+
+// TTS: Auto-queue new assistant messages when read aloud is enabled
+watch(() => displayableItems.value.length, (newLen, oldLen) => {
+  if (newLen > oldLen && uiStore.ttsReadAloudEnabled) {
+    // Check the latest displayable item
+    const latestItem = displayableItems.value[displayableItems.value.length - 1]
+    if (latestItem?.type === 'message' && latestItem.message?.type === 'assistant') {
+      tts.queueNewMessage(latestItem.message)
+    }
+  }
+})
 
 // Auto-scroll on new messages, or restore scroll position if pending
 watch(() => displayableItems.value.length, async (newLen) => {

@@ -78,6 +78,16 @@ export const useUIStore = defineStore('ui', () => {
   // Queue panel height (resizable, issue #552)
   const queuePanelHeight = ref(readStorage('queuePanelHeight', 200))
 
+  // TTS Read Aloud toggle (issue #735)
+  const ttsReadAloudEnabled = ref(
+    (() => {
+      try {
+        const val = localStorage.getItem('webui-tts-readaloud-enabled')
+        return val !== null ? JSON.parse(val) : false
+      } catch { return false }
+    })()
+  )
+
   // ========== ACTIONS ==========
 
   function toggleRightSidebar() {
@@ -106,6 +116,11 @@ export const useUIStore = defineStore('ui', () => {
 
   function setSuppressAutoShow(value) {
     suppressAutoShow.value = value
+  }
+
+  function setTTSReadAloud(enabled) {
+    ttsReadAloudEnabled.value = enabled
+    try { localStorage.setItem('webui-tts-readaloud-enabled', JSON.stringify(enabled)) } catch {}
   }
 
   function setQueuePanelHeight(height, containerHeight = 600) {
@@ -223,6 +238,7 @@ export const useUIStore = defineStore('ui', () => {
     restartStatus,
     suppressAutoShow,
     queuePanelHeight,
+    ttsReadAloudEnabled,
 
     // Actions
     toggleRightSidebar,
@@ -235,6 +251,7 @@ export const useUIStore = defineStore('ui', () => {
     toggleRightPanel,
     setRightPanelVisible,
     setAutoScroll,
+    setTTSReadAloud,
     setSuppressAutoShow,
     setQueuePanelHeight,
     initBackgroundColor,

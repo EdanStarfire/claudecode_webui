@@ -6,14 +6,23 @@
       <span class="msg-role">assistant</span>
       <span class="msg-time">{{ formattedTimestamp }}</span>
     </div>
-    <div class="msg-bubble msg-bubble-assistant" :class="{ 'has-permission-prompt': hasActivePermission }">
+    <div class="msg-bubble msg-bubble-assistant" :class="{ 'has-permission-prompt': hasActivePermission, 'tts-playing': isTTSPlaying }">
       <!-- Thinking Block (collapsible) -->
       <div v-if="hasThinking" class="thinking-block mb-2">
         <ThinkingBlock :thinking="thinkingContent" />
       </div>
 
       <!-- Content -->
-      <div v-if="hasContent" class="msg-text" v-html="renderedContent"></div>
+      <div v-if="hasContent" class="msg-content-row">
+        <div class="msg-text" v-html="renderedContent"></div>
+        <button
+          v-if="hasContent && tts"
+          class="tts-play-icon"
+          @click.stop="onPlayClick"
+          aria-label="Read aloud from this message"
+          title="Read aloud"
+        >&#x1F50A;</button>
+      </div>
 
       <!-- Activity Timeline (compact dot timeline) — excludes Task tools and child tools -->
       <ActivityTimeline
@@ -40,7 +49,7 @@
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, inject } from 'vue'
 import DOMPurify from 'dompurify'
 import { marked } from 'marked'
 import { formatTimestamp } from '@/utils/time'
@@ -65,6 +74,22 @@ const props = defineProps({
 
 const messageStore = useMessageStore()
 const sessionStore = useSessionStore()
+
+// TTS Read Aloud (provided by MessageList)
+const tts = inject('ttsReadAloud', null)
+const allMessages = inject('allMessages', null)
+
+const isTTSPlaying = computed(() => {
+  if (!tts) return false
+  const msgId = props.message.message_id || props.message.id
+  return tts.currentMessageId.value === msgId
+})
+
+function onPlayClick() {
+  if (!tts || !allMessages) return
+  const msgId = props.message.message_id || props.message.id
+  tts.playMessage(msgId, allMessages.value)
+}
 
 // Configure marked for safe rendering
 marked.setOptions({
@@ -322,6 +347,33 @@ const hasAnythingToShow = computed(() => {
   font-weight: 600;
 }
 
+/* TTS content row layout */
+.msg-content-row {
+  position: relative;
+}
+
+.tts-play-icon {
+  position: absolute;
+  top: 0;
+  right: -8px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 14px;
+  opacity: 0;
+  transition: opacity 0.15s;
+  padding: 2px;
+  line-height: 1;
+}
+
+.msg-content-row:hover .tts-play-icon {
+  opacity: 0.6;
+}
+
+.tts-play-icon:hover {
+  opacity: 1 !important;
+}
+
 /* Issue #716: Force bubble to full allowed width when permission prompt is active */
 .msg-bubble.has-permission-prompt {
   width: 85%;
@@ -335,6 +387,10 @@ const hasAnythingToShow = computed(() => {
 
   .msg-bubble.has-permission-prompt {
     width: 95%;
+  }
+
+  .tts-play-icon {
+    opacity: 0.5;
   }
 }
 </style>

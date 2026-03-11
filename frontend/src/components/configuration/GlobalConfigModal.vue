@@ -41,6 +41,15 @@
                   Notifications
                 </button>
               </li>
+              <li class="nav-item">
+                <button
+                  class="nav-link"
+                  :class="{ active: activeTab === 'readaloud' }"
+                  @click="activeTab = 'readaloud'"
+                >
+                  Read Aloud
+                </button>
+              </li>
             </ul>
 
             <!-- Tab content -->
@@ -63,6 +72,9 @@
             </div>
             <div v-else-if="activeTab === 'notifications'">
               <NotificationsTab :config="notificationConfig" @update:config="onNotificationsUpdate" />
+            </div>
+            <div v-else-if="activeTab === 'readaloud'">
+              <ReadAloudTab :config="readAloudConfig" @update:config="onReadAloudUpdate" />
             </div>
           </div>
         </div>
@@ -93,6 +105,8 @@ import { apiGet, apiPut } from '@/utils/api'
 import { getSettings as getNotificationSettings, updateSettings as saveNotificationSettings } from '@/composables/useNotifications'
 import FeaturesTab from './FeaturesTab.vue'
 import NotificationsTab from './NotificationsTab.vue'
+import ReadAloudTab from './ReadAloudTab.vue'
+import { getReadAloudSettings, updateReadAloudSettings } from '@/composables/useTTSReadAloud'
 
 const uiStore = useUIStore()
 
@@ -108,10 +122,13 @@ const originalConfig = ref({})
 const templateCount = ref(0)
 const notificationConfig = ref({})
 const originalNotificationConfig = ref({})
+const readAloudConfig = ref({})
+const originalReadAloudConfig = ref({})
 
 const dirty = computed(() => {
   return JSON.stringify(config.value) !== JSON.stringify(originalConfig.value) ||
-    JSON.stringify(notificationConfig.value) !== JSON.stringify(originalNotificationConfig.value)
+    JSON.stringify(notificationConfig.value) !== JSON.stringify(originalNotificationConfig.value) ||
+    JSON.stringify(readAloudConfig.value) !== JSON.stringify(originalReadAloudConfig.value)
 })
 
 function onFeaturesUpdate(features) {
@@ -120,6 +137,10 @@ function onFeaturesUpdate(features) {
 
 function onNotificationsUpdate(notifications) {
   notificationConfig.value = notifications
+}
+
+function onReadAloudUpdate(settings) {
+  readAloudConfig.value = settings
 }
 
 async function loadConfig() {
@@ -131,6 +152,8 @@ async function loadConfig() {
     originalConfig.value = JSON.parse(JSON.stringify(data.config))
     notificationConfig.value = getNotificationSettings()
     originalNotificationConfig.value = JSON.parse(JSON.stringify(notificationConfig.value))
+    readAloudConfig.value = getReadAloudSettings()
+    originalReadAloudConfig.value = JSON.parse(JSON.stringify(readAloudConfig.value))
     try {
       const templates = await apiGet('/api/templates')
       templateCount.value = templates.length
@@ -153,6 +176,9 @@ async function saveConfig() {
     // Persist notification settings to localStorage
     saveNotificationSettings(notificationConfig.value)
     originalNotificationConfig.value = JSON.parse(JSON.stringify(notificationConfig.value))
+    // Persist read aloud settings to localStorage
+    updateReadAloudSettings(readAloudConfig.value)
+    originalReadAloudConfig.value = JSON.parse(JSON.stringify(readAloudConfig.value))
     if (modalInstance) {
       modalInstance.hide()
     }
@@ -176,6 +202,8 @@ function resetState() {
   originalConfig.value = {}
   notificationConfig.value = {}
   originalNotificationConfig.value = {}
+  readAloudConfig.value = {}
+  originalReadAloudConfig.value = {}
   loadError.value = null
   saving.value = false
 }
