@@ -564,6 +564,8 @@ function shouldDisplayMessage(message) {
  */
 function normalizeMessage(message) {
   return {
+    id: message.id,
+    message_id: message.message_id,
     type: message.type || 'unknown',
     content: message.content || '',
     timestamp: message.timestamp || Date.now() / 1000,
