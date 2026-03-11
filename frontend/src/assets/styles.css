@@ -1132,6 +1132,7 @@ button:focus {
 .priority-indigo  { border-left: 4px solid #6f42c1 !important; }
 .priority-gray    { border-left: 4px solid #6c757d !important; }
 .priority-teal    { border-left: 4px solid #20c997 !important; }
+.priority-amber   { border-left: 4px solid #f59e0b !important; }
 .priority-danger  { border-left: 4px solid #dc3545 !important; background: rgba(220, 53, 69, 0.02); }
 
 /* Dot indicators */
@@ -1146,6 +1147,7 @@ button:focus {
 .dot-indigo  { background: #6f42c1; }
 .dot-gray    { background: #6c757d; }
 .dot-teal    { background: #20c997; }
+.dot-amber   { background: #f59e0b; }
 .dot-danger  { background: #dc3545; }
 
 /* Tag editor */

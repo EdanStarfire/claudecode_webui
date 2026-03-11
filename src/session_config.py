@@ -57,7 +57,7 @@ class SessionConfig:
     docker_extra_mounts: list[str] | None = None
 
     # Features
-    knowledge_management_enabled: bool = True
+    history_distillation_enabled: bool = True
     auto_memory_mode: str = "claude"  # "claude" | "session" | "disabled"
 
 
@@ -85,7 +85,7 @@ class SessionConfigBase(BaseModel):
     thinking_mode: str | None = None
     thinking_budget_tokens: int | None = None
     effort: str | None = None
-    knowledge_management_enabled: bool = True
+    history_distillation_enabled: bool = True
     auto_memory_mode: str = "claude"
 
     def to_session_config(self, **overrides) -> SessionConfig:
@@ -108,7 +108,7 @@ class SessionConfigBase(BaseModel):
             "thinking_mode": self.thinking_mode,
             "thinking_budget_tokens": self.thinking_budget_tokens,
             "effort": self.effort,
-            "knowledge_management_enabled": self.knowledge_management_enabled,
+            "history_distillation_enabled": self.history_distillation_enabled,
             "auto_memory_mode": self.auto_memory_mode,
         }
         data.update(overrides)

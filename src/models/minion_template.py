@@ -41,8 +41,8 @@ class MinionTemplate:
     thinking_mode: str | None = None
     thinking_budget_tokens: int | None = None
     effort: str | None = None
-    # Knowledge management toggle (issue #710)
-    knowledge_management_enabled: bool = True
+    # History distillation toggle (issue #710, renamed #736)
+    history_distillation_enabled: bool = True
     # Auto-memory mode (issue #709, replaces #708 disable_auto_memory boolean)
     auto_memory_mode: str = "claude"  # "claude" | "session" | "disabled"
     created_at: datetime | None = None
@@ -90,7 +90,12 @@ class MinionTemplate:
         data.setdefault('thinking_mode', None)
         data.setdefault('thinking_budget_tokens', None)
         data.setdefault('effort', None)
-        data.setdefault('knowledge_management_enabled', True)
+        # Migrate knowledge_management_enabled → history_distillation_enabled (issue #736)
+        if 'knowledge_management_enabled' in data and 'history_distillation_enabled' not in data:
+            data['history_distillation_enabled'] = data.pop('knowledge_management_enabled')
+        else:
+            data.pop('knowledge_management_enabled', None)
+            data.setdefault('history_distillation_enabled', True)
         # Migrate legacy disable_auto_memory boolean to auto_memory_mode enum (issue #709)
         if 'disable_auto_memory' in data and 'auto_memory_mode' not in data:
             data['auto_memory_mode'] = "disabled" if data.pop('disable_auto_memory') else "claude"

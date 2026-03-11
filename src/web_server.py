@@ -198,8 +198,8 @@ class SessionUpdateRequest(BaseModel):
     thinking_mode: str | None = None  # "adaptive", "enabled", "disabled"
     thinking_budget_tokens: int | None = None  # Token budget (min 1024)
     effort: str | None = None  # "low", "medium", "high", "max"
-    # Knowledge management toggle (issue #710)
-    knowledge_management_enabled: bool | None = None
+    # History distillation toggle (issue #710, renamed #736)
+    history_distillation_enabled: bool | None = None
     # Auto-memory mode (issue #709)
     auto_memory_mode: str | None = None  # "claude" | "session" | "disabled"
 
@@ -295,8 +295,8 @@ class TemplateUpdateRequest(BaseModel):
     thinking_mode: str | None = None
     thinking_budget_tokens: int | None = None
     effort: str | None = None
-    # Knowledge management toggle (issue #710)
-    knowledge_management_enabled: bool | None = None
+    # History distillation toggle (issue #710, renamed #736)
+    history_distillation_enabled: bool | None = None
     # Auto-memory mode (issue #709)
     auto_memory_mode: str | None = None  # "claude" | "session" | "disabled"
 
@@ -1314,8 +1314,8 @@ class ClaudeWebUI:
                 if request.effort is not None:
                     updates["effort"] = request.effort if request.effort else None
 
-                if request.knowledge_management_enabled is not None:
-                    updates["knowledge_management_enabled"] = request.knowledge_management_enabled
+                if request.history_distillation_enabled is not None:
+                    updates["history_distillation_enabled"] = request.history_distillation_enabled
 
                 if request.auto_memory_mode is not None:
                     updates["auto_memory_mode"] = request.auto_memory_mode
@@ -3275,7 +3275,7 @@ class ClaudeWebUI:
                     thinking_mode=request.thinking_mode,
                     thinking_budget_tokens=request.thinking_budget_tokens,
                     effort=request.effort,
-                    knowledge_management_enabled=request.knowledge_management_enabled,
+                    history_distillation_enabled=request.history_distillation_enabled,
                     auto_memory_mode=request.auto_memory_mode,
                 )
                 return template.to_dict()
