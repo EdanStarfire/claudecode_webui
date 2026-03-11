@@ -4,7 +4,7 @@
       <span class="subagent-icon">&#x1F916;</span>
       <span v-if="subagentType" class="subagent-type-badge">{{ subagentType }}</span>
       <span class="subagent-description">{{ taskDescription }}</span>
-      <span class="subagent-status-badge" :class="statusBadgeClass">{{ statusLabel }}</span>
+      <span v-if="showBadge" class="subagent-status-badge" :class="statusBadgeClass">{{ statusLabel }}</span>
       <span class="subagent-toggle">{{ collapsed ? '\u25B6' : '\u25BC' }}</span>
     </div>
 
@@ -136,6 +136,10 @@ const statusClass = computed(() => {
   return `subagent-${effectiveStatus.value}`
 })
 
+const showBadge = computed(() => {
+  return ['completed', 'error', 'orphaned', 'permission_required'].includes(effectiveStatus.value)
+})
+
 const statusBadgeClass = computed(() => {
   return `badge-${effectiveStatus.value}`
 })
@@ -235,12 +239,6 @@ function openFullResult() {
   font-size: 11px;
   font-weight: 600;
   flex-shrink: 0;
-}
-
-.badge-pending,
-.badge-executing {
-  background: #dbeafe;
-  color: #1e40af;
 }
 
 .badge-completed {
