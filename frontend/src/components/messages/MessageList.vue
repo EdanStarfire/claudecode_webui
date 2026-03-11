@@ -412,10 +412,18 @@ function onScroll() {
 // TTS: Auto-queue new assistant messages when read aloud is enabled.
 // Watch raw message list (not displayableItems) because groupToolsToParentMessages
 // can merge/hide messages, making displayableItems.length unreliable for detection.
+// Use ttsInitialized flag to skip the initial message load (page reload / session switch)
+// so historical messages don't get queued for reading.
 const lastSeenMessageCount = ref(messageStore.currentMessages.length)
+const ttsInitialized = ref(false)
 watch(() => messageStore.currentMessages.length, (newLen) => {
+  if (!ttsInitialized.value) {
+    // First change after mount or session switch — treat as initial load, don't queue
+    lastSeenMessageCount.value = newLen
+    ttsInitialized.value = true
+    return
+  }
   if (newLen > lastSeenMessageCount.value && uiStore.ttsReadAloudEnabled) {
-    // Check all new messages (there may be multiple since last check)
     const msgs = messageStore.currentMessages
     for (let i = lastSeenMessageCount.value; i < newLen; i++) {
       const msg = msgs[i]
@@ -430,9 +438,11 @@ watch(() => messageStore.currentMessages.length, (newLen) => {
   lastSeenMessageCount.value = newLen
 })
 
-// Reset TTS message counter on session switch
+// Reset TTS message counter on session switch — mark as uninitialized
+// so the next batch of messages is treated as initial load
 watch(() => sessionStore.currentSessionId, () => {
   lastSeenMessageCount.value = messageStore.currentMessages.length
+  ttsInitialized.value = false
 })
 
 // Auto-scroll on new messages, or restore scroll position if pending
