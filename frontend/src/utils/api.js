@@ -3,6 +3,22 @@
  * Replaces the broken APIClient with clean fetch wrappers
  */
 
+// ==================== Auth Token Management (Issue #728) ====================
+
+export function getAuthToken() {
+  return sessionStorage.getItem('auth_token')
+}
+
+export function setAuthToken(token) {
+  sessionStorage.setItem('auth_token', token)
+}
+
+export function clearAuthToken() {
+  sessionStorage.removeItem('auth_token')
+}
+
+// ==================== API Error ====================
+
 class APIError extends Error {
   constructor(message, status, data) {
     super(message)
@@ -20,9 +36,17 @@ class APIError extends Error {
  */
 async function apiRequest(endpoint, options = {}) {
   try {
+    // Inject auth token if present (issue #728)
+    const authHeaders = {}
+    const token = getAuthToken()
+    if (token) {
+      authHeaders['Authorization'] = `Bearer ${token}`
+    }
+
     const response = await fetch(endpoint, {
       headers: {
         'Content-Type': 'application/json',
+        ...authHeaders,
         ...options.headers
       },
       ...options

@@ -26,9 +26,10 @@ from fastapi import (
     WebSocket,
     WebSocketDisconnect,
 )
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from .file_upload import FileUploadError, FileUploadManager
 from .logging_config import get_logger
@@ -53,6 +54,47 @@ ws_logger = get_logger('websocket_debug', category='WS_LIFECYCLE')
 ws_verbose_logger = get_logger('websocket_verbose', category='WS_PING_PONG')
 # Keep standard logger for errors
 logger = logging.getLogger(__name__)
+
+
+class AuthMiddleware(BaseHTTPMiddleware):
+    """Authentication middleware for HTTP requests (issue #728).
+
+    Exempts static assets, root HTML, health check, and auth check endpoint.
+    WebSocket auth is handled separately in each WS endpoint handler.
+    """
+
+    EXEMPT_PATHS = {'/', '/health', '/api/auth/check'}
+    EXEMPT_PREFIXES = ('/assets/',)
+
+    def __init__(self, app, auth_token: str):
+        super().__init__(app)
+        self.auth_token = auth_token
+
+    async def dispatch(self, request: Request, call_next):
+        path = request.url.path
+
+        # Exempt paths
+        if path in self.EXEMPT_PATHS:
+            return await call_next(request)
+        for prefix in self.EXEMPT_PREFIXES:
+            if path.startswith(prefix):
+                return await call_next(request)
+
+        # Extract token from Authorization header or query param
+        token = None
+        auth_header = request.headers.get('authorization', '')
+        if auth_header.startswith('Bearer '):
+            token = auth_header[7:]
+        if not token:
+            token = request.query_params.get('token')
+
+        if token != self.auth_token:
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "Authentication required", "auth_required": True}
+            )
+
+        return await call_next(request)
 
 
 def validate_and_normalize_working_directory(
@@ -436,10 +478,15 @@ class ClaudeWebUI:
     def __init__(self, data_dir: Path = None, experimental: bool = False,
                  mock_sdk: bool = False, fixtures_dir: Path | None = None,
                  available_fixtures: list[str] | None = None,
-                 config_file: Path | None = None):
+                 config_file: Path | None = None,
+                 auth_token: str | None = None, auth_enabled: bool = False):
         self.app = FastAPI(title="Claude Code WebUI", version="1.0.0")
         self.coordinator = SessionCoordinator(data_dir, experimental=experimental)
         self.config_file = config_file
+
+        # Authentication (issue #728)
+        self.auth_token = auth_token
+        self.auth_enabled = auth_enabled
 
         # Wire mock SDK factory if mock mode active (issue #561)
         if mock_sdk and fixtures_dir:
@@ -469,6 +516,11 @@ class ClaudeWebUI:
 
         # Setup routes
         self._setup_routes()
+
+        # Register auth middleware if enabled (issue #728)
+        if self.auth_enabled and self.auth_token:
+            self.app.add_middleware(AuthMiddleware, auth_token=self.auth_token)
+            logger.info("Authentication middleware enabled")
 
         # Setup Legion WebSocket broadcast callbacks
         self.coordinator.legion_system.comm_router.set_comm_broadcast_callback(
@@ -506,6 +558,21 @@ class ClaudeWebUI:
                 "Run 'cd frontend && npm run build' to create production build."
             )
         self.app.mount("/assets", StaticFiles(directory=str(static_dir / "assets")), name="assets")
+
+    async def _validate_ws_token(self, websocket: WebSocket) -> bool:
+        """Validate WebSocket auth token from query params (issue #728).
+
+        Returns True if auth is disabled or token is valid.
+        Returns False and closes the socket with 4401 if invalid.
+        """
+        if not self.auth_enabled:
+            return True
+        token = websocket.query_params.get('token')
+        if token == self.auth_token:
+            return True
+        await websocket.close(code=4401)
+        logger.warning("WebSocket connection rejected: invalid or missing auth token")
+        return False
 
     def _get_permission_callback_factory(self):
         """
@@ -697,6 +764,22 @@ class ClaudeWebUI:
         async def health_check():
             """Health check endpoint"""
             return {"status": "healthy", "timestamp": datetime.now(UTC).isoformat()}
+
+        @self.app.get("/api/auth/check")
+        async def auth_check(request: Request):
+            """Check authentication status (issue #728). Exempt from auth middleware."""
+            authenticated = False
+            if self.auth_enabled and self.auth_token:
+                # Check Authorization header
+                auth_header = request.headers.get('authorization', '')
+                if auth_header.startswith('Bearer ') and auth_header[7:] == self.auth_token:
+                    authenticated = True
+                # Check query param
+                if not authenticated and request.query_params.get('token') == self.auth_token:
+                    authenticated = True
+            elif not self.auth_enabled:
+                authenticated = True
+            return {"auth_required": self.auth_enabled, "authenticated": authenticated}
 
         # ==================== PROJECT ENDPOINTS ====================
 
@@ -3221,6 +3304,8 @@ class ClaudeWebUI:
         async def ui_websocket_endpoint(websocket: WebSocket):
             """Global UI WebSocket endpoint for session state updates"""
             logger.info("UI WebSocket connection request received")
+            if not await self._validate_ws_token(websocket):
+                return
             await self.ui_websocket_manager.connect(websocket)
 
             try:
@@ -3271,6 +3356,8 @@ class ClaudeWebUI:
         async def legion_websocket_endpoint(websocket: WebSocket, legion_id: str):
             """WebSocket endpoint for project real-time updates (issue #313: universal Legion)"""
             logger.info(f"Legion WebSocket connection request for project {legion_id}")
+            if not await self._validate_ws_token(websocket):
+                return
 
             # Issue #313: All projects support Legion WebSocket - verify project exists
             try:
@@ -3325,6 +3412,9 @@ class ClaudeWebUI:
         @self.app.websocket("/ws/session/{session_id}")
         async def websocket_endpoint(websocket: WebSocket, session_id: str):
             """WebSocket endpoint for session-specific messaging"""
+            if not await self._validate_ws_token(websocket):
+                return
+
             ws_connection_start_time = time.time()
             ws_logger.debug(f"WebSocket connection attempt for session {session_id} at {ws_connection_start_time}")
 
@@ -4282,6 +4372,8 @@ def create_app(
     mock_sdk: bool = False,
     fixtures_dir: Path | None = None,
     available_fixtures: list[str] | None = None,
+    auth_token: str | None = None,
+    auth_enabled: bool = False,
 ) -> FastAPI:
     """Create and configure the FastAPI application"""
     global webui_app
@@ -4289,6 +4381,7 @@ def create_app(
         data_dir, experimental=experimental,
         mock_sdk=mock_sdk, fixtures_dir=fixtures_dir,
         available_fixtures=available_fixtures,
+        auth_token=auth_token, auth_enabled=auth_enabled,
     )
     return webui_app.app
 

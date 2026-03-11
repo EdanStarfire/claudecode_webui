@@ -30,6 +30,12 @@ Examples:
 - Issue #372 -> Backend: 8372, Vite: 5372
 - Issue #1234 -> Backend: 8234, Vite: 5234
 
+### Auth Token
+
+- **Test Auth Token** = `test` (fixed value for all test servers)
+  - Passed to backend via `--token test` so it survives restarts
+  - Included in URLs reported to the user for one-click access
+
 ### Initialization Context Fragment
 
 Return this context fragment for inclusion in minion initialization:
@@ -39,6 +45,7 @@ Test Server Configuration:
 - Backend Port: ${BACKEND_PORT} (8000 + issue_number % 1000)
 - Backend Host: 0.0.0.0 (required for network-accessible dev server)
 - Vite Port: ${VITE_PORT} (5000 + issue_number % 1000)
+- Auth Token: test (pinned for testing)
 - Data Directory: Default (data/) - DO NOT use --data-dir flag
 ```
 

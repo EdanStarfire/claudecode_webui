@@ -31,6 +31,9 @@
       />
     </div>
 
+    <!-- Auth Prompt (issue #728) -->
+    <AuthPrompt v-if="showAuthPrompt" @authenticated="onAuthenticated" />
+
     <!-- Global Modals -->
     <FolderBrowserModal />
     <ProjectCreateModal />
@@ -62,14 +65,17 @@ import MinionViewModal from './components/legion/MinionViewModal.vue'
 import DeletedAgentsModal from './components/layout/DeletedAgentsModal.vue'
 import RestartModal from './components/layout/RestartModal.vue'
 import GlobalConfigModal from './components/configuration/GlobalConfigModal.vue'
+import AuthPrompt from './components/common/AuthPrompt.vue'
 import { useUIStore } from './stores/ui'
 import { useWebSocketStore } from './stores/websocket'
 import { useSessionStore } from './stores/session'
 import { useProjectStore } from './stores/project'
 import { useTaskStore } from './stores/task'
 import { useResourceStore } from './stores/resource'
+import { apiGet, getAuthToken, setAuthToken } from './utils/api'
 
 const uiStore = useUIStore()
+const showAuthPrompt = ref(false)
 const wsStore = useWebSocketStore()
 const sessionStore = useSessionStore()
 const projectStore = useProjectStore()
@@ -122,6 +128,39 @@ onMounted(async () => {
     })
   }
 
+  // Issue #728: Capture token from URL query param
+  const urlParams = new URLSearchParams(window.location.search)
+  const urlToken = urlParams.get('token')
+  if (urlToken) {
+    setAuthToken(urlToken)
+    // Strip token from URL for security
+    urlParams.delete('token')
+    const cleanUrl = urlParams.toString()
+      ? `${window.location.pathname}?${urlParams.toString()}${window.location.hash}`
+      : `${window.location.pathname}${window.location.hash}`
+    window.history.replaceState({}, '', cleanUrl)
+  }
+
+  // Issue #728: Check auth status before connecting
+  try {
+    const authStatus = await apiGet('/api/auth/check')
+    if (authStatus.auth_required && !authStatus.authenticated) {
+      showAuthPrompt.value = true
+      return  // Don't initialize app until authenticated
+    }
+  } catch {
+    // If auth check fails, try to proceed (server may be down)
+  }
+
+  initializeApp()
+})
+
+async function onAuthenticated() {
+  showAuthPrompt.value = false
+  initializeApp()
+}
+
+async function initializeApp() {
   // Connect to global UI WebSocket
   wsStore.connectUI()
 
@@ -155,7 +194,7 @@ onMounted(async () => {
       sessionStore.syncSessionStates()
     }
   }, STATE_POLL_INTERVAL_MS)
-})
+}
 
 onUnmounted(() => {
   if (statePollTimer) {

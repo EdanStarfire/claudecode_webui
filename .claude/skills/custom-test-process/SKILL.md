@@ -22,6 +22,9 @@ The Builder invokes this skill from its working directory (the worktree). Enviro
 Environment from `custom-environment-setup`:
 - `BACKEND_PORT`: Backend server port (8000 + issue_number % 1000)
 - `VITE_PORT`: Vite dev server port (5000 + issue_number % 1000)
+- `TEST_AUTH_TOKEN`: Fixed auth token for test servers (default: `test`)
+  - Pinned so the token survives restarts during testing
+  - Included in all URLs reported to the user
 
 ## Test Lifecycle
 
@@ -32,7 +35,7 @@ This skill owns the full test lifecycle in a single invocation:
 **CRITICAL:** Unset the `CLAUDECODE` environment variable before starting the backend. The Claude Agent SDK includes an undocumented safety check that prevents it from running inside another Claude Code instance. Since the builder agent runs inside Claude Code, this env var is inherited by child processes. Our application launches its own Claude Code SDK instances, so if `CLAUDECODE` is set, those SDK sessions will halt prematurely.
 
 ```bash
-env -u CLAUDECODE uv run python main.py --host 0.0.0.0 --debug-all --port ${BACKEND_PORT} &
+env -u CLAUDECODE uv run python main.py --host 0.0.0.0 --debug-all --port ${BACKEND_PORT} --token ${TEST_AUTH_TOKEN:-test} &
 ```
 
 Wait for server to be ready:
@@ -74,6 +77,17 @@ curl -s http://localhost:${VITE_PORT}
 
 **CRITICAL:** Do NOT stop servers after testing. Leave them running for user review.
 The `custom-cleanup-process` skill handles stopping servers later.
+
+### 6. Report Server URLs to User
+
+When reporting that servers are running, include the auth token in the URLs:
+
+```
+Backend:  http://localhost:${BACKEND_PORT}/?token=${TEST_AUTH_TOKEN:-test}
+Frontend: http://localhost:${VITE_PORT}/?token=${TEST_AUTH_TOKEN:-test}
+```
+
+This lets the user click the URL and authenticate automatically.
 
 ## Test Verification
 
