@@ -335,3 +335,91 @@ class TestDictFormatSuggestions:
         result = handler_km_enabled.evaluate_suggestions(suggestions)
         assert result is not None
         assert result[0] == "allow"
+
+
+class TestAddDirectoriesSuggestion:
+    """Tests for addDirectories suggestion auto-approval (issue #709)."""
+
+    def test_issue_709_add_memory_dir_auto_approved(self, tmp_dirs):
+        """addDirectories for session memory dir should be auto-approved."""
+        memory_dir = tmp_dirs["session_dir"] / "memory"
+        memory_dir.mkdir(parents=True, exist_ok=True)
+        handler = InternalPermissionHandler(
+            session_data_dir=tmp_dirs["session_dir"],
+            plans_dir=tmp_dirs["plans_dir"],
+            skills_dirs=tmp_dirs["skills_dirs"],
+            knowledge_mgmt_enabled=True,
+            memory_dir=memory_dir,
+        )
+        suggestions = [{
+            "type": "addDirectories",
+            "directories": [str(memory_dir)],
+            "destination": "session",
+        }]
+        result = handler.evaluate_suggestions(suggestions)
+        assert result is not None
+        assert result[0] == "allow"
+        assert result[1] == "Auto-approved: session memory file access"
+
+    def test_issue_709_add_unmanaged_dir_not_approved(self, tmp_dirs):
+        """addDirectories for an unmanaged dir should not be auto-approved."""
+        memory_dir = tmp_dirs["session_dir"] / "memory"
+        memory_dir.mkdir(parents=True, exist_ok=True)
+        handler = InternalPermissionHandler(
+            session_data_dir=tmp_dirs["session_dir"],
+            plans_dir=tmp_dirs["plans_dir"],
+            skills_dirs=tmp_dirs["skills_dirs"],
+            knowledge_mgmt_enabled=True,
+            memory_dir=memory_dir,
+        )
+        suggestions = [{
+            "type": "addDirectories",
+            "directories": ["/some/random/directory"],
+            "destination": "session",
+        }]
+        result = handler.evaluate_suggestions(suggestions)
+        assert result is None
+
+    def test_issue_709_add_mixed_dirs_not_approved(self, tmp_dirs):
+        """addDirectories with mix of managed and unmanaged dirs should not auto-approve."""
+        memory_dir = tmp_dirs["session_dir"] / "memory"
+        memory_dir.mkdir(parents=True, exist_ok=True)
+        handler = InternalPermissionHandler(
+            session_data_dir=tmp_dirs["session_dir"],
+            plans_dir=tmp_dirs["plans_dir"],
+            skills_dirs=tmp_dirs["skills_dirs"],
+            knowledge_mgmt_enabled=True,
+            memory_dir=memory_dir,
+        )
+        suggestions = [{
+            "type": "addDirectories",
+            "directories": [str(memory_dir), "/some/random/directory"],
+            "destination": "session",
+        }]
+        result = handler.evaluate_suggestions(suggestions)
+        assert result is None
+
+    def test_issue_709_add_plans_dir_auto_approved(self, handler_km_enabled, tmp_dirs):
+        """addDirectories for plans dir should also be auto-approved."""
+        suggestions = [{
+            "type": "addDirectories",
+            "directories": [str(tmp_dirs["plans_dir"])],
+            "destination": "session",
+        }]
+        result = handler_km_enabled.evaluate_suggestions(suggestions)
+        assert result is not None
+        assert result[0] == "allow"
+        assert result[1] == "Auto-approved: internal plan file access"
+
+    def test_issue_709_add_dir_without_memory_configured(self, handler_km_enabled, tmp_dirs):
+        """addDirectories for a session memory path should not auto-approve when memory not configured."""
+        memory_dir = tmp_dirs["session_dir"] / "memory"
+        memory_dir.mkdir(parents=True, exist_ok=True)
+        # handler_km_enabled has no memory_dir configured
+        suggestions = [{
+            "type": "addDirectories",
+            "directories": [str(memory_dir)],
+            "destination": "session",
+        }]
+        result = handler_km_enabled.evaluate_suggestions(suggestions)
+        assert result is None

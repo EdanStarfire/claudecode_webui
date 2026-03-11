@@ -61,8 +61,8 @@ class TestCreateSession:
         session = resp.json()["session"]
         assert session["current_permission_mode"] == "acceptEdits"
 
-    async def test_issue_708_create_session_preserves_disable_auto_memory(self, api_integration_env):
-        """Regression: disable_auto_memory=true must survive the API create → store round-trip."""
+    async def test_issue_709_create_session_preserves_auto_memory_mode(self, api_integration_env):
+        """Regression: auto_memory_mode must survive the API create → store round-trip."""
         client = api_integration_env["client"]
         create_project = api_integration_env["create_test_project"]
 
@@ -71,16 +71,16 @@ class TestCreateSession:
 
         resp = await client.post("/api/sessions", json={
             "project_id": pid,
-            "name": "Memory Disabled",
-            "disable_auto_memory": True,
+            "name": "Session Memory",
+            "auto_memory_mode": "session",
         })
         assert resp.status_code == 200
         sid = resp.json()["session_id"]
 
         resp = await client.get(f"/api/sessions/{sid}")
         session = resp.json()["session"]
-        assert session["disable_auto_memory"] is True, (
-            "disable_auto_memory=True must be preserved through create_session"
+        assert session["auto_memory_mode"] == "session", (
+            "auto_memory_mode='session' must be preserved through create_session"
         )
 
     async def test_create_session_invalid_project(self, api_integration_env):

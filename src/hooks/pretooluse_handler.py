@@ -104,10 +104,18 @@ class InternalPermissionHandler:
         plans_dir: Path,
         skills_dirs: list[Path],
         knowledge_mgmt_enabled: bool,
+        memory_dir: Path | None = None,
     ):
         self._rules = self._build_rules(
-            session_data_dir, plans_dir, skills_dirs, knowledge_mgmt_enabled
+            session_data_dir, plans_dir, skills_dirs, knowledge_mgmt_enabled, memory_dir
         )
+        # Collect (prefix, reason) pairs from allow rules for addDirectories auto-approval
+        self._managed_prefix_reasons: list[tuple[str, str]] = [
+            (prefix, rule.reason)
+            for rule in self._rules
+            if rule.enabled and rule.decision == "allow"
+            for prefix in rule.path_prefixes
+        ]
 
     def _build_rules(
         self,
@@ -115,6 +123,7 @@ class InternalPermissionHandler:
         plans_dir: Path,
         skills_dirs: list[Path],
         knowledge_mgmt_enabled: bool,
+        memory_dir: Path | None = None,
     ) -> list[InternalRule]:
         """Build internal rule set from session configuration. Paths are resolved once here."""
         rules: list[InternalRule] = []
@@ -167,6 +176,17 @@ class InternalPermissionHandler:
             enabled=True,
         ))
 
+        # Rule: Allow reading and writing session memory files (issue #709)
+        if memory_dir:
+            memory_prefixes = _resolve_prefixes([str(memory_dir)])
+            rules.append(InternalRule(
+                tool_names=frozenset(["Read", "Write", "Edit"]),
+                path_prefixes=memory_prefixes,
+                decision="allow",
+                reason="Auto-approved: session memory file access",
+                enabled=True,
+            ))
+
         return rules
 
     def _matches_path(self, file_path: str, prefixes: list[str]) -> bool:
@@ -181,6 +201,26 @@ class InternalPermissionHandler:
             if resolved.startswith(prefix) or resolved + os.sep == prefix:
                 return True
         return False
+
+    def _check_directories_managed(self, directories: list[str]) -> str | None:
+        """Check if all directories in an addDirectories suggestion are managed paths.
+
+        Returns the reason from the first matched rule if every directory matches,
+        or None if any directory is unmanaged.
+        """
+        first_reason = None
+        for dir_path in directories:
+            resolved = _resolve_path(dir_path)
+            matched_reason = None
+            for prefix, reason in self._managed_prefix_reasons:
+                if resolved.startswith(prefix.rstrip(os.sep)):
+                    matched_reason = reason
+                    break
+            if matched_reason is None:
+                return None
+            if first_reason is None:
+                first_reason = matched_reason
+        return first_reason
 
     def evaluate_suggestion(
         self, tool_name: str, rule_content: str | None, behavior: str | None
@@ -238,6 +278,16 @@ class InternalPermissionHandler:
         """
         for suggestion in suggestions:
             sug_type = _get_field(suggestion, "type", "type")
+
+            # Handle addDirectories: auto-approve if all directories are managed paths
+            if sug_type == "addDirectories":
+                directories = _get_field(suggestion, "directories", "directories")
+                if directories:
+                    reason = self._check_directories_managed(directories)
+                    if reason:
+                        return ("allow", reason)
+                continue
+
             if sug_type != "addRules":
                 continue
 

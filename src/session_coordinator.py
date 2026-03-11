@@ -371,7 +371,7 @@ class SessionCoordinator:
                 thinking_budget_tokens=config.thinking_budget_tokens,
                 effort=config.effort,
                 knowledge_management_enabled=config.knowledge_management_enabled,
-                disable_auto_memory=config.disable_auto_memory,
+                auto_memory_mode=config.auto_memory_mode,
             )
 
             # Create session through session manager
@@ -466,7 +466,7 @@ class SessionCoordinator:
             )
             # Issue #707: Build PreToolUse handler for internal tool access control
             permission_handler = self._build_permission_handler(
-                session_dir, config.knowledge_management_enabled
+                session_dir, config.knowledge_management_enabled, config.auto_memory_mode
             )
 
             sdk = self._sdk_factory(
@@ -803,10 +803,24 @@ class SessionCoordinator:
             else:
                 history_note = ""
 
-            if session_info.system_prompt:
-                minion_system_prompt = f"{legion_guide}{history_note}\n\n---\n\n{session_info.system_prompt}"
+            # Issue #709: Agent guidance file reference (session-specific memory mode)
+            if session_info.auto_memory_mode == "session":
+                guidance_file = session_dir / "memory" / "agent-guidance.md"
+                guidance_note = (
+                    f"\n\n## Agent Guidance\n"
+                    f"You have a personal guidance file at `{guidance_file}` for this session.\n"
+                    f"Use it to document key learnings, important patterns, rules discovered, "
+                    f"and context that should persist across session resets.\n"
+                    f"You can read it with the Read tool and update it with the Edit or Write tool.\n"
+                    f"Review it at session start to recover previous context."
+                )
             else:
-                minion_system_prompt = f"{legion_guide}{history_note}"
+                guidance_note = ""
+
+            if session_info.system_prompt:
+                minion_system_prompt = f"{legion_guide}{history_note}{guidance_note}\n\n---\n\n{session_info.system_prompt}"
+            else:
+                minion_system_prompt = f"{legion_guide}{history_note}{guidance_note}"
             coord_logger.info(f"Built minion system prompt for start (guide + context): {len(minion_system_prompt)} chars")
 
             # Escape special characters in system_prompt for subprocess command-line safety
@@ -854,12 +868,21 @@ class SessionCoordinator:
                 thinking_mode=session_info.thinking_mode,
                 thinking_budget_tokens=session_info.thinking_budget_tokens,
                 effort=session_info.effort,
-                disable_auto_memory=session_info.disable_auto_memory,
+                auto_memory_mode=session_info.auto_memory_mode,
             )
+
+            # Issue #709: Create session-specific memory directory and guidance file
+            if session_info.auto_memory_mode == "session":
+                memory_dir = session_dir / "memory"
+                memory_dir.mkdir(exist_ok=True)
+                guidance_file = memory_dir / "agent-guidance.md"
+                if not guidance_file.exists():
+                    guidance_file.touch()
+                    coord_logger.debug(f"Created memory/agent-guidance.md for session {session_id}")
 
             # Issue #707: Build PreToolUse handler for internal tool access control
             permission_handler = self._build_permission_handler(
-                session_dir, session_info.knowledge_management_enabled
+                session_dir, session_info.knowledge_management_enabled, session_info.auto_memory_mode
             )
 
             sdk = self._sdk_factory(
@@ -1683,6 +1706,11 @@ class SessionCoordinator:
             resources_dir = session_dir / "resources"
             if resources_dir.exists() and resources_dir.is_dir():
                 shutil.copytree(resources_dir, archive_dir / "resources")
+
+            # Copy memory/ directory if exists (issue #709)
+            memory_dir = session_dir / "memory"
+            if memory_dir.exists() and memory_dir.is_dir():
+                shutil.copytree(memory_dir, archive_dir / "memory")
 
             # Determine project/legion ID for metadata
             project_id = ""
@@ -2932,9 +2960,10 @@ class SessionCoordinator:
                 await storage.append_message(message_data)
 
     def _build_permission_handler(
-        self, session_dir: Path, knowledge_mgmt_enabled: bool
+        self, session_dir: Path, knowledge_mgmt_enabled: bool, auto_memory_mode: str = "claude"
     ) -> InternalPermissionHandler:
         """Build internal permission handler with consistent path configuration (issue #707)."""
+        memory_dir = session_dir / "memory" if auto_memory_mode == "session" else None
         return InternalPermissionHandler(
             session_data_dir=session_dir,
             plans_dir=Path.home() / ".cc_webui" / "plans",
@@ -2943,6 +2972,7 @@ class SessionCoordinator:
                 NEW_GLOBAL_SKILLS_DIR,
             ],
             knowledge_mgmt_enabled=knowledge_mgmt_enabled,
+            memory_dir=memory_dir,
         )
 
     def _create_message_callback(self, session_id: str) -> Callable:

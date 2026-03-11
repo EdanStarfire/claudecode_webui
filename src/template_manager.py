@@ -198,6 +198,7 @@ class TemplateManager:
             thinking_budget_tokens=config.thinking_budget_tokens,
             effort=config.effort,
             knowledge_management_enabled=config.knowledge_management_enabled,
+            auto_memory_mode=config.auto_memory_mode,
         )
 
         await self._save_template(template)
@@ -247,7 +248,7 @@ class TemplateManager:
         thinking_budget_tokens: int | None = None,
         effort: str | None = None,
         knowledge_management_enabled: bool | None = None,
-        disable_auto_memory: bool | None = None,
+        auto_memory_mode: str | None = None,
     ) -> MinionTemplate:
         """Update existing template."""
         template = self.templates.get(template_id)
@@ -323,8 +324,8 @@ class TemplateManager:
         if knowledge_management_enabled is not None:
             template.knowledge_management_enabled = knowledge_management_enabled
 
-        if disable_auto_memory is not None:
-            template.disable_auto_memory = disable_auto_memory
+        if auto_memory_mode is not None:
+            template.auto_memory_mode = auto_memory_mode
 
         template.updated_at = datetime.now(UTC)
 
