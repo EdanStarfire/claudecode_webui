@@ -224,8 +224,7 @@ export function useTTSReadAloud() {
     const content = message.content || ''
     if (!content.trim() || content === 'Assistant response') return
 
-    const id = message.message_id || message.id
-    if (!id) return
+    const id = message.message_id || message.id || `tts-${Date.now()}`
 
     // If already playing, append to queue
     if (isPlaying.value) {

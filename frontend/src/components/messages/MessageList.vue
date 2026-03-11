@@ -411,15 +411,30 @@ function onScroll() {
   })
 }
 
-// TTS: Auto-queue new assistant messages when read aloud is enabled
-watch(() => displayableItems.value.length, (newLen, oldLen) => {
-  if (newLen > oldLen && uiStore.ttsReadAloudEnabled) {
-    // Check the latest displayable item
-    const latestItem = displayableItems.value[displayableItems.value.length - 1]
-    if (latestItem?.type === 'message' && latestItem.message?.type === 'assistant') {
-      tts.queueNewMessage(latestItem.message)
+// TTS: Auto-queue new assistant messages when read aloud is enabled.
+// Watch raw message list (not displayableItems) because groupToolsToParentMessages
+// can merge/hide messages, making displayableItems.length unreliable for detection.
+const lastSeenMessageCount = ref(messageStore.currentMessages.length)
+watch(() => messageStore.currentMessages.length, (newLen) => {
+  if (newLen > lastSeenMessageCount.value && uiStore.ttsReadAloudEnabled) {
+    // Check all new messages (there may be multiple since last check)
+    const msgs = messageStore.currentMessages
+    for (let i = lastSeenMessageCount.value; i < newLen; i++) {
+      const msg = msgs[i]
+      if (msg?.type === 'assistant') {
+        const content = msg.content || ''
+        if (content.trim() && content !== 'Assistant response') {
+          tts.queueNewMessage(msg)
+        }
+      }
     }
   }
+  lastSeenMessageCount.value = newLen
+})
+
+// Reset TTS message counter on session switch
+watch(() => sessionStore.currentSessionId, () => {
+  lastSeenMessageCount.value = messageStore.currentMessages.length
 })
 
 // Auto-scroll on new messages, or restore scroll position if pending
