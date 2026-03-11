@@ -1,30 +1,32 @@
 <template>
-  <div class="messages-area flex-grow-1 overflow-auto" :class="{ 'theme-red': uiStore.isRedBackground }" ref="messagesArea" role="log" aria-live="polite" aria-label="Conversation messages" @scroll="onScroll">
-    <div v-if="displayableItems.length === 0" class="text-muted text-center py-5">
-      No messages yet. Start a conversation!
+  <div class="messages-area-wrapper flex-grow-1">
+    <div class="messages-area overflow-auto" :class="{ 'theme-red': uiStore.isRedBackground }" ref="messagesArea" role="log" aria-live="polite" aria-label="Conversation messages" @scroll="onScroll">
+      <div v-if="displayableItems.length === 0" class="text-muted text-center py-5">
+        No messages yet. Start a conversation!
+      </div>
+
+      <!-- Messages and compaction events using new component architecture -->
+      <!-- Tool cards are embedded within AssistantMessage components -->
+      <template v-for="(item, index) in displayableItems" :key="`item-${index}`">
+        <!-- Regular message -->
+        <MessageItem
+          v-if="item.type === 'message'"
+          :message="normalizeMessage(item.message)"
+          :attachedTools="item.attachedTools || []"
+        />
+
+        <!-- Compaction event group -->
+        <CompactionEventGroup
+          v-else-if="item.type === 'compaction'"
+          :messages="item.messages"
+        />
+      </template>
+
+      <!-- Issue #662: Truncation banner after last assistant message when response was truncated -->
+      <TruncationBanner v-if="showTruncationBanner" :key="'truncation-' + sessionStore.currentSessionId" />
     </div>
 
-    <!-- Messages and compaction events using new component architecture -->
-    <!-- Tool cards are embedded within AssistantMessage components -->
-    <template v-for="(item, index) in displayableItems" :key="`item-${index}`">
-      <!-- Regular message -->
-      <MessageItem
-        v-if="item.type === 'message'"
-        :message="normalizeMessage(item.message)"
-        :attachedTools="item.attachedTools || []"
-      />
-
-      <!-- Compaction event group -->
-      <CompactionEventGroup
-        v-else-if="item.type === 'compaction'"
-        :messages="item.messages"
-      />
-    </template>
-
-    <!-- Issue #662: Truncation banner after last assistant message when response was truncated -->
-    <TruncationBanner v-if="showTruncationBanner" :key="'truncation-' + sessionStore.currentSessionId" />
-
-    <!-- TTS Floating Controls (issue #735) -->
+    <!-- TTS Floating Controls (issue #735) — outside scroll container to avoid layout shift -->
     <div v-if="tts.isPlaying.value" class="tts-floating-controls">
       <button
         class="btn btn-sm btn-outline-secondary"
@@ -594,7 +596,16 @@ function normalizeMessage(message) {
 </script>
 
 <style scoped>
+.messages-area-wrapper {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
 .messages-area {
+  flex: 1;
+  overflow: auto;
   background: #ffffff;
   padding: 8px 0;
 }

@@ -1327,21 +1327,21 @@ button:focus {
     box-shadow: 0 0 14px 5px rgba(25, 135, 84, 0.3);
 }
 
-/* Floating playback controls */
+/* Floating playback controls — positioned over the scroll container */
 .tts-floating-controls {
-    position: sticky;
-    bottom: 8px;
+    position: absolute;
+    bottom: 12px;
+    left: 50%;
+    transform: translateX(-50%);
     display: flex;
-    justify-content: center;
     gap: 8px;
     padding: 6px 12px;
     background: rgba(255, 255, 255, 0.95);
     border: 1px solid #dee2e6;
     border-radius: 20px;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-    width: fit-content;
-    margin: 8px auto 0;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
     z-index: 10;
+    pointer-events: auto;
 }
 
 .tts-floating-controls .btn {
