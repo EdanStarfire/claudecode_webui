@@ -467,7 +467,7 @@ const CONFIG_FIELDS = {
     toPayload: (v) => v.trim() ? v.trim().split('\n').map(m => m.trim()).filter(Boolean) : null,
     fromSource: (s) => Array.isArray(s.docker_extra_mounts) ? s.docker_extra_mounts.join('\n') : '',
   },
-  knowledge_management_enabled: {
+  history_distillation_enabled: {
     default: true,
     change: 'restart',
     contexts: ['session', 'template', 'ephemeral', 'update'],

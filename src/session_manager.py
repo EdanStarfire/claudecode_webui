@@ -134,8 +134,8 @@ class SessionInfo:
     # Ephemeral session support (issue #578)
     is_ephemeral: bool = False  # True for temporary sessions created by ephemeral schedules
 
-    # Knowledge management toggle (issue #710)
-    knowledge_management_enabled: bool = True  # When False, skip distillation and history references
+    # History distillation toggle (issue #710, renamed #736)
+    history_distillation_enabled: bool = True  # When False, skip distillation and history references
 
     # Auto-memory mode (issue #709, replaces #708 disable_auto_memory boolean)
     auto_memory_mode: str = "claude"  # "claude" | "session" | "disabled"
@@ -204,7 +204,12 @@ class SessionInfo:
         data.setdefault('thinking_budget_tokens', None)
         data.setdefault('effort', None)
         data.setdefault('is_ephemeral', False)
-        data.setdefault('knowledge_management_enabled', True)
+        # Migrate knowledge_management_enabled → history_distillation_enabled (issue #736)
+        if 'knowledge_management_enabled' in data and 'history_distillation_enabled' not in data:
+            data['history_distillation_enabled'] = data.pop('knowledge_management_enabled')
+        else:
+            data.pop('knowledge_management_enabled', None)
+            data.setdefault('history_distillation_enabled', True)
         # Migrate legacy disable_auto_memory boolean to auto_memory_mode enum (issue #709)
         if 'disable_auto_memory' in data and 'auto_memory_mode' not in data:
             data['auto_memory_mode'] = "disabled" if data.pop('disable_auto_memory') else "claude"
@@ -373,7 +378,7 @@ class SessionManager:
             thinking_mode=config.thinking_mode,
             thinking_budget_tokens=config.thinking_budget_tokens,
             effort=config.effort,
-            knowledge_management_enabled=config.knowledge_management_enabled,
+            history_distillation_enabled=config.history_distillation_enabled,
             auto_memory_mode=config.auto_memory_mode,
         )
 

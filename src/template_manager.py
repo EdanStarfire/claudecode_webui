@@ -197,7 +197,7 @@ class TemplateManager:
             thinking_mode=config.thinking_mode,
             thinking_budget_tokens=config.thinking_budget_tokens,
             effort=config.effort,
-            knowledge_management_enabled=config.knowledge_management_enabled,
+            history_distillation_enabled=config.history_distillation_enabled,
             auto_memory_mode=config.auto_memory_mode,
         )
 
@@ -247,7 +247,7 @@ class TemplateManager:
         thinking_mode: str | None = None,
         thinking_budget_tokens: int | None = None,
         effort: str | None = None,
-        knowledge_management_enabled: bool | None = None,
+        history_distillation_enabled: bool | None = None,
         auto_memory_mode: str | None = None,
     ) -> MinionTemplate:
         """Update existing template."""
@@ -321,8 +321,8 @@ class TemplateManager:
         if effort is not None:
             template.effort = effort
 
-        if knowledge_management_enabled is not None:
-            template.knowledge_management_enabled = knowledge_management_enabled
+        if history_distillation_enabled is not None:
+            template.history_distillation_enabled = history_distillation_enabled
 
         if auto_memory_mode is not None:
             template.auto_memory_mode = auto_memory_mode

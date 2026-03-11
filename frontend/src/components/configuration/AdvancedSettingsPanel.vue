@@ -241,17 +241,36 @@
             Override System Prompt
           </label>
         </div>
-        <div class="form-check form-switch">
+      </div>
+    </div>
+
+    <!-- Card 4: Knowledge Management (Amber) -->
+    <div class="priority-card priority-amber">
+      <button
+        class="card-header-btn"
+        :class="{ collapsed: !cardStates.knowledge }"
+        type="button"
+        @click="cardStates.knowledge = !cardStates.knowledge"
+      >
+        <span class="dot dot-amber"></span>
+        Knowledge Management
+        <span class="chevron"><i class="bi bi-chevron-down"></i></span>
+      </button>
+      <div v-show="cardStates.knowledge" class="card-body-inner">
+        <div class="form-check form-switch mb-2">
           <input
             class="form-check-input"
             type="checkbox"
-            id="adv-knowledge-mgmt"
-            :checked="formData.knowledge_management_enabled"
-            @change="$emit('update:form-data', 'knowledge_management_enabled', $event.target.checked)"
+            id="adv-history-distillation"
+            :checked="formData.history_distillation_enabled"
+            @change="$emit('update:form-data', 'history_distillation_enabled', $event.target.checked)"
           />
-          <label class="form-check-label" for="adv-knowledge-mgmt" style="text-transform: none; letter-spacing: normal;">
-            Knowledge Management
+          <label class="form-check-label" for="adv-history-distillation" style="text-transform: none; letter-spacing: normal;">
+            History Distillation
           </label>
+          <small class="form-text text-muted d-block">
+            When enabled, session history is distilled to markdown on archive for context continuity.
+          </small>
         </div>
         <div class="mb-2">
           <label class="form-label" for="adv-auto-memory-mode" style="text-transform: none; letter-spacing: normal;">
@@ -275,7 +294,7 @@
       </div>
     </div>
 
-    <!-- Card 4: Extra Options (Gray, collapsed by default) -->
+    <!-- Card 5: Extra Options (Gray, collapsed by default) -->
     <div class="priority-card priority-gray">
       <button
         class="card-header-btn"
@@ -560,11 +579,12 @@ const emit = defineEmits([
   'browse-additional-dir'
 ])
 
-// Card collapse states (expanded by default for first 3, collapsed for 4 & 5)
+// Card collapse states (expanded by default for first 4, collapsed for 5 & 6)
 const cardStates = reactive({
   tuning: true,
   tools: true,
   prompt: true,
+  knowledge: true,
   extra: false,
   sandbox: false
 })

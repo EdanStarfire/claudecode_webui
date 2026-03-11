@@ -370,7 +370,7 @@ class SessionCoordinator:
                 thinking_mode=config.thinking_mode,
                 thinking_budget_tokens=config.thinking_budget_tokens,
                 effort=config.effort,
-                knowledge_management_enabled=config.knowledge_management_enabled,
+                history_distillation_enabled=config.history_distillation_enabled,
                 auto_memory_mode=config.auto_memory_mode,
             )
 
@@ -466,7 +466,7 @@ class SessionCoordinator:
             )
             # Issue #707: Build PreToolUse handler for internal tool access control
             permission_handler = self._build_permission_handler(
-                session_dir, config.knowledge_management_enabled, config.auto_memory_mode
+                session_dir, config.history_distillation_enabled, config.auto_memory_mode
             )
 
             sdk = self._sdk_factory(
@@ -789,7 +789,7 @@ class SessionCoordinator:
 
             # Issue #691: Append session history reference so agents can check past context
             # Issue #710: Skip history reference when knowledge management is disabled
-            if session_info.knowledge_management_enabled:
+            if session_info.history_distillation_enabled:
                 history_dir = session_dir / "history"
                 history_note = (
                     f"\n\n## Session History\n"
@@ -882,7 +882,7 @@ class SessionCoordinator:
 
             # Issue #707: Build PreToolUse handler for internal tool access control
             permission_handler = self._build_permission_handler(
-                session_dir, session_info.knowledge_management_enabled, session_info.auto_memory_mode
+                session_dir, session_info.history_distillation_enabled, session_info.auto_memory_mode
             )
 
             sdk = self._sdk_factory(
@@ -1743,7 +1743,7 @@ class SessionCoordinator:
             # Use the archived copy of messages.jsonl, not the live file — the live
             # file gets truncated by clear_messages() right after this method returns.
             # Skip distillation when knowledge management is disabled
-            if session_info.knowledge_management_enabled:
+            if session_info.history_distillation_enabled:
                 archived_messages = archive_dir / "messages.jsonl"
                 if archived_messages.exists():
                     from src.history_distiller import distill_session_history
