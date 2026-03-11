@@ -237,6 +237,7 @@ import { useRouter } from 'vue-router'
 import { useScheduleStore } from '@/stores/schedule'
 import { useSessionStore } from '@/stores/session'
 import { useUIStore } from '@/stores/ui'
+import { apiGet } from '@/utils/api'
 import cronstrue from 'cronstrue'
 
 const props = defineProps({
@@ -525,23 +526,20 @@ async function navigateToAgent() {
   const pid = session?.project_id || props.legionId
   if (!pid) return
   try {
-    const response = await fetch(`/api/projects/${pid}/archives/${agentId}`)
-    if (response.ok) {
-      const data = await response.json()
-      const archives = data.archives || []
-      if (archives.length > 0) {
-        const latest = archives[archives.length - 1]
-        // Add ghost agent so the chip appears in AgentStrip
-        sessionStore.addGhostAgent(agentId, {
-          name: session?.name || props.schedule.name || 'Scheduled agent',
-          role: session?.role || 'ephemeral',
-          archiveCount: archives.length,
-          latestArchiveId: latest.archive_id,
-          projectId: pid
-        })
-        router.push(`/session/${agentId}/archive/${latest.archive_id}`)
-        return
-      }
+    const data = await apiGet(`/api/projects/${pid}/archives/${agentId}`)
+    const archives = data.archives || []
+    if (archives.length > 0) {
+      const latest = archives[archives.length - 1]
+      // Add ghost agent so the chip appears in AgentStrip
+      sessionStore.addGhostAgent(agentId, {
+        name: session?.name || props.schedule.name || 'Scheduled agent',
+        role: session?.role || 'ephemeral',
+        archiveCount: archives.length,
+        latestArchiveId: latest.archive_id,
+        projectId: pid
+      })
+      router.push(`/session/${agentId}/archive/${latest.archive_id}`)
+      return
     }
   } catch (e) {
     console.error('Failed to fetch archives for agent:', e)

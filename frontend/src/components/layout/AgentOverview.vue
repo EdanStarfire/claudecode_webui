@@ -82,6 +82,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { useSessionStore } from '@/stores/session'
 import { useMessageStore } from '@/stores/message'
 import { useUIStore } from '@/stores/ui'
+import { apiGet } from '@/utils/api'
 
 const route = useRoute()
 const router = useRouter()
@@ -227,11 +228,8 @@ async function fetchArchives() {
   if (!pid) return
 
   try {
-    const response = await fetch(`/api/projects/${pid}/archives/${id}`)
-    if (response.ok) {
-      const data = await response.json()
-      archives.value = data.archives || []
-    }
+    const data = await apiGet(`/api/projects/${pid}/archives/${id}`)
+    archives.value = data.archives || []
   } catch {
     archives.value = []
   }

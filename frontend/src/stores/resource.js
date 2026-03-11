@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { useSessionStore } from './session'
-import { apiGet, apiDelete } from '../utils/api'
+import { apiGet, apiDelete, getAuthToken } from '../utils/api'
 
 /**
  * Resource Store - Manages resources (images, files) displayed via MCP tool per session
@@ -386,10 +386,17 @@ export const useResourceStore = defineStore('resource', () => {
    */
   function getResourceUrl(sessionId, resourceId) {
     const ctx = archiveContext.value.get(sessionId)
+    let url
     if (ctx) {
-      return `/api/projects/${ctx.projectId}/archives/${sessionId}/${ctx.archiveId}/resources/${resourceId}`
+      url = `/api/projects/${ctx.projectId}/archives/${sessionId}/${ctx.archiveId}/resources/${resourceId}`
+    } else {
+      url = `/api/sessions/${sessionId}/resources/${resourceId}`
     }
-    return `/api/sessions/${sessionId}/resources/${resourceId}`
+    const token = getAuthToken()
+    if (token) {
+      url += `?token=${encodeURIComponent(token)}`
+    }
+    return url
   }
 
   // Backward compatibility alias
@@ -399,7 +406,12 @@ export const useResourceStore = defineStore('resource', () => {
    * Get the download URL for a resource
    */
   function getDownloadUrl(sessionId, resourceId) {
-    return `/api/sessions/${sessionId}/resources/${resourceId}/download`
+    let url = `/api/sessions/${sessionId}/resources/${resourceId}/download`
+    const token = getAuthToken()
+    if (token) {
+      url += `?token=${encodeURIComponent(token)}`
+    }
+    return url
   }
 
   /**
@@ -566,7 +578,12 @@ export const useResourceStore = defineStore('resource', () => {
 
     try {
       const url = getResourceUrl(sessionId, resourceId)
-      const response = await fetch(url)
+      const headers = {}
+      const token = getAuthToken()
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`
+      }
+      const response = await fetch(url, { headers })
       if (!response.ok) throw new Error(`HTTP ${response.status}`)
 
       const text = await response.text()

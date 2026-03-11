@@ -129,7 +129,7 @@ import { useSessionStore } from '@/stores/session'
 import { useWebSocketStore } from '@/stores/websocket'
 import { useResourceStore } from '@/stores/resource'
 import { useUIStore } from '@/stores/ui'
-import { api } from '@/utils/api'
+import { api, getAuthToken } from '@/utils/api'
 import AttachmentList from './AttachmentList.vue'
 import SlashCommandDropdown from './SlashCommandDropdown.vue'
 
@@ -455,8 +455,15 @@ async function uploadFile(attachment) {
     const formData = new FormData()
     formData.append('file', attachment.file)
 
+    const headers = {}
+    const token = getAuthToken()
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`
+    }
+
     const response = await fetch(`/api/sessions/${sessionId}/files`, {
       method: 'POST',
+      headers,
       body: formData
     })
 
