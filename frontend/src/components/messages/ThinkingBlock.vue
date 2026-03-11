@@ -22,8 +22,7 @@
 
 <script setup>
 import { ref, computed } from 'vue'
-import DOMPurify from 'dompurify'
-import { marked } from 'marked'
+import { useMarkdown } from '@/composables/useMarkdown'
 
 const props = defineProps({
   thinking: {
@@ -38,12 +37,8 @@ const contentLength = computed(() => {
   return props.thinking?.length || 0
 })
 
-const renderedThinking = computed(() => {
-  const content = props.thinking || ''
-  // Render markdown and sanitize
-  const html = marked.parse(content)
-  return DOMPurify.sanitize(html)
-})
+const thinkingContent = computed(() => props.thinking || '')
+const { renderedHtml: renderedThinking } = useMarkdown(thinkingContent)
 
 function toggleExpanded() {
   isExpanded.value = !isExpanded.value

@@ -14,7 +14,7 @@
 
       <!-- Content -->
       <div v-if="hasContent" class="msg-content-row">
-        <div class="msg-text" v-html="renderedContent"></div>
+        <div class="msg-text" ref="contentRef" v-html="renderedContent"></div>
         <button
           v-if="hasContent && tts"
           class="tts-play-icon"
@@ -49,10 +49,10 @@
 </template>
 
 <script setup>
-import { computed, inject } from 'vue'
-import DOMPurify from 'dompurify'
-import { marked } from 'marked'
+import { computed, inject, ref } from 'vue'
 import { formatTimestamp } from '@/utils/time'
+import { useMarkdown } from '@/composables/useMarkdown'
+import { useMermaid } from '@/composables/useMermaid'
 import { getEffectiveStatusForTool } from '@/composables/useToolStatus'
 import { useMessageStore } from '@/stores/message'
 import { useSessionStore } from '@/stores/session'
@@ -90,12 +90,6 @@ function onPlayClick() {
   tts.playMessage(props.message, allMessages.value)
 }
 
-// Configure marked for safe rendering
-marked.setOptions({
-  breaks: true,
-  gfm: true
-})
-
 const formattedTimestamp = computed(() => {
   return formatTimestamp(props.message.timestamp)
 })
@@ -109,16 +103,12 @@ const hasContent = computed(() => {
   return content.trim().length > 0 && content !== 'Assistant response'
 })
 
-const renderedContent = computed(() => {
-  const content = props.message.content || ''
-  // Render markdown and sanitize
-  let html = marked.parse(content)
-  // Remove newlines before HTML tags to reduce whitespace
-  html = html.replace(/\n</g, '<')
-  // Trim trailing newlines
-  html = html.replace(/\n+$/, '')
-  return DOMPurify.sanitize(html)
-})
+const rawContent = computed(() => props.message.content || '')
+const { renderedHtml: renderedContent } = useMarkdown(rawContent)
+
+// Mermaid diagram rendering
+const contentRef = ref(null)
+useMermaid(contentRef)
 
 const hasThinking = computed(() => {
   return props.message.metadata?.has_thinking &&
