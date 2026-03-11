@@ -58,7 +58,7 @@ class SessionConfig:
 
     # Features
     knowledge_management_enabled: bool = True
-    disable_auto_memory: bool = False
+    auto_memory_mode: str = "claude"  # "claude" | "session" | "disabled"
 
 
 class SessionConfigBase(BaseModel):
@@ -86,7 +86,7 @@ class SessionConfigBase(BaseModel):
     thinking_budget_tokens: int | None = None
     effort: str | None = None
     knowledge_management_enabled: bool = True
-    disable_auto_memory: bool = False
+    auto_memory_mode: str = "claude"
 
     def to_session_config(self, **overrides) -> SessionConfig:
         """Convert to SessionConfig dataclass, with optional field overrides."""
@@ -109,7 +109,7 @@ class SessionConfigBase(BaseModel):
             "thinking_budget_tokens": self.thinking_budget_tokens,
             "effort": self.effort,
             "knowledge_management_enabled": self.knowledge_management_enabled,
-            "disable_auto_memory": self.disable_auto_memory,
+            "auto_memory_mode": self.auto_memory_mode,
         }
         data.update(overrides)
         return SessionConfig(**data)

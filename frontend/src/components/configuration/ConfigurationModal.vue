@@ -472,8 +472,8 @@ const CONFIG_FIELDS = {
     change: 'restart',
     contexts: ['session', 'template', 'ephemeral', 'update'],
   },
-  disable_auto_memory: {
-    default: false,
+  auto_memory_mode: {
+    default: 'claude',
     change: 'restart',
     contexts: ['session', 'template', 'ephemeral', 'update'],
   },

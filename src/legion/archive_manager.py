@@ -116,6 +116,13 @@ class ArchiveManager:
                 files_archived.append("state.json")
                 archive_logger.debug(f"Archived state.json for minion {minion_id}")
 
+            # Copy memory/ directory if exists (issue #709)
+            memory_dir = session_dir / "memory"
+            if memory_dir.exists() and memory_dir.is_dir():
+                shutil.copytree(memory_dir, archive_dir / "memory")
+                files_archived.append("memory/")
+                archive_logger.debug(f"Archived memory/ directory for minion {minion_id}")
+
             # Create disposal metadata
             # Use "deleted" as final_state if session will be deleted after archive
             final_state = "deleted" if will_be_deleted else session_info.state.value

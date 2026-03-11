@@ -43,8 +43,8 @@ class MinionTemplate:
     effort: str | None = None
     # Knowledge management toggle (issue #710)
     knowledge_management_enabled: bool = True
-    # Auto-memory toggle (issue #708)
-    disable_auto_memory: bool = False
+    # Auto-memory mode (issue #709, replaces #708 disable_auto_memory boolean)
+    auto_memory_mode: str = "claude"  # "claude" | "session" | "disabled"
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
@@ -91,7 +91,12 @@ class MinionTemplate:
         data.setdefault('thinking_budget_tokens', None)
         data.setdefault('effort', None)
         data.setdefault('knowledge_management_enabled', True)
-        data.setdefault('disable_auto_memory', False)
+        # Migrate legacy disable_auto_memory boolean to auto_memory_mode enum (issue #709)
+        if 'disable_auto_memory' in data and 'auto_memory_mode' not in data:
+            data['auto_memory_mode'] = "disabled" if data.pop('disable_auto_memory') else "claude"
+        else:
+            data.pop('disable_auto_memory', None)
+            data.setdefault('auto_memory_mode', 'claude')
         # Backward-compat renames (issue #731)
         if 'default_role' in data:
             data.setdefault('role', data.pop('default_role'))

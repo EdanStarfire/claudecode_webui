@@ -158,8 +158,8 @@ class SessionUpdateRequest(BaseModel):
     effort: str | None = None  # "low", "medium", "high", "max"
     # Knowledge management toggle (issue #710)
     knowledge_management_enabled: bool | None = None
-    # Auto-memory toggle (issue #708)
-    disable_auto_memory: bool | None = None
+    # Auto-memory mode (issue #709)
+    auto_memory_mode: str | None = None  # "claude" | "session" | "disabled"
 
 
 class SessionReorderRequest(BaseModel):
@@ -255,8 +255,8 @@ class TemplateUpdateRequest(BaseModel):
     effort: str | None = None
     # Knowledge management toggle (issue #710)
     knowledge_management_enabled: bool | None = None
-    # Auto-memory toggle (issue #708)
-    disable_auto_memory: bool | None = None
+    # Auto-memory mode (issue #709)
+    auto_memory_mode: str | None = None  # "claude" | "session" | "disabled"
 
 
 class UIWebSocketManager:
@@ -1235,8 +1235,8 @@ class ClaudeWebUI:
                 if request.knowledge_management_enabled is not None:
                     updates["knowledge_management_enabled"] = request.knowledge_management_enabled
 
-                if request.disable_auto_memory is not None:
-                    updates["disable_auto_memory"] = request.disable_auto_memory
+                if request.auto_memory_mode is not None:
+                    updates["auto_memory_mode"] = request.auto_memory_mode
 
                 if not updates:
                     return {"success": True, "message": "No fields to update"}
@@ -3194,7 +3194,7 @@ class ClaudeWebUI:
                     thinking_budget_tokens=request.thinking_budget_tokens,
                     effort=request.effort,
                     knowledge_management_enabled=request.knowledge_management_enabled,
-                    disable_auto_memory=request.disable_auto_memory,
+                    auto_memory_mode=request.auto_memory_mode,
                 )
                 return template.to_dict()
             except ValueError as e:

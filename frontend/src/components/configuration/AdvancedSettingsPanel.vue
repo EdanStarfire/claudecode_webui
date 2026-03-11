@@ -253,19 +253,23 @@
             Knowledge Management
           </label>
         </div>
-        <div class="form-check form-switch">
-          <input
-            class="form-check-input"
-            type="checkbox"
-            id="adv-disable-auto-memory"
-            :checked="formData.disable_auto_memory"
-            @change="$emit('update:form-data', 'disable_auto_memory', $event.target.checked)"
-          />
-          <label class="form-check-label" for="adv-disable-auto-memory" style="text-transform: none; letter-spacing: normal;">
-            Disable Auto-Memory
+        <div class="mb-2">
+          <label class="form-label" for="adv-auto-memory-mode" style="text-transform: none; letter-spacing: normal;">
+            Auto-Memory Mode
           </label>
+          <select
+            class="form-select form-select-sm"
+            id="adv-auto-memory-mode"
+            :value="formData.auto_memory_mode"
+            @change="$emit('update:form-data', 'auto_memory_mode', $event.target.value)"
+          >
+            <option value="claude">Claude Auto-Memory</option>
+            <option value="session">Session-Specific</option>
+            <option value="disabled">Disabled</option>
+          </select>
           <small class="form-text text-muted d-block">
-            Prevents Claude Code's working-directory memory. Recommended for multi-agent workflows.
+            Claude: built-in working-directory memory. Session-Specific: per-session guidance file.
+            Disabled: no auto-memory.
           </small>
         </div>
       </div>

@@ -137,8 +137,8 @@ class SessionInfo:
     # Knowledge management toggle (issue #710)
     knowledge_management_enabled: bool = True  # When False, skip distillation and history references
 
-    # Auto-memory toggle (issue #708)
-    disable_auto_memory: bool = False  # When True, set CLAUDE_CODE_DISABLE_AUTO_MEMORY=1 in SDK env
+    # Auto-memory mode (issue #709, replaces #708 disable_auto_memory boolean)
+    auto_memory_mode: str = "claude"  # "claude" | "session" | "disabled"
 
     def __post_init__(self):
         if self.additional_directories is None:
@@ -205,7 +205,12 @@ class SessionInfo:
         data.setdefault('effort', None)
         data.setdefault('is_ephemeral', False)
         data.setdefault('knowledge_management_enabled', True)
-        data.setdefault('disable_auto_memory', False)
+        # Migrate legacy disable_auto_memory boolean to auto_memory_mode enum (issue #709)
+        if 'disable_auto_memory' in data and 'auto_memory_mode' not in data:
+            data['auto_memory_mode'] = "disabled" if data.pop('disable_auto_memory') else "claude"
+        else:
+            data.pop('disable_auto_memory', None)
+            data.setdefault('auto_memory_mode', 'claude')
         return cls(**data)
 
 
@@ -369,7 +374,7 @@ class SessionManager:
             thinking_budget_tokens=config.thinking_budget_tokens,
             effort=config.effort,
             knowledge_management_enabled=config.knowledge_management_enabled,
-            disable_auto_memory=config.disable_auto_memory,
+            auto_memory_mode=config.auto_memory_mode,
         )
 
         try:

@@ -104,9 +104,10 @@ class InternalPermissionHandler:
         plans_dir: Path,
         skills_dirs: list[Path],
         knowledge_mgmt_enabled: bool,
+        memory_dir: Path | None = None,
     ):
         self._rules = self._build_rules(
-            session_data_dir, plans_dir, skills_dirs, knowledge_mgmt_enabled
+            session_data_dir, plans_dir, skills_dirs, knowledge_mgmt_enabled, memory_dir
         )
 
     def _build_rules(
@@ -115,6 +116,7 @@ class InternalPermissionHandler:
         plans_dir: Path,
         skills_dirs: list[Path],
         knowledge_mgmt_enabled: bool,
+        memory_dir: Path | None = None,
     ) -> list[InternalRule]:
         """Build internal rule set from session configuration. Paths are resolved once here."""
         rules: list[InternalRule] = []
@@ -166,6 +168,17 @@ class InternalPermissionHandler:
             reason="Denied: skill files are managed by SkillManager",
             enabled=True,
         ))
+
+        # Rule: Allow reading and writing session memory files (issue #709)
+        if memory_dir:
+            memory_prefixes = _resolve_prefixes([str(memory_dir)])
+            rules.append(InternalRule(
+                tool_names=frozenset(["Read", "Write", "Edit"]),
+                path_prefixes=memory_prefixes,
+                decision="allow",
+                reason="Auto-approved: session memory file access",
+                enabled=True,
+            ))
 
         return rules
 
