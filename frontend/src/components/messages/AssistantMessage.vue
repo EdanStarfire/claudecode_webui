@@ -81,14 +81,13 @@ const allMessages = inject('allMessages', null)
 
 const isTTSPlaying = computed(() => {
   if (!tts) return false
-  const msgId = props.message.message_id || props.message.id
-  return tts.currentMessageId.value === msgId
+  // Match by timestamp since messages lack unique IDs
+  return tts.currentMessageId.value === props.message.timestamp
 })
 
 function onPlayClick() {
   if (!tts || !allMessages) return
-  const msgId = props.message.message_id || props.message.id
-  tts.playMessage(msgId, allMessages.value)
+  tts.playMessage(props.message, allMessages.value)
 }
 
 // Configure marked for safe rendering

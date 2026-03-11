@@ -181,16 +181,20 @@ export function useTTSReadAloud() {
 
   /**
    * Play from a specific message, then auto-continue forward through assistant messages.
+   * Identifies the start message by matching the object reference in allMessages,
+   * falling back to timestamp comparison (messages lack unique IDs from the backend).
    */
-  async function playMessage(messageId, allMessages) {
+  async function playMessage(messageRef, allMessages) {
     stop()
     stopRequested = false
 
-    // Find start index
-    const startIdx = allMessages.findIndex(m => {
-      const id = m.message_id || m.id
-      return id === messageId
-    })
+    // Find start index — try reference equality first, then timestamp match
+    let startIdx = allMessages.indexOf(messageRef)
+    if (startIdx < 0 && messageRef.timestamp) {
+      startIdx = allMessages.findIndex(m =>
+        m.timestamp === messageRef.timestamp && m.type === messageRef.type
+      )
+    }
     if (startIdx < 0) return
 
     isPlaying.value = true
@@ -204,7 +208,7 @@ export function useTTSReadAloud() {
         const content = msg.content || ''
         if (content.trim().length > 0 && content !== 'Assistant response') {
           messageQueue.push({
-            id: msg.message_id || msg.id,
+            id: msg.timestamp || `tts-${i}`,
             content: content
           })
         }
@@ -224,7 +228,7 @@ export function useTTSReadAloud() {
     const content = message.content || ''
     if (!content.trim() || content === 'Assistant response') return
 
-    const id = message.message_id || message.id || `tts-${Date.now()}`
+    const id = message.timestamp || `tts-${Date.now()}`
 
     // If already playing, append to queue
     if (isPlaying.value) {
