@@ -71,7 +71,7 @@
           </div>
           <div class="text-body">
             <pre v-if="directTextContent && displayMode === 'raw'" class="text-content">{{ directTextContent }}</pre>
-            <div v-else-if="directTextContent && displayMode === 'markdown'" class="markdown-content" v-html="directRenderedMarkdown"></div>
+            <div v-else-if="directTextContent && displayMode === 'markdown'" class="markdown-content" ref="directMarkdownRef" v-html="directRenderedMarkdown"></div>
             <div v-else class="text-unavailable">No content available.</div>
           </div>
         </div>
@@ -173,7 +173,7 @@
             <!-- Content: Raw -->
             <pre v-else-if="textContent && displayMode === 'raw'" class="text-content">{{ textContent }}</pre>
             <!-- Content: Markdown -->
-            <div v-else-if="textContent && displayMode === 'markdown'" class="markdown-content" v-html="renderedMarkdown"></div>
+            <div v-else-if="textContent && displayMode === 'markdown'" class="markdown-content" ref="resourceMarkdownRef" v-html="renderedMarkdown"></div>
             <!-- No content / unsupported -->
             <div v-else class="text-unavailable">
               Preview not available for this file type.
@@ -227,19 +227,20 @@
 <script setup>
 import { computed, watch, ref, nextTick, onUnmounted } from 'vue'
 import { useResourceStore } from '@/stores/resource'
-import DOMPurify from 'dompurify'
-import { marked } from 'marked'
-
-marked.setOptions({
-  breaks: true,
-  gfm: true
-})
+import { renderMarkdown } from '@/composables/useMarkdown'
+import { useMermaid } from '@/composables/useMermaid'
 
 const resourceStore = useResourceStore()
 const overlayRef = ref(null)
 const copyFeedback = ref(false)
 const displayMode = ref('raw')
+const directMarkdownRef = ref(null)
+const resourceMarkdownRef = ref(null)
 let copyTimeout = null
+
+// Mermaid diagram rendering for markdown content views
+useMermaid(directMarkdownRef)
+useMermaid(resourceMarkdownRef)
 
 // Computed properties
 const isOpen = computed(() => resourceStore.fullViewOpen)
@@ -271,13 +272,7 @@ const textContent = computed(() => textCacheEntry.value?.content || null)
 const textLoading = computed(() => textCacheEntry.value?.loading || false)
 const textError = computed(() => textCacheEntry.value?.error || null)
 
-const renderedMarkdown = computed(() => {
-  if (!textContent.value) return ''
-  let html = marked.parse(textContent.value)
-  html = html.replace(/\n</g, '<')
-  html = html.replace(/\n+$/, '')
-  return DOMPurify.sanitize(html)
-})
+const renderedMarkdown = computed(() => renderMarkdown(textContent.value))
 
 // Direct content mode
 const directTextContent = computed(() => resourceStore.directContent)
@@ -289,11 +284,7 @@ function stripLineNumbers(text) {
 
 const directRenderedMarkdown = computed(() => {
   if (!directTextContent.value) return ''
-  const cleaned = stripLineNumbers(directTextContent.value)
-  let html = marked.parse(cleaned)
-  html = html.replace(/\n</g, '<')
-  html = html.replace(/\n+$/, '')
-  return DOMPurify.sanitize(html)
+  return renderMarkdown(stripLineNumbers(directTextContent.value))
 })
 
 // Focus overlay when opened for keyboard events

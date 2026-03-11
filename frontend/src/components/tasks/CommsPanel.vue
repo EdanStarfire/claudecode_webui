@@ -48,8 +48,8 @@ import { useLegionStore } from '@/stores/legion'
 import { useWebSocketStore } from '@/stores/websocket'
 import { formatTimestamp } from '@/utils/time'
 import { getAgentColor, slugifyAgentName } from '@/composables/useAgentColor'
-import DOMPurify from 'dompurify'
-import { marked } from 'marked'
+import { renderMarkdown } from '@/composables/useMarkdown'
+import { useMermaid } from '@/composables/useMermaid'
 
 const sessionStore = useSessionStore()
 const legionStore = useLegionStore()
@@ -62,8 +62,8 @@ const expandedComms = ref(new Set())
 const SYSTEM_MINION_ID = 'ffffffff-ffff-ffff-ffff-ffffffffffff'
 const USER_MINION_ID = '00000000-0000-0000-0000-000000000000'
 
-// Configure marked
-marked.setOptions({ breaks: true, gfm: true })
+// Mermaid diagram rendering for expanded comm content
+useMermaid(commsList)
 
 // Current project (legion) ID from the active session
 const projectId = computed(() => sessionStore.currentSession?.project_id || null)
@@ -156,14 +156,6 @@ function toggleExpand(commId) {
     expandedComms.value.add(commId)
   }
   expandedComms.value = new Set(expandedComms.value)
-}
-
-function renderMarkdown(content) {
-  if (!content) return ''
-  let html = marked.parse(content)
-  html = html.replace(/\n</g, '<')
-  html = html.replace(/\n+$/, '')
-  return DOMPurify.sanitize(html)
 }
 
 // Auto-scroll when new comms arrive

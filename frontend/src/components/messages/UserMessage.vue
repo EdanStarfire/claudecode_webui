@@ -40,22 +40,15 @@
 
 <script setup>
 import { computed } from 'vue'
-import DOMPurify from 'dompurify'
-import { marked } from 'marked'
 import { formatTimestamp } from '@/utils/time'
 import { getAgentColor } from '@/composables/useAgentColor'
+import { useMarkdown } from '@/composables/useMarkdown'
 
 const props = defineProps({
   message: {
     type: Object,
     required: true
   }
-})
-
-// Configure marked for safe rendering
-marked.setOptions({
-  breaks: true,
-  gfm: true
 })
 
 const formattedTimestamp = computed(() => {
@@ -66,16 +59,8 @@ const isComm = computed(() => !!props.message.metadata?.comm)
 const commColor = computed(() => isComm.value ? getAgentColor(props.message.metadata.comm.from_name) : null)
 const commSenderName = computed(() => props.message.metadata?.comm?.from_display_name || 'agent')
 
-const renderedContent = computed(() => {
-  const content = props.message.content || ''
-  // Render markdown and sanitize
-  let html = marked.parse(content)
-  // Remove newlines before HTML tags to reduce whitespace
-  html = html.replace(/\n</g, '<')
-  // Trim trailing newlines
-  html = html.replace(/\n+$/, '')
-  return DOMPurify.sanitize(html)
-})
+const rawContent = computed(() => props.message.content || '')
+const { renderedHtml: renderedContent } = useMarkdown(rawContent)
 
 const hasToolResults = computed(() => {
   return props.message.metadata?.has_tool_results &&

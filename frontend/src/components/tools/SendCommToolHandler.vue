@@ -20,7 +20,7 @@
         borderLeftStyle: 'solid',
       }"
     >
-      <div class="outbound-comm-content" v-html="renderedContent"></div>
+      <div class="outbound-comm-content" ref="contentRef" v-html="renderedContent"></div>
     </div>
     <!-- Result indicator -->
     <div v-if="hasResult" class="outbound-comm-result" :class="isError ? 'result-error' : 'result-success'">
@@ -30,9 +30,9 @@
 </template>
 
 <script setup>
-import { computed, toRef } from 'vue'
-import DOMPurify from 'dompurify'
-import { marked } from 'marked'
+import { computed, ref, toRef } from 'vue'
+import { renderMarkdown } from '@/composables/useMarkdown'
+import { useMermaid } from '@/composables/useMermaid'
 import { useToolResult } from '@/composables/useToolResult'
 import { getAgentColor, slugifyAgentName } from '@/composables/useAgentColor'
 
@@ -51,14 +51,11 @@ const interruptPriority = computed(() => props.toolCall.input?.interrupt_priorit
 const recipientColor = computed(() => getAgentColor(slugifyAgentName(recipientName.value)))
 
 // Render content as markdown
-const renderedContent = computed(() => {
-  const text = content.value || summaryText.value
-  if (!text) return ''
-  let html = marked.parse(text)
-  html = html.replace(/\n</g, '<')
-  html = html.replace(/\n+$/, '')
-  return DOMPurify.sanitize(html)
-})
+const renderedContent = computed(() => renderMarkdown(content.value || summaryText.value))
+
+// Mermaid diagram rendering
+const contentRef = ref(null)
+useMermaid(contentRef)
 
 // Result handling
 const { hasResult, isError, resultContent } = useToolResult(toRef(props, 'toolCall'))

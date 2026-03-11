@@ -40,7 +40,7 @@
 
       <!-- Collapsible Content -->
       <div v-if="isExpanded" class="comm-content-body">
-        <div class="message-text" v-html="renderedContent"></div>
+        <div class="message-text" ref="contentRef" v-html="renderedContent"></div>
       </div>
     </div>
   </div>
@@ -48,8 +48,8 @@
 
 <script setup>
 import { ref, computed } from 'vue'
-import DOMPurify from 'dompurify'
-import { marked } from 'marked'
+import { useMarkdown } from '@/composables/useMarkdown'
+import { useMermaid } from '@/composables/useMermaid'
 
 const props = defineProps({
   comm: {
@@ -69,14 +69,12 @@ const props = defineProps({
 // System minion ID constant (matches backend)
 const SYSTEM_MINION_ID = 'ffffffff-ffff-ffff-ffff-ffffffffffff'
 
-// Configure marked for safe rendering
-marked.setOptions({
-  breaks: true,
-  gfm: true
-})
-
 // Expanded state
 const isExpanded = ref(false)
+
+// Mermaid diagram rendering
+const contentRef = ref(null)
+useMermaid(contentRef)
 
 function toggleExpanded() {
   isExpanded.value = !isExpanded.value
@@ -126,16 +124,8 @@ const summaryOrPreview = computed(() => {
 })
 
 // Render content with markdown
-const renderedContent = computed(() => {
-  const content = props.comm.content || ''
-  // Render markdown and sanitize
-  let html = marked.parse(content)
-  // Remove newlines before HTML tags to reduce whitespace
-  html = html.replace(/\n</g, '<')
-  // Trim trailing newlines
-  html = html.replace(/\n+$/, '')
-  return DOMPurify.sanitize(html)
-})
+const rawContent = computed(() => props.comm.content || '')
+const { renderedHtml: renderedContent } = useMarkdown(rawContent)
 </script>
 
 <style scoped>
