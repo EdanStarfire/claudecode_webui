@@ -12,9 +12,6 @@ Tests:
 
 import uuid
 
-import pytest
-
-
 
 async def _setup_legion(env):
     """Create a legion project for testing."""

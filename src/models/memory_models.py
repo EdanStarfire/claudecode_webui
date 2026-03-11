@@ -8,7 +8,7 @@ memory entries, distillation, and reinforcement learning.
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import List, Dict, Optional, Any
+from typing import Any
 
 
 class MemoryType(Enum):
@@ -30,21 +30,21 @@ class MemoryEntry:
     entry_type: MemoryType
 
     # Source
-    source_task_id: Optional[str] = None
-    source_comm_id: Optional[str] = None
+    source_task_id: str | None = None
+    source_comm_id: str | None = None
     created_at: datetime = field(default_factory=datetime.now)
 
     # Reinforcement learning
     quality_score: float = 0.5  # 0.0 to 1.0
     times_used_successfully: int = 0
     times_used_unsuccessfully: int = 0
-    last_reinforcement: Optional[datetime] = None
+    last_reinforcement: datetime | None = None
 
     # Context
-    related_capabilities: List[str] = field(default_factory=list)
-    tags: List[str] = field(default_factory=list)
+    related_capabilities: list[str] = field(default_factory=list)
+    tags: list[str] = field(default_factory=list)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization."""
         return {
             "entry_id": self.entry_id,
@@ -62,7 +62,7 @@ class MemoryEntry:
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'MemoryEntry':
+    def from_dict(cls, data: dict[str, Any]) -> 'MemoryEntry':
         """Create from dictionary."""
         data = data.copy()
         data["entry_type"] = MemoryType(data["entry_type"])
@@ -83,22 +83,22 @@ class MinionMemory:
     # Stored in: session_messages.jsonl (existing format)
 
     # Short-term memory (recent distillations)
-    short_term: List[MemoryEntry] = field(default_factory=list)
+    short_term: list[MemoryEntry] = field(default_factory=list)
     # Stored in: short_term_memory.json
 
     # Long-term memory (promoted patterns/rules)
-    long_term: List[MemoryEntry] = field(default_factory=list)
+    long_term: list[MemoryEntry] = field(default_factory=list)
     # Stored in: long_term_memory.json
 
     # Capability evidence (tasks demonstrating capabilities)
-    capability_evidence: Dict[str, List[str]] = field(default_factory=dict)
+    capability_evidence: dict[str, list[str]] = field(default_factory=dict)
     # Format: {capability: [task_id1, task_id2, ...]}
     # Stored in: capability_evidence.json
 
     # Last distillation timestamp
-    last_distilled_at: Optional[datetime] = None
+    last_distilled_at: datetime | None = None
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization."""
         return {
             "minion_id": self.minion_id,
@@ -109,7 +109,7 @@ class MinionMemory:
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'MinionMemory':
+    def from_dict(cls, data: dict[str, Any]) -> 'MinionMemory':
         """Create from dictionary."""
         data = data.copy()
         data["short_term"] = [MemoryEntry.from_dict(entry) for entry in data.get("short_term", [])]
@@ -135,11 +135,11 @@ class TaskMilestone:
     success: bool = True        # True if successful, False if failed
 
     # Distillation
-    messages_to_distill: List[str] = field(default_factory=list)  # Message IDs from this chunk
+    messages_to_distill: list[str] = field(default_factory=list)  # Message IDs from this chunk
     distilled: bool = False
-    distilled_memory_ids: List[str] = field(default_factory=list)
+    distilled_memory_ids: list[str] = field(default_factory=list)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization."""
         return {
             "milestone_id": self.milestone_id,
@@ -154,7 +154,7 @@ class TaskMilestone:
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> 'TaskMilestone':
+    def from_dict(cls, data: dict[str, Any]) -> 'TaskMilestone':
         """Create from dictionary."""
         data = data.copy()
         data["completed_at"] = datetime.fromisoformat(data["completed_at"])

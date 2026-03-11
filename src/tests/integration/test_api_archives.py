@@ -13,9 +13,6 @@ Tests:
 import json
 import uuid
 
-import pytest
-
-
 
 async def _create_and_delete_session(env):
     """Create a session, add some messages to disk, then delete it to generate archive."""

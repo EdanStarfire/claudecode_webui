@@ -11,7 +11,6 @@ Tests:
 - PUT /api/sessions/{session_id}/queue/config — update queue config
 """
 
-import pytest
 
 
 

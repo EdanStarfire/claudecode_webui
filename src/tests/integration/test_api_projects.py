@@ -15,9 +15,6 @@ Tests:
 import json
 import uuid
 
-import pytest
-
-
 
 class TestCreateProject:
     async def test_create_project(self, api_integration_env):
