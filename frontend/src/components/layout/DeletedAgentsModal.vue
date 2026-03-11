@@ -53,6 +53,7 @@ import { ref, watch, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useSessionStore } from '@/stores/session'
 import { useUIStore } from '@/stores/ui'
+import { apiGet } from '@/utils/api'
 
 const router = useRouter()
 const sessionStore = useSessionStore()
@@ -75,11 +76,8 @@ async function loadDeletedAgents(projectId) {
   loading.value = true
   agents.value = []
   try {
-    const response = await fetch(`/api/projects/${projectId}/deleted-agents`)
-    if (response.ok) {
-      const data = await response.json()
-      agents.value = data.agents || []
-    }
+    const data = await apiGet(`/api/projects/${projectId}/deleted-agents`)
+    agents.value = data.agents || []
   } catch (e) {
     console.error('Failed to load deleted agents:', e)
   } finally {
@@ -90,25 +88,22 @@ async function loadDeletedAgents(projectId) {
 async function selectAgent(agent) {
   // Fetch archives to get the latest archive ID
   try {
-    const response = await fetch(`/api/projects/${currentProjectId}/archives/${agent.agent_id}`)
-    if (response.ok) {
-      const data = await response.json()
-      const archives = data.archives || []
-      const latest = archives.length > 0 ? archives[archives.length - 1] : null
+    const data = await apiGet(`/api/projects/${currentProjectId}/archives/${agent.agent_id}`)
+    const archives = data.archives || []
+    const latest = archives.length > 0 ? archives[archives.length - 1] : null
 
-      const latestArchiveId = latest?.archive_id || null
-      sessionStore.addGhostAgent(agent.agent_id, {
-        name: agent.name,
-        role: agent.role,
-        archiveCount: agent.archive_count,
-        latestArchiveId,
-        projectId: currentProjectId
-      })
+    const latestArchiveId = latest?.archive_id || null
+    sessionStore.addGhostAgent(agent.agent_id, {
+      name: agent.name,
+      role: agent.role,
+      archiveCount: agent.archive_count,
+      latestArchiveId,
+      projectId: currentProjectId
+    })
 
-      // Auto-navigate to latest archive
-      if (latestArchiveId) {
-        router.push(`/archive/agent/${agent.agent_id}/${latestArchiveId}`)
-      }
+    // Auto-navigate to latest archive
+    if (latestArchiveId) {
+      router.push(`/archive/agent/${agent.agent_id}/${latestArchiveId}`)
     }
   } catch (e) {
     console.error('Failed to load archives for agent:', e)

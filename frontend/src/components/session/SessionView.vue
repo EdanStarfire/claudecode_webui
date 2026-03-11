@@ -47,6 +47,7 @@ import { useSessionStore } from '@/stores/session'
 import { useMessageStore } from '@/stores/message'
 import { useResourceStore } from '@/stores/resource'
 import { useUIStore } from '@/stores/ui'
+import { apiGet } from '@/utils/api'
 import SessionStateStatusLine from './SessionStateStatusLine.vue'
 import SessionStatusBar from '../statusbar/SessionStatusBar.vue'
 import MessageList from '../messages/MessageList.vue'
@@ -99,11 +100,8 @@ async function loadArchiveMessages() {
 
   uiStore.showLoading('Loading archived session...')
   try {
-    const response = await fetch(`/api/projects/${pid}/archives/${props.sessionId}/${archiveId}/messages?limit=1000&offset=0`)
-    if (response.ok) {
-      const data = await response.json()
-      messageStore.setArchiveMessages(props.sessionId, data.messages || [])
-    }
+    const data = await apiGet(`/api/projects/${pid}/archives/${props.sessionId}/${archiveId}/messages?limit=1000&offset=0`)
+    messageStore.setArchiveMessages(props.sessionId, data.messages || [])
     // Load archived resources
     await resourceStore.loadArchiveResources(props.sessionId, pid, archiveId)
   } catch (e) {
