@@ -1393,10 +1393,10 @@ button:focus {
     padding: 0;
 }
 
-/* Toggle button (top-right corner) */
+/* Toggle button (bottom-right corner — avoids overlap with TTS read-aloud icon) */
 .mermaid-toggle {
     position: absolute;
-    top: 6px;
+    bottom: 6px;
     right: 6px;
     padding: 2px 8px;
     font-size: 11px;

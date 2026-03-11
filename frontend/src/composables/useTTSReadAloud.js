@@ -81,6 +81,9 @@ export function normalizeForSpeech(text) {
   // Remove HTML tags
   result = result.replace(/<[^>]+>/g, '')
 
+  // Remove mermaid code blocks entirely (diagram source is not readable)
+  result = result.replace(/```mermaid\n[\s\S]*?```/g, '')
+
   // Remove fenced code block markers but keep content
   result = result.replace(/```[\w]*\n?/g, '')
 
