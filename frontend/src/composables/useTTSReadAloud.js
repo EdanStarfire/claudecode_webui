@@ -41,12 +41,12 @@ export function updateReadAloudSettings(partial) {
   return updated
 }
 
-export function testReadAloud(text = 'This is a test of the read aloud feature.') {
+export function testReadAloud(text = 'This is a test of the read aloud feature.', overrideSettings = null) {
   if (!isTTSAvailable()) return
   window.speechSynthesis.cancel()
-  const settings = getReadAloudSettings()
+  const settings = overrideSettings || getReadAloudSettings()
   const utterance = new SpeechSynthesisUtterance(text)
-  utterance.rate = settings.rate
+  utterance.rate = settings.rate || 1.0
   if (settings.voice) {
     const voices = getVoices()
     const voice = voices.find(v => v.voiceURI === settings.voice)

@@ -75,7 +75,7 @@ function updateField(field, value) {
 }
 
 function onTest() {
-  testReadAloud('This is a test of the read aloud feature.')
+  testReadAloud('This is a test of the read aloud feature.', props.config)
 }
 
 function loadVoices() {
