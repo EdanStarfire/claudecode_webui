@@ -1368,11 +1368,21 @@ button:focus {
 .mermaid-diagram {
     display: flex;
     justify-content: center;
+    overflow-x: auto;
+    overflow-y: hidden;
+    max-width: 100%;
 }
 
 .mermaid-diagram svg {
     max-width: 100%;
     height: auto;
+}
+
+/* ZenUML and other plugins that render iframes or divs instead of SVG */
+.mermaid-diagram iframe,
+.mermaid-diagram > div {
+    max-width: 100%;
+    overflow-x: auto;
 }
 
 /* Code view (hidden by default, toggled via button) */
