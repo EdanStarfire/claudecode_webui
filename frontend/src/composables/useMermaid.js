@@ -11,8 +11,12 @@ async function loadMermaid() {
   if (mermaidModule) return mermaidModule
   if (mermaidLoadPromise) return mermaidLoadPromise
 
-  mermaidLoadPromise = import('mermaid').then((mod) => {
+  mermaidLoadPromise = Promise.all([
+    import('mermaid'),
+    import('@mermaid-js/mermaid-zenuml')
+  ]).then(([mod, zenuml]) => {
     mermaidModule = mod.default
+    mermaidModule.registerExternalDiagrams([zenuml.default])
     mermaidModule.initialize({
       startOnLoad: false,
       securityLevel: 'strict',
@@ -22,6 +26,81 @@ async function loadMermaid() {
   })
 
   return mermaidLoadPromise
+}
+
+/**
+ * Scale a diagram div to fit within its container if it overflows.
+ * Uses CSS transform: scale() to shrink content that has fixed pixel widths
+ * (e.g., ZenUML foreignObject-based diagrams).
+ */
+function fitDiagramToContainer(diagramDiv, wrapper) {
+  requestAnimationFrame(() => {
+    const containerWidth = wrapper.clientWidth - 24 // account for padding
+    if (containerWidth <= 0) return
+
+    const svgEl = diagramDiv.querySelector('svg')
+    if (!svgEl) return
+
+    // For foreignObject-based diagrams (ZenUML), the declared SVG dimensions
+    // may not match the actual content. Inflate the SVG to allow the
+    // intrinsically-sized content (inline-block div) to render at natural size.
+    const foreignObj = svgEl.querySelector('foreignObject')
+    let contentWidth, contentHeight
+
+    if (foreignObj) {
+      // Save and inflate SVG so foreignObject content can size naturally
+      const origSvgW = svgEl.style.cssText
+      const origOverflow = diagramDiv.style.overflow
+      svgEl.style.cssText = 'width:9999px !important;height:9999px !important;'
+      diagramDiv.style.overflow = 'visible'
+
+      // Find the intrinsically-sized element (ZenUML uses .inline-block which
+      // wraps the .frame with padding). Measure this for full content bounds.
+      const intrinsic = foreignObj.querySelector('.inline-block')
+      if (intrinsic) {
+        const rect = intrinsic.getBoundingClientRect()
+        // Include the parent's margins (ZenUML .frame has m-1)
+        const styles = getComputedStyle(intrinsic)
+        const marginH = parseFloat(styles.marginLeft) + parseFloat(styles.marginRight)
+        const marginV = parseFloat(styles.marginTop) + parseFloat(styles.marginBottom)
+        // Add 4px buffer for child borders and box-shadow that extend beyond bounds
+        contentWidth = rect.width + marginH + 4
+        contentHeight = rect.height + marginV + 4
+      } else {
+        // Fallback: first child's scroll dimensions
+        const child = foreignObj.firstElementChild
+        contentWidth = child ? child.scrollWidth : 0
+        contentHeight = child ? child.scrollHeight : 0
+      }
+
+      // Restore
+      svgEl.style.cssText = origSvgW
+      diagramDiv.style.overflow = origOverflow
+    } else {
+      // Standard SVG: read width attribute or bounding rect
+      const attrWidth = parseFloat(svgEl.getAttribute('width'))
+      contentWidth = attrWidth > 0 ? attrWidth : svgEl.getBoundingClientRect().width
+      contentHeight = svgEl.getBoundingClientRect().height
+    }
+
+    if (contentWidth > containerWidth && contentWidth > 0) {
+      const scale = containerWidth / contentWidth
+      // Set the diagram div to the content's natural size so nothing is clipped,
+      // then use CSS transform to scale it down visually. Negative margins correct
+      // the layout box to match the visual size (transforms don't affect layout).
+      diagramDiv.style.width = `${contentWidth}px`
+      diagramDiv.style.height = `${contentHeight}px`
+      diagramDiv.style.transformOrigin = 'top left'
+      diagramDiv.style.transform = `scale(${scale})`
+      diagramDiv.style.marginBottom = `${-(contentHeight * (1 - scale))}px`
+      diagramDiv.style.marginRight = `${-(contentWidth * (1 - scale))}px`
+      // Also resize the SVG to match the true content dimensions
+      if (foreignObj) {
+        svgEl.style.width = `${contentWidth}px`
+        svgEl.style.height = `${contentHeight}px`
+      }
+    }
+  })
 }
 
 /**
@@ -86,18 +165,37 @@ async function renderBlock(mermaid, preElement) {
     wrapper.appendChild(toggleBtn)
 
     preElement.replaceWith(wrapper)
+    fitDiagramToContainer(diagramDiv, wrapper)
     return true
   } catch (err) {
-    // Show error banner above the existing code block
+    // Wrap error banner + original code in .mermaid-container so the
+    // MutationObserver skip check prevents re-processing (mirrors success path)
+    const wrapper = document.createElement('div')
+    wrapper.className = 'mermaid-container'
+    wrapper.dataset.mermaidError = 'true'
+
     const errorBanner = document.createElement('div')
     errorBanner.className = 'mermaid-error'
     errorBanner.textContent = `Diagram error: ${err.message || 'Invalid syntax'}`
-    preElement.parentNode.insertBefore(errorBanner, preElement)
+    wrapper.appendChild(errorBanner)
+
+    // Code view (visible by default since there's no diagram)
+    const codeDiv = document.createElement('div')
+    codeDiv.className = 'mermaid-code-view'
+    codeDiv.style.display = 'block'
+    const codePre = document.createElement('pre')
+    const codeEl = document.createElement('code')
+    codeEl.className = 'language-mermaid'
+    codeEl.textContent = source
+    codePre.appendChild(codeEl)
+    codeDiv.appendChild(codePre)
+    wrapper.appendChild(codeDiv)
+
+    preElement.replaceWith(wrapper)
 
     // Clean up any leftover mermaid render artifacts
     const leftover = document.getElementById(diagramId)
     if (leftover) leftover.remove()
-    // Mermaid sometimes creates a hidden container with 'd' + id
     const dLeftover = document.getElementById('d' + diagramId)
     if (dLeftover) dLeftover.remove()
 

@@ -1361,17 +1361,17 @@ button:focus {
     border-radius: 8px;
     background: #fafbfc;
     max-width: 100%;
-    overflow-x: auto;
+    overflow: hidden;
 }
 
-/* SVG diagram view */
+/* SVG diagram view — overflow hidden prevents flash before JS scaling */
 .mermaid-diagram {
     display: flex;
     justify-content: center;
+    overflow: hidden;
 }
 
 .mermaid-diagram svg {
-    max-width: 100%;
     height: auto;
 }
 
