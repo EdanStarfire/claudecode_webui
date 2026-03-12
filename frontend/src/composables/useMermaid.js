@@ -41,40 +41,31 @@ function fitDiagramToContainer(diagramDiv, wrapper) {
     const svgEl = diagramDiv.querySelector('svg')
     if (!svgEl) return
 
-    // Temporarily inflate SVG to a large width so foreignObject content
-    // (e.g., ZenUML divs with fixed pixel positions) can size naturally
-    // without being clipped by the SVG viewport.
-    const origWidth = svgEl.style.width
-    const origMinWidth = svgEl.style.minWidth
-    const origOverflow = diagramDiv.style.overflow
-    svgEl.style.width = '9999px'
-    svgEl.style.minWidth = '9999px'
-    diagramDiv.style.overflow = 'visible'
-
-    // Force layout recalc then measure true content width
-    svgEl.getBoundingClientRect()
-    // Find the actual content boundary — check foreignObject children first
-    // (ZenUML), then fall back to SVG rect
-    const foreignObj = svgEl.querySelector('foreignObject')
-    let contentWidth
-    if (foreignObj && foreignObj.firstElementChild) {
-      contentWidth = foreignObj.firstElementChild.scrollWidth
+    // Determine the SVG's intended content width:
+    // 1. ZenUML sets an inline style like "width: 400px" on the SVG
+    // 2. Standard mermaid uses a width attribute like width="800"
+    // 3. Fall back to the SVG's rendered bounding rect
+    let contentWidth = 0
+    const inlineWidth = parseFloat(svgEl.style.width)
+    const attrWidth = parseFloat(svgEl.getAttribute('width'))
+    if (inlineWidth > 0) {
+      contentWidth = inlineWidth
+    } else if (attrWidth > 0) {
+      contentWidth = attrWidth
     } else {
       contentWidth = svgEl.getBoundingClientRect().width
     }
-
-    // Restore original styles
-    svgEl.style.width = origWidth
-    svgEl.style.minWidth = origMinWidth
-    diagramDiv.style.overflow = origOverflow
 
     if (contentWidth > containerWidth) {
       const scale = containerWidth / contentWidth
       diagramDiv.style.transformOrigin = 'top left'
       diagramDiv.style.transform = `scale(${scale})`
-      // Measure height after restoring width for accurate value
-      const heightRect = diagramDiv.getBoundingClientRect()
-      diagramDiv.style.height = `${heightRect.height * scale}px`
+      // Set explicit height to prevent wrapper collapse
+      const svgHeight = parseFloat(svgEl.style.height) ||
+        parseFloat(svgEl.getAttribute('height')) ||
+        svgEl.getBoundingClientRect().height
+      diagramDiv.style.height = `${svgHeight * scale}px`
+      diagramDiv.style.width = `${contentWidth}px`
     }
   })
 }
