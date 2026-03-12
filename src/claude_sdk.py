@@ -397,14 +397,24 @@ class ClaudeSDK:
             sdk_logger.debug(f"Session {self.session_id} state check passed: {self.info.state}")
             sdk_logger.debug(f"SDK client exists: {bool(self._sdk_client)}")
 
-            # Add interrupt request to message queue to be processed by the message loop
-            sdk_logger.debug(f"Adding interrupt request to message queue for session {self.session_id}")
-            await self._message_queue.put({
-                "type": "interrupt_request",
-                "timestamp": time.time()
-            })
+            # Call interrupt directly on the SDK client, bypassing the message queue.
+            # The queue is sequential — if a query() is in flight, an interrupt_request
+            # would wait behind it, arriving too late. client.interrupt() sends a control
+            # message via the transport and is safe to call concurrently. (Issue #748)
+            sdk_logger.debug(f"Sending direct interrupt to SDK for session {self.session_id}")
+            await self._sdk_client.interrupt()
+            sdk_logger.info(f"INTERRUPT SENT DIRECTLY for session {self.session_id}")
 
-            sdk_logger.info(f"INTERRUPT REQUEST QUEUED for session {self.session_id}")
+            # Notify through callback
+            if self.message_callback:
+                await self._safe_callback(self.message_callback, {
+                    "type": "system",
+                    "content": "Session interrupted successfully",
+                    "subtype": "interrupt_success",
+                    "session_id": self.session_id,
+                    "timestamp": time.time()
+                })
+
             return True
 
         except Exception as e:

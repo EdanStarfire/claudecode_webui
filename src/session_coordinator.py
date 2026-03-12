@@ -82,6 +82,11 @@ class SessionCoordinator:
         self._session_reset_callbacks: list[Callable] = []
         self._tool_call_broadcast_callbacks: list[Callable] = []
 
+        # Issue #748: Track pending result messages per session.
+        # Incremented on send_message(), decremented on ResultMessage.
+        # If >0 after decrement, a newer query is in flight — don't reset is_processing.
+        self._pending_results: dict[str, int] = {}
+
         # Track recent tool uses for ExitPlanMode detection
         self._recent_tool_uses: dict[str, dict[str, str]] = {}  # session_id -> {tool_use_id: tool_name}
 
@@ -1409,6 +1414,8 @@ class SessionCoordinator:
 
             # Mark session as processing before sending message
             await self.session_manager.update_processing_state(session_id, True)
+            # Issue #748: Track that we expect a ResultMessage for this query
+            self._pending_results[session_id] = self._pending_results.get(session_id, 0) + 1
 
             # Send message through SDK (will be queued and processed)
             # The SDK should echo the user message back through the stream
@@ -1417,6 +1424,7 @@ class SessionCoordinator:
             # If message sending failed, reset processing state
             if not result:
                 await self.session_manager.update_processing_state(session_id, False)
+                self._pending_results[session_id] = max(0, self._pending_results.get(session_id, 0) - 1)
 
             return result
 
@@ -3112,20 +3120,26 @@ class SessionCoordinator:
 
                 # Check if this message indicates processing completion
                 if parsed_message.type.value == 'result':
-                    # Message processing completed - reset processing state
-                    try:
-                        await self.session_manager.update_processing_state(session_id, False)
-                        # logger.info(f"Reset processing state for session {session_id} after result message")
-                    except Exception:
-                        logger.exception(f"Failed to reset processing state for session {session_id}")
+                    # Issue #748: Decrement pending results counter.
+                    # Only reset is_processing if no more queries are in flight.
+                    pending = self._pending_results.get(session_id, 0)
+                    if pending > 0:
+                        self._pending_results[session_id] = pending - 1
+                    if self._pending_results.get(session_id, 0) == 0:
+                        try:
+                            await self.session_manager.update_processing_state(session_id, False)
+                        except Exception:
+                            logger.exception(f"Failed to reset processing state for session {session_id}")
 
                 # Also reset processing state on interrupt_success
                 if parsed_message.type.value == 'system' and parsed_message.metadata.get('subtype') == 'interrupt_success':
-                    try:
-                        await self.session_manager.update_processing_state(session_id, False)
-                        coord_logger.info(f"Reset processing state for session {session_id} after interrupt")
-                    except Exception:
-                        logger.exception(f"Failed to reset processing state after interrupt for session {session_id}")
+                    # Only reset if no queries pending (PIVOT sends a new message after interrupt)
+                    if self._pending_results.get(session_id, 0) == 0:
+                        try:
+                            await self.session_manager.update_processing_state(session_id, False)
+                            coord_logger.info(f"Reset processing state for session {session_id} after interrupt")
+                        except Exception:
+                            logger.exception(f"Failed to reset processing state after interrupt for session {session_id}")
 
                 # Call registered callbacks with processed message (maintain backward compatibility)
                 callbacks = self._message_callbacks.get(session_id, [])
