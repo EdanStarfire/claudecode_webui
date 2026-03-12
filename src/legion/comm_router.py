@@ -10,6 +10,7 @@ Responsibilities:
 - Parse #minion-name tags for explicit references
 """
 
+import asyncio
 import json
 import re
 from typing import TYPE_CHECKING
@@ -248,7 +249,6 @@ class CommRouter:
                     return False
 
                 # Wait for session to become active (with timeout)
-                import asyncio
                 max_wait = 30  # 30 seconds timeout
                 wait_interval = 0.5
                 elapsed = 0
@@ -294,18 +294,6 @@ class CommRouter:
 
             formatted_message = f"**{comm_type_prefix} from {from_name}:** {header_summary}\n\n{comm.content}\n\n---\nAlways send messages to {from_name} using the `send_comm` tool."
 
-            # Handle interrupt priority
-            if comm.interrupt_priority in [InterruptPriority.HALT, InterruptPriority.PIVOT]:
-                legion_logger.info(f"Comm {comm.comm_id} has {comm.interrupt_priority.value} priority - interrupting session {comm.to_minion_id}")
-
-                # Interrupt the target session
-                try:
-                    await self.system.session_coordinator.interrupt_session(comm.to_minion_id)
-                    legion_logger.debug(f"Successfully interrupted session {comm.to_minion_id}")
-                except Exception as e:
-                    legion_logger.warning(f"Failed to interrupt session {comm.to_minion_id}: {e}")
-                    # Continue anyway - message will queue if interrupt fails
-
             # Build comm metadata for frontend styling
             from_name_slug = self._slugify(from_name.replace("Minion #", ""))
             from_display = from_name.replace("Minion #", "")
@@ -317,7 +305,33 @@ class CommRouter:
                 }
             }
 
-            # Send message to target minion via SessionCoordinator
+            # Handle interrupt priority (issue #748)
+            if comm.interrupt_priority == InterruptPriority.HALT:
+                # HALT: interrupt only — do NOT deliver message to the SDK.
+                # Sending a message via client.query() creates a new conversation
+                # turn that the minion would process after the interrupt, defeating
+                # the purpose of HALT. The comm is already persisted to the timeline
+                # above for user inspection.
+                legion_logger.info(f"Comm {comm.comm_id} has HALT priority - interrupting {comm.to_minion_id} (message not delivered to SDK)")
+                try:
+                    await self.system.session_coordinator.interrupt_session(comm.to_minion_id)
+                    legion_logger.debug(f"Successfully interrupted session {comm.to_minion_id}")
+                except Exception as e:
+                    legion_logger.warning(f"Failed to interrupt session {comm.to_minion_id}: {e}")
+                legion_logger.info(f"HALT comm {comm.comm_id} from {from_name} - minion {comm.to_minion_id} interrupted")
+                return True
+
+            if comm.interrupt_priority == InterruptPriority.PIVOT:
+                # PIVOT: interrupt first to stop current work, then deliver new direction.
+                legion_logger.info(f"Comm {comm.comm_id} has PIVOT priority - interrupting then sending to {comm.to_minion_id}")
+                try:
+                    await self.system.session_coordinator.interrupt_session(comm.to_minion_id)
+                    legion_logger.debug(f"Successfully interrupted session {comm.to_minion_id}")
+                except Exception as e:
+                    legion_logger.warning(f"Failed to interrupt session {comm.to_minion_id}: {e}")
+                # Fall through to send_message below
+
+            # Send message to target minion via SessionCoordinator (PIVOT and NORMAL)
             await self.system.session_coordinator.send_message(
                 session_id=comm.to_minion_id,
                 message=formatted_message,
