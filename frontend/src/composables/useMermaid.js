@@ -29,6 +29,24 @@ async function loadMermaid() {
 }
 
 /**
+ * Scale a diagram div to fit within its container if it overflows.
+ * Uses CSS transform: scale() to shrink content that has fixed pixel widths
+ * (e.g., ZenUML foreignObject-based diagrams).
+ */
+function fitDiagramToContainer(diagramDiv, wrapper) {
+  requestAnimationFrame(() => {
+    const containerWidth = wrapper.clientWidth - 24 // account for padding
+    const contentWidth = diagramDiv.scrollWidth
+    if (contentWidth > containerWidth && containerWidth > 0) {
+      const scale = containerWidth / contentWidth
+      diagramDiv.style.transformOrigin = 'top left'
+      diagramDiv.style.transform = `scale(${scale})`
+      diagramDiv.style.height = `${diagramDiv.scrollHeight * scale}px`
+    }
+  })
+}
+
+/**
  * Render a single mermaid code block, replacing the <pre> with an SVG + toggle.
  * Returns true if rendering succeeded.
  */
@@ -90,6 +108,7 @@ async function renderBlock(mermaid, preElement) {
     wrapper.appendChild(toggleBtn)
 
     preElement.replaceWith(wrapper)
+    fitDiagramToContainer(diagramDiv, wrapper)
     return true
   } catch (err) {
     // Wrap error banner + original code in .mermaid-container so the
