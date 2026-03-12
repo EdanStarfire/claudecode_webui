@@ -85,11 +85,15 @@ function fitDiagramToContainer(diagramDiv, wrapper) {
 
     if (contentWidth > containerWidth && contentWidth > 0) {
       const scale = containerWidth / contentWidth
-      // Set the diagram div to the content's natural size, then scale down
+      // Set the diagram div to the content's natural size so nothing is clipped,
+      // then use CSS transform to scale it down visually. Negative margins correct
+      // the layout box to match the visual size (transforms don't affect layout).
       diagramDiv.style.width = `${contentWidth}px`
+      diagramDiv.style.height = `${contentHeight}px`
       diagramDiv.style.transformOrigin = 'top left'
       diagramDiv.style.transform = `scale(${scale})`
-      diagramDiv.style.height = `${contentHeight * scale}px`
+      diagramDiv.style.marginBottom = `${-(contentHeight * (1 - scale))}px`
+      diagramDiv.style.marginRight = `${-(contentWidth * (1 - scale))}px`
       // Also resize the SVG to match the true content dimensions
       if (foreignObj) {
         svgEl.style.width = `${contentWidth}px`
