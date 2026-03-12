@@ -63,8 +63,9 @@ function fitDiagramToContainer(diagramDiv, wrapper) {
         const styles = getComputedStyle(intrinsic)
         const marginH = parseFloat(styles.marginLeft) + parseFloat(styles.marginRight)
         const marginV = parseFloat(styles.marginTop) + parseFloat(styles.marginBottom)
-        contentWidth = rect.width + marginH
-        contentHeight = rect.height + marginV
+        // Add 4px buffer for child borders and box-shadow that extend beyond bounds
+        contentWidth = rect.width + marginH + 4
+        contentHeight = rect.height + marginV + 4
       } else {
         // Fallback: first child's scroll dimensions
         const child = foreignObj.firstElementChild
