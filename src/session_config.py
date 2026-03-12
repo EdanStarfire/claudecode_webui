@@ -59,6 +59,7 @@ class SessionConfig:
     # Features
     history_distillation_enabled: bool = True
     auto_memory_mode: str = "claude"  # "claude" | "session" | "disabled"
+    skill_creating_enabled: bool = False
 
 
 class SessionConfigBase(BaseModel):
@@ -87,6 +88,7 @@ class SessionConfigBase(BaseModel):
     effort: str | None = None
     history_distillation_enabled: bool = True
     auto_memory_mode: str = "claude"
+    skill_creating_enabled: bool = False
 
     def to_session_config(self, **overrides) -> SessionConfig:
         """Convert to SessionConfig dataclass, with optional field overrides."""
@@ -110,6 +112,7 @@ class SessionConfigBase(BaseModel):
             "effort": self.effort,
             "history_distillation_enabled": self.history_distillation_enabled,
             "auto_memory_mode": self.auto_memory_mode,
+            "skill_creating_enabled": self.skill_creating_enabled,
         }
         data.update(overrides)
         return SessionConfig(**data)

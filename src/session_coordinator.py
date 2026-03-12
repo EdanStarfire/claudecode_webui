@@ -821,10 +821,23 @@ class SessionCoordinator:
             else:
                 guidance_note = ""
 
-            if session_info.system_prompt:
-                minion_system_prompt = f"{legion_guide}{history_note}{guidance_note}\n\n---\n\n{session_info.system_prompt}"
+            # Issue #749: Skill creating context
+            if session_info.skill_creating_enabled:
+                skill_creating_note = (
+                    "\n\n## Skill Creation\n"
+                    "You can create custom skills to automate repetitive workflows. "
+                    "Use `/skill-maker` to get guided through writing a SKILL.md file. "
+                    "Skills are created in your working directory at `.claude/skills/{name}/SKILL.md` "
+                    "and are local to your session. After creating, modifying, or deleting a skill, "
+                    "call `restart_session` to reload — this preserves your context and work.\n"
+                )
             else:
-                minion_system_prompt = f"{legion_guide}{history_note}{guidance_note}"
+                skill_creating_note = ""
+
+            if session_info.system_prompt:
+                minion_system_prompt = f"{legion_guide}{history_note}{guidance_note}{skill_creating_note}\n\n---\n\n{session_info.system_prompt}"
+            else:
+                minion_system_prompt = f"{legion_guide}{history_note}{guidance_note}{skill_creating_note}"
             coord_logger.info(f"Built minion system prompt for start (guide + context): {len(minion_system_prompt)} chars")
 
             # Escape special characters in system_prompt for subprocess command-line safety

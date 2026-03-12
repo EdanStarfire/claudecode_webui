@@ -291,6 +291,23 @@
             Disabled: no auto-memory.
           </small>
         </div>
+        <div class="form-check form-switch mb-2">
+          <input
+            class="form-check-input"
+            type="checkbox"
+            id="adv-skill-creating"
+            :checked="formData.skill_creating_enabled"
+            @change="$emit('update:form-data', 'skill_creating_enabled', $event.target.checked)"
+          />
+          <label class="form-check-label" for="adv-skill-creating"
+            style="text-transform: none; letter-spacing: normal;">
+            Skill Creating
+          </label>
+          <small class="form-text text-muted d-block">
+            When enabled, the session's system prompt includes guidance on creating custom
+            local skills using /skill-maker. Requires restart to apply.
+          </small>
+        </div>
       </div>
     </div>
 
