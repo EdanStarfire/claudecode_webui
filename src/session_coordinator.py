@@ -829,9 +829,12 @@ class SessionCoordinator:
                     "Use `/skill-maker` to get guided through writing a SKILL.md file. "
                     "Skills MUST be created in your working directory at "
                     "`<working-directory>/.claude/skills/{name}/SKILL.md` — "
-                    "NOT in `~/.claude/skills/` (that is for system-managed global skills). "
-                    "After creating, modifying, or deleting a skill, "
-                    "call `restart_session` to reload — this preserves your context and work.\n"
+                    "NOT in `~/.claude/skills/` (that is for system-managed global skills).\n\n"
+                    "**MANDATORY**: After writing a SKILL.md file, you MUST call `restart_session` "
+                    "before attempting to use the skill. Writing the file to disk does NOT make the "
+                    "skill available — Claude Code only discovers skills at startup. The skill "
+                    "literally does not exist until `restart_session` is called. Do not skip this step "
+                    "or try to use the skill from memory.\n"
                 )
             else:
                 skill_creating_note = ""

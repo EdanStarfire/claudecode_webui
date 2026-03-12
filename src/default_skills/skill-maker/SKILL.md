@@ -194,17 +194,30 @@ The script checks:
 
 Fix any errors before proceeding.
 
-## Step 5: Reload
+## Step 5: Reload (MANDATORY — skill does not exist until this step completes)
 
-**CRITICAL**: After creating, modifying, or deleting a skill, you must reload the session for changes to take effect.
+> **STOP — DO NOT SKIP THIS STEP.**
+>
+> Writing a SKILL.md file to disk does **NOT** make the skill available.
+> Claude Code only discovers skills at startup. Until you call `restart_session`,
+> the skill you just wrote **does not exist** — it cannot be invoked, referenced,
+> or used in any way. You cannot work around this by remembering what you wrote.
+> The skill MUST be loaded by the runtime, and that only happens after a restart.
 
-Call the `restart_session` MCP tool to reload. This preserves your conversation context and work — it only restarts the Claude Code process to pick up the new skill definitions.
+**Immediately after writing and validating the SKILL.md**, call the `restart_session` MCP tool:
 
 ```
-Use the restart_session MCP tool now.
+Call the restart_session MCP tool NOW. Do not do anything else first.
 ```
 
-After restart, the new skill will be available as `/<skill-name>`.
+This preserves your conversation context and work — it only restarts the Claude Code
+process to pick up the new skill definitions.
+
+**After restart**, verify the skill is loaded by invoking it as `/<skill-name>`.
+If the skill does not appear, re-check the file path and frontmatter, then restart again.
+
+**NEVER attempt to use a skill you just created without calling restart_session first.**
+The skill file on disk is inert until the runtime loads it.
 
 ## Updating a Skill
 
