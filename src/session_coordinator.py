@@ -470,7 +470,9 @@ class SessionCoordinator:
             )
             # Issue #707: Build PreToolUse handler for internal tool access control
             permission_handler = self._build_permission_handler(
-                session_dir, config.history_distillation_enabled, config.auto_memory_mode
+                session_dir, config.history_distillation_enabled, config.auto_memory_mode,
+                skill_creating_enabled=config.skill_creating_enabled,
+                working_directory=Path(effective_working_directory),
             )
 
             sdk = self._sdk_factory(
@@ -901,7 +903,9 @@ class SessionCoordinator:
 
             # Issue #707: Build PreToolUse handler for internal tool access control
             permission_handler = self._build_permission_handler(
-                session_dir, session_info.history_distillation_enabled, session_info.auto_memory_mode
+                session_dir, session_info.history_distillation_enabled, session_info.auto_memory_mode,
+                skill_creating_enabled=session_info.skill_creating_enabled,
+                working_directory=Path(session_info.working_directory),
             )
 
             sdk = self._sdk_factory(
@@ -2982,7 +2986,12 @@ class SessionCoordinator:
                 await storage.append_message(message_data)
 
     def _build_permission_handler(
-        self, session_dir: Path, knowledge_mgmt_enabled: bool, auto_memory_mode: str = "claude"
+        self,
+        session_dir: Path,
+        knowledge_mgmt_enabled: bool,
+        auto_memory_mode: str = "claude",
+        skill_creating_enabled: bool = False,
+        working_directory: Path | None = None,
     ) -> InternalPermissionHandler:
         """Build internal permission handler with consistent path configuration (issue #707)."""
         memory_dir = session_dir / "memory" if auto_memory_mode == "session" else None
@@ -2991,6 +3000,8 @@ class SessionCoordinator:
             plans_dir=Path.home() / ".cc_webui" / "plans",
             knowledge_mgmt_enabled=knowledge_mgmt_enabled,
             memory_dir=memory_dir,
+            skill_creating_enabled=skill_creating_enabled,
+            working_directory=working_directory,
         )
 
     def _create_message_callback(self, session_id: str) -> Callable:
