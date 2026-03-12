@@ -1058,7 +1058,9 @@ class ClaudeSDK:
 
         # Check CLI suggestions against internal rules (issue #707)
         if self.permission_handler and hasattr(context, "suggestions") and context.suggestions:
-            result = self.permission_handler.evaluate_suggestions(context.suggestions)
+            result = self.permission_handler.evaluate_suggestions(
+                context.suggestions, actual_tool=tool_name, tool_input=input_params
+            )
             if result is not None:
                 decision, reason = result
                 if decision == "allow":

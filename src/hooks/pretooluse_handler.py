@@ -1,8 +1,8 @@
 """Internal permission handler for auto-approving/denying tool operations.
 
 Evaluates CLI permission suggestions against internal path rules to auto-approve
-or deny operations on managed directories (history, plans, skills) without
-prompting the user.
+or deny operations on managed directories (history, plans) without prompting the
+user. Also guards against dangerous Bash commands being silently auto-approved.
 
 The CLI infers permission mappings (e.g., Bash accessing history → Read rule for
 that path) and exposes them via ToolPermissionContext.suggestions. This module
@@ -11,6 +11,7 @@ checks those suggestions against our internal rules.
 
 import logging
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -20,6 +21,28 @@ _logger = logging.getLogger(__name__)
 PermissionDecision = Literal["allow", "deny"]
 
 _RESOLVE_CACHE: dict[str, str] = {}
+
+# Dangerous Bash command patterns that must never be silently auto-approved.
+# The CLI may misclassify destructive Bash commands (e.g., `rm -rf ~/.claude/skills/`)
+# as benign file reads, causing them to match internal allow rules. This deny list
+# ensures such commands always fall through to the user permission prompt.
+DANGEROUS_BASH_PATTERNS: list[re.Pattern[str]] = [
+    re.compile(r"\brm\b"),         # file/directory deletion
+    re.compile(r"\brmdir\b"),      # directory deletion
+    re.compile(r"\bchmod\b"),      # permission changes
+    re.compile(r"\bchown\b"),      # ownership changes
+    re.compile(r"\bmv\b"),         # move/rename (can overwrite)
+    re.compile(r">\s*/"),          # redirect overwrite to absolute path
+    re.compile(r"\btruncate\b"),   # file truncation
+    re.compile(r"\bshred\b"),      # secure deletion
+    re.compile(r"\bmkfs\b"),       # filesystem creation
+    re.compile(r"\bdd\b"),         # raw disk operations
+]
+
+
+def _is_dangerous_bash(command: str) -> bool:
+    """Check if a Bash command matches any dangerous pattern."""
+    return any(pattern.search(command) for pattern in DANGEROUS_BASH_PATTERNS)
 
 
 def _get_field(obj: Any, snake_name: str, camel_name: str) -> Any:
@@ -102,12 +125,11 @@ class InternalPermissionHandler:
         self,
         session_data_dir: Path,
         plans_dir: Path,
-        skills_dirs: list[Path],
         knowledge_mgmt_enabled: bool,
         memory_dir: Path | None = None,
     ):
         self._rules = self._build_rules(
-            session_data_dir, plans_dir, skills_dirs, knowledge_mgmt_enabled, memory_dir
+            session_data_dir, plans_dir, knowledge_mgmt_enabled, memory_dir
         )
         # Collect (prefix, reason) pairs from allow rules for addDirectories auto-approval
         self._managed_prefix_reasons: list[tuple[str, str]] = [
@@ -121,7 +143,6 @@ class InternalPermissionHandler:
         self,
         session_data_dir: Path,
         plans_dir: Path,
-        skills_dirs: list[Path],
         knowledge_mgmt_enabled: bool,
         memory_dir: Path | None = None,
     ) -> list[InternalRule]:
@@ -154,25 +175,6 @@ class InternalPermissionHandler:
             path_prefixes=plan_prefixes,
             decision="allow",
             reason="Auto-approved: internal plan file access",
-            enabled=True,
-        ))
-
-        # Rule: Allow reading skill files
-        skill_prefixes = _resolve_prefixes([str(d) for d in skills_dirs])
-        rules.append(InternalRule(
-            tool_names=frozenset(["Read"]),
-            path_prefixes=skill_prefixes,
-            decision="allow",
-            reason="Auto-approved: internal skill file read",
-            enabled=True,
-        ))
-
-        # Rule: Deny writing to skill directories (managed by SkillManager)
-        rules.append(InternalRule(
-            tool_names=frozenset(["Write", "Edit"]),
-            path_prefixes=skill_prefixes,
-            decision="deny",
-            reason="Denied: skill files are managed by SkillManager",
             enabled=True,
         ))
 
@@ -262,7 +264,10 @@ class InternalPermissionHandler:
         return None
 
     def evaluate_suggestions(
-        self, suggestions: list[Any]
+        self,
+        suggestions: list[Any],
+        actual_tool: str | None = None,
+        tool_input: dict[str, Any] | None = None,
     ) -> tuple[PermissionDecision, str] | None:
         """Evaluate all CLI suggestions against internal rules.
 
@@ -270,8 +275,15 @@ class InternalPermissionHandler:
         If all rules in a suggestion match allow, returns allow.
         Returns None if no suggestion matches internal rules.
 
+        Before returning an allow decision, checks whether the actual tool is Bash
+        with a dangerous command — if so, returns None to force a user prompt
+        (issue #750).
+
         Args:
             suggestions: List of PermissionUpdate objects from context.suggestions.
+            actual_tool: The real tool name (e.g., "Bash") — may differ from the
+                suggestion's inferred tool name.
+            tool_input: The tool's input parameters (e.g., {"command": "rm -rf /"}).
 
         Returns:
             (decision, reason) if a matching decision was found, None otherwise.
@@ -285,6 +297,15 @@ class InternalPermissionHandler:
                 if directories:
                     reason = self._check_directories_managed(directories)
                     if reason:
+                        # Issue #750: Guard against dangerous Bash commands
+                        if actual_tool == "Bash" and tool_input:
+                            command = tool_input.get("command", "")
+                            if _is_dangerous_bash(command):
+                                _logger.info(
+                                    "Blocked auto-approve for dangerous Bash command: %s",
+                                    command,
+                                )
+                                return None
                         return ("allow", reason)
                 continue
 
@@ -314,6 +335,14 @@ class InternalPermissionHandler:
                 matched_allows.append(reason)
 
             if matched_allows:
+                # Issue #750: Guard against dangerous Bash commands being auto-approved
+                if actual_tool == "Bash" and tool_input:
+                    command = tool_input.get("command", "")
+                    if _is_dangerous_bash(command):
+                        _logger.info(
+                            "Blocked auto-approve for dangerous Bash command: %s", command
+                        )
+                        return None
                 return ("allow", matched_allows[0])
 
         return None
