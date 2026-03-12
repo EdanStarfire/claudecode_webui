@@ -41,31 +41,55 @@ function fitDiagramToContainer(diagramDiv, wrapper) {
     const svgEl = diagramDiv.querySelector('svg')
     if (!svgEl) return
 
-    // Determine the SVG's intended content width:
-    // 1. ZenUML sets an inline style like "width: 400px" on the SVG
-    // 2. Standard mermaid uses a width attribute like width="800"
-    // 3. Fall back to the SVG's rendered bounding rect
-    let contentWidth = 0
-    const inlineWidth = parseFloat(svgEl.style.width)
-    const attrWidth = parseFloat(svgEl.getAttribute('width'))
-    if (inlineWidth > 0) {
-      contentWidth = inlineWidth
-    } else if (attrWidth > 0) {
-      contentWidth = attrWidth
+    // For foreignObject-based diagrams (ZenUML), the declared SVG dimensions
+    // may not match the actual content. Inflate the SVG to allow the
+    // intrinsically-sized content (inline-block div) to render at natural size.
+    const foreignObj = svgEl.querySelector('foreignObject')
+    let contentWidth, contentHeight
+
+    if (foreignObj) {
+      // Save and inflate SVG so foreignObject content can size naturally
+      const origSvgW = svgEl.style.cssText
+      const origOverflow = diagramDiv.style.overflow
+      svgEl.style.cssText = 'width:9999px !important;height:9999px !important;'
+      diagramDiv.style.overflow = 'visible'
+
+      // Find the intrinsically-sized element (ZenUML uses .inline-block)
+      const intrinsic = foreignObj.querySelector('.inline-block') ||
+        foreignObj.querySelector('[class*="frame"]')
+      if (intrinsic) {
+        const rect = intrinsic.getBoundingClientRect()
+        contentWidth = rect.width
+        contentHeight = rect.height
+      } else {
+        // Fallback: first child's scroll dimensions
+        const child = foreignObj.firstElementChild
+        contentWidth = child ? child.scrollWidth : 0
+        contentHeight = child ? child.scrollHeight : 0
+      }
+
+      // Restore
+      svgEl.style.cssText = origSvgW
+      diagramDiv.style.overflow = origOverflow
     } else {
-      contentWidth = svgEl.getBoundingClientRect().width
+      // Standard SVG: read width attribute or bounding rect
+      const attrWidth = parseFloat(svgEl.getAttribute('width'))
+      contentWidth = attrWidth > 0 ? attrWidth : svgEl.getBoundingClientRect().width
+      contentHeight = svgEl.getBoundingClientRect().height
     }
 
-    if (contentWidth > containerWidth) {
+    if (contentWidth > containerWidth && contentWidth > 0) {
       const scale = containerWidth / contentWidth
+      // Set the diagram div to the content's natural size, then scale down
+      diagramDiv.style.width = `${contentWidth}px`
       diagramDiv.style.transformOrigin = 'top left'
       diagramDiv.style.transform = `scale(${scale})`
-      // Set explicit height to prevent wrapper collapse
-      const svgHeight = parseFloat(svgEl.style.height) ||
-        parseFloat(svgEl.getAttribute('height')) ||
-        svgEl.getBoundingClientRect().height
-      diagramDiv.style.height = `${svgHeight * scale}px`
-      diagramDiv.style.width = `${contentWidth}px`
+      diagramDiv.style.height = `${contentHeight * scale}px`
+      // Also resize the SVG to match the true content dimensions
+      if (foreignObj) {
+        svgEl.style.width = `${contentWidth}px`
+        svgEl.style.height = `${contentHeight}px`
+      }
     }
   })
 }
