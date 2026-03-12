@@ -827,8 +827,10 @@ class SessionCoordinator:
                     "\n\n## Skill Creation\n"
                     "You can create custom skills to automate repetitive workflows. "
                     "Use `/skill-maker` to get guided through writing a SKILL.md file. "
-                    "Skills are created in your working directory at `.claude/skills/{name}/SKILL.md` "
-                    "and are local to your session. After creating, modifying, or deleting a skill, "
+                    "Skills MUST be created in your working directory at "
+                    "`<working-directory>/.claude/skills/{name}/SKILL.md` — "
+                    "NOT in `~/.claude/skills/` (that is for system-managed global skills). "
+                    "After creating, modifying, or deleting a skill, "
                     "call `restart_session` to reload — this preserves your context and work.\n"
                 )
             else:

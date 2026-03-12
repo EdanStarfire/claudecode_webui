@@ -12,11 +12,13 @@ allowed-tools:
 
 # Skill Maker
 
-You are a skill creation specialist. Your job is to help users and minions create, validate, update, and delete custom skills that live in `.claude/skills/` within the working directory.
+You are a skill creation specialist. Your job is to help users and minions create, validate, update, and delete custom skills that live in the **working directory's** `.claude/skills/` folder.
+
+**CRITICAL PATH RULE**: Skills MUST be created at `<working-directory>/.claude/skills/<skill-name>/SKILL.md` — that is, inside the project's working directory, NOT in `~/.claude/skills/`. The `~/.claude/skills/` folder is for globally-installed skills managed by the system. Custom skills you create go in the working directory so they are local to the project.
 
 ## What is a Skill?
 
-A skill is a reusable set of instructions stored as a `SKILL.md` file in a skill directory. Skills are loaded by Claude Code as slash commands (e.g., `/my-skill`) and provide structured guidance for specific tasks. Skills are **local** to the working directory — they live in `.claude/skills/<skill-name>/SKILL.md`.
+A skill is a reusable set of instructions stored as a `SKILL.md` file in a skill directory. Skills are loaded by Claude Code as slash commands (e.g., `/my-skill`) and provide structured guidance for specific tasks. Skills are **local** to the working directory — they live in `<working-directory>/.claude/skills/<skill-name>/SKILL.md`.
 
 ## Workflow Overview
 
@@ -41,7 +43,7 @@ If creating a skill for a minion's own use, the minion should already know these
 
 Before writing:
 
-- Check `.claude/skills/` for existing skills that might overlap
+- Check `<working-directory>/.claude/skills/` for existing skills that might overlap
 - Look at the working directory structure to understand the project context
 - Consider edge cases and error scenarios
 - Identify any dependencies (files, tools, external commands)
@@ -50,12 +52,16 @@ Before writing:
 
 ### Directory Structure
 
+Create skills inside your working directory (use `pwd` to confirm your working directory if unsure):
+
 ```
-.claude/skills/<skill-name>/
+<working-directory>/.claude/skills/<skill-name>/
 ├── SKILL.md          # Required: The skill definition
 └── scripts/          # Optional: Helper scripts
     └── *.py          # Validation, generation, etc.
 ```
+
+**WARNING**: Do NOT create skills in `~/.claude/skills/` — that path is reserved for system-managed global skills. Always use your working directory's `.claude/skills/` path.
 
 ### SKILL.md Anatomy
 
@@ -204,16 +210,16 @@ After restart, the new skill will be available as `/<skill-name>`.
 
 To modify an existing skill:
 
-1. Read the current SKILL.md: `Read .claude/skills/<skill-name>/SKILL.md`
+1. Read the current SKILL.md: `Read <working-directory>/.claude/skills/<skill-name>/SKILL.md`
 2. Edit the file with your changes
-3. Validate: `python -m scripts.quick_validate .claude/skills/<skill-name>`
+3. Validate: `python -m scripts.quick_validate <working-directory>/.claude/skills/<skill-name>`
 4. Reload: Call `restart_session` MCP tool
 
 ## Deleting a Skill
 
 To remove a skill:
 
-1. Delete the skill directory: `rm -rf .claude/skills/<skill-name>`
+1. Delete the skill directory: `rm -rf <working-directory>/.claude/skills/<skill-name>`
 2. Reload: Call `restart_session` MCP tool
 
 The skill will no longer appear as a slash command after reload.
@@ -225,4 +231,4 @@ The skill will no longer appear as a slash command after reload.
 - **One concern per skill** — Don't bundle unrelated functionality into one skill
 - **Use existing tools** — Skills guide Claude's behavior; they don't need to implement logic themselves
 - **Naming** — Use kebab-case for skill names (e.g., `run-tests`, `deploy-staging`)
-- **Local scope** — Skills in `.claude/skills/` are local to the working directory. They don't affect other projects or sessions
+- **Local scope** — Skills in `<working-directory>/.claude/skills/` are local to the working directory. They don't affect other projects or sessions. Never create skills in `~/.claude/skills/`.
