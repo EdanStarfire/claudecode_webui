@@ -1,14 +1,19 @@
-"""Tests for internal permission handler (issue #707).
+"""Tests for internal permission handler (issue #707, #750).
 
 Tests the suggestion-based auto-approval logic that evaluates CLI permission
-suggestions against internal path rules (history, plans, skills).
+suggestions against internal path rules (history, plans) and the dangerous
+Bash command guard.
 """
 
 from dataclasses import dataclass
 
 import pytest
 
-from src.hooks.pretooluse_handler import InternalPermissionHandler, _extract_dir_from_rule_content
+from src.hooks.pretooluse_handler import (
+    InternalPermissionHandler,
+    _extract_dir_from_rule_content,
+    _is_dangerous_bash,
+)
 
 
 @pytest.fixture
@@ -21,16 +26,10 @@ def tmp_dirs(tmp_path):
     plans_dir = tmp_path / ".cc_webui" / "plans"
     plans_dir.mkdir(parents=True)
 
-    skills_dir1 = tmp_path / ".claude" / "skills"
-    skills_dir1.mkdir(parents=True)
-    skills_dir2 = tmp_path / ".config" / "cc_webui" / "skills"
-    skills_dir2.mkdir(parents=True)
-
     return {
         "session_dir": session_dir,
         "history_dir": history_dir,
         "plans_dir": plans_dir,
-        "skills_dirs": [skills_dir1, skills_dir2],
     }
 
 
@@ -40,7 +39,6 @@ def handler_km_enabled(tmp_dirs):
     return InternalPermissionHandler(
         session_data_dir=tmp_dirs["session_dir"],
         plans_dir=tmp_dirs["plans_dir"],
-        skills_dirs=tmp_dirs["skills_dirs"],
         knowledge_mgmt_enabled=True,
     )
 
@@ -51,7 +49,6 @@ def handler_km_disabled(tmp_dirs):
     return InternalPermissionHandler(
         session_data_dir=tmp_dirs["session_dir"],
         plans_dir=tmp_dirs["plans_dir"],
-        skills_dirs=tmp_dirs["skills_dirs"],
         knowledge_mgmt_enabled=False,
     )
 
@@ -135,24 +132,6 @@ class TestSuggestionEvaluation:
         assert result is not None
         assert result[0] == "allow"
 
-    def test_issue_707_read_skill_allowed(self, handler_km_enabled, tmp_dirs):
-        """CLI suggestion to allow Read on skills should be auto-approved."""
-        skills_dir = str(tmp_dirs["skills_dirs"][0])
-        result = handler_km_enabled.evaluate_suggestion(
-            "Read", f"//{skills_dir}/**", "allow"
-        )
-        assert result is not None
-        assert result[0] == "allow"
-
-    def test_issue_707_write_skill_denied(self, handler_km_enabled, tmp_dirs):
-        """CLI suggestion to allow Write on skills should be denied."""
-        skills_dir = str(tmp_dirs["skills_dirs"][0])
-        result = handler_km_enabled.evaluate_suggestion(
-            "Write", f"//{skills_dir}/**", "allow"
-        )
-        assert result is not None
-        assert result[0] == "deny"
-
     def test_issue_707_unrelated_path_no_match(self, handler_km_enabled):
         """Suggestion for unrelated path should return None (no opinion)."""
         result = handler_km_enabled.evaluate_suggestion(
@@ -172,15 +151,6 @@ class TestSuggestionEvaluation:
             "Read", f"//{history_dir}/**", "allow"
         )
         assert result is None
-
-    def test_issue_707_read_second_skills_dir(self, handler_km_enabled, tmp_dirs):
-        """Suggestion for Read on second skills dir should be auto-approved."""
-        skills_dir = str(tmp_dirs["skills_dirs"][1])
-        result = handler_km_enabled.evaluate_suggestion(
-            "Read", f"//{skills_dir}/**", "allow"
-        )
-        assert result is not None
-        assert result[0] == "allow"
 
 
 class TestEvaluateSuggestions:
@@ -347,7 +317,6 @@ class TestAddDirectoriesSuggestion:
         handler = InternalPermissionHandler(
             session_data_dir=tmp_dirs["session_dir"],
             plans_dir=tmp_dirs["plans_dir"],
-            skills_dirs=tmp_dirs["skills_dirs"],
             knowledge_mgmt_enabled=True,
             memory_dir=memory_dir,
         )
@@ -368,7 +337,6 @@ class TestAddDirectoriesSuggestion:
         handler = InternalPermissionHandler(
             session_data_dir=tmp_dirs["session_dir"],
             plans_dir=tmp_dirs["plans_dir"],
-            skills_dirs=tmp_dirs["skills_dirs"],
             knowledge_mgmt_enabled=True,
             memory_dir=memory_dir,
         )
@@ -387,7 +355,6 @@ class TestAddDirectoriesSuggestion:
         handler = InternalPermissionHandler(
             session_data_dir=tmp_dirs["session_dir"],
             plans_dir=tmp_dirs["plans_dir"],
-            skills_dirs=tmp_dirs["skills_dirs"],
             knowledge_mgmt_enabled=True,
             memory_dir=memory_dir,
         )
@@ -422,4 +389,182 @@ class TestAddDirectoriesSuggestion:
             "destination": "session",
         }]
         result = handler_km_enabled.evaluate_suggestions(suggestions)
+        assert result is None
+
+
+class TestIsDangerousBash:
+    """Tests for _is_dangerous_bash helper (issue #750)."""
+
+    def test_rm_rf(self):
+        assert _is_dangerous_bash("rm -rf /home/user/.claude/skills/") is True
+
+    def test_rm_simple(self):
+        assert _is_dangerous_bash("rm file.txt") is True
+
+    def test_rmdir(self):
+        assert _is_dangerous_bash("rmdir /some/dir") is True
+
+    def test_chmod(self):
+        assert _is_dangerous_bash("chmod 777 /etc/passwd") is True
+
+    def test_chown(self):
+        assert _is_dangerous_bash("chown root:root /etc/passwd") is True
+
+    def test_mv(self):
+        assert _is_dangerous_bash("mv important.txt /dev/null") is True
+
+    def test_redirect_overwrite(self):
+        assert _is_dangerous_bash("echo bad > /etc/config") is True
+
+    def test_truncate(self):
+        assert _is_dangerous_bash("truncate -s 0 /var/log/syslog") is True
+
+    def test_shred(self):
+        assert _is_dangerous_bash("shred /var/data/secrets") is True
+
+    def test_dd(self):
+        assert _is_dangerous_bash("dd if=/dev/zero of=/dev/sda") is True
+
+    def test_mkfs(self):
+        assert _is_dangerous_bash("mkfs.ext4 /dev/sda1") is True
+
+    def test_safe_cat(self):
+        assert _is_dangerous_bash("cat /home/user/file.txt") is False
+
+    def test_safe_ls(self):
+        assert _is_dangerous_bash("ls -la /home/user") is False
+
+    def test_safe_grep(self):
+        assert _is_dangerous_bash("grep -r 'pattern' /src") is False
+
+    def test_safe_echo(self):
+        assert _is_dangerous_bash("echo hello world") is False
+
+
+class TestBashDenyPatternGuard:
+    """Tests for Bash deny-pattern guard in evaluate_suggestions (issue #750)."""
+
+    def test_issue_750_bash_rm_on_plan_dir_no_auto_approve(self, handler_km_enabled, tmp_dirs):
+        """Bash rm -rf on plans dir should NOT be auto-approved despite matching plan rule."""
+        plans_dir = str(tmp_dirs["plans_dir"])
+        suggestions = [
+            FakePermissionUpdate(
+                type="addRules",
+                rules=[FakePermissionRuleValue("Read", f"//{plans_dir}/**")],
+                behavior="allow",
+            )
+        ]
+        result = handler_km_enabled.evaluate_suggestions(
+            suggestions,
+            actual_tool="Bash",
+            tool_input={"command": f"rm -rf {plans_dir}"},
+        )
+        # Should return None (fall through to user prompt), not allow
+        assert result is None
+
+    def test_issue_750_read_tool_on_plan_dir_still_approved(self, handler_km_enabled, tmp_dirs):
+        """Read tool on plans dir should still be auto-approved (not Bash)."""
+        plans_dir = str(tmp_dirs["plans_dir"])
+        suggestions = [
+            FakePermissionUpdate(
+                type="addRules",
+                rules=[FakePermissionRuleValue("Read", f"//{plans_dir}/**")],
+                behavior="allow",
+            )
+        ]
+        result = handler_km_enabled.evaluate_suggestions(
+            suggestions,
+            actual_tool="Read",
+            tool_input={"file_path": f"{plans_dir}/issue-1.md"},
+        )
+        assert result is not None
+        assert result[0] == "allow"
+
+    def test_issue_750_bash_cat_on_plan_dir_still_approved(self, handler_km_enabled, tmp_dirs):
+        """Bash cat (non-dangerous) on plans dir should still be auto-approved."""
+        plans_dir = str(tmp_dirs["plans_dir"])
+        suggestions = [
+            FakePermissionUpdate(
+                type="addRules",
+                rules=[FakePermissionRuleValue("Read", f"//{plans_dir}/**")],
+                behavior="allow",
+            )
+        ]
+        result = handler_km_enabled.evaluate_suggestions(
+            suggestions,
+            actual_tool="Bash",
+            tool_input={"command": f"cat {plans_dir}/issue-1.md"},
+        )
+        assert result is not None
+        assert result[0] == "allow"
+
+    def test_issue_750_bash_rm_on_history_dir_no_auto_approve(self, handler_km_enabled, tmp_dirs):
+        """Bash rm on history dir should NOT be auto-approved."""
+        history_dir = str(tmp_dirs["history_dir"])
+        suggestions = [
+            FakePermissionUpdate(
+                type="addRules",
+                rules=[FakePermissionRuleValue("Read", f"//{history_dir}/**")],
+                behavior="allow",
+            )
+        ]
+        result = handler_km_enabled.evaluate_suggestions(
+            suggestions,
+            actual_tool="Bash",
+            tool_input={"command": f"rm -rf {history_dir}"},
+        )
+        assert result is None
+
+    def test_issue_750_no_actual_tool_still_works(self, handler_km_enabled, tmp_dirs):
+        """Without actual_tool param, existing behavior is preserved."""
+        plans_dir = str(tmp_dirs["plans_dir"])
+        suggestions = [
+            FakePermissionUpdate(
+                type="addRules",
+                rules=[FakePermissionRuleValue("Read", f"//{plans_dir}/**")],
+                behavior="allow",
+            )
+        ]
+        result = handler_km_enabled.evaluate_suggestions(suggestions)
+        assert result is not None
+        assert result[0] == "allow"
+
+    def test_issue_750_deny_rules_still_deny_regardless(self, handler_km_enabled, tmp_dirs):
+        """Deny rules should still deny even for non-Bash tools."""
+        history_dir = str(tmp_dirs["history_dir"])
+        suggestions = [
+            FakePermissionUpdate(
+                type="addRules",
+                rules=[FakePermissionRuleValue("Write", f"//{history_dir}/**")],
+                behavior="allow",
+            )
+        ]
+        result = handler_km_enabled.evaluate_suggestions(
+            suggestions,
+            actual_tool="Write",
+            tool_input={"file_path": f"{history_dir}/test.md"},
+        )
+        assert result is not None
+        assert result[0] == "deny"
+
+    def test_issue_750_bash_chmod_on_add_directories_no_auto_approve(self, tmp_dirs):
+        """Bash chmod via addDirectories should NOT be auto-approved."""
+        memory_dir = tmp_dirs["session_dir"] / "memory"
+        memory_dir.mkdir(parents=True, exist_ok=True)
+        handler = InternalPermissionHandler(
+            session_data_dir=tmp_dirs["session_dir"],
+            plans_dir=tmp_dirs["plans_dir"],
+            knowledge_mgmt_enabled=True,
+            memory_dir=memory_dir,
+        )
+        suggestions = [{
+            "type": "addDirectories",
+            "directories": [str(memory_dir)],
+            "destination": "session",
+        }]
+        result = handler.evaluate_suggestions(
+            suggestions,
+            actual_tool="Bash",
+            tool_input={"command": f"chmod -R 777 {memory_dir}"},
+        )
         assert result is None

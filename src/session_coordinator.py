@@ -38,7 +38,6 @@ from .queue_manager import QueueManager
 from .queue_processor import QueueProcessor
 from .session_config import SessionConfig
 from .session_manager import SessionManager, SessionState
-from .skill_manager import NEW_GLOBAL_SKILLS_DIR
 from .timestamp_utils import get_unix_timestamp
 
 # Get specialized logger for coordinator actions
@@ -2975,10 +2974,6 @@ class SessionCoordinator:
         return InternalPermissionHandler(
             session_data_dir=session_dir,
             plans_dir=Path.home() / ".cc_webui" / "plans",
-            skills_dirs=[
-                Path.home() / ".claude" / "skills",
-                NEW_GLOBAL_SKILLS_DIR,
-            ],
             knowledge_mgmt_enabled=knowledge_mgmt_enabled,
             memory_dir=memory_dir,
         )
