@@ -11,8 +11,12 @@ async function loadMermaid() {
   if (mermaidModule) return mermaidModule
   if (mermaidLoadPromise) return mermaidLoadPromise
 
-  mermaidLoadPromise = import('mermaid').then((mod) => {
+  mermaidLoadPromise = Promise.all([
+    import('mermaid'),
+    import('@mermaid-js/mermaid-zenuml')
+  ]).then(([mod, zenuml]) => {
     mermaidModule = mod.default
+    mermaidModule.registerExternalDiagrams([zenuml.default])
     mermaidModule.initialize({
       startOnLoad: false,
       securityLevel: 'strict',
