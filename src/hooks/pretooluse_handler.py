@@ -282,6 +282,54 @@ class InternalPermissionHandler:
 
         return None
 
+    def evaluate_direct(
+        self,
+        tool_name: str,
+        tool_input: dict[str, Any] | None = None,
+    ) -> tuple[PermissionDecision, str] | None:
+        """Evaluate a tool call directly against internal rules, without suggestions.
+
+        Checks the tool name and its file_path input against path-based rules.
+        Used as a fallback when the CLI provides no suggestions but the tool
+        operates on a managed path (e.g., Write to .claude/skills/).
+
+        Also handles non-path tools like Skill that are gated on feature flags.
+
+        Returns:
+            (decision, reason) if a matching rule was found, None otherwise.
+        """
+        # Issue #749: Auto-approve Skill tool when skill creating is enabled
+        if self._skill_creating_enabled and tool_name == "Skill":
+            return ("allow", "Auto-approved: skill invocation (skill creating enabled)")
+
+        if not tool_input:
+            return None
+
+        file_path = tool_input.get("file_path")
+        if not file_path:
+            return None
+
+        # Guard dangerous Bash commands even if path matches
+        if tool_name == "Bash":
+            command = tool_input.get("command", "")
+            if _is_dangerous_bash(command):
+                return None
+
+        for rule in self._rules:
+            if not rule.enabled:
+                continue
+            if tool_name not in rule.tool_names:
+                continue
+            if not self._matches_path(file_path, rule.path_prefixes):
+                continue
+            _logger.debug(
+                "Direct match internal rule: tool=%s path=%s decision=%s reason=%s",
+                tool_name, file_path, rule.decision, rule.reason,
+            )
+            return (rule.decision, rule.reason)
+
+        return None
+
     def evaluate_suggestions(
         self,
         suggestions: list[Any],
