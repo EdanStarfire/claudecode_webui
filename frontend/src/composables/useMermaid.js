@@ -54,13 +54,17 @@ function fitDiagramToContainer(diagramDiv, wrapper) {
       svgEl.style.cssText = 'width:9999px !important;height:9999px !important;'
       diagramDiv.style.overflow = 'visible'
 
-      // Find the intrinsically-sized element (ZenUML uses .inline-block)
-      const intrinsic = foreignObj.querySelector('.inline-block') ||
-        foreignObj.querySelector('[class*="frame"]')
+      // Find the intrinsically-sized element (ZenUML uses .inline-block which
+      // wraps the .frame with padding). Measure this for full content bounds.
+      const intrinsic = foreignObj.querySelector('.inline-block')
       if (intrinsic) {
         const rect = intrinsic.getBoundingClientRect()
-        contentWidth = rect.width
-        contentHeight = rect.height
+        // Include the parent's margins (ZenUML .frame has m-1)
+        const styles = getComputedStyle(intrinsic)
+        const marginH = parseFloat(styles.marginLeft) + parseFloat(styles.marginRight)
+        const marginV = parseFloat(styles.marginTop) + parseFloat(styles.marginBottom)
+        contentWidth = rect.width + marginH
+        contentHeight = rect.height + marginV
       } else {
         // Fallback: first child's scroll dimensions
         const child = foreignObj.firstElementChild
