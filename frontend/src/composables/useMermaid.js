@@ -88,16 +88,34 @@ async function renderBlock(mermaid, preElement) {
     preElement.replaceWith(wrapper)
     return true
   } catch (err) {
-    // Show error banner above the existing code block
+    // Wrap error banner + original code in .mermaid-container so the
+    // MutationObserver skip check prevents re-processing (mirrors success path)
+    const wrapper = document.createElement('div')
+    wrapper.className = 'mermaid-container'
+    wrapper.dataset.mermaidError = 'true'
+
     const errorBanner = document.createElement('div')
     errorBanner.className = 'mermaid-error'
     errorBanner.textContent = `Diagram error: ${err.message || 'Invalid syntax'}`
-    preElement.parentNode.insertBefore(errorBanner, preElement)
+    wrapper.appendChild(errorBanner)
+
+    // Code view (visible by default since there's no diagram)
+    const codeDiv = document.createElement('div')
+    codeDiv.className = 'mermaid-code-view'
+    codeDiv.style.display = 'block'
+    const codePre = document.createElement('pre')
+    const codeEl = document.createElement('code')
+    codeEl.className = 'language-mermaid'
+    codeEl.textContent = source
+    codePre.appendChild(codeEl)
+    codeDiv.appendChild(codePre)
+    wrapper.appendChild(codeDiv)
+
+    preElement.replaceWith(wrapper)
 
     // Clean up any leftover mermaid render artifacts
     const leftover = document.getElementById(diagramId)
     if (leftover) leftover.remove()
-    // Mermaid sometimes creates a hidden container with 'd' + id
     const dLeftover = document.getElementById('d' + diagramId)
     if (dLeftover) dLeftover.remove()
 
