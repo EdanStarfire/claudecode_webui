@@ -13,4 +13,4 @@ This skill is adapted from the **skill-creator** skill by Anthropic.
 - Removed eval/benchmark/iteration/blind-comparison/packaging/description-optimization infrastructure
 - Removed agents/, eval-viewer/, assets/, claude.ai/cowork sections
 - Removed PyYAML dependency from validation scripts (replaced with string-based frontmatter parsing)
-- Added `restart_session` MCP tool guidance for minion context (session reload after skill changes)
+- Added `restart_session` fallback guidance for troubleshooting skill reload issues

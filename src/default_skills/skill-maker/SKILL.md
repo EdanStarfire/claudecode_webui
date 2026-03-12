@@ -26,7 +26,7 @@ A skill is a reusable set of instructions stored as a `SKILL.md` file in a skill
 2. **Research** — Check existing patterns and edge cases
 3. **Write SKILL.md** — Create the skill file with proper format
 4. **Validate** — Run the validator to check format
-5. **Reload** — Call `restart_session` to make the skill available
+5. **Verify** — Invoke the skill to confirm it works
 
 ## Step 1: Capture Intent
 
@@ -194,30 +194,14 @@ The script checks:
 
 Fix any errors before proceeding.
 
-## Step 5: Reload (MANDATORY — skill does not exist until this step completes)
+## Step 5: Verify
 
-> **STOP — DO NOT SKIP THIS STEP.**
->
-> Writing a SKILL.md file to disk does **NOT** make the skill available.
-> Claude Code only discovers skills at startup. Until you call `restart_session`,
-> the skill you just wrote **does not exist** — it cannot be invoked, referenced,
-> or used in any way. You cannot work around this by remembering what you wrote.
-> The skill MUST be loaded by the runtime, and that only happens after a restart.
+Skills are **hot-reloaded** by Claude Code — they become available immediately after writing the file to disk. No restart is required.
 
-**Immediately after writing and validating the SKILL.md**, call the `restart_session` MCP tool:
+After creating the SKILL.md, verify the skill works by invoking it as `/<skill-name>`.
+If the invocation returns "Unknown skill", re-check the file path and frontmatter format.
 
-```
-Call the restart_session MCP tool NOW. Do not do anything else first.
-```
-
-This preserves your conversation context and work — it only restarts the Claude Code
-process to pick up the new skill definitions.
-
-**After restart**, verify the skill is loaded by invoking it as `/<skill-name>`.
-If the skill does not appear, re-check the file path and frontmatter, then restart again.
-
-**NEVER attempt to use a skill you just created without calling restart_session first.**
-The skill file on disk is inert until the runtime loads it.
+**Tip**: If a skill you created or modified doesn't seem to be working correctly, you can call `restart_session` to fully reload all skills.
 
 ## Updating a Skill
 
@@ -226,16 +210,15 @@ To modify an existing skill:
 1. Read the current SKILL.md: `Read <working-directory>/.claude/skills/<skill-name>/SKILL.md`
 2. Edit the file with your changes
 3. Validate: `python -m scripts.quick_validate <working-directory>/.claude/skills/<skill-name>`
-4. Reload: Call `restart_session` MCP tool
+4. Verify: Invoke `/<skill-name>` to confirm the updated skill works
 
 ## Deleting a Skill
 
 To remove a skill:
 
 1. Delete the skill directory: `rm -rf <working-directory>/.claude/skills/<skill-name>`
-2. Reload: Call `restart_session` MCP tool
 
-The skill will no longer appear as a slash command after reload.
+The skill will no longer appear as a slash command after deletion.
 
 ## Tips
 
