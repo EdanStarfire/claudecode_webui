@@ -1,13 +1,11 @@
 ---
 name: skill-maker
-description: Create new skills and validate skill format. Use when users or minions want to create a custom skill from scratch, edit an existing skill, or validate a skill's SKILL.md format. Trigger this skill whenever someone mentions creating a skill, writing a SKILL.md, automating a workflow as a skill, or optimizing a process into a reusable skill.
+description: Create new skills. Use when users or minions want to create a custom skill from scratch, edit an existing skill, or work with SKILL.md files. Trigger this skill whenever someone mentions creating a skill, writing a SKILL.md, automating a workflow as a skill, or optimizing a process into a reusable skill.
 allowed-tools:
   - Read
   - Write
   - Bash(mkdir:*)
   - Bash(ls:*)
-  - Bash(python:*)
-  - Bash(cat:*)
 ---
 
 # Skill Maker
@@ -25,8 +23,7 @@ A skill is a reusable set of instructions stored as a `SKILL.md` file in a skill
 1. **Capture Intent** — Understand what the skill should do
 2. **Research** — Check existing patterns and edge cases
 3. **Write SKILL.md** — Create the skill file with proper format
-4. **Validate** — Run the validator to check format
-5. **Verify** — Invoke the skill to confirm it works
+4. **Verify** — Invoke the skill to confirm it works
 
 ## Step 1: Capture Intent
 
@@ -56,9 +53,7 @@ Create skills inside your working directory (use `pwd` to confirm your working d
 
 ```
 <working-directory>/.claude/skills/<skill-name>/
-├── SKILL.md          # Required: The skill definition
-└── scripts/          # Optional: Helper scripts
-    └── *.py          # Validation, generation, etc.
+└── SKILL.md          # Required: The skill definition
 ```
 
 **WARNING**: Do NOT create skills in `~/.claude/skills/` — that path is reserved for system-managed global skills. Always use your working directory's `.claude/skills/` path.
@@ -172,29 +167,7 @@ If your skill needs reference data (templates, schemas, examples), place them al
 
 Reference them in SKILL.md with relative paths from the skill directory.
 
-## Step 4: Validate
-
-After creating the SKILL.md, validate its format using the validation script:
-
-```bash
-python -m scripts.quick_validate .claude/skills/<skill-name>
-```
-
-Run this from the skill-maker scripts directory:
-
-```bash
-python -m scripts.quick_validate <absolute-path-to-skill-dir>
-```
-
-The script checks:
-- SKILL.md exists and is non-empty
-- Frontmatter has opening and closing `---` delimiters
-- Required `name` and `description` fields are present and non-empty
-- Warns if `allowed-tools` is missing (recommended but optional)
-
-Fix any errors before proceeding.
-
-## Step 5: Verify
+## Step 4: Verify
 
 Skills are **hot-reloaded** by Claude Code — they become available immediately after writing the file to disk. No restart is required.
 
@@ -209,8 +182,7 @@ To modify an existing skill:
 
 1. Read the current SKILL.md: `Read <working-directory>/.claude/skills/<skill-name>/SKILL.md`
 2. Edit the file with your changes
-3. Validate: `python -m scripts.quick_validate <working-directory>/.claude/skills/<skill-name>`
-4. Verify: Invoke `/<skill-name>` to confirm the updated skill works
+3. Verify: Invoke `/<skill-name>` to confirm the updated skill works
 
 ## Deleting a Skill
 

@@ -12,5 +12,4 @@ This skill is adapted from the **skill-creator** skill by Anthropic.
 - Trimmed to creation, validation, update, and delete guidance only
 - Removed eval/benchmark/iteration/blind-comparison/packaging/description-optimization infrastructure
 - Removed agents/, eval-viewer/, assets/, claude.ai/cowork sections
-- Removed PyYAML dependency from validation scripts (replaced with string-based frontmatter parsing)
-- Added `restart_session` fallback guidance for troubleshooting skill reload issues
+- Removed validation scripts (SDK hot-reloads skills and reports errors on invocation)
