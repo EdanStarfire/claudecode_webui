@@ -1364,17 +1364,14 @@ button:focus {
     overflow-x: auto;
 }
 
-/* SVG diagram view */
+/* SVG diagram view — overflow hidden prevents flash before JS scaling */
 .mermaid-diagram {
     display: flex;
     justify-content: center;
     overflow: hidden;
-    max-width: 100%;
-    min-width: 0;
 }
 
 .mermaid-diagram svg {
-    max-width: 100%;
     height: auto;
 }
 

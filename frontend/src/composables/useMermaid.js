@@ -36,13 +36,33 @@ async function loadMermaid() {
 function fitDiagramToContainer(diagramDiv, wrapper) {
   requestAnimationFrame(() => {
     const containerWidth = wrapper.clientWidth - 24 // account for padding
-    const contentWidth = diagramDiv.scrollWidth
-    if (contentWidth > containerWidth && containerWidth > 0) {
+    if (containerWidth <= 0) return
+
+    // Temporarily allow overflow so we can measure the true content width
+    // (overflow: hidden clips the content before getBoundingClientRect)
+    diagramDiv.style.overflow = 'visible'
+    diagramDiv.style.justifyContent = 'flex-start'
+
+    const svgEl = diagramDiv.querySelector('svg')
+    if (!svgEl) {
+      diagramDiv.style.overflow = ''
+      diagramDiv.style.justifyContent = ''
+      return
+    }
+
+    // Measure the actual rendered width of the SVG content
+    const contentRect = svgEl.getBoundingClientRect()
+    const contentWidth = contentRect.width
+
+    if (contentWidth > containerWidth) {
       const scale = containerWidth / contentWidth
       diagramDiv.style.transformOrigin = 'top left'
       diagramDiv.style.transform = `scale(${scale})`
-      diagramDiv.style.height = `${diagramDiv.scrollHeight * scale}px`
+      diagramDiv.style.height = `${contentRect.height * scale}px`
     }
+
+    diagramDiv.style.overflow = 'hidden'
+    diagramDiv.style.justifyContent = ''
   })
 }
 
