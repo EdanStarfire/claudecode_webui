@@ -38,31 +38,44 @@ function fitDiagramToContainer(diagramDiv, wrapper) {
     const containerWidth = wrapper.clientWidth - 24 // account for padding
     if (containerWidth <= 0) return
 
-    // Temporarily allow overflow so we can measure the true content width
-    // (overflow: hidden clips the content before getBoundingClientRect)
-    diagramDiv.style.overflow = 'visible'
-    diagramDiv.style.justifyContent = 'flex-start'
-
     const svgEl = diagramDiv.querySelector('svg')
-    if (!svgEl) {
-      diagramDiv.style.overflow = ''
-      diagramDiv.style.justifyContent = ''
-      return
+    if (!svgEl) return
+
+    // Temporarily inflate SVG to a large width so foreignObject content
+    // (e.g., ZenUML divs with fixed pixel positions) can size naturally
+    // without being clipped by the SVG viewport.
+    const origWidth = svgEl.style.width
+    const origMinWidth = svgEl.style.minWidth
+    const origOverflow = diagramDiv.style.overflow
+    svgEl.style.width = '9999px'
+    svgEl.style.minWidth = '9999px'
+    diagramDiv.style.overflow = 'visible'
+
+    // Force layout recalc then measure true content width
+    svgEl.getBoundingClientRect()
+    // Find the actual content boundary — check foreignObject children first
+    // (ZenUML), then fall back to SVG rect
+    const foreignObj = svgEl.querySelector('foreignObject')
+    let contentWidth
+    if (foreignObj && foreignObj.firstElementChild) {
+      contentWidth = foreignObj.firstElementChild.scrollWidth
+    } else {
+      contentWidth = svgEl.getBoundingClientRect().width
     }
 
-    // Measure the actual rendered width of the SVG content
-    const contentRect = svgEl.getBoundingClientRect()
-    const contentWidth = contentRect.width
+    // Restore original styles
+    svgEl.style.width = origWidth
+    svgEl.style.minWidth = origMinWidth
+    diagramDiv.style.overflow = origOverflow
 
     if (contentWidth > containerWidth) {
       const scale = containerWidth / contentWidth
       diagramDiv.style.transformOrigin = 'top left'
       diagramDiv.style.transform = `scale(${scale})`
-      diagramDiv.style.height = `${contentRect.height * scale}px`
+      // Measure height after restoring width for accurate value
+      const heightRect = diagramDiv.getBoundingClientRect()
+      diagramDiv.style.height = `${heightRect.height * scale}px`
     }
-
-    diagramDiv.style.overflow = 'hidden'
-    diagramDiv.style.justifyContent = ''
   })
 }
 
