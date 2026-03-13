@@ -866,6 +866,7 @@ class SessionCoordinator:
                     docker_extra_mounts=session_info.docker_extra_mounts,
                     workspace=session_info.working_directory,
                     session_data_dir=docker_data_dir,
+                    docker_home_directory=session_info.docker_home_directory,
                 )
                 coord_logger.info(
                     f"Docker mode enabled for session {session_id}: "

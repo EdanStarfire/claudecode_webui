@@ -458,6 +458,16 @@
               @input="$emit('update:form-data', 'docker_extra_mounts', $event.target.value)"
               :disabled="isEditSession" rows="2" placeholder="/host/path:/container/path:ro (one per line)" />
           </div>
+          <div class="mb-2">
+            <label class="form-label">Home Directory</label>
+            <input type="text" class="form-control form-control-sm"
+              :value="formData.docker_home_directory"
+              @input="$emit('update:form-data', 'docker_home_directory', $event.target.value)"
+              :disabled="isEditSession" placeholder="/home/claude" />
+            <small class="form-text text-muted d-block">
+              Home directory inside the container (for custom images)
+            </small>
+          </div>
         </div>
 
         <!-- Sandbox Enable -->

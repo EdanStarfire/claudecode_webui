@@ -55,6 +55,7 @@ class SessionConfig:
     docker_enabled: bool = False
     docker_image: str | None = None
     docker_extra_mounts: list[str] | None = None
+    docker_home_directory: str | None = None
 
     # Features
     history_distillation_enabled: bool = True
@@ -83,6 +84,7 @@ class SessionConfigBase(BaseModel):
     docker_enabled: bool = False
     docker_image: str | None = None
     docker_extra_mounts: list[str] | None = None
+    docker_home_directory: str | None = None
     thinking_mode: str | None = None
     thinking_budget_tokens: int | None = None
     effort: str | None = None
@@ -107,6 +109,7 @@ class SessionConfigBase(BaseModel):
             "docker_enabled": self.docker_enabled,
             "docker_image": self.docker_image,
             "docker_extra_mounts": self.docker_extra_mounts,
+            "docker_home_directory": self.docker_home_directory,
             "thinking_mode": self.thinking_mode,
             "thinking_budget_tokens": self.thinking_budget_tokens,
             "effort": self.effort,
