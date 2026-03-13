@@ -140,6 +140,9 @@ class SessionInfo:
     # Auto-memory mode (issue #709, replaces #708 disable_auto_memory boolean)
     auto_memory_mode: str = "claude"  # "claude" | "session" | "disabled"
 
+    # Skill creating toggle (issue #749)
+    skill_creating_enabled: bool = False
+
     def __post_init__(self):
         if self.additional_directories is None:
             self.additional_directories = []
@@ -216,6 +219,7 @@ class SessionInfo:
         else:
             data.pop('disable_auto_memory', None)
             data.setdefault('auto_memory_mode', 'claude')
+        data.setdefault('skill_creating_enabled', False)
         return cls(**data)
 
 
@@ -380,6 +384,7 @@ class SessionManager:
             effort=config.effort,
             history_distillation_enabled=config.history_distillation_enabled,
             auto_memory_mode=config.auto_memory_mode,
+            skill_creating_enabled=config.skill_creating_enabled,
         )
 
         try:

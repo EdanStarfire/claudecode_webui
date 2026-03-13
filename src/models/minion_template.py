@@ -45,6 +45,8 @@ class MinionTemplate:
     history_distillation_enabled: bool = True
     # Auto-memory mode (issue #709, replaces #708 disable_auto_memory boolean)
     auto_memory_mode: str = "claude"  # "claude" | "session" | "disabled"
+    # Skill creating toggle (issue #749)
+    skill_creating_enabled: bool = False
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
@@ -102,6 +104,7 @@ class MinionTemplate:
         else:
             data.pop('disable_auto_memory', None)
             data.setdefault('auto_memory_mode', 'claude')
+        data.setdefault('skill_creating_enabled', False)
         # Backward-compat renames (issue #731)
         if 'default_role' in data:
             data.setdefault('role', data.pop('default_role'))

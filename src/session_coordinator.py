@@ -470,7 +470,9 @@ class SessionCoordinator:
             )
             # Issue #707: Build PreToolUse handler for internal tool access control
             permission_handler = self._build_permission_handler(
-                session_dir, config.history_distillation_enabled, config.auto_memory_mode
+                session_dir, config.history_distillation_enabled, config.auto_memory_mode,
+                skill_creating_enabled=config.skill_creating_enabled,
+                working_directory=Path(effective_working_directory),
             )
 
             sdk = self._sdk_factory(
@@ -821,10 +823,25 @@ class SessionCoordinator:
             else:
                 guidance_note = ""
 
-            if session_info.system_prompt:
-                minion_system_prompt = f"{legion_guide}{history_note}{guidance_note}\n\n---\n\n{session_info.system_prompt}"
+            # Issue #749: Skill creating context
+            if session_info.skill_creating_enabled:
+                skill_creating_note = (
+                    "\n\n## Skill Creation\n"
+                    "You can create custom skills to automate repetitive workflows. "
+                    "Use `/skill-maker` to get guided through writing a SKILL.md file. "
+                    "Skills MUST be created in your working directory at "
+                    "`<working-directory>/.claude/skills/{name}/SKILL.md` — "
+                    "NOT in `~/.claude/skills/` (that is for system-managed global skills). "
+                    "Skills are hot-reloaded and available immediately after writing. "
+                    "If a skill doesn't seem to work correctly, call `restart_session` to fully reload.\n"
+                )
             else:
-                minion_system_prompt = f"{legion_guide}{history_note}{guidance_note}"
+                skill_creating_note = ""
+
+            if session_info.system_prompt:
+                minion_system_prompt = f"{legion_guide}{history_note}{guidance_note}{skill_creating_note}\n\n---\n\n{session_info.system_prompt}"
+            else:
+                minion_system_prompt = f"{legion_guide}{history_note}{guidance_note}{skill_creating_note}"
             coord_logger.info(f"Built minion system prompt for start (guide + context): {len(minion_system_prompt)} chars")
 
             # Escape special characters in system_prompt for subprocess command-line safety
@@ -886,7 +903,9 @@ class SessionCoordinator:
 
             # Issue #707: Build PreToolUse handler for internal tool access control
             permission_handler = self._build_permission_handler(
-                session_dir, session_info.history_distillation_enabled, session_info.auto_memory_mode
+                session_dir, session_info.history_distillation_enabled, session_info.auto_memory_mode,
+                skill_creating_enabled=session_info.skill_creating_enabled,
+                working_directory=Path(session_info.working_directory),
             )
 
             sdk = self._sdk_factory(
@@ -2967,7 +2986,12 @@ class SessionCoordinator:
                 await storage.append_message(message_data)
 
     def _build_permission_handler(
-        self, session_dir: Path, knowledge_mgmt_enabled: bool, auto_memory_mode: str = "claude"
+        self,
+        session_dir: Path,
+        knowledge_mgmt_enabled: bool,
+        auto_memory_mode: str = "claude",
+        skill_creating_enabled: bool = False,
+        working_directory: Path | None = None,
     ) -> InternalPermissionHandler:
         """Build internal permission handler with consistent path configuration (issue #707)."""
         memory_dir = session_dir / "memory" if auto_memory_mode == "session" else None
@@ -2976,6 +3000,8 @@ class SessionCoordinator:
             plans_dir=Path.home() / ".cc_webui" / "plans",
             knowledge_mgmt_enabled=knowledge_mgmt_enabled,
             memory_dir=memory_dir,
+            skill_creating_enabled=skill_creating_enabled,
+            working_directory=working_directory,
         )
 
     def _create_message_callback(self, session_id: str) -> Callable:

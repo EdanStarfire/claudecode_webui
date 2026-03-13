@@ -477,6 +477,11 @@ const CONFIG_FIELDS = {
     change: 'restart',
     contexts: ['session', 'template', 'ephemeral', 'update'],
   },
+  skill_creating_enabled: {
+    default: false,
+    change: 'restart',
+    contexts: ['session', 'template', 'ephemeral', 'update'],
+  },
 }
 
 // Derive fieldStates and templateOriginalValues from schema

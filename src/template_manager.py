@@ -199,6 +199,7 @@ class TemplateManager:
             effort=config.effort,
             history_distillation_enabled=config.history_distillation_enabled,
             auto_memory_mode=config.auto_memory_mode,
+            skill_creating_enabled=config.skill_creating_enabled,
         )
 
         await self._save_template(template)
@@ -249,6 +250,7 @@ class TemplateManager:
         effort: str | None = None,
         history_distillation_enabled: bool | None = None,
         auto_memory_mode: str | None = None,
+        skill_creating_enabled: bool | None = None,
     ) -> MinionTemplate:
         """Update existing template."""
         template = self.templates.get(template_id)
@@ -326,6 +328,9 @@ class TemplateManager:
 
         if auto_memory_mode is not None:
             template.auto_memory_mode = auto_memory_mode
+
+        if skill_creating_enabled is not None:
+            template.skill_creating_enabled = skill_creating_enabled
 
         template.updated_at = datetime.now(UTC)
 

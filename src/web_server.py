@@ -202,6 +202,8 @@ class SessionUpdateRequest(BaseModel):
     history_distillation_enabled: bool | None = None
     # Auto-memory mode (issue #709)
     auto_memory_mode: str | None = None  # "claude" | "session" | "disabled"
+    # Skill creating toggle (issue #749)
+    skill_creating_enabled: bool | None = None
 
 
 class SessionReorderRequest(BaseModel):
@@ -299,6 +301,8 @@ class TemplateUpdateRequest(BaseModel):
     history_distillation_enabled: bool | None = None
     # Auto-memory mode (issue #709)
     auto_memory_mode: str | None = None  # "claude" | "session" | "disabled"
+    # Skill creating toggle (issue #749)
+    skill_creating_enabled: bool | None = None
 
 
 class UIWebSocketManager:
@@ -1319,6 +1323,9 @@ class ClaudeWebUI:
 
                 if request.auto_memory_mode is not None:
                     updates["auto_memory_mode"] = request.auto_memory_mode
+
+                if request.skill_creating_enabled is not None:
+                    updates["skill_creating_enabled"] = request.skill_creating_enabled
 
                 if not updates:
                     return {"success": True, "message": "No fields to update"}
@@ -3277,6 +3284,7 @@ class ClaudeWebUI:
                     effort=request.effort,
                     history_distillation_enabled=request.history_distillation_enabled,
                     auto_memory_mode=request.auto_memory_mode,
+                    skill_creating_enabled=request.skill_creating_enabled,
                 )
                 return template.to_dict()
             except ValueError as e:

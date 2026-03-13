@@ -1083,6 +1083,20 @@ class ClaudeSDK:
                     perm_logger.info(f"Auto-denied via suggestion: {reason}")
                     return PermissionResultDeny(message=reason)
 
+        # Issue #749: Direct rule check (no suggestions needed) for managed paths
+        if self.permission_handler:
+            result = self.permission_handler.evaluate_direct(tool_name, input_params)
+            if result is not None:
+                decision, reason = result
+                if decision == "allow":
+                    perm_logger.info(f"Auto-approved via direct rule: {reason}")
+                    if self.auto_approval_callback:
+                        self.auto_approval_callback(tool_name, input_params, reason)
+                    return PermissionResultAllow(updated_input=input_params)
+                else:
+                    perm_logger.info(f"Auto-denied via direct rule: {reason}")
+                    return PermissionResultDeny(message=reason)
+
         if self.permission_callback:
             perm_logger.debug(f"Delegating permission check for tool '{tool_name}' to external callback")
             try:

@@ -127,9 +127,13 @@ class InternalPermissionHandler:
         plans_dir: Path,
         knowledge_mgmt_enabled: bool,
         memory_dir: Path | None = None,
+        skill_creating_enabled: bool = False,
+        working_directory: Path | None = None,
     ):
+        self._skill_creating_enabled = skill_creating_enabled
         self._rules = self._build_rules(
-            session_data_dir, plans_dir, knowledge_mgmt_enabled, memory_dir
+            session_data_dir, plans_dir, knowledge_mgmt_enabled, memory_dir,
+            skill_creating_enabled, working_directory,
         )
         # Collect (prefix, reason) pairs from allow rules for addDirectories auto-approval
         self._managed_prefix_reasons: list[tuple[str, str]] = [
@@ -145,6 +149,8 @@ class InternalPermissionHandler:
         plans_dir: Path,
         knowledge_mgmt_enabled: bool,
         memory_dir: Path | None = None,
+        skill_creating_enabled: bool = False,
+        working_directory: Path | None = None,
     ) -> list[InternalRule]:
         """Build internal rule set from session configuration. Paths are resolved once here."""
         rules: list[InternalRule] = []
@@ -186,6 +192,19 @@ class InternalPermissionHandler:
                 path_prefixes=memory_prefixes,
                 decision="allow",
                 reason="Auto-approved: session memory file access",
+                enabled=True,
+            ))
+
+        # Rule: Allow reading/writing/editing skills directory (issue #749)
+        if skill_creating_enabled and working_directory:
+            skills_prefixes = _resolve_prefixes(
+                [str(working_directory / ".claude" / "skills")]
+            )
+            rules.append(InternalRule(
+                tool_names=frozenset(["Read", "Write", "Edit"]),
+                path_prefixes=skills_prefixes,
+                decision="allow",
+                reason="Auto-approved: skill creating (issue #749)",
                 enabled=True,
             ))
 
@@ -263,6 +282,54 @@ class InternalPermissionHandler:
 
         return None
 
+    def evaluate_direct(
+        self,
+        tool_name: str,
+        tool_input: dict[str, Any] | None = None,
+    ) -> tuple[PermissionDecision, str] | None:
+        """Evaluate a tool call directly against internal rules, without suggestions.
+
+        Checks the tool name and its file_path input against path-based rules.
+        Used as a fallback when the CLI provides no suggestions but the tool
+        operates on a managed path (e.g., Write to .claude/skills/).
+
+        Also handles non-path tools like Skill that are gated on feature flags.
+
+        Returns:
+            (decision, reason) if a matching rule was found, None otherwise.
+        """
+        # Issue #749: Auto-approve Skill tool when skill creating is enabled
+        if self._skill_creating_enabled and tool_name == "Skill":
+            return ("allow", "Auto-approved: skill invocation (skill creating enabled)")
+
+        if not tool_input:
+            return None
+
+        file_path = tool_input.get("file_path")
+        if not file_path:
+            return None
+
+        # Guard dangerous Bash commands even if path matches
+        if tool_name == "Bash":
+            command = tool_input.get("command", "")
+            if _is_dangerous_bash(command):
+                return None
+
+        for rule in self._rules:
+            if not rule.enabled:
+                continue
+            if tool_name not in rule.tool_names:
+                continue
+            if not self._matches_path(file_path, rule.path_prefixes):
+                continue
+            _logger.debug(
+                "Direct match internal rule: tool=%s path=%s decision=%s reason=%s",
+                tool_name, file_path, rule.decision, rule.reason,
+            )
+            return (rule.decision, rule.reason)
+
+        return None
+
     def evaluate_suggestions(
         self,
         suggestions: list[Any],
@@ -288,6 +355,10 @@ class InternalPermissionHandler:
         Returns:
             (decision, reason) if a matching decision was found, None otherwise.
         """
+        # Issue #749: Auto-approve all Skill tool invocations when skill creating is enabled
+        if self._skill_creating_enabled and actual_tool == "Skill":
+            return ("allow", "Auto-approved: skill invocation (skill creating enabled)")
+
         for suggestion in suggestions:
             sug_type = _get_field(suggestion, "type", "type")
 
