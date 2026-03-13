@@ -861,9 +861,15 @@ class SessionCoordinator:
                 from src.docker_utils import resolve_docker_cli_path
                 # Persistent data dir for Claude session transcripts (enables --resume)
                 docker_data_dir = str(session_dir / "docker_claude_data")
+                # Issue #759: Mount session memory dir into Docker container (RW, at host path)
+                extra_mounts = list(session_info.docker_extra_mounts or [])
+                if session_info.auto_memory_mode == "session":
+                    memory_dir = session_dir / "memory"
+                    memory_dir.mkdir(exist_ok=True)
+                    extra_mounts.append(f"{memory_dir}:{memory_dir}")
                 effective_cli_path, docker_env_vars = resolve_docker_cli_path(
                     docker_image=session_info.docker_image,
-                    docker_extra_mounts=session_info.docker_extra_mounts,
+                    docker_extra_mounts=extra_mounts or None,
                     workspace=session_info.working_directory,
                     session_data_dir=docker_data_dir,
                     docker_home_directory=session_info.docker_home_directory,
