@@ -22,10 +22,12 @@ set -euo pipefail
 #   CLAUDE_DOCKER_EXTRA_MOUNTS  - Comma-separated extra -v mount specs
 #   CLAUDE_DOCKER_WORKSPACE     - Workspace directory to mount (default: $PWD)
 #   CLAUDE_DOCKER_DATA_DIR      - Host dir for persistent Claude session data (enables --resume)
+#   CLAUDE_DOCKER_HOME          - Home directory inside the container (default: /home/claude)
 
 DEFAULT_IMAGE="claude-code:local"
 IMAGE_NAME="${CLAUDE_DOCKER_IMAGE:-$DEFAULT_IMAGE}"
 CONTAINER_NAME="claude-code-$$"
+DOCKER_HOME="${CLAUDE_DOCKER_HOME:-/home/claude}"
 
 # Build default image if it doesn't exist; fail fast for custom images
 if ! docker image inspect "$IMAGE_NAME" &>/dev/null; then
@@ -79,7 +81,7 @@ if [ -n "${CLAUDE_DOCKER_DATA_DIR:-}" ]; then
     SESSION_DIRS="projects todos tasks plans debug shell-snapshots session-env downloads"
     for dir in $SESSION_DIRS; do
         mkdir -p "$CLAUDE_DOCKER_DATA_DIR/$dir"
-        DATA_DIR_FLAGS="$DATA_DIR_FLAGS -v $CLAUDE_DOCKER_DATA_DIR/$dir:/home/claude/.claude/$dir"
+        DATA_DIR_FLAGS="$DATA_DIR_FLAGS -v $CLAUDE_DOCKER_DATA_DIR/$dir:$DOCKER_HOME/.claude/$dir"
     done
 fi
 
@@ -113,8 +115,8 @@ exec docker run \
     --name "$CONTAINER_NAME" \
     -v "$WORKSPACE:$WORKSPACE" \
     -w "$WORKSPACE" \
-    -v "$HOME/.claude/.credentials.json:/home/claude/.claude/.credentials.json:ro" \
-    -v "$HOME/.claude/settings.json:/home/claude/.claude/settings.json:ro" \
+    -v "$HOME/.claude/.credentials.json:$DOCKER_HOME/.claude/.credentials.json:ro" \
+    -v "$HOME/.claude/settings.json:$DOCKER_HOME/.claude/settings.json:ro" \
     -e "CLAUDE_CODE_DISABLE_AUTO_UPDATE=1" \
     $ENV_FLAGS \
     $DATA_DIR_FLAGS \

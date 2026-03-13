@@ -467,6 +467,12 @@ const CONFIG_FIELDS = {
     toPayload: (v) => v.trim() ? v.trim().split('\n').map(m => m.trim()).filter(Boolean) : null,
     fromSource: (s) => Array.isArray(s.docker_extra_mounts) ? s.docker_extra_mounts.join('\n') : '',
   },
+  docker_home_directory: {
+    default: '',
+    change: null,
+    contexts: ['session', 'template', 'ephemeral'],
+    toPayload: (v) => v.trim() || null,
+  },
   history_distillation_enabled: {
     default: true,
     change: 'restart',
@@ -962,6 +968,7 @@ function buildTemplateFromSession() {
     docker_enabled: session.docker_enabled ?? false,
     docker_image: session.docker_image || null,
     docker_extra_mounts: parseList(session.docker_extra_mounts),
+    docker_home_directory: session.docker_home_directory || null,
     thinking_mode: session.thinking_mode || null,
     thinking_budget_tokens: session.thinking_budget_tokens || null,
     effort: session.effort || null,
@@ -1054,6 +1061,7 @@ function computeTemplateDiff() {
     { field: 'cli_path', label: 'CLI Path' },
     { field: 'docker_enabled', label: 'Docker Enabled' },
     { field: 'docker_image', label: 'Docker Image' },
+    { field: 'docker_home_directory', label: 'Docker Home Dir' },
     { field: 'thinking_mode', label: 'Thinking Mode' },
     { field: 'thinking_budget_tokens', label: 'Thinking Budget' },
     { field: 'effort', label: 'Effort' },
