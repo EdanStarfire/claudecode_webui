@@ -271,6 +271,61 @@ class TestUpdateTemplate:
 # --- Signature parity test ---
 
 
+class TestCreateDefaultTemplates:
+    """Verify create_default_templates passes all JSON fields through to SessionConfig."""
+
+    @pytest.mark.asyncio
+    async def test_issue_759_default_template_preserves_all_fields(self, data_dir):
+        """Regression: create_default_templates must pass all JSON fields to SessionConfig.
+
+        Before this fix, only permission_mode and allowed_tools were forwarded;
+        fields like docker_enabled, auto_memory_mode, and skill_creating_enabled
+        were silently dropped, causing templates to revert to defaults.
+        """
+        import json
+
+        # Create a fake default_templates source directory with a rich template
+        source_dir = data_dir / "default_templates"
+        source_dir.mkdir()
+        (source_dir / "agent.json").write_text(json.dumps({
+            "name": "Agent",
+            "permission_mode": "bypassPermissions",
+            "allowed_tools": [],
+            "disallowed_tools": [],
+            "capabilities": [],
+            "docker_enabled": True,
+            "history_distillation_enabled": True,
+            "auto_memory_mode": "session",
+            "skill_creating_enabled": True,
+            "role": "Autonomous agent",
+            "description": "Test agent template",
+        }))
+        (source_dir / "agent.md").write_text("You are an agent.")
+
+        # Patch _get_default_templates_dir to use our fake dir
+        import src.template_manager as tm
+        original_fn = tm._get_default_templates_dir
+        tm._get_default_templates_dir = lambda: source_dir
+
+        try:
+            manager = TemplateManager(data_dir)
+            await manager.load_templates()
+            await manager.create_default_templates()
+
+            agent = await manager.get_template_by_name("Agent")
+            assert agent is not None, "Agent template should have been created"
+            assert agent.docker_enabled is True, "docker_enabled must be True"
+            assert agent.auto_memory_mode == "session", "auto_memory_mode must be 'session'"
+            assert agent.skill_creating_enabled is True, "skill_creating_enabled must be True"
+            assert agent.history_distillation_enabled is True
+            assert agent.permission_mode == "bypassPermissions"
+            assert agent.system_prompt == "You are an agent."
+            assert agent.role == "Autonomous agent"
+            assert agent.description == "Test agent template"
+        finally:
+            tm._get_default_templates_dir = original_fn
+
+
 class TestSignatureParity:
     """Ensure create_template and update_template accept all MinionTemplate fields.
 
