@@ -124,7 +124,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted, watch, inject } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch, inject, nextTick } from 'vue'
 import { useSessionStore } from '@/stores/session'
 import { useWebSocketStore } from '@/stores/websocket'
 import { useResourceStore } from '@/stores/resource'
@@ -316,10 +316,24 @@ watch(inputText, (text) => {
  * Insert selected slash command into input
  */
 function selectSlashCommand(command) {
-  inputText.value = `/${command} `
+  const textarea = messageTextarea.value
+  // End any active IME composition by blurring (mobile virtual keyboards
+  // use composition mode for Latin text, which blocks v-model updates)
+  textarea?.blur()
+  const fullCommand = `/${command} `
+  // Set DOM value directly to bypass Vue's composition guard
+  if (textarea) {
+    textarea.value = fullCommand
+  }
+  inputText.value = fullCommand
   showSlashDropdown.value = false
-  messageTextarea.value?.focus()
-  autoResizeTextarea()
+  nextTick(() => {
+    textarea?.focus()
+    if (textarea) {
+      textarea.selectionStart = textarea.selectionEnd = fullCommand.length
+    }
+    autoResizeTextarea()
+  })
 }
 
 /**
