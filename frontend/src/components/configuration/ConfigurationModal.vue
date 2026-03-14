@@ -343,6 +343,7 @@ const CONFIG_FIELDS = {
     change: null,
     contexts: ['session', 'template', 'ephemeral', 'update'],
     trackState: true,
+    fromSource: (s) => s.permission_mode || s.current_permission_mode || 'default',
   },
   working_directory: {
     default: '',
