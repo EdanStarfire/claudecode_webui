@@ -60,7 +60,7 @@ const uiStore = useUIStore()
 
 const messagesArea = ref(null)
 const isProgrammaticScroll = ref(false)
-const scrollRafId = ref(null)
+
 
 // TTS Read Aloud (issue #735)
 const tts = useTTSReadAloud()
@@ -365,7 +365,6 @@ async function restoreScrollPosition() {
     isProgrammaticScroll.value = true
     container.scrollTop = container.scrollHeight
     requestAnimationFrame(() => { isProgrammaticScroll.value = false })
-    uiStore.setAutoScroll(true)
   } else {
     // Restore to specific message index
     const children = Array.from(container.children)
@@ -374,7 +373,6 @@ async function restoreScrollPosition() {
       container.scrollTop = children[pos.index].offsetTop
       requestAnimationFrame(() => { isProgrammaticScroll.value = false })
     }
-    uiStore.setAutoScroll(false)
   }
 }
 
@@ -394,21 +392,9 @@ async function scrollToBottom() {
   }
 }
 
-// Scroll event handler: auto-toggle autoscroll based on user scroll position
+// Scroll event handler: programmatic scroll guard only (manual toggle controls auto-scroll)
 function onScroll() {
   if (isProgrammaticScroll.value) return
-  if (scrollRafId.value) return
-  scrollRafId.value = requestAnimationFrame(() => {
-    scrollRafId.value = null
-    if (!messagesArea.value) return
-    const { scrollTop, scrollHeight, clientHeight } = messagesArea.value
-    const isAtBottom = scrollTop + clientHeight >= scrollHeight - 10
-    if (uiStore.autoScrollEnabled && !isAtBottom) {
-      uiStore.setAutoScroll(false)
-    } else if (!uiStore.autoScrollEnabled && isAtBottom) {
-      uiStore.setAutoScroll(true)
-    }
-  })
 }
 
 // TTS: Auto-queue new assistant messages when read aloud is enabled.
@@ -478,10 +464,6 @@ onMounted(() => {
 // Unregister scroll position getter and cancel pending rAF on unmount
 onUnmounted(() => {
   sessionStore.registerScrollPositionGetter(null)
-  if (scrollRafId.value) {
-    cancelAnimationFrame(scrollRafId.value)
-    scrollRafId.value = null
-  }
 })
 
 function shouldDisplayMessage(message) {
