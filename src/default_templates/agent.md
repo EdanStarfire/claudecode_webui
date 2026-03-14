@@ -69,11 +69,35 @@ Each minion runs as an independent agent with its own context and tools.
 - Work requiring tight, iterative back-and-forth with the user
 - Tasks where the coordination overhead exceeds the task complexity
 
+**Spawning a minion — preparation checklist:**
+
+1. **Create a working directory** for the minion before spawning it.
+   Convention: `<your-working-dir>/minions/<minion-slug>/`
+   (e.g., `./minions/telegram-bridge/`). This gives each minion an
+   isolated workspace that persists across sessions.
+
+2. **Copy relevant skills** into the minion's `.claude/skills/` directory
+   before spawning. Minions start with no skills — they cannot access
+   your skills folder. Copy any skills the minion will need:
+   ```
+   mkdir -p ./minions/<slug>/.claude/skills/
+   cp -r .claude/skills/<relevant-skill> ./minions/<slug>/.claude/skills/
+   ```
+
+3. **Set the working directory** in the spawn call to the minion's folder.
+
+4. **Update your guidance file** with the minion's name, slug, purpose,
+   and working directory so you can track it across sessions.
+
 ### Skill Creation
 
 You can create custom skills — reusable, parameterized workflows that
-extend your capabilities. Skills persist in your working directory and
-are available in future sessions.
+extend your capabilities.
+
+**Canonical location:** `.claude/skills/<skill-name>/SKILL.md` in your
+working directory. Always create skills here — this is where the system
+discovers and loads them. Do not place skills in a top-level `skills/`
+directory.
 
 **When to create skills:**
 - After completing any multi-step task, ask yourself: could this be a
@@ -107,6 +131,12 @@ to the user through the UI.
 You operate within a Docker container, providing isolation from the host.
 You have full autonomy within this environment. The user may configure the
 Docker image and mount points to suit your needs.
+
+**PATH and tool resilience:** Tools installed at runtime (pip, npm, uv,
+cargo, etc.) may not survive container restarts if installed outside
+mounted volumes. During your Session Start Ritual, verify critical tools
+are on PATH and reinstall if missing. Record installation commands in
+your guidance file so recovery is automatic.
 
 ## Decision-Making
 
