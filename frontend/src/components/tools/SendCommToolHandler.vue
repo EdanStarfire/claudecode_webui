@@ -33,8 +33,10 @@
 import { computed, ref, toRef } from 'vue'
 import { renderMarkdown } from '@/composables/useMarkdown'
 import { useMermaid } from '@/composables/useMermaid'
+import { useResourceImages } from '@/composables/useResourceImages'
 import { useToolResult } from '@/composables/useToolResult'
 import { getAgentColor, slugifyAgentName } from '@/composables/useAgentColor'
+import { useSessionStore } from '@/stores/session'
 
 const props = defineProps({
   toolCall: { type: Object, required: true }
@@ -53,9 +55,15 @@ const recipientColor = computed(() => getAgentColor(slugifyAgentName(recipientNa
 // Render content as markdown
 const renderedContent = computed(() => renderMarkdown(content.value || summaryText.value))
 
+const sessionStore = useSessionStore()
+
 // Mermaid diagram rendering
 const contentRef = ref(null)
 useMermaid(contentRef)
+
+// Inline resource image click-to-open
+const currentSessionId = computed(() => sessionStore.currentSessionId)
+useResourceImages(contentRef, currentSessionId)
 
 // Result handling
 const { hasResult, isError, resultContent } = useToolResult(toRef(props, 'toolCall'))

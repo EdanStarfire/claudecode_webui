@@ -53,6 +53,7 @@ import { computed, inject, ref } from 'vue'
 import { formatTimestamp } from '@/utils/time'
 import { useMarkdown } from '@/composables/useMarkdown'
 import { useMermaid } from '@/composables/useMermaid'
+import { useResourceImages } from '@/composables/useResourceImages'
 import { getEffectiveStatusForTool } from '@/composables/useToolStatus'
 import { useMessageStore } from '@/stores/message'
 import { useSessionStore } from '@/stores/session'
@@ -109,6 +110,10 @@ const { renderedHtml: renderedContent } = useMarkdown(rawContent)
 // Mermaid diagram rendering
 const contentRef = ref(null)
 useMermaid(contentRef)
+
+// Inline resource image click-to-open
+const currentSessionId = computed(() => sessionStore.currentSessionId)
+useResourceImages(contentRef, currentSessionId)
 
 const hasThinking = computed(() => {
   return props.message.metadata?.has_thinking &&

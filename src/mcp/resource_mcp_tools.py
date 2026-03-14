@@ -136,6 +136,10 @@ Resources appear in the Task Panel where users can:
 - Click to preview or download files
 - Add resources back to the chat as context
 
+INLINE DISPLAY: For image resources, the response includes a `markdown` field with
+ready-to-use markdown. To display the image inline in your response, paste the markdown
+from the `markdown` field directly into your message text.
+
 USAGE: Provide the absolute path to a file. The backend reads it directly.
 
 Examples:
@@ -356,18 +360,34 @@ This tool is kept for backward compatibility but simply calls register_resource.
                     logger.error(f"Failed to broadcast resource_registered: {e}")
 
             type_label = "Image" if is_image else "File"
+            markdown_field = ""
+            if is_image:
+                markdown_field = (
+                    f"![{title}](/api/sessions/{session_id}/resources/{resource_id})"
+                )
+            result_text = (
+                f"{type_label} registered successfully.\n"
+                f"- ID: {resource_id}\n"
+                f"- Title: {title}\n"
+                f"- Type: {resource_format.upper()}\n"
+                f"- Size: {file_size / 1024:.1f}KB\n"
+                f"- Source: {file_path}\n"
+            )
+            if markdown_field:
+                result_text += (
+                    f"- Markdown: {markdown_field}\n\n"
+                    f"The image is now visible in the Resource Gallery. "
+                    f"To display it inline in your response, paste the markdown above "
+                    f"into your message text."
+                )
+            else:
+                result_text += (
+                    "\nThe file is now visible in the Resource Gallery."
+                )
             return {
                 "content": [{
                     "type": "text",
-                    "text": (
-                        f"{type_label} registered successfully.\n"
-                        f"- ID: {resource_id}\n"
-                        f"- Title: {title}\n"
-                        f"- Type: {resource_format.upper()}\n"
-                        f"- Size: {file_size / 1024:.1f}KB\n"
-                        f"- Source: {file_path}\n\n"
-                        f"The {type_label.lower()} is now visible in the Resource Gallery."
-                    )
+                    "text": result_text
                 }],
                 "is_error": False
             }

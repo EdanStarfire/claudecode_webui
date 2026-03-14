@@ -761,7 +761,11 @@ class ClaudeWebUI:
             """Serve the main HTML page"""
             html_file = Path(__file__).parent.parent / "frontend" / "dist" / "index.html"
             if html_file.exists():
-                return HTMLResponse(content=html_file.read_text(encoding='utf-8'), status_code=200)
+                return HTMLResponse(
+                    content=html_file.read_text(encoding='utf-8'),
+                    status_code=200,
+                    headers={"Cache-Control": "no-cache, no-store, must-revalidate"}
+                )
             return HTMLResponse(content=self._default_html(), status_code=200)
 
         @self.app.get("/health")
