@@ -823,6 +823,42 @@ class LegionMCPTools:
                 docker_image = getattr(template, 'docker_image', None)
                 docker_extra_mounts = getattr(template, 'docker_extra_mounts', None)
 
+                # Extract additional config fields from template, falling back to parent session
+                # (issue #762: ensure all SessionConfig fields propagate through spawn path)
+                thinking_mode = getattr(template, 'thinking_mode', None) or parent_session.thinking_mode
+                thinking_budget_tokens = (
+                    getattr(template, 'thinking_budget_tokens', None)
+                    or parent_session.thinking_budget_tokens
+                )
+                effort = getattr(template, 'effort', None) or parent_session.effort
+                setting_sources = (
+                    getattr(template, 'setting_sources', None) or parent_session.setting_sources
+                )
+                additional_directories = (
+                    getattr(template, 'additional_directories', None)
+                    or parent_session.additional_directories
+                )
+                sandbox_config = (
+                    getattr(template, 'sandbox_config', None) or parent_session.sandbox_config
+                )
+                docker_home_directory = (
+                    getattr(template, 'docker_home_directory', None)
+                    or parent_session.docker_home_directory
+                )
+                # Booleans: use getattr with parent fallback to avoid falsy-value bugs
+                history_distillation_enabled = getattr(
+                    template, 'history_distillation_enabled',
+                    parent_session.history_distillation_enabled,
+                )
+                auto_memory_mode = (
+                    getattr(template, 'auto_memory_mode', None)
+                    or parent_session.auto_memory_mode
+                )
+                skill_creating_enabled = getattr(
+                    template, 'skill_creating_enabled',
+                    parent_session.skill_creating_enabled,
+                )
+
             except Exception as e:
                 coord_logger.error(f"Error applying template: {e}", exc_info=True)
                 return {
@@ -842,6 +878,17 @@ class LegionMCPTools:
             docker_enabled = False
             docker_image = None
             docker_extra_mounts = None
+            # Inherit operational config from parent (issue #762)
+            thinking_mode = parent_session.thinking_mode
+            thinking_budget_tokens = parent_session.thinking_budget_tokens
+            effort = parent_session.effort
+            setting_sources = parent_session.setting_sources
+            additional_directories = parent_session.additional_directories or []
+            sandbox_config = parent_session.sandbox_config
+            docker_home_directory = parent_session.docker_home_directory
+            history_distillation_enabled = parent_session.history_distillation_enabled
+            auto_memory_mode = parent_session.auto_memory_mode
+            skill_creating_enabled = parent_session.skill_creating_enabled
 
         # Validate role is set (from parameter or template)
         if not role:
@@ -886,9 +933,19 @@ class LegionMCPTools:
                 working_directory=working_directory,
                 cli_path=cli_path,
                 sandbox_enabled=sandbox_enabled,
+                sandbox_config=sandbox_config,
                 docker_enabled=docker_enabled,
                 docker_image=docker_image,
                 docker_extra_mounts=docker_extra_mounts,
+                docker_home_directory=docker_home_directory,
+                thinking_mode=thinking_mode,
+                thinking_budget_tokens=thinking_budget_tokens,
+                effort=effort,
+                setting_sources=setting_sources,
+                additional_directories=additional_directories,
+                history_distillation_enabled=history_distillation_enabled,
+                auto_memory_mode=auto_memory_mode,
+                skill_creating_enabled=skill_creating_enabled,
             )
             spawn_result = await self.system.overseer_controller.spawn_minion(
                 parent_overseer_id=parent_overseer_id,
