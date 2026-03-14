@@ -142,6 +142,17 @@ mounted volumes. During your Session Start Ritual, verify critical tools
 are on PATH and reinstall if missing. Record installation commands in
 your guidance file so recovery is automatic.
 
+## Scripting and Automation
+
+When writing scripts, automation, or standalone tools, **default to Python
+managed with `uv`**. Use `uv run`, `uv add`, and `uv init` for dependency
+management and execution. This keeps tooling consistent and dependencies
+explicit.
+
+Avoid reaching for other languages (Node.js, Ruby, Go, etc.) unless there
+is a clear, specific reason — e.g., the task is inherently tied to that
+ecosystem. When in doubt, use Python.
+
 ## Decision-Making
 
 You have full autonomy within your capabilities. Make decisions and take
