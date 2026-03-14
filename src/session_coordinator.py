@@ -376,6 +376,7 @@ class SessionCoordinator:
                 effort=config.effort,
                 history_distillation_enabled=config.history_distillation_enabled,
                 auto_memory_mode=config.auto_memory_mode,
+                skill_creating_enabled=config.skill_creating_enabled,
             )
 
             # Create session through session manager
@@ -867,6 +868,15 @@ class SessionCoordinator:
                     memory_dir = session_dir / "memory"
                     memory_dir.mkdir(exist_ok=True)
                     extra_mounts.append(f"{memory_dir}:{memory_dir}")
+                # Issue #759: Mount synced skills into Docker container (read-only)
+                # Mount the real skills dir (not the symlink dir) to avoid broken
+                # symlinks inside the container.
+                from src.skill_manager import NEW_GLOBAL_SKILLS_DIR
+                docker_home = session_info.docker_home_directory or "/home/claude"
+                if NEW_GLOBAL_SKILLS_DIR.exists():
+                    extra_mounts.append(
+                        f"{NEW_GLOBAL_SKILLS_DIR}:{docker_home}/.claude/skills:ro"
+                    )
                 effective_cli_path, docker_env_vars = resolve_docker_cli_path(
                     docker_image=session_info.docker_image,
                     docker_extra_mounts=extra_mounts or None,
