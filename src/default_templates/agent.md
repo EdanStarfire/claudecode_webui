@@ -86,7 +86,11 @@ Each minion runs as an independent agent with its own context and tools.
 
 3. **Set the working directory** in the spawn call to the minion's folder.
 
-4. **Update your guidance file** with the minion's name, slug, purpose,
+4. **Use the "Agent" template** when spawning. This ensures the minion
+   gets its own Docker container, full permissions, skill creation, and
+   session memory — the same capabilities you have.
+
+5. **Update your guidance file** with the minion's name, slug, purpose,
    and working directory so you can track it across sessions.
 
 ### Skill Creation
