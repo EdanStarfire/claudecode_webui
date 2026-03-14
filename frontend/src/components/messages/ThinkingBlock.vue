@@ -15,7 +15,7 @@
     </div>
 
     <div v-if="isExpanded" class="thinking-content mt-2 p-3 bg-light rounded border">
-      <div class="thinking-text" v-html="renderedThinking"></div>
+      <div class="thinking-text" ref="thinkingRef" v-html="renderedThinking"></div>
     </div>
   </div>
 </template>
@@ -23,6 +23,8 @@
 <script setup>
 import { ref, computed } from 'vue'
 import { useMarkdown } from '@/composables/useMarkdown'
+import { useResourceImages } from '@/composables/useResourceImages'
+import { useSessionStore } from '@/stores/session'
 
 const props = defineProps({
   thinking: {
@@ -37,8 +39,15 @@ const contentLength = computed(() => {
   return props.thinking?.length || 0
 })
 
+const sessionStore = useSessionStore()
+
 const thinkingContent = computed(() => props.thinking || '')
 const { renderedHtml: renderedThinking } = useMarkdown(thinkingContent)
+
+// Inline resource image click-to-open
+const thinkingRef = ref(null)
+const currentSessionId = computed(() => sessionStore.currentSessionId)
+useResourceImages(thinkingRef, currentSessionId)
 
 function toggleExpanded() {
   isExpanded.value = !isExpanded.value

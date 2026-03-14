@@ -50,6 +50,7 @@ import { formatTimestamp } from '@/utils/time'
 import { getAgentColor, slugifyAgentName } from '@/composables/useAgentColor'
 import { renderMarkdown } from '@/composables/useMarkdown'
 import { useMermaid } from '@/composables/useMermaid'
+import { useResourceImages } from '@/composables/useResourceImages'
 
 const sessionStore = useSessionStore()
 const legionStore = useLegionStore()
@@ -70,6 +71,9 @@ const projectId = computed(() => sessionStore.currentSession?.project_id || null
 
 // Current session ID (used to identify outbound comms from this session/minion)
 const currentSessionId = computed(() => sessionStore.currentSessionId)
+
+// Inline resource image click-to-open
+useResourceImages(commsList, currentSessionId)
 
 // Comms involving the current session (as sender or recipient)
 const comms = computed(() => {

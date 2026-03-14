@@ -1,6 +1,7 @@
 import { computed } from 'vue'
 import DOMPurify from 'dompurify'
 import { marked } from 'marked'
+import { getAuthToken } from '@/utils/api'
 
 // Configure marked once
 marked.setOptions({
@@ -8,16 +9,20 @@ marked.setOptions({
   gfm: true
 })
 
-/**
- * Render a markdown string to sanitized HTML.
- * Shared logic extracted from 7 components.
- */
+// Append auth token to resource API image URLs so <img> tags can load them
+const RESOURCE_URL_RE = /(<img\s[^>]*src=")(\/api\/sessions\/[^/]+\/resources\/[^"?]+)(")/g
+
 export function renderMarkdown(content) {
   if (!content) return ''
   let html = marked.parse(content)
   html = html.replace(/\n</g, '<')
   html = html.replace(/\n+$/, '')
-  return DOMPurify.sanitize(html)
+  html = DOMPurify.sanitize(html)
+  const token = getAuthToken()
+  if (token) {
+    html = html.replace(RESOURCE_URL_RE, `$1$2?token=${encodeURIComponent(token)}$3`)
+  }
+  return html
 }
 
 /**

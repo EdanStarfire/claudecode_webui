@@ -1478,3 +1478,17 @@ button:focus {
     background-color: transparent;
     border: none;
 }
+
+/* ========== INLINE RESOURCE IMAGES (Issue #761) ========== */
+
+/* Images rendered inline from agent markdown (e.g. ![title](/api/sessions/.../resources/...)) */
+.msg-text img,
+.thinking-text img,
+.outbound-comm-content img,
+.comm-content img {
+    max-width: 100%;
+    height: auto;
+    border-radius: 6px;
+    margin: 8px 0;
+    cursor: pointer;
+}

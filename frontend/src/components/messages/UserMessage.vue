@@ -10,7 +10,7 @@
       :style="isComm ? { background: commColor.bg, borderColor: commColor.border, borderRightWidth: '3px', borderRightStyle: 'solid' } : {}"
     >
       <!-- Content -->
-      <div class="msg-text" v-html="renderedContent"></div>
+      <div class="msg-text" ref="contentRef" v-html="renderedContent"></div>
 
       <!-- Tool Results (if any) -->
       <div v-if="hasToolResults" class="tool-results mt-2">
@@ -39,10 +39,12 @@
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { formatTimestamp } from '@/utils/time'
 import { getAgentColor } from '@/composables/useAgentColor'
 import { useMarkdown } from '@/composables/useMarkdown'
+import { useResourceImages } from '@/composables/useResourceImages'
+import { useSessionStore } from '@/stores/session'
 
 const props = defineProps({
   message: {
@@ -59,8 +61,15 @@ const isComm = computed(() => !!props.message.metadata?.comm)
 const commColor = computed(() => isComm.value ? getAgentColor(props.message.metadata.comm.from_name) : null)
 const commSenderName = computed(() => props.message.metadata?.comm?.from_display_name || 'agent')
 
+const sessionStore = useSessionStore()
+
 const rawContent = computed(() => props.message.content || '')
 const { renderedHtml: renderedContent } = useMarkdown(rawContent)
+
+// Inline resource image click-to-open
+const contentRef = ref(null)
+const currentSessionId = computed(() => sessionStore.currentSessionId)
+useResourceImages(contentRef, currentSessionId)
 
 const hasToolResults = computed(() => {
   return props.message.metadata?.has_tool_results &&
