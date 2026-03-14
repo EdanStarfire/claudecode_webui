@@ -105,7 +105,7 @@
               class="tag tag-allowed"
             >
               {{ tool }}
-              <span class="tag-remove" @click.stop="removeTool(index)"><i class="bi bi-x"></i></span>
+              <span class="tag-remove" @click.stop="removeTool(index)">&times;</span>
             </span>
             <input
               ref="allowedToolInput"
@@ -142,7 +142,7 @@
               class="tag tag-disallowed"
             >
               {{ tool }}
-              <span class="tag-remove" @click.stop="removeDeniedTool(index)"><i class="bi bi-x"></i></span>
+              <span class="tag-remove" @click.stop="removeDeniedTool(index)">&times;</span>
             </span>
             <input
               ref="disallowedToolInput"
@@ -359,7 +359,7 @@
               class="dir-list-item"
             >
               <span class="dir-path">{{ dir }}</span>
-              <span class="dir-remove" @click="removeDirectory(index)"><i class="bi bi-x-lg"></i></span>
+              <span class="dir-remove" @click="removeDirectory(index)">&times;</span>
             </div>
           </div>
           <div class="d-flex gap-2 mt-1">
@@ -396,7 +396,7 @@
               class="tag tag-capability"
             >
               {{ cap }}
-              <span class="tag-remove" @click.stop="removeCapability(index)"><i class="bi bi-x"></i></span>
+              <span class="tag-remove" @click.stop="removeCapability(index)">&times;</span>
             </span>
             <input
               ref="capabilityInput"
