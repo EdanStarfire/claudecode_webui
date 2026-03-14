@@ -1,0 +1,13 @@
+{
+  "name": "Agent",
+  "permission_mode": "bypassPermissions",
+  "allowed_tools": [],
+  "disallowed_tools": [],
+  "role": "Autonomous agent with full tool access, skill creation, and multi-agent coordination",
+  "description": "Long-lived autonomous agent with Docker isolation, full permissions, skill creation, and multi-agent capabilities. Adapts its identity and approach based on user needs.",
+  "capabilities": [],
+  "docker_enabled": true,
+  "history_distillation_enabled": true,
+  "auto_memory_mode": "session",
+  "skill_creating_enabled": true
+}

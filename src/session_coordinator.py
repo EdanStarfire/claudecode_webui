@@ -376,6 +376,7 @@ class SessionCoordinator:
                 effort=config.effort,
                 history_distillation_enabled=config.history_distillation_enabled,
                 auto_memory_mode=config.auto_memory_mode,
+                skill_creating_enabled=config.skill_creating_enabled,
             )
 
             # Create session through session manager
@@ -861,9 +862,24 @@ class SessionCoordinator:
                 from src.docker_utils import resolve_docker_cli_path
                 # Persistent data dir for Claude session transcripts (enables --resume)
                 docker_data_dir = str(session_dir / "docker_claude_data")
+                # Issue #759: Mount session memory dir into Docker container (RW, at host path)
+                extra_mounts = list(session_info.docker_extra_mounts or [])
+                if session_info.auto_memory_mode == "session":
+                    memory_dir = session_dir / "memory"
+                    memory_dir.mkdir(exist_ok=True)
+                    extra_mounts.append(f"{memory_dir}:{memory_dir}")
+                # Issue #759: Mount synced skills into Docker container (read-only)
+                # Mount the real skills dir (not the symlink dir) to avoid broken
+                # symlinks inside the container.
+                from src.skill_manager import NEW_GLOBAL_SKILLS_DIR
+                docker_home = session_info.docker_home_directory or "/home/claude"
+                if NEW_GLOBAL_SKILLS_DIR.exists():
+                    extra_mounts.append(
+                        f"{NEW_GLOBAL_SKILLS_DIR}:{docker_home}/.claude/skills:ro"
+                    )
                 effective_cli_path, docker_env_vars = resolve_docker_cli_path(
                     docker_image=session_info.docker_image,
-                    docker_extra_mounts=session_info.docker_extra_mounts,
+                    docker_extra_mounts=extra_mounts or None,
                     workspace=session_info.working_directory,
                     session_data_dir=docker_data_dir,
                     docker_home_directory=session_info.docker_home_directory,

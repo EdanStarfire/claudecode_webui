@@ -447,6 +447,25 @@ class TemplateManager:
                 seed_config = SessionConfig(
                     permission_mode=data["permission_mode"],
                     allowed_tools=data.get("allowed_tools"),
+                    disallowed_tools=data.get("disallowed_tools"),
+                    model=data.get("model"),
+                    thinking_mode=data.get("thinking_mode"),
+                    thinking_budget_tokens=data.get("thinking_budget_tokens"),
+                    effort=data.get("effort"),
+                    cli_path=data.get("cli_path"),
+                    additional_directories=data.get("additional_directories"),
+                    override_system_prompt=data.get("override_system_prompt", False),
+                    sandbox_enabled=data.get("sandbox_enabled", False),
+                    sandbox_config=data.get("sandbox_config"),
+                    docker_enabled=data.get("docker_enabled", False),
+                    docker_image=data.get("docker_image"),
+                    docker_extra_mounts=data.get("docker_extra_mounts"),
+                    docker_home_directory=data.get("docker_home_directory"),
+                    history_distillation_enabled=data.get(
+                        "history_distillation_enabled", True
+                    ),
+                    auto_memory_mode=data.get("auto_memory_mode", "claude"),
+                    skill_creating_enabled=data.get("skill_creating_enabled", False),
                 )
                 await self.create_template(
                     name=data["name"],
@@ -454,6 +473,7 @@ class TemplateManager:
                     role=data.get("role") or data.get("default_role"),
                     system_prompt=source_prompt,
                     description=data.get("description"),
+                    capabilities=data.get("capabilities"),
                 )
                 existing_by_name[name] = await self.get_template_by_name(name)
                 created_count += 1
