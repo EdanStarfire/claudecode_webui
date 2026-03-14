@@ -780,9 +780,14 @@ class LegionMCPTools:
                 template_applied = template
 
                 # Apply template values (enforced, no overrides)
-                permission_mode = template.permission_mode
-                allowed_tools = template.allowed_tools
-                disallowed_tools = template.disallowed_tools
+                # Use getattr with parent fallback so templates missing the field
+                # don't silently collapse to None → "default" in the constructor
+                permission_mode = (
+                    getattr(template, 'permission_mode', None)
+                    or parent_session.current_permission_mode
+                )
+                allowed_tools = getattr(template, 'allowed_tools', None)
+                disallowed_tools = getattr(template, 'disallowed_tools', None)
 
                 # Use template's role if role not provided
                 if not role and template.role:
@@ -875,9 +880,9 @@ class LegionMCPTools:
             model = None
             override_system_prompt = False
             cli_path = None
-            docker_enabled = False
-            docker_image = None
-            docker_extra_mounts = None
+            docker_enabled = parent_session.docker_enabled
+            docker_image = parent_session.docker_image
+            docker_extra_mounts = parent_session.docker_extra_mounts
             # Inherit operational config from parent (issue #762)
             thinking_mode = parent_session.thinking_mode
             thinking_budget_tokens = parent_session.thinking_budget_tokens
