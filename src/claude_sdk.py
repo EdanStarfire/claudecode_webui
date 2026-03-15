@@ -1444,10 +1444,40 @@ class ClaudeSDK:
         ),
     }
 
+    # Stderr patterns that override generic exit code messages with specific diagnostics
+    _STDERR_OVERRIDES: list[tuple[str, str, str]] = [
+        (
+            r"Docker image '([^']+)' not found",
+            "Docker image not found: {match}",
+            "Build or pull the image, then restart the session.",
+        ),
+        (
+            r"Cannot connect to the Docker daemon",
+            "Docker daemon is not running",
+            "Start the Docker daemon and restart the session.",
+        ),
+        (
+            r"JSON message exceeded maximum buffer size",
+            "SDK response exceeded maximum buffer size (1MB)",
+            "A tool returned a response too large for the SDK parser. "
+            "This commonly happens with Chrome DevTools screenshots. "
+            "Try reducing the page size or using a different capture method. "
+            "Restart should recover the session.",
+        ),
+        (
+            r"permission denied.*docker\.sock",
+            "Docker socket permission denied",
+            "Ensure the user has access to /var/run/docker.sock (docker group).",
+        ),
+    ]
+
     def _parse_container_exit_code(
         self, error_msg: str, stderr_buffer: list[str]
     ) -> str | None:
         """Parse container exit codes from error messages and stderr for actionable diagnostics.
+
+        Checks stderr for specific error patterns first (e.g., "Docker image not found"),
+        then falls back to generic exit code mapping.
 
         Returns a formatted error string with diagnosis and recovery guidance,
         or None if no exit code pattern is found.
@@ -1457,7 +1487,22 @@ class ClaudeSDK:
         # Combine error message and stderr for pattern matching
         combined = error_msg + "\n" + "\n".join(stderr_buffer) if stderr_buffer else error_msg
 
-        # Look for exit code patterns from Docker/subprocess
+        # Phase 1: Check stderr for specific, actionable patterns that override exit codes
+        for pattern, diagnosis_template, recovery in self._STDERR_OVERRIDES:
+            match = re.search(pattern, combined, re.IGNORECASE)
+            if match:
+                # Format diagnosis with captured group if template uses {match}
+                if "{match}" in diagnosis_template:
+                    diagnosis = diagnosis_template.format(match=match.group(1))
+                else:
+                    diagnosis = diagnosis_template
+                parts = [diagnosis, f"Recovery: {recovery}"]
+                if stderr_buffer:
+                    recent_stderr = stderr_buffer[-5:]
+                    parts.append("Recent stderr:\n" + "\n".join(recent_stderr))
+                return "\n".join(parts)
+
+        # Phase 2: Extract exit code from error message
         exit_code = None
         patterns = [
             r"exit code[:\s]+(\d+)",
