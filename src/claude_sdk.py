@@ -857,6 +857,10 @@ class ClaudeSDK:
         if self.effort:
             options_kwargs["effort"] = self.effort
 
+        # Issue #781: Increase JSON buffer to 10MB to handle large MCP tool responses
+        # (e.g., Chrome DevTools screenshots). SDK default is 1MB which is too small.
+        options_kwargs["max_buffer_size"] = 10 * 1024 * 1024
+
         # Enable native Tasks system (Claude Code 2.1+)
         env_vars = {"CLAUDE_CODE_ENABLE_TASKS": "true"}
         # Issue #411: Enable Agent Teams when experimental flag is set
