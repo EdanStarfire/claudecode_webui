@@ -903,6 +903,16 @@ class SessionCoordinator:
                     memory_dir = session_dir / "memory"
                     memory_dir.mkdir(exist_ok=True)
                     extra_mounts.append(f"{memory_dir}:{memory_dir}")
+                # Issue #773: Mount session data dirs into Docker (read-only)
+                # These host-side dirs contain files the agent needs to Read:
+                #   resources/ - MCP-registered resources, comm file attachments
+                #   attachments/ - User-uploaded files via InputArea
+                # Mounted at the same absolute path so paths work identically.
+                for subdir in ("resources", "attachments"):
+                    host_dir = session_dir / subdir
+                    host_dir.mkdir(exist_ok=True)
+                    extra_mounts.append(f"{host_dir}:{host_dir}:ro")
+
                 # Issue #759: Mount synced skills into Docker container (read-only)
                 # Mount the real skills dir (not the symlink dir) to avoid broken
                 # symlinks inside the container.

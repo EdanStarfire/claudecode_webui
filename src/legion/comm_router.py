@@ -295,36 +295,39 @@ class CommRouter:
             formatted_message = f"**{comm_type_prefix} from {from_name}:** {header_summary}\n\n{comm.content}"
 
             # Deliver file attachments to recipient session (issue #773)
+            # Files are written to the session's resources dir on the host.
+            # For Docker sessions, this dir is mounted read-only into the
+            # container at the same absolute path (see session_coordinator.py
+            # Docker mount setup), so the path works identically in both modes.
             if comm.attachments and comm.to_minion_id:
+                from pathlib import Path
+
                 attachment_data = getattr(comm, "_attachment_data", {})
                 attachment_lines = []
+                data_dir = self.system.session_coordinator.data_dir
+                resources_dir = data_dir / "sessions" / comm.to_minion_id / "resources"
+                resources_dir.mkdir(parents=True, exist_ok=True)
+
                 for att in comm.attachments:
                     file_bytes = attachment_data.get(att["name"])
                     if not file_bytes:
                         # Fallback: try reading from source path
-                        from pathlib import Path
                         source = Path(att.get("source_path", ""))
                         if source.exists():
                             file_bytes = source.read_bytes()
                     if file_bytes:
                         try:
-                            # Write to temp file in recipient session's resource dir
-                            data_dir = self.system.session_coordinator.data_dir
-                            session_dir = data_dir / "sessions" / comm.to_minion_id / "resources"
-                            session_dir.mkdir(parents=True, exist_ok=True)
-                            tmp_path = session_dir / att["name"]
+                            dest_path = resources_dir / att["name"]
                             # Avoid name collisions
-                            if tmp_path.exists():
-                                stem = tmp_path.stem
-                                suffix = tmp_path.suffix
+                            if dest_path.exists():
                                 import uuid as _uuid
-                                tmp_path = session_dir / f"{stem}_{_uuid.uuid4().hex[:8]}{suffix}"
-                            tmp_path.write_bytes(file_bytes)
+                                dest_path = resources_dir / f"{dest_path.stem}_{_uuid.uuid4().hex[:8]}{dest_path.suffix}"
+                            dest_path.write_bytes(file_bytes)
 
-                            # Register as resource in recipient session
+                            # Register as resource in recipient session (for UI gallery)
                             resource_result = await self.system.session_coordinator.register_uploaded_resource(
                                 session_id=comm.to_minion_id,
-                                file_path=str(tmp_path),
+                                file_path=str(dest_path),
                                 title=att["name"],
                                 description=f"File attachment from {from_name}"
                             )
@@ -332,14 +335,14 @@ class CommRouter:
                             # Register for auto-approve Read
                             await self.system.session_coordinator.register_uploaded_file(
                                 session_id=comm.to_minion_id,
-                                file_path=str(tmp_path)
+                                file_path=str(dest_path)
                             )
 
                             # Update attachment metadata with resource info
                             if resource_result:
                                 att["resource_id"] = resource_result.get("resource_id")
                                 att["session_id"] = comm.to_minion_id
-                                att["stored_path"] = str(tmp_path)
+                                att["stored_path"] = str(dest_path)
 
                             # Format size for display
                             size_kb = att["size"] / 1024
@@ -349,7 +352,7 @@ class CommRouter:
                                 size_str = f"{size_kb:.1f} KB"
 
                             attachment_lines.append(
-                                f"- {att['name']} ({size_str}): {tmp_path}"
+                                f"- {att['name']} ({size_str}): {dest_path}"
                             )
                         except Exception as e:
                             legion_logger.error(f"Failed to deliver attachment {att['name']}: {e}")
