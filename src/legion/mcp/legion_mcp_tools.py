@@ -695,12 +695,11 @@ class LegionMCPTools:
             visible_to_user=True
         )
 
-        # Stash file data transiently for CommRouter (not serialized)
-        comm._attachment_data = attachment_file_data
-
-        # Route the comm
+        # Route the comm (pass file data as parameter, not stashed on Comm)
         try:
-            success = await self.system.comm_router.route_comm(comm)
+            success = await self.system.comm_router.route_comm(
+                comm, attachment_data=attachment_file_data or None
+            )
             if success:
                 return {
                     "content": [{

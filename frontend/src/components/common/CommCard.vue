@@ -46,7 +46,7 @@
         <div class="message-text" ref="contentRef" v-html="renderedContent"></div>
 
         <!-- File Attachments -->
-        <div v-if="hasAttachments" class="comm-attachments">
+        <div v-if="attachmentCount > 0" class="comm-attachments">
           <div class="comm-attachments-label text-muted">Attachments</div>
           <div class="comm-attachment-list">
             <div
@@ -78,6 +78,7 @@
 import { ref, computed } from 'vue'
 import { useMarkdown } from '@/composables/useMarkdown'
 import { useMermaid } from '@/composables/useMermaid'
+import { useResourceStore } from '@/stores/resource'
 
 const props = defineProps({
   comm: {
@@ -93,6 +94,8 @@ const props = defineProps({
     required: true
   }
 })
+
+const resourceStore = useResourceStore()
 
 // System minion ID constant (matches backend)
 const SYSTEM_MINION_ID = 'ffffffff-ffff-ffff-ffff-ffffffffffff'
@@ -155,11 +158,6 @@ const summaryOrPreview = computed(() => {
 const rawContent = computed(() => props.comm.content || '')
 const { renderedHtml: renderedContent } = useMarkdown(rawContent)
 
-// File attachments
-const hasAttachments = computed(() => {
-  return props.comm.attachments && props.comm.attachments.length > 0
-})
-
 // Attachment count for header badge
 const attachmentCount = computed(() => {
   return props.comm.attachments ? props.comm.attachments.length : 0
@@ -183,7 +181,7 @@ function formatFileSize(bytes) {
 }
 
 function getDownloadUrl(att) {
-  return `/api/sessions/${att.session_id}/resources/${att.resource_id}/download`
+  return resourceStore.getDownloadUrl(att.session_id, att.resource_id)
 }
 </script>
 

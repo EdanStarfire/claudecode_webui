@@ -13,6 +13,8 @@ Responsibilities:
 import asyncio
 import json
 import re
+import uuid
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from src.logging_config import get_logger
@@ -139,7 +141,11 @@ class CommRouter:
         """
         self._ui_notification_callback = callback
 
-    async def route_comm(self, comm: Comm) -> bool:
+    async def route_comm(
+        self,
+        comm: Comm,
+        attachment_data: dict[str, bytes] | None = None,
+    ) -> bool:
         """
         Route a Comm to its destination(s).
 
@@ -147,6 +153,7 @@ class CommRouter:
 
         Args:
             comm: Comm object to route
+            attachment_data: Optional dict mapping filename -> bytes for file attachments
 
         Returns:
             bool: True if routing succeeded (or queued during halt)
@@ -174,7 +181,7 @@ class CommRouter:
 
         # Route to destination
         if comm.to_minion_id:
-            result = await self._send_to_minion(comm)
+            result = await self._send_to_minion(comm, attachment_data=attachment_data)
             legion_logger.info(f"Comm {comm.comm_id} routed to minion {comm.to_minion_id}: {'success' if result else 'failed'}")
             return result
         elif comm.to_user:
@@ -185,13 +192,18 @@ class CommRouter:
         legion_logger.warning(f"Comm {comm.comm_id} has no valid destination")
         return False
 
-    async def _send_to_minion(self, comm: Comm) -> bool:
+    async def _send_to_minion(
+        self,
+        comm: Comm,
+        attachment_data: dict[str, bytes] | None = None,
+    ) -> bool:
         """
         Send Comm to a specific minion by injecting message into SDK session.
         Auto-starts the minion session if it's not active.
 
         Args:
             comm: Comm with to_minion_id set
+            attachment_data: Optional dict mapping filename -> bytes for file attachments
 
         Returns:
             bool: True if sent successfully
@@ -301,9 +313,7 @@ class CommRouter:
             # should be consistent. For Docker sessions, attachments/ is
             # mounted read-only at its host path (see session_coordinator.py).
             if comm.attachments and comm.to_minion_id:
-                from pathlib import Path
-
-                attachment_data = getattr(comm, "_attachment_data", {})
+                attachment_data = attachment_data or {}
                 attachment_lines = []
                 data_dir = self.system.session_coordinator.data_dir
                 attachments_dir = data_dir / "sessions" / comm.to_minion_id / "attachments"
@@ -321,8 +331,7 @@ class CommRouter:
                             dest_path = attachments_dir / att["name"]
                             # Avoid name collisions
                             if dest_path.exists():
-                                import uuid as _uuid
-                                dest_path = attachments_dir / f"{dest_path.stem}_{_uuid.uuid4().hex[:8]}{dest_path.suffix}"
+                                dest_path = attachments_dir / f"{dest_path.stem}_{uuid.uuid4().hex[:8]}{dest_path.suffix}"
                             dest_path.write_bytes(file_bytes)
 
                             # Register as resource in recipient session (for UI gallery)
@@ -450,10 +459,7 @@ class CommRouter:
             error_message: Human-readable error description
             original_comm_id: ID of the original comm that failed
         """
-        import uuid
-
         try:
-            # Create system error comm
             error_comm = Comm(
                 comm_id=str(uuid.uuid4()),
                 from_minion_id=SYSTEM_MINION_ID,  # System-generated error
