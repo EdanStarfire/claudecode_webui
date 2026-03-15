@@ -81,6 +81,26 @@ npm run dev
 # Access dev server at http://localhost:5173
 ```
 
+### Optional: Docker Development Environment
+
+A development Docker image is available at `docker/Dockerfile.dev` for working on Claude WebUI inside Docker isolation. It includes UV, Node.js 22 LTS, and Chromium — everything needed to run the backend, frontend, and headless browser tests without installing tooling locally.
+
+```bash
+# Build the dev image
+docker build -f docker/Dockerfile.dev -t claude-code-dev:local docker/
+
+# Use it with claude-docker by setting the image
+CLAUDE_DOCKER_IMAGE=claude-code-dev:local claude-docker ...
+
+# Or configure it in your session's Docker image setting within the WebUI
+```
+
+Inside the container, dev servers work as usual:
+```bash
+uv run python main.py --host 0.0.0.0 --port 8001
+cd frontend && npm run dev -- --host   # --host required for Docker HMR
+```
+
 ### Code Quality
 
 The project uses **Ruff** for Python linting to maintain code quality:
