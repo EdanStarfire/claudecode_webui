@@ -3674,7 +3674,7 @@ class SessionCoordinator:
         file_path: str,
         title: str | None = None,
         description: str | None = None
-    ) -> None:
+    ) -> dict | None:
         """
         Register an uploaded file to the resource gallery.
 
@@ -3686,10 +3686,13 @@ class SessionCoordinator:
             file_path: Absolute path to the uploaded file
             title: Optional title for the resource (defaults to filename)
             description: Optional description
+
+        Returns:
+            Dict with resource_id and markdown URL, or None if registration failed
         """
         if not self.resource_mcp_tools:
             coord_logger.warning("Resource MCP tools not available")
-            return
+            return None
 
         # Build args matching the MCP tool interface
         args = {
@@ -3706,6 +3709,28 @@ class SessionCoordinator:
             raise ValueError(f"Failed to register resource: {error_text}")
 
         coord_logger.info(f"Registered uploaded resource to gallery for session {session_id}: {title}")
+
+        # Extract resource_id from result text and build metadata for caller
+        result_text = result.get("content", [{}])[0].get("text", "")
+        resource_id = None
+        for line in result_text.splitlines():
+            if line.startswith("- ID: "):
+                resource_id = line[len("- ID: "):].strip()
+                break
+
+        if resource_id:
+            from src.mcp.resource_mcp_tools import ResourceMCPTools
+            is_image = any(
+                file_path.lower().endswith(ext)
+                for ext in ('.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp', '.ico', '.tiff', '.tif')
+            )
+            return {
+                "resource_id": resource_id,
+                "markdown": ResourceMCPTools._get_resource_url(
+                    session_id, resource_id, title or "", is_image
+                ),
+            }
+        return None
 
     # Backward compatibility alias
     async def register_uploaded_image(
