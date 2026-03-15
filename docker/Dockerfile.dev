@@ -1,0 +1,59 @@
+# Development environment for Claude WebUI
+#
+# Extends the base claude-code image concept with development tooling:
+# UV (Python package manager), Node.js 22 LTS, and Chromium for headless testing.
+#
+# Build:
+#   docker build -f docker/Dockerfile.dev -t claude-code-dev:local docker/
+#
+# Usage with claude-docker:
+#   Set session Docker image to "claude-code-dev:local" or:
+#   CLAUDE_DOCKER_IMAGE=claude-code-dev:local claude-docker ...
+#
+# Running dev servers inside the container:
+#   Backend:  uv run python main.py --host 0.0.0.0 --port 8001
+#   Frontend: cd frontend && npm run dev -- --host
+#   (Vite needs --host for HMR to work inside Docker)
+#
+# Port forwarding example:
+#   docker run -p 8001:8001 -p 5173:5173 -v $(pwd):/workspace -w /workspace ...
+
+FROM debian:bookworm-slim
+
+# ---------- Layer 1: System packages (rarely changes) ----------
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    ca-certificates \
+    git \
+    jq \
+    gnupg \
+    build-essential \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# ---------- Layer 2: Node.js 22 LTS via nodesource (rarely changes) ----------
+RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# ---------- Layer 3: Chromium for headless browser testing (rarely changes) ----------
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    chromium \
+    chromium-driver \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# ---------- Layer 4: Non-root user ----------
+RUN useradd -m -s /bin/bash claude
+
+USER claude
+
+# ---------- Layer 5: UV Python package manager ----------
+RUN curl -fsSL https://astral.sh/uv/install.sh | bash
+
+# ---------- Layer 6: Claude Code CLI ----------
+RUN curl -fsSL https://claude.ai/install.sh | bash
+
+# ---------- Layer 7: PATH and entrypoint ----------
+ENV PATH="/home/claude/.local/bin:${PATH}"
+
+# Workspace path and working directory set at runtime via docker run -w
+ENTRYPOINT ["claude"]
