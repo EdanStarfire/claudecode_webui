@@ -551,15 +551,23 @@ async function sendMessage() {
 
   if (uploadedFiles.length > 0) {
     // Append file paths to message for Claude to read
+    // Issue #774: Include resource metadata (ID + markdown URL) when available
     const fileSection = uploadedFiles.map(f => {
       const sizeKB = (f.size_bytes / 1024).toFixed(1)
-      return `- ${f.original_name} (${sizeKB} KB): ${f.stored_path}`
+      let line = `- ${f.original_name} (${sizeKB} KB): ${f.stored_path}`
+      if (f.resource_id) {
+        line += `\n  Resource ID: ${f.resource_id}`
+      }
+      if (f.markdown) {
+        line += `\n  Markdown: \`${f.markdown}\``
+      }
+      return line
     }).join('\n')
 
     if (messageContent.trim()) {
-      messageContent = `${messageContent}\n\n---\nAttached files (use Read tool to access):\n${fileSection}`
+      messageContent = `${messageContent}\n\n---\nAttached files (use Read tool to access, or embed via markdown URL):\n${fileSection}`
     } else {
-      messageContent = `Please analyze these attached files:\n\n---\nAttached files (use Read tool to access):\n${fileSection}`
+      messageContent = `Please analyze these attached files:\n\n---\nAttached files (use Read tool to access, or embed via markdown URL):\n${fileSection}`
     }
   }
 

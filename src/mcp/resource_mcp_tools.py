@@ -11,6 +11,7 @@ Implementation uses Claude Agent SDK's @tool decorator and create_sdk_mcp_server
 Tools are exposed to agents with names like: mcp__resources__register_resource
 """
 
+import json
 import logging
 import uuid
 from pathlib import Path
@@ -107,6 +108,19 @@ class ResourceMCPTools:
         self.session_coordinator = session_coordinator
         self.broadcast_callback = broadcast_callback
 
+    @staticmethod
+    def _get_resource_url(session_id: str, resource_id: str, title: str, is_image: bool) -> str:
+        """
+        Build a markdown URL for a resource.
+
+        For images: ![{title}](/api/sessions/{sid}/resources/{rid})
+        For non-images: /api/sessions/{sid}/resources/{rid}
+        """
+        url = f"/api/sessions/{session_id}/resources/{resource_id}"
+        if is_image:
+            return f"![{title}]({url})"
+        return url
+
     def create_mcp_server_for_session(self, session_id: str):
         """
         Create session-specific MCP server with resource tools.
@@ -178,11 +192,60 @@ This tool is kept for backward compatibility but simply calls register_resource.
             """Register an image (backward compatibility wrapper)."""
             return await self._handle_register_resource(session_id, args)
 
+        @tool(
+            "list_resources",
+            """List all resources registered in the current session.
+
+Use this to discover files and images that have been uploaded or registered,
+along with their metadata and markdown URLs for inline embedding.
+
+Each resource includes:
+- resource_id: Unique identifier
+- original_name: Original filename
+- title: Display title
+- format: File format (e.g. 'png', 'py', 'json')
+- mime_type: MIME type
+- is_image: Whether the resource is an image
+- size_bytes: File size
+- markdown: Ready-to-use URL (image markdown for images, plain URL for files)
+
+Optional: Use format_filter to filter by format type (e.g. "image" for images only,
+or a specific extension like "png", "json").""",
+            {
+                "format_filter": str,  # Optional filter: "image" or specific format
+            }
+        )
+        async def list_resources_tool(args: dict[str, Any]) -> dict[str, Any]:
+            """List all session resources with metadata."""
+            return await self._handle_list_resources(session_id, args)
+
+        @tool(
+            "get_resource",
+            """Get metadata for a specific resource by ID or filename.
+
+Returns a single resource with its metadata and markdown URL for inline embedding.
+Provide either resource_id or filename (case-insensitive match on original filename).
+
+At least one of resource_id or filename must be provided.""",
+            {
+                "resource_id": str,  # Optional: exact resource ID
+                "filename": str,    # Optional: original filename (case-insensitive)
+            }
+        )
+        async def get_resource_tool(args: dict[str, Any]) -> dict[str, Any]:
+            """Get a specific resource by ID or filename."""
+            return await self._handle_get_resource(session_id, args)
+
         # Create and return MCP server with resource tools
         return create_sdk_mcp_server(
             name="resources",
             version="2.0.0",
-            tools=[register_resource_tool, register_image_tool]
+            tools=[
+                register_resource_tool,
+                register_image_tool,
+                list_resources_tool,
+                get_resource_tool,
+            ]
         )
 
     async def _handle_register_resource(
@@ -362,8 +425,8 @@ This tool is kept for backward compatibility but simply calls register_resource.
             type_label = "Image" if is_image else "File"
             markdown_field = ""
             if is_image:
-                markdown_field = (
-                    f"![{title}](/api/sessions/{session_id}/resources/{resource_id})"
+                markdown_field = self._get_resource_url(
+                    session_id, resource_id, title, is_image=True
                 )
             result_text = (
                 f"{type_label} registered successfully.\n"
@@ -407,6 +470,139 @@ This tool is kept for backward compatibility but simply calls register_resource.
                     "type": "text",
                     "text": f"Error registering resource: {str(e)}"
                 }],
+                "is_error": True
+            }
+
+    async def _handle_list_resources(
+        self,
+        session_id: str,
+        args: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Handle list_resources tool call."""
+        try:
+            storage_manager = await self._get_storage_manager(session_id)
+            if not storage_manager:
+                return {
+                    "content": [{"type": "text", "text": "Error: No storage available for this session"}],
+                    "is_error": True
+                }
+
+            resources = await storage_manager.read_resources()
+            format_filter = (args.get("format_filter") or "").strip().lower()
+
+            if format_filter:
+                if format_filter == "image":
+                    resources = [r for r in resources if r.get("is_image")]
+                else:
+                    resources = [
+                        r for r in resources
+                        if (r.get("format") or "").lower() == format_filter
+                    ]
+
+            # Augment each resource with markdown URL
+            result_items = []
+            for r in resources:
+                item = {
+                    "resource_id": r.get("resource_id"),
+                    "original_name": r.get("original_name"),
+                    "title": r.get("title"),
+                    "format": r.get("format"),
+                    "mime_type": r.get("mime_type"),
+                    "is_image": r.get("is_image", False),
+                    "size_bytes": r.get("size_bytes"),
+                    "markdown": self._get_resource_url(
+                        session_id,
+                        r.get("resource_id", ""),
+                        r.get("title", r.get("original_name", "")),
+                        r.get("is_image", False),
+                    ),
+                }
+                result_items.append(item)
+
+            result_text = json.dumps(result_items, indent=2)
+            summary = f"Found {len(result_items)} resource(s)"
+            if format_filter:
+                summary += f" matching filter '{format_filter}'"
+
+            return {
+                "content": [{"type": "text", "text": f"{summary}.\n\n{result_text}"}],
+                "is_error": False
+            }
+
+        except Exception as e:
+            logger.error(f"Error in list_resources: {e}", exc_info=True)
+            return {
+                "content": [{"type": "text", "text": f"Error listing resources: {e!s}"}],
+                "is_error": True
+            }
+
+    async def _handle_get_resource(
+        self,
+        session_id: str,
+        args: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Handle get_resource tool call."""
+        try:
+            resource_id = (args.get("resource_id") or "").strip()
+            filename = (args.get("filename") or "").strip()
+
+            if not resource_id and not filename:
+                return {
+                    "content": [{"type": "text", "text": "Error: Provide at least one of 'resource_id' or 'filename'"}],
+                    "is_error": True
+                }
+
+            storage_manager = await self._get_storage_manager(session_id)
+            if not storage_manager:
+                return {
+                    "content": [{"type": "text", "text": "Error: No storage available for this session"}],
+                    "is_error": True
+                }
+
+            resources = await storage_manager.read_resources()
+            match = None
+
+            if resource_id:
+                match = next((r for r in resources if r.get("resource_id") == resource_id), None)
+
+            if not match and filename:
+                filename_lower = filename.lower()
+                match = next(
+                    (r for r in resources if (r.get("original_name") or "").lower() == filename_lower),
+                    None,
+                )
+
+            if not match:
+                lookup = resource_id or filename
+                return {
+                    "content": [{"type": "text", "text": f"Error: No resource found matching '{lookup}'"}],
+                    "is_error": True
+                }
+
+            item = {
+                "resource_id": match.get("resource_id"),
+                "original_name": match.get("original_name"),
+                "title": match.get("title"),
+                "format": match.get("format"),
+                "mime_type": match.get("mime_type"),
+                "is_image": match.get("is_image", False),
+                "size_bytes": match.get("size_bytes"),
+                "markdown": self._get_resource_url(
+                    session_id,
+                    match.get("resource_id", ""),
+                    match.get("title", match.get("original_name", "")),
+                    match.get("is_image", False),
+                ),
+            }
+            return {
+                "content": [{"type": "text", "text": json.dumps(item, indent=2)}],
+                "is_error": False
+            }
+
+        except Exception as e:
+            logger.error(f"Error in get_resource: {e}", exc_info=True)
+            return {
+                "content": [{"type": "text", "text": f"Error getting resource: {e!s}"}],
                 "is_error": True
             }
 

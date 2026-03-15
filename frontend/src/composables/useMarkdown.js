@@ -9,8 +9,9 @@ marked.setOptions({
   gfm: true
 })
 
-// Append auth token to resource API image URLs so <img> tags can load them
-const RESOURCE_URL_RE = /(<img\s[^>]*src=")(\/api\/sessions\/[^/]+\/resources\/[^"?]+)(")/g
+// Append auth token to resource API URLs so <img> and <a> tags can access them
+const RESOURCE_IMG_RE = /(<img\s[^>]*src=")(\/api\/sessions\/[^/]+\/resources\/[^"?]+)(")/g
+const RESOURCE_LINK_RE = /(<a\s[^>]*href=")(\/api\/sessions\/[^/]+\/resources\/[^"?]+)(")/g
 
 export function renderMarkdown(content) {
   if (!content) return ''
@@ -20,7 +21,9 @@ export function renderMarkdown(content) {
   html = DOMPurify.sanitize(html)
   const token = getAuthToken()
   if (token) {
-    html = html.replace(RESOURCE_URL_RE, `$1$2?token=${encodeURIComponent(token)}$3`)
+    const suffix = `?token=${encodeURIComponent(token)}`
+    html = html.replace(RESOURCE_IMG_RE, `$1$2${suffix}$3`)
+    html = html.replace(RESOURCE_LINK_RE, `$1$2${suffix}$3`)
   }
   return html
 }

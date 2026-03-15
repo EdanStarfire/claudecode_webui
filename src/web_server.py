@@ -1494,8 +1494,9 @@ class ClaudeWebUI:
                 await self.coordinator.register_uploaded_file(session_id, file_info.stored_path)
 
                 # Issue #404: Auto-register all uploaded files to resource gallery
+                resource_meta = None
                 try:
-                    await self.coordinator.register_uploaded_resource(
+                    resource_meta = await self.coordinator.register_uploaded_resource(
                         session_id=session_id,
                         file_path=file_info.stored_path,
                         title=file_info.original_name,
@@ -1511,10 +1512,15 @@ class ClaudeWebUI:
                         f"Failed to register uploaded file to gallery: {e}"
                     )
 
-                return {
+                response = {
                     "success": True,
                     "file": file_info.to_dict()
                 }
+                # Issue #774: Include resource metadata for attachment summaries
+                if resource_meta:
+                    response["file"]["resource_id"] = resource_meta["resource_id"]
+                    response["file"]["markdown"] = resource_meta["markdown"]
+                return response
 
             except FileUploadError as e:
                 logger.warning(f"File upload validation failed: {e.message}")
