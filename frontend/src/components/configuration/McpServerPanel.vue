@@ -6,9 +6,22 @@
     <div class="mcp-section">
       <div class="mcp-section-header">System MCP Servers</div>
       <div v-if="configStore.loading" class="text-muted small ps-2 py-1">Loading...</div>
-      <div v-else-if="globalConfigs.length === 0" class="text-muted small ps-2 py-1">
+      <div v-else-if="globalConfigs.length === 0 && internalServers.length === 0" class="text-muted small ps-2 py-1">
         No global MCP servers configured. Add them in Application Settings.
       </div>
+      <!-- Internal app servers (resources, legion) -->
+      <div
+        v-for="server in internalServers"
+        :key="'int-' + server.name"
+        class="mcp-server-row d-flex align-items-center justify-content-between py-1 px-2"
+      >
+        <div class="d-flex align-items-center gap-2">
+          <span class="badge" :class="statusBadgeClass(server.status)">{{ server.status }}</span>
+          <span class="server-name small">{{ server.name }}</span>
+          <span class="text-muted small">(built-in)</span>
+        </div>
+      </div>
+      <!-- User-configured global servers -->
       <div
         v-for="cfg in globalConfigs"
         :key="cfg.id"
@@ -194,25 +207,38 @@ function toggleSystemServer(id, checked) {
   emit('update:mcp-server-ids', current)
 }
 
+// Internal app MCP servers (created by the backend, not user-configured)
+const INTERNAL_SERVER_NAMES = new Set(['resources', 'legion'])
+
+function isInternalServer(name) {
+  return INTERNAL_SERVER_NAMES.has(name)
+}
+
+// Internal servers (resources, legion) from runtime
+const internalServers = computed(() => {
+  if (!props.sessionActive) return []
+  return props.runtimeServers.filter(s => isInternalServer(s.name))
+})
+
 // Detect Claude AI servers by name pattern (e.g. "claude.ai Sentry", "claude.ai Gmail")
 function isClaudeAiServer(name) {
   const lower = name.toLowerCase()
   return lower.startsWith('claude.ai ') || lower.startsWith('claude_ai_') || lower.startsWith('claude.ai_')
 }
 
-// Claude AI servers: runtime servers matching Claude AI naming, excluding system slugs
+// Claude AI servers: runtime servers matching Claude AI naming, excluding system slugs and internal
 const claudeAiServers = computed(() => {
   if (!props.sessionActive) return []
   return props.runtimeServers.filter(s =>
-    isClaudeAiServer(s.name) && !systemSlugs.value.has(s.name)
+    isClaudeAiServer(s.name) && !systemSlugs.value.has(s.name) && !isInternalServer(s.name)
   )
 })
 
-// Local servers: everything else from runtime that isn't system or Claude AI
+// Local servers: everything else from runtime that isn't system, Claude AI, or internal
 const localServers = computed(() => {
   if (!props.sessionActive) return []
   return props.runtimeServers.filter(s =>
-    !systemSlugs.value.has(s.name) && !isClaudeAiServer(s.name)
+    !systemSlugs.value.has(s.name) && !isClaudeAiServer(s.name) && !isInternalServer(s.name)
   )
 })
 
