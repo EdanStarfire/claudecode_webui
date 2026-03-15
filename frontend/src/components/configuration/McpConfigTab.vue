@@ -84,8 +84,7 @@
           <input
             type="text"
             class="form-control form-control-sm"
-            :value="(form.args || []).join(' ')"
-            @input="form.args = $event.target.value.split(/\s+/).filter(Boolean)"
+            v-model="rawArgs"
             placeholder="e.g., -y @sentry/mcp-server"
           />
         </div>
@@ -190,6 +189,7 @@ const form = reactive({
   enabled: true,
 })
 
+const rawArgs = ref('')
 const newEnvKey = ref('')
 const newEnvVal = ref('')
 const newHeaderKey = ref('')
@@ -204,6 +204,7 @@ function resetForm() {
   form.type = 'stdio'
   form.command = ''
   form.args = []
+  rawArgs.value = ''
   form.env = {}
   form.url = ''
   form.headers = {}
@@ -227,6 +228,7 @@ function editConfig(config) {
   form.type = config.type
   form.command = config.command || ''
   form.args = [...(config.args || [])]
+  rawArgs.value = (config.args || []).join(' ')
   form.env = { ...(config.env || {}) }
   form.url = config.url || ''
   form.headers = { ...(config.headers || {}) }
@@ -275,7 +277,7 @@ async function saveForm() {
     }
     if (form.type === 'stdio') {
       data.command = form.command
-      data.args = form.args
+      data.args = rawArgs.value.split(/\s+/).filter(Boolean)
       data.env = Object.keys(form.env).length > 0 ? form.env : null
     } else {
       data.url = form.url
