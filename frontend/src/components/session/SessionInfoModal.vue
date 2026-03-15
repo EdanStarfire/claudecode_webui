@@ -67,14 +67,41 @@
             </div>
 
             <!-- MCP Servers -->
-            <div v-if="mcpServers.length > 0" class="mb-3">
+            <div class="mb-3">
               <h6 class="text-muted">MCP Servers</h6>
-              <McpServerDetail
-                v-for="server in mcpServers"
-                :key="server.name"
-                :server="server"
-                @reconnect="handleReconnect"
-              />
+              <!-- System servers (from global config) -->
+              <div v-if="systemMcpServers.length > 0">
+                <div class="mcp-category-header">System MCP Servers</div>
+                <McpServerDetail
+                  v-for="server in systemMcpServers"
+                  :key="server.name"
+                  :server="server"
+                  @reconnect="handleReconnect"
+                />
+              </div>
+              <!-- Claude AI servers -->
+              <div v-if="claudeAiMcpServers.length > 0">
+                <div class="mcp-category-header">Claude AI MCP Servers</div>
+                <McpServerDetail
+                  v-for="server in claudeAiMcpServers"
+                  :key="server.name"
+                  :server="server"
+                  @reconnect="handleReconnect"
+                />
+              </div>
+              <!-- Local servers -->
+              <div v-if="localMcpServers.length > 0">
+                <div class="mcp-category-header">Local MCP Servers</div>
+                <McpServerDetail
+                  v-for="server in localMcpServers"
+                  :key="server.name"
+                  :server="server"
+                  @reconnect="handleReconnect"
+                />
+              </div>
+              <div v-if="mcpServers.length === 0" class="text-muted small">
+                No MCP servers active.
+              </div>
             </div>
 
             <!-- Commands -->
@@ -131,12 +158,14 @@ import { useSessionStore } from '@/stores/session'
 import { useMessageStore } from '@/stores/message'
 import { useUIStore } from '@/stores/ui'
 import { useMcpStore } from '@/stores/mcp'
+import { useMcpConfigStore } from '@/stores/mcpConfig'
 import McpServerDetail from './McpServerDetail.vue'
 
 const sessionStore = useSessionStore()
 const messageStore = useMessageStore()
 const uiStore = useUIStore()
 const mcpStore = useMcpStore()
+const mcpConfigStore = useMcpConfigStore()
 
 // State
 const sessionId = ref(null)
@@ -185,6 +214,27 @@ const nonMcpTools = computed(() => {
 const mcpServers = computed(() => {
   if (!sessionId.value) return []
   return mcpStore.mcpServers(sessionId.value)
+})
+
+// Categorize MCP servers
+const systemSlugs = computed(() => {
+  return new Set(mcpConfigStore.configList().map(c => c.slug))
+})
+
+const systemMcpServers = computed(() => {
+  return mcpServers.value.filter(s => systemSlugs.value.has(s.name))
+})
+
+const claudeAiMcpServers = computed(() => {
+  return mcpServers.value.filter(s =>
+    s.name.includes('claude_ai_') && !systemSlugs.value.has(s.name)
+  )
+})
+
+const localMcpServers = computed(() => {
+  return mcpServers.value.filter(s =>
+    !systemSlugs.value.has(s.name) && !s.name.includes('claude_ai_')
+  )
 })
 
 function handleReconnect(name) {
@@ -243,6 +293,9 @@ watch(
         if (session?.state === 'active') {
           mcpStore.fetchMcpStatus(data.sessionId)
         }
+        if (mcpConfigStore.configList().length === 0) {
+          mcpConfigStore.fetchConfigs()
+        }
       }
       modalInstance.show()
     }
@@ -295,6 +348,20 @@ pre {
   background-color: #f8f9fa;
   outline: 2px solid #0d6efd;
   outline-offset: 2px;
+}
+
+.mcp-category-header {
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--bs-secondary);
+  padding: 0.25rem 0;
+  margin-top: 0.5rem;
+}
+
+.mcp-category-header:first-child {
+  margin-top: 0;
 }
 
 /* Mobile responsive */
