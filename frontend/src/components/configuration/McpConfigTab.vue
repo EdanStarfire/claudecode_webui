@@ -21,8 +21,8 @@
           <span v-if="!config.enabled" class="badge bg-warning text-dark">disabled</span>
         </div>
         <div class="d-flex gap-1">
-          <button class="btn btn-sm btn-outline-primary py-0 px-1" @click="editConfig(config)" title="Edit">&#9998;</button>
-          <button class="btn btn-sm btn-outline-danger py-0 px-1" @click="confirmDelete(config)" title="Delete">&times;</button>
+          <button class="btn btn-sm btn-outline-primary config-action-btn" @click="editConfig(config)" title="Edit">&#9998;</button>
+          <button class="btn btn-sm btn-outline-danger config-action-btn" @click="confirmDelete(config)" title="Delete">&times;</button>
         </div>
       </div>
       <div class="small text-muted mt-1">
@@ -310,5 +310,16 @@ async function doDelete() {
 
 .config-form {
   background: var(--bs-gray-100, #f8f9fa);
+}
+
+.config-action-btn {
+  width: 1.5rem;
+  height: 1.5rem;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.8rem;
+  line-height: 1;
 }
 </style>
