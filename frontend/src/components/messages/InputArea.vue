@@ -559,7 +559,7 @@ async function sendMessage() {
         line += `\n  Resource ID: ${f.resource_id}`
       }
       if (f.markdown) {
-        line += `\n  Markdown: ${f.markdown}`
+        line += `\n  Markdown: \`${f.markdown}\``
       }
       return line
     }).join('\n')
