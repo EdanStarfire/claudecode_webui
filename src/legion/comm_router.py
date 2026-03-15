@@ -292,7 +292,74 @@ class CommRouter:
             # Use summary in header if available, otherwise use truncated content
             header_summary = comm.summary if comm.summary else (comm.content[:50] + "..." if len(comm.content) > 50 else comm.content)
 
-            formatted_message = f"**{comm_type_prefix} from {from_name}:** {header_summary}\n\n{comm.content}\n\n---\nAlways send messages to {from_name} using the `send_comm` tool."
+            formatted_message = f"**{comm_type_prefix} from {from_name}:** {header_summary}\n\n{comm.content}"
+
+            # Deliver file attachments to recipient session (issue #773)
+            if comm.attachments and comm.to_minion_id:
+                attachment_data = getattr(comm, "_attachment_data", {})
+                attachment_lines = []
+                for att in comm.attachments:
+                    file_bytes = attachment_data.get(att["name"])
+                    if not file_bytes:
+                        # Fallback: try reading from source path
+                        from pathlib import Path
+                        source = Path(att.get("source_path", ""))
+                        if source.exists():
+                            file_bytes = source.read_bytes()
+                    if file_bytes:
+                        try:
+                            # Write to temp file in recipient session's resource dir
+                            data_dir = self.system.session_coordinator.data_dir
+                            session_dir = data_dir / "sessions" / comm.to_minion_id / "resources"
+                            session_dir.mkdir(parents=True, exist_ok=True)
+                            tmp_path = session_dir / att["name"]
+                            # Avoid name collisions
+                            if tmp_path.exists():
+                                stem = tmp_path.stem
+                                suffix = tmp_path.suffix
+                                import uuid as _uuid
+                                tmp_path = session_dir / f"{stem}_{_uuid.uuid4().hex[:8]}{suffix}"
+                            tmp_path.write_bytes(file_bytes)
+
+                            # Register as resource in recipient session
+                            resource_result = await self.system.session_coordinator.register_uploaded_resource(
+                                session_id=comm.to_minion_id,
+                                file_path=str(tmp_path),
+                                title=att["name"],
+                                description=f"File attachment from {from_name}"
+                            )
+
+                            # Register for auto-approve Read
+                            await self.system.session_coordinator.register_uploaded_file(
+                                session_id=comm.to_minion_id,
+                                file_path=str(tmp_path)
+                            )
+
+                            # Update attachment metadata with resource info
+                            if resource_result:
+                                att["resource_id"] = resource_result.get("resource_id")
+                                att["session_id"] = comm.to_minion_id
+                                att["stored_path"] = str(tmp_path)
+
+                            # Format size for display
+                            size_kb = att["size"] / 1024
+                            if size_kb >= 1024:
+                                size_str = f"{size_kb / 1024:.1f} MB"
+                            else:
+                                size_str = f"{size_kb:.1f} KB"
+
+                            attachment_lines.append(
+                                f"- {att['name']} ({size_str}): {tmp_path}"
+                            )
+                        except Exception as e:
+                            legion_logger.error(f"Failed to deliver attachment {att['name']}: {e}")
+                            attachment_lines.append(f"- {att['name']}: [delivery failed]")
+
+                if attachment_lines:
+                    formatted_message += "\n\n---\nAttached files (use Read tool to access):\n"
+                    formatted_message += "\n".join(attachment_lines)
+
+            formatted_message += f"\n\n---\nAlways send messages to {from_name} using the `send_comm` tool."
 
             # Build comm metadata for frontend styling
             from_name_slug = self._slugify(from_name.replace("Minion #", ""))
