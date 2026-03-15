@@ -3474,6 +3474,10 @@ class SessionCoordinator:
                 "Claude Code command failed - see details above": "Claude Code CLI failed - check error details",
                 # Issue #781: Container crash patterns (passthrough — already parsed by ClaudeSDK)
                 "Container crash detected": None,
+                "SDK response exceeded maximum buffer size": None,
+                "Docker image not found": None,
+                "Docker daemon is not running": None,
+                "Docker socket permission denied": None,
             }
 
             # Check for known patterns and provide clearer descriptions

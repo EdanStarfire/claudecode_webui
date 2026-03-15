@@ -39,7 +39,9 @@ SHM_SIZE="${CLAUDE_DOCKER_SHM_SIZE:-256m}"
 echo "[claude-docker] Container: $CONTAINER_NAME, Image: $IMAGE_NAME, PID: $$" >&2
 
 # Build default image if it doesn't exist; fail fast for custom images
-if ! timeout 30 docker image inspect "$IMAGE_NAME" &>/dev/null; then
+# Note: Do NOT wrap this with `timeout` — after a container crash, Docker may be
+# briefly busy with --rm cleanup and a timeout can cause false "not found" errors.
+if ! docker image inspect "$IMAGE_NAME" &>/dev/null; then
     if [ "$IMAGE_NAME" = "$DEFAULT_IMAGE" ]; then
         echo "Building Claude Code container image..."
         SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
