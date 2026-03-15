@@ -377,13 +377,13 @@
               class="btn btn-sm btn-outline-secondary"
               @click="$emit('browse-additional-dir')"
               title="Browse"
-            ><i class="bi bi-folder2-open"></i></button>
+            >&#x1F4C2;</button>
             <button
               type="button"
               class="btn btn-sm btn-outline-primary"
               @click="addDirectory"
               :disabled="!newDirectory.trim()"
-            ><i class="bi bi-plus"></i></button>
+            >+</button>
           </div>
         </div>
 
