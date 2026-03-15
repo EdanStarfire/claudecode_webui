@@ -80,6 +80,11 @@ class Comm:
     comm_type: CommType = CommType.SYSTEM
     interrupt_priority: InterruptPriority = InterruptPriority.NONE
 
+    # Attachments (file passing between minions)
+    attachments: list[dict[str, Any]] = field(default_factory=list)
+    # Each dict: {"name": str, "size": int, "mime_type": str,
+    #             "resource_id": str|None, "session_id": str|None}
+
     # Context
     in_reply_to: str | None = None
     related_task_id: str | None = None
@@ -123,6 +128,7 @@ class Comm:
             "content": self.content,
             "comm_type": self.comm_type.value,
             "interrupt_priority": self.interrupt_priority.value,
+            "attachments": self.attachments,
             "in_reply_to": self.in_reply_to,
             "related_task_id": self.related_task_id,
             "metadata": self.metadata,
@@ -136,6 +142,8 @@ class Comm:
         data = data.copy()
         data["comm_type"] = CommType(data["comm_type"])
         data["interrupt_priority"] = InterruptPriority(data["interrupt_priority"])
+        # Backward compat: old comms may not have attachments
+        data.setdefault("attachments", [])
 
         # Normalize timestamp to handle mixed string/float formats (backwards compatibility)
         if "timestamp" in data:

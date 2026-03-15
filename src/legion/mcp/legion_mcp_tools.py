@@ -87,13 +87,18 @@ class LegionMCPTools:
             "\nUse PIVOT when: requirements changed, need to redirect — minion receives the new direction after interruption"
             "\nUse NONE when: normal coordination, non-urgent updates, FYI messages (task completion notification)"
             "\n\n**Visibility Scope:** You can only send comms to minions in your full hierarchy chain: "
-            "all ancestors, all descendants, and siblings. To reach minions outside your group, ask your overseer to relay.",
+            "all ancestors, all descendants, and siblings. To reach minions outside your group, ask your overseer to relay."
+            "\n\n**File Attachments (optional):**"
+            "\nPass `attachments` as a list of absolute file paths to share files with the recipient. "
+            "Files are copied into the recipient's session and registered for auto-approve Read. "
+            "Max 10MB per file. Supported extensions: text, code, config, image, and data files.",
             {
                 "to_minion_name": str,       # Exact name of target minion (case-sensitive)
                 "summary": str,              # Specific one-sentence update (actionable)
                 "content": str,              # Details only if summary needs elaboration (supports markdown)
                 "comm_type": str,            # One of: task, question, report, info
-                "interrupt_priority": str    # Optional: "none", "halt", or "pivot" (default: "none")
+                "interrupt_priority": str,   # Optional: "none", "halt", or "pivot" (default: "none")
+                "attachments": str           # Optional: JSON array of absolute file paths to attach
             }
         )
         async def send_comm_tool(args: dict[str, Any]) -> dict[str, Any]:
@@ -578,6 +583,101 @@ class LegionMCPTools:
             if to_minion_session:
                 to_minion_name_captured = to_minion_session.name
 
+        # Process file attachments (optional)
+        attachment_metadata = []
+        attachment_file_data = {}  # Maps filename -> bytes for CommRouter delivery
+        raw_attachments = args.get("attachments")
+        if raw_attachments:
+            import json as _json
+            from pathlib import Path
+
+            from src.mcp.resource_mcp_tools import (
+                MAX_RESOURCE_SIZE_BYTES,
+                MIME_TYPES,
+                SUPPORTED_EXTENSIONS,
+            )
+
+            # Parse attachments - could be JSON string (from MCP tool) or list
+            if isinstance(raw_attachments, str):
+                try:
+                    file_paths = _json.loads(raw_attachments)
+                except _json.JSONDecodeError:
+                    # Single path as string
+                    file_paths = [raw_attachments]
+            elif isinstance(raw_attachments, list):
+                file_paths = raw_attachments
+            else:
+                return {
+                    "content": [{
+                        "type": "text",
+                        "text": "Error: 'attachments' must be a JSON array of file paths or a single file path string"
+                    }],
+                    "is_error": True
+                }
+
+            for fpath_str in file_paths:
+                fpath = Path(fpath_str)
+                # Validate existence
+                if not fpath.exists():
+                    return {
+                        "content": [{
+                            "type": "text",
+                            "text": f"Error: Attachment file not found: {fpath_str}"
+                        }],
+                        "is_error": True
+                    }
+                if not fpath.is_file():
+                    return {
+                        "content": [{
+                            "type": "text",
+                            "text": f"Error: Attachment path is not a file: {fpath_str}"
+                        }],
+                        "is_error": True
+                    }
+                # Validate extension
+                ext = fpath.suffix.lower()
+                if ext not in SUPPORTED_EXTENSIONS:
+                    return {
+                        "content": [{
+                            "type": "text",
+                            "text": f"Error: Unsupported file extension '{ext}' for attachment: {fpath.name}"
+                        }],
+                        "is_error": True
+                    }
+                # Validate size
+                file_size = fpath.stat().st_size
+                if file_size > MAX_RESOURCE_SIZE_BYTES:
+                    return {
+                        "content": [{
+                            "type": "text",
+                            "text": f"Error: Attachment too large ({file_size} bytes > {MAX_RESOURCE_SIZE_BYTES}): {fpath.name}"
+                        }],
+                        "is_error": True
+                    }
+                if file_size == 0:
+                    return {
+                        "content": [{
+                            "type": "text",
+                            "text": f"Error: Attachment file is empty: {fpath.name}"
+                        }],
+                        "is_error": True
+                    }
+
+                # Read file content
+                file_bytes = fpath.read_bytes()
+                mime_type = MIME_TYPES.get(ext, "application/octet-stream")
+
+                meta = {
+                    "name": fpath.name,
+                    "size": file_size,
+                    "mime_type": mime_type,
+                    "source_path": str(fpath),
+                    "resource_id": None,
+                    "session_id": None,
+                }
+                attachment_metadata.append(meta)
+                attachment_file_data[fpath.name] = file_bytes
+
         # Create Comm
         comm = Comm(
             comm_id=str(uuid.uuid4()),
@@ -591,12 +691,15 @@ class LegionMCPTools:
             content=content,
             comm_type=CommType(internal_comm_type),
             interrupt_priority=interrupt_priority,  # Use validated priority
+            attachments=attachment_metadata,
             visible_to_user=True
         )
 
-        # Route the comm
+        # Route the comm (pass file data as parameter, not stashed on Comm)
         try:
-            success = await self.system.comm_router.route_comm(comm)
+            success = await self.system.comm_router.route_comm(
+                comm, attachment_data=attachment_file_data or None
+            )
             if success:
                 return {
                     "content": [{
