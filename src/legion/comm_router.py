@@ -295,18 +295,19 @@ class CommRouter:
             formatted_message = f"**{comm_type_prefix} from {from_name}:** {header_summary}\n\n{comm.content}"
 
             # Deliver file attachments to recipient session (issue #773)
-            # Files are written to the session's resources dir on the host.
-            # For Docker sessions, this dir is mounted read-only into the
-            # container at the same absolute path (see session_coordinator.py
-            # Docker mount setup), so the path works identically in both modes.
+            # Files go to the session's attachments/ dir — same location as
+            # user uploads via InputArea. To the agent, a comm is just an
+            # enhanced user message from another agent, so the file paths
+            # should be consistent. For Docker sessions, attachments/ is
+            # mounted read-only at its host path (see session_coordinator.py).
             if comm.attachments and comm.to_minion_id:
                 from pathlib import Path
 
                 attachment_data = getattr(comm, "_attachment_data", {})
                 attachment_lines = []
                 data_dir = self.system.session_coordinator.data_dir
-                resources_dir = data_dir / "sessions" / comm.to_minion_id / "resources"
-                resources_dir.mkdir(parents=True, exist_ok=True)
+                attachments_dir = data_dir / "sessions" / comm.to_minion_id / "attachments"
+                attachments_dir.mkdir(parents=True, exist_ok=True)
 
                 for att in comm.attachments:
                     file_bytes = attachment_data.get(att["name"])
@@ -317,11 +318,11 @@ class CommRouter:
                             file_bytes = source.read_bytes()
                     if file_bytes:
                         try:
-                            dest_path = resources_dir / att["name"]
+                            dest_path = attachments_dir / att["name"]
                             # Avoid name collisions
                             if dest_path.exists():
                                 import uuid as _uuid
-                                dest_path = resources_dir / f"{dest_path.stem}_{_uuid.uuid4().hex[:8]}{dest_path.suffix}"
+                                dest_path = attachments_dir / f"{dest_path.stem}_{_uuid.uuid4().hex[:8]}{dest_path.suffix}"
                             dest_path.write_bytes(file_bytes)
 
                             # Register as resource in recipient session (for UI gallery)
