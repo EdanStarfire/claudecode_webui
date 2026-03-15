@@ -62,6 +62,10 @@ class SessionConfig:
     auto_memory_mode: str = "claude"  # "claude" | "session" | "disabled"
     skill_creating_enabled: bool = False
 
+    # MCP servers (issue #676)
+    mcp_server_ids: list[str] | None = None  # Global MCP config IDs to attach
+    enable_claudeai_mcp_servers: bool = True  # Toggle ENABLE_CLAUDEAI_MCP_SERVERS env var
+
 
 class SessionConfigBase(BaseModel):
     """Shared Pydantic base for session/minion/template request models.
@@ -91,6 +95,8 @@ class SessionConfigBase(BaseModel):
     history_distillation_enabled: bool = True
     auto_memory_mode: str = "claude"
     skill_creating_enabled: bool = False
+    mcp_server_ids: list[str] | None = None
+    enable_claudeai_mcp_servers: bool = True
 
     def to_session_config(self, **overrides) -> SessionConfig:
         """Convert to SessionConfig dataclass, with optional field overrides."""
@@ -116,6 +122,8 @@ class SessionConfigBase(BaseModel):
             "history_distillation_enabled": self.history_distillation_enabled,
             "auto_memory_mode": self.auto_memory_mode,
             "skill_creating_enabled": self.skill_creating_enabled,
+            "mcp_server_ids": self.mcp_server_ids,
+            "enable_claudeai_mcp_servers": self.enable_claudeai_mcp_servers,
         }
         data.update(overrides)
         return SessionConfig(**data)

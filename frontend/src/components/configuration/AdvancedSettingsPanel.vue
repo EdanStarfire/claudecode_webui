@@ -326,7 +326,7 @@
       <div v-show="cardStates.extra" class="card-body-inner">
         <!-- MCP Servers (edit-session, active only) -->
         <div v-if="isEditSession && isSessionActive && mcpServers.length > 0" class="mb-2">
-          <label class="form-label">MCP Servers</label>
+          <label class="form-label">Active MCP Servers</label>
           <McpServerRow
             v-for="server in mcpServers"
             :key="server.name"
@@ -334,6 +334,28 @@
             @toggle="handleMcpToggle"
             @reconnect="handleMcpReconnect"
           />
+        </div>
+
+        <!-- Global MCP Server Picker (issue #676) -->
+        <McpServerPicker
+          :modelValue="formData.mcp_server_ids || []"
+          @update:modelValue="$emit('update:form-data', 'mcp_server_ids', $event)"
+          class="mb-2"
+        />
+
+        <!-- Claude AI MCP Servers toggle (issue #676) -->
+        <div class="form-check mb-2">
+          <input
+            class="form-check-input"
+            type="checkbox"
+            id="adv-claudeai-mcp"
+            :checked="formData.enable_claudeai_mcp_servers !== false"
+            @change="$emit('update:form-data', 'enable_claudeai_mcp_servers', $event.target.checked)"
+          />
+          <label class="form-check-label" for="adv-claudeai-mcp">
+            Enable Claude AI MCP Servers
+          </label>
+          <div class="form-text">When disabled, sets <code>ENABLE_CLAUDEAI_MCP_SERVERS=false</code>. Requires restart.</div>
         </div>
 
         <!-- CLI Path -->
@@ -569,6 +591,7 @@ import { ref, reactive, computed, onMounted, watch, useTemplateRef } from 'vue'
 import { api } from '@/utils/api'
 import { useMcpStore } from '../../stores/mcp'
 import McpServerRow from './McpServerRow.vue'
+import McpServerPicker from './McpServerPicker.vue'
 
 const mcpStore = useMcpStore()
 

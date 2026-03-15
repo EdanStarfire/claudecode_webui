@@ -200,6 +200,7 @@ class TemplateManager:
             history_distillation_enabled=config.history_distillation_enabled,
             auto_memory_mode=config.auto_memory_mode,
             skill_creating_enabled=config.skill_creating_enabled,
+            mcp_server_ids=config.mcp_server_ids if config.mcp_server_ids is not None else [],
         )
 
         await self._save_template(template)
@@ -251,6 +252,7 @@ class TemplateManager:
         history_distillation_enabled: bool | None = None,
         auto_memory_mode: str | None = None,
         skill_creating_enabled: bool | None = None,
+        mcp_server_ids: list[str] | None = None,
     ) -> MinionTemplate:
         """Update existing template."""
         template = self.templates.get(template_id)
@@ -331,6 +333,9 @@ class TemplateManager:
 
         if skill_creating_enabled is not None:
             template.skill_creating_enabled = skill_creating_enabled
+
+        if mcp_server_ids is not None:
+            template.mcp_server_ids = mcp_server_ids
 
         template.updated_at = datetime.now(UTC)
 
@@ -466,6 +471,7 @@ class TemplateManager:
                     ),
                     auto_memory_mode=data.get("auto_memory_mode", "claude"),
                     skill_creating_enabled=data.get("skill_creating_enabled", False),
+                    mcp_server_ids=data.get("mcp_server_ids"),
                 )
                 await self.create_template(
                     name=data["name"],
