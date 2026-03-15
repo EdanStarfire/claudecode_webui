@@ -166,19 +166,25 @@ function toggleSystemServer(id, checked) {
   emit('update:mcp-server-ids', current)
 }
 
-// Claude AI servers: runtime servers with claude_ai_ prefix, excluding system slugs
+// Detect Claude AI servers by name pattern (e.g. "claude.ai Sentry", "claude.ai Gmail")
+function isClaudeAiServer(name) {
+  const lower = name.toLowerCase()
+  return lower.startsWith('claude.ai ') || lower.startsWith('claude_ai_') || lower.startsWith('claude.ai_')
+}
+
+// Claude AI servers: runtime servers matching Claude AI naming, excluding system slugs
 const claudeAiServers = computed(() => {
   if (!props.sessionActive) return []
   return props.runtimeServers.filter(s =>
-    s.name.includes('claude_ai_') && !systemSlugs.value.has(s.name)
+    isClaudeAiServer(s.name) && !systemSlugs.value.has(s.name)
   )
 })
 
-// Local servers: everything else from runtime that isn't system or claude_ai
+// Local servers: everything else from runtime that isn't system or Claude AI
 const localServers = computed(() => {
   if (!props.sessionActive) return []
   return props.runtimeServers.filter(s =>
-    !systemSlugs.value.has(s.name) && !s.name.includes('claude_ai_')
+    !systemSlugs.value.has(s.name) && !isClaudeAiServer(s.name)
   )
 })
 

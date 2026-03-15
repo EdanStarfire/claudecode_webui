@@ -225,15 +225,20 @@ const systemMcpServers = computed(() => {
   return mcpServers.value.filter(s => systemSlugs.value.has(s.name))
 })
 
+function isClaudeAiServer(name) {
+  const lower = name.toLowerCase()
+  return lower.startsWith('claude.ai ') || lower.startsWith('claude_ai_') || lower.startsWith('claude.ai_')
+}
+
 const claudeAiMcpServers = computed(() => {
   return mcpServers.value.filter(s =>
-    s.name.includes('claude_ai_') && !systemSlugs.value.has(s.name)
+    isClaudeAiServer(s.name) && !systemSlugs.value.has(s.name)
   )
 })
 
 const localMcpServers = computed(() => {
   return mcpServers.value.filter(s =>
-    !systemSlugs.value.has(s.name) && !s.name.includes('claude_ai_')
+    !systemSlugs.value.has(s.name) && !isClaudeAiServer(s.name)
   )
 })
 
