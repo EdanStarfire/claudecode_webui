@@ -7,7 +7,7 @@
 
     <!-- Config list -->
     <div v-if="configStore.configList().length === 0 && !showForm" class="text-center text-muted py-3">
-      <i class="bi bi-plug" style="font-size: 1.5rem;"></i>
+      <span style="font-size: 1.5rem;">&#x1F50C;</span>
       <p class="mt-2 mb-0">No MCP servers configured</p>
     </div>
 
@@ -21,12 +21,8 @@
           <span v-if="!config.enabled" class="badge bg-warning text-dark">disabled</span>
         </div>
         <div class="d-flex gap-1">
-          <button class="btn btn-sm btn-outline-primary py-0 px-1" @click="editConfig(config)" title="Edit">
-            <i class="bi bi-pencil" style="font-size: 0.75rem;"></i>
-          </button>
-          <button class="btn btn-sm btn-outline-danger py-0 px-1" @click="confirmDelete(config)" title="Delete">
-            <i class="bi bi-trash" style="font-size: 0.75rem;"></i>
-          </button>
+          <button class="btn btn-sm btn-outline-primary py-0 px-1" @click="editConfig(config)" title="Edit">&#9998;</button>
+          <button class="btn btn-sm btn-outline-danger py-0 px-1" @click="confirmDelete(config)" title="Delete">&times;</button>
         </div>
       </div>
       <div class="small text-muted mt-1">
@@ -41,7 +37,7 @@
       class="btn btn-outline-primary btn-sm mt-2"
       @click="startCreate"
     >
-      <i class="bi bi-plus"></i> Add MCP Server
+      + Add MCP Server
     </button>
 
     <!-- Create/Edit form -->
@@ -95,7 +91,7 @@
             <input type="text" class="form-control form-control-sm" v-model="newEnvKey" placeholder="KEY" style="flex: 1;" />
             <input type="text" class="form-control form-control-sm" v-model="newEnvVal" placeholder="value" style="flex: 2;" />
             <button class="btn btn-sm btn-outline-primary py-0 px-1" @click="addEnvVar" :disabled="!newEnvKey.trim()">
-              <i class="bi bi-plus"></i>
+              +
             </button>
           </div>
         </div>
@@ -124,7 +120,7 @@
             <input type="text" class="form-control form-control-sm" v-model="newHeaderKey" placeholder="Header" style="flex: 1;" />
             <input type="text" class="form-control form-control-sm" v-model="newHeaderVal" placeholder="value" style="flex: 2;" />
             <button class="btn btn-sm btn-outline-primary py-0 px-1" @click="addHeader" :disabled="!newHeaderKey.trim()">
-              <i class="bi bi-plus"></i>
+              +
             </button>
           </div>
         </div>
