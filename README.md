@@ -87,10 +87,10 @@ A development Docker image is available at `docker/Dockerfile.dev` for working o
 
 ```bash
 # Build the dev image
-docker build -f docker/Dockerfile.dev -t claude-code-dev:local docker/
+docker build -f docker/Dockerfile.dev -t claudecode-webui-dev:local docker/
 
 # Use it with claude-docker by setting the image
-CLAUDE_DOCKER_IMAGE=claude-code-dev:local claude-docker ...
+CLAUDE_DOCKER_IMAGE=claudecode-webui-dev:local claude-docker ...
 
 # Or configure it in your session's Docker image setting within the WebUI
 ```

@@ -4,11 +4,11 @@
 # UV (Python package manager), Node.js 22 LTS, and Chromium for headless testing.
 #
 # Build:
-#   docker build -f docker/Dockerfile.dev -t claude-code-dev:local docker/
+#   docker build -f docker/Dockerfile.dev -t claudecode-webui-dev:local docker/
 #
 # Usage with claude-docker:
-#   Set session Docker image to "claude-code-dev:local" or:
-#   CLAUDE_DOCKER_IMAGE=claude-code-dev:local claude-docker ...
+#   Set session Docker image to "claudecode-webui-dev:local" or:
+#   CLAUDE_DOCKER_IMAGE=claudecode-webui-dev:local claude-docker ...
 #
 # Running dev servers inside the container:
 #   Backend:  uv run python main.py --host 0.0.0.0 --port 8001
