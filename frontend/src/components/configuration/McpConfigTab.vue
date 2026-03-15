@@ -51,11 +51,26 @@
 
       <div class="mb-2">
         <label class="form-label">Type</label>
-        <select class="form-select form-select-sm" v-model="form.type">
-          <option value="stdio">stdio</option>
-          <option value="sse">SSE</option>
-          <option value="http">HTTP</option>
-        </select>
+        <div class="model-btn-group">
+          <button
+            type="button"
+            class="model-btn"
+            :class="{ active: form.type === 'stdio' }"
+            @click="form.type = 'stdio'"
+          >STDIO</button>
+          <button
+            type="button"
+            class="model-btn"
+            :class="{ active: form.type === 'sse' }"
+            @click="form.type = 'sse'"
+          >SSE</button>
+          <button
+            type="button"
+            class="model-btn"
+            :class="{ active: form.type === 'http' }"
+            @click="form.type = 'http'"
+          >HTTP</button>
+        </div>
       </div>
 
       <!-- stdio fields -->

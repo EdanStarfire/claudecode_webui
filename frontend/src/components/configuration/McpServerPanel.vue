@@ -75,15 +75,38 @@
     </div>
 
     <!-- Local MCP Servers -->
-    <div v-if="localServers.length > 0" class="mcp-section">
-      <div class="mcp-section-header">Local MCP Servers</div>
-      <McpServerRow
-        v-for="server in localServers"
-        :key="server.name"
-        :server="server"
-        @toggle="(name, enabled) => $emit('toggle', name, enabled)"
-        @reconnect="(name) => $emit('reconnect', name)"
-      />
+    <div class="mcp-section">
+      <div class="mcp-section-header d-flex align-items-center justify-content-between">
+        <span>Local MCP Servers</span>
+        <div class="form-check form-switch mb-0">
+          <input
+            class="form-check-input"
+            type="checkbox"
+            :checked="localEnabled"
+            @change="$emit('update:local-enabled', $event.target.checked)"
+          />
+        </div>
+      </div>
+      <template v-if="localEnabled">
+        <template v-if="sessionActive">
+          <div v-if="localServers.length === 0" class="text-muted small ps-2 py-1">
+            No local servers detected.
+          </div>
+          <McpServerRow
+            v-for="server in localServers"
+            :key="server.name"
+            :server="server"
+            @toggle="(name, enabled) => $emit('toggle', name, enabled)"
+            @reconnect="(name) => $emit('reconnect', name)"
+          />
+        </template>
+        <div v-else class="text-muted small ps-2 py-1">
+          Local <code>.mcp.json</code> configs will be loaded on session start.
+        </div>
+      </template>
+      <div v-else class="text-muted small ps-2 py-1">
+        Disabled. Passes <code>--strict-mcp-config</code> to ignore local configs.
+      </div>
     </div>
   </div>
 </template>
@@ -104,6 +127,10 @@ const props = defineProps({
     type: Boolean,
     default: true
   },
+  localEnabled: {
+    type: Boolean,
+    default: true
+  },
   runtimeServers: {
     type: Array,
     default: () => []
@@ -117,6 +144,7 @@ const props = defineProps({
 const emit = defineEmits([
   'update:mcp-server-ids',
   'update:claude-ai-enabled',
+  'update:local-enabled',
   'toggle',
   'reconnect'
 ])

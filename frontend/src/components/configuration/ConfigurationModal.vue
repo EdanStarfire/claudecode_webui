@@ -500,6 +500,11 @@ const CONFIG_FIELDS = {
     change: 'restart',
     contexts: ['session', 'ephemeral', 'update'],
   },
+  strict_mcp_config: {
+    default: false,
+    change: 'restart',
+    contexts: ['session', 'template', 'ephemeral', 'update'],
+  },
 }
 
 // Derive fieldStates and templateOriginalValues from schema

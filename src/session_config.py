@@ -65,6 +65,7 @@ class SessionConfig:
     # MCP servers (issue #676)
     mcp_server_ids: list[str] | None = None  # Global MCP config IDs to attach
     enable_claudeai_mcp_servers: bool = True  # Toggle ENABLE_CLAUDEAI_MCP_SERVERS env var
+    strict_mcp_config: bool = False  # Pass --strict-mcp-config to disable local .mcp.json
 
 
 class SessionConfigBase(BaseModel):
@@ -97,6 +98,7 @@ class SessionConfigBase(BaseModel):
     skill_creating_enabled: bool = False
     mcp_server_ids: list[str] | None = None
     enable_claudeai_mcp_servers: bool = True
+    strict_mcp_config: bool = False
 
     def to_session_config(self, **overrides) -> SessionConfig:
         """Convert to SessionConfig dataclass, with optional field overrides."""
@@ -124,6 +126,7 @@ class SessionConfigBase(BaseModel):
             "skill_creating_enabled": self.skill_creating_enabled,
             "mcp_server_ids": self.mcp_server_ids,
             "enable_claudeai_mcp_servers": self.enable_claudeai_mcp_servers,
+            "strict_mcp_config": self.strict_mcp_config,
         }
         data.update(overrides)
         return SessionConfig(**data)

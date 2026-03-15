@@ -147,6 +147,7 @@ class SessionInfo:
     # MCP server configuration (issue #676)
     mcp_server_ids: list[str] | None = None  # Global MCP config IDs attached to this session
     enable_claudeai_mcp_servers: bool = True  # Toggle ENABLE_CLAUDEAI_MCP_SERVERS env var
+    strict_mcp_config: bool = False  # Pass --strict-mcp-config to disable local .mcp.json
 
     def __post_init__(self):
         if self.additional_directories is None:
@@ -230,6 +231,7 @@ class SessionInfo:
         data.setdefault('skill_creating_enabled', False)
         data.setdefault('mcp_server_ids', None)
         data.setdefault('enable_claudeai_mcp_servers', True)
+        data.setdefault('strict_mcp_config', False)
         return cls(**data)
 
 
@@ -399,6 +401,7 @@ class SessionManager:
             # MCP server configuration (issue #676)
             mcp_server_ids=config.mcp_server_ids if config.mcp_server_ids is not None else [],
             enable_claudeai_mcp_servers=config.enable_claudeai_mcp_servers,
+            strict_mcp_config=config.strict_mcp_config,
         )
 
         try:

@@ -199,6 +199,7 @@ class ClaudeSDK:
         self.effort = config.effort
         self.auto_memory_mode = config.auto_memory_mode
         self.enable_claudeai_mcp_servers = config.enable_claudeai_mcp_servers
+        self.strict_mcp_config = config.strict_mcp_config
         self.permission_handler = permission_handler
         self.auto_approval_callback: Callable | None = None  # Issue #707: notifies coordinator
         self._stderr_buffer: list[str] = []
@@ -768,6 +769,10 @@ class ClaudeSDK:
                 "preset": "claude_code"
             }
             sdk_logger.info("Using DEFAULT mode - Claude Code preset only")
+
+        # Issue #676: Pass --strict-mcp-config to disable local .mcp.json configs
+        if self.strict_mcp_config:
+            extra_args["strict-mcp-config"] = True
 
         options_kwargs = {
             "cwd": str(self.working_directory),
