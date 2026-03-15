@@ -489,6 +489,22 @@ const CONFIG_FIELDS = {
     change: 'restart',
     contexts: ['session', 'template', 'ephemeral', 'update'],
   },
+  mcp_server_ids: {
+    default: [],
+    change: 'restart',
+    contexts: ['session', 'template', 'ephemeral', 'update'],
+    compare: (a, b) => JSON.stringify(a || []) === JSON.stringify(b || []),
+  },
+  enable_claudeai_mcp_servers: {
+    default: true,
+    change: 'restart',
+    contexts: ['session', 'ephemeral', 'update'],
+  },
+  strict_mcp_config: {
+    default: false,
+    change: 'restart',
+    contexts: ['session', 'template', 'ephemeral', 'update'],
+  },
 }
 
 // Derive fieldStates and templateOriginalValues from schema

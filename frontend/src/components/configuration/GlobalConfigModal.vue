@@ -50,6 +50,15 @@
                   Read Aloud
                 </button>
               </li>
+              <li class="nav-item">
+                <button
+                  class="nav-link"
+                  :class="{ active: activeTab === 'mcp' }"
+                  @click="activeTab = 'mcp'"
+                >
+                  MCP Servers
+                </button>
+              </li>
             </ul>
 
             <!-- Tab content -->
@@ -75,6 +84,9 @@
             </div>
             <div v-else-if="activeTab === 'readaloud'">
               <ReadAloudTab :config="readAloudConfig" @update:config="onReadAloudUpdate" />
+            </div>
+            <div v-else-if="activeTab === 'mcp'">
+              <McpConfigTab />
             </div>
           </div>
         </div>
@@ -106,6 +118,7 @@ import { getSettings as getNotificationSettings, updateSettings as saveNotificat
 import FeaturesTab from './FeaturesTab.vue'
 import NotificationsTab from './NotificationsTab.vue'
 import ReadAloudTab from './ReadAloudTab.vue'
+import McpConfigTab from './McpConfigTab.vue'
 import { getReadAloudSettings, updateReadAloudSettings } from '@/composables/useTTSReadAloud'
 
 const uiStore = useUIStore()

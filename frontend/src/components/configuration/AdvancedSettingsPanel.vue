@@ -20,44 +20,95 @@
       <div v-show="cardStates.tuning" class="card-body-inner">
         <div class="mb-2">
           <label class="form-label">Model</label>
-          <select
-            class="form-select form-select-sm"
-            :value="formData.model"
-            @change="$emit('update:form-data', 'model', $event.target.value)"
-          >
-            <option value="sonnet">Sonnet (Recommended)</option>
-            <option value="opus">Opus</option>
-            <option value="haiku">Haiku</option>
-            <option value="opusplan">OpusPlan</option>
-          </select>
-        </div>
-        <div class="row g-2 mb-2">
-          <div class="col-6">
-            <label class="form-label">Thinking Mode</label>
-            <select
-              class="form-select form-select-sm"
-              :value="formData.thinking_mode"
-              @change="$emit('update:form-data', 'thinking_mode', $event.target.value)"
-            >
-              <option value="">Default</option>
-              <option value="adaptive">Adaptive</option>
-              <option value="enabled">Enabled</option>
-              <option value="disabled">Disabled</option>
-            </select>
+          <div class="model-btn-group">
+            <button
+              type="button"
+              class="model-btn"
+              :class="{ active: formData.model === 'sonnet' }"
+              @click="$emit('update:form-data', 'model', 'sonnet')"
+            >Sonnet</button>
+            <button
+              type="button"
+              class="model-btn"
+              :class="{ active: formData.model === 'opus' }"
+              @click="$emit('update:form-data', 'model', 'opus')"
+            >Opus</button>
+            <button
+              type="button"
+              class="model-btn"
+              :class="{ active: formData.model === 'haiku' }"
+              @click="$emit('update:form-data', 'model', 'haiku')"
+            >Haiku</button>
+            <button
+              type="button"
+              class="model-btn"
+              :class="{ active: formData.model === 'opusplan' }"
+              @click="$emit('update:form-data', 'model', 'opusplan')"
+            >OpusPlan</button>
           </div>
-          <div class="col-6">
-            <label class="form-label">Effort</label>
-            <select
-              class="form-select form-select-sm"
-              :value="formData.effort"
-              @change="$emit('update:form-data', 'effort', $event.target.value)"
-            >
-              <option value="">Default</option>
-              <option value="low">Low</option>
-              <option value="medium">Medium</option>
-              <option value="high">High</option>
-              <option value="max">Max</option>
-            </select>
+        </div>
+        <div class="mb-2">
+          <label class="form-label">Thinking Mode</label>
+          <div class="model-btn-group">
+            <button
+              type="button"
+              class="model-btn"
+              :class="{ active: !formData.thinking_mode }"
+              @click="$emit('update:form-data', 'thinking_mode', '')"
+            >Default</button>
+            <button
+              type="button"
+              class="model-btn"
+              :class="{ active: formData.thinking_mode === 'adaptive' }"
+              @click="$emit('update:form-data', 'thinking_mode', 'adaptive')"
+            >Adaptive</button>
+            <button
+              type="button"
+              class="model-btn"
+              :class="{ active: formData.thinking_mode === 'enabled' }"
+              @click="$emit('update:form-data', 'thinking_mode', 'enabled')"
+            >Enabled</button>
+            <button
+              type="button"
+              class="model-btn"
+              :class="{ active: formData.thinking_mode === 'disabled' }"
+              @click="$emit('update:form-data', 'thinking_mode', 'disabled')"
+            >Disabled</button>
+          </div>
+        </div>
+        <div class="mb-2">
+          <label class="form-label">Effort</label>
+          <div class="model-btn-group">
+            <button
+              type="button"
+              class="model-btn"
+              :class="{ active: !formData.effort }"
+              @click="$emit('update:form-data', 'effort', '')"
+            >Default</button>
+            <button
+              type="button"
+              class="model-btn"
+              :class="{ active: formData.effort === 'low' }"
+              @click="$emit('update:form-data', 'effort', 'low')"
+            >Low</button>
+            <button
+              type="button"
+              class="model-btn"
+              :class="{ active: formData.effort === 'medium' }"
+              @click="$emit('update:form-data', 'effort', 'medium')"
+            >Med</button>
+            <button
+              type="button"
+              class="model-btn"
+              :class="{ active: formData.effort === 'high' }"
+              @click="$emit('update:form-data', 'effort', 'high')"
+            >High</button>
+            <button
+              type="button"
+              class="model-btn"
+              :class="{ active: formData.effort === 'max' }"
+              @click="$emit('update:form-data', 'effort', 'max')"
+            >Max</button>
           </div>
         </div>
         <div v-if="formData.thinking_mode === 'enabled'">
@@ -168,25 +219,25 @@
         <!-- Settings Sources (session modes only) -->
         <div v-if="isSessionMode" class="mb-2">
           <label class="form-label">Settings Sources</label>
-          <div class="d-flex gap-3">
-            <div class="form-check">
-              <input class="form-check-input" type="checkbox" id="adv-src-user"
-                :checked="settingSourcesArray.includes('user')"
-                @change="toggleSettingSource('user')" />
-              <label class="form-check-label" for="adv-src-user" style="text-transform: none; letter-spacing: normal;">User</label>
-            </div>
-            <div class="form-check">
-              <input class="form-check-input" type="checkbox" id="adv-src-project"
-                :checked="settingSourcesArray.includes('project')"
-                @change="toggleSettingSource('project')" />
-              <label class="form-check-label" for="adv-src-project" style="text-transform: none; letter-spacing: normal;">Project</label>
-            </div>
-            <div class="form-check">
-              <input class="form-check-input" type="checkbox" id="adv-src-local"
-                :checked="settingSourcesArray.includes('local')"
-                @change="toggleSettingSource('local')" />
-              <label class="form-check-label" for="adv-src-local" style="text-transform: none; letter-spacing: normal;">Local</label>
-            </div>
+          <div class="model-btn-group">
+            <button
+              type="button"
+              class="model-btn"
+              :class="{ active: settingSourcesArray.includes('user') }"
+              @click="toggleSettingSource('user')"
+            >User</button>
+            <button
+              type="button"
+              class="model-btn"
+              :class="{ active: settingSourcesArray.includes('project') }"
+              @click="toggleSettingSource('project')"
+            >Project</button>
+            <button
+              type="button"
+              class="model-btn"
+              :class="{ active: settingSourcesArray.includes('local') }"
+              @click="toggleSettingSource('local')"
+            >Local</button>
           </div>
         </div>
 
@@ -202,45 +253,31 @@
       </div>
     </div>
 
-    <!-- Card 3: System Prompt & Context (Teal) -->
-    <div class="priority-card priority-teal">
+    <!-- Card 3: MCP Servers (Purple) -->
+    <div class="priority-card priority-purple">
       <button
         class="card-header-btn"
-        :class="{ collapsed: !cardStates.prompt }"
+        :class="{ collapsed: !cardStates.mcp }"
         type="button"
-        @click="cardStates.prompt = !cardStates.prompt"
+        @click="cardStates.mcp = !cardStates.mcp"
       >
-        <span class="dot dot-teal"></span>
-        System Prompt & Context
+        <span class="dot dot-purple"></span>
+        MCP Servers
         <span class="chevron"><i class="bi bi-chevron-down"></i></span>
       </button>
-      <div v-show="cardStates.prompt" class="card-body-inner">
-        <div class="mb-2">
-          <label class="form-label">
-            System Prompt
-            <span v-if="fieldStates.system_prompt === 'autofilled'" class="field-indicator autofilled">&lt;</span>
-            <span v-if="fieldStates.system_prompt === 'modified'" class="field-indicator modified">*</span>
-          </label>
-          <textarea
-            class="form-control form-control-sm"
-            :value="formData.system_prompt"
-            @input="$emit('update:form-data', 'system_prompt', $event.target.value)"
-            rows="3"
-            :placeholder="isTemplateMode ? 'Optional default system prompt' : 'Instructions and context for the session...'"
-          ></textarea>
-        </div>
-        <div class="form-check mb-2">
-          <input
-            class="form-check-input"
-            type="checkbox"
-            id="adv-override-prompt"
-            :checked="formData.override_system_prompt"
-            @change="$emit('update:form-data', 'override_system_prompt', $event.target.checked)"
-          />
-          <label class="form-check-label" for="adv-override-prompt" style="text-transform: none; letter-spacing: normal;">
-            Override System Prompt
-          </label>
-        </div>
+      <div v-show="cardStates.mcp" class="card-body-inner">
+        <McpServerPanel
+          :mcp-server-ids="formData.mcp_server_ids || []"
+          @update:mcp-server-ids="$emit('update:form-data', 'mcp_server_ids', $event)"
+          :claude-ai-enabled="formData.enable_claudeai_mcp_servers !== false"
+          @update:claude-ai-enabled="$emit('update:form-data', 'enable_claudeai_mcp_servers', $event)"
+          :local-enabled="!formData.strict_mcp_config"
+          @update:local-enabled="$emit('update:form-data', 'strict_mcp_config', !$event)"
+          :runtime-servers="mcpServers"
+          :session-active="isEditSession && isSessionActive"
+          @toggle="handleMcpToggle"
+          @reconnect="handleMcpReconnect"
+        />
       </div>
     </div>
 
@@ -311,7 +348,49 @@
       </div>
     </div>
 
-    <!-- Card 5: Extra Options (Gray, collapsed by default) -->
+    <!-- Card 5: System Prompt (Teal) -->
+    <div class="priority-card priority-teal">
+      <button
+        class="card-header-btn"
+        :class="{ collapsed: !cardStates.prompt }"
+        type="button"
+        @click="cardStates.prompt = !cardStates.prompt"
+      >
+        <span class="dot dot-teal"></span>
+        System Prompt & Context
+        <span class="chevron"><i class="bi bi-chevron-down"></i></span>
+      </button>
+      <div v-show="cardStates.prompt" class="card-body-inner">
+        <div class="mb-2">
+          <label class="form-label">
+            System Prompt
+            <span v-if="fieldStates.system_prompt === 'autofilled'" class="field-indicator autofilled">&lt;</span>
+            <span v-if="fieldStates.system_prompt === 'modified'" class="field-indicator modified">*</span>
+          </label>
+          <textarea
+            class="form-control form-control-sm"
+            :value="formData.system_prompt"
+            @input="$emit('update:form-data', 'system_prompt', $event.target.value)"
+            rows="3"
+            :placeholder="isTemplateMode ? 'Optional default system prompt' : 'Instructions and context for the session...'"
+          ></textarea>
+        </div>
+        <div class="form-check mb-2">
+          <input
+            class="form-check-input"
+            type="checkbox"
+            id="adv-override-prompt"
+            :checked="formData.override_system_prompt"
+            @change="$emit('update:form-data', 'override_system_prompt', $event.target.checked)"
+          />
+          <label class="form-check-label" for="adv-override-prompt" style="text-transform: none; letter-spacing: normal;">
+            Override System Prompt
+          </label>
+        </div>
+      </div>
+    </div>
+
+    <!-- Card 6: Extra Options (Gray, collapsed by default) -->
     <div class="priority-card priority-gray">
       <button
         class="card-header-btn"
@@ -324,18 +403,6 @@
         <span class="chevron"><i class="bi bi-chevron-down"></i></span>
       </button>
       <div v-show="cardStates.extra" class="card-body-inner">
-        <!-- MCP Servers (edit-session, active only) -->
-        <div v-if="isEditSession && isSessionActive && mcpServers.length > 0" class="mb-2">
-          <label class="form-label">MCP Servers</label>
-          <McpServerRow
-            v-for="server in mcpServers"
-            :key="server.name"
-            :server="server"
-            @toggle="handleMcpToggle"
-            @reconnect="handleMcpReconnect"
-          />
-        </div>
-
         <!-- CLI Path -->
         <div class="mb-2">
           <label class="form-label">CLI Path</label>
@@ -376,13 +443,13 @@
               class="btn btn-sm btn-outline-secondary"
               @click="$emit('browse-additional-dir')"
               title="Browse"
-            ><i class="bi bi-folder2-open"></i></button>
+            >&#x1F4C2;</button>
             <button
               type="button"
               class="btn btn-sm btn-outline-primary"
               @click="addDirectory"
               :disabled="!newDirectory.trim()"
-            ><i class="bi bi-plus"></i></button>
+            >+</button>
           </div>
         </div>
 
@@ -411,7 +478,7 @@
       </div>
     </div>
 
-    <!-- Card 5: Sandbox & Security (Red, collapsed by default) -->
+    <!-- Card 7: Sandbox & Security (Red, collapsed by default) -->
     <div class="priority-card priority-danger">
       <button
         class="card-header-btn"
@@ -568,7 +635,7 @@
 import { ref, reactive, computed, onMounted, watch, useTemplateRef } from 'vue'
 import { api } from '@/utils/api'
 import { useMcpStore } from '../../stores/mcp'
-import McpServerRow from './McpServerRow.vue'
+import McpServerPanel from './McpServerPanel.vue'
 
 const mcpStore = useMcpStore()
 
@@ -610,7 +677,8 @@ const emit = defineEmits([
 const cardStates = reactive({
   tuning: true,
   tools: true,
-  prompt: true,
+  mcp: true,
+  prompt: false,
   knowledge: true,
   extra: false,
   sandbox: false

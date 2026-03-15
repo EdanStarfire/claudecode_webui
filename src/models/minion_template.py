@@ -47,6 +47,8 @@ class MinionTemplate:
     auto_memory_mode: str = "claude"  # "claude" | "session" | "disabled"
     # Skill creating toggle (issue #749)
     skill_creating_enabled: bool = False
+    # MCP server configuration (issue #676)
+    mcp_server_ids: list[str] | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
@@ -66,6 +68,8 @@ class MinionTemplate:
             self.additional_directories = []
         if self.docker_extra_mounts is None:
             self.docker_extra_mounts = []
+        if self.mcp_server_ids is None:
+            self.mcp_server_ids = []
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
@@ -105,6 +109,7 @@ class MinionTemplate:
             data.pop('disable_auto_memory', None)
             data.setdefault('auto_memory_mode', 'claude')
         data.setdefault('skill_creating_enabled', False)
+        data.setdefault('mcp_server_ids', None)
         # Backward-compat renames (issue #731)
         if 'default_role' in data:
             data.setdefault('role', data.pop('default_role'))

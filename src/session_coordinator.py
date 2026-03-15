@@ -70,6 +70,10 @@ class SessionCoordinator:
         from src.template_manager import TemplateManager
         self.template_manager = TemplateManager(self.data_dir)
 
+        # MCP config manager for global MCP server configurations (issue #676)
+        from src.mcp_config_manager import McpConfigManager
+        self.mcp_config_manager = McpConfigManager(self.data_dir)
+
         # Active SDK instances
         self._active_sdks: dict[str, ClaudeSDK] = {}
         self._storage_managers: dict[str, DataStorageManager] = {}
@@ -164,6 +168,10 @@ class SessionCoordinator:
             # Create default templates if none exist
             await self.template_manager.create_default_templates()
             coord_logger.info("Loaded minion templates")
+
+            # Load global MCP server configs (issue #676)
+            await self.mcp_config_manager.load_configs()
+            coord_logger.info("Loaded global MCP server configs")
 
             # Rebuild capability registry from persisted session data (if LegionSystem is initialized)
             if hasattr(self, 'legion_system') and self.legion_system is not None:
@@ -377,6 +385,9 @@ class SessionCoordinator:
                 history_distillation_enabled=config.history_distillation_enabled,
                 auto_memory_mode=config.auto_memory_mode,
                 skill_creating_enabled=config.skill_creating_enabled,
+                mcp_server_ids=config.mcp_server_ids,
+                enable_claudeai_mcp_servers=config.enable_claudeai_mcp_servers,
+                strict_mcp_config=config.strict_mcp_config,
             )
 
             # Create session through session manager
@@ -440,6 +451,16 @@ class SessionCoordinator:
                     mcp_tools_list.append("mcp__resources")
                     coord_logger.info(f"Attaching Resource MCP tools to session {session_id}")
 
+            # Issue #676: Attach user-selected global MCP server configs
+            if config.mcp_server_ids:
+                selected_configs = self.mcp_config_manager.get_configs_by_ids(config.mcp_server_ids)
+                for mcp_cfg in selected_configs:
+                    mcp_servers[mcp_cfg.slug] = mcp_cfg.to_sdk_config()
+                    mcp_tools_list.append(f"mcp__{mcp_cfg.slug}")
+                    coord_logger.info(
+                        f"Attaching global MCP server '{mcp_cfg.name}' to session {session_id}"
+                    )
+
             # Merge MCP tools with any provided allowed_tools
             all_tools = allowed_tools if allowed_tools else []
             all_tools = list(set(all_tools + mcp_tools_list))  # Deduplicate
@@ -468,6 +489,8 @@ class SessionCoordinator:
                 thinking_mode=sm_config.thinking_mode,
                 thinking_budget_tokens=sm_config.thinking_budget_tokens,
                 effort=sm_config.effort,
+                enable_claudeai_mcp_servers=sm_config.enable_claudeai_mcp_servers,
+                strict_mcp_config=sm_config.strict_mcp_config,
             )
             # Issue #707: Build PreToolUse handler for internal tool access control
             permission_handler = self._build_permission_handler(
@@ -787,6 +810,18 @@ class SessionCoordinator:
                     mcp_tools_list.append("mcp__resources")
                     coord_logger.info(f"Attaching Resource MCP tools to session {session_id}")
 
+            # Issue #676: Attach user-selected global MCP server configs
+            if session_info.mcp_server_ids:
+                selected_configs = self.mcp_config_manager.get_configs_by_ids(
+                    session_info.mcp_server_ids
+                )
+                for mcp_cfg in selected_configs:
+                    mcp_servers[mcp_cfg.slug] = mcp_cfg.to_sdk_config()
+                    mcp_tools_list.append(f"mcp__{mcp_cfg.slug}")
+                    coord_logger.info(
+                        f"Attaching global MCP server '{mcp_cfg.name}' to session {session_id}"
+                    )
+
             # Merge MCP tools with session's stored allowed_tools
             all_tools = session_info.allowed_tools if session_info.allowed_tools else []
             all_tools = list(set(all_tools + mcp_tools_list))  # Deduplicate
@@ -907,6 +942,8 @@ class SessionCoordinator:
                 thinking_budget_tokens=session_info.thinking_budget_tokens,
                 effort=session_info.effort,
                 auto_memory_mode=session_info.auto_memory_mode,
+                enable_claudeai_mcp_servers=session_info.enable_claudeai_mcp_servers,
+                strict_mcp_config=session_info.strict_mcp_config,
             )
 
             # Issue #709: Create session-specific memory directory and guidance file

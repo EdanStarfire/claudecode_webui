@@ -144,6 +144,11 @@ class SessionInfo:
     # Skill creating toggle (issue #749)
     skill_creating_enabled: bool = False
 
+    # MCP server configuration (issue #676)
+    mcp_server_ids: list[str] | None = None  # Global MCP config IDs attached to this session
+    enable_claudeai_mcp_servers: bool = True  # Toggle ENABLE_CLAUDEAI_MCP_SERVERS env var
+    strict_mcp_config: bool = False  # Pass --strict-mcp-config to disable local .mcp.json
+
     def __post_init__(self):
         if self.additional_directories is None:
             self.additional_directories = []
@@ -157,6 +162,8 @@ class SessionInfo:
             self.capabilities = []
         if self.docker_extra_mounts is None:
             self.docker_extra_mounts = []
+        if self.mcp_server_ids is None:
+            self.mcp_server_ids = []
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for JSON serialization"""
@@ -222,6 +229,9 @@ class SessionInfo:
             data.pop('disable_auto_memory', None)
             data.setdefault('auto_memory_mode', 'claude')
         data.setdefault('skill_creating_enabled', False)
+        data.setdefault('mcp_server_ids', None)
+        data.setdefault('enable_claudeai_mcp_servers', True)
+        data.setdefault('strict_mcp_config', False)
         return cls(**data)
 
 
@@ -388,6 +398,10 @@ class SessionManager:
             history_distillation_enabled=config.history_distillation_enabled,
             auto_memory_mode=config.auto_memory_mode,
             skill_creating_enabled=config.skill_creating_enabled,
+            # MCP server configuration (issue #676)
+            mcp_server_ids=config.mcp_server_ids if config.mcp_server_ids is not None else [],
+            enable_claudeai_mcp_servers=config.enable_claudeai_mcp_servers,
+            strict_mcp_config=config.strict_mcp_config,
         )
 
         try:

@@ -204,6 +204,10 @@ class SessionUpdateRequest(BaseModel):
     auto_memory_mode: str | None = None  # "claude" | "session" | "disabled"
     # Skill creating toggle (issue #749)
     skill_creating_enabled: bool | None = None
+    # MCP server configuration (issue #676)
+    mcp_server_ids: list[str] | None = None
+    enable_claudeai_mcp_servers: bool | None = None
+    strict_mcp_config: bool | None = None
 
 
 class SessionReorderRequest(BaseModel):
@@ -303,6 +307,31 @@ class TemplateUpdateRequest(BaseModel):
     auto_memory_mode: str | None = None  # "claude" | "session" | "disabled"
     # Skill creating toggle (issue #749)
     skill_creating_enabled: bool | None = None
+    # MCP server configuration (issue #676)
+    mcp_server_ids: list[str] | None = None
+
+
+# MCP config request models (issue #676)
+class McpConfigCreateRequest(BaseModel):
+    name: str
+    type: str  # "stdio" | "sse" | "http"
+    command: str | None = None
+    args: list[str] | None = None
+    env: dict[str, str] | None = None
+    url: str | None = None
+    headers: dict[str, str] | None = None
+    enabled: bool = True
+
+
+class McpConfigUpdateRequest(BaseModel):
+    name: str | None = None
+    type: str | None = None
+    command: str | None = None
+    args: list[str] | None = None
+    env: dict[str, str] | None = None
+    url: str | None = None
+    headers: dict[str, str] | None = None
+    enabled: bool | None = None
 
 
 class UIWebSocketManager:
@@ -1330,6 +1359,14 @@ class ClaudeWebUI:
 
                 if request.skill_creating_enabled is not None:
                     updates["skill_creating_enabled"] = request.skill_creating_enabled
+
+                # MCP server configuration (issue #676)
+                if request.mcp_server_ids is not None:
+                    updates["mcp_server_ids"] = request.mcp_server_ids
+                if request.enable_claudeai_mcp_servers is not None:
+                    updates["enable_claudeai_mcp_servers"] = request.enable_claudeai_mcp_servers
+                if request.strict_mcp_config is not None:
+                    updates["strict_mcp_config"] = request.strict_mcp_config
 
                 if not updates:
                     return {"success": True, "message": "No fields to update"}
@@ -3212,6 +3249,89 @@ class ClaudeWebUI:
                 logger.exception("Failed to browse filesystem")
                 raise HTTPException(status_code=500, detail=str(e)) from e
 
+        # ========== MCP Config Endpoints (issue #676) ==========
+
+        @self.app.get("/api/mcp-configs")
+        async def list_mcp_configs():
+            """List all global MCP server configurations"""
+            try:
+                configs = await self.coordinator.mcp_config_manager.list_configs()
+                return [c.to_dict() for c in configs]
+            except Exception as e:
+                logger.exception("Failed to list MCP configs")
+                raise HTTPException(status_code=500, detail=str(e)) from e
+
+        @self.app.post("/api/mcp-configs")
+        async def create_mcp_config(request: McpConfigCreateRequest):
+            """Create a new global MCP server configuration"""
+            try:
+                config = await self.coordinator.mcp_config_manager.create_config(
+                    name=request.name,
+                    server_type=request.type,
+                    command=request.command,
+                    args=request.args,
+                    env=request.env,
+                    url=request.url,
+                    headers=request.headers,
+                    enabled=request.enabled,
+                )
+                return config.to_dict()
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e)) from e
+            except Exception as e:
+                logger.exception("Failed to create MCP config")
+                raise HTTPException(status_code=500, detail=str(e)) from e
+
+        @self.app.get("/api/mcp-configs/{config_id}")
+        async def get_mcp_config(config_id: str):
+            """Get a specific MCP server configuration"""
+            try:
+                config = await self.coordinator.mcp_config_manager.get_config(config_id)
+                if not config:
+                    raise HTTPException(status_code=404, detail="MCP config not found")
+                return config.to_dict()
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.exception("Failed to get MCP config")
+                raise HTTPException(status_code=500, detail=str(e)) from e
+
+        @self.app.put("/api/mcp-configs/{config_id}")
+        async def update_mcp_config(config_id: str, request: McpConfigUpdateRequest):
+            """Update an existing MCP server configuration"""
+            try:
+                config = await self.coordinator.mcp_config_manager.update_config(
+                    config_id=config_id,
+                    name=request.name,
+                    server_type=request.type,
+                    command=request.command,
+                    args=request.args,
+                    env=request.env,
+                    url=request.url,
+                    headers=request.headers,
+                    enabled=request.enabled,
+                )
+                return config.to_dict()
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e)) from e
+            except Exception as e:
+                logger.exception("Failed to update MCP config")
+                raise HTTPException(status_code=500, detail=str(e)) from e
+
+        @self.app.delete("/api/mcp-configs/{config_id}")
+        async def delete_mcp_config(config_id: str):
+            """Delete an MCP server configuration"""
+            try:
+                success = await self.coordinator.mcp_config_manager.delete_config(config_id)
+                if not success:
+                    raise HTTPException(status_code=404, detail="MCP config not found")
+                return {"deleted": True}
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.exception("Failed to delete MCP config")
+                raise HTTPException(status_code=500, detail=str(e)) from e
+
         # ========== Template Endpoints ==========
 
         @self.app.get("/api/templates")
@@ -3289,6 +3409,7 @@ class ClaudeWebUI:
                     history_distillation_enabled=request.history_distillation_enabled,
                     auto_memory_mode=request.auto_memory_mode,
                     skill_creating_enabled=request.skill_creating_enabled,
+                    mcp_server_ids=request.mcp_server_ids,
                 )
                 return template.to_dict()
             except ValueError as e:

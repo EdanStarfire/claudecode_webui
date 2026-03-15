@@ -198,6 +198,8 @@ class ClaudeSDK:
         self.thinking_budget_tokens = config.thinking_budget_tokens
         self.effort = config.effort
         self.auto_memory_mode = config.auto_memory_mode
+        self.enable_claudeai_mcp_servers = config.enable_claudeai_mcp_servers
+        self.strict_mcp_config = config.strict_mcp_config
         self.permission_handler = permission_handler
         self.auto_approval_callback: Callable | None = None  # Issue #707: notifies coordinator
         self._stderr_buffer: list[str] = []
@@ -768,6 +770,10 @@ class ClaudeSDK:
             }
             sdk_logger.info("Using DEFAULT mode - Claude Code preset only")
 
+        # Issue #676: Pass --strict-mcp-config to disable local .mcp.json configs
+        if self.strict_mcp_config:
+            extra_args["strict-mcp-config"] = True
+
         options_kwargs = {
             "cwd": str(self.working_directory),
             "permission_mode": self.current_permission_mode,
@@ -856,6 +862,9 @@ class ClaudeSDK:
         # Issue #709: Disable Claude auto-memory for session and disabled modes
         if self.auto_memory_mode in ("session", "disabled"):
             env_vars["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "1"
+        # Issue #676: Disable Claude AI MCP servers when toggled off
+        if not self.enable_claudeai_mcp_servers:
+            env_vars["ENABLE_CLAUDEAI_MCP_SERVERS"] = "false"
         # Issue #496: Merge extra env vars (e.g., Docker wrapper config like CLAUDE_DOCKER_*)
         if self.extra_env:
             env_vars.update(self.extra_env)

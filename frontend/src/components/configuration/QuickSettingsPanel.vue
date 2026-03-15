@@ -144,7 +144,7 @@
             @click="$emit('open-folder-browser')"
             title="Browse"
           >
-            <i class="bi bi-folder2-open"></i>
+            &#x1F4C2;
           </button>
         </template>
       </div>
@@ -177,7 +177,7 @@
     <!-- Advanced Settings link -->
     <div class="advanced-link" @click="$emit('show-advanced')">
       <span>Advanced Settings</span>
-      <i class="bi bi-arrow-right"></i>
+      &rarr;
     </div>
   </div>
 </template>
