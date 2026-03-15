@@ -1666,8 +1666,9 @@ class SessionCoordinator:
                 # Update session state to TERMINATED after disconnect
                 await self.session_manager.update_session_state(session_id, SessionState.TERMINATED)
 
-                # Wait a moment for cleanup
-                await asyncio.sleep(0.5)
+                # Wait for cleanup — Docker --rm needs time to remove crashed containers
+                # before a new container can be started (issue #781)
+                await asyncio.sleep(1.0)
 
                 # Remove old SDK reference
                 del self._active_sdks[session_id]
@@ -3470,12 +3471,18 @@ class SessionCoordinator:
                 "not a valid UUID": "Invalid session ID format",
                 "--resume requires a valid session ID": "Session resume failed - invalid session ID",
                 "Check stderr output for details": "See error details above",
-                "Claude Code command failed - see details above": "Claude Code CLI failed - check error details"
+                "Claude Code command failed - see details above": "Claude Code CLI failed - check error details",
+                # Issue #781: Container crash patterns (passthrough — already parsed by ClaudeSDK)
+                "Container crash detected": None,
             }
 
             # Check for known patterns and provide clearer descriptions
             for pattern, friendly_msg in error_patterns.items():
                 if pattern in error_str:
+                    # Issue #781: None means passthrough (already parsed by ClaudeSDK)
+                    if friendly_msg is None:
+                        return error_str
+
                     # If it's a UUID error, try to extract the actual UUID from the message
                     if "not a valid UUID" in error_str and "Provided value" in error_str:
                         # Try to extract the invalid UUID value

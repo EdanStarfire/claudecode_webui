@@ -714,7 +714,11 @@ class ClaudeSDK:
             self.info.state = SessionState.FAILED
             # Include buffered stderr in error message (issue #517)
             error_msg = str(e)
-            if self._stderr_buffer:
+            # Issue #781: Parse container exit codes for actionable error reporting
+            exit_code_info = self._parse_container_exit_code(error_msg, self._stderr_buffer)
+            if exit_code_info:
+                error_msg = exit_code_info
+            elif self._stderr_buffer:
                 stderr_text = "\n".join(self._stderr_buffer)
                 error_msg = f"{error_msg}\nStderr output:\n{stderr_text}"
             self.info.error_message = error_msg
@@ -909,12 +913,17 @@ class ClaudeSDK:
                 if "Fatal error in message reader" in error_content:
                     logger.error(f"Immediate CLI failure detected: {error_content}")
 
-                    # Extract the underlying error details
-                    fatal_error = error_content
-                    if "Command failed with exit code" in error_content:
-                        # This is the immediate CLI failure we want to surface
+                    # Issue #781: Parse exit codes for actionable diagnostics
+                    parsed_error = self._parse_container_exit_code(
+                        error_content, self._stderr_buffer
+                    )
+                    if parsed_error:
+                        fatal_error = parsed_error
+                    elif "Command failed with exit code" in error_content:
                         logger.error(f"CLI command failure: {error_content}")
                         fatal_error = "Claude Code command failed - see details above"
+                    else:
+                        fatal_error = error_content
 
                     # Trigger immediate error callback to update session state
                     if self.error_callback:
@@ -1399,6 +1408,102 @@ class ClaudeSDK:
             logger.warning(f"Consecutive health check failures: {health_status['consecutive_failures']}")
 
         return health_status
+
+    # Issue #781: Container exit code parsing for actionable error reporting
+    # Maps Docker/Linux exit codes to human-readable crash diagnostics
+    _EXIT_CODE_MAP: dict[int, tuple[str, str]] = {
+        137: (
+            "Container was killed (OOM or SIGKILL)",
+            "The container ran out of memory or was forcefully killed. "
+            "Try increasing CLAUDE_DOCKER_MEMORY_LIMIT or reducing concurrent operations. "
+            "Restart should recover automatically.",
+        ),
+        139: (
+            "Container crashed (segmentation fault)",
+            "A process inside the container crashed with a segfault (SIGSEGV). "
+            "This is common with Chromium in Docker when /dev/shm is too small. "
+            "Restart should recover automatically.",
+        ),
+        1: (
+            "Container exited with error",
+            "The process inside the container exited with a generic error. "
+            "Check stderr output above for details. Restart should recover automatically.",
+        ),
+        126: (
+            "Container command not executable",
+            "The entrypoint or command could not be executed (permission denied or not found).",
+        ),
+        127: (
+            "Container command not found",
+            "The entrypoint or command was not found in the container image.",
+        ),
+        143: (
+            "Container was terminated (SIGTERM)",
+            "The container received a termination signal. "
+            "Restart should recover automatically.",
+        ),
+    }
+
+    def _parse_container_exit_code(
+        self, error_msg: str, stderr_buffer: list[str]
+    ) -> str | None:
+        """Parse container exit codes from error messages and stderr for actionable diagnostics.
+
+        Returns a formatted error string with diagnosis and recovery guidance,
+        or None if no exit code pattern is found.
+        """
+        import re
+
+        # Combine error message and stderr for pattern matching
+        combined = error_msg + "\n" + "\n".join(stderr_buffer) if stderr_buffer else error_msg
+
+        # Look for exit code patterns from Docker/subprocess
+        exit_code = None
+        patterns = [
+            r"exit code[:\s]+(\d+)",
+            r"exited with code\s+(\d+)",
+            r"exit status\s+(\d+)",
+            r"returned non-zero exit status\s+(\d+)",
+            r"Command failed with exit code\s+(\d+)",
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, combined, re.IGNORECASE)
+            if match:
+                exit_code = int(match.group(1))
+                break
+
+        if exit_code is None:
+            # Check for OOM-specific patterns even without exit code
+            oom_patterns = [
+                r"OOM",
+                r"out of memory",
+                r"memory allocation failed",
+                r"Cannot allocate memory",
+                r"Killed\s*$",
+            ]
+            for pattern in oom_patterns:
+                if re.search(pattern, combined, re.IGNORECASE):
+                    exit_code = 137  # Treat as OOM
+                    break
+
+        if exit_code is None:
+            return None
+
+        diagnosis, recovery = self._EXIT_CODE_MAP.get(
+            exit_code,
+            (
+                f"Container exited with code {exit_code}",
+                "Check container logs for details. Restart may recover the session.",
+            ),
+        )
+
+        parts = [f"Container crash detected (exit code {exit_code}): {diagnosis}"]
+        parts.append(f"Recovery: {recovery}")
+        if stderr_buffer:
+            # Include last few lines of stderr for context (limit to avoid huge messages)
+            recent_stderr = stderr_buffer[-5:]
+            parts.append("Recent stderr:\n" + "\n".join(recent_stderr))
+        return "\n".join(parts)
 
     def _create_system_prompt_temp_file(self, content: str) -> str:
         """
