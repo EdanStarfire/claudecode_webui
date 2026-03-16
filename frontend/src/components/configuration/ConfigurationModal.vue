@@ -457,21 +457,21 @@ const CONFIG_FIELDS = {
   },
   docker_image: {
     default: '',
-    change: null,
-    contexts: ['session', 'template', 'ephemeral'],
+    change: 'restart',
+    contexts: ['session', 'template', 'ephemeral', 'update'],
     toPayload: (v) => v.trim() || null,
   },
   docker_extra_mounts: {
     default: '',
-    change: null,
-    contexts: ['session', 'template', 'ephemeral'],
+    change: 'restart',
+    contexts: ['session', 'template', 'ephemeral', 'update'],
     toPayload: (v) => v.trim() ? v.trim().split('\n').map(m => m.trim()).filter(Boolean) : null,
     fromSource: (s) => Array.isArray(s.docker_extra_mounts) ? s.docker_extra_mounts.join('\n') : '',
   },
   docker_home_directory: {
     default: '',
-    change: null,
-    contexts: ['session', 'template', 'ephemeral'],
+    change: 'restart',
+    contexts: ['session', 'template', 'ephemeral', 'update'],
     toPayload: (v) => v.trim() || null,
   },
   history_distillation_enabled: {

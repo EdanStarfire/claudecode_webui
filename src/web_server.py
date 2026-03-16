@@ -193,7 +193,10 @@ class SessionUpdateRequest(BaseModel):
     setting_sources: list[str] | None = None  # Issue #36: which settings files to load
     cli_path: str | None = None  # Issue #489: custom CLI executable path
     additional_directories: list[str] | None = None  # Issue #630: extra dirs for agent access
-    # Issue #496: Docker fields intentionally excluded — immutable after session creation
+    # Docker sub-field updates (issue #787): docker_enabled is immutable; image/mounts/home are editable
+    docker_image: str | None = None
+    docker_extra_mounts: list[str] | None = None
+    docker_home_directory: str | None = None
     # Thinking and effort configuration (issue #540)
     thinking_mode: str | None = None  # "adaptive", "enabled", "disabled"
     thinking_budget_tokens: int | None = None  # Token budget (min 1024)
@@ -1344,7 +1347,14 @@ class ClaudeWebUI:
                     )
                     updates["additional_directories"] = validated_dirs
 
-                # Issue #496: Docker fields are immutable after session creation — not updatable here
+                # Handle Docker sub-field updates (docker_enabled is immutable; image/mounts/home are editable)
+                # Takes effect on next restart if session is active.
+                if request.docker_image is not None:
+                    updates["docker_image"] = request.docker_image if request.docker_image.strip() else None
+                if request.docker_extra_mounts is not None:
+                    updates["docker_extra_mounts"] = request.docker_extra_mounts
+                if request.docker_home_directory is not None:
+                    updates["docker_home_directory"] = request.docker_home_directory if request.docker_home_directory.strip() else None
 
                 # Handle thinking and effort configuration (issue #540)
                 if request.thinking_mode is not None:

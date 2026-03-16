@@ -507,34 +507,37 @@
           </label>
         </div>
         <!-- Docker status warnings -->
-        <div v-if="formData.docker_enabled && dockerStatus && !dockerStatus.available && !isEditSession" class="alert alert-warning py-1 mb-2">
+        <div v-if="formData.docker_enabled && dockerStatus && !dockerStatus.available" class="alert alert-warning py-1 mb-2">
           <small>Docker is not available on this system.</small>
         </div>
-        <div v-if="formData.docker_enabled && !isEditSession" class="ms-4 mb-2">
+        <div v-if="formData.docker_enabled" class="ms-4 mb-2">
           <div class="mb-2">
             <label class="form-label">Docker Image</label>
             <input type="text" class="form-control form-control-sm"
               :value="formData.docker_image"
               @input="$emit('update:form-data', 'docker_image', $event.target.value)"
-              :disabled="isEditSession" placeholder="claude-code:local" />
+              placeholder="claude-code:local" />
           </div>
           <div class="mb-2">
             <label class="form-label">Mounts</label>
             <textarea class="form-control form-control-sm"
               :value="formData.docker_extra_mounts"
               @input="$emit('update:form-data', 'docker_extra_mounts', $event.target.value)"
-              :disabled="isEditSession" rows="2" placeholder="/host/path:/container/path:ro (one per line)" />
+              rows="2" placeholder="/host/path:/container/path:ro (one per line)" />
           </div>
           <div class="mb-2">
             <label class="form-label">Home Directory</label>
             <input type="text" class="form-control form-control-sm"
               :value="formData.docker_home_directory"
               @input="$emit('update:form-data', 'docker_home_directory', $event.target.value)"
-              :disabled="isEditSession" placeholder="/home/claude" />
+              placeholder="/home/claude" />
             <small class="form-text text-muted d-block">
               Home directory inside the container (for custom images)
             </small>
           </div>
+          <small v-if="isEditSession" class="form-text text-warning d-block mt-1">
+            Changes take effect after restarting the session.
+          </small>
         </div>
 
         <!-- Sandbox Enable -->
