@@ -309,6 +309,9 @@ class TemplateUpdateRequest(BaseModel):
     skill_creating_enabled: bool | None = None
     # MCP server configuration (issue #676)
     mcp_server_ids: list[str] | None = None
+    # MCP toggle configuration (issue #786)
+    enable_claudeai_mcp_servers: bool | None = None
+    strict_mcp_config: bool | None = None
 
 
 # MCP config request models (issue #676)
@@ -3416,6 +3419,8 @@ class ClaudeWebUI:
                     auto_memory_mode=request.auto_memory_mode,
                     skill_creating_enabled=request.skill_creating_enabled,
                     mcp_server_ids=request.mcp_server_ids,
+                    enable_claudeai_mcp_servers=request.enable_claudeai_mcp_servers,
+                    strict_mcp_config=request.strict_mcp_config,
                 )
                 return template.to_dict()
             except ValueError as e:

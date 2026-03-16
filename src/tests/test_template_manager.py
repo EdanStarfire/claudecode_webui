@@ -326,6 +326,55 @@ class TestCreateDefaultTemplates:
             tm._get_default_templates_dir = original_fn
 
 
+# --- MCP toggle regression tests (issue #786) ---
+
+
+class TestMcpToggleRoundTrip:
+    """Regression: enable_claudeai_mcp_servers and strict_mcp_config must persist."""
+
+    def test_mcp_toggles_round_trip(self):
+        """to_dict()/from_dict() must preserve non-default MCP toggle values."""
+        template = MinionTemplate(
+            template_id="mcp-test",
+            name="MCP Toggle Test",
+            permission_mode="default",
+            enable_claudeai_mcp_servers=False,
+            strict_mcp_config=True,
+        )
+
+        data = template.to_dict()
+        restored = MinionTemplate.from_dict(data)
+
+        assert restored.enable_claudeai_mcp_servers is False
+        assert restored.strict_mcp_config is True
+
+    @pytest.mark.asyncio
+    async def test_update_mcp_toggles_persist(self, manager):
+        """update_template() must persist MCP toggle changes to disk."""
+        template = await manager.create_template(
+            name="MCP Update Test",
+            config=SessionConfig(permission_mode="default"),
+        )
+        # Defaults should be True/False
+        assert template.enable_claudeai_mcp_servers is True
+        assert template.strict_mcp_config is False
+
+        updated = await manager.update_template(
+            template.template_id,
+            enable_claudeai_mcp_servers=False,
+            strict_mcp_config=True,
+        )
+        assert updated.enable_claudeai_mcp_servers is False
+        assert updated.strict_mcp_config is True
+
+        # Reload from disk and verify persistence
+        manager2 = TemplateManager(manager.templates_dir.parent)
+        await manager2.load_templates()
+        reloaded = await manager2.get_template(template.template_id)
+        assert reloaded.enable_claudeai_mcp_servers is False
+        assert reloaded.strict_mcp_config is True
+
+
 class TestSignatureParity:
     """Ensure create_template and update_template accept all MinionTemplate fields.
 
