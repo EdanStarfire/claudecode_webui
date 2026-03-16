@@ -72,9 +72,9 @@ const attachments = computed(() => {
 
 function getFileIcon(name) {
   const ext = name.split('.').pop()?.toLowerCase()
-  if (['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp'].includes(ext)) return '\u{1F5BC}'
+  if (['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp'].includes(ext)) return '\u{1F5BC}\uFE0F'
   if (['py', 'js', 'ts', 'vue', 'go', 'rs', 'java', 'cpp', 'c', 'h'].includes(ext)) return '\u{1F4DD}'
-  if (['json', 'yaml', 'yml', 'toml', 'xml', 'ini'].includes(ext)) return '\u{2699}'
+  if (['json', 'yaml', 'yml', 'toml', 'xml', 'ini'].includes(ext)) return '\u2699\uFE0F'
   return '\u{1F4CE}'
 }
 
@@ -241,20 +241,28 @@ defineExpose({ summary, params, result })
 }
 
 .outbound-comm-attachments {
-  margin-top: 6px;
-  padding-top: 6px;
-  border-top: 1px dashed #cbd5e1;
+  margin-top: 0.75rem;
+  padding-top: 0.5rem;
+  border-top: 1px dashed rgba(0, 0, 0, 0.1);
 }
 
 .outbound-comm-attachment-item {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 0.25rem;
+  padding: 0.25rem 0.5rem;
+  background: rgba(0, 0, 0, 0.03);
+  border-radius: 0.25rem;
   font-size: 0.85rem;
+}
+
+.outbound-comm-attachment-icon {
+  flex-shrink: 0;
 }
 
 .outbound-comm-attachment-name {
   font-family: 'Courier New', monospace;
+  font-size: 0.8rem;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
