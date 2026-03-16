@@ -23,13 +23,24 @@ set -euo pipefail
 #   CLAUDE_DOCKER_WORKSPACE     - Workspace directory to mount (default: $PWD)
 #   CLAUDE_DOCKER_DATA_DIR      - Host dir for persistent Claude session data (enables --resume)
 #   CLAUDE_DOCKER_HOME          - Home directory inside the container (default: /home/claude)
+#   CLAUDE_DOCKER_MEMORY_LIMIT  - Container memory limit (default: none, e.g. "4g", "2048m")
+#   CLAUDE_DOCKER_SHM_SIZE      - /dev/shm size for Chromium (default: 256m)
 
 DEFAULT_IMAGE="claude-code:local"
 IMAGE_NAME="${CLAUDE_DOCKER_IMAGE:-$DEFAULT_IMAGE}"
 CONTAINER_NAME="claude-code-$$"
 DOCKER_HOME="${CLAUDE_DOCKER_HOME:-/home/claude}"
 
+# Issue #781: Configurable resource limits
+MEMORY_LIMIT="${CLAUDE_DOCKER_MEMORY_LIMIT:-}"
+SHM_SIZE="${CLAUDE_DOCKER_SHM_SIZE:-256m}"
+
+# Issue #781: Log container identity for crash correlation
+echo "[claude-docker] Container: $CONTAINER_NAME, Image: $IMAGE_NAME, PID: $$" >&2
+
 # Build default image if it doesn't exist; fail fast for custom images
+# Note: Do NOT wrap this with `timeout` — after a container crash, Docker may be
+# briefly busy with --rm cleanup and a timeout can cause false "not found" errors.
 if ! docker image inspect "$IMAGE_NAME" &>/dev/null; then
     if [ "$IMAGE_NAME" = "$DEFAULT_IMAGE" ]; then
         echo "Building Claude Code container image..."
@@ -108,8 +119,17 @@ for arg in "$@"; do
     PREV_ARG="$arg"
 done
 
-# Run the container
-exec docker run \
+# Issue #781: Build resource limit flags
+RESOURCE_FLAGS=""
+if [ -n "$MEMORY_LIMIT" ]; then
+    RESOURCE_FLAGS="$RESOURCE_FLAGS --memory=$MEMORY_LIMIT"
+    echo "[claude-docker] Memory limit: $MEMORY_LIMIT" >&2
+fi
+# Always set --shm-size for Chromium stability (default 256m vs Docker's 64m default)
+RESOURCE_FLAGS="$RESOURCE_FLAGS --shm-size=$SHM_SIZE"
+
+# Run the container (capture exit code for diagnostics)
+docker run \
     --rm \
     $DOCKER_FLAGS \
     --name "$CONTAINER_NAME" \
@@ -122,5 +142,19 @@ exec docker run \
     $DATA_DIR_FLAGS \
     $EXTRA_MOUNT_FLAGS \
     $FILE_MOUNT_FLAGS \
+    $RESOURCE_FLAGS \
     "$IMAGE_NAME" \
     "$@"
+EXIT_CODE=$?
+
+# Issue #781: Log exit code for crash correlation
+if [ $EXIT_CODE -ne 0 ]; then
+    echo "[claude-docker] Container $CONTAINER_NAME exited with code $EXIT_CODE" >&2
+    if [ $EXIT_CODE -eq 137 ]; then
+        echo "[claude-docker] Container was killed (OOM or SIGKILL)" >&2
+    elif [ $EXIT_CODE -eq 139 ]; then
+        echo "[claude-docker] Container crashed (segmentation fault)" >&2
+    fi
+fi
+
+exit $EXIT_CODE
