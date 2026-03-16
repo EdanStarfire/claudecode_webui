@@ -1,7 +1,8 @@
 # Development environment for Claude WebUI
 #
 # Extends the base claude-code image concept with development tooling:
-# UV (Python package manager), Node.js 22 LTS, and Chromium for headless testing.
+# UV (Python package manager), Node.js 22 LTS, Chromium for headless testing,
+# and GitHub CLI (gh) for GitHub operations.
 #
 # Build:
 #   docker build -f docker/Dockerfile.dev -t claudecode-webui-dev:local docker/
@@ -17,6 +18,9 @@
 #
 # Port forwarding example:
 #   docker run -p 8001:8001 -p 5173:5173 -v $(pwd):/workspace -w /workspace ...
+#
+# GitHub CLI auth (mount host config):
+#   -v ~/.config/gh:/home/claude/.config/gh:ro
 
 FROM debian:bookworm-slim
 
@@ -41,18 +45,27 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     chromium-driver \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# ---------- Layer 4: Non-root user ----------
+# ---------- Layer 4: gh CLI (GitHub CLI) ----------
+RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+    | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg \
+    && chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+    | tee /etc/apt/sources.list.d/github-cli.list > /dev/null \
+    && apt-get update && apt-get install -y --no-install-recommends gh \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# ---------- Layer 5: Non-root user ----------
 RUN useradd -m -s /bin/bash claude
 
 USER claude
 
-# ---------- Layer 5: UV Python package manager ----------
+# ---------- Layer 6: UV Python package manager ----------
 RUN curl -fsSL https://astral.sh/uv/install.sh | bash
 
-# ---------- Layer 6: Claude Code CLI ----------
+# ---------- Layer 7: Claude Code CLI ----------
 RUN curl -fsSL https://claude.ai/install.sh | bash
 
-# ---------- Layer 7: PATH and entrypoint ----------
+# ---------- Layer 8: PATH and entrypoint ----------
 ENV PATH="/home/claude/.local/bin:${PATH}"
 
 # Workspace path and working directory set at runtime via docker run -w
