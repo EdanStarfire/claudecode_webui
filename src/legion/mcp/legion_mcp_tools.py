@@ -966,6 +966,18 @@ class LegionMCPTools:
                     template, 'skill_creating_enabled',
                     parent_session.skill_creating_enabled,
                 )
+                mcp_server_ids = (
+                    getattr(template, 'mcp_server_ids', None)
+                    or parent_session.mcp_server_ids
+                )
+                enable_claudeai_mcp_servers = getattr(
+                    template, 'enable_claudeai_mcp_servers',
+                    parent_session.enable_claudeai_mcp_servers,
+                )
+                strict_mcp_config = getattr(
+                    template, 'strict_mcp_config',
+                    parent_session.strict_mcp_config,
+                )
 
             except Exception as e:
                 coord_logger.error(f"Error applying template: {e}", exc_info=True)
@@ -997,6 +1009,9 @@ class LegionMCPTools:
             history_distillation_enabled = parent_session.history_distillation_enabled
             auto_memory_mode = parent_session.auto_memory_mode
             skill_creating_enabled = parent_session.skill_creating_enabled
+            mcp_server_ids = parent_session.mcp_server_ids
+            enable_claudeai_mcp_servers = parent_session.enable_claudeai_mcp_servers
+            strict_mcp_config = parent_session.strict_mcp_config
 
         # Validate role is set (from parameter or template)
         if not role:
@@ -1054,6 +1069,9 @@ class LegionMCPTools:
                 history_distillation_enabled=history_distillation_enabled,
                 auto_memory_mode=auto_memory_mode,
                 skill_creating_enabled=skill_creating_enabled,
+                mcp_server_ids=mcp_server_ids,
+                enable_claudeai_mcp_servers=enable_claudeai_mcp_servers,
+                strict_mcp_config=strict_mcp_config,
             )
             spawn_result = await self.system.overseer_controller.spawn_minion(
                 parent_overseer_id=parent_overseer_id,

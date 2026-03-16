@@ -498,7 +498,7 @@ const CONFIG_FIELDS = {
   enable_claudeai_mcp_servers: {
     default: true,
     change: 'restart',
-    contexts: ['session', 'ephemeral', 'update'],
+    contexts: ['session', 'template', 'ephemeral', 'update'],
   },
   strict_mcp_config: {
     default: false,
