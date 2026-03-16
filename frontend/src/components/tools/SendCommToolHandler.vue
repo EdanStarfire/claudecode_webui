@@ -243,7 +243,7 @@ defineExpose({ summary, params, result })
 .outbound-comm-attachments {
   margin-top: 0.75rem;
   padding-top: 0.5rem;
-  border-top: 1px dashed rgba(0, 0, 0, 0.1);
+  border-top: 1px solid rgba(0, 0, 0, 0.1);
 }
 
 .outbound-comm-attachment-item {
