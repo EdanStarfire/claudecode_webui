@@ -71,7 +71,6 @@ import { useWebSocketStore } from './stores/websocket'
 import { useSessionStore } from './stores/session'
 import { useProjectStore } from './stores/project'
 import { useTaskStore } from './stores/task'
-import { useResourceStore } from './stores/resource'
 import { apiGet, getAuthToken, setAuthToken } from './utils/api'
 
 const uiStore = useUIStore()
@@ -80,7 +79,6 @@ const wsStore = useWebSocketStore()
 const sessionStore = useSessionStore()
 const projectStore = useProjectStore()
 const taskStore = useTaskStore()
-const resourceStore = useResourceStore()
 const router = useRouter()
 
 // Provide function for adding resource to attachments
@@ -101,14 +99,6 @@ const isTabletOrMobile = computed(() => uiStore.windowWidth < 768)
 watch(() => taskStore.currentHasTasks, (hasTasks, hadTasks) => {
   if (hasTasks && !hadTasks && !uiStore.suppressAutoShow) {
     uiStore.setRightSidebarTab('tasks')
-    uiStore.setRightPanelVisible(true)
-  }
-})
-
-// Auto-show right panel when resources first appear (suppressed during session switch, #521)
-watch(() => resourceStore.currentHasResources, (hasResources, hadResources) => {
-  if (hasResources && !hadResources && !uiStore.suppressAutoShow) {
-    uiStore.setRightSidebarTab('resources')
     uiStore.setRightPanelVisible(true)
   }
 })
