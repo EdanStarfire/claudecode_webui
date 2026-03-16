@@ -24,11 +24,11 @@
       }"
     >
       <div class="outbound-comm-content" ref="contentRef" v-html="renderedContent"></div>
-    </div>
-    <div v-if="attachments.length > 0" class="outbound-comm-attachments">
-      <div v-for="(name, idx) in attachments" :key="idx" class="outbound-comm-attachment-item">
-        <span>{{ getFileIcon(name) }}</span>
-        <span class="outbound-comm-attachment-name">{{ name }}</span>
+      <div v-if="attachments.length > 0" class="outbound-comm-attachments">
+        <div v-for="(name, idx) in attachments" :key="idx" class="outbound-comm-attachment-item">
+          <span class="outbound-comm-attachment-icon">{{ getFileIcon(name) }}</span>
+          <span class="outbound-comm-attachment-name">{{ name }}</span>
+        </div>
       </div>
     </div>
     <!-- Result indicator -->
@@ -72,10 +72,10 @@ const attachments = computed(() => {
 
 function getFileIcon(name) {
   const ext = name.split('.').pop()?.toLowerCase()
-  if (['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp'].includes(ext)) return '🖼️'
-  if (['py', 'js', 'ts', 'vue', 'go', 'rs', 'java', 'cpp', 'c', 'h'].includes(ext)) return '📝'
-  if (['json', 'yaml', 'yml', 'toml', 'xml', 'ini'].includes(ext)) return '⚙️'
-  return '📎'
+  if (['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp'].includes(ext)) return '\u{1F5BC}'
+  if (['py', 'js', 'ts', 'vue', 'go', 'rs', 'java', 'cpp', 'c', 'h'].includes(ext)) return '\u{1F4DD}'
+  if (['json', 'yaml', 'yml', 'toml', 'xml', 'ini'].includes(ext)) return '\u{2699}'
+  return '\u{1F4CE}'
 }
 
 // Agent color from recipient name
@@ -244,7 +244,6 @@ defineExpose({ summary, params, result })
   margin-top: 6px;
   padding-top: 6px;
   border-top: 1px dashed #cbd5e1;
-  max-width: 85%;
 }
 
 .outbound-comm-attachment-item {
