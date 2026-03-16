@@ -589,9 +589,25 @@ class ClaudeSDK:
                             await self._process_sdk_message(response_message)
                             self._session_health_checks["total_responses_received"] += 1
                             self._session_health_checks["last_successful_response"] = time.time()
-                    except Exception:
+                    except Exception as consumer_err:
                         if not self._shutdown_event.is_set():
                             logger.exception("Error in global response consumer")
+                            # Issue #781: Parse the error for actionable diagnostics
+                            # and surface it to the user via error callback
+                            error_msg = str(consumer_err)
+                            parsed = self._parse_container_exit_code(
+                                error_msg, self._stderr_buffer
+                            )
+                            if parsed:
+                                error_msg = parsed
+                            self.info.state = SessionState.FAILED
+                            self.info.error_message = error_msg
+                            if self.error_callback:
+                                await self._safe_callback(
+                                    self.error_callback,
+                                    "immediate_cli_failure",
+                                    Exception(error_msg),
+                                )
 
                 # Start response consumer as background task
                 response_consumer_task = asyncio.create_task(consume_all_responses())
@@ -858,7 +874,7 @@ class ClaudeSDK:
             options_kwargs["effort"] = self.effort
 
         # Issue #781: Increase JSON buffer to 10MB to handle large MCP tool responses
-        # (e.g., Chrome DevTools screenshots). SDK default is 1MB which is too small.
+        # (e.g., Chrome DevTools screenshots/snapshots). SDK default is 1MB which is too small.
         options_kwargs["max_buffer_size"] = 10 * 1024 * 1024
 
         # Enable native Tasks system (Claude Code 2.1+)
