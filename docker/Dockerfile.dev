@@ -21,6 +21,12 @@
 #
 # GitHub CLI auth (mount host config):
 #   -v ~/.config/gh:/home/claude/.config/gh:ro
+#
+# SSH agent forwarding (default — keys stay on host):
+#   -v $SSH_AUTH_SOCK:/ssh-agent -e SSH_AUTH_SOCK=/ssh-agent
+#
+# Alternatively, mount host SSH keys read-only:
+#   -v ~/.ssh:/home/claude/.ssh:ro
 
 FROM debian:bookworm-slim
 
@@ -29,6 +35,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     ca-certificates \
     git \
+    openssh-client \
     jq \
     gnupg \
     build-essential \

@@ -25,6 +25,9 @@ set -euo pipefail
 #   CLAUDE_DOCKER_HOME          - Home directory inside the container (default: /home/claude)
 #   CLAUDE_DOCKER_MEMORY_LIMIT  - Container memory limit (default: none, e.g. "4g", "2048m")
 #   CLAUDE_DOCKER_SHM_SIZE      - /dev/shm size for Chromium (default: 256m)
+#
+# Auto-forwarded from host environment (when available):
+#   SSH_AUTH_SOCK               - SSH agent socket (mounted at /ssh-agent, env set inside container)
 
 DEFAULT_IMAGE="claude-code:local"
 IMAGE_NAME="${CLAUDE_DOCKER_IMAGE:-$DEFAULT_IMAGE}"
@@ -119,6 +122,12 @@ for arg in "$@"; do
     PREV_ARG="$arg"
 done
 
+# Issue #794: Auto-forward SSH agent if available (enables git SSH operations inside container)
+SSH_AGENT_FLAGS=""
+if [ -n "${SSH_AUTH_SOCK:-}" ] && [ -S "$SSH_AUTH_SOCK" ]; then
+    SSH_AGENT_FLAGS="-v $SSH_AUTH_SOCK:/ssh-agent -e SSH_AUTH_SOCK=/ssh-agent"
+fi
+
 # Issue #781: Build resource limit flags
 RESOURCE_FLAGS=""
 if [ -n "$MEMORY_LIMIT" ]; then
@@ -142,6 +151,7 @@ docker run \
     $DATA_DIR_FLAGS \
     $EXTRA_MOUNT_FLAGS \
     $FILE_MOUNT_FLAGS \
+    $SSH_AGENT_FLAGS \
     $RESOURCE_FLAGS \
     "$IMAGE_NAME" \
     "$@"
