@@ -201,6 +201,8 @@ class TemplateManager:
             auto_memory_mode=config.auto_memory_mode,
             skill_creating_enabled=config.skill_creating_enabled,
             mcp_server_ids=config.mcp_server_ids if config.mcp_server_ids is not None else [],
+            enable_claudeai_mcp_servers=config.enable_claudeai_mcp_servers,
+            strict_mcp_config=config.strict_mcp_config,
         )
 
         await self._save_template(template)
@@ -253,6 +255,9 @@ class TemplateManager:
         auto_memory_mode: str | None = None,
         skill_creating_enabled: bool | None = None,
         mcp_server_ids: list[str] | None = None,
+        # MCP toggle configuration (issue #786)
+        enable_claudeai_mcp_servers: bool | None = None,
+        strict_mcp_config: bool | None = None,
     ) -> MinionTemplate:
         """Update existing template."""
         template = self.templates.get(template_id)
@@ -336,6 +341,12 @@ class TemplateManager:
 
         if mcp_server_ids is not None:
             template.mcp_server_ids = mcp_server_ids
+
+        if enable_claudeai_mcp_servers is not None:
+            template.enable_claudeai_mcp_servers = enable_claudeai_mcp_servers
+
+        if strict_mcp_config is not None:
+            template.strict_mcp_config = strict_mcp_config
 
         template.updated_at = datetime.now(UTC)
 

@@ -49,6 +49,9 @@ class MinionTemplate:
     skill_creating_enabled: bool = False
     # MCP server configuration (issue #676)
     mcp_server_ids: list[str] | None = None
+    # MCP toggle configuration (issue #786)
+    enable_claudeai_mcp_servers: bool = True
+    strict_mcp_config: bool = False
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
@@ -110,6 +113,9 @@ class MinionTemplate:
             data.setdefault('auto_memory_mode', 'claude')
         data.setdefault('skill_creating_enabled', False)
         data.setdefault('mcp_server_ids', None)
+        # MCP toggle configuration (issue #786)
+        data.setdefault('enable_claudeai_mcp_servers', True)
+        data.setdefault('strict_mcp_config', False)
         # Backward-compat renames (issue #731)
         if 'default_role' in data:
             data.setdefault('role', data.pop('default_role'))
