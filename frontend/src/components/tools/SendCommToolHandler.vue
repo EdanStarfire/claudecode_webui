@@ -10,6 +10,9 @@
       <span v-if="interruptPriority && interruptPriority !== 'none'" class="outbound-comm-priority">
         {{ interruptPriority }}
       </span>
+      <span v-if="attachments.length > 0" class="outbound-comm-attach-badge">
+        📎 {{ attachments.length }}
+      </span>
     </div>
     <div
       class="outbound-comm-bubble"
@@ -21,6 +24,12 @@
       }"
     >
       <div class="outbound-comm-content" ref="contentRef" v-html="renderedContent"></div>
+      <div v-if="attachments.length > 0" class="outbound-comm-attachments">
+        <div v-for="(name, idx) in attachments" :key="idx" class="outbound-comm-attachment-item">
+          <span class="outbound-comm-attachment-icon">{{ getFileIcon(name) }}</span>
+          <span class="outbound-comm-attachment-name">{{ name }}</span>
+        </div>
+      </div>
     </div>
     <!-- Result indicator -->
     <div v-if="hasResult" class="outbound-comm-result" :class="isError ? 'result-error' : 'result-success'">
@@ -48,6 +57,26 @@ const content = computed(() => props.toolCall.input?.content || '')
 const summaryText = computed(() => props.toolCall.input?.summary || '')
 const commType = computed(() => props.toolCall.input?.comm_type || '')
 const interruptPriority = computed(() => props.toolCall.input?.interrupt_priority || '')
+
+const attachments = computed(() => {
+  const raw = props.toolCall.input?.attachments
+  if (!raw) return []
+  try {
+    const paths = typeof raw === 'string' ? JSON.parse(raw) : raw
+    return Array.isArray(paths) ? paths.map(p => p.split('/').pop()) : []
+  } catch {
+    // single path string (not JSON array)
+    return [String(raw).split('/').pop()]
+  }
+})
+
+function getFileIcon(name) {
+  const ext = name.split('.').pop()?.toLowerCase()
+  if (['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp'].includes(ext)) return '\u{1F5BC}\uFE0F'
+  if (['py', 'js', 'ts', 'vue', 'go', 'rs', 'java', 'cpp', 'c', 'h'].includes(ext)) return '\u{1F4DD}'
+  if (['json', 'yaml', 'yml', 'toml', 'xml', 'ini'].includes(ext)) return '\u2699\uFE0F'
+  return '\u{1F4CE}'
+}
 
 // Agent color from recipient name
 const recipientColor = computed(() => getAgentColor(slugifyAgentName(recipientName.value)))
@@ -200,5 +229,42 @@ defineExpose({ summary, params, result })
 
 .outbound-comm-result.result-error {
   color: #dc2626;
+}
+
+.outbound-comm-attach-badge {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 8px;
+  background: #e0f2fe;
+  color: #0369a1;
+}
+
+.outbound-comm-attachments {
+  margin-top: 0.75rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid rgba(0, 0, 0, 0.1);
+}
+
+.outbound-comm-attachment-item {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.25rem 0.5rem;
+  background: rgba(0, 0, 0, 0.03);
+  border-radius: 0.25rem;
+  font-size: 0.85rem;
+}
+
+.outbound-comm-attachment-icon {
+  flex-shrink: 0;
+}
+
+.outbound-comm-attachment-name {
+  font-family: 'Courier New', monospace;
+  font-size: 0.8rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 </style>
