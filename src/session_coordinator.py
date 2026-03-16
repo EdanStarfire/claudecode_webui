@@ -922,6 +922,10 @@ class SessionCoordinator:
                     extra_mounts.append(
                         f"{NEW_GLOBAL_SKILLS_DIR}:{docker_home}/.claude/skills:ro"
                     )
+                # Issue #789: Mount host gh CLI config for GitHub auth passthrough
+                gh_config = Path.home() / ".config" / "gh"
+                if gh_config.exists():
+                    extra_mounts.append(f"{gh_config}:{docker_home}/.config/gh:ro")
                 effective_cli_path, docker_env_vars = resolve_docker_cli_path(
                     docker_image=session_info.docker_image,
                     docker_extra_mounts=extra_mounts or None,
