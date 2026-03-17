@@ -46,6 +46,7 @@ import { useResourceImages } from '@/composables/useResourceImages'
 import { useToolResult } from '@/composables/useToolResult'
 import { getAgentColor, slugifyAgentName } from '@/composables/useAgentColor'
 import { useSessionStore } from '@/stores/session'
+import { getFileIcon } from '@/utils/fileTypes'
 
 const props = defineProps({
   toolCall: { type: Object, required: true }
@@ -69,14 +70,6 @@ const attachments = computed(() => {
     return [String(raw).split('/').pop()]
   }
 })
-
-function getFileIcon(name) {
-  const ext = name.split('.').pop()?.toLowerCase()
-  if (['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp'].includes(ext)) return '\u{1F5BC}\uFE0F'
-  if (['py', 'js', 'ts', 'vue', 'go', 'rs', 'java', 'cpp', 'c', 'h'].includes(ext)) return '\u{1F4DD}'
-  if (['json', 'yaml', 'yml', 'toml', 'xml', 'ini'].includes(ext)) return '\u2699\uFE0F'
-  return '\u{1F4CE}'
-}
 
 // Agent color from recipient name
 const recipientColor = computed(() => getAgentColor(slugifyAgentName(recipientName.value)))

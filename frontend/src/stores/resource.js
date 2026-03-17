@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { useSessionStore } from './session'
 import { apiGet, apiDelete, getAuthToken } from '../utils/api'
+import { IMAGE_EXTENSIONS, FILE_TYPE_ICONS } from '../utils/fileTypes'
 
 /**
  * Resource Store - Manages resources (images, files) displayed via MCP tool per session
@@ -13,51 +14,6 @@ import { apiGet, apiDelete, getAuthToken } from '../utils/api'
  * - Navigation between resources
  * - Download functionality for all resource types
  */
-
-// File extensions that are images (can be previewed)
-const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg', '.ico'])
-
-// File type icons for non-image resources
-const FILE_TYPE_ICONS = {
-  // Documents
-  '.pdf': '📄',
-  '.doc': '📝',
-  '.docx': '📝',
-  '.txt': '📄',
-  '.rtf': '📝',
-  '.odt': '📝',
-  // Spreadsheets
-  '.xls': '📊',
-  '.xlsx': '📊',
-  '.csv': '📊',
-  '.ods': '📊',
-  // Code
-  '.py': '🐍',
-  '.js': '📜',
-  '.ts': '📜',
-  '.jsx': '📜',
-  '.tsx': '📜',
-  '.html': '🌐',
-  '.css': '🎨',
-  '.json': '📋',
-  '.xml': '📋',
-  '.yaml': '📋',
-  '.yml': '📋',
-  '.md': '📝',
-  '.sh': '💻',
-  '.bat': '💻',
-  '.sql': '🗄️',
-  // Archives
-  '.zip': '📦',
-  '.tar': '📦',
-  '.gz': '📦',
-  '.rar': '📦',
-  '.7z': '📦',
-  // Data
-  '.log': '📋',
-  // Default
-  'default': '📎'
-}
 
 export const useResourceStore = defineStore('resource', () => {
   // ========== STATE ==========

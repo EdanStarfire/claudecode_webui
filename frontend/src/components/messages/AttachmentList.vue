@@ -49,6 +49,10 @@
 
 <script setup>
 import { defineProps, defineEmits } from 'vue'
+import {
+  isImageFile as isImageExtension,
+  getFileIcon as getIconByName,
+} from '@/utils/fileTypes'
 
 const props = defineProps({
   attachments: {
@@ -64,38 +68,15 @@ const emit = defineEmits(['remove'])
  * Check if file is an image based on MIME type or extension
  */
 function isImageFile(file) {
-  if (file.type && file.type.startsWith('image/')) {
-    return true
-  }
-  const ext = file.name?.split('.').pop()?.toLowerCase()
-  return ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'ico'].includes(ext)
+  if (file.type && file.type.startsWith('image/')) return true
+  return isImageExtension(file.name)
 }
 
 /**
  * Get appropriate icon for file type
  */
 function getFileIcon(file) {
-  const ext = file.name?.split('.').pop()?.toLowerCase() || ''
-  const type = file.type || ''
-
-  // Code files
-  if (['py', 'js', 'ts', 'jsx', 'tsx', 'vue', 'java', 'c', 'cpp', 'rs', 'go'].includes(ext)) {
-    return '📄'
-  }
-  // Config files
-  if (['json', 'yaml', 'yml', 'toml', 'xml', 'ini', 'cfg', 'env'].includes(ext)) {
-    return '⚙️'
-  }
-  // Log files
-  if (['log', 'txt'].includes(ext) || type === 'text/plain') {
-    return '📋'
-  }
-  // Markdown
-  if (['md', 'rst'].includes(ext)) {
-    return '📝'
-  }
-  // Default
-  return '📁'
+  return getIconByName(file.name || '')
 }
 
 /**
