@@ -15,7 +15,7 @@ import pytest
 
 from src.models.minion_template import MinionTemplate
 from src.session_config import SessionConfig
-from src.template_manager import TemplateManager
+from src.template_manager import TemplateConflictError, TemplateManager
 
 
 @pytest.fixture
@@ -373,6 +373,116 @@ class TestMcpToggleRoundTrip:
         reloaded = await manager2.get_template(template.template_id)
         assert reloaded.enable_claudeai_mcp_servers is False
         assert reloaded.strict_mcp_config is True
+
+
+# --- Import template tests (issue #797) ---
+
+
+class TestImportTemplate:
+    """Verify import_template round-trip, conflict detection, and overwrite."""
+
+    @pytest.mark.asyncio
+    async def test_import_roundtrip(self, manager):
+        """Exported template data can be imported back as a new template."""
+        original = await manager.create_template(
+            name="Export Me",
+            config=SessionConfig(
+                permission_mode="acceptEdits",
+                allowed_tools=["bash", "read"],
+                model="claude-sonnet-4-20250514",
+                thinking_mode="enabled",
+                thinking_budget_tokens=4000,
+            ),
+            role="developer",
+            description="A template to export",
+            capabilities=["python"],
+        )
+
+        envelope = {"version": 1, "template": original.to_dict()}
+
+        # Delete original so we can import cleanly
+        await manager.delete_template(original.template_id)
+
+        imported = await manager.import_template(envelope)
+
+        assert imported.name == original.name
+        assert imported.permission_mode == original.permission_mode
+        assert imported.allowed_tools == original.allowed_tools
+        assert imported.model == original.model
+        assert imported.thinking_mode == original.thinking_mode
+        assert imported.thinking_budget_tokens == original.thinking_budget_tokens
+        assert imported.role == original.role
+        assert imported.description == original.description
+        assert imported.capabilities == original.capabilities
+        # IDs must be fresh
+        assert imported.template_id != original.template_id
+        assert imported.created_at != original.created_at
+
+    @pytest.mark.asyncio
+    async def test_import_conflict_detection(self, manager):
+        """Import raises TemplateConflictError when name already exists."""
+        existing = await manager.create_template(
+            name="Conflict Target",
+            config=SessionConfig(permission_mode="default"),
+        )
+
+        envelope = {
+            "version": 1,
+            "template": {
+                "name": "Conflict Target",
+                "permission_mode": "acceptEdits",
+                "allowed_tools": [],
+                "disallowed_tools": [],
+                "capabilities": [],
+                "created_at": existing.created_at.isoformat(),
+                "updated_at": existing.updated_at.isoformat(),
+                "template_id": existing.template_id,
+            },
+        }
+
+        with pytest.raises(TemplateConflictError) as exc_info:
+            await manager.import_template(envelope, overwrite=False)
+
+        assert exc_info.value.existing_id == existing.template_id
+        assert exc_info.value.name == "Conflict Target"
+
+    @pytest.mark.asyncio
+    async def test_import_overwrite(self, manager):
+        """Import with overwrite=True replaces the existing template."""
+        original = await manager.create_template(
+            name="Overwrite Me",
+            config=SessionConfig(permission_mode="default"),
+            description="original description",
+        )
+
+        envelope = {
+            "version": 1,
+            "template": {
+                "name": "Overwrite Me",
+                "permission_mode": "acceptEdits",
+                "allowed_tools": ["bash"],
+                "disallowed_tools": [],
+                "capabilities": [],
+                "description": "updated description",
+                "created_at": original.created_at.isoformat(),
+                "updated_at": original.updated_at.isoformat(),
+                "template_id": original.template_id,
+            },
+        }
+
+        imported = await manager.import_template(envelope, overwrite=True)
+
+        assert imported.name == "Overwrite Me"
+        assert imported.permission_mode == "acceptEdits"
+        assert imported.allowed_tools == ["bash"]
+        assert imported.description == "updated description"
+        # Old template ID must be gone; new one created
+        assert imported.template_id != original.template_id
+        assert await manager.get_template(original.template_id) is None
+        # Only one template with this name should exist
+        all_templates = await manager.list_templates()
+        matching = [t for t in all_templates if t.name == "Overwrite Me"]
+        assert len(matching) == 1
 
 
 class TestSignatureParity:

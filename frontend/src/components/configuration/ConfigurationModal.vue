@@ -37,9 +37,14 @@
           <div v-if="mode === 'template-list'" class="template-list-view">
             <div class="d-flex justify-content-between align-items-center mb-3">
               <h6 class="mb-0">Templates</h6>
-              <button @click="switchToCreateTemplate" class="btn btn-primary btn-sm">
-                + Create New
-              </button>
+              <div class="d-flex gap-2">
+                <button @click="openImportModal" class="btn btn-outline-secondary btn-sm">
+                  Import
+                </button>
+                <button @click="switchToCreateTemplate" class="btn btn-primary btn-sm">
+                  + Create New
+                </button>
+              </div>
             </div>
 
             <div v-if="templates.length === 0" class="alert alert-info">
@@ -58,6 +63,9 @@
                     </div>
                   </div>
                   <div class="btn-group btn-group-sm ms-3">
+                    <button @click="exportTemplate(template)" class="btn btn-outline-secondary" title="Export">
+                      Export
+                    </button>
                     <button @click="switchToEditTemplate(template)" class="btn btn-outline-primary" title="Edit">
                       Edit
                     </button>
@@ -66,6 +74,67 @@
                     </button>
                   </div>
                 </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Import Template Modal -->
+          <div v-if="showImportModal" class="import-modal-overlay" @click.self="closeImportModal">
+            <div class="import-modal-box card">
+              <div class="card-header d-flex justify-content-between align-items-center">
+                <strong>Import Template</strong>
+                <button type="button" class="btn-close" @click="closeImportModal"></button>
+              </div>
+              <div class="card-body">
+                <div class="mb-3">
+                  <label class="form-label">Upload JSON file</label>
+                  <input
+                    type="file"
+                    accept=".json"
+                    class="form-control form-control-sm"
+                    @change="onImportFileChange"
+                  />
+                </div>
+                <div class="mb-3 text-center text-muted small">— or paste JSON below —</div>
+                <div class="mb-3">
+                  <textarea
+                    class="form-control font-monospace"
+                    rows="6"
+                    placeholder='{"version": 1, "template": {...}}'
+                    v-model="importJsonText"
+                  ></textarea>
+                </div>
+                <div v-if="importConflict" class="alert alert-warning mb-3">
+                  <div class="mb-2">A template named <strong>"{{ importConflict.name }}"</strong> already exists.</div>
+                  <div class="d-flex gap-2 flex-wrap">
+                    <button class="btn btn-sm btn-outline-secondary" @click="showImportRename = !showImportRename">
+                      Rename
+                    </button>
+                    <button class="btn btn-sm btn-warning" @click="submitImport(true)">
+                      Overwrite
+                    </button>
+                  </div>
+                  <div v-if="showImportRename" class="mt-2">
+                    <input
+                      type="text"
+                      class="form-control form-control-sm"
+                      v-model="importRenameTo"
+                      placeholder="New template name"
+                    />
+                  </div>
+                </div>
+                <div v-if="importError" class="alert alert-danger mb-3">{{ importError }}</div>
+              </div>
+              <div class="card-footer d-flex justify-content-end gap-2">
+                <button class="btn btn-secondary btn-sm" @click="closeImportModal">Cancel</button>
+                <button
+                  class="btn btn-primary btn-sm"
+                  :disabled="isImporting || !importJsonText.trim()"
+                  @click="submitImport(false)"
+                >
+                  <span v-if="isImporting" class="spinner-border spinner-border-sm me-1"></span>
+                  Import
+                </button>
               </div>
             </div>
           </div>
@@ -274,7 +343,7 @@ import { useRouter } from 'vue-router'
 import { useProjectStore } from '@/stores/project'
 import { useSessionStore } from '@/stores/session'
 import { useUIStore } from '@/stores/ui'
-import { api } from '@/utils/api'
+import { api, getAuthToken } from '@/utils/api'
 import QuickSettingsPanel from './QuickSettingsPanel.vue'
 import AdvancedSettingsPanel from './AdvancedSettingsPanel.vue'
 import PermissionPreviewModal from './PermissionPreviewModal.vue'
@@ -321,6 +390,15 @@ const saveAsTemplateError = ref('')
 // Issue #580: Update-template-from-session state
 const updateTargetTemplateId = ref(null)
 const templateDiff = ref(null)
+
+// Issue #797: Import template state
+const showImportModal = ref(false)
+const importJsonText = ref('')
+const importConflict = ref(null)   // { name, existing_template_id }
+const importError = ref('')
+const isImporting = ref(false)
+const showImportRename = ref(false)
+const importRenameTo = ref('')
 
 // --- CONFIG_FIELDS schema (issue #731) ---
 // Each field: { default, change, contexts, trackState?, toPayload?, toUpdatePayload?, fromSource?, compare? }
@@ -960,6 +1038,98 @@ async function deleteTemplate(template) {
   }
 }
 
+// Issue #797: Export template
+async function exportTemplate(template) {
+  try {
+    const token = getAuthToken()
+    const headers = token ? { Authorization: `Bearer ${token}` } : {}
+    const response = await fetch(`/api/templates/${template.template_id}/export`, { headers })
+    if (!response.ok) throw new Error(`HTTP ${response.status}`)
+    const blob = await response.blob()
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    const disposition = response.headers.get('Content-Disposition') || ''
+    const match = disposition.match(/filename="([^"]+)"/)
+    a.download = match ? match[1] : `${template.name}.template.json`
+    a.href = url
+    a.click()
+    URL.revokeObjectURL(url)
+  } catch (error) {
+    console.error('Failed to export template:', error)
+    errorMessage.value = 'Failed to export template'
+  }
+}
+
+// Issue #797: Import template modal
+function openImportModal() {
+  importJsonText.value = ''
+  importConflict.value = null
+  importError.value = ''
+  isImporting.value = false
+  showImportRename.value = false
+  importRenameTo.value = ''
+  showImportModal.value = true
+}
+
+function closeImportModal() {
+  showImportModal.value = false
+}
+
+function onImportFileChange(event) {
+  const file = event.target.files?.[0]
+  if (!file) return
+  const reader = new FileReader()
+  reader.onload = (e) => { importJsonText.value = e.target.result }
+  reader.readAsText(file)
+}
+
+async function submitImport(overwrite) {
+  importError.value = ''
+  importConflict.value = null
+
+  let envelope
+  try {
+    envelope = JSON.parse(importJsonText.value)
+  } catch {
+    importError.value = 'Invalid JSON — please check the pasted content.'
+    return
+  }
+
+  if (!envelope?.template?.name) {
+    importError.value = 'Invalid template file: missing template.name field.'
+    return
+  }
+
+  // Apply rename if requested
+  if (showImportRename.value && importRenameTo.value.trim()) {
+    envelope = {
+      ...envelope,
+      template: { ...envelope.template, name: importRenameTo.value.trim() }
+    }
+  }
+
+  isImporting.value = true
+  try {
+    await api.post('/api/templates/import', { ...envelope, overwrite })
+    closeImportModal()
+    await loadTemplates()
+  } catch (error) {
+    const detail = error.data?.detail
+    if (error.status === 409 && detail?.error === 'name_conflict') {
+      importConflict.value = {
+        name: detail.name,
+        existing_template_id: detail.existing_template_id,
+      }
+      showImportRename.value = false
+      importRenameTo.value = detail.name
+    } else {
+      importError.value = (typeof detail === 'string' ? detail : null) || 'Failed to import template'
+    }
+  } finally {
+    isImporting.value = false
+  }
+}
+
 // Issue #580: Build template config object from session data
 function buildTemplateFromSession() {
   const session = editSession.value
@@ -1529,6 +1699,24 @@ onUnmounted(() => {
   width: 1rem;
   height: 1rem;
   border-width: 0.15em;
+}
+
+/* Issue #797: Import modal overlay */
+.import-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 1060;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.import-modal-box {
+  width: 100%;
+  max-width: 520px;
+  max-height: 90vh;
+  overflow-y: auto;
 }
 
 /* Warning banner (Issue #459) */
