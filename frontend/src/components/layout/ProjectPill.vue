@@ -67,6 +67,7 @@ function handleClick() {
 }
 
 function navigateToOverview() {
+  uiStore.setBrowsingProject(props.project.project_id)
   router.push(`/project/${props.project.project_id}`)
 }
 
