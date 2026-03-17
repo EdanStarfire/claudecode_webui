@@ -347,7 +347,7 @@ class McpConfigExportRequest(BaseModel):
 
 
 class McpConfigImportRequest(BaseModel):
-    servers: list[dict]  # List of portable server objects
+    servers: dict[str, dict]  # Named dict: {serverName: {type, command, ...}}
     dry_run: bool = True
 
 
@@ -3314,15 +3314,15 @@ class ClaudeWebUI:
 
         @self.app.post("/api/mcp-configs/export")
         async def export_mcp_configs(request: McpConfigExportRequest):
-            """Export MCP server configurations as portable JSON (issue #788)"""
+            """Export MCP server configurations as portable named dict (issue #788)"""
             try:
                 all_configs = await self.coordinator.mcp_config_manager.list_configs()
                 if request.ids is not None:
                     id_set = set(request.ids)
                     all_configs = [c for c in all_configs if c.id in id_set]
-                portable = []
+                portable: dict = {}
                 for c in all_configs:
-                    entry: dict = {"name": c.name, "type": c.type, "enabled": c.enabled}
+                    entry: dict = {"type": c.type, "enabled": c.enabled}
                     if c.type == "stdio":
                         entry["command"] = c.command
                         if c.args:
@@ -3333,7 +3333,7 @@ class ClaudeWebUI:
                         entry["url"] = c.url
                         if c.headers:
                             entry["headers"] = c.headers
-                    portable.append(entry)
+                    portable[c.name] = entry
                 return portable
             except Exception as e:
                 logger.exception("Failed to export MCP configs")
@@ -3349,8 +3349,8 @@ class ClaudeWebUI:
                 preview = []
                 imported = []
 
-                for server_data in request.servers:
-                    name = (server_data.get("name") or "").strip()
+                for name, server_data in request.servers.items():
+                    name = name.strip()
                     if not name:
                         preview.append({"name": "", "action": "skip", "reason": "Missing name"})
                         continue
@@ -3373,7 +3373,7 @@ class ClaudeWebUI:
                     entry: dict = {
                         "name": name,
                         "action": action,
-                        "config": {k: v for k, v in server_data.items() if k != "name"},
+                        "config": dict(server_data),
                     }
                     if existing:
                         entry["existing_id"] = existing.id

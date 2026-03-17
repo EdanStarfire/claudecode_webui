@@ -179,7 +179,7 @@
     <div v-if="showImport" class="config-form mt-2 p-2 border rounded">
       <h6 class="mb-2">Import MCP Servers</h6>
       <p class="text-muted small mb-2">
-        Paste a JSON object or array of MCP server configurations.
+        Paste a JSON object with server names as keys (standard <code>mcpServers</code> format).
         New servers will be added; existing servers (matched by name) will be updated.
       </p>
 
@@ -191,7 +191,7 @@
             class="form-control form-control-sm font-monospace"
             v-model="importJson"
             rows="6"
-            placeholder='[{"name": "my-server", "type": "stdio", "command": "npx", "args": ["-y", "@my/mcp"]}]'
+            placeholder='{"my-server": {"type": "stdio", "command": "npx", "args": ["-y", "@my/mcp"]}}'
           ></textarea>
         </div>
         <div v-if="importError" class="alert alert-danger py-1 small mb-2">{{ importError }}</div>
@@ -410,11 +410,11 @@ async function doDelete() {
   }
 }
 
-// Export: copy a single server as JSON
+// Export: copy a single server as named dict {"serverName": {...}}
 async function copyServer(config) {
   try {
     const result = await configStore.exportConfigs([config.id])
-    await navigator.clipboard.writeText(JSON.stringify(result[0], null, 2))
+    await navigator.clipboard.writeText(JSON.stringify(result, null, 2))
     copiedId.value = config.id
     setTimeout(() => { copiedId.value = null }, 2000)
   } catch {
@@ -422,7 +422,7 @@ async function copyServer(config) {
   }
 }
 
-// Export: copy all servers as JSON array
+// Export: copy all servers as named dict
 async function exportAll() {
   try {
     const result = await configStore.exportConfigs()
@@ -434,20 +434,27 @@ async function exportAll() {
   }
 }
 
+// Parse import JSON — accepts named dict {"name": {...}} format
+function parseImportJson(raw) {
+  const parsed = JSON.parse(raw.trim())
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    throw new Error('Expected a JSON object with server names as keys')
+  }
+  return parsed
+}
+
 // Import: validate and preview
 async function previewImport() {
   importError.value = null
   saving.value = true
   try {
-    let parsed
+    let servers
     try {
-      parsed = JSON.parse(importJson.value.trim())
+      servers = parseImportJson(importJson.value)
     } catch (e) {
       importError.value = `Invalid JSON: ${e.message}`
       return
     }
-    // Support single object or array
-    const servers = Array.isArray(parsed) ? parsed : [parsed]
     const result = await configStore.importConfigs(servers, true)
     importPreview.value = result
   } catch (error) {
@@ -463,8 +470,7 @@ async function commitImport() {
   importSuccess.value = null
   saving.value = true
   try {
-    let parsed = JSON.parse(importJson.value.trim())
-    const servers = Array.isArray(parsed) ? parsed : [parsed]
+    const servers = parseImportJson(importJson.value)
     const result = await configStore.importConfigs(servers, false)
     const count = result.imported.length
     importSuccess.value = `Successfully imported ${count} server(s).`
