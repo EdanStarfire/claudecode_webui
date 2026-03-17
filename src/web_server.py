@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import platform
+import re
 import subprocess
 import sys
 import time
@@ -46,6 +47,7 @@ from .session_config import SessionConfigBase
 from .session_coordinator import SessionCoordinator
 from .session_manager import SessionState
 from .skill_manager import SkillManager
+from .template_manager import TemplateConflictError
 from .timestamp_utils import normalize_timestamp
 
 # Get specialized logger for WebSocket lifecycle debugging
@@ -3451,6 +3453,57 @@ class ClaudeWebUI:
                 raise
             except Exception as e:
                 logger.exception("Failed to delete template")
+                raise HTTPException(status_code=500, detail=str(e)) from e
+
+        @self.app.get("/api/templates/{template_id}/export")
+        async def export_template(template_id: str):
+            """Export template as a downloadable JSON envelope"""
+            from fastapi.responses import Response as FastAPIResponse
+            try:
+                template = await self.coordinator.template_manager.get_template(template_id)
+                if not template:
+                    raise HTTPException(status_code=404, detail="Template not found")
+                envelope = {
+                    "version": 1,
+                    "exported_at": datetime.now(UTC).isoformat(),
+                    "template": template.to_dict(),
+                }
+                slug = re.sub(r'[^a-z0-9]+', '_', template.name.strip().lower()).strip('_')
+                filename = f"{slug}.template.json"
+                return FastAPIResponse(
+                    content=json.dumps(envelope, indent=2),
+                    media_type="application/json",
+                    headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+                )
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.exception("Failed to export template")
+                raise HTTPException(status_code=500, detail=str(e)) from e
+
+        @self.app.post("/api/templates/import", status_code=201)
+        async def import_template(request: Request):
+            """Import a template from an export envelope"""
+            try:
+                body = await request.json()
+                template = await self.coordinator.template_manager.import_template(
+                    data=body,
+                    overwrite=bool(body.get("overwrite", False)),
+                )
+                return template.to_dict()
+            except TemplateConflictError as e:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "error": "name_conflict",
+                        "existing_template_id": e.existing_id,
+                        "name": e.name,
+                    },
+                ) from e
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e)) from e
+            except Exception as e:
+                logger.exception("Failed to import template")
                 raise HTTPException(status_code=500, detail=str(e)) from e
 
         @self.app.websocket("/ws/ui")
