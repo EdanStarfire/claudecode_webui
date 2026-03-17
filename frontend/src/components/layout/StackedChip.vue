@@ -13,10 +13,11 @@
       <!-- Peek Cards (collapsed state) -->
       <template v-if="!isExpanded && childIds.length > 0">
         <PeekCard
-          v-for="(childId, index) in visiblePeekIds"
-          :key="childId"
-          :sessionId="childId"
+          v-for="(item, index) in allDescendantsForPeek"
+          :key="item.sessionId"
+          :sessionId="item.sessionId"
           :index="index"
+          :depth="item.depth"
           @click="handlePeekClick"
         />
       </template>
@@ -133,16 +134,29 @@ const isExpanded = computed(() => {
   return uiStore.expandedStacks.has(props.session.session_id) || hasActiveDescendant.value
 })
 
-const visiblePeekIds = computed(() => {
-  return childIds.value
+// Flat DFS traversal of all descendants for peek stack
+// Returns [{sessionId, depth}, ...] in parent→child order
+// depth 1 = direct children, depth 2 = grandchildren, etc.
+const allDescendantsForPeek = computed(() => {
+  const result = []
+  function traverse(ids, depth) {
+    for (const id of ids) {
+      result.push({ sessionId: id, depth })
+      const child = sessionStore.getSession(id)
+      if (child?.child_minion_ids?.length) {
+        traverse(child.child_minion_ids, depth + 1)
+      }
+    }
+  }
+  traverse(childIds.value, 1)
+  return result
 })
 
 // Margin-right for peek card protrusion
 const stackStyle = computed(() => {
-  if (isExpanded.value || childIds.value.length === 0) return {}
-  const peekCount = childIds.value.length
+  if (isExpanded.value || allDescendantsForPeek.value.length === 0) return {}
   return {
-    marginRight: `${peekCount * 22}px`
+    marginRight: `${allDescendantsForPeek.value.length * 22}px`
   }
 })
 
