@@ -742,6 +742,9 @@ class SessionCoordinator:
 
             # Defensively reset processing state on session start
             await self.session_manager.update_processing_state(session_id, False)
+            # Reset pending results counter — stale count from a previous run would cause
+            # is_processing to get stuck true after the next send_message completes.
+            self._pending_results[session_id] = 0
 
             # Check if SDK exists and is running
             sdk = self._active_sdks.get(session_id)
@@ -1519,6 +1522,9 @@ class SessionCoordinator:
             # Reset processing state on error
             try:
                 await self.session_manager.update_processing_state(session_id, False)
+                # Decrement the counter that was incremented before the exception so
+                # it doesn't leave is_processing permanently stuck true.
+                self._pending_results[session_id] = max(0, self._pending_results.get(session_id, 0) - 1)
             except Exception:
                 pass  # Don't fail on state update error
             return False
