@@ -622,3 +622,56 @@ class TestDeleteSessionScheduleCancellation:
         result = await coordinator.delete_session(session_id)
 
         assert result["success"] is True
+
+
+class TestIssue811IsProcessingStuck:
+    """Regression tests for issue #811 — is_processing stuck true when agent is idle."""
+
+    @pytest.mark.asyncio
+    async def test_issue_811_start_session_resets_pending_results_counter(
+        self, temp_coordinator, sample_session_config
+    ):
+        """start_session() must zero _pending_results so a stale counter from a
+        previous run cannot leave is_processing permanently stuck true."""
+        coordinator = temp_coordinator
+        session_id = await coordinator.create_session(**sample_session_config)
+
+        # Simulate a stale counter left over from a previous session run.
+        coordinator._pending_results[session_id] = 3
+
+        mock_sdk = AsyncMock()
+        mock_sdk.start.return_value = True
+        mock_sdk.is_running.return_value = False
+        coordinator.set_sdk_factory(Mock(return_value=mock_sdk))
+
+        await coordinator.start_session(session_id)
+
+        assert coordinator._pending_results.get(session_id) == 0, (
+            "start_session() must reset _pending_results to 0 to prevent is_processing getting stuck"
+        )
+
+    @pytest.mark.asyncio
+    async def test_issue_811_send_message_exception_decrements_pending_results(
+        self, temp_coordinator, sample_session_config
+    ):
+        """When send_message() raises an exception after incrementing the counter,
+        the except block must decrement it so is_processing can clear on next result."""
+        coordinator = temp_coordinator
+        session_id = await coordinator.create_session(**sample_session_config)
+
+        await coordinator.session_manager.update_session_state(session_id, SessionState.ACTIVE)
+
+        mock_sdk = AsyncMock()
+        mock_sdk.send_message.side_effect = RuntimeError("SDK blew up")
+        coordinator._active_sdks[session_id] = mock_sdk
+
+        # Counter starts at 0.
+        assert coordinator._pending_results.get(session_id, 0) == 0
+
+        result = await coordinator.send_message(session_id, "Hello!")
+
+        assert result is False
+        # Counter must be back to 0 — not left at 1.
+        assert coordinator._pending_results.get(session_id, 0) == 0, (
+            "Exception in send_message() must decrement _pending_results so is_processing can clear"
+        )
