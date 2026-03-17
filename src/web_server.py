@@ -342,6 +342,15 @@ class McpConfigUpdateRequest(BaseModel):
     enabled: bool | None = None
 
 
+class McpConfigExportRequest(BaseModel):
+    ids: list[str] | None = None  # If None, export all
+
+
+class McpConfigImportRequest(BaseModel):
+    servers: list[dict]  # List of portable server objects
+    dry_run: bool = True
+
+
 class UIWebSocketManager:
     """Manages global UI WebSocket connections for session state updates"""
 
@@ -3301,6 +3310,121 @@ class ClaudeWebUI:
                 raise HTTPException(status_code=400, detail=str(e)) from e
             except Exception as e:
                 logger.exception("Failed to create MCP config")
+                raise HTTPException(status_code=500, detail=str(e)) from e
+
+        @self.app.post("/api/mcp-configs/export")
+        async def export_mcp_configs(request: McpConfigExportRequest):
+            """Export MCP server configurations as portable JSON (issue #788)"""
+            try:
+                all_configs = await self.coordinator.mcp_config_manager.list_configs()
+                if request.ids is not None:
+                    id_set = set(request.ids)
+                    all_configs = [c for c in all_configs if c.id in id_set]
+                portable = []
+                for c in all_configs:
+                    entry: dict = {"name": c.name, "type": c.type, "enabled": c.enabled}
+                    if c.type == "stdio":
+                        entry["command"] = c.command
+                        if c.args:
+                            entry["args"] = c.args
+                        if c.env:
+                            entry["env"] = c.env
+                    else:
+                        entry["url"] = c.url
+                        if c.headers:
+                            entry["headers"] = c.headers
+                    portable.append(entry)
+                return portable
+            except Exception as e:
+                logger.exception("Failed to export MCP configs")
+                raise HTTPException(status_code=500, detail=str(e)) from e
+
+        @self.app.post("/api/mcp-configs/import")
+        async def import_mcp_configs(request: McpConfigImportRequest):
+            """Import MCP server configurations with dry_run preview support (issue #788)"""
+            try:
+                manager = self.coordinator.mcp_config_manager
+                existing_by_name = {c.name: c for c in manager.configs.values()}
+
+                preview = []
+                imported = []
+
+                for server_data in request.servers:
+                    name = (server_data.get("name") or "").strip()
+                    if not name:
+                        preview.append({"name": "", "action": "skip", "reason": "Missing name"})
+                        continue
+
+                    server_type = server_data.get("type", "stdio")
+                    if server_type not in ("stdio", "sse", "http"):
+                        preview.append({"name": name, "action": "skip", "reason": f"Invalid type: {server_type}"})
+                        continue
+
+                    if server_type == "stdio" and not server_data.get("command"):
+                        preview.append({"name": name, "action": "skip", "reason": "Missing command for stdio server"})
+                        continue
+
+                    if server_type in ("sse", "http") and not server_data.get("url"):
+                        preview.append({"name": name, "action": "skip", "reason": f"Missing url for {server_type} server"})
+                        continue
+
+                    existing = existing_by_name.get(name)
+                    action = "update" if existing else "create"
+                    entry: dict = {
+                        "name": name,
+                        "action": action,
+                        "config": {k: v for k, v in server_data.items() if k != "name"},
+                    }
+                    if existing:
+                        entry["existing_id"] = existing.id
+
+                    if not request.dry_run:
+                        try:
+                            if action == "create":
+                                config = await manager.create_config(
+                                    name=name,
+                                    server_type=server_type,
+                                    command=server_data.get("command"),
+                                    args=server_data.get("args") or [],
+                                    env=server_data.get("env") or {},
+                                    url=server_data.get("url"),
+                                    headers=server_data.get("headers") or {},
+                                    enabled=server_data.get("enabled", True),
+                                )
+                            else:
+                                config = await manager.update_config(
+                                    config_id=existing.id,
+                                    name=name,
+                                    server_type=server_type,
+                                    command=server_data.get("command"),
+                                    args=server_data.get("args") or [],
+                                    env=server_data.get("env") or {},
+                                    url=server_data.get("url"),
+                                    headers=server_data.get("headers") or {},
+                                    enabled=server_data.get("enabled", True),
+                                )
+                            entry["result"] = config.to_dict()
+                            imported.append(config.to_dict())
+                        except Exception as e:
+                            entry["action"] = "skip"
+                            entry["reason"] = str(e)
+
+                    preview.append(entry)
+
+                create_count = sum(1 for p in preview if p["action"] == "create")
+                update_count = sum(1 for p in preview if p["action"] == "update")
+                skip_count = sum(1 for p in preview if p["action"] == "skip")
+
+                return {
+                    "dry_run": request.dry_run,
+                    "preview": preview,
+                    "summary": {"create": create_count, "update": update_count, "skip": skip_count},
+                    "imported": imported,
+                }
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.exception("Failed to import MCP configs")
                 raise HTTPException(status_code=500, detail=str(e)) from e
 
         @self.app.get("/api/mcp-configs/{config_id}")

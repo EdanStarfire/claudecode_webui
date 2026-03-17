@@ -21,6 +21,9 @@
           <span v-if="!config.enabled" class="badge bg-warning text-dark">disabled</span>
         </div>
         <div class="d-flex gap-1">
+          <button class="btn btn-sm btn-outline-secondary config-action-btn" @click="copyServer(config)" :title="copiedId === config.id ? 'Copied!' : 'Copy JSON'">
+            {{ copiedId === config.id ? '✓' : '⎘' }}
+          </button>
           <button class="btn btn-sm btn-outline-primary config-action-btn" @click="editConfig(config)" title="Edit">&#9998;</button>
           <button class="btn btn-sm btn-outline-danger config-action-btn" @click="confirmDelete(config)" title="Delete">&times;</button>
         </div>
@@ -31,14 +34,31 @@
       </div>
     </div>
 
-    <!-- Add button -->
-    <button
-      v-if="!showForm"
-      class="btn btn-outline-primary btn-sm mt-2"
-      @click="startCreate"
-    >
-      + Add MCP Server
-    </button>
+    <!-- Action buttons row -->
+    <div class="d-flex gap-2 mt-2 flex-wrap">
+      <button
+        v-if="!showForm && !showImport"
+        class="btn btn-outline-primary btn-sm"
+        @click="startCreate"
+      >
+        + Add MCP Server
+      </button>
+      <button
+        v-if="!showForm && !showImport && configStore.configList().length > 0"
+        class="btn btn-outline-secondary btn-sm"
+        @click="exportAll"
+        :title="exportCopied ? 'Copied to clipboard!' : 'Export all servers as JSON'"
+      >
+        {{ exportCopied ? '✓ Copied' : '↑ Export All' }}
+      </button>
+      <button
+        v-if="!showForm && !showImport"
+        class="btn btn-outline-secondary btn-sm"
+        @click="showImport = true"
+      >
+        ↓ Import
+      </button>
+    </div>
 
     <!-- Create/Edit form -->
     <div v-if="showForm" class="config-form mt-2 p-2 border rounded">
@@ -155,6 +175,71 @@
       </div>
     </div>
 
+    <!-- Import panel -->
+    <div v-if="showImport" class="config-form mt-2 p-2 border rounded">
+      <h6 class="mb-2">Import MCP Servers</h6>
+      <p class="text-muted small mb-2">
+        Paste a JSON object or array of MCP server configurations.
+        New servers will be added; existing servers (matched by name) will be updated.
+      </p>
+
+      <!-- Paste area (only shown before preview) -->
+      <template v-if="!importPreview">
+        <div class="mb-2">
+          <label class="form-label">JSON Configuration</label>
+          <textarea
+            class="form-control form-control-sm font-monospace"
+            v-model="importJson"
+            rows="6"
+            placeholder='[{"name": "my-server", "type": "stdio", "command": "npx", "args": ["-y", "@my/mcp"]}]'
+          ></textarea>
+        </div>
+        <div v-if="importError" class="alert alert-danger py-1 small mb-2">{{ importError }}</div>
+        <div class="d-flex gap-2">
+          <button class="btn btn-primary btn-sm" @click="previewImport" :disabled="saving || !importJson.trim()">
+            {{ saving ? 'Validating...' : 'Preview Import' }}
+          </button>
+          <button class="btn btn-secondary btn-sm" @click="cancelImport">Cancel</button>
+        </div>
+      </template>
+
+      <!-- Preview results -->
+      <template v-else>
+        <div class="mb-2">
+          <div class="d-flex gap-3 small mb-2">
+            <span class="text-success">+ {{ importPreview.summary.create }} to add</span>
+            <span class="text-warning">~ {{ importPreview.summary.update }} to update</span>
+            <span v-if="importPreview.summary.skip > 0" class="text-danger">✗ {{ importPreview.summary.skip }} skipped</span>
+          </div>
+          <div v-for="item in importPreview.preview" :key="item.name" class="preview-item small">
+            <span
+              class="badge me-1"
+              :class="{
+                'bg-success': item.action === 'create',
+                'bg-warning text-dark': item.action === 'update',
+                'bg-danger': item.action === 'skip',
+              }"
+            >{{ item.action }}</span>
+            <span class="fw-medium">{{ item.name || '(unnamed)' }}</span>
+            <span v-if="item.reason" class="text-muted ms-1">— {{ item.reason }}</span>
+          </div>
+        </div>
+        <div v-if="importError" class="alert alert-danger py-1 small mb-2">{{ importError }}</div>
+        <div v-if="importSuccess" class="alert alert-success py-1 small mb-2">{{ importSuccess }}</div>
+        <div class="d-flex gap-2">
+          <button
+            class="btn btn-primary btn-sm"
+            @click="commitImport"
+            :disabled="saving || importPreview.summary.create + importPreview.summary.update === 0"
+          >
+            {{ saving ? 'Importing...' : `Import ${importPreview.summary.create + importPreview.summary.update} Server(s)` }}
+          </button>
+          <button class="btn btn-outline-secondary btn-sm" @click="importPreview = null">Back</button>
+          <button class="btn btn-secondary btn-sm" @click="cancelImport">Cancel</button>
+        </div>
+      </template>
+    </div>
+
     <!-- Delete confirmation -->
     <div v-if="deletingConfig" class="mt-2 p-2 border border-danger rounded">
       <p class="small mb-2">Delete <strong>{{ deletingConfig.name }}</strong>? Sessions using this server will no longer have it on next restart.</p>
@@ -194,6 +279,17 @@ const newEnvKey = ref('')
 const newEnvVal = ref('')
 const newHeaderKey = ref('')
 const newHeaderVal = ref('')
+
+// Export state
+const copiedId = ref(null)
+const exportCopied = ref(false)
+
+// Import state
+const showImport = ref(false)
+const importJson = ref('')
+const importError = ref(null)
+const importSuccess = ref(null)
+const importPreview = ref(null)
 
 onMounted(() => {
   configStore.fetchConfigs()
@@ -313,6 +409,89 @@ async function doDelete() {
     saving.value = false
   }
 }
+
+// Export: copy a single server as JSON
+async function copyServer(config) {
+  try {
+    const result = await configStore.exportConfigs([config.id])
+    await navigator.clipboard.writeText(JSON.stringify(result[0], null, 2))
+    copiedId.value = config.id
+    setTimeout(() => { copiedId.value = null }, 2000)
+  } catch {
+    // fallback: ignored
+  }
+}
+
+// Export: copy all servers as JSON array
+async function exportAll() {
+  try {
+    const result = await configStore.exportConfigs()
+    await navigator.clipboard.writeText(JSON.stringify(result, null, 2))
+    exportCopied.value = true
+    setTimeout(() => { exportCopied.value = false }, 2000)
+  } catch {
+    // fallback: ignored
+  }
+}
+
+// Import: validate and preview
+async function previewImport() {
+  importError.value = null
+  saving.value = true
+  try {
+    let parsed
+    try {
+      parsed = JSON.parse(importJson.value.trim())
+    } catch (e) {
+      importError.value = `Invalid JSON: ${e.message}`
+      return
+    }
+    // Support single object or array
+    const servers = Array.isArray(parsed) ? parsed : [parsed]
+    const result = await configStore.importConfigs(servers, true)
+    importPreview.value = result
+  } catch (error) {
+    importError.value = error?.data?.detail || error.message || 'Validation failed'
+  } finally {
+    saving.value = false
+  }
+}
+
+// Import: commit after preview
+async function commitImport() {
+  importError.value = null
+  importSuccess.value = null
+  saving.value = true
+  try {
+    let parsed = JSON.parse(importJson.value.trim())
+    const servers = Array.isArray(parsed) ? parsed : [parsed]
+    const result = await configStore.importConfigs(servers, false)
+    const count = result.imported.length
+    importSuccess.value = `Successfully imported ${count} server(s).`
+    // Refresh the config list
+    await configStore.fetchConfigs()
+    // Auto-close after short delay
+    setTimeout(() => {
+      showImport.value = false
+      importJson.value = ''
+      importPreview.value = null
+      importError.value = null
+      importSuccess.value = null
+    }, 1500)
+  } catch (error) {
+    importError.value = error?.data?.detail || error.message || 'Import failed'
+  } finally {
+    saving.value = false
+  }
+}
+
+function cancelImport() {
+  showImport.value = false
+  importJson.value = ''
+  importPreview.value = null
+  importError.value = null
+  importSuccess.value = null
+}
 </script>
 
 <style scoped>
@@ -338,5 +517,14 @@ async function doDelete() {
   justify-content: center;
   font-size: 0.8rem;
   line-height: 1;
+}
+
+.preview-item {
+  padding: 0.2rem 0;
+  border-bottom: 1px solid var(--bs-border-color);
+}
+
+.preview-item:last-child {
+  border-bottom: none;
 }
 </style>

@@ -81,6 +81,15 @@ export const useMcpConfigStore = defineStore('mcpConfig', () => {
     }
   }
 
+  async function exportConfigs(ids = null) {
+    const body = ids ? { ids } : {}
+    return await api.post('/api/mcp-configs/export', body)
+  }
+
+  async function importConfigs(servers, dry_run = true) {
+    return await api.post('/api/mcp-configs/import', { servers, dry_run })
+  }
+
   return {
     configs,
     loading,
@@ -90,5 +99,7 @@ export const useMcpConfigStore = defineStore('mcpConfig', () => {
     createConfig,
     updateConfig,
     deleteConfig,
+    exportConfigs,
+    importConfigs,
   }
 })
