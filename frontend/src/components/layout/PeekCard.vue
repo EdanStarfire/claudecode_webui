@@ -19,7 +19,8 @@ import { useSessionStore } from '@/stores/session'
 
 const props = defineProps({
   sessionId: { type: String, required: true },
-  index: { type: Number, default: 0 }
+  index: { type: Number, default: 0 },
+  depth: { type: Number, default: 1 }
 })
 
 defineEmits(['click'])
@@ -33,9 +34,13 @@ const letter = computed(() => {
   return name.charAt(0).toUpperCase()
 })
 
+const scale = computed(() => Math.max(0.5, Math.pow(0.9, props.depth)))
+
 const peekStyle = computed(() => ({
   right: `${-22 - (props.index * 22)}px`,
-  zIndex: 20 - props.index
+  zIndex: 20 - props.index,
+  transform: `scale(${scale.value})`,
+  transformOrigin: 'right center'
 }))
 
 const statusClass = computed(() => {
