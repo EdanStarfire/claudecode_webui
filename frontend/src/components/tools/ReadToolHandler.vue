@@ -50,6 +50,7 @@
 import { computed, toRef } from 'vue'
 import { useToolResult } from '@/composables/useToolResult'
 import { useResourceStore } from '@/stores/resource'
+import { isImageFile as checkIsImageFile, getImageMimeType } from '@/utils/fileTypes'
 
 const props = defineProps({
   toolCall: {
@@ -89,10 +90,7 @@ const endLine = computed(() => {
 })
 
 // Check if file path indicates an image
-const isImageFile = computed(() => {
-  const path = filePath.value.toLowerCase()
-  return /\.(png|jpg|jpeg|gif|webp|svg|bmp|ico)$/.test(path)
-})
+const isImageFile = computed(() => checkIsImageFile(filePath.value))
 
 // Extract image data from result if present
 // Structure: result.content = [{ type: 'image', source: { type: 'base64', data: '...' } }]
@@ -117,18 +115,7 @@ const imageData = computed(() => {
 // Determine MIME type for image
 const imageMimeType = computed(() => {
   if (!imageData.value) return ''
-
-  const path = filePath.value.toLowerCase()
-  if (path.endsWith('.png')) return 'image/png'
-  if (path.endsWith('.jpg') || path.endsWith('.jpeg')) return 'image/jpeg'
-  if (path.endsWith('.gif')) return 'image/gif'
-  if (path.endsWith('.webp')) return 'image/webp'
-  if (path.endsWith('.svg')) return 'image/svg+xml'
-  if (path.endsWith('.bmp')) return 'image/bmp'
-  if (path.endsWith('.ico')) return 'image/x-icon'
-
-  // Default to PNG if we can't determine
-  return 'image/png'
+  return getImageMimeType(filePath.value)
 })
 
 const previewLimit = 100

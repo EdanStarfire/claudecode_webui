@@ -79,6 +79,7 @@ import { ref, computed } from 'vue'
 import { useMarkdown } from '@/composables/useMarkdown'
 import { useMermaid } from '@/composables/useMermaid'
 import { useResourceStore } from '@/stores/resource'
+import { getFileIconByMimeType as getFileIcon } from '@/utils/fileTypes'
 
 const props = defineProps({
   comm: {
@@ -162,15 +163,6 @@ const { renderedHtml: renderedContent } = useMarkdown(rawContent)
 const attachmentCount = computed(() => {
   return props.comm.attachments ? props.comm.attachments.length : 0
 })
-
-function getFileIcon(mimeType) {
-  if (!mimeType) return '\u{1F4CE}'
-  if (mimeType.startsWith('image/')) return '\u{1F5BC}'
-  if (mimeType.startsWith('text/x-python') || mimeType.includes('javascript') || mimeType.includes('typescript')) return '\u{1F4DD}'
-  if (mimeType.startsWith('text/')) return '\u{1F4C4}'
-  if (mimeType.includes('json') || mimeType.includes('yaml') || mimeType.includes('xml')) return '\u{2699}'
-  return '\u{1F4CE}'
-}
 
 function formatFileSize(bytes) {
   if (!bytes || bytes === 0) return '0 B'
