@@ -96,6 +96,7 @@ export function isImageFile(filename) {
 export function getFileIcon(filename) {
   if (!filename) return FILE_TYPE_ICONS.default
   const ext = '.' + filename.split('.').pop().toLowerCase()
+  if (IMAGE_EXTENSIONS.has(ext)) return '🖼️'
   return FILE_TYPE_ICONS[ext] || FILE_TYPE_ICONS.default
 }
 
