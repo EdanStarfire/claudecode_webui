@@ -65,7 +65,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
     WebSocket auth is handled separately in each WS endpoint handler.
     """
 
-    EXEMPT_PATHS = {'/', '/health', '/api/auth/check'}
+    EXEMPT_PATHS = {'/', '/health', '/api/auth/check', '/oauth/callback'}
     EXEMPT_PREFIXES = ('/assets/',)
 
     def __init__(self, app, auth_token: str):
@@ -329,6 +329,7 @@ class McpConfigCreateRequest(BaseModel):
     url: str | None = None
     headers: dict[str, str] | None = None
     enabled: bool = True
+    oauth_enabled: bool = False
 
 
 class McpConfigUpdateRequest(BaseModel):
@@ -340,6 +341,11 @@ class McpConfigUpdateRequest(BaseModel):
     url: str | None = None
     headers: dict[str, str] | None = None
     enabled: bool | None = None
+    oauth_enabled: bool | None = None
+
+
+class McpOAuthInitiateRequest(BaseModel):
+    redirect_uri: str
 
 
 class McpConfigExportRequest(BaseModel):
@@ -3304,6 +3310,7 @@ class ClaudeWebUI:
                     url=request.url,
                     headers=request.headers,
                     enabled=request.enabled,
+                    oauth_enabled=request.oauth_enabled,
                 )
                 return config.to_dict()
             except ValueError as e:
@@ -3455,6 +3462,7 @@ class ClaudeWebUI:
                     url=request.url,
                     headers=request.headers,
                     enabled=request.enabled,
+                    oauth_enabled=request.oauth_enabled,
                 )
                 return config.to_dict()
             except ValueError as e:
@@ -3475,6 +3483,131 @@ class ClaudeWebUI:
                 raise
             except Exception as e:
                 logger.exception("Failed to delete MCP config")
+                raise HTTPException(status_code=500, detail=str(e)) from e
+
+        # ========== MCP OAuth Endpoints (issue #813) ==========
+
+        @self.app.get("/oauth/callback", response_class=HTMLResponse)
+        async def oauth_callback(request: Request):
+            """Handle OAuth 2.1 authorization code callback.
+
+            Exempt from auth middleware — this route is reached before any token exists.
+            On success broadcasts mcp_oauth_complete to all UI WebSocket clients.
+            """
+            code = request.query_params.get("code")
+            state = request.query_params.get("state")
+            error = request.query_params.get("error")
+
+            if error:
+                error_desc = request.query_params.get("error_description", error)
+                return HTMLResponse(
+                    content=f"""<!DOCTYPE html>
+<html><head><title>OAuth Error</title></head>
+<body style="font-family:sans-serif;text-align:center;padding:40px">
+<h2>&#x274C; Authorization Failed</h2>
+<p>{error_desc}</p>
+<p>You may close this window.</p>
+</body></html>""",
+                    status_code=400,
+                )
+
+            if not code or not state:
+                return HTMLResponse(
+                    content="""<!DOCTYPE html>
+<html><head><title>OAuth Error</title></head>
+<body style="font-family:sans-serif;text-align:center;padding:40px">
+<h2>&#x274C; Missing Parameters</h2>
+<p>Authorization code or state parameter missing.</p>
+<p>You may close this window.</p>
+</body></html>""",
+                    status_code=400,
+                )
+
+            try:
+                server_id = await self.coordinator.oauth_manager.complete_flow(state, code)
+                # Broadcast OAuth completion to all connected UI clients
+                await self.ui_websocket_manager.broadcast_to_all({
+                    "type": "mcp_oauth_complete",
+                    "server_id": server_id,
+                })
+                return HTMLResponse(
+                    content="""<!DOCTYPE html>
+<html><head><title>Connected</title></head>
+<body style="font-family:sans-serif;text-align:center;padding:40px">
+<h2>&#x2705; Connected Successfully</h2>
+<p>MCP server authorized. You may close this window.</p>
+<script>window.close();</script>
+</body></html>"""
+                )
+            except Exception as e:
+                logger.exception("OAuth callback error")
+                return HTMLResponse(
+                    content=f"""<!DOCTYPE html>
+<html><head><title>OAuth Error</title></head>
+<body style="font-family:sans-serif;text-align:center;padding:40px">
+<h2>&#x274C; Authorization Failed</h2>
+<p>{e}</p>
+<p>You may close this window.</p>
+</body></html>""",
+                    status_code=400,
+                )
+
+        @self.app.post("/api/mcp-configs/{config_id}/oauth/initiate")
+        async def initiate_mcp_oauth(config_id: str, request: McpOAuthInitiateRequest):
+            """Initiate OAuth 2.1 flow for an MCP server.
+
+            Returns the authorization URL the frontend should open in a popup.
+            """
+            try:
+                config = await self.coordinator.mcp_config_manager.get_config(config_id)
+                if not config:
+                    raise HTTPException(status_code=404, detail="MCP config not found")
+                if not config.url:
+                    raise HTTPException(status_code=400, detail="OAuth requires a URL-based MCP server")
+                auth_url = await self.coordinator.oauth_manager.start_flow(
+                    server_id=config_id,
+                    server_url=config.url,
+                    redirect_uri=request.redirect_uri,
+                    client_name=f"Claude Code WebUI — {config.name}",
+                )
+                return {"auth_url": auth_url}
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.exception("Failed to initiate OAuth flow for MCP config %s", config_id)
+                raise HTTPException(status_code=500, detail=str(e)) from e
+
+        @self.app.post("/api/mcp-configs/{config_id}/oauth/disconnect")
+        async def disconnect_mcp_oauth(config_id: str):
+            """Clear stored OAuth tokens for an MCP server."""
+            try:
+                config = await self.coordinator.mcp_config_manager.get_config(config_id)
+                if not config:
+                    raise HTTPException(status_code=404, detail="MCP config not found")
+                await self.coordinator.oauth_manager.disconnect(config_id)
+                return {"disconnected": True}
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.exception("Failed to disconnect OAuth for MCP config %s", config_id)
+                raise HTTPException(status_code=500, detail=str(e)) from e
+
+        @self.app.get("/api/mcp-configs/{config_id}/oauth/status")
+        async def get_mcp_oauth_status(config_id: str):
+            """Return whether a stored OAuth token exists for this MCP server."""
+            try:
+                config = await self.coordinator.mcp_config_manager.get_config(config_id)
+                if not config:
+                    raise HTTPException(status_code=404, detail="MCP config not found")
+                token = await self.coordinator.oauth_manager.get_stored_token(config_id)
+                return {
+                    "authenticated": token is not None,
+                    "has_token": token is not None,
+                }
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.exception("Failed to get OAuth status for MCP config %s", config_id)
                 raise HTTPException(status_code=500, detail=str(e)) from e
 
         # ========== Template Endpoints ==========

@@ -74,6 +74,10 @@ class SessionCoordinator:
         from src.mcp_config_manager import McpConfigManager
         self.mcp_config_manager = McpConfigManager(self.data_dir)
 
+        # OAuth 2.1 flow manager for MCP servers (issue #813)
+        from src.oauth_manager import OAuthFlowManager
+        self.oauth_manager = OAuthFlowManager(self.data_dir)
+
         # Active SDK instances
         self._active_sdks: dict[str, ClaudeSDK] = {}
         self._storage_managers: dict[str, DataStorageManager] = {}
@@ -156,6 +160,27 @@ class SessionCoordinator:
     def set_sdk_factory(self, factory):
         """Set custom SDK factory for testing (e.g., MockClaudeSDK)."""
         self._sdk_factory = factory
+
+    async def _get_mcp_sdk_config(self, mcp_cfg) -> dict:
+        """Return SDK config for an MCP server, injecting OAuth Bearer token when applicable.
+
+        For HTTP/SSE servers with oauth_enabled=True, reads the stored encrypted token
+        and adds an Authorization: Bearer header. Replaces direct mcp_cfg.to_sdk_config()
+        calls so that OAuth-authenticated servers always have fresh credentials injected.
+        """
+        config = mcp_cfg.to_sdk_config()
+        if mcp_cfg.oauth_enabled and mcp_cfg.type in ("sse", "http"):
+            try:
+                token = await self.oauth_manager.get_stored_token(mcp_cfg.id)
+                if token:
+                    headers = dict(config.get("headers") or {})
+                    headers["Authorization"] = f"Bearer {token.access_token}"
+                    config["headers"] = headers
+            except Exception as exc:
+                logger.warning(
+                    "Failed to inject OAuth token for MCP server %s: %s", mcp_cfg.id, exc
+                )
+        return config
 
     async def initialize(self):
         """Initialize the session coordinator"""
@@ -455,7 +480,7 @@ class SessionCoordinator:
             if config.mcp_server_ids:
                 selected_configs = self.mcp_config_manager.get_configs_by_ids(config.mcp_server_ids)
                 for mcp_cfg in selected_configs:
-                    mcp_servers[mcp_cfg.slug] = mcp_cfg.to_sdk_config()
+                    mcp_servers[mcp_cfg.slug] = await self._get_mcp_sdk_config(mcp_cfg)
                     mcp_tools_list.append(f"mcp__{mcp_cfg.slug}")
                     coord_logger.info(
                         f"Attaching global MCP server '{mcp_cfg.name}' to session {session_id}"
@@ -819,7 +844,7 @@ class SessionCoordinator:
                     session_info.mcp_server_ids
                 )
                 for mcp_cfg in selected_configs:
-                    mcp_servers[mcp_cfg.slug] = mcp_cfg.to_sdk_config()
+                    mcp_servers[mcp_cfg.slug] = await self._get_mcp_sdk_config(mcp_cfg)
                     mcp_tools_list.append(f"mcp__{mcp_cfg.slug}")
                     coord_logger.info(
                         f"Attaching global MCP server '{mcp_cfg.name}' to session {session_id}"
