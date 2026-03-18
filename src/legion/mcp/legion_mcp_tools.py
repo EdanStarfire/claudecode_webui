@@ -616,6 +616,17 @@ class LegionMCPTools:
                 }
 
             for fpath_str in file_paths:
+                # Issue #824: Translate /tmp/ paths for Docker sessions
+                if fpath_str.startswith("/tmp/"):
+                    try:
+                        session_info = await self.system.session_coordinator.session_manager.get_session_info(from_minion_id)
+                        if session_info and getattr(session_info, "docker_enabled", False):
+                            session_dir = self.system.session_coordinator.data_dir / "sessions" / from_minion_id
+                            relative = fpath_str[len("/tmp/"):]
+                            fpath_str = str(session_dir / "tmp" / relative)
+                            logger.debug(f"Translated /tmp path for Docker session {from_minion_id}: {fpath_str}")
+                    except Exception as e:
+                        logger.warning(f"Failed to check docker_enabled for path translation: {e}")
                 fpath = Path(fpath_str)
                 # Validate existence
                 if not fpath.exists():

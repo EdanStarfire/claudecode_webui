@@ -304,3 +304,168 @@ async def test_get_minion_by_name_includes_overseer():
         "get_minion_by_name_in_legion should find sessions by name"
     assert result.session_id == "overseer-session-id"
     assert result.name == "MyOverseer"
+
+
+# Regression tests for issue #824: /tmp path translation for send_comm file attachments
+
+
+def _make_send_comm_system(session_id: str, docker_enabled: bool, data_dir):
+    """Helper: build a mock system for send_comm path-translation tests."""
+    from pathlib import Path
+    from unittest.mock import AsyncMock, MagicMock
+
+    session_info = MagicMock()
+    session_info.docker_enabled = docker_enabled
+
+    session_manager = MagicMock()
+    session_manager.get_session_info = AsyncMock(return_value=session_info)
+
+    session_coordinator = MagicMock()
+    session_coordinator.session_manager = session_manager
+    session_coordinator.data_dir = Path(data_dir)
+
+    mock_system = MagicMock()
+    mock_system.session_coordinator = session_coordinator
+    return mock_system
+
+
+@pytest.mark.asyncio
+async def test_issue_824_tmp_path_translated_for_docker_session(tmp_path):
+    """Issue #824: /tmp/ paths are translated to session tmp dir for Docker sessions."""
+    from src.legion.mcp.legion_mcp_tools import LegionMCPTools
+
+    session_id = "docker-session-abc"
+    mock_system = _make_send_comm_system(session_id, docker_enabled=True, data_dir=tmp_path)
+
+    # Create the translated file so existence check passes
+    translated_dir = tmp_path / "sessions" / session_id / "tmp"
+    translated_dir.mkdir(parents=True)
+    test_file = translated_dir / "output.md"
+    test_file.write_text("hello")
+
+    mcp_tools = LegionMCPTools(mock_system)
+
+    # We only want to exercise the path-translation branch; stub out everything after
+    # the loop by making the comm_router call fail gracefully so we can inspect
+    # whether fpath resolved correctly. We do this by patching the later parts to
+    # raise a known sentinel and catching it.
+    resolved_paths = []
+    original_method = mcp_tools._handle_send_comm
+
+    async def spy_handle(args):
+        # Patch Path.exists to record resolved path, then pretend the rest fails
+        import pathlib
+        _original_exists = pathlib.Path.exists
+
+        def recording_exists(self_path):
+            resolved_paths.append(str(self_path))
+            return _original_exists(self_path)
+
+        pathlib.Path.exists = recording_exists
+        try:
+            return await original_method(args)
+        finally:
+            pathlib.Path.exists = _original_exists
+
+    await spy_handle({
+        "_from_minion_id": session_id,
+        "to_minion_name": "user",
+        "summary": "test",
+        "content": "body",
+        "comm_type": "report",
+        "attachments": '["' + "/tmp/output.md" + '"]',
+    })
+
+    # The translated path should appear in resolved_paths
+    expected = str(tmp_path / "sessions" / session_id / "tmp" / "output.md")
+    assert any(p == expected for p in resolved_paths), (
+        f"Expected translated path {expected} not found in {resolved_paths}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_issue_824_tmp_path_not_translated_for_non_docker_session(tmp_path):
+    """Issue #824: /tmp/ paths are NOT translated when docker_enabled=False."""
+    from src.legion.mcp.legion_mcp_tools import LegionMCPTools
+
+    session_id = "plain-session-xyz"
+    mock_system = _make_send_comm_system(session_id, docker_enabled=False, data_dir=tmp_path)
+
+    mcp_tools = LegionMCPTools(mock_system)
+
+    resolved_paths = []
+    original_method = mcp_tools._handle_send_comm
+
+    async def spy_handle(args):
+        import pathlib
+        _original_exists = pathlib.Path.exists
+
+        def recording_exists(self_path):
+            resolved_paths.append(str(self_path))
+            return _original_exists(self_path)
+
+        pathlib.Path.exists = recording_exists
+        try:
+            return await original_method(args)
+        finally:
+            pathlib.Path.exists = _original_exists
+
+    result = await spy_handle({
+        "_from_minion_id": session_id,
+        "to_minion_name": "user",
+        "summary": "test",
+        "content": "body",
+        "comm_type": "report",
+        "attachments": '["/tmp/output.md"]',
+    })
+
+    # Should have tried the raw /tmp path (file won't exist, error returned)
+    assert any(p == "/tmp/output.md" for p in resolved_paths), (
+        f"/tmp/output.md should be tried untranslated; got {resolved_paths}"
+    )
+    # The result should be an error (file not found at /tmp/output.md)
+    assert result.get("is_error") is True
+
+
+@pytest.mark.asyncio
+async def test_issue_824_non_tmp_path_not_translated(tmp_path):
+    """Issue #824: Non-/tmp/ paths are never translated regardless of docker_enabled."""
+    from src.legion.mcp.legion_mcp_tools import LegionMCPTools
+
+    session_id = "docker-session-def"
+    mock_system = _make_send_comm_system(session_id, docker_enabled=True, data_dir=tmp_path)
+
+    mcp_tools = LegionMCPTools(mock_system)
+
+    resolved_paths = []
+    original_method = mcp_tools._handle_send_comm
+
+    async def spy_handle(args):
+        import pathlib
+        _original_exists = pathlib.Path.exists
+
+        def recording_exists(self_path):
+            resolved_paths.append(str(self_path))
+            return _original_exists(self_path)
+
+        pathlib.Path.exists = recording_exists
+        try:
+            return await original_method(args)
+        finally:
+            pathlib.Path.exists = _original_exists
+
+    result = await spy_handle({
+        "_from_minion_id": session_id,
+        "to_minion_name": "user",
+        "summary": "test",
+        "content": "body",
+        "comm_type": "report",
+        "attachments": '["/home/user/report.md"]',
+    })
+
+    # Path must be used as-is (no translation for non-/tmp/ paths)
+    assert any(p == "/home/user/report.md" for p in resolved_paths), (
+        f"/home/user/report.md should be tried as-is; got {resolved_paths}"
+    )
+    # The result should be an error (file doesn't exist)
+    assert result.get("is_error") is True
