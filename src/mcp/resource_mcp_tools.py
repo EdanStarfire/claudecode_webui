@@ -283,6 +283,20 @@ At least one of resource_id or filename must be provided.""",
                     "is_error": True
                 }
 
+            # Issue #820: Translate /tmp/ paths for Docker sessions
+            if file_path_str.startswith("/tmp/"):
+                try:
+                    session_info = await self.session_coordinator.session_manager.get_session_info(session_id)
+                    if session_info and getattr(session_info, "docker_enabled", False):
+                        session_dir = self.session_coordinator.data_dir / "sessions" / session_id
+                        relative = file_path_str[len("/tmp/"):]
+                        file_path_str = str(session_dir / "tmp" / relative)
+                        logger.debug(
+                            f"Translated /tmp path for Docker session {session_id}: {file_path_str}"
+                        )
+                except Exception as e:
+                    logger.warning(f"Failed to check docker_enabled for path translation: {e}")
+
             # Resolve and validate path
             file_path = Path(file_path_str).expanduser().resolve()
 
