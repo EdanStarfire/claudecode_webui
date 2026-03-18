@@ -11,26 +11,26 @@ When user requests work on an issue:
    - Branch: `feat/issue-{suffix}` based on latest main
    - Invokes `custom-environment-setup` if available (for project-specific config)
    - Spawns **Planner** minion with "Issue Planner" template
-   - Plan will be written to `~/.cc_webui/plans/issue-{suffix}.md`
-2. Planner collaborates with user:
+   - Planner will attach plan FILE to send_comm for review
+2. Planner collaborates with User/Agent:
    - Builds user stories from requirements
    - Creates design artifacts (diagrams, flows)
-   - Iterates based on user feedback
-   - Writes approved plan to file (via custom-plan-manager or plan-manager)
+   - Iterates based on feedback
+   - Attaches plan FILE to completion comm
    - Plan registered as resource (viewable in Resource Gallery)
 3. Planner signals completion via comm
 
-**CRITICAL: Do NOT proceed to the Build phase until the user explicitly runs `/approve_plan <number> [stage]`.** Planner comms saying "plan ready" or "plan written" are **informational status updates**, NOT approval signals. The user may want to iterate with the Planner, request revisions, or ask clarifying questions. Only the explicit `/approve_plan` command from the user indicates approval. Do not spawn a Builder until this command is received.
+**CRITICAL: Do NOT proceed to the Build phase until the User/Agent explicitly invokes `/approve_plan <number> [stage]`.** Planner comms saying "plan ready" or "plan written" are **informational status updates**, NOT approval signals. The User/Agent may want to iterate with the Planner, request revisions, or ask clarifying questions. Only the explicit `/approve_plan` command from the User/Agent indicates approval. Do not spawn a Builder until this command is received.
 
 ### Phase 2: Building
-When user has explicitly approved the plan via `/approve_plan`:
+When User/Agent has explicitly approved the plan via `/approve_plan`:
 1. Use `/approve_plan <number> [stage]` command:
    - **Planner stays alive** (idle, for reference during build)
    - Invokes `custom-environment-setup` if available (for Builder config)
    - Spawns **Builder** minion with "Issue Builder" template in same worktree
-   - Builder receives plan file path in initialization context
+   - Builder receives plan FILE ATTACHMENT in kickoff comm
 2. Builder implements the plan:
-   - Reads approved plan from file (via custom-plan-manager or plan-manager)
+   - Extracts plan from kickoff comm attachment
    - Creates task list and implements changes
    - Runs `custom-build-process`, `custom-quality-check`, `custom-test-process` if available
    - Creates PR and reports completion
@@ -41,7 +41,7 @@ When build is complete:
 1. Notify user with:
    - PR link for code review
    - Any test server URLs (if custom-test-process started them)
-2. User reviews via running servers and PR
+2. User/Agent reviews via running servers and PR
 3. User may iterate with Builder for adjustments
 4. User signals approval when satisfied
 
@@ -51,7 +51,6 @@ When user approves:
    - Runs `custom-cleanup-process` if available (project-specific cleanup)
    - Merges PR (squash merge)
    - Disposes **both** Planner and Builder minions
-   - Deletes plan file from `~/.cc_webui/plans/`
    - Removes worktree
    - Deletes branch
    - Updates main
@@ -62,7 +61,7 @@ All commands support an optional stage parameter for multi-stage workflows:
 - Without stage: suffix = `<number>` (e.g., `42`)
 - With stage: suffix = `<number>-<stage>` (e.g., `501-backend`)
 
-The suffix is used consistently for: worktree, branch, minion names, and plan file.
+The suffix is used consistently for: worktree, branch, and minion names.
 
 ## Key Commands
 
@@ -70,7 +69,7 @@ The suffix is used consistently for: worktree, branch, minion names, and plan fi
 |---------|--------|
 | `/plan_issue <n> [stage]` | Create worktree, spawn Planner |
 | `/approve_plan <n> [stage]` | Spawn Builder (Planner stays alive) |
-| `/approve_issue <n> [stage]` | Merge PR, dispose both, delete plan, clean up |
+| `/approve_issue <n> [stage]` | Merge PR, dispose both, clean up |
 | `/status_workers` | Show all active Planners/Builders with stages |
 
 ## Custom Skill Injection Points
@@ -97,7 +96,7 @@ If a custom skill does not exist, that step is skipped gracefully (or falls back
 - Planners are READ-ONLY (focus on user collaboration)
 - Planners stay alive until `/approve_issue` (not just `/approve_plan`)
 - Builders have full code access (implementation focus)
-- Plans stored in files at `~/.cc_webui/plans/` (not in GitHub comments)
+- Plans transported as comm FILE ATTACHMENTS (not disk paths)
 - Test servers may stay running for user review (project-dependent)
 - Workers operate independently in parallel
 - You relay results to user, escalate blockers
@@ -111,27 +110,27 @@ If a custom skill does not exist, that step is skipped gracefully (or falls back
 
 ## Minion Templates
 
-- **Issue Planner**: Read-only, user Q&A, design, writes plan to file, registers resource
-- **Issue Builder**: Full code access, reads plan from file, implements, creates PR
+- **Issue Planner**: Read-only, User/Agent Q&A, design, writes plan locally, attaches FILE to completion comm
+- **Issue Builder**: Full code access, extracts plan from kickoff comm attachment, implements, creates PR
 
 ## Workflow Summary
 
 ```
-User: "Work on issue #42"
+User/Agent: "Work on issue #42"
      |
 /plan_issue 42 -> Planner-42 spawned
      |
-User <-> Planner (Q&A, design)
+User/Agent <-> Planner (Q&A, design)
      |
-Planner writes plan to ~/.cc_webui/plans/issue-42.md
+Planner attaches plan FILE to completion comm → Orchestrator
      |
 /approve_plan 42 -> Builder-42 spawned (Planner-42 stays alive)
      |
-Builder reads plan, implements, tests, creates PR
+Builder extracts plan from kickoff comm, implements, tests, creates PR
      |
-User reviews via test servers
+User/Agent reviews via test servers
      |
-/approve_issue 42 -> Merged, Planner-42 + Builder-42 disposed, plan deleted
+/approve_issue 42 -> Merged, Planner-42 + Builder-42 disposed
 ```
 
 ### Multi-Stage Example

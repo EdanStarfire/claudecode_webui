@@ -9,7 +9,7 @@ allowed-tools:
 
 ## Status Workers
 
-This skill displays the status of all active Planners, Builders, and their worktrees, including stage information and plan file paths.
+This skill displays the status of all active Planners, Builders, and their worktrees, including stage information.
 
 ### Workflow
 
@@ -47,20 +47,9 @@ For each worker, **invoke `mcp__legion__get_minion_info`**:
 - Check for orphaned worktrees (no minion)
 - Check for branch status
 
-#### 5. Check Plan Files
+Plan status is tracked per-comm (file attachment), not by disk file. No plan file check needed.
 
-For each active worker, check for plan file:
-```bash
-ls "$HOME/.cc_webui/plans/" 2>/dev/null
-```
-
-Match plan files to workers:
-- `issue-42.md` → issue 42, no stage
-- `issue-501-backend.md` → issue 501, stage "backend"
-
-Identify orphaned plan files (plan exists but no active worker).
-
-#### 6. Check Running Servers (if custom skill exists)
+#### 5. Check Running Servers (if custom skill exists)
 
 Check if `custom-environment-setup` skill exists:
 ```bash
@@ -73,7 +62,7 @@ If it exists, **invoke the `custom-environment-setup` skill** to get environment
 
 If it does not exist, skip server/port status display.
 
-#### 7. Display Summary
+#### 6. Display Summary
 
 Show formatted status:
 ```
@@ -86,32 +75,25 @@ Issue #42 - Planner-42 (Planning Phase)
   Status: Collaborating with user
   Worktree: worktrees/issue-42/
   Branch: feat/issue-42
-  Plan: ~/.cc_webui/plans/issue-42.md (exists/pending)
 
 Issue #501 - Planner-501-backend (Planning Phase, stage: backend)
   Status: Idle (awaiting /approve_plan 501 backend)
   Worktree: worktrees/issue-501-backend/
   Branch: feat/issue-501-backend
-  Plan: ~/.cc_webui/plans/issue-501-backend.md (exists)
 
 Issue #501 - Builder-501-frontend (Building Phase, stage: frontend)
   Status: Implementing
   Worktree: worktrees/issue-501-frontend/
   Branch: feat/issue-501-frontend
-  Plan: ~/.cc_webui/plans/issue-501-frontend.md (exists)
   [Environment info from custom-environment-setup if available]
 
 Issue #123 - Builder-123 (Building Phase)
   Status: Testing
   Worktree: worktrees/issue-123/
   Branch: feat/issue-123
-  Plan: ~/.cc_webui/plans/issue-123.md (exists)
 
 Orphaned Worktrees: <count if any>
   - worktrees/issue-789/ (no minion found)
-
-Orphaned Plan Files: <count if any>
-  - ~/.cc_webui/plans/issue-800.md (no active worker)
 ```
 
 ### Skills Used
@@ -125,8 +107,8 @@ Orphaned Plan Files: <count if any>
 
 - Shows real-time status of all Planners and Builders
 - Parses stage suffix from minion names for multi-stage display
-- Shows plan file path and existence status per worker
 - Identifies which phase each issue is in (Planning vs Building)
 - Shows running servers and ports if custom-environment-setup is available
-- Identifies orphaned worktrees (no minion) and orphaned plan files (no worker)
+- Identifies orphaned worktrees (no minion)
+- Plan status tracked per-comm (attachment model), not by file
 - Helps coordinate multiple parallel issues and stages
