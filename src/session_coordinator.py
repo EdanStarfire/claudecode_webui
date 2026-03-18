@@ -167,12 +167,25 @@ class SessionCoordinator:
         For HTTP/SSE servers with oauth_enabled=True, reads the stored encrypted token
         and adds an Authorization: Bearer header. Replaces direct mcp_cfg.to_sdk_config()
         calls so that OAuth-authenticated servers always have fresh credentials injected.
+        Mid-session token expiry is a known limitation: expired tokens are still injected
+        but a warning is logged so operators can detect and re-authenticate.
         """
+        import time as _time
+
         config = mcp_cfg.to_sdk_config()
         if mcp_cfg.oauth_enabled and mcp_cfg.type in ("sse", "http"):
             try:
                 token = await self.oauth_manager.get_stored_token(mcp_cfg.id)
                 if token:
+                    store = self.oauth_manager.get_token_store(mcp_cfg.id)
+                    expiry = await store.get_token_expiry()
+                    if expiry is not None and expiry < _time.time():
+                        logger.warning(
+                            "Injecting expired OAuth token for MCP server %s "
+                            "(expired %.0f s ago). Re-authenticate via the UI.",
+                            mcp_cfg.id,
+                            _time.time() - expiry,
+                        )
                     headers = dict(config.get("headers") or {})
                     headers["Authorization"] = f"Bearer {token.access_token}"
                     config["headers"] = headers

@@ -616,6 +616,17 @@ export const useWebSocketStore = defineStore('websocket', () => {
         console.log('UI WebSocket: Connection established')
         break
 
+      case 'mcp_oauth_complete': {
+        // OAuth flow completed — refresh status badge for that server
+        const serverId = payload.server_id
+        if (serverId) {
+          import('./mcpConfig').then(({ useMcpConfigStore }) => {
+            useMcpConfigStore().fetchOAuthStatus(serverId)
+          })
+        }
+        break
+      }
+
       case 'ping':
         uiLastPingTime.value = Date.now()  // Update heartbeat timestamp
         // Respond to keepalive ping with pong

@@ -90,9 +90,33 @@ export const useMcpConfigStore = defineStore('mcpConfig', () => {
     return await api.post('/api/mcp-configs/import', { servers, dry_run })
   }
 
+  // ========== OAuth Actions ==========
+
+  // Per-server OAuth status cache: configId → "authenticated" | "expired" | "unauthenticated"
+  const oauthStatus = ref(new Map())
+
+  async function fetchOAuthStatus(configId) {
+    try {
+      const data = await api.get(`/api/mcp-configs/${configId}/oauth/status`)
+      oauthStatus.value = new Map(oauthStatus.value.set(configId, data.status))
+    } catch {
+      oauthStatus.value = new Map(oauthStatus.value.set(configId, 'unauthenticated'))
+    }
+  }
+
+  async function initiateOAuth(configId) {
+    return await api.post(`/api/mcp-configs/${configId}/oauth/initiate`, {})
+  }
+
+  async function disconnectOAuth(configId) {
+    await api.post(`/api/mcp-configs/${configId}/oauth/disconnect`, {})
+    oauthStatus.value = new Map(oauthStatus.value.set(configId, 'unauthenticated'))
+  }
+
   return {
     configs,
     loading,
+    oauthStatus,
     configList,
     getConfig,
     fetchConfigs,
@@ -101,5 +125,8 @@ export const useMcpConfigStore = defineStore('mcpConfig', () => {
     deleteConfig,
     exportConfigs,
     importConfigs,
+    fetchOAuthStatus,
+    initiateOAuth,
+    disconnectOAuth,
   }
 })

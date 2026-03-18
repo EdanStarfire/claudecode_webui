@@ -32,6 +32,7 @@ from mcp.client.auth.utils import (
     handle_token_response_scopes,
 )
 from mcp.shared.auth import OAuthClientInformationFull, OAuthClientMetadata, OAuthToken
+from mcp.shared.auth_utils import calculate_token_expiry
 
 logger = logging.getLogger(__name__)
 
@@ -47,8 +48,10 @@ class FernetTokenStore:
         self._key_file = data_dir / "oauth_key.bin"
         self._tokens_dir = data_dir / "oauth_tokens"
         self._clients_dir = data_dir / "oauth_clients"
+        self._expiry_dir = data_dir / "oauth_expiry"
         self._tokens_dir.mkdir(parents=True, exist_ok=True)
         self._clients_dir.mkdir(parents=True, exist_ok=True)
+        self._expiry_dir.mkdir(parents=True, exist_ok=True)
         self._fernet = Fernet(self._get_or_create_key())
 
     def _get_or_create_key(self) -> bytes:
@@ -73,10 +76,31 @@ class FernetTokenStore:
             return None
 
     async def set_tokens(self, tokens: OAuthToken) -> None:
-        """Encrypt and persist OAuthToken for this server."""
+        """Encrypt and persist OAuthToken for this server.
+
+        Also records the absolute expiry timestamp using calculate_token_expiry so
+        that get_token_expiry() can check staleness without knowing the issue time.
+        """
         token_file = self._tokens_dir / f"{self._server_id}.enc"
         encrypted = self._fernet.encrypt(tokens.model_dump_json().encode())
         token_file.write_bytes(encrypted)
+        # Record absolute expiry timestamp at storage time
+        expiry = calculate_token_expiry(tokens.expires_in)
+        expiry_file = self._expiry_dir / f"{self._server_id}.expiry"
+        if expiry is not None:
+            expiry_file.write_text(str(expiry))
+        elif expiry_file.exists():
+            expiry_file.unlink()
+
+    async def get_token_expiry(self) -> float | None:
+        """Return the stored absolute expiry timestamp, or None if not recorded."""
+        expiry_file = self._expiry_dir / f"{self._server_id}.expiry"
+        if not expiry_file.exists():
+            return None
+        try:
+            return float(expiry_file.read_text().strip())
+        except Exception:
+            return None
 
     async def get_client_info(self) -> OAuthClientInformationFull | None:
         """Return decrypted OAuthClientInformationFull for this server, or None."""
@@ -98,10 +122,11 @@ class FernetTokenStore:
         client_file.write_bytes(encrypted)
 
     async def clear(self) -> None:
-        """Delete all stored data (tokens + client info) for this server."""
+        """Delete all stored data (tokens + client info + expiry) for this server."""
         for f in (
             self._tokens_dir / f"{self._server_id}.enc",
             self._clients_dir / f"{self._server_id}.enc",
+            self._expiry_dir / f"{self._server_id}.expiry",
         ):
             if f.exists():
                 f.unlink()

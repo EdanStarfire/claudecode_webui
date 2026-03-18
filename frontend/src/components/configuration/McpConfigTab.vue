@@ -13,14 +13,43 @@
 
     <div v-for="config in configStore.configList()" :key="config.id" class="config-item">
       <div class="d-flex align-items-center justify-content-between">
-        <div class="d-flex align-items-center gap-2">
+        <div class="d-flex align-items-center gap-2 flex-wrap">
           <span class="badge" :class="config.enabled ? 'bg-success' : 'bg-secondary'">
             {{ config.type }}
           </span>
           <span class="fw-medium">{{ config.name }}</span>
           <span v-if="!config.enabled" class="badge bg-warning text-dark">disabled</span>
+          <!-- OAuth status badge for oauth-enabled HTTP/SSE servers -->
+          <span
+            v-if="config.oauth_enabled && (config.type === 'http' || config.type === 'sse')"
+            class="badge"
+            :class="oauthStatusClass(config.id)"
+          >
+            {{ oauthStatusLabel(config.id) }}
+          </span>
         </div>
-        <div class="d-flex gap-1">
+        <div class="d-flex gap-1 align-items-center">
+          <!-- OAuth Connect/Disconnect buttons -->
+          <template v-if="config.oauth_enabled && (config.type === 'http' || config.type === 'sse')">
+            <button
+              v-if="oauthStatusFor(config.id) !== 'authenticated'"
+              class="btn btn-xs btn-outline-success"
+              :disabled="connectingId === config.id"
+              @click="connectOAuth(config)"
+              title="Connect via OAuth 2.1"
+            >
+              {{ connectingId === config.id ? '…' : 'Connect' }}
+            </button>
+            <button
+              v-else
+              class="btn btn-xs btn-outline-secondary"
+              :disabled="disconnectingId === config.id"
+              @click="disconnectOAuth(config)"
+              title="Disconnect OAuth"
+            >
+              {{ disconnectingId === config.id ? '…' : 'Disconnect' }}
+            </button>
+          </template>
           <button class="btn btn-sm btn-outline-secondary config-action-btn" @click="copyServer(config)" :title="copiedId === config.id ? 'Copied!' : 'Copy JSON'">
             {{ copiedId === config.id ? '✓' : '⎘' }}
           </button>
@@ -158,6 +187,26 @@
             </button>
           </div>
         </div>
+
+        <!-- OAuth 2.1 section (HTTP/SSE only) -->
+        <div class="mb-2 border rounded p-2 bg-light">
+          <div class="form-check mb-1">
+            <input class="form-check-input" type="checkbox" id="mcp-oauth-enabled" v-model="form.oauth_enabled" />
+            <label class="form-check-label fw-medium" for="mcp-oauth-enabled">Enable OAuth 2.1</label>
+          </div>
+          <p class="text-muted small mb-1" style="padding-left: 1.5rem;">
+            Uses PKCE + Dynamic Client Registration. Connect after saving.
+          </p>
+          <div v-if="form.oauth_enabled" class="mt-1" style="padding-left: 1.5rem;">
+            <label class="form-label mb-0">Scopes <span class="text-muted">(optional)</span></label>
+            <input
+              type="text"
+              class="form-control form-control-sm"
+              v-model="form.oauth_scope"
+              placeholder="e.g., read write"
+            />
+          </div>
+        </div>
       </template>
 
       <div class="form-check mb-2">
@@ -272,6 +321,8 @@ const form = reactive({
   url: '',
   headers: {},
   enabled: true,
+  oauth_enabled: false,
+  oauth_scope: '',
 })
 
 const rawArgs = ref('')
@@ -291,9 +342,63 @@ const importError = ref(null)
 const importSuccess = ref(null)
 const importPreview = ref(null)
 
-onMounted(() => {
-  configStore.fetchConfigs()
+// OAuth state
+const connectingId = ref(null)
+const disconnectingId = ref(null)
+
+onMounted(async () => {
+  await configStore.fetchConfigs()
+  // Load OAuth status for all oauth-enabled HTTP/SSE servers
+  for (const cfg of configStore.configList()) {
+    if (cfg.oauth_enabled && (cfg.type === 'http' || cfg.type === 'sse')) {
+      configStore.fetchOAuthStatus(cfg.id)
+    }
+  }
 })
+
+// OAuth helpers
+function oauthStatusFor(configId) {
+  return configStore.oauthStatus.get(configId) || 'unauthenticated'
+}
+
+function oauthStatusLabel(configId) {
+  const s = oauthStatusFor(configId)
+  if (s === 'authenticated') return '● auth'
+  if (s === 'expired') return '⚠ expired'
+  return '○ unauth'
+}
+
+function oauthStatusClass(configId) {
+  const s = oauthStatusFor(configId)
+  if (s === 'authenticated') return 'bg-success'
+  if (s === 'expired') return 'bg-warning text-dark'
+  return 'bg-secondary'
+}
+
+async function connectOAuth(config) {
+  connectingId.value = config.id
+  try {
+    const result = await configStore.initiateOAuth(config.id)
+    if (result?.auth_url) {
+      window.open(result.auth_url, '_blank', 'noopener,noreferrer')
+    }
+  } catch (e) {
+    console.error('OAuth initiate failed:', e)
+  } finally {
+    connectingId.value = null
+  }
+}
+
+async function disconnectOAuth(config) {
+  disconnectingId.value = config.id
+  try {
+    await configStore.disconnectOAuth(config.id)
+  } catch (e) {
+    console.error('OAuth disconnect failed:', e)
+  } finally {
+    disconnectingId.value = null
+  }
+}
 
 function resetForm() {
   form.name = ''
@@ -305,6 +410,8 @@ function resetForm() {
   form.url = ''
   form.headers = {}
   form.enabled = true
+  form.oauth_enabled = false
+  form.oauth_scope = ''
   editingId.value = null
   formError.value = null
   newEnvKey.value = ''
@@ -329,6 +436,8 @@ function editConfig(config) {
   form.url = config.url || ''
   form.headers = { ...(config.headers || {}) }
   form.enabled = config.enabled
+  form.oauth_enabled = config.oauth_enabled || false
+  form.oauth_scope = config.oauth_scope || ''
   formError.value = null
   showForm.value = true
 }
@@ -378,6 +487,10 @@ async function saveForm() {
     } else {
       data.url = form.url
       data.headers = Object.keys(form.headers).length > 0 ? form.headers : null
+      data.oauth_enabled = form.oauth_enabled
+      if (form.oauth_enabled && form.oauth_scope.trim()) {
+        data.oauth_scope = form.oauth_scope.trim()
+      }
     }
 
     if (editingId.value) {
@@ -523,6 +636,12 @@ function cancelImport() {
   justify-content: center;
   font-size: 0.8rem;
   line-height: 1;
+}
+
+.btn-xs {
+  padding: 0.1rem 0.4rem;
+  font-size: 0.75rem;
+  line-height: 1.2;
 }
 
 .preview-item {

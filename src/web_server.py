@@ -3594,16 +3594,26 @@ class ClaudeWebUI:
 
         @self.app.get("/api/mcp-configs/{config_id}/oauth/status")
         async def get_mcp_oauth_status(config_id: str):
-            """Return whether a stored OAuth token exists for this MCP server."""
+            """Return OAuth status for this MCP server.
+
+            Returns {"status": "authenticated" | "expired" | "unauthenticated"}.
+            Expiry is determined from the timestamp recorded at token storage time.
+            """
             try:
                 config = await self.coordinator.mcp_config_manager.get_config(config_id)
                 if not config:
                     raise HTTPException(status_code=404, detail="MCP config not found")
                 token = await self.coordinator.oauth_manager.get_stored_token(config_id)
-                return {
-                    "authenticated": token is not None,
-                    "has_token": token is not None,
-                }
+                if token is None:
+                    status = "unauthenticated"
+                else:
+                    store = self.coordinator.oauth_manager.get_token_store(config_id)
+                    expiry = await store.get_token_expiry()
+                    if expiry is not None and expiry < time.time():
+                        status = "expired"
+                    else:
+                        status = "authenticated"
+                return {"status": status}
             except HTTPException:
                 raise
             except Exception as e:
