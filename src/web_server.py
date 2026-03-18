@@ -1823,6 +1823,16 @@ class ClaudeWebUI:
         async def restart_session(session_id: str):
             """Restart a session (disconnect and resume)"""
             try:
+                # Clear any existing callbacks to prevent duplicates
+                if session_id in self.coordinator._message_callbacks:
+                    self.coordinator._message_callbacks[session_id] = []
+
+                # Re-register WebSocket message callback so messages stream after restart
+                self.coordinator.add_message_callback(
+                    session_id,
+                    self._create_message_callback(session_id)
+                )
+
                 # Get permission callback for this session
                 permission_callback = self._create_permission_callback(session_id)
 
