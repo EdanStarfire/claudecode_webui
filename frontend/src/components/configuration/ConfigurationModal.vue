@@ -245,7 +245,8 @@
           </div>
 
           <!-- Form View (create/edit session or template) — Slide Layout -->
-          <div v-else class="config-slide-body">
+          <!-- Issue #815: exclude form when in template-list mode to prevent co-rendering -->
+          <div v-else-if="mode !== 'template-list'" class="config-slide-body">
             <div class="slide-container" :class="{ 'show-advanced': showAdvanced }">
               <QuickSettingsPanel
                 class="slide-panel"
@@ -1736,4 +1737,5 @@ onUnmounted(() => {
   border-color: #f0e6c0;
   color: #664d03;
 }
+
 </style>
