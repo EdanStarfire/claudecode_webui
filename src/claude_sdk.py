@@ -590,7 +590,7 @@ class ClaudeSDK:
                             self._session_health_checks["total_responses_received"] += 1
                             self._session_health_checks["last_successful_response"] = time.time()
                     except Exception as consumer_err:
-                        if not self._shutdown_event.is_set():
+                        if not self._shutdown_event.is_set() and not asyncio.current_task().cancelling() > 0:
                             logger.exception("Error in global response consumer")
                             # Issue #781: Parse the error for actionable diagnostics
                             # and surface it to the user via error callback
