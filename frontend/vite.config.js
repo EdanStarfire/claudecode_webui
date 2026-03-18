@@ -34,6 +34,13 @@ export default defineConfig({
         target: BACKEND_URL.replace('http://', 'ws://'),
         ws: true,
         changeOrigin: true
+      },
+
+      // Proxy OAuth callback so redirect_uri can use window.location.origin in dev
+      '/oauth': {
+        target: BACKEND_URL,
+        changeOrigin: true,
+        secure: false
       }
     }
   },

@@ -45,6 +45,8 @@ class McpServerConfig:
     headers: dict[str, str] = field(default_factory=dict)
     # metadata
     enabled: bool = True
+    # OAuth 2.1 support (issue #813)
+    oauth_enabled: bool = False
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
@@ -62,6 +64,7 @@ class McpServerConfig:
         data.setdefault('env', {})
         data.setdefault('headers', {})
         data.setdefault('enabled', True)
+        data.setdefault('oauth_enabled', False)
         if isinstance(data.get('created_at'), str):
             data['created_at'] = datetime.fromisoformat(data['created_at'])
         if isinstance(data.get('updated_at'), str):
@@ -145,6 +148,7 @@ class McpConfigManager:
         url: str | None = None,
         headers: dict[str, str] | None = None,
         enabled: bool = True,
+        oauth_enabled: bool = False,
     ) -> McpServerConfig:
         """Create a new MCP server configuration."""
         if not name or not name.strip():
@@ -175,6 +179,7 @@ class McpConfigManager:
             url=url,
             headers=headers or {},
             enabled=enabled,
+            oauth_enabled=oauth_enabled,
         )
 
         await self._save_config(config)
@@ -201,6 +206,7 @@ class McpConfigManager:
         url: str | None = None,
         headers: dict[str, str] | None = None,
         enabled: bool | None = None,
+        oauth_enabled: bool | None = None,
     ) -> McpServerConfig:
         """Update existing MCP server configuration."""
         config = self.configs.get(config_id)
@@ -233,6 +239,8 @@ class McpConfigManager:
             config.headers = headers
         if enabled is not None:
             config.enabled = enabled
+        if oauth_enabled is not None:
+            config.oauth_enabled = oauth_enabled
 
         config.updated_at = datetime.now(UTC)
 
