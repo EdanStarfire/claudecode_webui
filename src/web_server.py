@@ -1692,6 +1692,36 @@ class ClaudeWebUI:
                 logger.exception("Failed to download resource")
                 raise HTTPException(status_code=500, detail=str(e)) from e
 
+        # Issue #820: Serve session /tmp files directly (for containerized agents)
+        @self.app.get("/api/sessions/{session_id}/tmp/{path:path}")
+        async def get_session_tmp_file(session_id: str, path: str):
+            """Serve a file from the session's /tmp directory (for containerized agents)."""
+            import mimetypes
+
+            from fastapi.responses import FileResponse
+
+            # Validate session exists
+            session_info = await self.coordinator.session_manager.get_session_info(session_id)
+            if not session_info:
+                raise HTTPException(status_code=404, detail="Session not found")
+
+            tmp_dir = (self.coordinator.data_dir / "sessions" / session_id / "tmp").resolve()
+            requested = (tmp_dir / path).resolve()
+
+            # Security: path must remain within session tmp dir (prevent traversal)
+            if not str(requested).startswith(str(tmp_dir) + "/") and requested != tmp_dir:
+                raise HTTPException(status_code=403, detail="Access denied")
+
+            if not requested.exists() or not requested.is_file():
+                raise HTTPException(status_code=404, detail="File not found")
+
+            media_type, _ = mimetypes.guess_type(str(requested))
+            return FileResponse(
+                path=str(requested),
+                media_type=media_type or "application/octet-stream",
+                filename=requested.name,
+            )
+
         # Issue #423: Remove resource from session display (soft-remove)
         @self.app.delete("/api/sessions/{session_id}/resources/{resource_id}")
         async def remove_session_resource(session_id: str, resource_id: str):

@@ -970,6 +970,12 @@ class SessionCoordinator:
                 gh_config = Path.home() / ".config" / "gh"
                 if gh_config.exists():
                     extra_mounts.append(f"{gh_config}:{docker_home}/.config/gh:ro")
+                # Issue #820: Mount session-specific /tmp dir so container /tmp is host-accessible
+                # IMPORTANT: mkdir must happen BEFORE adding to extra_mounts — Docker bind-mount
+                # fails at container start if the host source path does not already exist.
+                tmp_dir = session_dir / "tmp"
+                tmp_dir.mkdir(exist_ok=True)
+                extra_mounts.append(f"{tmp_dir}:/tmp")
                 effective_cli_path, docker_env_vars = resolve_docker_cli_path(
                     docker_image=session_info.docker_image,
                     docker_extra_mounts=extra_mounts or None,
@@ -1143,6 +1149,15 @@ class SessionCoordinator:
 
             # Terminate session through manager
             success = await self.session_manager.terminate_session(session_id)
+
+            # Issue #820: Clean up session /tmp directory on session end
+            try:
+                tmp_dir = self.session_manager.sessions_dir / session_id / "tmp"
+                if tmp_dir.exists():
+                    shutil.rmtree(tmp_dir, ignore_errors=True)
+                    coord_logger.info(f"Cleaned up /tmp for session {session_id}")
+            except Exception:
+                logger.exception(f"Failed to clean up /tmp for session {session_id}")
 
             # Cleanup storage and callbacks
             if session_id in self._storage_managers:

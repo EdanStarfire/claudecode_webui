@@ -722,3 +722,48 @@ class TestIssue819DockerHistoryMount:
         assert any(m.endswith(":ro") for m in history_mounts), (
             "history/ must be mounted read-only (:ro)"
         )
+
+
+class TestIssue820TmpMount:
+    """Tests for session-specific /tmp mount (Issue #820)."""
+
+    @pytest.mark.asyncio
+    async def test_issue_820_terminate_session_cleans_tmp_dir(self, temp_coordinator, sample_session_config):
+        """terminate_session() removes the {session_dir}/tmp/ directory when it exists."""
+        coordinator = temp_coordinator
+        session_id = await coordinator.create_session(**sample_session_config)
+
+        # Create the tmp directory and a file inside it
+        session_dir = coordinator.session_manager.sessions_dir / session_id
+        tmp_dir = session_dir / "tmp"
+        tmp_dir.mkdir(exist_ok=True)
+        (tmp_dir / "test.txt").write_text("hello")
+
+        assert tmp_dir.exists()
+
+        mock_sdk = AsyncMock()
+        coordinator._active_sdks[session_id] = mock_sdk
+
+        with patch.object(coordinator.session_manager, "terminate_session", return_value=True):
+            await coordinator.terminate_session(session_id)
+
+        # tmp directory must be removed
+        assert not tmp_dir.exists()
+
+    @pytest.mark.asyncio
+    async def test_issue_820_terminate_session_no_tmp_dir_is_safe(self, temp_coordinator, sample_session_config):
+        """terminate_session() succeeds even when {session_dir}/tmp/ does not exist."""
+        coordinator = temp_coordinator
+        session_id = await coordinator.create_session(**sample_session_config)
+
+        session_dir = coordinator.session_manager.sessions_dir / session_id
+        tmp_dir = session_dir / "tmp"
+        assert not tmp_dir.exists()
+
+        mock_sdk = AsyncMock()
+        coordinator._active_sdks[session_id] = mock_sdk
+
+        with patch.object(coordinator.session_manager, "terminate_session", return_value=True):
+            success = await coordinator.terminate_session(session_id)
+
+        assert success is True

@@ -244,3 +244,50 @@ class TestLegacyImages:
 
         resp = await client.get(f"/api/sessions/{sid}/images/nonexistent")
         assert resp.status_code == 404
+
+
+class TestSessionTmpEndpoint:
+    """Tests for GET /api/sessions/{session_id}/tmp/{path} (Issue #820)."""
+
+    async def test_get_existing_tmp_file(self, api_integration_env):
+        """Returns file content for a file that exists in the session tmp dir."""
+        client = api_integration_env["client"]
+        coordinator = api_integration_env["coordinator"]
+        session = await _create_session_with_project(api_integration_env)
+        sid = session["session_id"]
+
+        # Create the tmp dir and write a file directly (simulating container write)
+        tmp_dir = coordinator.data_dir / "sessions" / sid / "tmp"
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        (tmp_dir / "hello.txt").write_text("hello from container")
+
+        resp = await client.get(f"/api/sessions/{sid}/tmp/hello.txt")
+        assert resp.status_code == 200
+        assert resp.content == b"hello from container"
+
+    async def test_get_nonexistent_tmp_file_returns_404(self, api_integration_env):
+        """Returns 404 when the requested file does not exist."""
+        client = api_integration_env["client"]
+        session = await _create_session_with_project(api_integration_env)
+        sid = session["session_id"]
+
+        resp = await client.get(f"/api/sessions/{sid}/tmp/nonexistent.txt")
+        assert resp.status_code == 404
+
+    async def test_path_traversal_returns_403_or_404(self, api_integration_env):
+        """Path traversal attempts are blocked — either 403 (our check) or 404 (URL normalization)."""
+        client = api_integration_env["client"]
+        session = await _create_session_with_project(api_integration_env)
+        sid = session["session_id"]
+
+        # httpx normalizes the URL path before sending, so ../../../etc/passwd may be stripped
+        # by the HTTP layer; either way, the file must not be served (403 or 404 are both safe).
+        resp = await client.get(f"/api/sessions/{sid}/tmp/../../../etc/passwd")
+        assert resp.status_code in (403, 404)
+
+    async def test_invalid_session_returns_404(self, api_integration_env):
+        """Returns 404 for a session that does not exist."""
+        client = api_integration_env["client"]
+
+        resp = await client.get("/api/sessions/nonexistent-session-id/tmp/file.txt")
+        assert resp.status_code == 404
