@@ -936,7 +936,9 @@ class SessionCoordinator:
             docker_env_vars = {}
             if session_info.docker_enabled and not session_info.cli_path:
                 from src.docker_utils import resolve_docker_cli_path
-                # Persistent data dir for Claude session transcripts (enables --resume)
+                # Persistent data dir for Claude session transcripts (enables --resume).
+                # Nested inside session_dir so Claude CLI internals and WebUI session data
+                # are created, backed up, and cleaned up together.
                 docker_data_dir = str(session_dir / "docker_claude_data")
                 # Issue #759: Mount session memory dir into Docker container (RW, at host path)
                 extra_mounts = list(session_info.docker_extra_mounts or [])
@@ -946,10 +948,11 @@ class SessionCoordinator:
                     extra_mounts.append(f"{memory_dir}:{memory_dir}")
                 # Issue #773: Mount session data dirs into Docker (read-only)
                 # These host-side dirs contain files the agent needs to Read:
-                #   resources/ - MCP-registered resources, comm file attachments
+                #   resources/   - MCP-registered resources, comm file attachments
                 #   attachments/ - User-uploaded files via InputArea
+                #   history/     - Distilled history .md files (issue #691)
                 # Mounted at the same absolute path so paths work identically.
-                for subdir in ("resources", "attachments"):
+                for subdir in ("resources", "attachments", "history"):
                     host_dir = session_dir / subdir
                     host_dir.mkdir(exist_ok=True)
                     extra_mounts.append(f"{host_dir}:{host_dir}:ro")

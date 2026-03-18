@@ -675,3 +675,50 @@ class TestIssue811IsProcessingStuck:
         assert coordinator._pending_results.get(session_id, 0) == 0, (
             "Exception in send_message() must decrement _pending_results so is_processing can clear"
         )
+
+
+class TestIssue819DockerHistoryMount:
+    """Regression tests for issue #819 — history/ dir must be mounted in Docker sessions."""
+
+    @pytest.mark.asyncio
+    async def test_issue_819_history_in_extra_mounts(self, temp_coordinator):
+        """start_session() must include history/ in Docker extra mounts (read-only)."""
+        import uuid
+
+        coordinator = temp_coordinator
+
+        project = await coordinator.project_manager.create_project(
+            name="Test Project",
+            working_directory="/test/project",
+        )
+
+        session_id = str(uuid.uuid4())
+        await coordinator.create_session(
+            session_id=session_id,
+            project_id=project.project_id,
+            config=SessionConfig(docker_enabled=True, docker_image="claude-code:local"),
+        )
+
+        captured_mounts = []
+
+        def fake_resolve(docker_image, docker_extra_mounts, workspace, session_data_dir, docker_home_directory):
+            captured_mounts.extend(docker_extra_mounts or [])
+            return "/usr/bin/docker", {}
+
+        mock_sdk = AsyncMock()
+        mock_sdk.start.return_value = True
+        mock_sdk.is_running.return_value = False
+        coordinator.set_sdk_factory(Mock(return_value=mock_sdk))
+
+        with patch("src.docker_utils.resolve_docker_cli_path", fake_resolve):
+            with patch("src.skill_manager.NEW_GLOBAL_SKILLS_DIR") as mock_skills_dir:
+                mock_skills_dir.exists.return_value = False
+                await coordinator.start_session(session_id)
+
+        history_mounts = [m for m in captured_mounts if "/history" in m]
+        assert history_mounts, (
+            f"history/ must appear in Docker extra_mounts. Got: {captured_mounts}"
+        )
+        assert any(m.endswith(":ro") for m in history_mounts), (
+            "history/ must be mounted read-only (:ro)"
+        )
