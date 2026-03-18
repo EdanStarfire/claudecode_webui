@@ -11,16 +11,12 @@ You are an Issue Builder minion responsible for implementing an approved plan fo
 
 ### Phase 1: Plan Retrieval
 
-1. **Fetch Implementation Plan**
-   Check if `custom-plan-manager` skill exists:
-   ```bash
-   ls .claude/skills/custom-plan-manager/SKILL.md 2>/dev/null
-   ```
-   If it exists, invoke `custom-plan-manager` with operation=`read-plan` and issue_number=${ISSUE_NUMBER} and stage=${STAGE} (if provided in init context).
-   The custom skill retrieves the approved plan from the configured issue tracker.
-
-   If it does not exist, invoke `plan-manager` with operation=`read-plan` and issue_number=${ISSUE_NUMBER} and stage=${STAGE} (if provided in init context).
-   The plan-manager reads the plan from `${PLAN_FILE}` (path provided in your initialization context).
+1. **Extract Implementation Plan from Kickoff Comm**
+   The plan was delivered as a FILE ATTACHMENT in your kickoff comm from the Orchestrator.
+   - Check your received comms for the plan file attachment
+   - Read the attached plan file directly using the Read tool
+   - Do NOT invoke plan-manager or custom-plan-manager read-plan
+   - Do NOT use any ${PLAN_FILE} path variable (no longer passed in init context)
 
    Extract all user stories, steps, and acceptance criteria from the plan.
 

@@ -17,6 +17,8 @@ allowed-tools:
 
 File-based plan storage at `~/.cc_webui/plans/`. This is the default plan manager used by the Planner/Builder workflow. Projects can override this by providing a `custom-plan-manager` skill in `.claude/skills/`.
 
+The plan file is for local Planner reference only. Do NOT share file paths across containers.
+
 ### Operations
 
 The first argument (`$1`) is the operation. The second argument (`$2`) is the issue number. The optional third argument (`$3`) is the stage name.
@@ -80,11 +82,17 @@ Writes the plan content to a file and registers it as a resource for the Resourc
 5. **Report path:**
    Output the file path so the caller knows where the plan was stored.
 
+**Note:** The reported path is container-local. Do NOT pass this path to other containers
+(Orchestrator, Builder). Instead, attach the file to your send_comm when reporting completion.
+
 ---
 
 ### Operation: read-plan
 
 **Usage:** `plan-manager read-plan <issue_number> [stage]`
+
+**Note:** This operation is for Planner local use only. The Builder no longer calls
+plan-manager read-plan — it extracts the plan from its kickoff comm FILE ATTACHMENT instead.
 
 Reads and returns the plan content from file.
 
@@ -112,6 +120,9 @@ Reads and returns the plan content from file.
 
 **Usage:** `plan-manager verify-plan <issue_number> [stage]`
 
+**Note:** Local use only. approve_plan no longer calls verify-plan — it extracts the plan
+from the Planner's completion comm attachment instead.
+
 Checks that the plan file exists and returns its absolute path.
 
 **Steps:**
@@ -138,7 +149,11 @@ Checks that the plan file exists and returns its absolute path.
 
 **Usage:** `plan-manager delete-plan <issue_number> [stage]`
 
-Deletes the plan file during cleanup (typically called by `/approve_issue`).
+**Note:** approve_issue no longer calls delete-plan. This operation is kept for manual
+cleanup only. Plans are transported via comm attachments, not retained in `~/.cc_webui/plans/`
+after the workflow completes.
+
+Deletes the plan file during cleanup.
 
 **Steps:**
 
@@ -169,3 +184,7 @@ Deletes the plan file during cleanup (typically called by `/approve_issue`).
 - The `fetch-issue` operation delegates to `github-issue-reader` by default
 - This skill is deployed automatically via the SkillManager symlink system
 - Projects can override by placing a `custom-plan-manager` in `.claude/skills/`
+- `write-plan`: local reference only — do NOT pass path to other containers
+- `read-plan`: for Planner local use only; Builder no longer calls this
+- `verify-plan`: local use only; approve_plan no longer calls this
+- `delete-plan`: no longer called by approve_issue

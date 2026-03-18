@@ -1,7 +1,6 @@
 ---
 name: plan_issue
 description: Start planning phase for an issue by spawning a Planner minion
-disable-model-invocation: true
 argument-hint: <issue_number> [stage]
 allowed-tools:
   - Bash(ls:*)
@@ -32,7 +31,6 @@ This suffix is used consistently:
 - Worktree: `worktrees/issue-{suffix}/`
 - Branch: `feat/issue-{suffix}`
 - Minion: `Planner-{suffix}`
-- Plan file: `~/.cc_webui/plans/issue-{suffix}.md`
 
 ### Workflow
 
@@ -98,18 +96,19 @@ The skill will:
   Working Directory: [worktree path]
   Issue: #$1
   Stage: {$2 if provided, else "default"}
-  Plan File: $HOME/.cc_webui/plans/issue-{suffix}.md
 
   Your mission:
   1. Fetch issue details (use custom-plan-manager fetch-issue if available, else plan-manager fetch-issue)
   2. Explore current implementation using Task tool with Explore subagent
   3. Build user stories from requirements
   4. Create design artifacts (diagrams, flows) as appropriate
-  5. Present to user and iterate based on feedback
-  6. When user approves, write plan using custom-plan-manager write-plan (if available) or plan-manager write-plan
-  7. Send comm to Orchestrator: "Plan written for issue #$1, awaiting user approval"
+  5. Present to User/Agent and iterate based on feedback
+  6. When User/Agent approves, write plan using custom-plan-manager write-plan (if available) or plan-manager write-plan
+  7. Attach the plan FILE to your completion comm to Orchestrator
+     Note: The plan file path is container-local — do NOT pass paths across containers
+  8. Send comm to Orchestrator: "Plan written for issue #$1, awaiting User/Agent approval"
      IMPORTANT: Your comm is informational only. The Orchestrator will NOT
-     auto-transition to building. The user must explicitly invoke /approve_plan $1 {$2 if provided} when ready.
+     auto-transition to building. The User/Agent must explicitly invoke /approve_plan $1 {$2 if provided} when ready.
 
   CRITICAL - Codebase Exploration:
   When you need to understand the codebase structure, find relevant files, or
@@ -157,16 +156,16 @@ Planning started for issue #$1{" (stage: $2)" if stage provided}
 - Planner: Planner-{suffix}
 - Worktree: worktrees/issue-{suffix}/
 - Branch: feat/issue-{suffix}
-- Plan file: ~/.cc_webui/plans/issue-{suffix}.md
+- Plan: Will be attached as FILE to Planner comm for review
 
 The Planner will:
 1. Fetch and analyze the issue
 2. Build user stories from requirements
 3. Create design artifacts as needed
 4. Collaborate with you on requirements
-5. Write approved plan to file (viewable in Resource Gallery)
+5. Attach approved plan FILE to completion comm (viewable in Resource Gallery)
 
-Speak directly with the Planner to refine the plan.
+Speak directly with the Planner or Agent to refine the plan.
 When satisfied, use /approve_plan $1 {$2 if provided} to transition to the Building phase.
 ```
 
@@ -210,7 +209,7 @@ The Planner uses Task tool with Explore subagent for codebase investigation. Thi
 - Stage parameter enables parallel work on the same issue (e.g., backend + frontend)
 - Planner is READ-ONLY by default
 - User collaborates directly with Planner
-- Plan is written to file via plan-manager (or custom-plan-manager override)
+- Plan is written locally then attached as FILE to completion comm
 - Plan is registered as resource for Resource Gallery viewing
 - Worktree cleaned up after issue is merged
 - Environment configuration is project-specific via custom-environment-setup
