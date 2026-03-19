@@ -22,6 +22,7 @@ export const useWebSocketStore = defineStore('websocket', () => {
   // Poll cursors
   let uiCursor = 0
   let sessionCursor = 0
+  const sessionCursors = {}  // Per-session cursor cache to avoid replaying history on switch
 
   // AbortControllers for long-poll requests
   let uiAbortController = null
@@ -107,7 +108,7 @@ export const useWebSocketStore = defineStore('websocket', () => {
 
     currentSessionId.value = sessionId
     sessionPolling = true
-    sessionCursor = 0
+    sessionCursor = sessionCursors[sessionId] || 0
     sessionRetryCount.value = 0
 
     while (sessionPolling && currentSessionId.value === sessionId) {
@@ -137,6 +138,7 @@ export const useWebSocketStore = defineStore('websocket', () => {
           }
         }
         sessionCursor = data.next_cursor
+        sessionCursors[sessionId] = data.next_cursor
 
       } catch (err) {
         if (err.name === 'AbortError') {
@@ -280,7 +282,7 @@ export const useWebSocketStore = defineStore('websocket', () => {
           if (wasProcessing && !payload.data.session.is_processing) {
             notify('task_complete', { sessionName: payload.data.session.name || 'Session' })
           }
-          if (newState === 'paused') {
+          if (newState === 'paused' && priorSession?.state !== 'paused') {
             notify('permission_prompt', { sessionName: payload.data.session.name || 'Session' })
           }
         }
