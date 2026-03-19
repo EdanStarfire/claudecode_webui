@@ -528,12 +528,34 @@ class ClaudeWebUI:
             if session_id in self.coordinator._message_callbacks:
                 self.coordinator._message_callbacks[session_id] = []
 
-            # Register WebSocket callback for this session
+            # Register message callback for this session
             self.coordinator.add_message_callback(
                 session_id,
                 self._create_message_callback(session_id)
             )
-            logger.info(f"Registered WebSocket message callback for session {session_id}")
+            logger.info(f"Registered message callback for session {session_id}")
+
+            # Create session poll queue if not already present
+            if session_id not in self.session_queues:
+                self.session_queues[session_id] = EventQueue()
+
+            # Broadcast project_updated so UI shows new child session in real-time
+            async def _broadcast_session_added():
+                try:
+                    session = await self.coordinator.session_manager.get_session_info(session_id)
+                    if session and session.project_id:
+                        project = await self.coordinator.project_manager.get_project(session.project_id)
+                        if project:
+                            self.ui_queue.append({
+                                "type": "project_updated",
+                                "data": {"project": project.to_dict()}
+                            })
+                            logger.debug(f"Appended project_updated for internally spawned session {session_id}")
+                except Exception:
+                    logger.exception(f"Error broadcasting project_updated for session {session_id}")
+
+            asyncio.ensure_future(_broadcast_session_added())
+
         return registrar
 
     async def _broadcast_comm_notification_to_ui(self, comm):
