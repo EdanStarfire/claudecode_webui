@@ -12,7 +12,6 @@ import subprocess
 import sys
 import time
 import uuid
-from collections import deque
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any
@@ -357,15 +356,17 @@ class EventQueue:
     MAX_SIZE = 5000
 
     def __init__(self):
-        self._events: deque[tuple[int, dict]] = deque()
+        self._events: list[dict] = []
         self._cursor: int = 0
+        self._oldest_cursor: int = 1
         self._waiters: list[asyncio.Event] = []
 
     def append(self, event: dict) -> int:
         self._cursor += 1
-        self._events.append((self._cursor, event))
+        self._events.append(event)
         if len(self._events) > self.MAX_SIZE:
-            self._events.popleft()
+            self._events.pop(0)
+            self._oldest_cursor += 1
         for waiter in self._waiters:
             waiter.set()
         self._waiters.clear()
@@ -374,10 +375,10 @@ class EventQueue:
     def events_since(self, cursor: int) -> tuple[list[dict], int]:
         if not self._events:
             return [], self._cursor
-        oldest_cursor = self._events[0][0]
-        if cursor < oldest_cursor - 1:
-            return [e for _, e in self._events], self._cursor
-        return [e for c, e in self._events if c > cursor], self._cursor
+        if cursor < self._oldest_cursor - 1:
+            return list(self._events), self._cursor
+        start_idx = max(0, cursor - self._oldest_cursor + 1)
+        return self._events[start_idx:], self._cursor
 
     async def wait_for_events(self, cursor: int, timeout: float) -> None:
         _, current = self.events_since(cursor)
