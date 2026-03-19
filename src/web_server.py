@@ -785,6 +785,10 @@ class ClaudeWebUI:
                     working_directory=request.working_directory,
                     max_concurrent_minions=request.max_concurrent_minions
                 )
+                self.ui_queue.append({
+                    "type": "project_updated",
+                    "data": {"project": project.to_dict()}
+                })
                 return {"project": project.to_dict()}
             except Exception as e:
                 logger.exception("Failed to create project")
