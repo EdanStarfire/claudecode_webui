@@ -592,3 +592,38 @@ class DataStorageManager:
         except Exception:
             logger.exception("Failed to count resources")
             return 0
+
+    async def count_resources(self) -> int:
+        """
+        Count active (non-removed) resources without full deserialization.
+
+        Reads each line and checks only the 'type' field to track
+        soft-removal markers, returning the net active resource count.
+
+        Returns:
+            Number of active resource entries
+        """
+        try:
+            if not self.resources_metadata_file.exists():
+                return 0
+
+            adds = 0
+            removes = 0
+            with open(self.resources_metadata_file, encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        try:
+                            entry = json.loads(line)
+                            if entry.get("type") == "remove":
+                                removes += 1
+                            else:
+                                adds += 1
+                        except json.JSONDecodeError:
+                            pass
+
+            return max(0, adds - removes)
+
+        except Exception:
+            logger.exception("Failed to count resources")
+            return 0

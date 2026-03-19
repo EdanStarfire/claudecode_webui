@@ -284,3 +284,49 @@ class TestDataStorageManager:
         timestamp = messages[0]["timestamp"]
         assert isinstance(timestamp, (int, float))
         assert timestamp > 0  # Should be positive Unix timestamp
+
+
+class TestCountResources:
+    """Tests for DataStorageManager.count_resources() — issue #834."""
+
+    def _write_resource_lines(self, manager, lines: list[dict]) -> None:
+        """Write raw resource JSONL entries directly to the metadata file."""
+        manager.resources_dir.mkdir(parents=True, exist_ok=True)
+        with open(manager.resources_metadata_file, "w", encoding="utf-8") as f:
+            for entry in lines:
+                f.write(json.dumps(entry) + "\n")
+
+    @pytest.mark.asyncio
+    async def test_issue_834_count_resources_empty_file(self, temp_storage_manager):
+        """Empty metadata file → 0."""
+        manager = temp_storage_manager
+        assert await manager.count_resources() == 0
+
+    @pytest.mark.asyncio
+    async def test_issue_834_count_resources_no_removes(self, temp_storage_manager):
+        """N add entries, no removes → N."""
+        manager = temp_storage_manager
+        entries = [{"resource_id": str(i), "type": "resource"} for i in range(5)]
+        self._write_resource_lines(manager, entries)
+        assert await manager.count_resources() == 5
+
+    @pytest.mark.asyncio
+    async def test_issue_834_count_resources_with_removes(self, temp_storage_manager):
+        """N add entries, M remove markers → N - M."""
+        manager = temp_storage_manager
+        entries = [{"resource_id": str(i), "type": "resource"} for i in range(4)]
+        entries.append({"resource_id": "0", "type": "remove"})
+        entries.append({"resource_id": "1", "type": "remove"})
+        self._write_resource_lines(manager, entries)
+        assert await manager.count_resources() == 2
+
+    @pytest.mark.asyncio
+    async def test_issue_834_count_resources_all_removed(self, temp_storage_manager):
+        """All entries removed → 0."""
+        manager = temp_storage_manager
+        entries = [
+            {"resource_id": "a", "type": "resource"},
+            {"resource_id": "a", "type": "remove"},
+        ]
+        self._write_resource_lines(manager, entries)
+        assert await manager.count_resources() == 0
