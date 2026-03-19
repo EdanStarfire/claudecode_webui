@@ -444,6 +444,9 @@ class ClaudeWebUI:
         self.ui_queue = EventQueue()
         self.session_queues: dict[str, EventQueue] = {}
 
+        # Inject ui_queue into LegionSystem so legion components can append events directly
+        self.coordinator.legion_system.ui_queue = self.ui_queue
+
         # Initialize MessageProcessor for unified WebSocket message formatting
         self._message_parser = MessageParser()
         self._message_processor = MessageProcessor(self._message_parser)

@@ -261,15 +261,15 @@ class OverseerController:
             permission_callback=permission_callback
         )
 
-        # 14. Broadcast project update to UI WebSocket (new session added)
-        if self.system.ui_websocket_manager:
+        # 14. Broadcast project update to UI poll queue (new session added)
+        if self.system.ui_queue:
             project = await self.system.session_coordinator.project_manager.get_project(legion_id)
             if project:
-                await self.system.ui_websocket_manager.broadcast_to_all({
+                self.system.ui_queue.append({
                     "type": "project_updated",
                     "data": {"project": project.to_dict()}
                 })
-                coord_logger.debug(f"Broadcasted project_updated for legion {legion_id} after minion spawn")
+                coord_logger.debug(f"Appended project_updated for legion {legion_id} after minion spawn")
 
         coord_logger.info(f"Minion {name} spawned by {parent_session.name} (parent={parent_overseer_id}, child={child_minion_id})")
 
@@ -403,8 +403,8 @@ class OverseerController:
             except Exception as e:
                 coord_logger.warning(f"Failed to delete minion session {child_minion_id}: {e}")
         else:
-            # Soft dispose: keep relationships intact, minion can be restarted
-            # Only deregister from capability registry (capabilities are session-specific)
+            # Soft dispose: keep relationships intact, minion can be restarted.
+            # Only deregister from capability registry (capabilities are session-specific).
             for _capability, minion_ids in self.system.legion_coordinator.capability_registry.items():
                 if child_minion_id in minion_ids:
                     minion_ids.remove(child_minion_id)
@@ -426,16 +426,16 @@ class OverseerController:
         )
         await self.system.comm_router.route_comm(dispose_comm)
 
-        # 9. Broadcast project update to UI WebSocket (session state changed or removed)
+        # 9. Broadcast project update to UI poll queue (session state changed or removed)
         legion_id = parent_session.project_id
-        if self.system.ui_websocket_manager:
+        if self.system.ui_queue:
             project = await self.system.session_coordinator.project_manager.get_project(legion_id)
             if project:
-                await self.system.ui_websocket_manager.broadcast_to_all({
+                self.system.ui_queue.append({
                     "type": "project_updated",
                     "data": {"project": project.to_dict()}
                 })
-                coord_logger.debug(f"Broadcasted project_updated for legion {legion_id} after minion disposal")
+                coord_logger.debug(f"Appended project_updated for legion {legion_id} after minion disposal")
 
         coord_logger.info(
             f"Minion {child_minion_name} {action_word} by {parent_session.name} "
