@@ -29,8 +29,7 @@ export const useWebSocketStore = defineStore('websocket', () => {
   let sessionAbortController = null
 
   // Loop control flags
-  let uiPolling = false
-  let sessionPolling = false
+  let uiPollGeneration = 0
 
   // ========== COMPUTED ==========
   const overallStatus = computed(() => {
@@ -52,11 +51,12 @@ export const useWebSocketStore = defineStore('websocket', () => {
 
   // ========== UI POLL LOOP ==========
   async function startUIPolling() {
-    if (uiPolling) return
-    uiPolling = true
+    if (uiConnected.value) return
+    uiConnected.value = true
     uiRetryCount.value = 0
+    const myGeneration = ++uiPollGeneration
 
-    while (uiPolling) {
+    while (uiConnected.value) {
       try {
         uiAbortController = new AbortController()
         const url = getPollUrl('/api/poll/ui', uiCursor)
@@ -86,12 +86,15 @@ export const useWebSocketStore = defineStore('websocket', () => {
         uiRetryCount.value++
         const delay = Math.min(2000 * uiRetryCount.value, 30000)
         await new Promise(resolve => setTimeout(resolve, delay))
+        if (uiPollGeneration === myGeneration) {
+          uiConnected.value = true
+        }
       }
     }
   }
 
   function stopUIPolling() {
-    uiPolling = false
+    uiPollGeneration++
     uiConnected.value = false
     uiAbortController?.abort()
     uiAbortController = null
@@ -107,7 +110,7 @@ export const useWebSocketStore = defineStore('websocket', () => {
     await disconnectSession()
 
     currentSessionId.value = sessionId
-    sessionPolling = true
+    sessionConnected.value = true
     sessionRetryCount.value = 0
 
     // On first connection to this session, start from cursor 0.
@@ -118,17 +121,15 @@ export const useWebSocketStore = defineStore('websocket', () => {
     }
     sessionCursor = sessionCursors[sessionId]
 
-    while (sessionPolling && currentSessionId.value === sessionId) {
+    while (sessionConnected.value && currentSessionId.value === sessionId) {
       try {
         sessionAbortController = new AbortController()
         const url = getPollUrl(`/api/poll/session/${sessionId}`, sessionCursor)
-        sessionConnected.value = true
         const response = await fetch(url, { signal: sessionAbortController.signal })
 
         if (response.status === 404) {
           // Session not found - stop polling
           sessionConnected.value = false
-          sessionPolling = false
           break
         }
 
@@ -155,13 +156,15 @@ export const useWebSocketStore = defineStore('websocket', () => {
         sessionRetryCount.value++
         const delay = Math.min(2000 * sessionRetryCount.value, 30000)
         await new Promise(resolve => setTimeout(resolve, delay))
+        if (currentSessionId.value === sessionId) {
+          sessionConnected.value = true
+        }
       }
     }
   }
 
   function disconnectSession() {
     return new Promise(resolve => {
-      sessionPolling = false
       sessionConnected.value = false
       currentSessionId.value = null
       sessionAbortController?.abort()
