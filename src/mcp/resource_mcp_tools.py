@@ -374,8 +374,8 @@ At least one of resource_id or filename must be provided.""",
             # Check session resource count limit
             storage_manager = await self._get_storage_manager(session_id)
             if storage_manager:
-                existing_resources = await storage_manager.read_resources()
-                if len(existing_resources) >= MAX_RESOURCES_PER_SESSION:
+                resource_count = await storage_manager.count_resources()
+                if resource_count >= MAX_RESOURCES_PER_SESSION:
                     return {
                         "content": [{
                             "type": "text",
