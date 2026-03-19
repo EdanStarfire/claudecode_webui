@@ -7,6 +7,7 @@ for Docker session isolation.
 
 import asyncio
 import logging
+import shutil
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -116,3 +117,40 @@ def resolve_docker_cli_path(
         env_vars["CLAUDE_DOCKER_HOME"] = docker_home_directory
 
     return wrapper_path, env_vars
+
+
+async def translate_docker_tmp_path(
+    file_path: str,
+    session_id: str,
+    session_coordinator,
+) -> str:
+    """Translate /tmp paths to session-scoped tmp dir for Docker sessions."""
+    if not file_path.startswith("/tmp/"):
+        return file_path
+    try:
+        session_info = await session_coordinator.session_manager.get_session_info(session_id)
+        if session_info and getattr(session_info, "docker_enabled", False):
+            session_dir = session_coordinator.data_dir / "sessions" / session_id
+            relative = file_path[len("/tmp/"):]
+            translated = str(session_dir / "tmp" / relative)
+            logger.debug(f"Translated /tmp path for Docker session {session_id}: {translated}")
+            return translated
+    except Exception as e:
+        logger.warning(f"Failed to check docker_enabled for path translation: {e}")
+    return file_path
+
+
+def get_session_tmp_dir(session_dir: Path) -> Path:
+    """Get session's /tmp directory."""
+    return session_dir / "tmp"
+
+
+def cleanup_session_tmp(session_id: str, sessions_dir: Path) -> None:
+    """Clean up session's temporary directory."""
+    try:
+        tmp_dir = sessions_dir / session_id / "tmp"
+        if tmp_dir.exists():
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+            logger.info(f"Cleaned up /tmp for session {session_id}")
+    except Exception:
+        logger.exception(f"Failed to clean up /tmp for session {session_id}")

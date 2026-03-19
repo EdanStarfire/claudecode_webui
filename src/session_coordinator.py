@@ -17,6 +17,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from src.docker_utils import cleanup_session_tmp
 from src.legion.minion_system_prompts import get_legion_guide_only
 
 from .claude_sdk import ClaudeSDK
@@ -936,7 +937,7 @@ class SessionCoordinator:
             effective_cli_path = session_info.cli_path
             docker_env_vars = {}
             if session_info.docker_enabled and not session_info.cli_path:
-                from src.docker_utils import resolve_docker_cli_path
+                from src.docker_utils import get_session_tmp_dir, resolve_docker_cli_path
                 # Persistent data dir for Claude session transcripts (enables --resume).
                 # Nested inside session_dir so Claude CLI internals and WebUI session data
                 # are created, backed up, and cleaned up together.
@@ -974,7 +975,7 @@ class SessionCoordinator:
                 # Issue #820: Mount session-specific /tmp dir so container /tmp is host-accessible
                 # IMPORTANT: mkdir must happen BEFORE adding to extra_mounts — Docker bind-mount
                 # fails at container start if the host source path does not already exist.
-                tmp_dir = session_dir / "tmp"
+                tmp_dir = get_session_tmp_dir(session_dir)
                 tmp_dir.mkdir(exist_ok=True)
                 extra_mounts.append(f"{tmp_dir}:/tmp")
                 effective_cli_path, docker_env_vars = resolve_docker_cli_path(
@@ -1152,13 +1153,7 @@ class SessionCoordinator:
             success = await self.session_manager.terminate_session(session_id)
 
             # Issue #820: Clean up session /tmp directory on session end
-            try:
-                tmp_dir = self.session_manager.sessions_dir / session_id / "tmp"
-                if tmp_dir.exists():
-                    shutil.rmtree(tmp_dir, ignore_errors=True)
-                    coord_logger.info(f"Cleaned up /tmp for session {session_id}")
-            except Exception:
-                logger.exception(f"Failed to clean up /tmp for session {session_id}")
+            cleanup_session_tmp(session_id, self.session_manager.sessions_dir)
 
             # Cleanup storage and callbacks
             if session_id in self._storage_managers:
