@@ -88,7 +88,6 @@
 
     <!-- Stats -->
     <div class="schedule-stats">
-      <span>{{ schedule.execution_count }} runs</span>
       <span v-if="schedule.failure_count > 0" class="failures">
         {{ schedule.failure_count }} consecutive failures
       </span>
