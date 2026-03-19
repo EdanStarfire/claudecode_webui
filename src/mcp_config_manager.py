@@ -13,6 +13,7 @@ import re
 import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
+from enum import Enum
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +21,12 @@ from .logging_config import get_logger
 
 mcp_logger = get_logger('mcp_config', category='MCP_CONFIG')
 logger = logging.getLogger(__name__)
+
+
+class McpServerType(str, Enum):
+    STDIO = "stdio"
+    SSE = "sse"
+    HTTP = "http"
 
 
 def _slugify(name: str) -> str:
@@ -35,7 +42,7 @@ class McpServerConfig:
     id: str
     name: str
     slug: str
-    type: str  # "stdio" | "sse" | "http"
+    type: McpServerType
     # stdio fields
     command: str | None = None
     args: list[str] = field(default_factory=list)
@@ -65,6 +72,8 @@ class McpServerConfig:
         data.setdefault('headers', {})
         data.setdefault('enabled', True)
         data.setdefault('oauth_enabled', False)
+        if 'type' in data and isinstance(data['type'], str):
+            data['type'] = McpServerType(data['type'])
         if isinstance(data.get('created_at'), str):
             data['created_at'] = datetime.fromisoformat(data['created_at'])
         if isinstance(data.get('updated_at'), str):
@@ -79,26 +88,26 @@ class McpServerConfig:
         - sse: McpSSEServerConfig
         - http: McpHttpServerConfig
         """
-        if self.type == "stdio":
+        if self.type == McpServerType.STDIO:
             config: dict[str, Any] = {
-                "type": "stdio",
+                "type": self.type.value,
                 "command": self.command,
                 "args": self.args,
             }
             if self.env:
                 config["env"] = self.env
             return config
-        elif self.type == "sse":
+        elif self.type == McpServerType.SSE:
             config = {
-                "type": "sse",
+                "type": self.type.value,
                 "url": self.url,
             }
             if self.headers:
                 config["headers"] = self.headers
             return config
-        elif self.type == "http":
+        elif self.type == McpServerType.HTTP:
             config = {
-                "type": "http",
+                "type": self.type.value,
                 "url": self.url,
             }
             if self.headers:
@@ -141,7 +150,7 @@ class McpConfigManager:
     async def create_config(
         self,
         name: str,
-        server_type: str,
+        server_type: str | McpServerType,
         command: str | None = None,
         args: list[str] | None = None,
         env: dict[str, str] | None = None,
@@ -154,14 +163,16 @@ class McpConfigManager:
         if not name or not name.strip():
             raise ValueError("MCP server name cannot be empty")
 
-        if server_type not in ("stdio", "sse", "http"):
-            raise ValueError(f"Invalid server type: {server_type}. Must be stdio, sse, or http")
+        try:
+            server_type_enum = McpServerType(server_type)
+        except ValueError:
+            raise ValueError(f"Invalid server type: {server_type}. Must be stdio, sse, or http") from None
 
-        if server_type == "stdio" and not command:
+        if server_type_enum == McpServerType.STDIO and not command:
             raise ValueError("Command is required for stdio MCP servers")
 
-        if server_type in ("sse", "http") and not url:
-            raise ValueError(f"URL is required for {server_type} MCP servers")
+        if server_type_enum in (McpServerType.SSE, McpServerType.HTTP) and not url:
+            raise ValueError(f"URL is required for {server_type_enum.value} MCP servers")
 
         slug = _slugify(name)
         # Check slug uniqueness
@@ -172,7 +183,7 @@ class McpConfigManager:
             id=str(uuid.uuid4()),
             name=name.strip(),
             slug=slug,
-            type=server_type,
+            type=server_type_enum,
             command=command,
             args=args or [],
             env=env or {},
@@ -223,9 +234,10 @@ class McpConfigManager:
             config.slug = new_slug
 
         if server_type is not None:
-            if server_type not in ("stdio", "sse", "http"):
-                raise ValueError(f"Invalid server type: {server_type}")
-            config.type = server_type
+            try:
+                config.type = McpServerType(server_type)
+            except ValueError:
+                raise ValueError(f"Invalid server type: {server_type}") from None
 
         if command is not None:
             config.command = command

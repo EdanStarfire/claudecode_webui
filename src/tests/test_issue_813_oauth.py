@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from mcp.shared.auth import OAuthClientInformationFull, OAuthToken
 
+from src.mcp_config_manager import McpServerType
 from src.oauth_manager import FernetTokenStore, OAuthFlowManager
 
 # ---------------------------------------------------------------------------
@@ -242,7 +243,7 @@ async def test_get_mcp_sdk_config_injects_bearer_token(tmp_path: Path):
     # Build a minimal McpServerConfig stub
     mcp_cfg = MagicMock()
     mcp_cfg.id = "srv-oauth"
-    mcp_cfg.type = "http"
+    mcp_cfg.type = McpServerType.HTTP
     mcp_cfg.oauth_enabled = True
     mcp_cfg.to_sdk_config.return_value = {
         "type": "http",
@@ -264,7 +265,7 @@ async def test_get_mcp_sdk_config_no_token_no_header(tmp_path: Path):
 
     mcp_cfg = MagicMock()
     mcp_cfg.id = "srv-no-token"
-    mcp_cfg.type = "http"
+    mcp_cfg.type = McpServerType.HTTP
     mcp_cfg.oauth_enabled = True
     mcp_cfg.to_sdk_config.return_value = {
         "type": "http",
@@ -287,7 +288,7 @@ async def test_get_mcp_sdk_config_non_oauth_passthrough(tmp_path: Path):
     expected = {"type": "stdio", "command": "npx", "args": ["-y", "@modelcontextprotocol/server-everything"]}
     mcp_cfg = MagicMock()
     mcp_cfg.id = "srv-stdio"
-    mcp_cfg.type = "stdio"
+    mcp_cfg.type = McpServerType.STDIO
     mcp_cfg.oauth_enabled = False
     mcp_cfg.to_sdk_config.return_value = expected
 

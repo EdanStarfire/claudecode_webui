@@ -23,6 +23,7 @@ from .claude_sdk import ClaudeSDK
 from .data_storage import DataStorageManager
 from .hooks.pretooluse_handler import InternalPermissionHandler
 from .logging_config import get_logger
+from .mcp_config_manager import McpServerType
 from .message_parser import MessageParser, MessageProcessor
 from .models.messages import (
     DisplayProjection,
@@ -173,7 +174,7 @@ class SessionCoordinator:
         import time as _time
 
         config = mcp_cfg.to_sdk_config()
-        if mcp_cfg.oauth_enabled and mcp_cfg.type in ("sse", "http"):
+        if mcp_cfg.oauth_enabled and mcp_cfg.type in (McpServerType.SSE, McpServerType.HTTP):
             try:
                 token = await self.oauth_manager.get_stored_token(mcp_cfg.id)
                 if token:
