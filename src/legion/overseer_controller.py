@@ -435,7 +435,6 @@ class OverseerController:
                     "type": "project_updated",
                     "data": {"project": project.to_dict()}
                 })
-                coord_logger.debug(f"Appended project_updated for legion {legion_id} after minion disposal")
 
         coord_logger.info(
             f"Minion {child_minion_name} {action_word} by {parent_session.name} "

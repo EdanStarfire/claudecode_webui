@@ -86,7 +86,7 @@ const uiStore = useUIStore()
 const currentSessionId = computed(() => sessionStore.currentSessionId)
 
 const childIds = computed(() => {
-  return props.session.child_minion_ids || []
+  return (props.session.child_minion_ids || []).filter(id => sessionStore.getSession(id))
 })
 
 // Compute max depth of the subtree rooted at this session
