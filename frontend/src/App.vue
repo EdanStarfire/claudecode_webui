@@ -103,10 +103,6 @@ watch(() => taskStore.currentHasTasks, (hasTasks, hadTasks) => {
   }
 })
 
-// Issue #702: Periodic state polling to correct drift from missed WebSocket messages
-const STATE_POLL_INTERVAL_MS = 30000
-let statePollTimer = null
-
 // Initialize app on mount
 onMounted(async () => {
   uiStore.initBackgroundColor()
@@ -151,8 +147,9 @@ async function onAuthenticated() {
 }
 
 async function initializeApp() {
-  // Connect to global UI WebSocket
-  wsStore.connectUI()
+  // Start long-polling for global UI events
+  wsStore.startUIPolling()
+  wsStore.setupVisibilityHandler()
 
   // Load initial data
   await Promise.all([
@@ -167,9 +164,6 @@ async function initializeApp() {
     if (sessionStore.sessions.has(sessionId)) {
       await sessionStore.selectSession(sessionId)
     }
-  } else if (hash.startsWith('#/timeline/')) {
-    const legionId = hash.replace('#/timeline/', '')
-    router.push(`/timeline/${legionId}`)
   }
 
   // Handle browser back/forward
@@ -177,23 +171,12 @@ async function initializeApp() {
 
   // Handle window resize
   window.addEventListener('resize', uiStore.handleResize)
-
-  // Issue #702: Start periodic state polling
-  statePollTimer = setInterval(() => {
-    if (wsStore.uiConnected) {
-      sessionStore.syncSessionStates()
-    }
-  }, STATE_POLL_INTERVAL_MS)
 }
 
 onUnmounted(() => {
-  if (statePollTimer) {
-    clearInterval(statePollTimer)
-    statePollTimer = null
-  }
   window.removeEventListener('popstate', handlePopState)
   window.removeEventListener('resize', uiStore.handleResize)
-  wsStore.disconnectUI()
+  wsStore.stopUIPolling()
 })
 
 function handlePopState() {

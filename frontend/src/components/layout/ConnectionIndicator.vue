@@ -6,7 +6,7 @@
       :class="getIndicatorClass('ui')"
       :title="getTooltip('ui')"
       role="status"
-      :aria-label="`UI WebSocket: ${getStatusLabel('ui')}`"
+      :aria-label="`UI Poll: ${getStatusLabel('ui')}`"
     >
       🌐
     </div>
@@ -17,7 +17,7 @@
       :class="getIndicatorClass('session')"
       :title="getTooltip('session')"
       role="status"
-      :aria-label="`Session WebSocket: ${getStatusLabel('session')}`"
+      :aria-label="`Session Poll: ${getStatusLabel('session')}`"
     >
       💬
     </div>
@@ -64,8 +64,8 @@ function getIndicatorClass(type) {
  */
 function getTooltip(type) {
   const labels = {
-    ui: 'UI WebSocket',
-    session: 'Session WebSocket'
+    ui: 'UI Poll',
+    session: 'Session Poll'
   }
 
   const descriptions = {

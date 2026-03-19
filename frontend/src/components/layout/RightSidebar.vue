@@ -38,9 +38,6 @@
       <!-- Resources Tab -->
       <ResourceGallery v-show="activeTab === 'resources'" role="tabpanel" aria-label="Resources panel" />
 
-      <!-- Comms Tab -->
-      <CommsPanel v-show="activeTab === 'comms'" role="tabpanel" aria-label="Comms panel" />
-
       <!-- Schedules Tab (Issue #495) -->
       <SchedulePanel v-show="activeTab === 'schedules'" role="tabpanel" aria-label="Schedules panel" />
     </div>
@@ -60,7 +57,6 @@ import { useUIStore } from '@/stores/ui'
 import { useTaskStore } from '@/stores/task'
 import { useResourceStore } from '@/stores/resource'
 import { useDiffStore } from '@/stores/diff'
-import { useLegionStore } from '@/stores/legion'
 import { useSessionStore } from '@/stores/session'
 import AgentOverview from './AgentOverview.vue'
 import TaskListPanel from '../tasks/TaskListPanel.vue'
@@ -68,7 +64,6 @@ import ResourceGallery from '../tasks/ResourceGallery.vue'
 import ResourceFullView from '../common/ResourceFullView.vue'
 import DiffPanel from '../tasks/DiffPanel.vue'
 import DiffFullView from '../common/DiffFullView.vue'
-import CommsPanel from '../tasks/CommsPanel.vue'
 import SchedulePanel from '../schedules/SchedulePanel.vue'
 import { useScheduleStore } from '@/stores/schedule'
 
@@ -76,7 +71,6 @@ const uiStore = useUIStore()
 const taskStore = useTaskStore()
 const resourceStore = useResourceStore()
 const diffStore = useDiffStore()
-const legionStore = useLegionStore()
 const sessionStore = useSessionStore()
 const scheduleStore = useScheduleStore()
 
@@ -86,16 +80,6 @@ const activeTab = computed(() => uiStore.rightSidebarActiveTab)
 const taskStats = computed(() => taskStore.currentTaskStats)
 const resourceCount = computed(() => resourceStore.currentResourceCount)
 const diffFileCount = computed(() => diffStore.fileCount)
-const commsCount = computed(() => {
-  const projectId = sessionStore.currentSession?.project_id
-  const sessionId = sessionStore.currentSessionId
-  if (!projectId || !sessionId) return 0
-  const allComms = legionStore.commsByLegion.get(projectId) || []
-  return allComms.filter(c =>
-    c.from_minion_id === sessionId || c.to_minion_id === sessionId
-  ).length
-})
-
 const schedulesCount = computed(() => {
   const projectId = sessionStore.currentSession?.project_id
   if (!projectId) return 0
@@ -108,7 +92,6 @@ const tabs = computed(() => [
   { id: 'diff', label: 'Diff', badge: diffFileCount.value },
   { id: 'tasks', label: 'Tasks', badge: taskStats.value.total > 0 ? taskStats.value.total : 0 },
   { id: 'resources', label: 'Resources', badge: resourceCount.value },
-  { id: 'comms', label: 'Comms', badge: commsCount.value },
   { id: 'schedules', label: 'Sched', badge: schedulesCount.value }
 ])
 

@@ -1,5 +1,5 @@
 """
-FastAPI web server for Claude Code WebUI with WebSocket support.
+FastAPI web server for Claude Code WebUI with HTTP long-polling support.
 """
 
 import asyncio
@@ -12,6 +12,7 @@ import subprocess
 import sys
 import time
 import uuid
+from collections import deque
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any
@@ -24,8 +25,6 @@ from fastapi import (
     HTTPException,
     Request,
     UploadFile,
-    WebSocket,
-    WebSocketDisconnect,
 )
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -33,7 +32,6 @@ from pydantic import BaseModel
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from .file_upload import FileUploadError, FileUploadManager
-from .logging_config import get_logger
 from .message_parser import MessageParser, MessageProcessor
 from .models.messages import (
     PermissionInfo,
@@ -50,10 +48,6 @@ from .skill_manager import SkillManager
 from .template_manager import TemplateConflictError
 from .timestamp_utils import normalize_timestamp
 
-# Get specialized logger for WebSocket lifecycle debugging
-ws_logger = get_logger('websocket_debug', category='WS_LIFECYCLE')
-# Get verbose logger for ping/pong (use only with --debug-ping-pong)
-ws_verbose_logger = get_logger('websocket_verbose', category='WS_PING_PONG')
 # Keep standard logger for errors
 logger = logging.getLogger(__name__)
 
@@ -357,153 +351,47 @@ class McpConfigImportRequest(BaseModel):
     dry_run: bool = True
 
 
-class UIWebSocketManager:
-    """Manages global UI WebSocket connections for session state updates"""
+class EventQueue:
+    """Bounded in-memory event queue for HTTP long-polling."""
+
+    MAX_SIZE = 5000
 
     def __init__(self):
-        self.active_connections: list[WebSocket] = []
+        self._events: deque[tuple[int, dict]] = deque()
+        self._cursor: int = 0
+        self._waiters: list[asyncio.Event] = []
 
-    async def connect(self, websocket: WebSocket):
-        await websocket.accept()
-        self.active_connections.append(websocket)
-        logger.info(f"UI WebSocket connected. Total UI connections: {len(self.active_connections)}")
+    def append(self, event: dict) -> int:
+        self._cursor += 1
+        self._events.append((self._cursor, event))
+        if len(self._events) > self.MAX_SIZE:
+            self._events.popleft()
+        for waiter in self._waiters:
+            waiter.set()
+        self._waiters.clear()
+        return self._cursor
 
-    def disconnect(self, websocket: WebSocket):
-        if websocket in self.active_connections:
-            self.active_connections.remove(websocket)
-        logger.info(f"UI WebSocket disconnected. Total UI connections: {len(self.active_connections)}")
+    def events_since(self, cursor: int) -> tuple[list[dict], int]:
+        if not self._events:
+            return [], self._cursor
+        oldest_cursor = self._events[0][0]
+        if cursor < oldest_cursor - 1:
+            return [e for _, e in self._events], self._cursor
+        return [e for c, e in self._events if c > cursor], self._cursor
 
-    async def broadcast_to_all(self, message: dict):
-        """Broadcast message to all connected UI clients"""
-        if not self.active_connections:
-            logger.debug("No UI WebSocket connections available for broadcasting")
+    async def wait_for_events(self, cursor: int, timeout: float) -> None:
+        _, current = self.events_since(cursor)
+        if current > cursor:
             return
-
-        dead_connections = []
-        for connection in self.active_connections[:]:  # Create a copy to iterate safely
-            try:
-                # Check if connection is still open before attempting to send
-                if connection.client_state.value != 1:  # 1 = OPEN state
-                    logger.warning(f"UI WebSocket connection is not open (state: {connection.client_state.value})")
-                    dead_connections.append(connection)
-                    continue
-
-                await connection.send_json(message)
-                logger.debug(f"Broadcasted message to UI WebSocket: {message.get('type', 'unknown')}")
-
-            except Exception:
-                logger.exception("Error sending to UI WebSocket connection")
-                dead_connections.append(connection)
-
-        # Clean up dead connections
-        for dead_connection in dead_connections:
-            self.disconnect(dead_connection)
-
-
-class WebSocketManager:
-    """Manages WebSocket connections for session-specific messaging"""
-
-    def __init__(self):
-        self.active_connections: dict[str, list[WebSocket]] = {}
-
-    async def connect(self, websocket: WebSocket, session_id: str):
-        await websocket.accept()
-        if session_id not in self.active_connections:
-            self.active_connections[session_id] = []
-        self.active_connections[session_id].append(websocket)
-        logger.info(f"WebSocket connected for session {session_id}")
-
-    def disconnect(self, websocket: WebSocket, session_id: str):
-        if session_id in self.active_connections:
-            if websocket in self.active_connections[session_id]:
-                self.active_connections[session_id].remove(websocket)
-            if not self.active_connections[session_id]:
-                del self.active_connections[session_id]
-        logger.info(f"WebSocket disconnected for session {session_id}")
-
-    async def force_disconnect_session(self, session_id: str):
-        """Force disconnect all WebSocket connections for a specific session"""
-        if session_id in self.active_connections:
-            connections = self.active_connections[session_id].copy()
-            logger.info(f"Force disconnecting {len(connections)} WebSocket connections for session {session_id}")
-            for websocket in connections:
-                try:
-                    await websocket.close(code=1012, reason="Session being deleted")
-                except Exception as e:
-                    logger.warning(f"Error closing WebSocket for session {session_id}: {e}")
-            # Clear the connections list
-            if session_id in self.active_connections:
-                del self.active_connections[session_id]
-            logger.info(f"All WebSocket connections for session {session_id} have been disconnected")
-
-    async def send_message(self, session_id: str, message: dict):
-        logger.info(f"WebSocketManager: Attempting to send message to session {session_id}, active connections: {len(self.active_connections.get(session_id, []))}")
-        if session_id in self.active_connections:
-            dead_connections = []
-            for connection in self.active_connections[session_id][:]:  # Create a copy to iterate safely
-                try:
-                    # Check if connection is still open before attempting to send
-                    if connection.client_state.value != 1:  # 1 = OPEN state
-                        logger.warning(f"WebSocket connection for session {session_id} is not open (state: {connection.client_state.value})")
-                        dead_connections.append(connection)
-                        continue
-
-                    logger.info(f"WebSocketManager: Sending message to WebSocket connection for session {session_id}")
-                    await connection.send_text(json.dumps(message))
-                    logger.info(f"WebSocketManager: Message sent successfully to WebSocket connection for session {session_id}")
-                except Exception:
-                    logger.exception("Error sending WebSocket message")
-                    dead_connections.append(connection)
-
-            # Remove dead connections
-            for dead_conn in dead_connections:
-                self.disconnect(dead_conn, session_id)
-
-
-class LegionWebSocketManager:
-    """Manages WebSocket connections for legion-specific real-time updates"""
-
-    def __init__(self):
-        self.active_connections: dict[str, list[WebSocket]] = {}
-
-    async def connect(self, websocket: WebSocket, legion_id: str):
-        await websocket.accept()
-        if legion_id not in self.active_connections:
-            self.active_connections[legion_id] = []
-        self.active_connections[legion_id].append(websocket)
-        logger.info(f"Legion WebSocket connected for legion {legion_id}. Total connections: {len(self.active_connections[legion_id])}")
-
-    def disconnect(self, websocket: WebSocket, legion_id: str):
-        if legion_id in self.active_connections:
-            if websocket in self.active_connections[legion_id]:
-                self.active_connections[legion_id].remove(websocket)
-            if not self.active_connections[legion_id]:
-                del self.active_connections[legion_id]
-        logger.info(f"Legion WebSocket disconnected for legion {legion_id}")
-
-    async def broadcast_to_legion(self, legion_id: str, message: dict):
-        """Broadcast message to all clients watching this legion"""
-        if legion_id not in self.active_connections:
-            logger.debug(f"No Legion WebSocket connections for legion {legion_id}")
-            return
-
-        dead_connections = []
-        for connection in self.active_connections[legion_id][:]:
-            try:
-                if connection.client_state.value != 1:  # 1 = OPEN state
-                    logger.warning(f"Legion WebSocket connection for legion {legion_id} is not open")
-                    dead_connections.append(connection)
-                    continue
-
-                await connection.send_text(json.dumps(message))
-                logger.debug(f"Broadcast message to legion {legion_id} WebSocket")
-            except Exception:
-                logger.exception(f"Error broadcasting to legion {legion_id} WebSocket")
-                dead_connections.append(connection)
-
-        # Clean up dead connections
-        for dead_connection in dead_connections:
-            self.disconnect(dead_connection, legion_id)
+        waiter = asyncio.Event()
+        self._waiters.append(waiter)
+        try:
+            await asyncio.wait_for(waiter.wait(), timeout=timeout)
+        except TimeoutError:
+            pass
+        finally:
+            if waiter in self._waiters:
+                self._waiters.remove(waiter)
 
 
 def _validate_additional_directories(dirs: list[str] | None, working_directory: str | None) -> list[str]:
@@ -553,12 +441,8 @@ class ClaudeWebUI:
                 )
             )
         self.skill_manager = SkillManager()
-        self.websocket_manager = WebSocketManager()
-        self.ui_websocket_manager = UIWebSocketManager()
-        self.legion_websocket_manager = LegionWebSocketManager()
-
-        # Inject UI WebSocket manager into Legion system for project update broadcasts
-        self.coordinator.legion_system.ui_websocket_manager = self.ui_websocket_manager
+        self.ui_queue = EventQueue()
+        self.session_queues: dict[str, EventQueue] = {}
 
         # Initialize MessageProcessor for unified WebSocket message formatting
         self._message_parser = MessageParser()
@@ -578,16 +462,12 @@ class ClaudeWebUI:
             self.app.add_middleware(AuthMiddleware, auth_token=self.auth_token)
             logger.info("Authentication middleware enabled")
 
-        # Setup Legion WebSocket broadcast callbacks
-        self.coordinator.legion_system.comm_router.set_comm_broadcast_callback(
-            self._broadcast_comm_to_legion_websocket
-        )
         # Issue #699: Wire UI notification callback for comm sounds
         self.coordinator.legion_system.comm_router.set_ui_notification_callback(
             self._broadcast_comm_notification_to_ui
         )
         self.coordinator.legion_system.scheduler_service.set_schedule_broadcast_callback(
-            self._broadcast_schedule_to_legion_websocket
+            self._broadcast_schedule_event
         )
 
         # Inject permission callback factory into SessionCoordinator
@@ -614,21 +494,6 @@ class ClaudeWebUI:
                 "Run 'cd frontend && npm run build' to create production build."
             )
         self.app.mount("/assets", StaticFiles(directory=str(static_dir / "assets")), name="assets")
-
-    async def _validate_ws_token(self, websocket: WebSocket) -> bool:
-        """Validate WebSocket auth token from query params (issue #728).
-
-        Returns True if auth is disabled or token is valid.
-        Returns False and closes the socket with 4401 if invalid.
-        """
-        if not self.auth_enabled:
-            return True
-        token = websocket.query_params.get('token')
-        if token == self.auth_token:
-            return True
-        await websocket.close(code=4401)
-        logger.warning("WebSocket connection rejected: invalid or missing auth token")
-        return False
 
     def _get_permission_callback_factory(self):
         """
@@ -671,26 +536,10 @@ class ClaudeWebUI:
             logger.info(f"Registered WebSocket message callback for session {session_id}")
         return registrar
 
-    async def _broadcast_comm_to_legion_websocket(self, legion_id: str, comm):
-        """Broadcast new comm to WebSocket clients watching this legion"""
-        try:
-            # Convert comm to dict for JSON serialization
-            comm_dict = comm.to_dict()
-
-            # Broadcast to all clients watching this legion
-            await self.legion_websocket_manager.broadcast_to_legion(legion_id, {
-                "type": "comm",
-                "comm": comm_dict,
-                "timestamp": datetime.now(UTC).isoformat()
-            })
-            logger.debug(f"Broadcast comm {comm.comm_id} to legion {legion_id} WebSocket clients")
-        except Exception:
-            logger.exception("Error broadcasting comm to legion WebSocket")
-
     async def _broadcast_comm_notification_to_ui(self, comm):
-        """Issue #699: Push comm notification event to UI WebSocket for audio alerts."""
+        """Issue #699: Push comm notification event to UI poll queue for audio alerts."""
         try:
-            await self.ui_websocket_manager.broadcast_to_all({
+            self.ui_queue.append({
                 "type": "notification",
                 "data": {
                     "event_type": "minion_comm",
@@ -699,21 +548,17 @@ class ClaudeWebUI:
                     "comm_id": comm.comm_id,
                 }
             })
-            logger.debug(f"Broadcast UI notification for comm {comm.comm_id}")
+            logger.debug(f"Appended UI notification for comm {comm.comm_id}")
         except Exception:
-            logger.exception("Error broadcasting comm notification to UI WebSocket")
+            logger.exception("Error appending comm notification to UI queue")
 
-    async def _broadcast_schedule_to_legion_websocket(self, legion_id: str, event: dict):
-        """Broadcast schedule event to WebSocket clients watching this legion."""
-        try:
-            await self.legion_websocket_manager.broadcast_to_legion(legion_id, event)
-            logger.debug(f"Broadcast schedule event to legion {legion_id} WebSocket clients")
-        except Exception:
-            logger.exception("Error broadcasting schedule event to legion WebSocket")
+    async def _broadcast_schedule_event(self, legion_id: str, event: dict):
+        """Broadcast schedule event to UI poll queue."""
+        self.ui_queue.append(event)
 
     async def _broadcast_resource_registered(self, session_id: str, resource_metadata: dict):
         """
-        Broadcast resource_registered event to WebSocket clients watching this session.
+        Append resource_registered event to session poll queue.
 
         Issue #404: Called by ResourceMCPTools when a resource is registered.
 
@@ -722,18 +567,19 @@ class ClaudeWebUI:
             resource_metadata: Resource metadata dict (resource_id, title, is_image, etc.)
         """
         try:
-            await self.websocket_manager.send_message(session_id, {
-                "type": "resource_registered",
-                "resource": resource_metadata,
-                "timestamp": datetime.now(UTC).isoformat()
-            })
-            logger.debug(f"Broadcast resource_registered for {resource_metadata.get('resource_id')} to session {session_id}")
+            if session_id in self.session_queues:
+                self.session_queues[session_id].append({
+                    "type": "resource_registered",
+                    "resource": resource_metadata,
+                    "timestamp": datetime.now(UTC).isoformat()
+                })
+                logger.debug(f"Appended resource_registered for {resource_metadata.get('resource_id')} to session {session_id}")
         except Exception:
-            logger.exception("Error broadcasting resource_registered")
+            logger.exception("Error appending resource_registered")
 
     async def _broadcast_queue_update(self, session_id: str, action: str, item: dict):
         """
-        Broadcast queue update to session WebSocket clients.
+        Append queue update to session poll queue.
 
         Issue #500: Real-time queue status updates.
 
@@ -743,15 +589,16 @@ class ClaudeWebUI:
             item: Queue item dict or action-specific data
         """
         try:
-            await self.websocket_manager.send_message(session_id, {
-                "type": "queue_update",
-                "action": action,
-                "item": item,
-                "pending_count": self.coordinator.queue_manager.get_pending_count(session_id),
-                "timestamp": datetime.now(UTC).isoformat()
-            })
+            if session_id in self.session_queues:
+                self.session_queues[session_id].append({
+                    "type": "queue_update",
+                    "action": action,
+                    "item": item,
+                    "pending_count": self.coordinator.queue_manager.get_pending_count(session_id),
+                    "timestamp": datetime.now(UTC).isoformat()
+                })
         except Exception:
-            logger.exception("Error broadcasting queue_update")
+            logger.exception("Error appending queue_update")
 
     def _cleanup_pending_permissions_for_session(self, session_id: str):
         """Clean up pending permissions for a specific session by auto-denying them"""
@@ -795,6 +642,13 @@ class ClaudeWebUI:
 
         # Templates are now loaded in SessionCoordinator.initialize()
 
+        # Create event queues for all existing sessions
+        sessions = await self.coordinator.list_sessions()
+        for s in sessions:
+            sid = s.get('session_id') or (s.get('session') or {}).get('session_id')
+            if sid:
+                self.session_queues[sid] = EventQueue()
+
         # Register callbacks
         self.coordinator.add_state_change_callback(self._on_state_change)
         self.coordinator.add_session_reset_callback(self._on_session_reset)
@@ -807,6 +661,85 @@ class ClaudeWebUI:
 
     def _setup_routes(self):
         """Setup FastAPI routes"""
+
+        # ==================== POLL ENDPOINTS ====================
+
+        @self.app.get("/api/poll/ui")
+        async def poll_ui(since: int = 0, timeout: int = 30):
+            """HTTP long-poll endpoint for global UI events."""
+            effective_timeout = min(float(timeout), 30.0)
+            await self.ui_queue.wait_for_events(since, timeout=effective_timeout)
+            events, next_cursor = self.ui_queue.events_since(since)
+            return {"events": events, "next_cursor": next_cursor}
+
+        @self.app.get("/api/poll/session/{session_id}")
+        async def poll_session(session_id: str, since: int = 0, timeout: int = 30):
+            """HTTP long-poll endpoint for session-specific events."""
+            if session_id not in self.session_queues:
+                raise HTTPException(status_code=404, detail="Session queue not found")
+            queue = self.session_queues[session_id]
+            effective_timeout = min(float(timeout), 30.0)
+            await queue.wait_for_events(since, timeout=effective_timeout)
+            events, next_cursor = queue.events_since(since)
+            return {"events": events, "next_cursor": next_cursor}
+
+        # ==================== REST INBOUND ENDPOINTS ====================
+
+        class PermissionResponseRequest(BaseModel):
+            decision: str
+            apply_suggestions: bool = False
+            clarification_message: str | None = None
+            selected_suggestions: list | None = None
+            updated_input: dict | None = None
+
+        @self.app.post("/api/sessions/{session_id}/interrupt")
+        async def interrupt_session_rest(session_id: str):
+            """Interrupt a session via REST (replaces WebSocket interrupt_session message)."""
+            try:
+                session_info = await self.coordinator.session_manager.get_session_info(session_id)
+                if session_info and session_info.state == SessionState.PAUSED:
+                    for request_id, future in list(self.pending_permissions.items()):
+                        if not future.done():
+                            future.set_result({
+                                "behavior": "deny",
+                                "message": "Permission denied due to session interrupt",
+                                "interrupt": True
+                            })
+                            del self.pending_permissions[request_id]
+                result = await self.coordinator.interrupt_session(session_id)
+                return {"success": bool(result)}
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=str(e)) from e
+
+        @self.app.post("/api/sessions/{session_id}/permission/{request_id}")
+        async def respond_to_permission(
+            session_id: str, request_id: str, request: PermissionResponseRequest
+        ):
+            """Respond to a pending permission request via REST."""
+            if request_id not in self.pending_permissions:
+                raise HTTPException(status_code=404, detail="No pending permission with that ID")
+            pending_future = self.pending_permissions.pop(request_id)
+            if pending_future.done():
+                raise HTTPException(status_code=409, detail="Permission already resolved")
+            if request.decision == "allow":
+                response = {"behavior": "allow"}
+                if request.updated_input is not None:
+                    response["updated_input"] = request.updated_input
+                if request.apply_suggestions:
+                    response["apply_suggestions"] = request.apply_suggestions
+                if request.selected_suggestions is not None:
+                    response["selected_suggestions"] = request.selected_suggestions
+            else:
+                if request.clarification_message:
+                    response = {
+                        "behavior": "deny",
+                        "message": request.clarification_message,
+                        "interrupt": False
+                    }
+                else:
+                    response = {"behavior": "deny", "message": "User denied permission"}
+            pending_future.set_result(response)
+            return {"success": True}
 
         @self.app.get("/", response_class=HTMLResponse)
         async def read_root():
@@ -916,7 +849,7 @@ class ClaudeWebUI:
 
                 # Broadcast update to UI
                 project = await self.coordinator.project_manager.get_project(project_id)
-                await self.ui_websocket_manager.broadcast_to_all({
+                self.ui_queue.append({
                     "type": "project_updated",
                     "data": {"project": project.to_dict()}
                 })
@@ -946,7 +879,7 @@ class ClaudeWebUI:
                     raise HTTPException(status_code=500, detail="Failed to delete project")
 
                 # Broadcast deletion to UI
-                await self.ui_websocket_manager.broadcast_to_all({
+                self.ui_queue.append({
                     "type": "project_deleted",
                     "data": {"project_id": project_id}
                 })
@@ -968,7 +901,7 @@ class ClaudeWebUI:
 
                 # Broadcast update to UI
                 project = await self.coordinator.project_manager.get_project(project_id)
-                await self.ui_websocket_manager.broadcast_to_all({
+                self.ui_queue.append({
                     "type": "project_updated",
                     "data": {"project": project.to_dict()}
                 })
@@ -997,7 +930,7 @@ class ClaudeWebUI:
                 # Broadcast project update to all UI clients
                 project = await self.coordinator.project_manager.get_project(project_id)
                 if project:
-                    await self.ui_websocket_manager.broadcast_to_all({
+                    self.ui_queue.append({
                         "type": "project_updated",
                         "data": {"project": project.to_dict()}
                     })
@@ -1174,10 +1107,13 @@ class ClaudeWebUI:
                     permission_callback=self._create_permission_callback(session_id),
                 )
 
+                # Create event queue for this new session
+                self.session_queues[session_id] = EventQueue()
+
                 # Broadcast session creation to all UI clients
                 session_info = await self.coordinator.session_manager.get_session_info(session_id)
                 if session_info:
-                    await self.ui_websocket_manager.broadcast_to_all({
+                    self.ui_queue.append({
                         "type": "state_change",
                         "data": {
                             "session_id": session_id,
@@ -1185,16 +1121,16 @@ class ClaudeWebUI:
                             "timestamp": datetime.now().isoformat()
                         }
                     })
-                    logger.debug(f"Broadcasted state_change for newly created session {session_id}")
+                    logger.debug(f"Appended state_change for newly created session {session_id}")
 
                 # Broadcast project update to all UI clients (session was added to project)
                 project = await self.coordinator.project_manager.get_project(request.project_id)
                 if project:
-                    await self.ui_websocket_manager.broadcast_to_all({
+                    self.ui_queue.append({
                         "type": "project_updated",
                         "data": {"project": project.to_dict()}
                     })
-                    logger.debug(f"Broadcasted project_updated for project {request.project_id} after session creation")
+                    logger.debug(f"Appended project_updated for project {request.project_id} after session creation")
 
                 return {"session_id": session_id}
 
@@ -1420,9 +1356,6 @@ class ClaudeWebUI:
                 project = await self.coordinator._find_project_for_session(session_id)
                 project_id = project.project_id if project else None
 
-                # First force disconnect any WebSocket connections for this session
-                await self.websocket_manager.force_disconnect_session(session_id)
-
                 # Clean up any pending permissions for this session
                 self._cleanup_pending_permissions_for_session(session_id)
 
@@ -1434,29 +1367,30 @@ class ClaudeWebUI:
 
                 deleted_ids = result.get("deleted_session_ids", [])
 
-                # Force disconnect WebSocket connections for any cascaded child sessions
+                # Clean up event queues and pending permissions for cascaded child sessions
+                self.session_queues.pop(session_id, None)
                 for deleted_id in deleted_ids:
-                    if deleted_id != session_id:  # Already disconnected the primary session
-                        await self.websocket_manager.force_disconnect_session(deleted_id)
+                    if deleted_id != session_id:
                         self._cleanup_pending_permissions_for_session(deleted_id)
+                        self.session_queues.pop(deleted_id, None)
 
                 # Check if the project still exists - if not, it was auto-deleted
                 if project_id:
                     updated_project = await self.coordinator.project_manager.get_project(project_id)
                     if updated_project is None:
                         # Project was deleted because it became empty
-                        await self.ui_websocket_manager.broadcast_to_all({
+                        self.ui_queue.append({
                             "type": "project_deleted",
                             "data": {"project_id": project_id}
                         })
-                        logger.info(f"Broadcasted project_deleted for auto-deleted project {project_id}")
+                        logger.info(f"Appended project_deleted for auto-deleted project {project_id}")
                     else:
                         # Project still exists - broadcast update with reduced session count
-                        await self.ui_websocket_manager.broadcast_to_all({
+                        self.ui_queue.append({
                             "type": "project_updated",
                             "data": {"project": updated_project.to_dict()}
                         })
-                        logger.debug(f"Broadcasted project_updated for project {project_id} after session deletion")
+                        logger.debug(f"Appended project_updated for project {project_id} after session deletion")
 
                 return {
                     "success": result.get("success"),
@@ -1731,11 +1665,12 @@ class ClaudeWebUI:
                 if not success:
                     raise HTTPException(status_code=404, detail="Resource not found or removal failed")
 
-                # Broadcast removal to WebSocket clients
-                await self.websocket_manager.send_message(session_id, {
-                    "type": "resource_removed",
-                    "resource_id": resource_id,
-                })
+                # Append removal to session poll queue
+                if session_id in self.session_queues:
+                    self.session_queues[session_id].append({
+                        "type": "resource_removed",
+                        "resource_id": resource_id,
+                    })
 
                 return {"status": "ok", "resource_id": resource_id}
             except HTTPException:
@@ -2357,7 +2292,7 @@ class ClaudeWebUI:
                     metadata=data.get("metadata"),
                 )
 
-                # Broadcast queue update via session WebSocket
+                # Append queue update to session poll queue
                 await self._broadcast_queue_update(session_id, "enqueued", item)
 
                 return {
@@ -3244,9 +3179,9 @@ class ClaudeWebUI:
                 logger.exception("uv sync failed")
                 raise HTTPException(status_code=500, detail=str(e)) from e
 
-            # Broadcast restart notice to all WebSocket connections
+            # Append restart notice to UI poll queue
             try:
-                await self.ui_websocket_manager.broadcast({
+                self.ui_queue.append({
                     "type": "server_restarting",
                     "message": "Server is restarting...",
                     "pull_output": pull_output,
@@ -3254,7 +3189,7 @@ class ClaudeWebUI:
                     "timestamp": datetime.now(UTC).isoformat(),
                 })
             except Exception as e:
-                logger.warning(f"Failed to broadcast restart notice: {e}")
+                logger.warning(f"Failed to append restart notice: {e}")
 
             # Schedule the actual restart after response is sent
             async def _do_restart():
@@ -3565,8 +3500,8 @@ class ClaudeWebUI:
 
             try:
                 server_id = await self.coordinator.oauth_manager.complete_flow(state, code)
-                # Broadcast OAuth completion to all connected UI clients
-                await self.ui_websocket_manager.broadcast_to_all({
+                # Append OAuth completion to UI poll queue
+                self.ui_queue.append({
                     "type": "mcp_oauth_complete",
                     "server_id": server_id,
                 })
@@ -3813,416 +3748,15 @@ class ClaudeWebUI:
                 logger.exception("Failed to import template")
                 raise HTTPException(status_code=500, detail=str(e)) from e
 
-        @self.app.websocket("/ws/ui")
-        async def ui_websocket_endpoint(websocket: WebSocket):
-            """Global UI WebSocket endpoint for session state updates"""
-            logger.info("UI WebSocket connection request received")
-            if not await self._validate_ws_token(websocket):
-                return
-            await self.ui_websocket_manager.connect(websocket)
 
-            try:
-                # Send initial session list on connection
-                sessions_data = await self.coordinator.list_sessions()
-                initial_message = {
-                    "type": "sessions_list",
-                    "data": {
-                        "sessions": sessions_data  # Already converted to dicts by coordinator.list_sessions()
-                    }
-                }
-                await websocket.send_json(initial_message)
-                logger.info("Sent initial sessions list to UI WebSocket")
 
-                # Keep connection alive and handle incoming messages
-                while True:
-                    try:
-                        # Wait for any incoming messages (ping, etc.)
-                        message = await asyncio.wait_for(websocket.receive_text(), timeout=3.0)
-
-                        # Handle ping/pong for keepalive
-                        try:
-                            message_data = json.loads(message)
-                            if message_data.get("type") == "ping":
-                                ws_verbose_logger.debug("UI WebSocket received ping, sending pong")
-                                await websocket.send_json({"type": "pong", "timestamp": datetime.now(UTC).isoformat()})
-                            else:
-                                # Log non-ping/pong messages
-                                logger.debug(f"UI WebSocket received: {message}")
-                        except json.JSONDecodeError:
-                            logger.warning(f"Invalid JSON in UI WebSocket message: {message}")
-
-                    except TimeoutError:
-                        # Send periodic ping to keep connection alive
-                        await websocket.send_json({
-                            "type": "ping",
-                            "timestamp": datetime.now(UTC).isoformat()
-                        })
-
-            except WebSocketDisconnect:
-                logger.info("UI WebSocket disconnected")
-            except Exception:
-                logger.exception("Error in UI WebSocket")
-            finally:
-                self.ui_websocket_manager.disconnect(websocket)
-
-        @self.app.websocket("/ws/legion/{legion_id}")
-        async def legion_websocket_endpoint(websocket: WebSocket, legion_id: str):
-            """WebSocket endpoint for project real-time updates (issue #313: universal Legion)"""
-            logger.info(f"Legion WebSocket connection request for project {legion_id}")
-            if not await self._validate_ws_token(websocket):
-                return
-
-            # Issue #313: All projects support Legion WebSocket - verify project exists
-            try:
-                project = await self.coordinator.project_manager.get_project(legion_id)
-                if not project:
-                    logger.warning(f"Legion WebSocket connection rejected - project not found: {legion_id}")
-                    await websocket.close(code=4404)
-                    return
-            except Exception:
-                logger.exception(f"Error validating project {legion_id}")
-                await websocket.close(code=4500)
-                return
-
-            await self.legion_websocket_manager.connect(websocket, legion_id)
-
-            # Send initial connection confirmation
-            try:
-                await websocket.send_json({
-                    "type": "connection_established",
-                    "legion_id": legion_id,
-                    "timestamp": datetime.now(UTC).isoformat()
-                })
-            except Exception:
-                logger.exception(f"Failed to send initial message to legion WebSocket {legion_id}")
-                self.legion_websocket_manager.disconnect(websocket, legion_id)
-                return
-
-            try:
-                while True:
-                    try:
-                        # Wait for ping messages from client (keepalive)
-                        message = await asyncio.wait_for(websocket.receive_text(), timeout=3.0)
-                        try:
-                            message_data = json.loads(message)
-                            if message_data.get("type") == "ping":
-                                await websocket.send_json({"type": "pong", "timestamp": datetime.now(UTC).isoformat()})
-                        except json.JSONDecodeError:
-                            logger.warning(f"Invalid JSON in legion WebSocket message: {message}")
-                    except TimeoutError:
-                        # Send periodic ping to keep connection alive
-                        await websocket.send_json({
-                            "type": "ping",
-                            "timestamp": datetime.now(UTC).isoformat()
-                        })
-            except WebSocketDisconnect:
-                logger.info(f"Legion WebSocket disconnected for legion {legion_id}")
-            except Exception:
-                logger.exception(f"Error in legion WebSocket for {legion_id}")
-            finally:
-                self.legion_websocket_manager.disconnect(websocket, legion_id)
-
-        @self.app.websocket("/ws/session/{session_id}")
-        async def websocket_endpoint(websocket: WebSocket, session_id: str):
-            """WebSocket endpoint for session-specific messaging"""
-            if not await self._validate_ws_token(websocket):
-                return
-
-            ws_connection_start_time = time.time()
-            ws_logger.debug(f"WebSocket connection attempt for session {session_id} at {ws_connection_start_time}")
-
-            # Validate session exists and is active before accepting connection
-            try:
-                session_validation_time = time.time()
-                ws_logger.debug(f"Validating session {session_id} at {session_validation_time}")
-
-                session_info = await self.coordinator.get_session_info(session_id)
-                if not session_info:
-                    rejection_time = time.time()
-                    ws_logger.debug(f"WebSocket connection REJECTED for non-existent session: {session_id} at {rejection_time}")
-                    await websocket.close(code=4404)
-                    return
-
-                session_state = session_info.get('session', {}).get('state')
-                ws_logger.debug(f"Session {session_id} state: {session_state}")
-
-                # Allow connections to active, error, and paused (waiting for permission) states
-                if session_state not in ['active', 'error', 'paused']:
-                    rejection_time = time.time()
-                    ws_logger.debug(f"WebSocket connection REJECTED for session: {session_id} (state: {session_state}) at {rejection_time}")
-                    ws_logger.debug("WebSocket will only connect to sessions in 'active', 'error', or 'paused' state")
-                    await websocket.close(code=4003)
-                    return
-
-                validation_success_time = time.time()
-                ws_logger.debug(f"Session validation successful for {session_id} at {validation_success_time}")
-
-            except Exception:
-                validation_error_time = time.time()
-                logger.exception(f"Error validating session {session_id} for WebSocket at {validation_error_time}")
-                await websocket.close(code=4500)
-                return
-
-            # Accept WebSocket connection
-            connection_accept_time = time.time()
-            ws_logger.debug(f"Accepting WebSocket connection for session {session_id} at {connection_accept_time}")
-
-            await self.websocket_manager.connect(websocket, session_id)
-
-            connection_established_time = time.time()
-            ws_logger.info(f"WebSocket connection ESTABLISHED for session {session_id} at {connection_established_time}")
-            ws_logger.debug(f"Connection establishment took {connection_established_time - ws_connection_start_time:.3f}s")
-            ws_logger.debug(f"WebSocket loop starting for session {session_id}")
-
-            # Send initial ping to establish connection
-            try:
-                initial_message_time = time.time()
-                ws_logger.debug(f"Sending initial connection_established message at {initial_message_time}")
-
-                await websocket.send_text(json.dumps({
-                    "type": "connection_established",
-                    "session_id": session_id,
-                    "timestamp": datetime.now(UTC).isoformat()
-                }))
-
-                initial_message_sent_time = time.time()
-                ws_logger.debug(f"Initial message sent successfully at {initial_message_sent_time}")
-
-            except Exception:
-                initial_message_error_time = time.time()
-                logger.exception(f"Failed to send initial message to WebSocket {session_id} at {initial_message_error_time}")
-                # Clean up the connection that was already registered
-                self.websocket_manager.disconnect(websocket, session_id)
-                ws_logger.debug(f"WebSocket disconnected due to initial message failure for session {session_id}")
-                return
-
-            message_loop_iteration = 0
-            try:
-                ws_verbose_logger.debug(f"Starting message loop for session {session_id}")
-
-                while True:
-                    message_loop_iteration += 1
-                    loop_iteration_start_time = time.time()
-                    ws_verbose_logger.debug(f"Message loop iteration {message_loop_iteration} started at {loop_iteration_start_time}")
-
-                    # Wait for incoming messages with proper error handling
-                    try:
-                        message_wait_start_time = time.time()
-                        ws_verbose_logger.debug(f"WebSocket waiting for message from session {session_id} (timeout=3s)")
-
-                        message = await asyncio.wait_for(websocket.receive_text(), timeout=3.0)
-
-                        message_received_time = time.time()
-                        message_data = json.loads(message)
-
-                        # Filter ping/pong messages from general debug logging (use ws_verbose_logger for those)
-                        if message_data.get("type") in ["ping", "pong"]:
-                            ws_verbose_logger.debug(f"WebSocket received {message_data.get('type')} from session {session_id}")
-                        else:
-                            ws_logger.debug(f"WebSocket received message from session {session_id} at {message_received_time}: {message[:100]}...")
-                            ws_logger.debug(f"Message wait took {message_received_time - message_wait_start_time:.3f}s")
-                            ws_logger.debug(f"DEBUG: Received message type: '{message_data.get('type', 'unknown')}' from session {session_id}")
-                            ws_logger.debug(f"DEBUG: Full message data: {message_data}")
-
-                        if message_data.get("type") == "send_message":
-                            # Handle message sending through WebSocket
-                            content = message_data.get("content", "")
-                            if content:
-                                message_processing_start_time = time.time()
-                                ws_logger.debug(f"Forwarding message to coordinator for session {session_id} at {message_processing_start_time}")
-                                ws_logger.debug(f"Message content preview: {content[:100]}...")
-
-                                await self.coordinator.send_message(session_id, content)
-
-                                message_processing_end_time = time.time()
-                                ws_logger.debug(f"Message forwarded to coordinator at {message_processing_end_time}")
-                                ws_logger.debug(f"Message forwarding took {message_processing_end_time - message_processing_start_time:.3f}s")
-
-                        elif message_data.get("type") == "interrupt_session":
-                            # Handle session interrupt through WebSocket
-                            interrupt_start_time = time.time()
-                            ws_logger.debug(f"DEBUG: INTERRUPT REQUEST RECEIVED for session {session_id} at {interrupt_start_time}")
-                            ws_logger.debug(f"DEBUG: Full interrupt message data: {message_data}")
-
-                            try:
-                                # Check if session is in PAUSED state (waiting for permission)
-                                # If so, deny all pending permissions for this session
-                                session_info = await self.coordinator.session_manager.get_session_info(session_id)
-                                if session_info and session_info.state == SessionState.PAUSED:
-                                    # Find and resolve any pending permission requests for this session
-                                    permissions_to_resolve = []
-                                    for request_id, future in list(self.pending_permissions.items()):
-                                        # We need to check if this request belongs to this session
-                                        # Since we don't store session_id with the future, we'll resolve all pending
-                                        # This is safe because interrupting a session should clear its permissions
-                                        if not future.done():
-                                            permissions_to_resolve.append(request_id)
-
-                                    for request_id in permissions_to_resolve:
-                                        future = self.pending_permissions.get(request_id)
-                                        if future and not future.done():
-                                            future.set_result({
-                                                "behavior": "deny",
-                                                "message": "Permission denied due to session interrupt",
-                                                "interrupt": True
-                                            })
-                                            del self.pending_permissions[request_id]
-                                            logger.info(f"Resolved pending permission {request_id} with deny due to interrupt")
-
-                                # Forward interrupt request to coordinator
-                                result = await self.coordinator.interrupt_session(session_id)
-                                interrupt_end_time = time.time()
-
-                                if result:
-                                    ws_logger.debug(f"Interrupt successfully initiated for session {session_id} at {interrupt_end_time}")
-                                    ws_logger.debug(f"Interrupt processing took {interrupt_end_time - interrupt_start_time:.3f}s")
-
-                                    # Send success response back to client
-                                    await websocket.send_text(json.dumps({
-                                        "type": "interrupt_response",
-                                        "success": True,
-                                        "message": "Interrupt initiated successfully",
-                                        "session_id": session_id,
-                                        "timestamp": datetime.now(UTC).isoformat()
-                                    }))
-                                else:
-                                    ws_logger.debug(f"Interrupt failed for session {session_id} at {interrupt_end_time}")
-
-                                    # Send failure response back to client
-                                    await websocket.send_text(json.dumps({
-                                        "type": "interrupt_response",
-                                        "success": False,
-                                        "message": "Failed to initiate interrupt",
-                                        "session_id": session_id,
-                                        "timestamp": datetime.now(UTC).isoformat()
-                                    }))
-
-                            except Exception as interrupt_error:
-                                logger.exception(f"Interrupt error for session {session_id}")
-
-                                # Send error response back to client
-                                try:
-                                    await websocket.send_text(json.dumps({
-                                        "type": "interrupt_response",
-                                        "success": False,
-                                        "message": f"Interrupt error: {str(interrupt_error)}",
-                                        "session_id": session_id,
-                                        "timestamp": datetime.now(UTC).isoformat()
-                                    }))
-                                except Exception:
-                                    logger.exception("Failed to send interrupt error response")
-
-                        elif message_data.get("type") == "permission_response":
-                            # Handle permission response from user
-                            request_id = message_data.get("request_id")
-                            decision = message_data.get("decision")
-
-                            ws_logger.debug(f"Permission response received: request_id={request_id}, decision={decision}")
-
-                            if not request_id or decision not in ["allow", "deny"]:
-                                ws_logger.debug(f"Invalid permission response: {message_data}")
-                                continue
-
-                            # Find and resolve the pending permission Future
-                            if request_id in self.pending_permissions:
-                                pending_future = self.pending_permissions.pop(request_id)
-
-                                if not pending_future.done():
-                                    # Resolve the Future with the user's decision
-                                    if decision == "allow":
-                                        response = {"behavior": "allow"}
-                                        # Only include updated_input if it was actually provided
-                                        # This is used by AskUserQuestion to pass user answers back to SDK
-                                        if "updated_input" in message_data:
-                                            response["updated_input"] = message_data["updated_input"]
-                                            ws_logger.info(f"Permission response includes updated_input for AskUserQuestion: {message_data['updated_input']}")
-                                        # Include apply_suggestions flag if provided
-                                        if "apply_suggestions" in message_data:
-                                            response["apply_suggestions"] = message_data["apply_suggestions"]
-                                            ws_logger.debug(f"Permission response includes apply_suggestions: {message_data['apply_suggestions']}")
-                                        # Include selected_suggestions for granular permission selection
-                                        if "selected_suggestions" in message_data:
-                                            response["selected_suggestions"] = message_data["selected_suggestions"]
-                                            ws_logger.debug(f"Permission response includes selected_suggestions: {len(message_data['selected_suggestions'])} items")
-                                    else:
-                                        # Check if this is a deny with clarification
-                                        clarification_message = message_data.get("clarification_message")
-                                        if clarification_message:
-                                            # Deny with clarification - let SDK continue with user guidance
-                                            response = {
-                                                "behavior": "deny",
-                                                "message": clarification_message,
-                                                "interrupt": False  # CRITICAL: Allow SDK to continue
-                                            }
-                                            ws_logger.info(f"Permission denied with clarification: {clarification_message[:100]}...")
-                                        else:
-                                            # Standard deny - use default behavior
-                                            response = {
-                                                "behavior": "deny",
-                                                "message": message_data.get("reason", "User denied permission")
-                                            }
-
-                                    pending_future.set_result(response)
-                                    ws_logger.debug(f"Permission request {request_id} resolved with decision: {decision}")
-                                else:
-                                    ws_logger.debug(f"Permission request {request_id} Future was already resolved")
-                            else:
-                                ws_logger.debug(f"No pending permission found for request_id: {request_id}")
-
-                    except TimeoutError:
-                        # Send ping to keep connection alive
-                        timeout_time = time.time()
-                        ws_verbose_logger.debug(f"WebSocket timeout for session {session_id} at {timeout_time} - sending ping")
-
-                        try:
-                            await websocket.send_text(json.dumps({"type": "ping", "timestamp": datetime.now(UTC).isoformat()}))
-
-                            ping_sent_time = time.time()
-                            ws_verbose_logger.debug(f"Ping sent successfully at {ping_sent_time}")
-
-                        except Exception as ping_error:
-                            # Connection is dead, break the loop
-                            connection_death_time = time.time()
-                            ws_logger.debug(f"WebSocket connection DEAD for session {session_id} at {connection_death_time}: {ping_error}")
-                            ws_logger.debug("Breaking message loop due to dead connection")
-                            break
-
-                    except json.JSONDecodeError as e:
-                        json_error_time = time.time()
-                        ws_logger.debug(f"Invalid JSON received on WebSocket for session {session_id} at {json_error_time}: {e}")
-                        continue
-
-                    loop_iteration_end_time = time.time()
-                    ws_verbose_logger.debug(f"Message loop iteration {message_loop_iteration} completed at {loop_iteration_end_time}")
-
-            except WebSocketDisconnect as disconnect_error:
-                disconnect_time = time.time()
-                ws_logger.info(f"WebSocket DISCONNECTED gracefully for session {session_id} at {disconnect_time}")
-                ws_logger.debug(f"Disconnect details: {disconnect_error}")
-                ws_logger.debug(f"Total message loop iterations: {message_loop_iteration}")
-                self.websocket_manager.disconnect(websocket, session_id)
-
-            except Exception as ws_error:
-                error_time = time.time()
-                logger.exception(f"WebSocket ERROR for session {session_id} at {error_time}")
-                logger.error(f"Error type: {type(ws_error)}")
-                logger.error(f"Total message loop iterations before error: {message_loop_iteration}")
-                self.websocket_manager.disconnect(websocket, session_id)
-
-            finally:
-                cleanup_time = time.time()
-                total_connection_time = cleanup_time - ws_connection_start_time
-                ws_logger.debug(f"WebSocket cleanup for session {session_id} at {cleanup_time}")
-                ws_logger.debug(f"Total WebSocket connection duration: {total_connection_time:.3f}s")
-                ws_logger.debug(f"Total message loop iterations: {message_loop_iteration}")
-                ws_logger.info(f"WebSocket loop ENDED for session {session_id}")
 
     def _create_message_callback(self, session_id: str):
-        """Create message callback for WebSocket broadcasting using unified MessageProcessor"""
+        """Create message callback for poll queue broadcasting using unified MessageProcessor"""
         async def callback(session_id: str, message_data: Any):
-            logger.info(f"WebSocket callback triggered for session {session_id}, message type: {getattr(message_data, 'type', 'unknown')}")
+            logger.info(f"Message callback triggered for session {session_id}, message type: {getattr(message_data, 'type', 'unknown')}")
             try:
-                # Process message and prepare for WebSocket using MessageProcessor
+                # Process message and prepare for poll queue using MessageProcessor
                 if hasattr(message_data, '__dict__'):
                     # Handle ParsedMessage objects (from MessageProcessor)
                     websocket_data = self._message_processor.prepare_for_websocket(message_data)
@@ -4235,7 +3769,7 @@ class ClaudeWebUI:
                 # Issue #324: Emit tool_call messages for tool lifecycle events
                 await self._emit_tool_call_updates(session_id, parsed_message)
 
-                # Wrap in standard WebSocket envelope
+                # Wrap in standard poll queue envelope
                 serialized = {
                     "type": "message",
                     "session_id": session_id,
@@ -4243,9 +3777,9 @@ class ClaudeWebUI:
                     "timestamp": datetime.now(UTC).isoformat()
                 }
 
-                logger.info(f"Attempting to send WebSocket message for session {session_id}: {serialized['type']}")
-                await self.websocket_manager.send_message(session_id, serialized)
-                logger.info(f"WebSocket message sent successfully for session {session_id}")
+                if session_id in self.session_queues:
+                    self.session_queues[session_id].append(serialized)
+                    logger.info(f"Appended message to session queue for {session_id}")
 
             except Exception:
                 logger.exception("Error in message callback")
@@ -4298,7 +3832,8 @@ class ClaudeWebUI:
                             "data": tool_call_data,
                             "timestamp": datetime.now(UTC).isoformat(),
                         }
-                        await self.websocket_manager.send_message(session_id, websocket_message)
+                        if session_id in self.session_queues:
+                            self.session_queues[session_id].append(websocket_message)
                         logger.debug(f"Emitted tool_call pending for {tool_name} ({tool_id}) in session {session_id}")
 
             # Handle tool_results in user messages
@@ -4330,7 +3865,8 @@ class ClaudeWebUI:
                                 "data": tool_call_data,
                                 "timestamp": datetime.now(UTC).isoformat(),
                             }
-                            await self.websocket_manager.send_message(session_id, websocket_message)
+                            if session_id in self.session_queues:
+                                self.session_queues[session_id].append(websocket_message)
                             logger.debug(
                                 f"Emitted tool_call {'failed' if is_error else 'completed'} "
                                 f"for {tool_use_id} in session {session_id}"
@@ -4360,38 +3896,36 @@ class ClaudeWebUI:
                             "timestamp": state_data.get("timestamp")
                         }
                     }
-                    # Broadcast to all UI WebSocket connections instead of session-specific
-                    await self.ui_websocket_manager.broadcast_to_all(message)
-                    logger.info(f"Broadcasted state change for session {session_id} to all UI clients")
+                    # Append to UI poll queue
+                    self.ui_queue.append(message)
+                    logger.info(f"Appended state change for session {session_id} to UI queue")
         except Exception:
             logger.exception("Error handling state change")
 
     def _on_tool_call_broadcast(self, session_id: str, tool_call_data: dict):
-        """Issue #520: Broadcast tool_call message via WebSocket.
+        """Issue #520: Append tool_call message to session poll queue.
 
-        Called synchronously from coordinator; schedules async send.
+        Called synchronously from coordinator.
         """
-        websocket_message = {
-            "type": "message",
-            "session_id": session_id,
-            "data": tool_call_data,
-            "timestamp": datetime.now(UTC).isoformat(),
-        }
-        asyncio.ensure_future(
-            self.websocket_manager.send_message(session_id, websocket_message)
-        )
+        if session_id in self.session_queues:
+            self.session_queues[session_id].append({
+                "type": "tool_call",
+                "session_id": session_id,
+                "data": tool_call_data,
+                "timestamp": datetime.now(UTC).isoformat(),
+            })
 
     async def _on_session_reset(self, session_id: str):
-        """Issue #500: Broadcast session_reset so frontend clears stale messages."""
+        """Issue #500: Append session_reset to UI queue so frontend clears stale messages."""
         try:
             message = {
                 "type": "session_reset",
                 "data": {"session_id": session_id},
             }
-            await self.ui_websocket_manager.broadcast_to_all(message)
-            logger.info(f"Broadcasted session_reset for {session_id}")
+            self.ui_queue.append(message)
+            logger.info(f"Appended session_reset for {session_id} to UI queue")
         except Exception:
-            logger.exception("Error broadcasting session_reset")
+            logger.exception("Error appending session_reset")
 
     def _create_permission_callback(self, session_id: str):
         """Create permission callback for tool usage"""
@@ -4519,8 +4053,9 @@ class ClaudeWebUI:
                                 "data": tool_call_data,
                                 "timestamp": datetime.now(UTC).isoformat(),
                             }
-                            await self.websocket_manager.send_message(session_id, websocket_message)
-                            logger.info(f"Broadcasted tool_call awaiting_permission for {tool_name} in session {session_id}")
+                            if session_id in self.session_queues:
+                                self.session_queues[session_id].append(websocket_message)
+                            logger.info(f"Appended tool_call awaiting_permission for {tool_name} in session {session_id}")
                     else:
                         # Issue #616: No ToolCall found after retries — auto-deny to prevent deadlock
                         logger.warning(
@@ -4788,9 +4323,10 @@ class ClaudeWebUI:
                                 "data": tool_call_data,
                                 "timestamp": datetime.now(UTC).isoformat(),
                             }
-                            await self.websocket_manager.send_message(session_id, websocket_message)
+                            if session_id in self.session_queues:
+                                self.session_queues[session_id].append(websocket_message)
                             logger.info(
-                                f"Broadcasted tool_call {'running' if granted else 'denied'} "
+                                f"Appended tool_call {'running' if granted else 'denied'} "
                                 f"for {tool_name} in session {session_id}"
                             )
                 except Exception:
