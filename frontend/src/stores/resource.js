@@ -585,6 +585,17 @@ export const useResourceStore = defineStore('resource', () => {
     return resources.find(r => r.resource_id === resourceId) || null
   }
 
+  /**
+   * Open full view modal by resource ID (for attachment chips that only know the resource_id)
+   */
+  function openFullViewById(resourceId, sessionId) {
+    const sessionStore = useSessionStore()
+    const sid = sessionId || sessionStore.currentSessionId
+    const resources = resourcesBySession.value.get(sid) || []
+    const index = resources.findIndex(r => r.resource_id === resourceId)
+    if (index >= 0) openFullView(sid, index)
+  }
+
   // ========== RETURN ==========
   return {
     // State
@@ -650,6 +661,7 @@ export const useResourceStore = defineStore('resource', () => {
     clearResources,
     fetchTextContent,
     clearTextCache,
+    openFullViewById,
 
     // Actions - Backward compatibility
     loadImages,
