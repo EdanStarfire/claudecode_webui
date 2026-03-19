@@ -193,6 +193,13 @@ export const useScheduleStore = defineStore('schedule', () => {
       // Prepend new execution to history (newest first)
       executionHistory.value = [event.execution, ...executionHistory.value]
     }
+
+    // Increment execution_count locally so the "X runs" stat updates live
+    const schedules = schedulesByLegion.value.get(legionId) || []
+    const schedule = schedules.find(s => s.schedule_id === scheduleId)
+    if (schedule) {
+      _upsertSchedule(legionId, { ...schedule, execution_count: (schedule.execution_count || 0) + 1 })
+    }
   }
 
   // ========== INTERNAL HELPERS ==========
