@@ -32,7 +32,7 @@
           <!-- OAuth Connect/Disconnect buttons -->
           <template v-if="config.oauth_enabled && (config.type === 'http' || config.type === 'sse')">
             <button
-              v-if="oauthStatusFor(config.id) !== 'authenticated'"
+              v-if="oauthStatusFor(config.id) !== OAUTH_STATUS.AUTHENTICATED"
               class="btn btn-xs btn-outline-success"
               :disabled="connectingId === config.id"
               @click="connectOAuth(config)"
@@ -302,7 +302,7 @@
 
 <script setup>
 import { ref, reactive, onMounted } from 'vue'
-import { useMcpConfigStore } from '@/stores/mcpConfig'
+import { useMcpConfigStore, OAUTH_STATUS } from '@/stores/mcpConfig'
 
 const configStore = useMcpConfigStore()
 
@@ -358,20 +358,20 @@ onMounted(async () => {
 
 // OAuth helpers
 function oauthStatusFor(configId) {
-  return configStore.oauthStatus.get(configId) || 'unauthenticated'
+  return configStore.oauthStatus.get(configId) || OAUTH_STATUS.UNAUTHENTICATED
 }
 
 function oauthStatusLabel(configId) {
   const s = oauthStatusFor(configId)
-  if (s === 'authenticated') return '● auth'
-  if (s === 'expired') return '⚠ expired'
+  if (s === OAUTH_STATUS.AUTHENTICATED) return '● auth'
+  if (s === OAUTH_STATUS.EXPIRED) return '⚠ expired'
   return '○ unauth'
 }
 
 function oauthStatusClass(configId) {
   const s = oauthStatusFor(configId)
-  if (s === 'authenticated') return 'bg-success'
-  if (s === 'expired') return 'bg-warning text-dark'
+  if (s === OAUTH_STATUS.AUTHENTICATED) return 'bg-success'
+  if (s === OAUTH_STATUS.EXPIRED) return 'bg-warning text-dark'
   return 'bg-secondary'
 }
 
