@@ -51,7 +51,7 @@ class LegionSystem:
     session_coordinator: 'SessionCoordinator'
     data_storage_manager: 'DataStorageManager'
     template_manager: 'TemplateManager'
-    ui_websocket_manager: Any | None = None  # UIWebSocketManager (optional, for broadcasting project updates)
+    ui_queue: Any | None = None  # EventQueue (optional, for broadcasting project updates to poll clients)
 
     # Permission callback factory (injected after creation by web_server via session_coordinator)
     # Allows legion components to create permission callbacks for spawned minions

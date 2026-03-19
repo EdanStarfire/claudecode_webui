@@ -46,13 +46,11 @@
 import { ref, computed, watch } from 'vue'
 import { useSessionStore } from '@/stores/session'
 import { useScheduleStore } from '@/stores/schedule'
-import { useWebSocketStore } from '@/stores/websocket'
 import ScheduleItem from './ScheduleItem.vue'
 import ScheduleCreateModal from './ScheduleCreateModal.vue'
 
 const sessionStore = useSessionStore()
 const scheduleStore = useScheduleStore()
-const wsStore = useWebSocketStore()
 
 const showCreate = ref(false)
 const statusFilter = ref('')
@@ -73,12 +71,6 @@ watch(projectId, (newId) => {
   }
 }, { immediate: true })
 
-// Reload when legion WebSocket reconnects
-watch(() => wsStore.legionConnected, (connected) => {
-  if (connected && projectId.value) {
-    scheduleStore.loadSchedules(projectId.value)
-  }
-})
 </script>
 
 <style scoped>

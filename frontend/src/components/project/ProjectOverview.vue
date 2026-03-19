@@ -78,20 +78,6 @@
           </div>
         </div>
 
-        <!-- Legion-specific: Quick Actions -->
-        <div v-if="hasMinions" class="card mb-4">
-          <div class="card-header">
-            <h5 class="mb-0">🏛 Legion Controls</h5>
-          </div>
-          <div class="card-body">
-            <div class="d-flex gap-2 flex-wrap">
-              <button class="btn btn-outline-primary" @click="viewTimeline">
-                📊 View Timeline
-              </button>
-            </div>
-          </div>
-        </div>
-
         <!-- Minion Hierarchy (two-column layout) -->
         <div class="card mb-4">
           <div class="card-header d-flex align-items-center justify-content-between">
@@ -200,8 +186,6 @@ import { useRouter } from 'vue-router'
 import { useProjectStore } from '@/stores/project'
 import { useSessionStore } from '@/stores/session'
 import { useUIStore } from '@/stores/ui'
-import { useLegionStore } from '@/stores/legion'
-import { useWebSocketStore } from '@/stores/websocket'
 import { api } from '@/utils/api'
 import MinionTreeNode from '../legion/MinionTreeNode.vue'
 
@@ -216,8 +200,6 @@ const router = useRouter()
 const projectStore = useProjectStore()
 const sessionStore = useSessionStore()
 const uiStore = useUIStore()
-const legionStore = useLegionStore()
-const websocketStore = useWebSocketStore()
 
 const loading = ref(false)
 const error = ref(null)
@@ -328,31 +310,9 @@ function getCommSummary(comm) {
   return text
 }
 
-// Handle new comm events from Legion WebSocket
-function handleNewComm(comm) {
-  if (!minionHierarchy.value) return
-
-  // If comm is from a minion, update that minion's last_comm
-  if (comm.from_minion_id) {
-    const minion = findMinionInTree(minionHierarchy.value, comm.from_minion_id)
-    if (minion && minion.type === 'minion') {
-      minion.last_comm = comm
-    }
-  }
-
-  // If comm is from user, update user root node
-  if (comm.from_user && minionHierarchy.value.type === 'user') {
-    minionHierarchy.value.last_comm = comm
-  }
-}
-
 // Navigation
 function navigateToSession(sessionId) {
   router.push(`/session/${sessionId}`)
-}
-
-function viewTimeline() {
-  router.push(`/timeline/${props.projectId}`)
 }
 
 // Modals
@@ -372,10 +332,6 @@ onMounted(() => {
 
   // Load minion hierarchy
   loadMinionHierarchy()
-
-  // Connect to legion WebSocket for comm updates
-  legionStore.setCurrentLegion(props.projectId)
-  websocketStore.connectLegion(props.projectId)
 
   // Watch for minion state changes from session store
   sessionWatchStop = watch(
@@ -409,19 +365,6 @@ onMounted(() => {
     { deep: true }
   )
 
-  // Watch for new comms (from Legion WebSocket)
-  watch(
-    () => legionStore.commsByLegion.get(props.projectId),
-    (comms) => {
-      if (comms && comms.length > 0) {
-        // Get the most recent comm
-        const latestComm = comms[comms.length - 1]
-        handleNewComm(latestComm)
-      }
-    },
-    { deep: true }
-  )
-
   // Watch for minions being created or deleted (reload hierarchy)
   watch(
     () => {
@@ -441,10 +384,6 @@ watch(() => props.projectId, (newId) => {
   projectStore.selectProject(newId)
   sessionStore.currentSessionId = null
   loadMinionHierarchy()
-
-  // Reconnect legion WebSocket for new project
-  legionStore.setCurrentLegion(newId)
-  websocketStore.connectLegion(newId)
 })
 
 // Cleanup on unmount

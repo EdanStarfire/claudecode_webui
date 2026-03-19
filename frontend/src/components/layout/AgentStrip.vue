@@ -158,7 +158,7 @@ const projectGhosts = computed(() => {
 })
 
 function hasChildren(session) {
-  return session.child_minion_ids && session.child_minion_ids.length > 0
+  return session.child_minion_ids && session.child_minion_ids.some(id => sessionStore.getSession(id))
 }
 
 function isChildActive(session) {

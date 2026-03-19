@@ -193,6 +193,7 @@ export const useScheduleStore = defineStore('schedule', () => {
       // Prepend new execution to history (newest first)
       executionHistory.value = [event.execution, ...executionHistory.value]
     }
+
   }
 
   // ========== INTERNAL HELPERS ==========

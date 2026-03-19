@@ -292,8 +292,9 @@ async function handleRestart() {
         // This is CRITICAL - without it, selectSession() returns early and doesn't reconnect
         sessionStore.currentSessionId = null
 
-        // Reconnect to session (will fetch fresh data and reconnect WebSocket)
-        await sessionStore.selectSession(sessionId)
+        // Reconnect to session (fire-and-forget — connectSession is an infinite poll loop,
+        // awaiting selectSession would hang the modal forever)
+        sessionStore.selectSession(sessionId)
       }
 
       // Close modal
@@ -376,9 +377,9 @@ async function confirmResetSession() {
         // Clear current session to force selectSession to re-run (bypass early return)
         sessionStore.currentSessionId = null
 
-        // Reconnect to session (will fetch fresh data and reconnect WebSocket)
-        // Use selectSession to match restart behavior - this properly handles reconnection
-        await sessionStore.selectSession(sessionId)
+        // Reconnect to session (fire-and-forget — connectSession is an infinite poll loop,
+        // awaiting selectSession would hang the modal forever)
+        sessionStore.selectSession(sessionId)
       }
 
       // Close modal

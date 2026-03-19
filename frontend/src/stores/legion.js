@@ -12,89 +12,17 @@ import { api } from '../utils/api'
 export const useLegionStore = defineStore('legion', () => {
   // ========== STATE ==========
 
-  // Comms per legion (legionId -> Comm[])
-  const commsByLegion = ref(new Map())
-
   // Minions per legion (legionId -> Minion[])
   const minionsByLegion = ref(new Map())
 
-  // Currently selected legion
-  const currentLegionId = ref(null)
-
   // ========== COMPUTED ==========
 
-  // Current legion's comms
-  const currentComms = computed(() => {
-    return commsByLegion.value.get(currentLegionId.value) || []
-  })
-
-  // Current legion's minions
+  // Current legion's minions (no currentLegionId - removed with WebSocket)
   const currentMinions = computed(() => {
-    return minionsByLegion.value.get(currentLegionId.value) || []
+    return []
   })
 
   // ========== ACTIONS ==========
-
-  /**
-   * Set the current legion
-   */
-  function setCurrentLegion(legionId) {
-    currentLegionId.value = legionId
-  }
-
-  /**
-   * Load comms (timeline) for a legion
-   */
-  async function loadTimeline(legionId, limit = 100, offset = 0) {
-    try {
-      const data = await api.get(
-        `/api/legions/${legionId}/timeline?limit=${limit}&offset=${offset}`
-      )
-
-      const comms = data.comms || []
-      const totalCount = data.total_count || comms.length
-      const hasMore = data.has_more || false
-
-      // Sort comms by timestamp (oldest first, like a chat)
-      comms.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp))
-
-      console.log(`Loaded ${comms.length} of ${totalCount} comms for legion ${legionId}`)
-
-      // Store comms
-      commsByLegion.value.set(legionId, comms)
-
-      // Trigger reactivity
-      commsByLegion.value = new Map(commsByLegion.value)
-
-      return { comms, totalCount, hasMore }
-    } catch (error) {
-      console.error('Failed to load timeline:', error)
-      throw error
-    }
-  }
-
-  /**
-   * Add a comm to a legion (from WebSocket or API)
-   */
-  function addComm(legionId, comm) {
-    if (!commsByLegion.value.has(legionId)) {
-      commsByLegion.value.set(legionId, [])
-    }
-
-    const comms = commsByLegion.value.get(legionId)
-
-    // Check if comm already exists (prevent duplicates from multiple WebSocket connections)
-    const exists = comms.some(c => c.comm_id === comm.comm_id)
-    if (exists) {
-      console.log(`Duplicate comm ${comm.comm_id} prevented in timeline`)
-      return
-    }
-
-    comms.push(comm)
-
-    // Trigger reactivity
-    commsByLegion.value = new Map(commsByLegion.value)
-  }
 
   /**
    * Send a comm to a legion
@@ -192,29 +120,21 @@ export const useLegionStore = defineStore('legion', () => {
    * Clear all legion data
    */
   function clearLegionData(legionId) {
-    commsByLegion.value.delete(legionId)
     minionsByLegion.value.delete(legionId)
 
     // Trigger reactivity
-    commsByLegion.value = new Map(commsByLegion.value)
     minionsByLegion.value = new Map(minionsByLegion.value)
   }
 
   // ========== RETURN ==========
   return {
     // State
-    commsByLegion,
     minionsByLegion,
-    currentLegionId,
 
     // Computed
-    currentComms,
     currentMinions,
 
     // Actions
-    setCurrentLegion,
-    loadTimeline,
-    addComm,
     sendComm,
     loadMinions,
     createMinion,

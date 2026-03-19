@@ -99,10 +99,11 @@ export const useProjectStore = defineStore('project', () => {
     const project = projects.value.get(projectId)
     if (project) {
       Object.assign(project, updates)
-
-      // Trigger reactivity
-      projects.value = new Map(projects.value)
+    } else {
+      projects.value.set(projectId, updates)
     }
+    // Trigger reactivity
+    projects.value = new Map(projects.value)
   }
 
   /**

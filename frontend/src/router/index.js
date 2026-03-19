@@ -1,7 +1,6 @@
 import { createRouter, createWebHashHistory } from 'vue-router'
 import NoSessionSelected from '../components/session/NoSessionSelected.vue'
 import SessionView from '../components/session/SessionView.vue'
-import TimelineView from '../components/legion/TimelineView.vue'
 import ProjectOverview from '../components/project/ProjectOverview.vue'
 
 const routes = [
@@ -37,12 +36,6 @@ const routes = [
       archiveId: route.params.archiveId,
       isDeletedAgent: true
     })
-  },
-  {
-    path: '/timeline/:legionId',
-    name: 'timeline',
-    component: TimelineView,
-    props: true
   }
 ]
 

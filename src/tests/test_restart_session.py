@@ -141,9 +141,10 @@ async def test_issue_680_monitor_detects_idle_and_restarts(mcp_tools):
     mock_callback = Mock()
     mcp_tools.system.permission_callback_factory = Mock(return_value=mock_callback)
 
-    # Set up websocket manager
-    mcp_tools.system.ui_websocket_manager = AsyncMock()
-    mcp_tools.system.ui_websocket_manager.broadcast_to_all = AsyncMock()
+    # Set up ui_queue mock
+    from unittest.mock import MagicMock
+    mock_ui_queue = MagicMock()
+    mcp_tools.system.ui_queue = mock_ui_queue
 
     with patch("src.legion.mcp.legion_mcp_tools.asyncio.sleep", new_callable=AsyncMock):
         await mcp_tools._restart_monitor("session-1", "restart-123", "test reason")
@@ -153,8 +154,8 @@ async def test_issue_680_monitor_detects_idle_and_restarts(mcp_tools):
     enqueue_kwargs = coordinator.enqueue_message.call_args
     assert "test reason" in enqueue_kwargs.kwargs.get("content", enqueue_kwargs[1].get("content", ""))
 
-    mcp_tools.system.ui_websocket_manager.broadcast_to_all.assert_awaited_once()
-    broadcast_msg = mcp_tools.system.ui_websocket_manager.broadcast_to_all.call_args[0][0]
+    mock_ui_queue.append.assert_called_once()
+    broadcast_msg = mock_ui_queue.append.call_args[0][0]
     assert broadcast_msg["type"] == "session_self_restart"
     assert broadcast_msg["data"]["session_id"] == "session-1"
     assert broadcast_msg["data"]["restart_id"] == "restart-123"
@@ -217,7 +218,7 @@ async def test_issue_680_continuation_message_no_reason(mcp_tools):
     idle_info = _make_session_info(state=SessionState.ACTIVE, is_processing=False)
     coordinator.session_manager.get_session_info = AsyncMock(return_value=idle_info)
     mcp_tools.system.permission_callback_factory = None
-    mcp_tools.system.ui_websocket_manager = None
+    mcp_tools.system.ui_queue = None
 
     with patch("src.legion.mcp.legion_mcp_tools.asyncio.sleep", new_callable=AsyncMock):
         await mcp_tools._restart_monitor("session-2", "restart-abc", "")

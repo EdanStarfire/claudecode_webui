@@ -2385,9 +2385,9 @@ class LegionMCPTools:
                             f"(restart_id={restart_id}, reason={reason})"
                         )
 
-                        # Broadcast WebSocket event
-                        if self.system.ui_websocket_manager:
-                            await self.system.ui_websocket_manager.broadcast_to_all({
+                        # Broadcast poll event
+                        if self.system.ui_queue:
+                            self.system.ui_queue.append({
                                 "type": "session_self_restart",
                                 "data": {
                                     "session_id": session_id,
