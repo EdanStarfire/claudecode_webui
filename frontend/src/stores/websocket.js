@@ -30,6 +30,9 @@ export const useWebSocketStore = defineStore('websocket', () => {
   // Loop control flags
   let uiPollGeneration = 0
 
+  // Page Visibility cleanup
+  let visibilityUnsubscribe = null
+
   // ========== COMPUTED ==========
   const overallStatus = computed(() => {
     if (uiConnected.value && (sessionConnected.value || !currentSessionId.value)) {
@@ -172,12 +175,18 @@ export const useWebSocketStore = defineStore('websocket', () => {
 
   // ========== PAGE VISIBILITY ==========
   function setupVisibilityHandler() {
-    document.addEventListener('visibilitychange', () => {
+    if (visibilityUnsubscribe) visibilityUnsubscribe()
+
+    const handler = () => {
       if (document.visibilityState === 'visible') {
         uiAbortController?.abort()
         sessionAbortController?.abort()
       }
-    })
+    }
+    document.addEventListener('visibilitychange', handler)
+    visibilityUnsubscribe = () => {
+      document.removeEventListener('visibilitychange', handler)
+    }
   }
 
   // ========== OUTBOUND REST ACTIONS ==========
