@@ -108,8 +108,25 @@ export const useWebSocketStore = defineStore('websocket', () => {
 
     currentSessionId.value = sessionId
     sessionPolling = true
-    sessionCursor = sessionCursors[sessionId] || 0
     sessionRetryCount.value = 0
+
+    // On first connection to this session (no cached cursor), skip to the current queue
+    // end so historical events are not replayed. loadMessages() covers history via REST.
+    // On reconnect (cached cursor exists), resume from where we left off.
+    if (sessionCursors[sessionId] === undefined) {
+      try {
+        const skipUrl = getPollUrl(`/api/poll/session/${sessionId}`, 0, 0)
+        const skipResp = await fetch(skipUrl)
+        if (skipResp.ok) {
+          const skipData = await skipResp.json()
+          sessionCursors[sessionId] = skipData.next_cursor
+        }
+      } catch (_) {
+        // If skip fails, start from 0 (may replay history but safer than blocking)
+        sessionCursors[sessionId] = 0
+      }
+    }
+    sessionCursor = sessionCursors[sessionId]
 
     while (sessionPolling && currentSessionId.value === sessionId) {
       try {
