@@ -11,7 +11,7 @@
     <!-- Agent Overview Section -->
     <AgentOverview />
 
-    <!-- Tab Navigation (Diff, Tasks, Resources, Comms) -->
+    <!-- Tab Navigation (Diff, Tasks, Resources) -->
     <div class="sidebar-tabs" role="tablist" aria-label="Sidebar panels">
       <button
         v-for="tab in tabs"

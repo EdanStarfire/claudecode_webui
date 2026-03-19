@@ -59,6 +59,7 @@ export const useWebSocketStore = defineStore('websocket', () => {
       try {
         uiAbortController = new AbortController()
         const url = getPollUrl('/api/poll/ui', uiCursor)
+        uiConnected.value = true
         const response = await fetch(url, { signal: uiAbortController.signal })
 
         if (!response.ok) {
@@ -66,7 +67,6 @@ export const useWebSocketStore = defineStore('websocket', () => {
         }
 
         const data = await response.json()
-        uiConnected.value = true
         uiRetryCount.value = 0
 
         if (data.events && data.events.length > 0) {
