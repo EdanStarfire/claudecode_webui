@@ -84,6 +84,7 @@ export const useWebSocketStore = defineStore('websocket', () => {
           // Visibility resume or stop — re-enter immediately if still polling
           continue
         }
+        console.warn(`[UI poll] Connection error (retry ${uiRetryCount.value + 1}):`, err.message || err)
         uiConnected.value = false
         uiRetryCount.value++
         const delay = Math.min(2000 * uiRetryCount.value, 30000)
@@ -152,6 +153,7 @@ export const useWebSocketStore = defineStore('websocket', () => {
         if (err.name === 'AbortError') {
           continue
         }
+        console.warn(`[Session poll] Connection error for session ${sessionId} (retry ${sessionRetryCount.value + 1}):`, err.message || err)
         sessionConnected.value = false
         sessionRetryCount.value++
         const delay = Math.min(2000 * sessionRetryCount.value, 30000)
