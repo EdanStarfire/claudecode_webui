@@ -21,7 +21,6 @@ export const useWebSocketStore = defineStore('websocket', () => {
 
   // Poll cursors
   let uiCursor = 0
-  let sessionCursor = 0
   const sessionCursors = {}  // Per-session cursor cache to avoid replaying history on switch
 
   // AbortControllers for long-poll requests
@@ -119,12 +118,11 @@ export const useWebSocketStore = defineStore('websocket', () => {
     if (sessionCursors[sessionId] === undefined) {
       sessionCursors[sessionId] = 0
     }
-    sessionCursor = sessionCursors[sessionId]
 
     while (sessionConnected.value && currentSessionId.value === sessionId) {
       try {
         sessionAbortController = new AbortController()
-        const url = getPollUrl(`/api/poll/session/${sessionId}`, sessionCursor)
+        const url = getPollUrl(`/api/poll/session/${sessionId}`, sessionCursors[sessionId])
         const response = await fetch(url, { signal: sessionAbortController.signal })
 
         if (response.status === 404) {
@@ -145,7 +143,6 @@ export const useWebSocketStore = defineStore('websocket', () => {
             handleSessionMessage(event, sessionId)
           }
         }
-        sessionCursor = data.next_cursor
         sessionCursors[sessionId] = data.next_cursor
 
       } catch (err) {
