@@ -31,6 +31,7 @@ from pydantic import BaseModel
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from .file_upload import FileUploadError, FileUploadManager
+from .mcp_config_manager import McpServerType
 from .message_parser import MessageParser, MessageProcessor
 from .models.messages import (
     PermissionInfo,
@@ -315,7 +316,7 @@ class TemplateUpdateRequest(BaseModel):
 # MCP config request models (issue #676)
 class McpConfigCreateRequest(BaseModel):
     name: str
-    type: str  # "stdio" | "sse" | "http"
+    type: McpServerType
     command: str | None = None
     args: list[str] | None = None
     env: dict[str, str] | None = None
@@ -3337,8 +3338,8 @@ class ClaudeWebUI:
                     all_configs = [c for c in all_configs if c.id in id_set]
                 portable: dict = {}
                 for c in all_configs:
-                    entry: dict = {"type": c.type, "enabled": c.enabled}
-                    if c.type == "stdio":
+                    entry: dict = {"type": c.type.value, "enabled": c.enabled}
+                    if c.type == McpServerType.STDIO:
                         entry["command"] = c.command
                         if c.args:
                             entry["args"] = c.args
@@ -3370,16 +3371,18 @@ class ClaudeWebUI:
                         preview.append({"name": "", "action": "skip", "reason": "Missing name"})
                         continue
 
-                    server_type = server_data.get("type", "stdio")
-                    if server_type not in ("stdio", "sse", "http"):
-                        preview.append({"name": name, "action": "skip", "reason": f"Invalid type: {server_type}"})
+                    server_type_raw = server_data.get("type", "stdio")
+                    try:
+                        server_type = McpServerType(server_type_raw)
+                    except ValueError:
+                        preview.append({"name": name, "action": "skip", "reason": f"Invalid type: {server_type_raw}"})
                         continue
 
-                    if server_type == "stdio" and not server_data.get("command"):
+                    if server_type == McpServerType.STDIO and not server_data.get("command"):
                         preview.append({"name": name, "action": "skip", "reason": "Missing command for stdio server"})
                         continue
 
-                    if server_type in ("sse", "http") and not server_data.get("url"):
+                    if server_type in (McpServerType.SSE, McpServerType.HTTP) and not server_data.get("url"):
                         preview.append({"name": name, "action": "skip", "reason": f"Missing url for {server_type} server"})
                         continue
 
