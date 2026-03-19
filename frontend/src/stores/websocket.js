@@ -114,6 +114,7 @@ export const useWebSocketStore = defineStore('websocket', () => {
       try {
         sessionAbortController = new AbortController()
         const url = getPollUrl(`/api/poll/session/${sessionId}`, sessionCursor)
+        sessionConnected.value = true
         const response = await fetch(url, { signal: sessionAbortController.signal })
 
         if (response.status === 404) {
@@ -128,7 +129,6 @@ export const useWebSocketStore = defineStore('websocket', () => {
         }
 
         const data = await response.json()
-        sessionConnected.value = true
         sessionRetryCount.value = 0
 
         if (data.events && data.events.length > 0) {

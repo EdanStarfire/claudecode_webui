@@ -698,7 +698,10 @@ class ClaudeWebUI:
         async def poll_session(session_id: str, since: int = 0, timeout: int = 30):
             """HTTP long-poll endpoint for session-specific events."""
             if session_id not in self.session_queues:
-                raise HTTPException(status_code=404, detail="Session queue not found")
+                session_info = await self.coordinator.session_manager.get_session_info(session_id)
+                if not session_info:
+                    raise HTTPException(status_code=404, detail="Session not found")
+                self.session_queues[session_id] = EventQueue()
             queue = self.session_queues[session_id]
             effective_timeout = min(float(timeout), 30.0)
             await queue.wait_for_events(since, timeout=effective_timeout)
