@@ -55,10 +55,18 @@
               class="comm-attachment-item"
             >
               <span class="comm-attachment-icon">{{ getFileIcon(att.mime_type) }}</span>
-              <span class="comm-attachment-name">{{ att.name }}</span>
+              <span class="comm-attachment-name">{{ basename(att.name) }}</span>
               <span class="badge bg-light text-muted ms-1">{{ formatFileSize(att.size) }}</span>
-              <a
+              <span
                 v-if="att.resource_id && att.session_id"
+                class="comm-attachment-preview ms-2"
+                title="Preview"
+                @click="openAttachmentPreview(att)"
+              >
+                &#x2922;
+              </span>
+              <a
+                v-else
                 :href="getDownloadUrl(att)"
                 class="comm-attachment-download ms-2"
                 title="Download"
@@ -174,6 +182,15 @@ function formatFileSize(bytes) {
 
 function getDownloadUrl(att) {
   return resourceStore.getDownloadUrl(att.session_id, att.resource_id)
+}
+
+function basename(name) {
+  if (!name) return ''
+  return name.split('/').pop() || name
+}
+
+function openAttachmentPreview(att) {
+  resourceStore.openFullViewById(att.resource_id, att.session_id)
 }
 </script>
 
@@ -391,6 +408,17 @@ function getDownloadUrl(att) {
 }
 
 .comm-attachment-download:hover {
+  color: #0a58ca;
+}
+
+.comm-attachment-preview {
+  cursor: pointer;
+  font-weight: bold;
+  color: #0d6efd;
+  flex-shrink: 0;
+}
+
+.comm-attachment-preview:hover {
   color: #0a58ca;
 }
 
