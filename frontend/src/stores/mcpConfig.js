@@ -9,6 +9,12 @@ import { api } from '../utils/api'
  * - CRUD operations for global MCP server definitions
  * - Loading configs for picker components
  */
+export const OAUTH_STATUS = {
+  AUTHENTICATED: 'authenticated',
+  EXPIRED: 'expired',
+  UNAUTHENTICATED: 'unauthenticated',
+}
+
 export const useMcpConfigStore = defineStore('mcpConfig', () => {
   // ========== STATE ==========
 
@@ -92,7 +98,7 @@ export const useMcpConfigStore = defineStore('mcpConfig', () => {
 
   // ========== OAuth Actions ==========
 
-  // Per-server OAuth status cache: configId → "authenticated" | "expired" | "unauthenticated"
+  // Per-server OAuth status cache: configId → OAUTH_STATUS value
   const oauthStatus = ref(new Map())
 
   async function fetchOAuthStatus(configId) {
@@ -100,7 +106,7 @@ export const useMcpConfigStore = defineStore('mcpConfig', () => {
       const data = await api.get(`/api/mcp-configs/${configId}/oauth/status`)
       oauthStatus.value = new Map(oauthStatus.value.set(configId, data.status))
     } catch {
-      oauthStatus.value = new Map(oauthStatus.value.set(configId, 'unauthenticated'))
+      oauthStatus.value = new Map(oauthStatus.value.set(configId, OAUTH_STATUS.UNAUTHENTICATED))
     }
   }
 
@@ -113,7 +119,7 @@ export const useMcpConfigStore = defineStore('mcpConfig', () => {
 
   async function disconnectOAuth(configId) {
     await api.post(`/api/mcp-configs/${configId}/oauth/disconnect`, {})
-    oauthStatus.value = new Map(oauthStatus.value.set(configId, 'unauthenticated'))
+    oauthStatus.value = new Map(oauthStatus.value.set(configId, OAUTH_STATUS.UNAUTHENTICATED))
   }
 
   return {
