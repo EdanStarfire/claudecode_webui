@@ -294,7 +294,7 @@ class TestPermissionEndpoint:
         loop = asyncio.get_event_loop()
         future = loop.create_future()
         request_id = "test-perm-allow-001"
-        webui.pending_permissions[request_id] = future
+        webui.permission_service.pending_permissions[request_id] = future
 
         project = await api_integration_env["create_test_project"]()
         session = await api_integration_env["create_test_session"](project["project_id"])
@@ -317,7 +317,7 @@ class TestPermissionEndpoint:
         loop = asyncio.get_event_loop()
         future = loop.create_future()
         request_id = "test-perm-deny-001"
-        webui.pending_permissions[request_id] = future
+        webui.permission_service.pending_permissions[request_id] = future
 
         project = await api_integration_env["create_test_project"]()
         session = await api_integration_env["create_test_session"](project["project_id"])
@@ -352,7 +352,7 @@ class TestPermissionEndpoint:
         loop = asyncio.get_event_loop()
         future = loop.create_future()
         request_id = "test-perm-input-001"
-        webui.pending_permissions[request_id] = future
+        webui.permission_service.pending_permissions[request_id] = future
 
         project = await api_integration_env["create_test_project"]()
         session = await api_integration_env["create_test_session"](project["project_id"])
@@ -375,7 +375,7 @@ class TestPermissionEndpoint:
         loop = asyncio.get_event_loop()
         future = loop.create_future()
         request_id = "test-perm-double-001"
-        webui.pending_permissions[request_id] = future
+        webui.permission_service.pending_permissions[request_id] = future
 
         project = await api_integration_env["create_test_project"]()
         session = await api_integration_env["create_test_session"](project["project_id"])
