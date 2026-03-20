@@ -3,6 +3,7 @@ FastAPI web server for Claude Code WebUI with HTTP long-polling support.
 """
 
 import asyncio
+import html
 import json
 import logging
 import os
@@ -3516,7 +3517,7 @@ class ClaudeWebUI:
 <html><head><title>OAuth Error</title></head>
 <body style="font-family:sans-serif;text-align:center;padding:40px">
 <h2>&#x274C; Authorization Failed</h2>
-<p>{error_desc}</p>
+<p>{html.escape(error_desc)}</p>
 <p>You may close this window.</p>
 </body></html>""",
                     status_code=400,
@@ -3557,7 +3558,7 @@ class ClaudeWebUI:
 <html><head><title>OAuth Error</title></head>
 <body style="font-family:sans-serif;text-align:center;padding:40px">
 <h2>&#x274C; Authorization Failed</h2>
-<p>{e}</p>
+<p>{html.escape(str(e))}</p>
 <p>You may close this window.</p>
 </body></html>""",
                     status_code=400,

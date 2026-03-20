@@ -4,8 +4,10 @@ Covers:
 - FernetTokenStore: encrypted token/client persistence (mocked filesystem)
 - OAuthFlowManager.start_flow + complete_flow (mocked httpx)
 - _get_mcp_sdk_config() injects Bearer token in headers dict
+- XSS escaping in OAuth callback error page (issue #861)
 """
 
+import html
 import json
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -276,6 +278,60 @@ async def test_get_mcp_sdk_config_no_token_no_header(tmp_path: Path):
     sdk_config = await coordinator._get_mcp_sdk_config(mcp_cfg)
 
     assert "Authorization" not in sdk_config["headers"]
+
+
+# ---------------------------------------------------------------------------
+# XSS escaping tests (issue #861)
+# ---------------------------------------------------------------------------
+
+
+def test_issue_861_xss_in_error_description(tmp_path: Path):
+    """OAuth callback with XSS payload in error_description must escape it."""
+    from starlette.testclient import TestClient
+
+    from src.web_server import ClaudeWebUI
+
+    server = ClaudeWebUI(data_dir=tmp_path)
+
+    xss_payload = "<script>alert(1)</script>"
+    with TestClient(server.app, raise_server_exceptions=False) as client:
+        resp = client.get(
+            "/oauth/callback",
+            params={"error": "access_denied", "error_description": xss_payload},
+        )
+
+    assert resp.status_code == 400
+    body = resp.text
+    assert "<script>" not in body
+    assert html.escape(xss_payload) in body
+
+
+def test_issue_861_xss_in_exception_message(tmp_path: Path):
+    """OAuth callback exception with HTML in message must escape it."""
+    from unittest.mock import patch
+
+    from starlette.testclient import TestClient
+
+    from src.web_server import ClaudeWebUI
+
+    server = ClaudeWebUI(data_dir=tmp_path)
+
+    xss_payload = "<img src=x onerror=alert(1)>"
+
+    async def _raise(*args, **kwargs):
+        raise ValueError(xss_payload)
+
+    with patch.object(server.coordinator.oauth_manager, "complete_flow", _raise):
+        with TestClient(server.app, raise_server_exceptions=False) as client:
+            resp = client.get(
+                "/oauth/callback",
+                params={"code": "somecode", "state": "somestate"},
+            )
+
+    assert resp.status_code == 400
+    body = resp.text
+    assert "<img" not in body
+    assert html.escape(xss_payload) in body
 
 
 @pytest.mark.asyncio
