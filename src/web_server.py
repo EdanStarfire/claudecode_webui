@@ -30,6 +30,7 @@ from pydantic import BaseModel
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from .event_queue import EventQueue
+from .exception_handlers import handle_exceptions
 from .file_upload import FileUploadError, FileUploadManager
 from .mcp_config_manager import McpServerType
 from .message_parser import MessageParser, MessageProcessor
@@ -616,6 +617,7 @@ class ClaudeWebUI:
         # ==================== POLL ENDPOINTS ====================
 
         @self.app.get("/api/poll/ui")
+        @handle_exceptions("poll ui")
         async def poll_ui(since: int = 0, timeout: int = 30):
             """HTTP long-poll endpoint for global UI events."""
             effective_timeout = min(float(timeout), 30.0)
@@ -624,6 +626,7 @@ class ClaudeWebUI:
             return {"events": events, "next_cursor": next_cursor}
 
         @self.app.get("/api/poll/session/{session_id}")
+        @handle_exceptions("poll session")
         async def poll_session(session_id: str, since: int = 0, timeout: int = 30):
             """HTTP long-poll endpoint for session-specific events."""
             if session_id not in self.session_queues:
@@ -647,18 +650,19 @@ class ClaudeWebUI:
             updated_input: dict | None = None
 
         @self.app.post("/api/sessions/{session_id}/interrupt")
+        @handle_exceptions("interrupt session")
         async def interrupt_session_rest(session_id: str):
             """Interrupt a session via REST (replaces WebSocket interrupt_session message)."""
-            try:
-                session_info = await self.coordinator.session_manager.get_session_info(session_id)
-                if session_info and session_info.state == SessionState.PAUSED:
-                    self.permission_service.deny_all_for_interrupt()
-                result = await self.coordinator.interrupt_session(session_id)
-                return {"success": bool(result)}
-            except Exception as e:
-                raise HTTPException(status_code=500, detail=str(e)) from e
+            session = await self.coordinator.session_manager.get_session_info(session_id)
+            if not session:
+                raise HTTPException(status_code=404, detail="Session not found")
+            if session.state == SessionState.PAUSED:
+                self.permission_service.deny_all_for_interrupt()
+            result = await self.coordinator.interrupt_session(session_id)
+            return {"success": bool(result)}
 
         @self.app.post("/api/sessions/{session_id}/permission/{request_id}")
+        @handle_exceptions("respond to permission")
         async def respond_to_permission(
             session_id: str, request_id: str, request: PermissionResponseRequest
         ):
@@ -688,6 +692,7 @@ class ClaudeWebUI:
             return {"success": True}
 
         @self.app.get("/", response_class=HTMLResponse)
+        @handle_exceptions("serve root")
         async def read_root():
             """Serve the main HTML page"""
             html_file = Path(__file__).parent.parent / "frontend" / "dist" / "index.html"
@@ -700,11 +705,13 @@ class ClaudeWebUI:
             return HTMLResponse(content=self._default_html(), status_code=200)
 
         @self.app.get("/health")
+        @handle_exceptions("health check")
         async def health_check():
             """Health check endpoint"""
             return {"status": "healthy", "timestamp": datetime.now(UTC).isoformat()}
 
         @self.app.get("/api/auth/check")
+        @handle_exceptions("check auth")
         async def auth_check(request: Request):
             """Check authentication status (issue #728). Exempt from auth middleware."""
             authenticated = False
@@ -723,660 +730,574 @@ class ClaudeWebUI:
         # ==================== PROJECT ENDPOINTS ====================
 
         @self.app.post("/api/projects")
+        @handle_exceptions("create project")
         async def create_project(request: ProjectCreateRequest):
             """Create a new project."""
-            try:
-                project = await self.coordinator.project_manager.create_project(
-                    name=request.name,
-                    working_directory=request.working_directory,
-                    max_concurrent_minions=request.max_concurrent_minions
-                )
-                self.ui_queue.append({
-                    "type": "project_updated",
-                    "data": {"project": project.to_dict()}
-                })
-                return {"project": project.to_dict()}
-            except Exception as e:
-                logger.exception("Failed to create project")
-                raise HTTPException(status_code=500, detail=str(e)) from e
+            project = await self.coordinator.project_manager.create_project(
+                name=request.name,
+                working_directory=request.working_directory,
+                max_concurrent_minions=request.max_concurrent_minions
+            )
+            self.ui_queue.append({
+                "type": "project_updated",
+                "data": {"project": project.to_dict()}
+            })
+            return {"project": project.to_dict()}
 
         @self.app.get("/api/projects")
+        @handle_exceptions("list projects")
         async def list_projects():
             """List all projects."""
-            try:
-                projects = await self.coordinator.project_manager.list_projects()
-                return {"projects": [p.to_dict() for p in projects]}
-            except Exception as e:
-                logger.exception("Failed to list projects")
-                raise HTTPException(status_code=500, detail=str(e)) from e
+            projects = await self.coordinator.project_manager.list_projects()
+            return {"projects": [p.to_dict() for p in projects]}
 
         @self.app.get("/api/projects/{project_id}")
+        @handle_exceptions("get project")
         async def get_project(project_id: str):
             """Get project with sessions"""
-            try:
-                project = await self.coordinator.project_manager.get_project(project_id)
-                if not project:
-                    raise HTTPException(status_code=404, detail="Project not found")
+            project = await self.coordinator.project_manager.get_project(project_id)
+            if not project:
+                raise HTTPException(status_code=404, detail="Project not found")
 
-                # Get sessions for this project
-                sessions = await self.coordinator.session_manager.get_sessions_by_ids(project.session_ids)
+            # Get sessions for this project
+            sessions = await self.coordinator.session_manager.get_sessions_by_ids(project.session_ids)
 
-                return {
-                    "project": project.to_dict(),
-                    "sessions": [s.to_dict() for s in sessions]
-                }
-            except HTTPException:
-                raise
-            except Exception as e:
-                logger.exception("Failed to get project")
-                raise HTTPException(status_code=500, detail=str(e)) from e
+            return {
+                "project": project.to_dict(),
+                "sessions": [s.to_dict() for s in sessions]
+            }
 
         @self.app.put("/api/projects/reorder")
+        @handle_exceptions("reorder projects")
         async def reorder_projects(request: ProjectReorderRequest):
             """Reorder projects"""
-            try:
-                success = await self.coordinator.project_manager.reorder_projects(request.project_ids)
-                if not success:
-                    raise HTTPException(status_code=400, detail="Failed to reorder projects")
-                return {"success": True}
-            except HTTPException:
-                raise
-            except Exception as e:
-                logger.exception("Failed to reorder projects")
-                raise HTTPException(status_code=500, detail=str(e)) from e
+            success = await self.coordinator.project_manager.reorder_projects(request.project_ids)
+            if not success:
+                raise HTTPException(status_code=400, detail="Failed to reorder projects")
+            return {"success": True}
 
         @self.app.put("/api/projects/{project_id}")
+        @handle_exceptions("update project")
         async def update_project(project_id: str, request: ProjectUpdateRequest):
             """Update project metadata"""
-            try:
-                success = await self.coordinator.project_manager.update_project(
-                    project_id=project_id,
-                    name=request.name,
-                    is_expanded=request.is_expanded
-                )
-                if not success:
-                    raise HTTPException(status_code=404, detail="Project not found")
+            success = await self.coordinator.project_manager.update_project(
+                project_id=project_id,
+                name=request.name,
+                is_expanded=request.is_expanded
+            )
+            if not success:
+                raise HTTPException(status_code=404, detail="Project not found")
 
-                # Broadcast update to UI
-                project = await self.coordinator.project_manager.get_project(project_id)
-                self.ui_queue.append({
-                    "type": "project_updated",
-                    "data": {"project": project.to_dict()}
-                })
+            # Broadcast update to UI
+            project = await self.coordinator.project_manager.get_project(project_id)
+            self.ui_queue.append({
+                "type": "project_updated",
+                "data": {"project": project.to_dict()}
+            })
 
-                return {"success": True}
-            except HTTPException:
-                raise
-            except Exception as e:
-                logger.exception("Failed to update project")
-                raise HTTPException(status_code=500, detail=str(e)) from e
+            return {"success": True}
 
         @self.app.delete("/api/projects/{project_id}")
+        @handle_exceptions("delete project")
         async def delete_project(project_id: str):
             """Delete project and all its sessions"""
-            try:
-                project = await self.coordinator.project_manager.get_project(project_id)
-                if not project:
-                    raise HTTPException(status_code=404, detail="Project not found")
+            project = await self.coordinator.project_manager.get_project(project_id)
+            if not project:
+                raise HTTPException(status_code=404, detail="Project not found")
 
-                # Delete all sessions in the project
-                for session_id in project.session_ids:
-                    await self.coordinator.delete_session(session_id)
+            # Delete all sessions in the project
+            for session_id in project.session_ids:
+                await self.coordinator.delete_session(session_id)
 
-                # Delete the project
-                success = await self.coordinator.project_manager.delete_project(project_id)
-                if not success:
-                    raise HTTPException(status_code=500, detail="Failed to delete project")
+            # Delete the project
+            success = await self.coordinator.project_manager.delete_project(project_id)
+            if not success:
+                raise HTTPException(status_code=500, detail="Failed to delete project")
 
-                # Broadcast deletion to UI
-                self.ui_queue.append({
-                    "type": "project_deleted",
-                    "data": {"project_id": project_id}
-                })
+            # Broadcast deletion to UI
+            self.ui_queue.append({
+                "type": "project_deleted",
+                "data": {"project_id": project_id}
+            })
 
-                return {"success": True}
-            except HTTPException:
-                raise
-            except Exception as e:
-                logger.exception("Failed to delete project")
-                raise HTTPException(status_code=500, detail=str(e)) from e
+            return {"success": True}
 
         @self.app.put("/api/projects/{project_id}/toggle-expansion")
+        @handle_exceptions("toggle project expansion")
         async def toggle_project_expansion(project_id: str):
             """Toggle project expansion state"""
-            try:
-                success = await self.coordinator.project_manager.toggle_expansion(project_id)
-                if not success:
-                    raise HTTPException(status_code=404, detail="Project not found")
+            success = await self.coordinator.project_manager.toggle_expansion(project_id)
+            if not success:
+                raise HTTPException(status_code=404, detail="Project not found")
 
-                # Broadcast update to UI
-                project = await self.coordinator.project_manager.get_project(project_id)
+            # Broadcast update to UI
+            project = await self.coordinator.project_manager.get_project(project_id)
+            self.ui_queue.append({
+                "type": "project_updated",
+                "data": {"project": project.to_dict()}
+            })
+
+            return {"success": True, "is_expanded": project.is_expanded}
+
+        @self.app.put("/api/projects/{project_id}/sessions/reorder")
+        @handle_exceptions("reorder project sessions")
+        async def reorder_project_sessions(project_id: str, request: SessionReorderRequest):
+            """Reorder sessions within a project"""
+            success = await self.coordinator.project_manager.reorder_project_sessions(
+                project_id=project_id,
+                session_ids=request.session_ids
+            )
+            if not success:
+                raise HTTPException(status_code=400, detail="Failed to reorder sessions")
+
+            # Also update session order in session manager
+            await self.coordinator.session_manager.reorder_sessions(request.session_ids)
+
+            # Broadcast project update to all UI clients
+            project = await self.coordinator.project_manager.get_project(project_id)
+            if project:
                 self.ui_queue.append({
                     "type": "project_updated",
                     "data": {"project": project.to_dict()}
                 })
 
-                return {"success": True, "is_expanded": project.is_expanded}
-            except HTTPException:
-                raise
-            except Exception as e:
-                logger.exception("Failed to toggle expansion")
-                raise HTTPException(status_code=500, detail=str(e)) from e
-
-        @self.app.put("/api/projects/{project_id}/sessions/reorder")
-        async def reorder_project_sessions(project_id: str, request: SessionReorderRequest):
-            """Reorder sessions within a project"""
-            try:
-                success = await self.coordinator.project_manager.reorder_project_sessions(
-                    project_id=project_id,
-                    session_ids=request.session_ids
-                )
-                if not success:
-                    raise HTTPException(status_code=400, detail="Failed to reorder sessions")
-
-                # Also update session order in session manager
-                await self.coordinator.session_manager.reorder_sessions(request.session_ids)
-
-                # Broadcast project update to all UI clients
-                project = await self.coordinator.project_manager.get_project(project_id)
-                if project:
-                    self.ui_queue.append({
-                        "type": "project_updated",
-                        "data": {"project": project.to_dict()}
-                    })
-
-                return {"success": True}
-            except HTTPException:
-                raise
-            except Exception as e:
-                logger.exception("Failed to reorder project sessions")
-                raise HTTPException(status_code=500, detail=str(e)) from e
+            return {"success": True}
 
         # ==================== ARCHIVE ENDPOINTS ====================
 
         @self.app.get("/api/projects/{project_id}/archives/{session_id}")
+        @handle_exceptions("list session archives")
         async def list_session_archives(project_id: str, session_id: str):
             """List all archives for a session within a project."""
-            try:
-                project = await self.coordinator.project_manager.get_project(project_id)
-                if not project:
-                    raise HTTPException(status_code=404, detail="Project not found")
-                archives = await self.coordinator.get_archives(session_id)
-                return {"archives": archives}
-            except HTTPException:
-                raise
-            except Exception as e:
-                logger.exception("Failed to list archives")
-                raise HTTPException(status_code=500, detail=str(e)) from e
+            project = await self.coordinator.project_manager.get_project(project_id)
+            if not project:
+                raise HTTPException(status_code=404, detail="Project not found")
+            archives = await self.coordinator.get_archives(session_id)
+            return {"archives": archives}
 
         @self.app.get("/api/projects/{project_id}/archives/{session_id}/{archive_id}/messages")
+        @handle_exceptions("get archive messages")
         async def get_archive_messages(
             project_id: str, session_id: str, archive_id: str,
             limit: int | None = 50, offset: int = 0
         ):
             """Get paginated messages from an archive."""
-            try:
-                project = await self.coordinator.project_manager.get_project(project_id)
-                if not project:
-                    raise HTTPException(status_code=404, detail="Project not found")
-                result = await self.coordinator.get_archive_messages(
-                    session_id, archive_id, offset=offset, limit=limit
-                )
-                return result
-            except HTTPException:
-                raise
-            except Exception as e:
-                logger.exception("Failed to get archive messages")
-                raise HTTPException(status_code=500, detail=str(e)) from e
+            project = await self.coordinator.project_manager.get_project(project_id)
+            if not project:
+                raise HTTPException(status_code=404, detail="Project not found")
+            result = await self.coordinator.get_archive_messages(
+                session_id, archive_id, offset=offset, limit=limit
+            )
+            return result
 
         @self.app.get("/api/projects/{project_id}/archives/{session_id}/{archive_id}/state")
+        @handle_exceptions("get archive state")
         async def get_archive_state(project_id: str, session_id: str, archive_id: str):
             """Get archive state and disposal metadata."""
-            try:
-                project = await self.coordinator.project_manager.get_project(project_id)
-                if not project:
-                    raise HTTPException(status_code=404, detail="Project not found")
-                result = await self.coordinator.get_archive_state(session_id, archive_id)
-                if result is None:
-                    raise HTTPException(status_code=404, detail="Archive not found")
-                return result
-            except HTTPException:
-                raise
-            except Exception as e:
-                logger.exception("Failed to get archive state")
-                raise HTTPException(status_code=500, detail=str(e)) from e
+            project = await self.coordinator.project_manager.get_project(project_id)
+            if not project:
+                raise HTTPException(status_code=404, detail="Project not found")
+            result = await self.coordinator.get_archive_state(session_id, archive_id)
+            if result is None:
+                raise HTTPException(status_code=404, detail="Archive not found")
+            return result
 
         @self.app.get(
             "/api/projects/{project_id}/archives/{session_id}/{archive_id}/resources"
         )
+        @handle_exceptions("get archive resources")
         async def get_archive_resources(
             project_id: str, session_id: str, archive_id: str
         ):
             """List resource metadata from an archive."""
-            try:
-                project = await self.coordinator.project_manager.get_project(project_id)
-                if not project:
-                    raise HTTPException(status_code=404, detail="Project not found")
-                resources = await self.coordinator.get_archive_resources(
-                    session_id, archive_id
-                )
-                return {"resources": resources, "count": len(resources)}
-            except HTTPException:
-                raise
-            except Exception as e:
-                logger.exception("Failed to get archive resources")
-                raise HTTPException(status_code=500, detail=str(e)) from e
+            project = await self.coordinator.project_manager.get_project(project_id)
+            if not project:
+                raise HTTPException(status_code=404, detail="Project not found")
+            resources = await self.coordinator.get_archive_resources(
+                session_id, archive_id
+            )
+            return {"resources": resources, "count": len(resources)}
 
         @self.app.get(
             "/api/projects/{project_id}/archives/{session_id}/{archive_id}"
             "/resources/{resource_id}"
         )
+        @handle_exceptions("get archive resource file")
         async def get_archive_resource_file(
             project_id: str, session_id: str, archive_id: str, resource_id: str
         ):
             """Get raw file data for a resource in an archive."""
             from fastapi.responses import Response
 
-            try:
-                project = await self.coordinator.project_manager.get_project(project_id)
-                if not project:
-                    raise HTTPException(status_code=404, detail="Project not found")
+            project = await self.coordinator.project_manager.get_project(project_id)
+            if not project:
+                raise HTTPException(status_code=404, detail="Project not found")
 
-                resources = await self.coordinator.get_archive_resources(
-                    session_id, archive_id
-                )
-                resource_meta = next(
-                    (r for r in resources if r.get("resource_id") == resource_id), None
-                )
-                if not resource_meta:
-                    raise HTTPException(status_code=404, detail="Resource not found")
+            resources = await self.coordinator.get_archive_resources(
+                session_id, archive_id
+            )
+            resource_meta = next(
+                (r for r in resources if r.get("resource_id") == resource_id), None
+            )
+            if not resource_meta:
+                raise HTTPException(status_code=404, detail="Resource not found")
 
-                resource_bytes = await self.coordinator.get_archive_resource_file(
-                    session_id, archive_id, resource_id
-                )
-                if not resource_bytes:
-                    raise HTTPException(
-                        status_code=404, detail="Resource file not found"
-                    )
-
-                content_type = resource_meta.get(
-                    "mime_type", "application/octet-stream"
-                )
-                original_name = resource_meta.get(
-                    "original_name", f"{resource_id}.bin"
+            resource_bytes = await self.coordinator.get_archive_resource_file(
+                session_id, archive_id, resource_id
+            )
+            if not resource_bytes:
+                raise HTTPException(
+                    status_code=404, detail="Resource file not found"
                 )
 
-                return Response(
-                    content=resource_bytes,
-                    media_type=content_type,
-                    headers={
-                        "Content-Disposition": f'inline; filename="{original_name}"'
-                    },
-                )
-            except HTTPException:
-                raise
-            except Exception as e:
-                logger.exception("Failed to get archive resource")
-                raise HTTPException(status_code=500, detail=str(e)) from e
+            content_type = resource_meta.get(
+                "mime_type", "application/octet-stream"
+            )
+            original_name = resource_meta.get(
+                "original_name", f"{resource_id}.bin"
+            )
+
+            return Response(
+                content=resource_bytes,
+                media_type=content_type,
+                headers={
+                    "Content-Disposition": f'inline; filename="{original_name}"'
+                },
+            )
 
         @self.app.get("/api/projects/{project_id}/deleted-agents")
+        @handle_exceptions("list deleted agents")
         async def list_deleted_agents(project_id: str):
             """List deleted agents with archives for a project."""
-            try:
-                project = await self.coordinator.project_manager.get_project(project_id)
-                if not project:
-                    raise HTTPException(status_code=404, detail="Project not found")
-                agents = await self.coordinator.list_project_deleted_agents(project_id)
-                return {"agents": agents}
-            except HTTPException:
-                raise
-            except Exception as e:
-                logger.exception("Failed to list deleted agents")
-                raise HTTPException(status_code=500, detail=str(e)) from e
+            project = await self.coordinator.project_manager.get_project(project_id)
+            if not project:
+                raise HTTPException(status_code=404, detail="Project not found")
+            agents = await self.coordinator.list_project_deleted_agents(project_id)
+            return {"agents": agents}
 
         # ==================== SESSION ENDPOINTS ====================
 
         @self.app.post("/api/sessions")
+        @handle_exceptions("create session")
         async def create_session(request: SessionCreateRequest):
             """Create a new Claude Code session within a project"""
-            try:
-                # Pre-generate session ID so we can pass it to permission callback
-                session_id = str(uuid.uuid4())
+            # Pre-generate session ID so we can pass it to permission callback
+            session_id = str(uuid.uuid4())
 
-                # Issue #630: Validate additional directories
-                validated_dirs = _validate_additional_directories(
-                    request.additional_directories, None
-                )
-
-                config = request.to_session_config(additional_directories=validated_dirs)
-                session_id = await self.coordinator.create_session(
-                    session_id=session_id,
-                    project_id=request.project_id,
-                    config=config,
-                    name=request.name,
-                    permission_callback=self.permission_service.create_permission_callback(session_id),
-                )
-
-                # Create event queue for this new session
-                self.session_queues[session_id] = EventQueue()
-
-                # Broadcast session creation to all UI clients
-                session_info = await self.coordinator.session_manager.get_session_info(session_id)
-                if session_info:
-                    self.ui_queue.append({
-                        "type": "state_change",
-                        "data": {
-                            "session_id": session_id,
-                            "session": session_info.to_dict(),
-                            "timestamp": datetime.now().isoformat()
-                        }
-                    })
-                    logger.debug(f"Appended state_change for newly created session {session_id}")
-
-                # Broadcast project update to all UI clients (session was added to project)
+            if request.project_id:
                 project = await self.coordinator.project_manager.get_project(request.project_id)
-                if project:
-                    self.ui_queue.append({
-                        "type": "project_updated",
-                        "data": {"project": project.to_dict()}
-                    })
-                    logger.debug(f"Appended project_updated for project {request.project_id} after session creation")
+                if not project:
+                    raise HTTPException(status_code=404, detail="Project not found")
 
-                return {"session_id": session_id}
+            # Issue #630: Validate additional directories
+            validated_dirs = _validate_additional_directories(
+                request.additional_directories, None
+            )
 
-            except Exception as e:
-                logger.exception("Failed to create session")
-                raise HTTPException(status_code=500, detail=str(e)) from e
+            config = request.to_session_config(additional_directories=validated_dirs)
+            session_id = await self.coordinator.create_session(
+                session_id=session_id,
+                project_id=request.project_id,
+                config=config,
+                name=request.name,
+                permission_callback=self.permission_service.create_permission_callback(session_id),
+            )
+
+            # Create event queue for this new session
+            self.session_queues[session_id] = EventQueue()
+
+            # Broadcast session creation to all UI clients
+            session_info = await self.coordinator.session_manager.get_session_info(session_id)
+            if session_info:
+                self.ui_queue.append({
+                    "type": "state_change",
+                    "data": {
+                        "session_id": session_id,
+                        "session": session_info.to_dict(),
+                        "timestamp": datetime.now().isoformat()
+                    }
+                })
+                logger.debug(f"Appended state_change for newly created session {session_id}")
+
+            # Broadcast project update to all UI clients (session was added to project)
+            project = await self.coordinator.project_manager.get_project(request.project_id)
+            if project:
+                self.ui_queue.append({
+                    "type": "project_updated",
+                    "data": {"project": project.to_dict()}
+                })
+                logger.debug(f"Appended project_updated for project {request.project_id} after session creation")
+
+            return {"session_id": session_id}
 
         @self.app.get("/api/sessions")
+        @handle_exceptions("list sessions")
         async def list_sessions():
             """List all sessions"""
-            try:
-                sessions = await self.coordinator.list_sessions()
-                return {"sessions": sessions}
-            except Exception as e:
-                logger.exception("Failed to list sessions")
-                raise HTTPException(status_code=500, detail=str(e)) from e
+            sessions = await self.coordinator.list_sessions()
+            return {"sessions": sessions}
 
         @self.app.get("/api/sessions/{session_id}")
+        @handle_exceptions("get session info")
         async def get_session_info(session_id: str):
             """Get session information"""
-            try:
-                info = await self.coordinator.get_session_info(session_id)
-                if not info:
-                    raise HTTPException(status_code=404, detail="Session not found")
+            info = await self.coordinator.get_session_info(session_id)
+            if not info:
+                raise HTTPException(status_code=404, detail="Session not found")
 
-                # Log session state for debugging
-                session_state = info.get('session', {}).get('state', 'unknown')
-                logger.info(f"API returning session {session_id} with state: {session_state}")
+            # Log session state for debugging
+            session_state = info.get('session', {}).get('state', 'unknown')
+            logger.info(f"API returning session {session_id} with state: {session_state}")
 
-                return info
-            except HTTPException:
-                raise
-            except Exception as e:
-                logger.exception("Failed to get session info")
-                raise HTTPException(status_code=500, detail=str(e)) from e
+            return info
 
         @self.app.get("/api/sessions/{session_id}/descendants")
+        @handle_exceptions("get session descendants")
         async def get_session_descendants(session_id: str):
             """Get all descendant sessions (children, grandchildren, etc.) of a session"""
-            try:
-                descendants = await self.coordinator.get_descendants(session_id)
-                return {
-                    "session_id": session_id,
-                    "descendants": descendants,
-                    "count": len(descendants)
-                }
-            except Exception as e:
-                logger.exception(f"Failed to get descendants for session {session_id}")
-                raise HTTPException(status_code=500, detail=str(e)) from e
+            descendants = await self.coordinator.get_descendants(session_id)
+            return {
+                "session_id": session_id,
+                "descendants": descendants,
+                "count": len(descendants)
+            }
 
         @self.app.post("/api/sessions/{session_id}/start")
+        @handle_exceptions("start session")
         async def start_session(session_id: str):
             """Start a session"""
-            try:
-                # Clear any existing callbacks to prevent duplicates (in case session is restarted)
-                if session_id in self.coordinator._message_callbacks:
-                    self.coordinator._message_callbacks[session_id] = []
+            session = await self.coordinator.session_manager.get_session_info(session_id)
+            if not session:
+                raise HTTPException(status_code=404, detail="Session not found")
 
-                # Register WebSocket callback for this session (works for both new and resumed sessions)
-                self.coordinator.add_message_callback(
-                    session_id,
-                    self._create_message_callback(session_id)
-                )
+            # Clear any existing callbacks to prevent duplicates (in case session is restarted)
+            if session_id in self.coordinator._message_callbacks:
+                self.coordinator._message_callbacks[session_id] = []
 
-                success = await self.coordinator.start_session(session_id, permission_callback=self.permission_service.create_permission_callback(session_id))
-                return {"success": success}
-            except Exception as e:
-                logger.exception("Failed to start session")
-                raise HTTPException(status_code=500, detail=str(e)) from e
+            # Register WebSocket callback for this session (works for both new and resumed sessions)
+            self.coordinator.add_message_callback(
+                session_id,
+                self._create_message_callback(session_id)
+            )
+
+            success = await self.coordinator.start_session(session_id, permission_callback=self.permission_service.create_permission_callback(session_id))
+            return {"success": success}
 
         @self.app.post("/api/sessions/{session_id}/terminate")
+        @handle_exceptions("terminate session")
         async def terminate_session(session_id: str):
             """Terminate a session"""
-            try:
-                # Clean up any pending permissions for this session
-                self._cleanup_pending_permissions_for_session(session_id)
+            session = await self.coordinator.session_manager.get_session_info(session_id)
+            if not session:
+                raise HTTPException(status_code=404, detail="Session not found")
 
-                success = await self.coordinator.terminate_session(session_id)
-                return {"success": success}
-            except Exception as e:
-                logger.exception("Failed to terminate session")
-                raise HTTPException(status_code=500, detail=str(e)) from e
+            # Clean up any pending permissions for this session
+            self._cleanup_pending_permissions_for_session(session_id)
+
+            success = await self.coordinator.terminate_session(session_id)
+            return {"success": success}
 
         @self.app.put("/api/sessions/{session_id}/name")
+        @handle_exceptions("update session name")
         async def update_session_name(session_id: str, request: SessionNameUpdateRequest):
             """Update session name"""
-            try:
-                success = await self.coordinator.update_session_name(session_id, request.name)
-                if not success:
-                    raise HTTPException(status_code=404, detail="Session not found")
-                return {"success": success}
-            except HTTPException:
-                raise
-            except Exception as e:
-                logger.exception("Failed to update session name")
-                raise HTTPException(status_code=500, detail=str(e)) from e
+            success = await self.coordinator.update_session_name(session_id, request.name)
+            if not success:
+                raise HTTPException(status_code=404, detail="Session not found")
+            return {"success": success}
 
         @self.app.patch("/api/sessions/{session_id}")
+        @handle_exceptions("update session")
         async def update_session(session_id: str, request: SessionUpdateRequest):
             """Update session fields (generic endpoint)"""
-            try:
-                session = await self.coordinator.session_manager.get_session_info(session_id)
-                if not session:
-                    raise HTTPException(status_code=404, detail="Session not found")
+            session = await self.coordinator.session_manager.get_session_info(session_id)
+            if not session:
+                raise HTTPException(status_code=404, detail="Session not found")
 
-                updates = {}
+            updates = {}
 
-                # Handle name update
-                if request.name is not None:
-                    updates["name"] = request.name
+            # Handle name update
+            if request.name is not None:
+                updates["name"] = request.name
 
-                # Handle model update (takes effect on next restart if session is active)
-                if request.model is not None:
-                    valid_models = ["sonnet", "opus", "haiku", "opusplan"]
-                    if request.model not in valid_models:
-                        raise HTTPException(
-                            status_code=400,
-                            detail=f"Invalid model. Must be one of: {', '.join(valid_models)}"
-                        )
-                    updates["model"] = request.model
-
-                # Handle allowed_tools update (takes effect on next restart if session is active)
-                if request.allowed_tools is not None:
-                    updates["allowed_tools"] = request.allowed_tools
-
-                # Handle disallowed_tools update (takes effect on next reset if session is active)
-                if request.disallowed_tools is not None:
-                    updates["disallowed_tools"] = request.disallowed_tools
-
-                # Handle role update
-                if request.role is not None:
-                    updates["role"] = request.role
-
-                # Handle system_prompt update
-                if request.system_prompt is not None:
-                    updates["system_prompt"] = request.system_prompt
-
-                # Handle override_system_prompt update
-                if request.override_system_prompt is not None:
-                    updates["override_system_prompt"] = request.override_system_prompt
-
-                # Handle capabilities update
-                if request.capabilities is not None:
-                    updates["capabilities"] = request.capabilities
-
-                # Handle sandbox_enabled update
-                if request.sandbox_enabled is not None:
-                    updates["sandbox_enabled"] = request.sandbox_enabled
-
-                # Handle sandbox_config update (issue #458)
-                if request.sandbox_config is not None:
-                    updates["sandbox_config"] = request.sandbox_config
-
-                # Handle setting_sources update (issue #36)
-                if request.setting_sources is not None:
-                    updates["setting_sources"] = request.setting_sources
-
-                # Handle cli_path update (issue #489)
-                # Empty string means clear the custom CLI path
-                if request.cli_path is not None:
-                    updates["cli_path"] = request.cli_path if request.cli_path.strip() else None
-
-                # Handle additional_directories update (issue #630)
-                if request.additional_directories is not None:
-                    validated_dirs = _validate_additional_directories(
-                        request.additional_directories, session.working_directory
+            # Handle model update (takes effect on next restart if session is active)
+            if request.model is not None:
+                valid_models = ["sonnet", "opus", "haiku", "opusplan"]
+                if request.model not in valid_models:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Invalid model. Must be one of: {', '.join(valid_models)}"
                     )
-                    updates["additional_directories"] = validated_dirs
+                updates["model"] = request.model
 
-                # Handle Docker sub-field updates (docker_enabled is immutable; image/mounts/home are editable)
-                # Takes effect on next restart if session is active.
-                if request.docker_image is not None:
-                    updates["docker_image"] = request.docker_image if request.docker_image.strip() else None
-                if request.docker_extra_mounts is not None:
-                    updates["docker_extra_mounts"] = request.docker_extra_mounts
-                if request.docker_home_directory is not None:
-                    updates["docker_home_directory"] = request.docker_home_directory if request.docker_home_directory.strip() else None
+            # Handle allowed_tools update (takes effect on next restart if session is active)
+            if request.allowed_tools is not None:
+                updates["allowed_tools"] = request.allowed_tools
 
-                # Handle thinking and effort configuration (issue #540)
-                if request.thinking_mode is not None:
-                    updates["thinking_mode"] = request.thinking_mode if request.thinking_mode else None
-                if request.thinking_budget_tokens is not None:
-                    updates["thinking_budget_tokens"] = request.thinking_budget_tokens
-                if request.effort is not None:
-                    updates["effort"] = request.effort if request.effort else None
+            # Handle disallowed_tools update (takes effect on next reset if session is active)
+            if request.disallowed_tools is not None:
+                updates["disallowed_tools"] = request.disallowed_tools
 
-                if request.history_distillation_enabled is not None:
-                    updates["history_distillation_enabled"] = request.history_distillation_enabled
+            # Handle role update
+            if request.role is not None:
+                updates["role"] = request.role
 
-                if request.auto_memory_mode is not None:
-                    updates["auto_memory_mode"] = request.auto_memory_mode
+            # Handle system_prompt update
+            if request.system_prompt is not None:
+                updates["system_prompt"] = request.system_prompt
 
-                if request.skill_creating_enabled is not None:
-                    updates["skill_creating_enabled"] = request.skill_creating_enabled
+            # Handle override_system_prompt update
+            if request.override_system_prompt is not None:
+                updates["override_system_prompt"] = request.override_system_prompt
 
-                # MCP server configuration (issue #676)
-                if request.mcp_server_ids is not None:
-                    updates["mcp_server_ids"] = request.mcp_server_ids
-                if request.enable_claudeai_mcp_servers is not None:
-                    updates["enable_claudeai_mcp_servers"] = request.enable_claudeai_mcp_servers
-                if request.strict_mcp_config is not None:
-                    updates["strict_mcp_config"] = request.strict_mcp_config
+            # Handle capabilities update
+            if request.capabilities is not None:
+                updates["capabilities"] = request.capabilities
 
-                if not updates:
-                    return {"success": True, "message": "No fields to update"}
+            # Handle sandbox_enabled update
+            if request.sandbox_enabled is not None:
+                updates["sandbox_enabled"] = request.sandbox_enabled
 
-                success = await self.coordinator.session_manager.update_session(session_id, **updates)
-                if not success:
-                    raise HTTPException(status_code=500, detail="Failed to update session")
+            # Handle sandbox_config update (issue #458)
+            if request.sandbox_config is not None:
+                updates["sandbox_config"] = request.sandbox_config
 
-                return {"success": success}
-            except HTTPException:
-                raise
-            except Exception as e:
-                logger.exception("Failed to update session")
-                raise HTTPException(status_code=500, detail=str(e)) from e
+            # Handle setting_sources update (issue #36)
+            if request.setting_sources is not None:
+                updates["setting_sources"] = request.setting_sources
+
+            # Handle cli_path update (issue #489)
+            # Empty string means clear the custom CLI path
+            if request.cli_path is not None:
+                updates["cli_path"] = request.cli_path if request.cli_path.strip() else None
+
+            # Handle additional_directories update (issue #630)
+            if request.additional_directories is not None:
+                validated_dirs = _validate_additional_directories(
+                    request.additional_directories, session.working_directory
+                )
+                updates["additional_directories"] = validated_dirs
+
+            # Handle Docker sub-field updates (docker_enabled is immutable; image/mounts/home are editable)
+            # Takes effect on next restart if session is active.
+            if request.docker_image is not None:
+                updates["docker_image"] = request.docker_image if request.docker_image.strip() else None
+            if request.docker_extra_mounts is not None:
+                updates["docker_extra_mounts"] = request.docker_extra_mounts
+            if request.docker_home_directory is not None:
+                updates["docker_home_directory"] = request.docker_home_directory if request.docker_home_directory.strip() else None
+
+            # Handle thinking and effort configuration (issue #540)
+            if request.thinking_mode is not None:
+                updates["thinking_mode"] = request.thinking_mode if request.thinking_mode else None
+            if request.thinking_budget_tokens is not None:
+                updates["thinking_budget_tokens"] = request.thinking_budget_tokens
+            if request.effort is not None:
+                updates["effort"] = request.effort if request.effort else None
+
+            if request.history_distillation_enabled is not None:
+                updates["history_distillation_enabled"] = request.history_distillation_enabled
+
+            if request.auto_memory_mode is not None:
+                updates["auto_memory_mode"] = request.auto_memory_mode
+
+            if request.skill_creating_enabled is not None:
+                updates["skill_creating_enabled"] = request.skill_creating_enabled
+
+            # MCP server configuration (issue #676)
+            if request.mcp_server_ids is not None:
+                updates["mcp_server_ids"] = request.mcp_server_ids
+            if request.enable_claudeai_mcp_servers is not None:
+                updates["enable_claudeai_mcp_servers"] = request.enable_claudeai_mcp_servers
+            if request.strict_mcp_config is not None:
+                updates["strict_mcp_config"] = request.strict_mcp_config
+
+            if not updates:
+                return {"success": True, "message": "No fields to update"}
+
+            success = await self.coordinator.session_manager.update_session(session_id, **updates)
+            if not success:
+                raise HTTPException(status_code=500, detail="Failed to update session")
+
+            return {"success": success}
 
         @self.app.delete("/api/sessions/{session_id}")
+        @handle_exceptions("delete session")
         async def delete_session(session_id: str):
             """Delete a session and all its data (including cascaded child sessions)"""
-            try:
-                # Find the project before deletion (so we can check if it gets auto-deleted)
-                project = await self.coordinator._find_project_for_session(session_id)
-                project_id = project.project_id if project else None
+            # Find the project before deletion (so we can check if it gets auto-deleted)
+            project = await self.coordinator._find_project_for_session(session_id)
+            project_id = project.project_id if project else None
 
-                # Clean up any pending permissions for this session
-                self._cleanup_pending_permissions_for_session(session_id)
+            # Clean up any pending permissions for this session
+            self._cleanup_pending_permissions_for_session(session_id)
 
-                # Delete the session (may also delete the project if it was the last session)
-                # Returns dict with success and deleted_session_ids (for cascading deletes)
-                result = await self.coordinator.delete_session(session_id)
-                if not result.get("success"):
-                    raise HTTPException(status_code=404, detail="Session not found")
+            # Delete the session (may also delete the project if it was the last session)
+            # Returns dict with success and deleted_session_ids (for cascading deletes)
+            result = await self.coordinator.delete_session(session_id)
+            if not result.get("success"):
+                raise HTTPException(status_code=404, detail="Session not found")
 
-                deleted_ids = result.get("deleted_session_ids", [])
+            deleted_ids = result.get("deleted_session_ids", [])
 
-                # Clean up event queues and pending permissions for cascaded child sessions
-                self.session_queues.pop(session_id, None)
-                for deleted_id in deleted_ids:
-                    if deleted_id != session_id:
-                        self._cleanup_pending_permissions_for_session(deleted_id)
-                        self.session_queues.pop(deleted_id, None)
+            # Clean up event queues and pending permissions for cascaded child sessions
+            self.session_queues.pop(session_id, None)
+            for deleted_id in deleted_ids:
+                if deleted_id != session_id:
+                    self._cleanup_pending_permissions_for_session(deleted_id)
+                    self.session_queues.pop(deleted_id, None)
 
-                # Check if the project still exists - if not, it was auto-deleted
-                if project_id:
-                    updated_project = await self.coordinator.project_manager.get_project(project_id)
-                    if updated_project is None:
-                        # Project was deleted because it became empty
-                        self.ui_queue.append({
-                            "type": "project_deleted",
-                            "data": {"project_id": project_id}
-                        })
-                        logger.info(f"Appended project_deleted for auto-deleted project {project_id}")
-                    else:
-                        # Project still exists - broadcast update with reduced session count
-                        self.ui_queue.append({
-                            "type": "project_updated",
-                            "data": {"project": updated_project.to_dict()}
-                        })
-                        logger.debug(f"Appended project_updated for project {project_id} after session deletion")
+            # Check if the project still exists - if not, it was auto-deleted
+            if project_id:
+                updated_project = await self.coordinator.project_manager.get_project(project_id)
+                if updated_project is None:
+                    # Project was deleted because it became empty
+                    self.ui_queue.append({
+                        "type": "project_deleted",
+                        "data": {"project_id": project_id}
+                    })
+                    logger.info(f"Appended project_deleted for auto-deleted project {project_id}")
+                else:
+                    # Project still exists - broadcast update with reduced session count
+                    self.ui_queue.append({
+                        "type": "project_updated",
+                        "data": {"project": updated_project.to_dict()}
+                    })
+                    logger.debug(f"Appended project_updated for project {project_id} after session deletion")
 
-                return {
-                    "success": result.get("success"),
-                    "deleted_session_ids": deleted_ids
-                }
-            except HTTPException:
-                raise
-            except Exception as e:
-                logger.exception("Failed to delete session")
-                raise HTTPException(status_code=500, detail=str(e)) from e
+            return {
+                "success": result.get("success"),
+                "deleted_session_ids": deleted_ids
+            }
 
         @self.app.post("/api/sessions/{session_id}/messages")
+        @handle_exceptions("send message")
         async def send_message(session_id: str, request: MessageRequest):
             """Send a message to a session"""
-            try:
-                success = await self.coordinator.send_message(session_id, request.message)
-                return {"success": success}
-            except Exception as e:
-                logger.exception("Failed to send message")
-                raise HTTPException(status_code=500, detail=str(e)) from e
+            session = await self.coordinator.session_manager.get_session_info(session_id)
+            if not session:
+                raise HTTPException(status_code=404, detail="Session not found")
+            if session.state != SessionState.ACTIVE:
+                raise HTTPException(status_code=409, detail="Session is not active")
+            success = await self.coordinator.send_message(session_id, request.message)
+            return {"success": success}
 
         @self.app.get("/api/sessions/{session_id}/messages")
+        @handle_exceptions("get messages")
         async def get_messages(session_id: str, limit: int | None = 50, offset: int = 0):
             """Get messages from a session with pagination metadata"""
-            try:
-                result = await self.coordinator.get_session_messages(
-                    session_id, limit=limit, offset=offset
-                )
-                return result
-            except Exception as e:
-                logger.exception("Failed to get messages")
-                raise HTTPException(status_code=500, detail=str(e)) from e
+            session = await self.coordinator.session_manager.get_session_info(session_id)
+            if not session:
+                raise HTTPException(status_code=404, detail="Session not found")
+            result = await self.coordinator.get_session_messages(
+                session_id, limit=limit, offset=offset
+            )
+            return result
 
         # ==================== FILE UPLOAD ENDPOINTS ====================
 
         @self.app.post("/api/sessions/{session_id}/files")
+        @handle_exceptions("upload file")
         async def upload_file(session_id: str, file: Annotated[UploadFile, File(...)]):
             """
             Upload a file for a session.
@@ -1384,200 +1305,173 @@ class ClaudeWebUI:
             Files are stored in data/sessions/{session_id}/attachments/
             and paths are passed to Claude for reading via the Read tool.
             """
+            # Verify session exists
+            session_info = await self.coordinator.session_manager.get_session_info(session_id)
+            if not session_info:
+                raise HTTPException(status_code=404, detail="Session not found")
+
+            # Initialize file upload manager if not already done
+            file_manager = FileUploadManager(self.coordinator.data_dir / "sessions")
+
+            # Read file content
+            file_content = await file.read()
+
+            # Upload file
             try:
-                # Verify session exists
-                session_info = await self.coordinator.session_manager.get_session_info(session_id)
-                if not session_info:
-                    raise HTTPException(status_code=404, detail="Session not found")
-
-                # Initialize file upload manager if not already done
-                file_manager = FileUploadManager(self.coordinator.data_dir / "sessions")
-
-                # Read file content
-                file_content = await file.read()
-
-                # Upload file
                 file_info = await file_manager.upload_file(
                     session_id=session_id,
                     filename=file.filename,
                     file_data=file_content,
                     content_type=file.content_type
                 )
-
-                # Register path for auto-approve (via session coordinator)
-                await self.coordinator.register_uploaded_file(session_id, file_info.stored_path)
-
-                # Issue #404: Auto-register all uploaded files to resource gallery
-                resource_meta = None
-                try:
-                    resource_meta = await self.coordinator.register_uploaded_resource(
-                        session_id=session_id,
-                        file_path=file_info.stored_path,
-                        title=file_info.original_name,
-                        description="Uploaded by user"
-                    )
-                    logger.info(
-                        f"Auto-registered uploaded file to gallery: "
-                        f"{file_info.original_name}"
-                    )
-                except Exception as e:
-                    # Don't fail the upload if resource registration fails
-                    logger.warning(
-                        f"Failed to register uploaded file to gallery: {e}"
-                    )
-
-                response = {
-                    "success": True,
-                    "file": file_info.to_dict()
-                }
-                # Issue #774: Include resource metadata for attachment summaries
-                if resource_meta:
-                    response["file"]["resource_id"] = resource_meta["resource_id"]
-                    response["file"]["markdown"] = resource_meta["markdown"]
-                return response
-
             except FileUploadError as e:
                 logger.warning(f"File upload validation failed: {e.message}")
                 raise HTTPException(status_code=400, detail=e.message) from e
-            except HTTPException:
-                raise
+
+            # Register path for auto-approve (via session coordinator)
+            await self.coordinator.register_uploaded_file(session_id, file_info.stored_path)
+
+            # Issue #404: Auto-register all uploaded files to resource gallery
+            resource_meta = None
+            try:
+                resource_meta = await self.coordinator.register_uploaded_resource(
+                    session_id=session_id,
+                    file_path=file_info.stored_path,
+                    title=file_info.original_name,
+                    description="Uploaded by user"
+                )
+                logger.info(
+                    f"Auto-registered uploaded file to gallery: "
+                    f"{file_info.original_name}"
+                )
             except Exception as e:
-                logger.exception("Failed to upload file")
-                raise HTTPException(status_code=500, detail=str(e)) from e
+                # Don't fail the upload if resource registration fails
+                logger.warning(
+                    f"Failed to register uploaded file to gallery: {e}"
+                )
+
+            response = {
+                "success": True,
+                "file": file_info.to_dict()
+            }
+            # Issue #774: Include resource metadata for attachment summaries
+            if resource_meta:
+                response["file"]["resource_id"] = resource_meta["resource_id"]
+                response["file"]["markdown"] = resource_meta["markdown"]
+            return response
 
         @self.app.get("/api/sessions/{session_id}/files")
+        @handle_exceptions("list session files")
         async def list_session_files(session_id: str):
             """List all uploaded files for a session"""
-            try:
-                # Verify session exists
-                session_info = await self.coordinator.session_manager.get_session_info(session_id)
-                if not session_info:
-                    raise HTTPException(status_code=404, detail="Session not found")
+            # Verify session exists
+            session_info = await self.coordinator.session_manager.get_session_info(session_id)
+            if not session_info:
+                raise HTTPException(status_code=404, detail="Session not found")
 
-                file_manager = FileUploadManager(self.coordinator.data_dir / "sessions")
-                files = await file_manager.list_files(session_id)
+            file_manager = FileUploadManager(self.coordinator.data_dir / "sessions")
+            files = await file_manager.list_files(session_id)
 
-                return {
-                    "files": [f.to_dict() for f in files]
-                }
-
-            except HTTPException:
-                raise
-            except Exception as e:
-                logger.exception("Failed to list files")
-                raise HTTPException(status_code=500, detail=str(e)) from e
+            return {
+                "files": [f.to_dict() for f in files]
+            }
 
         @self.app.delete("/api/sessions/{session_id}/files/{file_id}")
+        @handle_exceptions("delete file")
         async def delete_file(session_id: str, file_id: str):
             """Delete an uploaded file"""
-            try:
-                # Verify session exists
-                session_info = await self.coordinator.session_manager.get_session_info(session_id)
-                if not session_info:
-                    raise HTTPException(status_code=404, detail="Session not found")
+            # Verify session exists
+            session_info = await self.coordinator.session_manager.get_session_info(session_id)
+            if not session_info:
+                raise HTTPException(status_code=404, detail="Session not found")
 
-                file_manager = FileUploadManager(self.coordinator.data_dir / "sessions")
+            file_manager = FileUploadManager(self.coordinator.data_dir / "sessions")
 
-                # Get file info before deleting (to unregister path)
-                file_info = await file_manager.get_file_info(session_id, file_id)
-                if file_info:
-                    # Unregister from auto-approve
-                    await self.coordinator.unregister_uploaded_file(session_id, file_info.stored_path)
+            # Get file info before deleting (to unregister path)
+            file_info = await file_manager.get_file_info(session_id, file_id)
+            if file_info:
+                # Unregister from auto-approve
+                await self.coordinator.unregister_uploaded_file(session_id, file_info.stored_path)
 
-                success = await file_manager.delete_file(session_id, file_id)
-                if not success:
-                    raise HTTPException(status_code=404, detail="File not found")
+            success = await file_manager.delete_file(session_id, file_id)
+            if not success:
+                raise HTTPException(status_code=404, detail="File not found")
 
-                return {"success": True}
-
-            except HTTPException:
-                raise
-            except Exception as e:
-                logger.exception("Failed to delete file")
-                raise HTTPException(status_code=500, detail=str(e)) from e
+            return {"success": True}
 
         # Issue #404: Resource gallery endpoints
         @self.app.get("/api/sessions/{session_id}/resources")
+        @handle_exceptions("get session resources")
         async def get_session_resources(session_id: str):
             """Get all resource metadata for a session"""
-            try:
-                resources = await self.coordinator.get_session_resources(session_id)
-                return {"resources": resources, "count": len(resources)}
-            except Exception as e:
-                logger.exception("Failed to get resources")
-                raise HTTPException(status_code=500, detail=str(e)) from e
+            session = await self.coordinator.session_manager.get_session_info(session_id)
+            if not session:
+                raise HTTPException(status_code=404, detail="Session not found")
+            resources = await self.coordinator.get_session_resources(session_id)
+            return {"resources": resources, "count": len(resources)}
 
         @self.app.get("/api/sessions/{session_id}/resources/{resource_id}")
+        @handle_exceptions("get session resource")
         async def get_session_resource(session_id: str, resource_id: str):
             """Get raw file data for a specific resource"""
             from fastapi.responses import Response
 
-            try:
-                # Get resource metadata to determine content type
-                resources = await self.coordinator.get_session_resources(session_id)
-                resource_meta = next((r for r in resources if r.get("resource_id") == resource_id), None)
+            # Get resource metadata to determine content type
+            resources = await self.coordinator.get_session_resources(session_id)
+            resource_meta = next((r for r in resources if r.get("resource_id") == resource_id), None)
 
-                if not resource_meta:
-                    raise HTTPException(status_code=404, detail="Resource not found")
+            if not resource_meta:
+                raise HTTPException(status_code=404, detail="Resource not found")
 
-                # Get resource bytes
-                resource_bytes = await self.coordinator.get_session_resource_file(session_id, resource_id)
-                if not resource_bytes:
-                    raise HTTPException(status_code=404, detail="Resource file not found")
+            # Get resource bytes
+            resource_bytes = await self.coordinator.get_session_resource_file(session_id, resource_id)
+            if not resource_bytes:
+                raise HTTPException(status_code=404, detail="Resource file not found")
 
-                # Use mime_type from metadata, fallback to octet-stream
-                content_type = resource_meta.get("mime_type", "application/octet-stream")
-                original_name = resource_meta.get("original_name", f"{resource_id}.bin")
+            # Use mime_type from metadata, fallback to octet-stream
+            content_type = resource_meta.get("mime_type", "application/octet-stream")
+            original_name = resource_meta.get("original_name", f"{resource_id}.bin")
 
-                return Response(
-                    content=resource_bytes,
-                    media_type=content_type,
-                    headers={
-                        "Content-Disposition": f'inline; filename="{original_name}"'
-                    }
-                )
-            except HTTPException:
-                raise
-            except Exception as e:
-                logger.exception("Failed to get resource")
-                raise HTTPException(status_code=500, detail=str(e)) from e
+            return Response(
+                content=resource_bytes,
+                media_type=content_type,
+                headers={
+                    "Content-Disposition": f'inline; filename="{original_name}"'
+                }
+            )
 
         @self.app.get("/api/sessions/{session_id}/resources/{resource_id}/download")
+        @handle_exceptions("download session resource")
         async def download_session_resource(session_id: str, resource_id: str):
             """Download a resource file"""
             from fastapi.responses import Response
 
-            try:
-                # Get resource metadata
-                resources = await self.coordinator.get_session_resources(session_id)
-                resource_meta = next((r for r in resources if r.get("resource_id") == resource_id), None)
+            # Get resource metadata
+            resources = await self.coordinator.get_session_resources(session_id)
+            resource_meta = next((r for r in resources if r.get("resource_id") == resource_id), None)
 
-                if not resource_meta:
-                    raise HTTPException(status_code=404, detail="Resource not found")
+            if not resource_meta:
+                raise HTTPException(status_code=404, detail="Resource not found")
 
-                # Get resource bytes
-                resource_bytes = await self.coordinator.get_session_resource_file(session_id, resource_id)
-                if not resource_bytes:
-                    raise HTTPException(status_code=404, detail="Resource file not found")
+            # Get resource bytes
+            resource_bytes = await self.coordinator.get_session_resource_file(session_id, resource_id)
+            if not resource_bytes:
+                raise HTTPException(status_code=404, detail="Resource file not found")
 
-                content_type = resource_meta.get("mime_type", "application/octet-stream")
-                original_name = resource_meta.get("original_name", f"{resource_id}.bin")
+            content_type = resource_meta.get("mime_type", "application/octet-stream")
+            original_name = resource_meta.get("original_name", f"{resource_id}.bin")
 
-                return Response(
-                    content=resource_bytes,
-                    media_type=content_type,
-                    headers={
-                        "Content-Disposition": f'attachment; filename="{original_name}"'
-                    }
-                )
-            except HTTPException:
-                raise
-            except Exception as e:
-                logger.exception("Failed to download resource")
-                raise HTTPException(status_code=500, detail=str(e)) from e
+            return Response(
+                content=resource_bytes,
+                media_type=content_type,
+                headers={
+                    "Content-Disposition": f'attachment; filename="{original_name}"'
+                }
+            )
 
         # Issue #820: Serve session /tmp files directly (for containerized agents)
         @self.app.get("/api/sessions/{session_id}/tmp/{path:path}")
+        @handle_exceptions("get session tmp file")
         async def get_session_tmp_file(session_id: str, path: str):
             """Serve a file from the session's /tmp directory (for containerized agents)."""
             import mimetypes
@@ -1609,503 +1503,477 @@ class ClaudeWebUI:
 
         # Issue #423: Remove resource from session display (soft-remove)
         @self.app.delete("/api/sessions/{session_id}/resources/{resource_id}")
+        @handle_exceptions("remove session resource")
         async def remove_session_resource(session_id: str, resource_id: str):
             """Soft-remove a resource from the session display (file is preserved)"""
-            try:
-                success = await self.coordinator.remove_session_resource(session_id, resource_id)
-                if not success:
-                    raise HTTPException(status_code=404, detail="Resource not found or removal failed")
+            success = await self.coordinator.remove_session_resource(session_id, resource_id)
+            if not success:
+                raise HTTPException(status_code=404, detail="Resource not found or removal failed")
 
-                # Append removal to session poll queue
-                if session_id in self.session_queues:
-                    self.session_queues[session_id].append({
-                        "type": "resource_removed",
-                        "resource_id": resource_id,
-                    })
+            # Append removal to session poll queue
+            if session_id in self.session_queues:
+                self.session_queues[session_id].append({
+                    "type": "resource_removed",
+                    "resource_id": resource_id,
+                })
 
-                return {"status": "ok", "resource_id": resource_id}
-            except HTTPException:
-                raise
-            except Exception as e:
-                logger.exception("Failed to remove resource")
-                raise HTTPException(status_code=500, detail=str(e)) from e
+            return {"status": "ok", "resource_id": resource_id}
 
         # Issue #404: Legacy image endpoints (backward compatibility)
         @self.app.get("/api/sessions/{session_id}/images")
+        @handle_exceptions("get session images")
         async def get_session_images(session_id: str):
             """Get all image metadata for a session (deprecated, use /resources)"""
-            try:
-                images = await self.coordinator.get_session_images(session_id)
-                return {"images": images, "count": len(images)}
-            except Exception as e:
-                logger.exception("Failed to get images")
-                raise HTTPException(status_code=500, detail=str(e)) from e
+            images = await self.coordinator.get_session_images(session_id)
+            return {"images": images, "count": len(images)}
 
         @self.app.get("/api/sessions/{session_id}/images/{image_id}")
+        @handle_exceptions("get session image")
         async def get_session_image(session_id: str, image_id: str):
             """Get raw image data for a specific image (deprecated, use /resources)"""
             from fastapi.responses import Response
 
-            try:
-                # Get image metadata to determine content type
-                images = await self.coordinator.get_session_images(session_id)
-                image_meta = next((img for img in images if img.get("image_id") == image_id), None)
+            # Get image metadata to determine content type
+            images = await self.coordinator.get_session_images(session_id)
+            image_meta = next((img for img in images if img.get("image_id") == image_id), None)
 
-                if not image_meta:
-                    raise HTTPException(status_code=404, detail="Image not found")
+            if not image_meta:
+                raise HTTPException(status_code=404, detail="Image not found")
 
-                # Get image bytes
-                image_bytes = await self.coordinator.get_session_image_file(session_id, image_id)
-                if not image_bytes:
-                    raise HTTPException(status_code=404, detail="Image file not found")
+            # Get image bytes
+            image_bytes = await self.coordinator.get_session_image_file(session_id, image_id)
+            if not image_bytes:
+                raise HTTPException(status_code=404, detail="Image file not found")
 
-                # Determine content type from format
-                format_to_mime = {
-                    "png": "image/png",
-                    "jpeg": "image/jpeg",
-                    "jpg": "image/jpeg",
-                    "webp": "image/webp",
-                    "gif": "image/gif"
+            # Determine content type from format
+            format_to_mime = {
+                "png": "image/png",
+                "jpeg": "image/jpeg",
+                "jpg": "image/jpeg",
+                "webp": "image/webp",
+                "gif": "image/gif"
+            }
+            content_type = format_to_mime.get(image_meta.get("format", "png"), "image/png")
+
+            return Response(
+                content=image_bytes,
+                media_type=content_type,
+                headers={
+                    "Content-Disposition": f'inline; filename="{image_id}.{image_meta.get("format", "png")}"'
                 }
-                content_type = format_to_mime.get(image_meta.get("format", "png"), "image/png")
-
-                return Response(
-                    content=image_bytes,
-                    media_type=content_type,
-                    headers={
-                        "Content-Disposition": f'inline; filename="{image_id}.{image_meta.get("format", "png")}"'
-                    }
-                )
-            except HTTPException:
-                raise
-            except Exception as e:
-                logger.exception("Failed to get image")
-                raise HTTPException(status_code=500, detail=str(e)) from e
+            )
 
         # ==================== PERMISSION MODE ENDPOINT ====================
 
         @self.app.post("/api/sessions/{session_id}/permission-mode")
+        @handle_exceptions("set permission mode")
         async def set_permission_mode(session_id: str, request: PermissionModeRequest):
             """Set the permission mode for a session"""
-            try:
-                # Validate mode
-                valid_modes = ["default", "acceptEdits", "plan", "bypassPermissions"]
-                if request.mode not in valid_modes:
-                    raise HTTPException(status_code=400, detail=f"Invalid permission mode: {request.mode}")
+            # Validate mode
+            valid_modes = ["default", "acceptEdits", "plan", "bypassPermissions"]
+            if request.mode not in valid_modes:
+                raise HTTPException(status_code=400, detail=f"Invalid permission mode: {request.mode}")
 
-                success = await self.coordinator.set_permission_mode(session_id, request.mode)
-                if not success:
-                    raise HTTPException(status_code=400, detail="Failed to set permission mode")
-                return {"success": success, "mode": request.mode}
-            except HTTPException:
-                raise
-            except Exception as e:
-                logger.exception("Failed to set permission mode")
-                raise HTTPException(status_code=500, detail=str(e)) from e
+            success = await self.coordinator.set_permission_mode(session_id, request.mode)
+            if not success:
+                raise HTTPException(status_code=400, detail="Failed to set permission mode")
+            return {"success": success, "mode": request.mode}
 
         @self.app.get("/api/sessions/{session_id}/mcp-status")
+        @handle_exceptions("get mcp status")
         async def get_mcp_status(session_id: str):
             """Get MCP server status for a session"""
-            try:
-                result = await self.coordinator.get_mcp_status(session_id)
-                return result
-            except Exception as e:
-                logger.exception("Failed to get MCP status")
-                raise HTTPException(status_code=500, detail=str(e)) from e
+            session = await self.coordinator.session_manager.get_session_info(session_id)
+            if not session:
+                raise HTTPException(status_code=404, detail="Session not found")
+            result = await self.coordinator.get_mcp_status(session_id)
+            return result
 
         @self.app.post("/api/sessions/{session_id}/mcp-toggle")
+        @handle_exceptions("toggle mcp server")
         async def toggle_mcp_server(session_id: str, request: McpToggleRequest):
             """Toggle an MCP server on or off"""
+            session = await self.coordinator.session_manager.get_session_info(session_id)
+            if not session:
+                raise HTTPException(status_code=404, detail="Session not found")
             try:
                 await self.coordinator.toggle_mcp_server(
                     session_id, request.name, request.enabled
                 )
-                return {"success": True, "name": request.name, "enabled": request.enabled}
             except Exception as e:
-                logger.exception("Failed to toggle MCP server")
                 raise HTTPException(status_code=400, detail=str(e)) from e
+            return {"success": True, "name": request.name, "enabled": request.enabled}
 
         @self.app.post("/api/sessions/{session_id}/mcp-reconnect")
+        @handle_exceptions("reconnect mcp server")
         async def reconnect_mcp_server(session_id: str, request: McpReconnectRequest):
             """Reconnect a failed MCP server"""
+            session = await self.coordinator.session_manager.get_session_info(session_id)
+            if not session:
+                raise HTTPException(status_code=404, detail="Session not found")
             try:
                 await self.coordinator.reconnect_mcp_server(session_id, request.name)
-                return {"success": True, "name": request.name}
             except Exception as e:
-                logger.exception("Failed to reconnect MCP server")
                 raise HTTPException(status_code=400, detail=str(e)) from e
+            return {"success": True, "name": request.name}
 
         @self.app.post("/api/sessions/{session_id}/restart")
+        @handle_exceptions("restart session")
         async def restart_session(session_id: str):
             """Restart a session (disconnect and resume)"""
-            try:
-                # Clear any existing callbacks to prevent duplicates
-                if session_id in self.coordinator._message_callbacks:
-                    self.coordinator._message_callbacks[session_id] = []
+            session = await self.coordinator.session_manager.get_session_info(session_id)
+            if not session:
+                raise HTTPException(status_code=404, detail="Session not found")
 
-                # Re-register WebSocket message callback so messages stream after restart
-                self.coordinator.add_message_callback(
-                    session_id,
-                    self._create_message_callback(session_id)
-                )
+            # Clear any existing callbacks to prevent duplicates
+            if session_id in self.coordinator._message_callbacks:
+                self.coordinator._message_callbacks[session_id] = []
 
-                # Get permission callback for this session
-                permission_callback = self.permission_service.create_permission_callback(session_id)
+            # Re-register WebSocket message callback so messages stream after restart
+            self.coordinator.add_message_callback(
+                session_id,
+                self._create_message_callback(session_id)
+            )
 
-                success = await self.coordinator.restart_session(
-                    session_id,
-                    permission_callback=permission_callback
-                )
-                return {"success": success}
-            except Exception as e:
-                logger.exception("Failed to restart session")
-                raise HTTPException(status_code=500, detail=str(e)) from e
+            # Get permission callback for this session
+            permission_callback = self.permission_service.create_permission_callback(session_id)
+
+            success = await self.coordinator.restart_session(
+                session_id,
+                permission_callback=permission_callback
+            )
+            return {"success": success}
 
         @self.app.post("/api/sessions/{session_id}/reset")
+        @handle_exceptions("reset session")
         async def reset_session(session_id: str):
             """Reset a session (clear messages and start fresh)"""
-            try:
-                # Get permission callback for this session
-                permission_callback = self.permission_service.create_permission_callback(session_id)
+            session = await self.coordinator.session_manager.get_session_info(session_id)
+            if not session:
+                raise HTTPException(status_code=404, detail="Session not found")
 
-                success = await self.coordinator.reset_session(
-                    session_id,
-                    permission_callback=permission_callback
-                )
-                return {"success": success}
-            except Exception as e:
-                logger.exception("Failed to reset session")
-                raise HTTPException(status_code=500, detail=str(e)) from e
+            # Get permission callback for this session
+            permission_callback = self.permission_service.create_permission_callback(session_id)
+
+            success = await self.coordinator.reset_session(
+                session_id,
+                permission_callback=permission_callback
+            )
+            return {"success": success}
 
         @self.app.delete("/api/sessions/{session_id}/history")
+        @handle_exceptions("erase session history")
         async def erase_session_history(session_id: str):
             """Erase distilled history files for a session."""
-            try:
-                success = await self.coordinator.erase_history(session_id)
-                return {"success": success}
-            except Exception as e:
-                logger.error(f"Failed to erase history: {e}")
-                raise HTTPException(status_code=500, detail=str(e)) from e
+            success = await self.coordinator.erase_history(session_id)
+            return {"success": success}
 
         @self.app.delete("/api/sessions/{session_id}/archives")
+        @handle_exceptions("erase session archives")
         async def erase_session_archives(session_id: str):
             """Erase archive data for a session."""
-            try:
-                success = await self.coordinator.erase_archives(session_id)
-                return {"success": success}
-            except Exception as e:
-                logger.error(f"Failed to erase archives: {e}")
-                raise HTTPException(status_code=500, detail=str(e)) from e
+            success = await self.coordinator.erase_archives(session_id)
+            return {"success": success}
 
         @self.app.get("/api/sessions/{session_id}/history-archives-status")
+        @handle_exceptions("get history archives status")
         async def get_history_archives_status(session_id: str):
             """Check if history and/or archives exist for a session."""
-            try:
-                return await self.coordinator.check_history_archives(session_id)
-            except Exception as e:
-                logger.error(f"Failed to check history/archives status: {e}")
-                raise HTTPException(status_code=500, detail=str(e)) from e
+            return await self.coordinator.check_history_archives(session_id)
 
         @self.app.post("/api/sessions/{session_id}/disconnect")
+        @handle_exceptions("disconnect session")
         async def disconnect_session(session_id: str):
             """Disconnect SDK but keep session state (for end session)"""
-            try:
-                sdk = self.coordinator._active_sdks.get(session_id)
-                if sdk:
-                    success = await sdk.disconnect()
-                    if success:
-                        del self.coordinator._active_sdks[session_id]
-                    return {"success": success}
-                return {"success": True}  # Already disconnected
-            except Exception as e:
-                logger.exception("Failed to disconnect session")
-                raise HTTPException(status_code=500, detail=str(e)) from e
+            sdk = self.coordinator._active_sdks.get(session_id)
+            if sdk:
+                success = await sdk.disconnect()
+                if success:
+                    del self.coordinator._active_sdks[session_id]
+                return {"success": success}
+            return {"success": True}  # Already disconnected
 
         # ==================== DIFF ENDPOINTS (Issue #435) ====================
 
         @self.app.get("/api/sessions/{session_id}/diff")
+        @handle_exceptions("get session diff")
         async def get_session_diff(session_id: str):
             """Get diff summary for a session's working directory vs origin/main."""
-            try:
-                session = await self.coordinator.session_manager.get_session_info(session_id)
-                if not session:
-                    raise HTTPException(status_code=404, detail="Session not found")
+            session = await self.coordinator.session_manager.get_session_info(session_id)
+            if not session:
+                raise HTTPException(status_code=404, detail="Session not found")
 
-                cwd = session.working_directory
-                if not cwd or not Path(cwd).exists():
-                    return {"is_git_repo": False}
+            cwd = session.working_directory
+            if not cwd or not Path(cwd).exists():
+                return {"is_git_repo": False}
 
-                # Check if it's a git repo
-                is_git = await self._run_git_command(
-                    ["git", "rev-parse", "--is-inside-work-tree"], cwd
-                )
-                if is_git is None:
-                    return {"is_git_repo": False}
+            # Check if it's a git repo
+            is_git = await self._run_git_command(
+                ["git", "rev-parse", "--is-inside-work-tree"], cwd
+            )
+            if is_git is None:
+                return {"is_git_repo": False}
 
-                # Get current branch
-                branch = await self._run_git_command(
-                    ["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd
-                )
+            # Get current branch
+            branch = await self._run_git_command(
+                ["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd
+            )
 
-                # Find merge base with origin/main (fallback to origin/master)
+            # Find merge base with origin/main (fallback to origin/master)
+            merge_base = await self._run_git_command(
+                ["git", "merge-base", "HEAD", "origin/main"], cwd
+            )
+            if merge_base is None:
                 merge_base = await self._run_git_command(
-                    ["git", "merge-base", "HEAD", "origin/main"], cwd
+                    ["git", "merge-base", "HEAD", "origin/master"], cwd
                 )
-                if merge_base is None:
-                    merge_base = await self._run_git_command(
-                        ["git", "merge-base", "HEAD", "origin/master"], cwd
-                    )
-                # Track whether we're in local-only mode (no remote)
-                is_local_only = merge_base is None
-                if is_local_only:
-                    # No remote: use the empty tree as base so all commits/files are shown
-                    empty_tree = await self._run_git_command(
-                        ["git", "hash-object", "-t", "tree", "/dev/null"], cwd
-                    )
-                    if empty_tree:
-                        merge_base = empty_tree.strip()
-                    else:
-                        # Fallback to well-known empty tree hash
-                        merge_base = "4b825dc642cb6eb9a060e54bf899d15f7f09f993"
-
-                # Get commit log since merge base
-                if is_local_only:
-                    # Local-only: show all commits (--root includes initial commit)
-                    log_output = await self._run_git_command(
-                        ["git", "log", "--format=%H%n%h%n%s%n%an%n%aI%n---COMMIT_END---"],
-                        cwd
-                    )
+            # Track whether we're in local-only mode (no remote)
+            is_local_only = merge_base is None
+            if is_local_only:
+                # No remote: use the empty tree as base so all commits/files are shown
+                empty_tree = await self._run_git_command(
+                    ["git", "hash-object", "-t", "tree", "/dev/null"], cwd
+                )
+                if empty_tree:
+                    merge_base = empty_tree.strip()
                 else:
-                    log_output = await self._run_git_command(
-                        ["git", "log", f"{merge_base}..HEAD",
-                         "--format=%H%n%h%n%s%n%an%n%aI%n---COMMIT_END---"],
-                        cwd
-                    )
-                commits = []
-                if log_output:
-                    raw_commits = log_output.strip().split("---COMMIT_END---")
-                    for raw in raw_commits:
-                        lines = raw.strip().split("\n")
-                        if len(lines) >= 5:
-                            # Get files for this commit
-                            commit_files_output = await self._run_git_command(
-                                ["git", "diff-tree", "--no-commit-id", "--root",
-                                 "-r", "--name-only", lines[0]], cwd
-                            )
-                            commit_files = [
-                                f for f in (commit_files_output or "").strip().split("\n")
-                                if f
-                            ]
-                            commits.append({
-                                "hash": lines[0],
-                                "short_hash": lines[1],
-                                "message": lines[2],
-                                "author": lines[3],
-                                "date": lines[4],
-                                "files": commit_files
-                            })
+                    # Fallback to well-known empty tree hash
+                    merge_base = "4b825dc642cb6eb9a060e54bf899d15f7f09f993"
 
-                # Detect uncommitted changes (staged + unstaged + untracked)
-                status_output = await self._run_git_command(
-                    ["git", "status", "--porcelain"], cwd
+            # Get commit log since merge base
+            if is_local_only:
+                # Local-only: show all commits (--root includes initial commit)
+                log_output = await self._run_git_command(
+                    ["git", "log", "--format=%H%n%h%n%s%n%an%n%aI%n---COMMIT_END---"],
+                    cwd
                 )
-                uncommitted_files = []
-                untracked_paths = []
-                if status_output:
-                    for line in status_output.strip().split("\n"):
-                        if not line or len(line) < 3:
-                            continue
-                        xy = line[:2]
-                        path = line[3:].strip()
-                        # Handle renames: "R  old -> new"
-                        if " -> " in path:
-                            path = path.split(" -> ", 1)[1]
-                        if xy == "??":
-                            untracked_paths.append(path)
-                        else:
-                            uncommitted_files.append(path)
+            else:
+                log_output = await self._run_git_command(
+                    ["git", "log", f"{merge_base}..HEAD",
+                     "--format=%H%n%h%n%s%n%an%n%aI%n---COMMIT_END---"],
+                    cwd
+                )
+            commits = []
+            if log_output:
+                raw_commits = log_output.strip().split("---COMMIT_END---")
+                for raw in raw_commits:
+                    lines = raw.strip().split("\n")
+                    if len(lines) >= 5:
+                        # Get files for this commit
+                        commit_files_output = await self._run_git_command(
+                            ["git", "diff-tree", "--no-commit-id", "--root",
+                             "-r", "--name-only", lines[0]], cwd
+                        )
+                        commit_files = [
+                            f for f in (commit_files_output or "").strip().split("\n")
+                            if f
+                        ]
+                        commits.append({
+                            "hash": lines[0],
+                            "short_hash": lines[1],
+                            "message": lines[2],
+                            "author": lines[3],
+                            "date": lines[4],
+                            "files": commit_files
+                        })
 
-                # Build synthetic uncommitted commit if dirty working tree
-                if uncommitted_files or untracked_paths:
-                    # Tracked file stats: combined staged+unstaged vs HEAD
-                    wip_numstat = await self._run_git_command(
-                        ["git", "diff", "--numstat", "HEAD"], cwd
-                    )
-                    wip_name_status = await self._run_git_command(
-                        ["git", "diff", "--name-status", "HEAD"], cwd
-                    )
-                    # Also include staged new files (added but not in HEAD)
-                    staged_numstat = await self._run_git_command(
-                        ["git", "diff", "--numstat", "--cached"], cwd
-                    )
-                    staged_name_status = await self._run_git_command(
-                        ["git", "diff", "--name-status", "--cached"], cwd
-                    )
+            # Detect uncommitted changes (staged + unstaged + untracked)
+            status_output = await self._run_git_command(
+                ["git", "status", "--porcelain"], cwd
+            )
+            uncommitted_files = []
+            untracked_paths = []
+            if status_output:
+                for line in status_output.strip().split("\n"):
+                    if not line or len(line) < 3:
+                        continue
+                    xy = line[:2]
+                    path = line[3:].strip()
+                    # Handle renames: "R  old -> new"
+                    if " -> " in path:
+                        path = path.split(" -> ", 1)[1]
+                    if xy == "??":
+                        untracked_paths.append(path)
+                    else:
+                        uncommitted_files.append(path)
 
-                    wip_status_map = {}
-                    if wip_name_status:
-                        for line in wip_name_status.strip().split("\n"):
-                            if line:
-                                parts = line.split("\t", 1)
-                                if len(parts) == 2:
-                                    sc = parts[0].strip()
-                                    fp = parts[1].strip()
+            # Build synthetic uncommitted commit if dirty working tree
+            if uncommitted_files or untracked_paths:
+                # Tracked file stats: combined staged+unstaged vs HEAD
+                wip_numstat = await self._run_git_command(
+                    ["git", "diff", "--numstat", "HEAD"], cwd
+                )
+                wip_name_status = await self._run_git_command(
+                    ["git", "diff", "--name-status", "HEAD"], cwd
+                )
+                # Also include staged new files (added but not in HEAD)
+                staged_numstat = await self._run_git_command(
+                    ["git", "diff", "--numstat", "--cached"], cwd
+                )
+                staged_name_status = await self._run_git_command(
+                    ["git", "diff", "--name-status", "--cached"], cwd
+                )
+
+                wip_status_map = {}
+                if wip_name_status:
+                    for line in wip_name_status.strip().split("\n"):
+                        if line:
+                            parts = line.split("\t", 1)
+                            if len(parts) == 2:
+                                sc = parts[0].strip()
+                                fp = parts[1].strip()
+                                if sc.startswith("A"):
+                                    wip_status_map[fp] = "added"
+                                elif sc.startswith("D"):
+                                    wip_status_map[fp] = "deleted"
+                                elif sc.startswith("R"):
+                                    wip_status_map[fp] = "renamed"
+                                else:
+                                    wip_status_map[fp] = "modified"
+                # Merge staged-only entries (new files that only show in --cached)
+                if staged_name_status:
+                    for line in staged_name_status.strip().split("\n"):
+                        if line:
+                            parts = line.split("\t", 1)
+                            if len(parts) == 2:
+                                sc = parts[0].strip()
+                                fp = parts[1].strip()
+                                if fp not in wip_status_map:
                                     if sc.startswith("A"):
                                         wip_status_map[fp] = "added"
                                     elif sc.startswith("D"):
                                         wip_status_map[fp] = "deleted"
-                                    elif sc.startswith("R"):
-                                        wip_status_map[fp] = "renamed"
                                     else:
                                         wip_status_map[fp] = "modified"
-                    # Merge staged-only entries (new files that only show in --cached)
-                    if staged_name_status:
-                        for line in staged_name_status.strip().split("\n"):
-                            if line:
-                                parts = line.split("\t", 1)
-                                if len(parts) == 2:
-                                    sc = parts[0].strip()
-                                    fp = parts[1].strip()
-                                    if fp not in wip_status_map:
-                                        if sc.startswith("A"):
-                                            wip_status_map[fp] = "added"
-                                        elif sc.startswith("D"):
-                                            wip_status_map[fp] = "deleted"
-                                        else:
-                                            wip_status_map[fp] = "modified"
 
-                    wip_files_list = []
-                    # Parse tracked file numstat
-                    all_numstat = (wip_numstat or "")
-                    if staged_numstat:
-                        # Merge staged numstat for files not in wip_numstat
-                        seen = set()
-                        if all_numstat:
-                            for line in all_numstat.strip().split("\n"):
-                                if line:
-                                    p = line.split("\t")
-                                    if len(p) >= 3:
-                                        seen.add(p[2].strip())
-                        for line in staged_numstat.strip().split("\n"):
-                            if line:
-                                p = line.split("\t")
-                                if len(p) >= 3 and p[2].strip() not in seen:
-                                    all_numstat += "\n" + line
-
+                wip_files_list = []
+                # Parse tracked file numstat
+                all_numstat = (wip_numstat or "")
+                if staged_numstat:
+                    # Merge staged numstat for files not in wip_numstat
+                    seen = set()
                     if all_numstat:
                         for line in all_numstat.strip().split("\n"):
                             if line:
-                                parts = line.split("\t")
-                                if len(parts) >= 3:
-                                    fp = parts[2].strip()
-                                    wip_files_list.append(fp)
-
-                    # Add untracked files
-                    for upath in untracked_paths:
-                        wip_files_list.append(upath)
-                        wip_status_map[upath] = "added"
-
-                    synthetic_commit = {
-                        "hash": "uncommitted",
-                        "short_hash": "wip",
-                        "message": "Uncommitted changes",
-                        "author": "",
-                        "date": "",
-                        "files": wip_files_list,
-                        "is_uncommitted": True
-                    }
-                    commits.insert(0, synthetic_commit)
-
-                # Total stats: two-dot notation includes uncommitted changes
-                numstat_output = await self._run_git_command(
-                    ["git", "diff", "--numstat", merge_base], cwd
-                )
-                name_status_output = await self._run_git_command(
-                    ["git", "diff", "--name-status", merge_base], cwd
-                )
-
-                files = {}
-                total_insertions = 0
-                total_deletions = 0
-
-                # Parse name-status for A/M/D
-                status_map = {}
-                if name_status_output:
-                    for line in name_status_output.strip().split("\n"):
+                                p = line.split("\t")
+                                if len(p) >= 3:
+                                    seen.add(p[2].strip())
+                    for line in staged_numstat.strip().split("\n"):
                         if line:
-                            parts = line.split("\t", 1)
-                            if len(parts) == 2:
-                                status_code = parts[0].strip()
-                                filepath = parts[1].strip()
-                                if status_code.startswith("A"):
-                                    status_map[filepath] = "added"
-                                elif status_code.startswith("D"):
-                                    status_map[filepath] = "deleted"
-                                elif status_code.startswith("R"):
-                                    status_map[filepath] = "renamed"
-                                else:
-                                    status_map[filepath] = "modified"
+                            p = line.split("\t")
+                            if len(p) >= 3 and p[2].strip() not in seen:
+                                all_numstat += "\n" + line
 
-                # Parse numstat for insertions/deletions
-                if numstat_output:
-                    for line in numstat_output.strip().split("\n"):
+                if all_numstat:
+                    for line in all_numstat.strip().split("\n"):
                         if line:
                             parts = line.split("\t")
                             if len(parts) >= 3:
-                                ins = parts[0].strip()
-                                dels = parts[1].strip()
-                                filepath = parts[2].strip()
-                                ins_count = int(ins) if ins != "-" else 0
-                                dels_count = int(dels) if dels != "-" else 0
-                                is_binary = ins == "-" and dels == "-"
-                                total_insertions += ins_count
-                                total_deletions += dels_count
-                                files[filepath] = {
-                                    "status": status_map.get(filepath, "modified"),
-                                    "insertions": ins_count,
-                                    "deletions": dels_count,
-                                    "is_binary": is_binary
-                                }
+                                fp = parts[2].strip()
+                                wip_files_list.append(fp)
 
-                # Add untracked files to total stats (not covered by git diff)
-                if untracked_paths:
-                    for upath in untracked_paths:
-                        if upath not in files:
-                            ustat = await self._run_git_command(
-                                ["git", "diff", "--numstat", "--no-index",
-                                 "/dev/null", upath],
-                                cwd, allow_nonzero=True
-                            )
-                            ins_count = 0
-                            if ustat:
-                                parts = ustat.split("\t")
-                                if len(parts) >= 3:
-                                    ins_val = parts[0].strip()
-                                    ins_count = int(ins_val) if ins_val != "-" else 0
+                # Add untracked files
+                for upath in untracked_paths:
+                    wip_files_list.append(upath)
+                    wip_status_map[upath] = "added"
+
+                synthetic_commit = {
+                    "hash": "uncommitted",
+                    "short_hash": "wip",
+                    "message": "Uncommitted changes",
+                    "author": "",
+                    "date": "",
+                    "files": wip_files_list,
+                    "is_uncommitted": True
+                }
+                commits.insert(0, synthetic_commit)
+
+            # Total stats: two-dot notation includes uncommitted changes
+            numstat_output = await self._run_git_command(
+                ["git", "diff", "--numstat", merge_base], cwd
+            )
+            name_status_output = await self._run_git_command(
+                ["git", "diff", "--name-status", merge_base], cwd
+            )
+
+            files = {}
+            total_insertions = 0
+            total_deletions = 0
+
+            # Parse name-status for A/M/D
+            status_map = {}
+            if name_status_output:
+                for line in name_status_output.strip().split("\n"):
+                    if line:
+                        parts = line.split("\t", 1)
+                        if len(parts) == 2:
+                            status_code = parts[0].strip()
+                            filepath = parts[1].strip()
+                            if status_code.startswith("A"):
+                                status_map[filepath] = "added"
+                            elif status_code.startswith("D"):
+                                status_map[filepath] = "deleted"
+                            elif status_code.startswith("R"):
+                                status_map[filepath] = "renamed"
+                            else:
+                                status_map[filepath] = "modified"
+
+            # Parse numstat for insertions/deletions
+            if numstat_output:
+                for line in numstat_output.strip().split("\n"):
+                    if line:
+                        parts = line.split("\t")
+                        if len(parts) >= 3:
+                            ins = parts[0].strip()
+                            dels = parts[1].strip()
+                            filepath = parts[2].strip()
+                            ins_count = int(ins) if ins != "-" else 0
+                            dels_count = int(dels) if dels != "-" else 0
+                            is_binary = ins == "-" and dels == "-"
                             total_insertions += ins_count
-                            files[upath] = {
-                                "status": "added",
+                            total_deletions += dels_count
+                            files[filepath] = {
+                                "status": status_map.get(filepath, "modified"),
                                 "insertions": ins_count,
-                                "deletions": 0,
-                                "is_binary": False
+                                "deletions": dels_count,
+                                "is_binary": is_binary
                             }
 
-                return {
-                    "is_git_repo": True,
-                    "merge_base": merge_base,
-                    "branch": branch or "unknown",
-                    "commits": commits,
-                    "files": files,
-                    "total_insertions": total_insertions,
-                    "total_deletions": total_deletions
-                }
-            except HTTPException:
-                raise
-            except Exception as e:
-                logger.exception(f"Failed to get diff for session {session_id}")
-                raise HTTPException(status_code=500, detail=str(e)) from e
+            # Add untracked files to total stats (not covered by git diff)
+            if untracked_paths:
+                for upath in untracked_paths:
+                    if upath not in files:
+                        ustat = await self._run_git_command(
+                            ["git", "diff", "--numstat", "--no-index",
+                             "/dev/null", upath],
+                            cwd, allow_nonzero=True
+                        )
+                        ins_count = 0
+                        if ustat:
+                            parts = ustat.split("\t")
+                            if len(parts) >= 3:
+                                ins_val = parts[0].strip()
+                                ins_count = int(ins_val) if ins_val != "-" else 0
+                        total_insertions += ins_count
+                        files[upath] = {
+                            "status": "added",
+                            "insertions": ins_count,
+                            "deletions": 0,
+                            "is_binary": False
+                        }
+
+            return {
+                "is_git_repo": True,
+                "merge_base": merge_base,
+                "branch": branch or "unknown",
+                "commits": commits,
+                "files": files,
+                "total_insertions": total_insertions,
+                "total_deletions": total_deletions
+            }
 
         @self.app.get("/api/sessions/{session_id}/diff/file")
+        @handle_exceptions("get session diff file")
         async def get_session_diff_file(
             session_id: str, path: str = None, ref: str = None
         ):
@@ -2119,783 +1987,651 @@ class ClaudeWebUI:
             if not path:
                 raise HTTPException(status_code=400, detail="path query parameter required")
 
-            try:
-                session = await self.coordinator.session_manager.get_session_info(session_id)
-                if not session:
-                    raise HTTPException(status_code=404, detail="Session not found")
+            session = await self.coordinator.session_manager.get_session_info(session_id)
+            if not session:
+                raise HTTPException(status_code=404, detail="Session not found")
 
-                cwd = session.working_directory
-                if not cwd or not Path(cwd).exists():
-                    raise HTTPException(status_code=400, detail="Invalid working directory")
+            cwd = session.working_directory
+            if not cwd or not Path(cwd).exists():
+                raise HTTPException(status_code=400, detail="Invalid working directory")
 
-                if ref and ref != "uncommitted":
-                    # Commit-specific diff: validate ref then diff against parent
-                    verified = await self._run_git_command(
-                        ["git", "rev-parse", "--verify", ref], cwd
-                    )
-                    if verified is None:
-                        raise HTTPException(
-                            status_code=400,
-                            detail=f"Invalid commit reference: {ref}"
-                        )
-
-                    # Check if this commit has a parent
-                    parent = await self._run_git_command(
-                        ["git", "rev-parse", "--verify", f"{ref}~1"], cwd
-                    )
-                    if parent:
-                        # Normal commit: diff against parent
-                        diff_output = await self._run_git_command(
-                            ["git", "diff", f"{ref}~1", ref, "--", path], cwd
-                        )
-                    else:
-                        # Root commit: diff against empty tree
-                        empty_tree = await self._run_git_command(
-                            ["git", "hash-object", "-t", "tree", "/dev/null"], cwd
-                        )
-                        base = (empty_tree.strip() if empty_tree
-                                else "4b825dc642cb6eb9a060e54bf899d15f7f09f993")
-                        diff_output = await self._run_git_command(
-                            ["git", "diff", base, ref, "--", path], cwd
-                        )
-
-                    return {
-                        "path": path,
-                        "ref": ref,
-                        "diff": diff_output or ""
-                    }
-
-                # Find merge base for uncommitted / total views
-                merge_base = await self._run_git_command(
-                    ["git", "merge-base", "HEAD", "origin/main"], cwd
+            if ref and ref != "uncommitted":
+                # Commit-specific diff: validate ref then diff against parent
+                verified = await self._run_git_command(
+                    ["git", "rev-parse", "--verify", ref], cwd
                 )
-                if merge_base is None:
-                    merge_base = await self._run_git_command(
-                        ["git", "merge-base", "HEAD", "origin/master"], cwd
+                if verified is None:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Invalid commit reference: {ref}"
                     )
 
-                if ref == "uncommitted":
-                    # Check if file is untracked
-                    is_tracked = await self._run_git_command(
-                        ["git", "ls-files", path], cwd
-                    )
-                    status_check = await self._run_git_command(
-                        ["git", "status", "--porcelain", "--", path], cwd
-                    )
-                    is_untracked = (
-                        status_check and status_check.startswith("??")
-                    )
-
-                    if is_untracked or not is_tracked:
-                        # Untracked file: diff vs /dev/null
-                        diff_output = await self._run_git_command(
-                            ["git", "diff", "--no-index", "/dev/null", path],
-                            cwd, allow_nonzero=True
-                        )
-                    else:
-                        # Tracked file: diff against merge base, or HEAD if no remote
-                        base = merge_base or "HEAD"
-                        diff_output = await self._run_git_command(
-                            ["git", "diff", base, "--", path], cwd
-                        )
-                elif merge_base is not None:
-                    # Default: three-dot (committed changes only)
+                # Check if this commit has a parent
+                parent = await self._run_git_command(
+                    ["git", "rev-parse", "--verify", f"{ref}~1"], cwd
+                )
+                if parent:
+                    # Normal commit: diff against parent
                     diff_output = await self._run_git_command(
-                        ["git", "diff", f"{merge_base}...HEAD", "--", path], cwd
+                        ["git", "diff", f"{ref}~1", ref, "--", path], cwd
                     )
                 else:
-                    # No remote: diff all changes from empty tree
+                    # Root commit: diff against empty tree
                     empty_tree = await self._run_git_command(
                         ["git", "hash-object", "-t", "tree", "/dev/null"], cwd
                     )
                     base = (empty_tree.strip() if empty_tree
                             else "4b825dc642cb6eb9a060e54bf899d15f7f09f993")
                     diff_output = await self._run_git_command(
-                        ["git", "diff", base, "HEAD", "--", path], cwd
+                        ["git", "diff", base, ref, "--", path], cwd
                     )
 
                 return {
                     "path": path,
-                    "merge_base": merge_base,
+                    "ref": ref,
                     "diff": diff_output or ""
                 }
-            except HTTPException:
-                raise
-            except Exception as e:
-                logger.exception(f"Failed to get file diff for {path}")
-                raise HTTPException(status_code=500, detail=str(e)) from e
+
+            # Find merge base for uncommitted / total views
+            merge_base = await self._run_git_command(
+                ["git", "merge-base", "HEAD", "origin/main"], cwd
+            )
+            if merge_base is None:
+                merge_base = await self._run_git_command(
+                    ["git", "merge-base", "HEAD", "origin/master"], cwd
+                )
+
+            if ref == "uncommitted":
+                # Check if file is untracked
+                is_tracked = await self._run_git_command(
+                    ["git", "ls-files", path], cwd
+                )
+                status_check = await self._run_git_command(
+                    ["git", "status", "--porcelain", "--", path], cwd
+                )
+                is_untracked = (
+                    status_check and status_check.startswith("??")
+                )
+
+                if is_untracked or not is_tracked:
+                    # Untracked file: diff vs /dev/null
+                    diff_output = await self._run_git_command(
+                        ["git", "diff", "--no-index", "/dev/null", path],
+                        cwd, allow_nonzero=True
+                    )
+                else:
+                    # Tracked file: diff against merge base, or HEAD if no remote
+                    base = merge_base or "HEAD"
+                    diff_output = await self._run_git_command(
+                        ["git", "diff", base, "--", path], cwd
+                    )
+            elif merge_base is not None:
+                # Default: three-dot (committed changes only)
+                diff_output = await self._run_git_command(
+                    ["git", "diff", f"{merge_base}...HEAD", "--", path], cwd
+                )
+            else:
+                # No remote: diff all changes from empty tree
+                empty_tree = await self._run_git_command(
+                    ["git", "hash-object", "-t", "tree", "/dev/null"], cwd
+                )
+                base = (empty_tree.strip() if empty_tree
+                        else "4b825dc642cb6eb9a060e54bf899d15f7f09f993")
+                diff_output = await self._run_git_command(
+                    ["git", "diff", base, "HEAD", "--", path], cwd
+                )
+
+            return {
+                "path": path,
+                "merge_base": merge_base,
+                "diff": diff_output or ""
+            }
 
         # ==================== QUEUE ENDPOINTS (Issue #500) ====================
 
         @self.app.post("/api/sessions/{session_id}/queue-message")
+        @handle_exceptions("enqueue message", value_error_status=400)
         async def enqueue_message(session_id: str, request: Request):
             """Enqueue a message for a session."""
-            try:
-                data = await request.json()
-                content = data.get("content")
-                if not content:
-                    raise HTTPException(status_code=400, detail="content is required")
+            data = await request.json()
+            content = data.get("content")
+            if not content:
+                raise HTTPException(status_code=400, detail="content is required")
 
-                item = await self.coordinator.enqueue_message(
-                    session_id=session_id,
-                    content=content,
-                    reset_session=data.get("reset_session"),
-                    metadata=data.get("metadata"),
-                )
+            item = await self.coordinator.enqueue_message(
+                session_id=session_id,
+                content=content,
+                reset_session=data.get("reset_session"),
+                metadata=data.get("metadata"),
+            )
 
-                # Append queue update to session poll queue
-                await self._broadcast_queue_update(session_id, "enqueued", item)
+            # Append queue update to session poll queue
+            await self._broadcast_queue_update(session_id, "enqueued", item)
 
-                return {
-                    "queue_id": item["queue_id"],
-                    "position": item["position"],
-                    "item": item,
-                }
-            except ValueError as e:
-                raise HTTPException(status_code=400, detail=str(e)) from e
-            except HTTPException:
-                raise
-            except Exception as e:
-                logger.exception("Failed to enqueue message")
-                raise HTTPException(status_code=500, detail=str(e)) from e
+            return {
+                "queue_id": item["queue_id"],
+                "position": item["position"],
+                "item": item,
+            }
 
         @self.app.get("/api/sessions/{session_id}/queue")
+        @handle_exceptions("get queue")
         async def get_queue(session_id: str):
             """List all queue items for a session."""
-            try:
-                items = await self.coordinator.get_queue(session_id)
-                pending_count = sum(1 for i in items if i.get("status") == "pending")
-                return {
-                    "items": items,
-                    "pending_count": pending_count,
-                }
-            except Exception as e:
-                logger.exception("Failed to get queue")
-                raise HTTPException(status_code=500, detail=str(e)) from e
+            session = await self.coordinator.session_manager.get_session_info(session_id)
+            if not session:
+                raise HTTPException(status_code=404, detail="Session not found")
+            items = await self.coordinator.get_queue(session_id)
+            pending_count = sum(1 for i in items if i.get("status") == "pending")
+            return {
+                "items": items,
+                "pending_count": pending_count,
+            }
 
         @self.app.delete("/api/sessions/{session_id}/queue/{queue_id}")
+        @handle_exceptions("cancel queue item")
         async def cancel_queue_item(session_id: str, queue_id: str):
             """Cancel a pending queue item."""
-            try:
-                item = await self.coordinator.cancel_queue_item(session_id, queue_id)
-                if not item:
-                    raise HTTPException(status_code=404, detail="Queue item not found or not pending")
+            item = await self.coordinator.cancel_queue_item(session_id, queue_id)
+            if not item:
+                raise HTTPException(status_code=404, detail="Queue item not found or not pending")
 
-                await self._broadcast_queue_update(session_id, "cancelled", item)
-                return {"item": item}
-            except HTTPException:
-                raise
-            except Exception as e:
-                logger.exception("Failed to cancel queue item")
-                raise HTTPException(status_code=500, detail=str(e)) from e
+            await self._broadcast_queue_update(session_id, "cancelled", item)
+            return {"item": item}
 
         @self.app.post("/api/sessions/{session_id}/queue/{queue_id}/requeue")
+        @handle_exceptions("requeue item")
         async def requeue_item(session_id: str, queue_id: str):
             """Re-queue a sent or failed item at the front."""
-            try:
-                item = await self.coordinator.requeue_item(session_id, queue_id)
-                if not item:
-                    raise HTTPException(status_code=404, detail="Queue item not found or not in sent/failed state")
+            item = await self.coordinator.requeue_item(session_id, queue_id)
+            if not item:
+                raise HTTPException(status_code=404, detail="Queue item not found or not in sent/failed state")
 
-                await self._broadcast_queue_update(session_id, "enqueued", item)
-                return {"item": item}
-            except HTTPException:
-                raise
-            except Exception as e:
-                logger.exception("Failed to requeue item")
-                raise HTTPException(status_code=500, detail=str(e)) from e
+            await self._broadcast_queue_update(session_id, "enqueued", item)
+            return {"item": item}
 
         @self.app.delete("/api/sessions/{session_id}/queue")
+        @handle_exceptions("clear queue")
         async def clear_queue(session_id: str):
             """Clear all pending queue items."""
-            try:
-                count = await self.coordinator.clear_queue(session_id)
-                await self._broadcast_queue_update(session_id, "cleared", {"count": count})
-                return {"cancelled_count": count}
-            except Exception as e:
-                logger.exception("Failed to clear queue")
-                raise HTTPException(status_code=500, detail=str(e)) from e
+            session = await self.coordinator.session_manager.get_session_info(session_id)
+            if not session:
+                raise HTTPException(status_code=404, detail="Session not found")
+            count = await self.coordinator.clear_queue(session_id)
+            await self._broadcast_queue_update(session_id, "cleared", {"count": count})
+            return {"cancelled_count": count}
 
         @self.app.put("/api/sessions/{session_id}/queue/pause")
+        @handle_exceptions("pause queue")
         async def pause_queue(session_id: str, request: Request):
             """Pause or resume the queue."""
-            try:
-                data = await request.json()
-                paused = data.get("paused", True)
-                success = await self.coordinator.pause_queue(session_id, paused)
-                if not success:
-                    raise HTTPException(status_code=400, detail="Failed to update queue pause state")
+            data = await request.json()
+            paused = data.get("paused", True)
+            success = await self.coordinator.pause_queue(session_id, paused)
+            if not success:
+                raise HTTPException(status_code=400, detail="Failed to update queue pause state")
 
-                action = "paused" if paused else "resumed"
-                await self._broadcast_queue_update(session_id, action, {"paused": paused})
-                return {"paused": paused}
-            except HTTPException:
-                raise
-            except Exception as e:
-                logger.exception("Failed to pause/resume queue")
-                raise HTTPException(status_code=500, detail=str(e)) from e
+            action = "paused" if paused else "resumed"
+            await self._broadcast_queue_update(session_id, action, {"paused": paused})
+            return {"paused": paused}
 
         @self.app.put("/api/sessions/{session_id}/queue/config")
+        @handle_exceptions("update queue config")
         async def update_queue_config(session_id: str, request: Request):
             """Update queue configuration."""
-            try:
-                data = await request.json()
-                success = await self.coordinator.update_queue_config(session_id, data)
-                if not success:
-                    raise HTTPException(status_code=400, detail="Failed to update queue config")
-                return {"config": data}
-            except HTTPException:
-                raise
-            except Exception as e:
-                logger.exception("Failed to update queue config")
-                raise HTTPException(status_code=500, detail=str(e)) from e
+            data = await request.json()
+            success = await self.coordinator.update_queue_config(session_id, data)
+            if not success:
+                raise HTTPException(status_code=400, detail="Failed to update queue config")
+            return {"config": data}
 
         # ==================== LEGION ENDPOINTS ====================
         # All projects support Legion capabilities (issue #313)
 
         @self.app.get("/api/legions/{legion_id}/timeline")
+        @handle_exceptions("get legion timeline")
         async def get_legion_timeline(legion_id: str, limit: int = 100, offset: int = 0):
             """Get Comms for legion timeline (all communications in the legion)"""
-            try:
-                # Read all comms from the main legion timeline
-                legion_dir = self.coordinator.data_dir / "legions" / legion_id
-                if not legion_dir.exists():
-                    return {
-                        "comms": [],
-                        "total": 0,
-                        "limit": limit,
-                        "offset": offset
-                    }
-
-                all_comms = []
-
-                # Read from main timeline.jsonl (contains ALL comms)
-                timeline_file = legion_dir / "timeline.jsonl"
-                if timeline_file.exists():
-                    with open(timeline_file, encoding='utf-8') as f:
-                        for line in f:
-                            line = line.strip()
-                            if line:
-                                try:
-                                    comm_data = json.loads(line)
-                                    all_comms.append(comm_data)
-                                except json.JSONDecodeError:
-                                    continue
-
-                # Normalize timestamps to handle mixed string/float formats (backwards compatibility)
-                for comm in all_comms:
-                    if 'timestamp' in comm:
-                        try:
-                            comm['timestamp'] = normalize_timestamp(comm['timestamp'])
-                        except (ValueError, TypeError) as e:
-                            logger.warning(f"Invalid timestamp in comm {comm.get('comm_id', 'unknown')}: {e}, using current time")
-                            comm['timestamp'] = datetime.now(UTC).timestamp()
-
-                # Sort by timestamp (newest first) and deduplicate
-                all_comms.sort(key=lambda x: x.get('timestamp', 0.0), reverse=True)
-
-                # Deduplicate by comm_id (since comms appear in both sender and receiver logs)
-                seen_ids = set()
-                unique_comms = []
-                for comm in all_comms:
-                    comm_id = comm.get('comm_id')
-                    if comm_id and comm_id not in seen_ids:
-                        seen_ids.add(comm_id)
-                        unique_comms.append(comm)
-
-                # Paginate
-                total = len(unique_comms)
-                paginated_comms = unique_comms[offset:offset + limit]
-
+            # Read all comms from the main legion timeline
+            legion_dir = self.coordinator.data_dir / "legions" / legion_id
+            if not legion_dir.exists():
                 return {
-                    "comms": paginated_comms,
-                    "total": total,
+                    "comms": [],
+                    "total": 0,
                     "limit": limit,
                     "offset": offset
                 }
-            except HTTPException:
-                raise
-            except Exception as e:
-                logger.exception("Failed to get timeline")
-                raise HTTPException(status_code=500, detail=str(e)) from e
+
+            all_comms = []
+
+            # Read from main timeline.jsonl (contains ALL comms)
+            timeline_file = legion_dir / "timeline.jsonl"
+            if timeline_file.exists():
+                with open(timeline_file, encoding='utf-8') as f:
+                    for line in f:
+                        line = line.strip()
+                        if line:
+                            try:
+                                comm_data = json.loads(line)
+                                all_comms.append(comm_data)
+                            except json.JSONDecodeError:
+                                continue
+
+            # Normalize timestamps to handle mixed string/float formats (backwards compatibility)
+            for comm in all_comms:
+                if 'timestamp' in comm:
+                    try:
+                        comm['timestamp'] = normalize_timestamp(comm['timestamp'])
+                    except (ValueError, TypeError) as e:
+                        logger.warning(f"Invalid timestamp in comm {comm.get('comm_id', 'unknown')}: {e}, using current time")
+                        comm['timestamp'] = datetime.now(UTC).timestamp()
+
+            # Sort by timestamp (newest first) and deduplicate
+            all_comms.sort(key=lambda x: x.get('timestamp', 0.0), reverse=True)
+
+            # Deduplicate by comm_id (since comms appear in both sender and receiver logs)
+            seen_ids = set()
+            unique_comms = []
+            for comm in all_comms:
+                comm_id = comm.get('comm_id')
+                if comm_id and comm_id not in seen_ids:
+                    seen_ids.add(comm_id)
+                    unique_comms.append(comm)
+
+            # Paginate
+            total = len(unique_comms)
+            paginated_comms = unique_comms[offset:offset + limit]
+
+            return {
+                "comms": paginated_comms,
+                "total": total,
+                "limit": limit,
+                "offset": offset
+            }
 
         @self.app.get("/api/legions/{legion_id}/hierarchy")
+        @handle_exceptions("get legion hierarchy")
         async def get_legion_hierarchy(legion_id: str):
             """Get complete minion hierarchy with user at root (issue #313: universal Legion)"""
-            try:
-                # Issue #313: All projects support hierarchy - verify project exists
-                project = await self.coordinator.project_manager.get_project(legion_id)
-                if not project:
-                    raise HTTPException(status_code=404, detail="Project not found")
+            # Issue #313: All projects support hierarchy - verify project exists
+            project = await self.coordinator.project_manager.get_project(legion_id)
+            if not project:
+                raise HTTPException(status_code=404, detail="Project not found")
 
-                # Get legion coordinator
-                legion_coord = self.coordinator.legion_system.legion_coordinator
-                if not legion_coord:
-                    raise HTTPException(status_code=500, detail="Legion coordinator not available")
+            # Get legion coordinator
+            legion_coord = self.coordinator.legion_system.legion_coordinator
+            if not legion_coord:
+                raise HTTPException(status_code=500, detail="Legion coordinator not available")
 
-                # Assemble hierarchy (returns empty children if no minions)
-                hierarchy = await legion_coord.assemble_minion_hierarchy(legion_id)
+            # Assemble hierarchy (returns empty children if no minions)
+            hierarchy = await legion_coord.assemble_minion_hierarchy(legion_id)
 
-                return hierarchy
-
-            except HTTPException:
-                raise
-            except Exception as e:
-                logger.exception("Failed to get minion hierarchy")
-                raise HTTPException(status_code=500, detail=str(e)) from e
+            return hierarchy
 
         @self.app.post("/api/legions/{legion_id}/comms")
+        @handle_exceptions("send comm to legion")
         async def send_comm_to_legion(legion_id: str, request: CommSendRequest):
             """Send a Comm in the legion"""
-            try:
-                import uuid
+            import uuid
 
-                from src.models.legion_models import Comm, CommType
+            from src.models.legion_models import Comm, CommType
 
-                legion = await self.coordinator.legion_system.legion_coordinator.get_legion(legion_id)
-                if not legion:
-                    raise HTTPException(status_code=404, detail="Legion not found")
+            legion = await self.coordinator.legion_system.legion_coordinator.get_legion(legion_id)
+            if not legion:
+                raise HTTPException(status_code=404, detail="Legion not found")
 
-                # Look up minion name if targeting a minion (for historical display)
-                to_minion_name = None
-                if request.to_minion_id:
-                    minion_session = await self.coordinator.session_manager.get_session_info(request.to_minion_id)
-                    if minion_session:
-                        to_minion_name = minion_session.name
+            # Look up minion name if targeting a minion (for historical display)
+            to_minion_name = None
+            if request.to_minion_id:
+                minion_session = await self.coordinator.session_manager.get_session_info(request.to_minion_id)
+                if minion_session:
+                    to_minion_name = minion_session.name
 
-                # Create Comm from user
-                comm = Comm(
-                    comm_id=str(uuid.uuid4()),
-                    from_user=True,
-                    to_minion_id=request.to_minion_id,
-                    to_user=request.to_user,
-                    to_minion_name=to_minion_name,
-                    content=request.content,
-                    comm_type=CommType(request.comm_type)
-                )
+            # Create Comm from user
+            comm = Comm(
+                comm_id=str(uuid.uuid4()),
+                from_user=True,
+                to_minion_id=request.to_minion_id,
+                to_user=request.to_user,
+                to_minion_name=to_minion_name,
+                content=request.content,
+                comm_type=CommType(request.comm_type)
+            )
 
-                # Route the comm
-                success = await self.coordinator.legion_system.comm_router.route_comm(comm)
+            # Route the comm
+            success = await self.coordinator.legion_system.comm_router.route_comm(comm)
 
-                if success:
-                    return {"comm": comm.to_dict(), "success": True}
-                else:
-                    raise HTTPException(status_code=500, detail="Failed to route comm")
-
-            except HTTPException:
-                raise
-            except Exception as e:
-                logger.exception("Failed to send comm")
-                raise HTTPException(status_code=500, detail=str(e)) from e
+            if success:
+                return {"comm": comm.to_dict(), "success": True}
+            else:
+                raise HTTPException(status_code=500, detail="Failed to route comm")
 
         @self.app.post("/api/legions/{legion_id}/minions")
+        @handle_exceptions("create minion", value_error_status=400)
         async def create_minion(legion_id: str, request: MinionCreateRequest):
             """Create a new minion in the project (issue #313: universal Legion)"""
-            try:
-                # Verify project exists (all projects support minions - issue #313)
-                project = await self.coordinator.project_manager.get_project(legion_id)
-                if not project:
-                    raise HTTPException(status_code=404, detail="Project not found")
+            # Verify project exists (all projects support minions - issue #313)
+            project = await self.coordinator.project_manager.get_project(legion_id)
+            if not project:
+                raise HTTPException(status_code=404, detail="Project not found")
 
-                # Validate and normalize working directory
-                try:
-                    working_dir = validate_and_normalize_working_directory(
-                        request.working_directory,
-                        str(project.working_directory)
-                    )
-                except ValueError as e:
-                    raise HTTPException(status_code=400, detail=str(e)) from e
+            # Validate and normalize working directory
+            working_dir = validate_and_normalize_working_directory(
+                request.working_directory,
+                str(project.working_directory)
+            )
 
-                # Create minion via OverseerController
-                config = request.to_session_config(
-                    system_prompt=request.system_prompt,
-                    working_directory=str(working_dir),
-                )
-                minion_id = await self.coordinator.legion_system.overseer_controller.create_minion_for_user(
-                    legion_id=legion_id,
-                    name=request.name,
-                    config=config,
-                    role=request.role,
-                    capabilities=request.capabilities,
-                )
+            # Create minion via OverseerController
+            config = request.to_session_config(
+                system_prompt=request.system_prompt,
+                working_directory=str(working_dir),
+            )
+            minion_id = await self.coordinator.legion_system.overseer_controller.create_minion_for_user(
+                legion_id=legion_id,
+                name=request.name,
+                config=config,
+                role=request.role,
+                capabilities=request.capabilities,
+            )
 
-                # Get the created minion info
-                minion_info = await self.coordinator.session_manager.get_session_info(minion_id)
+            # Get the created minion info
+            minion_info = await self.coordinator.session_manager.get_session_info(minion_id)
 
-                return {
-                    "success": True,
-                    "minion_id": minion_id,
-                    "minion": minion_info.to_dict() if minion_info else None
-                }
-
-            except ValueError as e:
-                # OverseerController raises ValueError for validation errors
-                logger.exception("Validation error creating minion")
-                raise HTTPException(status_code=400, detail=str(e)) from e
-            except HTTPException:
-                raise
-            except Exception as e:
-                logger.exception("Failed to create minion")
-                raise HTTPException(status_code=500, detail=str(e)) from e
+            return {
+                "success": True,
+                "minion_id": minion_id,
+                "minion": minion_info.to_dict() if minion_info else None
+            }
 
         # ==================== FLEET CONTROL ENDPOINTS ====================
 
         @self.app.post("/api/legions/{legion_id}/halt-all")
+        @handle_exceptions("emergency halt all")
         async def emergency_halt_all(legion_id: str):
             """Emergency halt all minions in the project (issue #313: universal Legion)"""
-            try:
-                # Issue #313: All projects support halt-all - verify project exists
-                project = await self.coordinator.project_manager.get_project(legion_id)
-                if not project:
-                    raise HTTPException(status_code=404, detail="Project not found")
+            # Issue #313: All projects support halt-all - verify project exists
+            project = await self.coordinator.project_manager.get_project(legion_id)
+            if not project:
+                raise HTTPException(status_code=404, detail="Project not found")
 
-                # Call LegionCoordinator.emergency_halt_all() (no-op if no minions)
-                result = await self.coordinator.legion_system.legion_coordinator.emergency_halt_all(legion_id)
+            # Call LegionCoordinator.emergency_halt_all() (no-op if no minions)
+            result = await self.coordinator.legion_system.legion_coordinator.emergency_halt_all(legion_id)
 
-                return {
-                    "success": True,
-                    "halted_count": result["halted_count"],
-                    "failed_minions": result["failed_minions"],
-                    "total_minions": result["total_minions"]
-                }
-
-            except HTTPException:
-                raise
-            except Exception as e:
-                logger.exception("Failed to halt all minions")
-                raise HTTPException(status_code=500, detail=str(e)) from e
+            return {
+                "success": True,
+                "halted_count": result["halted_count"],
+                "failed_minions": result["failed_minions"],
+                "total_minions": result["total_minions"]
+            }
 
         @self.app.post("/api/legions/{legion_id}/resume-all")
+        @handle_exceptions("resume all")
         async def resume_all(legion_id: str):
             """Resume all minions in the project (issue #313: universal Legion)"""
-            try:
-                # Issue #313: All projects support resume-all - verify project exists
-                project = await self.coordinator.project_manager.get_project(legion_id)
-                if not project:
-                    raise HTTPException(status_code=404, detail="Project not found")
+            # Issue #313: All projects support resume-all - verify project exists
+            project = await self.coordinator.project_manager.get_project(legion_id)
+            if not project:
+                raise HTTPException(status_code=404, detail="Project not found")
 
-                # Call LegionCoordinator.resume_all() (no-op if no minions)
-                result = await self.coordinator.legion_system.legion_coordinator.resume_all(legion_id)
+            # Call LegionCoordinator.resume_all() (no-op if no minions)
+            result = await self.coordinator.legion_system.legion_coordinator.resume_all(legion_id)
 
-                return {
-                    "success": True,
-                    "resumed_count": result["resumed_count"],
-                    "failed_minions": result["failed_minions"],
-                    "total_minions": result["total_minions"]
-                }
-
-            except HTTPException:
-                raise
-            except Exception as e:
-                logger.exception("Failed to resume all minions")
-                raise HTTPException(status_code=500, detail=str(e)) from e
+            return {
+                "success": True,
+                "resumed_count": result["resumed_count"],
+                "failed_minions": result["failed_minions"],
+                "total_minions": result["total_minions"]
+            }
 
         # ==================== SCHEDULE ENDPOINTS (Issue #495) ====================
 
         @self.app.get("/api/legions/{legion_id}/schedules")
+        @handle_exceptions("list schedules")
         async def list_schedules(
             legion_id: str, minion_id: str | None = None, status: str | None = None
         ):
             """List schedules for a legion with optional filters."""
-            try:
-                project = await self.coordinator.project_manager.get_project(legion_id)
-                if not project:
-                    raise HTTPException(status_code=404, detail="Project not found")
+            project = await self.coordinator.project_manager.get_project(legion_id)
+            if not project:
+                raise HTTPException(status_code=404, detail="Project not found")
 
-                status_filter = None
-                if status:
-                    from src.models.schedule_models import ScheduleStatus
-                    try:
-                        status_filter = ScheduleStatus(status)
-                    except ValueError:
-                        raise HTTPException(
-                            status_code=400,
-                            detail=f"Invalid status: {status}. Use active, paused, or cancelled",
-                        ) from None
-
-                schedules = await self.coordinator.legion_system.scheduler_service.list_schedules(
-                    legion_id=legion_id, minion_id=minion_id, status=status_filter
-                )
-                return {"schedules": [s.to_dict() for s in schedules]}
-            except HTTPException:
-                raise
-            except Exception as e:
-                logger.exception("Failed to list schedules")
-                raise HTTPException(status_code=500, detail=str(e)) from e
-
-        @self.app.post("/api/legions/{legion_id}/schedules")
-        async def create_schedule(legion_id: str, request: ScheduleCreateRequest):
-            """Create a new schedule (permanent or ephemeral)."""
-            try:
-                project = await self.coordinator.project_manager.get_project(legion_id)
-                if not project:
-                    raise HTTPException(status_code=404, detail="Project not found")
-
-                # Determine mode: permanent (minion_id) or ephemeral (session_config)
-                minion_id = request.minion_id
-                minion_name = None
-
-                ephemeral_agent_id = None
-
-                if minion_id:
-                    # Permanent mode: resolve minion name
-                    session = await self.coordinator.session_manager.get_session_info(
-                        minion_id
-                    )
-                    if not session:
-                        raise HTTPException(status_code=404, detail="Minion not found")
-                    minion_name = session.name or minion_id[:8]
-                elif request.session_config:
-                    # Ephemeral mode: create the persistent agent session up front
-                    ephemeral_agent_id = (
-                        await self.coordinator.create_ephemeral_session(
-                            session_config=request.session_config,
-                            schedule_name=request.name,
-                            project_id=legion_id,
-                        )
-                    )
-                else:
+            status_filter = None
+            if status:
+                from src.models.schedule_models import ScheduleStatus
+                try:
+                    status_filter = ScheduleStatus(status)
+                except ValueError:
                     raise HTTPException(
                         status_code=400,
-                        detail="Either minion_id or session_config is required",
-                    )
+                        detail=f"Invalid status: {status}. Use active, paused, or cancelled",
+                    ) from None
 
-                schedule = await self.coordinator.legion_system.scheduler_service.create_schedule(
-                    legion_id=legion_id,
-                    name=request.name,
-                    cron_expression=request.cron_expression,
-                    prompt=request.prompt,
-                    minion_id=minion_id,
-                    minion_name=minion_name,
-                    reset_session=request.reset_session,
-                    max_retries=request.max_retries,
-                    timeout_seconds=request.timeout_seconds,
-                    session_config=request.session_config,
-                    ephemeral_agent_id=ephemeral_agent_id,
+            schedules = await self.coordinator.legion_system.scheduler_service.list_schedules(
+                legion_id=legion_id, minion_id=minion_id, status=status_filter
+            )
+            return {"schedules": [s.to_dict() for s in schedules]}
+
+        @self.app.post("/api/legions/{legion_id}/schedules")
+        @handle_exceptions("create schedule", value_error_status=400)
+        async def create_schedule(legion_id: str, request: ScheduleCreateRequest):
+            """Create a new schedule (permanent or ephemeral)."""
+            project = await self.coordinator.project_manager.get_project(legion_id)
+            if not project:
+                raise HTTPException(status_code=404, detail="Project not found")
+
+            # Determine mode: permanent (minion_id) or ephemeral (session_config)
+            minion_id = request.minion_id
+            minion_name = None
+
+            ephemeral_agent_id = None
+
+            if minion_id:
+                # Permanent mode: resolve minion name
+                session = await self.coordinator.session_manager.get_session_info(
+                    minion_id
                 )
-                return {"schedule": schedule.to_dict()}
-            except HTTPException:
-                raise
-            except ValueError as e:
-                raise HTTPException(status_code=400, detail=str(e)) from e
-            except Exception as e:
-                logger.exception("Failed to create schedule")
-                raise HTTPException(status_code=500, detail=str(e)) from e
+                if not session:
+                    raise HTTPException(status_code=404, detail="Minion not found")
+                minion_name = session.name or minion_id[:8]
+            elif request.session_config:
+                # Ephemeral mode: create the persistent agent session up front
+                ephemeral_agent_id = (
+                    await self.coordinator.create_ephemeral_session(
+                        session_config=request.session_config,
+                        schedule_name=request.name,
+                        project_id=legion_id,
+                    )
+                )
+            else:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Either minion_id or session_config is required",
+                )
+
+            schedule = await self.coordinator.legion_system.scheduler_service.create_schedule(
+                legion_id=legion_id,
+                name=request.name,
+                cron_expression=request.cron_expression,
+                prompt=request.prompt,
+                minion_id=minion_id,
+                minion_name=minion_name,
+                reset_session=request.reset_session,
+                max_retries=request.max_retries,
+                timeout_seconds=request.timeout_seconds,
+                session_config=request.session_config,
+                ephemeral_agent_id=ephemeral_agent_id,
+            )
+            return {"schedule": schedule.to_dict()}
 
         @self.app.get("/api/legions/{legion_id}/schedules/{schedule_id}")
+        @handle_exceptions("get schedule")
         async def get_schedule(legion_id: str, schedule_id: str):
             """Get a single schedule."""
-            try:
-                schedule = await self.coordinator.legion_system.scheduler_service.get_schedule(
-                    schedule_id
-                )
-                if not schedule or schedule.legion_id != legion_id:
-                    raise HTTPException(status_code=404, detail="Schedule not found")
-                return {"schedule": schedule.to_dict()}
-            except HTTPException:
-                raise
-            except Exception as e:
-                logger.exception("Failed to get schedule")
-                raise HTTPException(status_code=500, detail=str(e)) from e
+            schedule = await self.coordinator.legion_system.scheduler_service.get_schedule(
+                schedule_id
+            )
+            if not schedule or schedule.legion_id != legion_id:
+                raise HTTPException(status_code=404, detail="Schedule not found")
+            return {"schedule": schedule.to_dict()}
 
         @self.app.put("/api/legions/{legion_id}/schedules/{schedule_id}")
+        @handle_exceptions("update schedule", value_error_status=400)
         async def update_schedule(
             legion_id: str, schedule_id: str, request: ScheduleUpdateRequest
         ):
             """Update schedule fields."""
-            try:
-                schedule = await self.coordinator.legion_system.scheduler_service.get_schedule(
-                    schedule_id
-                )
-                if not schedule or schedule.legion_id != legion_id:
-                    raise HTTPException(status_code=404, detail="Schedule not found")
+            schedule = await self.coordinator.legion_system.scheduler_service.get_schedule(
+                schedule_id
+            )
+            if not schedule or schedule.legion_id != legion_id:
+                raise HTTPException(status_code=404, detail="Schedule not found")
 
-                fields = {k: v for k, v in request.model_dump().items() if v is not None}
-                updated = await self.coordinator.legion_system.scheduler_service.update_schedule(
-                    schedule_id, **fields
-                )
-                return {"schedule": updated.to_dict()}
-            except HTTPException:
-                raise
-            except ValueError as e:
-                raise HTTPException(status_code=400, detail=str(e)) from e
-            except Exception as e:
-                logger.exception("Failed to update schedule")
-                raise HTTPException(status_code=500, detail=str(e)) from e
+            fields = {k: v for k, v in request.model_dump().items() if v is not None}
+            updated = await self.coordinator.legion_system.scheduler_service.update_schedule(
+                schedule_id, **fields
+            )
+            return {"schedule": updated.to_dict()}
 
         @self.app.post("/api/legions/{legion_id}/schedules/{schedule_id}/pause")
+        @handle_exceptions("pause schedule", value_error_status=400)
         async def pause_schedule(legion_id: str, schedule_id: str):
             """Pause an active schedule."""
-            try:
-                schedule = await self.coordinator.legion_system.scheduler_service.get_schedule(
-                    schedule_id
-                )
-                if not schedule or schedule.legion_id != legion_id:
-                    raise HTTPException(status_code=404, detail="Schedule not found")
+            schedule = await self.coordinator.legion_system.scheduler_service.get_schedule(
+                schedule_id
+            )
+            if not schedule or schedule.legion_id != legion_id:
+                raise HTTPException(status_code=404, detail="Schedule not found")
 
-                updated = await self.coordinator.legion_system.scheduler_service.pause_schedule(
-                    schedule_id
-                )
-                return {"schedule": updated.to_dict()}
-            except HTTPException:
-                raise
-            except ValueError as e:
-                raise HTTPException(status_code=400, detail=str(e)) from e
-            except Exception as e:
-                logger.exception("Failed to pause schedule")
-                raise HTTPException(status_code=500, detail=str(e)) from e
+            updated = await self.coordinator.legion_system.scheduler_service.pause_schedule(
+                schedule_id
+            )
+            return {"schedule": updated.to_dict()}
 
         @self.app.post("/api/legions/{legion_id}/schedules/{schedule_id}/resume")
+        @handle_exceptions("resume schedule", value_error_status=400)
         async def resume_schedule(legion_id: str, schedule_id: str):
             """Resume a paused schedule."""
-            try:
-                schedule = await self.coordinator.legion_system.scheduler_service.get_schedule(
-                    schedule_id
-                )
-                if not schedule or schedule.legion_id != legion_id:
-                    raise HTTPException(status_code=404, detail="Schedule not found")
+            schedule = await self.coordinator.legion_system.scheduler_service.get_schedule(
+                schedule_id
+            )
+            if not schedule or schedule.legion_id != legion_id:
+                raise HTTPException(status_code=404, detail="Schedule not found")
 
-                updated = await self.coordinator.legion_system.scheduler_service.resume_schedule(
-                    schedule_id
-                )
-                return {"schedule": updated.to_dict()}
-            except HTTPException:
-                raise
-            except ValueError as e:
-                raise HTTPException(status_code=400, detail=str(e)) from e
-            except Exception as e:
-                logger.exception("Failed to resume schedule")
-                raise HTTPException(status_code=500, detail=str(e)) from e
+            updated = await self.coordinator.legion_system.scheduler_service.resume_schedule(
+                schedule_id
+            )
+            return {"schedule": updated.to_dict()}
 
         @self.app.post("/api/legions/{legion_id}/schedules/{schedule_id}/cancel")
+        @handle_exceptions("cancel schedule", value_error_status=400)
         async def cancel_schedule(legion_id: str, schedule_id: str):
             """Cancel a schedule permanently."""
-            try:
-                schedule = await self.coordinator.legion_system.scheduler_service.get_schedule(
-                    schedule_id
-                )
-                if not schedule or schedule.legion_id != legion_id:
-                    raise HTTPException(status_code=404, detail="Schedule not found")
+            schedule = await self.coordinator.legion_system.scheduler_service.get_schedule(
+                schedule_id
+            )
+            if not schedule or schedule.legion_id != legion_id:
+                raise HTTPException(status_code=404, detail="Schedule not found")
 
-                updated = await self.coordinator.legion_system.scheduler_service.cancel_schedule(
-                    schedule_id
-                )
-                return {"schedule": updated.to_dict()}
-            except HTTPException:
-                raise
-            except ValueError as e:
-                raise HTTPException(status_code=400, detail=str(e)) from e
-            except Exception as e:
-                logger.exception("Failed to cancel schedule")
-                raise HTTPException(status_code=500, detail=str(e)) from e
+            updated = await self.coordinator.legion_system.scheduler_service.cancel_schedule(
+                schedule_id
+            )
+            return {"schedule": updated.to_dict()}
 
         @self.app.post("/api/legions/{legion_id}/schedules/{schedule_id}/run-now")
+        @handle_exceptions("run schedule now", value_error_status=400)
         async def run_schedule_now(legion_id: str, schedule_id: str):
             """Manually trigger a schedule execution immediately."""
-            try:
-                schedule = await self.coordinator.legion_system.scheduler_service.get_schedule(
-                    schedule_id
-                )
-                if not schedule or schedule.legion_id != legion_id:
-                    raise HTTPException(status_code=404, detail="Schedule not found")
+            schedule = await self.coordinator.legion_system.scheduler_service.get_schedule(
+                schedule_id
+            )
+            if not schedule or schedule.legion_id != legion_id:
+                raise HTTPException(status_code=404, detail="Schedule not found")
 
+            try:
                 result = await self.coordinator.legion_system.scheduler_service.run_now(
                     schedule_id
                 )
-                return result
-            except HTTPException:
-                raise
-            except ValueError as e:
-                raise HTTPException(status_code=400, detail=str(e)) from e
             except RuntimeError as e:
                 raise HTTPException(status_code=409, detail=str(e)) from e
-            except Exception as e:
-                logger.exception("Failed to run schedule now")
-                raise HTTPException(status_code=500, detail=str(e)) from e
+            return result
 
         @self.app.delete("/api/legions/{legion_id}/schedules/{schedule_id}")
+        @handle_exceptions("delete schedule", value_error_status=400)
         async def delete_schedule(
             legion_id: str, schedule_id: str, delete_agent: bool = False
         ):
             """Delete a schedule entirely. Optionally delete its ephemeral agent."""
-            try:
-                schedule = await self.coordinator.legion_system.scheduler_service.get_schedule(
-                    schedule_id
-                )
-                if not schedule or schedule.legion_id != legion_id:
-                    raise HTTPException(status_code=404, detail="Schedule not found")
+            schedule = await self.coordinator.legion_system.scheduler_service.get_schedule(
+                schedule_id
+            )
+            if not schedule or schedule.legion_id != legion_id:
+                raise HTTPException(status_code=404, detail="Schedule not found")
 
-                # Optionally delete the ephemeral agent session
-                if delete_agent and schedule.ephemeral_agent_id:
-                    try:
-                        await self.coordinator.delete_session(
-                            schedule.ephemeral_agent_id,
-                            archive_reason="schedule_deleted",
-                        )
-                    except Exception as e:
-                        logger.warning(
-                            f"Failed to delete ephemeral agent "
-                            f"{schedule.ephemeral_agent_id}: {e}"
-                        )
+            # Optionally delete the ephemeral agent session
+            if delete_agent and schedule.ephemeral_agent_id:
+                try:
+                    await self.coordinator.delete_session(
+                        schedule.ephemeral_agent_id,
+                        archive_reason="schedule_deleted",
+                    )
+                except Exception as e:
+                    logger.warning(
+                        f"Failed to delete ephemeral agent "
+                        f"{schedule.ephemeral_agent_id}: {e}"
+                    )
 
-                await self.coordinator.legion_system.scheduler_service.delete_schedule(
-                    schedule_id
-                )
-                return {"success": True}
-            except HTTPException:
-                raise
-            except ValueError as e:
-                raise HTTPException(status_code=400, detail=str(e)) from e
-            except Exception as e:
-                logger.exception("Failed to delete schedule")
-                raise HTTPException(status_code=500, detail=str(e)) from e
+            await self.coordinator.legion_system.scheduler_service.delete_schedule(
+                schedule_id
+            )
+            return {"success": True}
 
         @self.app.get("/api/legions/{legion_id}/schedules/{schedule_id}/history")
+        @handle_exceptions("get schedule history")
         async def get_schedule_history(
             legion_id: str, schedule_id: str, limit: int = 50, offset: int = 0
         ):
             """Get execution history for a schedule."""
-            try:
-                executions = (
-                    await self.coordinator.legion_system.scheduler_service.get_schedule_history(
-                        legion_id=legion_id,
-                        schedule_id=schedule_id,
-                        limit=limit,
-                        offset=offset,
-                    )
+            schedule = await self.coordinator.legion_system.scheduler_service.get_schedule(
+                schedule_id
+            )
+            if not schedule or schedule.legion_id != legion_id:
+                raise HTTPException(status_code=404, detail="Schedule not found")
+
+            executions = (
+                await self.coordinator.legion_system.scheduler_service.get_schedule_history(
+                    legion_id=legion_id,
+                    schedule_id=schedule_id,
+                    limit=limit,
+                    offset=offset,
                 )
-                return {
-                    "executions": [e.to_dict() for e in executions],
-                    "limit": limit,
-                    "offset": offset,
-                }
-            except Exception as e:
-                logger.exception("Failed to get schedule history")
-                raise HTTPException(status_code=500, detail=str(e)) from e
+            )
+            return {
+                "executions": [e.to_dict() for e in executions],
+                "limit": limit,
+                "offset": offset,
+            }
 
         # ==================== PERMISSION PREVIEW ENDPOINT (Issue #36) ====================
 
         @self.app.post("/api/permissions/preview")
+        @handle_exceptions("preview permissions")
         async def preview_permissions(request: PermissionPreviewRequest):
             """
             Preview effective permissions from settings files.
 
             Returns a list of permissions with their source annotations.
             """
-            try:
-                permissions = resolve_effective_permissions(
-                    working_directory=request.working_directory,
-                    setting_sources=request.setting_sources,
-                    session_allowed_tools=request.session_allowed_tools
-                )
-                return {"permissions": permissions}
-            except Exception as e:
-                logger.exception("Failed to preview permissions")
-                raise HTTPException(status_code=500, detail=str(e)) from e
+            permissions = resolve_effective_permissions(
+                working_directory=request.working_directory,
+                setting_sources=request.setting_sources,
+                session_allowed_tools=request.session_allowed_tools
+            )
+            return {"permissions": permissions}
 
         # ==================== CONFIG ENDPOINTS ====================
 
         @self.app.get("/api/config")
+        @handle_exceptions("get config")
         async def get_config():
             """Return full application config."""
             from .config_manager import load_config
@@ -2903,6 +2639,7 @@ class ClaudeWebUI:
             return {"config": config.to_dict()}
 
         @self.app.put("/api/config")
+        @handle_exceptions("update config")
         async def update_config(request: Request):
             """Update application config with side effects."""
             from .config_manager import load_config, save_config
@@ -2941,6 +2678,7 @@ class ClaudeWebUI:
         # ==================== SKILLS ENDPOINTS ====================
 
         @self.app.post("/api/skills/sync")
+        @handle_exceptions("sync skills")
         async def sync_skills():
             """Manually trigger skill sync."""
             from .config_manager import load_config
@@ -2951,6 +2689,7 @@ class ClaudeWebUI:
             return {"status": "synced", **result}
 
         @self.app.get("/api/skills/status")
+        @handle_exceptions("get skills status")
         async def get_skills_status():
             """Get skill sync status."""
             from .config_manager import load_config
@@ -2963,119 +2702,114 @@ class ClaudeWebUI:
         # ==================== SYSTEM ENDPOINTS (Issue #434) ====================
 
         @self.app.get("/api/system/docker-status")
+        @handle_exceptions("check docker status")
         async def get_docker_status():
             """Check Docker availability and image status (issue #496)."""
-            try:
-                from src.docker_utils import check_docker_available
-                status = await check_docker_available()
-                return status
-            except Exception as e:
-                logger.exception("Failed to check Docker status")
-                raise HTTPException(status_code=500, detail=str(e)) from e
+            from src.docker_utils import check_docker_available
+            status = await check_docker_available()
+            return status
 
         @self.app.get("/api/system/git-status")
+        @handle_exceptions("get git status")
         async def get_git_status():
             """Return current git branch, last commit, remote commit info, and dirty state."""
-            try:
-                project_root = str(Path(__file__).parent.parent)
+            project_root = str(Path(__file__).parent.parent)
 
-                branch = await self._run_git_command(
-                    ["git", "rev-parse", "--abbrev-ref", "HEAD"], project_root
+            branch = await self._run_git_command(
+                ["git", "rev-parse", "--abbrev-ref", "HEAD"], project_root
+            )
+            commit_hash = await self._run_git_command(
+                ["git", "log", "-1", "--format=%H"], project_root
+            )
+            commit_message = await self._run_git_command(
+                ["git", "log", "-1", "--format=%s"], project_root
+            )
+            status = await self._run_git_command(
+                ["git", "status", "--porcelain"], project_root
+            )
+
+            # Remote commit info
+            remote_commit_hash = ""
+            remote_commit_message = ""
+            commits_behind = 0
+            remote_fetch_failed = False
+
+            # Detect remote tracking branch
+            remote_branch = None
+            if branch and branch != "HEAD":
+                # Try the tracking branch for the current local branch
+                candidate = f"origin/{branch}"
+                ref_exists = await self._run_git_command(
+                    ["git", "rev-parse", "--verify", candidate], project_root
                 )
-                commit_hash = await self._run_git_command(
-                    ["git", "log", "-1", "--format=%H"], project_root
+                if ref_exists:
+                    remote_branch = candidate
+
+            if not remote_branch:
+                # Detached HEAD, no remote tracking, or unknown — try origin/HEAD
+                origin_head = await self._run_git_command(
+                    ["git", "rev-parse", "--abbrev-ref", "origin/HEAD"], project_root
                 )
-                commit_message = await self._run_git_command(
-                    ["git", "log", "-1", "--format=%s"], project_root
-                )
-                status = await self._run_git_command(
-                    ["git", "status", "--porcelain"], project_root
-                )
-
-                # Remote commit info
-                remote_commit_hash = ""
-                remote_commit_message = ""
-                commits_behind = 0
-                remote_fetch_failed = False
-
-                # Detect remote tracking branch
-                remote_branch = None
-                if branch and branch != "HEAD":
-                    # Try the tracking branch for the current local branch
-                    candidate = f"origin/{branch}"
-                    ref_exists = await self._run_git_command(
-                        ["git", "rev-parse", "--verify", candidate], project_root
-                    )
-                    if ref_exists:
-                        remote_branch = candidate
-
-                if not remote_branch:
-                    # Detached HEAD, no remote tracking, or unknown — try origin/HEAD
-                    origin_head = await self._run_git_command(
-                        ["git", "rev-parse", "--abbrev-ref", "origin/HEAD"], project_root
-                    )
-                    if origin_head:
-                        remote_branch = origin_head
-                    else:
-                        # Fall back to origin/main, then origin/master
-                        for fallback in ["origin/main", "origin/master"]:
-                            ref_check = await self._run_git_command(
-                                ["git", "rev-parse", "--verify", fallback], project_root
-                            )
-                            if ref_check:
-                                remote_branch = fallback
-                                break
-
-                # Fetch from origin (15s timeout)
-                if remote_branch:
-                    try:
-                        proc = await asyncio.create_subprocess_exec(
-                            "git", "fetch", "origin",
-                            cwd=project_root,
-                            stdout=asyncio.subprocess.PIPE,
-                            stderr=asyncio.subprocess.PIPE,
-                        )
-                        await asyncio.wait_for(proc.communicate(), timeout=15)
-                        if proc.returncode != 0:
-                            remote_fetch_failed = True
-                    except (TimeoutError, OSError):
-                        remote_fetch_failed = True
-
-                    # Read remote commit info (works even if fetch failed, using stale refs)
-                    r_hash = await self._run_git_command(
-                        ["git", "log", "-1", "--format=%H", remote_branch], project_root
-                    )
-                    r_msg = await self._run_git_command(
-                        ["git", "log", "-1", "--format=%s", remote_branch], project_root
-                    )
-                    if r_hash:
-                        remote_commit_hash = r_hash
-                        remote_commit_message = r_msg or ""
-                        behind = await self._run_git_command(
-                            ["git", "rev-list", "--count",
-                             f"HEAD..{remote_branch}"], project_root
-                        )
-                        commits_behind = int(behind) if behind else 0
-                    else:
-                        remote_fetch_failed = True
+                if origin_head:
+                    remote_branch = origin_head
                 else:
+                    # Fall back to origin/main, then origin/master
+                    for fallback in ["origin/main", "origin/master"]:
+                        ref_check = await self._run_git_command(
+                            ["git", "rev-parse", "--verify", fallback], project_root
+                        )
+                        if ref_check:
+                            remote_branch = fallback
+                            break
+
+            # Fetch from origin (15s timeout)
+            if remote_branch:
+                try:
+                    proc = await asyncio.create_subprocess_exec(
+                        "git", "fetch", "origin",
+                        cwd=project_root,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE,
+                    )
+                    await asyncio.wait_for(proc.communicate(), timeout=15)
+                    if proc.returncode != 0:
+                        remote_fetch_failed = True
+                except (TimeoutError, OSError):
                     remote_fetch_failed = True
 
-                return {
-                    "branch": branch or "unknown",
-                    "last_commit_hash": commit_hash or "",
-                    "last_commit_message": commit_message or "",
-                    "has_uncommitted_changes": bool(status),
-                    "remote_commit_hash": remote_commit_hash,
-                    "remote_commit_message": remote_commit_message,
-                    "commits_behind": commits_behind,
-                    "remote_fetch_failed": remote_fetch_failed,
-                }
-            except Exception as e:
-                logger.exception("Failed to get git status")
-                raise HTTPException(status_code=500, detail=str(e)) from e
+                # Read remote commit info (works even if fetch failed, using stale refs)
+                r_hash = await self._run_git_command(
+                    ["git", "log", "-1", "--format=%H", remote_branch], project_root
+                )
+                r_msg = await self._run_git_command(
+                    ["git", "log", "-1", "--format=%s", remote_branch], project_root
+                )
+                if r_hash:
+                    remote_commit_hash = r_hash
+                    remote_commit_message = r_msg or ""
+                    behind = await self._run_git_command(
+                        ["git", "rev-list", "--count",
+                         f"HEAD..{remote_branch}"], project_root
+                    )
+                    commits_behind = int(behind) if behind else 0
+                else:
+                    remote_fetch_failed = True
+            else:
+                remote_fetch_failed = True
+
+            return {
+                "branch": branch or "unknown",
+                "last_commit_hash": commit_hash or "",
+                "last_commit_message": commit_message or "",
+                "has_uncommitted_changes": bool(status),
+                "remote_commit_hash": remote_commit_hash,
+                "remote_commit_message": remote_commit_message,
+                "commits_behind": commits_behind,
+                "remote_fetch_failed": remote_fetch_failed,
+            }
 
         @self.app.post("/api/system/restart", status_code=202)
+        @handle_exceptions("restart server")
         async def restart_server():
             """Pull latest code and restart the backend server via os.execv."""
             # Rate limiting: 1 restart per 30 seconds
@@ -3164,258 +2898,223 @@ class ClaudeWebUI:
         # ==================== FILESYSTEM ENDPOINTS ====================
 
         @self.app.get("/api/filesystem/browse")
+        @handle_exceptions("browse filesystem")
         async def browse_filesystem(path: str = None):
             """Browse filesystem directories"""
+            # Default to user home directory if no path provided
+            if not path:
+                path = str(Path.home())
+
+            # Resolve and validate path
+            browse_path = Path(path).resolve()
+
+            # Check if path exists and is a directory
+            if not browse_path.exists():
+                raise HTTPException(status_code=404, detail="Path does not exist")
+            if not browse_path.is_dir():
+                raise HTTPException(status_code=400, detail="Path is not a directory")
+
+            # Get parent path (None if at root)
+            parent_path = str(browse_path.parent) if browse_path.parent != browse_path else None
+
+            # List directories only
+            directories = []
             try:
-                # Default to user home directory if no path provided
-                if not path:
-                    path = str(Path.home())
+                for entry in sorted(browse_path.iterdir()):
+                    if entry.is_dir():
+                        # Skip hidden directories on Unix-like systems (optional)
+                        if platform.system() != 'Windows' and entry.name.startswith('.'):
+                            continue
+                        directories.append({
+                            "name": entry.name,
+                            "path": str(entry.resolve())
+                        })
+            except PermissionError:
+                # If we can't list the directory, return what we can
+                pass
 
-                # Resolve and validate path
-                browse_path = Path(path).resolve()
-
-                # Check if path exists and is a directory
-                if not browse_path.exists():
-                    raise HTTPException(status_code=404, detail="Path does not exist")
-                if not browse_path.is_dir():
-                    raise HTTPException(status_code=400, detail="Path is not a directory")
-
-                # Get parent path (None if at root)
-                parent_path = str(browse_path.parent) if browse_path.parent != browse_path else None
-
-                # List directories only
-                directories = []
-                try:
-                    for entry in sorted(browse_path.iterdir()):
-                        if entry.is_dir():
-                            # Skip hidden directories on Unix-like systems (optional)
-                            if platform.system() != 'Windows' and entry.name.startswith('.'):
-                                continue
-                            directories.append({
-                                "name": entry.name,
-                                "path": str(entry.resolve())
-                            })
-                except PermissionError:
-                    # If we can't list the directory, return what we can
-                    pass
-
-                return {
-                    "current_path": str(browse_path),
-                    "parent_path": parent_path,
-                    "directories": directories,
-                    "separator": os.sep
-                }
-            except HTTPException:
-                raise
-            except Exception as e:
-                logger.exception("Failed to browse filesystem")
-                raise HTTPException(status_code=500, detail=str(e)) from e
+            return {
+                "current_path": str(browse_path),
+                "parent_path": parent_path,
+                "directories": directories,
+                "separator": os.sep
+            }
 
         # ========== MCP Config Endpoints (issue #676) ==========
 
         @self.app.get("/api/mcp-configs")
+        @handle_exceptions("list MCP configs")
         async def list_mcp_configs():
             """List all global MCP server configurations"""
-            try:
-                configs = await self.coordinator.mcp_config_manager.list_configs()
-                return [c.to_dict() for c in configs]
-            except Exception as e:
-                logger.exception("Failed to list MCP configs")
-                raise HTTPException(status_code=500, detail=str(e)) from e
+            configs = await self.coordinator.mcp_config_manager.list_configs()
+            return [c.to_dict() for c in configs]
 
         @self.app.post("/api/mcp-configs")
+        @handle_exceptions("create MCP config", value_error_status=400)
         async def create_mcp_config(request: McpConfigCreateRequest):
             """Create a new global MCP server configuration"""
-            try:
-                config = await self.coordinator.mcp_config_manager.create_config(
-                    name=request.name,
-                    server_type=request.type,
-                    command=request.command,
-                    args=request.args,
-                    env=request.env,
-                    url=request.url,
-                    headers=request.headers,
-                    enabled=request.enabled,
-                    oauth_enabled=request.oauth_enabled,
-                )
-                return config.to_dict()
-            except ValueError as e:
-                raise HTTPException(status_code=400, detail=str(e)) from e
-            except Exception as e:
-                logger.exception("Failed to create MCP config")
-                raise HTTPException(status_code=500, detail=str(e)) from e
+            config = await self.coordinator.mcp_config_manager.create_config(
+                name=request.name,
+                server_type=request.type,
+                command=request.command,
+                args=request.args,
+                env=request.env,
+                url=request.url,
+                headers=request.headers,
+                enabled=request.enabled,
+                oauth_enabled=request.oauth_enabled,
+            )
+            return config.to_dict()
 
         @self.app.post("/api/mcp-configs/export")
+        @handle_exceptions("export MCP configs")
         async def export_mcp_configs(request: McpConfigExportRequest):
             """Export MCP server configurations as portable named dict (issue #788)"""
-            try:
-                all_configs = await self.coordinator.mcp_config_manager.list_configs()
-                if request.ids is not None:
-                    id_set = set(request.ids)
-                    all_configs = [c for c in all_configs if c.id in id_set]
-                portable: dict = {}
-                for c in all_configs:
-                    entry: dict = {"type": c.type.value, "enabled": c.enabled}
-                    if c.type == McpServerType.STDIO:
-                        entry["command"] = c.command
-                        if c.args:
-                            entry["args"] = c.args
-                        if c.env:
-                            entry["env"] = c.env
-                    else:
-                        entry["url"] = c.url
-                        if c.headers:
-                            entry["headers"] = c.headers
-                    portable[c.name] = entry
-                return portable
-            except Exception as e:
-                logger.exception("Failed to export MCP configs")
-                raise HTTPException(status_code=500, detail=str(e)) from e
+            all_configs = await self.coordinator.mcp_config_manager.list_configs()
+            if request.ids is not None:
+                id_set = set(request.ids)
+                all_configs = [c for c in all_configs if c.id in id_set]
+            portable: dict = {}
+            for c in all_configs:
+                entry: dict = {"type": c.type.value, "enabled": c.enabled}
+                if c.type == McpServerType.STDIO:
+                    entry["command"] = c.command
+                    if c.args:
+                        entry["args"] = c.args
+                    if c.env:
+                        entry["env"] = c.env
+                else:
+                    entry["url"] = c.url
+                    if c.headers:
+                        entry["headers"] = c.headers
+                portable[c.name] = entry
+            return portable
 
         @self.app.post("/api/mcp-configs/import")
+        @handle_exceptions("import MCP configs")
         async def import_mcp_configs(request: McpConfigImportRequest):
             """Import MCP server configurations with dry_run preview support (issue #788)"""
-            try:
-                manager = self.coordinator.mcp_config_manager
-                existing_by_name = {c.name: c for c in manager.configs.values()}
+            manager = self.coordinator.mcp_config_manager
+            existing_by_name = {c.name: c for c in manager.configs.values()}
 
-                preview = []
-                imported = []
+            preview = []
+            imported = []
 
-                for name, server_data in request.servers.items():
-                    name = name.strip()
-                    if not name:
-                        preview.append({"name": "", "action": "skip", "reason": "Missing name"})
-                        continue
+            for name, server_data in request.servers.items():
+                name = name.strip()
+                if not name:
+                    preview.append({"name": "", "action": "skip", "reason": "Missing name"})
+                    continue
 
-                    server_type_raw = server_data.get("type", "stdio")
-                    try:
-                        server_type = McpServerType(server_type_raw)
-                    except ValueError:
-                        preview.append({"name": name, "action": "skip", "reason": f"Invalid type: {server_type_raw}"})
-                        continue
+                server_type_raw = server_data.get("type", "stdio")
+                try:
+                    server_type = McpServerType(server_type_raw)
+                except ValueError:
+                    preview.append({"name": name, "action": "skip", "reason": f"Invalid type: {server_type_raw}"})
+                    continue
 
-                    if server_type == McpServerType.STDIO and not server_data.get("command"):
-                        preview.append({"name": name, "action": "skip", "reason": "Missing command for stdio server"})
-                        continue
+                if server_type == McpServerType.STDIO and not server_data.get("command"):
+                    preview.append({"name": name, "action": "skip", "reason": "Missing command for stdio server"})
+                    continue
 
-                    if server_type in (McpServerType.SSE, McpServerType.HTTP) and not server_data.get("url"):
-                        preview.append({"name": name, "action": "skip", "reason": f"Missing url for {server_type} server"})
-                        continue
+                if server_type in (McpServerType.SSE, McpServerType.HTTP) and not server_data.get("url"):
+                    preview.append({"name": name, "action": "skip", "reason": f"Missing url for {server_type} server"})
+                    continue
 
-                    existing = existing_by_name.get(name)
-                    action = "update" if existing else "create"
-                    entry: dict = {
-                        "name": name,
-                        "action": action,
-                        "config": dict(server_data),
-                    }
-                    if existing:
-                        entry["existing_id"] = existing.id
-
-                    if not request.dry_run:
-                        try:
-                            if action == "create":
-                                config = await manager.create_config(
-                                    name=name,
-                                    server_type=server_type,
-                                    command=server_data.get("command"),
-                                    args=server_data.get("args") or [],
-                                    env=server_data.get("env") or {},
-                                    url=server_data.get("url"),
-                                    headers=server_data.get("headers") or {},
-                                    enabled=server_data.get("enabled", True),
-                                )
-                            else:
-                                config = await manager.update_config(
-                                    config_id=existing.id,
-                                    name=name,
-                                    server_type=server_type,
-                                    command=server_data.get("command"),
-                                    args=server_data.get("args") or [],
-                                    env=server_data.get("env") or {},
-                                    url=server_data.get("url"),
-                                    headers=server_data.get("headers") or {},
-                                    enabled=server_data.get("enabled", True),
-                                )
-                            entry["result"] = config.to_dict()
-                            imported.append(config.to_dict())
-                        except Exception as e:
-                            entry["action"] = "skip"
-                            entry["reason"] = str(e)
-
-                    preview.append(entry)
-
-                create_count = sum(1 for p in preview if p["action"] == "create")
-                update_count = sum(1 for p in preview if p["action"] == "update")
-                skip_count = sum(1 for p in preview if p["action"] == "skip")
-
-                return {
-                    "dry_run": request.dry_run,
-                    "preview": preview,
-                    "summary": {"create": create_count, "update": update_count, "skip": skip_count},
-                    "imported": imported,
+                existing = existing_by_name.get(name)
+                action = "update" if existing else "create"
+                entry: dict = {
+                    "name": name,
+                    "action": action,
+                    "config": dict(server_data),
                 }
-            except HTTPException:
-                raise
-            except Exception as e:
-                logger.exception("Failed to import MCP configs")
-                raise HTTPException(status_code=500, detail=str(e)) from e
+                if existing:
+                    entry["existing_id"] = existing.id
+
+                if not request.dry_run:
+                    try:
+                        if action == "create":
+                            config = await manager.create_config(
+                                name=name,
+                                server_type=server_type,
+                                command=server_data.get("command"),
+                                args=server_data.get("args") or [],
+                                env=server_data.get("env") or {},
+                                url=server_data.get("url"),
+                                headers=server_data.get("headers") or {},
+                                enabled=server_data.get("enabled", True),
+                            )
+                        else:
+                            config = await manager.update_config(
+                                config_id=existing.id,
+                                name=name,
+                                server_type=server_type,
+                                command=server_data.get("command"),
+                                args=server_data.get("args") or [],
+                                env=server_data.get("env") or {},
+                                url=server_data.get("url"),
+                                headers=server_data.get("headers") or {},
+                                enabled=server_data.get("enabled", True),
+                            )
+                        entry["result"] = config.to_dict()
+                        imported.append(config.to_dict())
+                    except Exception as e:
+                        entry["action"] = "skip"
+                        entry["reason"] = str(e)
+
+                preview.append(entry)
+
+            create_count = sum(1 for p in preview if p["action"] == "create")
+            update_count = sum(1 for p in preview if p["action"] == "update")
+            skip_count = sum(1 for p in preview if p["action"] == "skip")
+
+            return {
+                "dry_run": request.dry_run,
+                "preview": preview,
+                "summary": {"create": create_count, "update": update_count, "skip": skip_count},
+                "imported": imported,
+            }
 
         @self.app.get("/api/mcp-configs/{config_id}")
+        @handle_exceptions("get MCP config")
         async def get_mcp_config(config_id: str):
             """Get a specific MCP server configuration"""
-            try:
-                config = await self.coordinator.mcp_config_manager.get_config(config_id)
-                if not config:
-                    raise HTTPException(status_code=404, detail="MCP config not found")
-                return config.to_dict()
-            except HTTPException:
-                raise
-            except Exception as e:
-                logger.exception("Failed to get MCP config")
-                raise HTTPException(status_code=500, detail=str(e)) from e
+            config = await self.coordinator.mcp_config_manager.get_config(config_id)
+            if not config:
+                raise HTTPException(status_code=404, detail="MCP config not found")
+            return config.to_dict()
 
         @self.app.put("/api/mcp-configs/{config_id}")
+        @handle_exceptions("update MCP config", value_error_status=400)
         async def update_mcp_config(config_id: str, request: McpConfigUpdateRequest):
             """Update an existing MCP server configuration"""
-            try:
-                config = await self.coordinator.mcp_config_manager.update_config(
-                    config_id=config_id,
-                    name=request.name,
-                    server_type=request.type,
-                    command=request.command,
-                    args=request.args,
-                    env=request.env,
-                    url=request.url,
-                    headers=request.headers,
-                    enabled=request.enabled,
-                    oauth_enabled=request.oauth_enabled,
-                )
-                return config.to_dict()
-            except ValueError as e:
-                raise HTTPException(status_code=400, detail=str(e)) from e
-            except Exception as e:
-                logger.exception("Failed to update MCP config")
-                raise HTTPException(status_code=500, detail=str(e)) from e
+            config = await self.coordinator.mcp_config_manager.update_config(
+                config_id=config_id,
+                name=request.name,
+                server_type=request.type,
+                command=request.command,
+                args=request.args,
+                env=request.env,
+                url=request.url,
+                headers=request.headers,
+                enabled=request.enabled,
+                oauth_enabled=request.oauth_enabled,
+            )
+            return config.to_dict()
 
         @self.app.delete("/api/mcp-configs/{config_id}")
+        @handle_exceptions("delete MCP config")
         async def delete_mcp_config(config_id: str):
             """Delete an MCP server configuration"""
-            try:
-                success = await self.coordinator.mcp_config_manager.delete_config(config_id)
-                if not success:
-                    raise HTTPException(status_code=404, detail="MCP config not found")
-                return {"deleted": True}
-            except HTTPException:
-                raise
-            except Exception as e:
-                logger.exception("Failed to delete MCP config")
-                raise HTTPException(status_code=500, detail=str(e)) from e
+            success = await self.coordinator.mcp_config_manager.delete_config(config_id)
+            if not success:
+                raise HTTPException(status_code=404, detail="MCP config not found")
+            return {"deleted": True}
 
         # ========== MCP OAuth Endpoints (issue #813) ==========
 
         @self.app.get("/oauth/callback", response_class=HTMLResponse)
+        @handle_exceptions("handle oauth callback")
         async def oauth_callback(request: Request):
             """Handle OAuth 2.1 authorization code callback.
 
@@ -3481,211 +3180,168 @@ class ClaudeWebUI:
                 )
 
         @self.app.post("/api/mcp-configs/{config_id}/oauth/initiate")
+        @handle_exceptions("initiate MCP OAuth")
         async def initiate_mcp_oauth(config_id: str, request: McpOAuthInitiateRequest):
             """Initiate OAuth 2.1 flow for an MCP server.
 
             Returns the authorization URL the frontend should open in a popup.
             """
-            try:
-                config = await self.coordinator.mcp_config_manager.get_config(config_id)
-                if not config:
-                    raise HTTPException(status_code=404, detail="MCP config not found")
-                if not config.url:
-                    raise HTTPException(status_code=400, detail="OAuth requires a URL-based MCP server")
-                auth_url = await self.coordinator.oauth_manager.start_flow(
-                    server_id=config_id,
-                    server_url=config.url,
-                    redirect_uri=request.redirect_uri,
-                    client_name=f"Claude Code WebUI — {config.name}",
-                )
-                return {"auth_url": auth_url}
-            except HTTPException:
-                raise
-            except Exception as e:
-                logger.exception("Failed to initiate OAuth flow for MCP config %s", config_id)
-                raise HTTPException(status_code=500, detail=str(e)) from e
+            config = await self.coordinator.mcp_config_manager.get_config(config_id)
+            if not config:
+                raise HTTPException(status_code=404, detail="MCP config not found")
+            if not config.url:
+                raise HTTPException(status_code=400, detail="OAuth requires a URL-based MCP server")
+            auth_url = await self.coordinator.oauth_manager.start_flow(
+                server_id=config_id,
+                server_url=config.url,
+                redirect_uri=request.redirect_uri,
+                client_name=f"Claude Code WebUI — {config.name}",
+            )
+            return {"auth_url": auth_url}
 
         @self.app.post("/api/mcp-configs/{config_id}/oauth/disconnect")
+        @handle_exceptions("disconnect MCP OAuth")
         async def disconnect_mcp_oauth(config_id: str):
             """Clear stored OAuth tokens for an MCP server."""
-            try:
-                config = await self.coordinator.mcp_config_manager.get_config(config_id)
-                if not config:
-                    raise HTTPException(status_code=404, detail="MCP config not found")
-                await self.coordinator.oauth_manager.disconnect(config_id)
-                return {"disconnected": True}
-            except HTTPException:
-                raise
-            except Exception as e:
-                logger.exception("Failed to disconnect OAuth for MCP config %s", config_id)
-                raise HTTPException(status_code=500, detail=str(e)) from e
+            config = await self.coordinator.mcp_config_manager.get_config(config_id)
+            if not config:
+                raise HTTPException(status_code=404, detail="MCP config not found")
+            await self.coordinator.oauth_manager.disconnect(config_id)
+            return {"disconnected": True}
 
         @self.app.get("/api/mcp-configs/{config_id}/oauth/status")
+        @handle_exceptions("get MCP OAuth status")
         async def get_mcp_oauth_status(config_id: str):
             """Return OAuth status for this MCP server.
 
             Returns {"status": "authenticated" | "expired" | "unauthenticated"}.
             Expiry is determined from the timestamp recorded at token storage time.
             """
-            try:
-                config = await self.coordinator.mcp_config_manager.get_config(config_id)
-                if not config:
-                    raise HTTPException(status_code=404, detail="MCP config not found")
-                token = await self.coordinator.oauth_manager.get_stored_token(config_id)
-                if token is None:
-                    status = "unauthenticated"
+            config = await self.coordinator.mcp_config_manager.get_config(config_id)
+            if not config:
+                raise HTTPException(status_code=404, detail="MCP config not found")
+            token = await self.coordinator.oauth_manager.get_stored_token(config_id)
+            if token is None:
+                status = "unauthenticated"
+            else:
+                store = self.coordinator.oauth_manager.get_token_store(config_id)
+                expiry = await store.get_token_expiry()
+                if expiry is not None and expiry < time.time():
+                    status = "expired"
                 else:
-                    store = self.coordinator.oauth_manager.get_token_store(config_id)
-                    expiry = await store.get_token_expiry()
-                    if expiry is not None and expiry < time.time():
-                        status = "expired"
-                    else:
-                        status = "authenticated"
-                return {"status": status}
-            except HTTPException:
-                raise
-            except Exception as e:
-                logger.exception("Failed to get OAuth status for MCP config %s", config_id)
-                raise HTTPException(status_code=500, detail=str(e)) from e
+                    status = "authenticated"
+            return {"status": status}
 
         # ========== Template Endpoints ==========
 
         @self.app.get("/api/templates")
+        @handle_exceptions("list templates")
         async def list_templates():
             """List all minion templates"""
-            try:
-                templates = await self.coordinator.template_manager.list_templates()
-                return [t.to_dict() for t in templates]
-            except Exception as e:
-                logger.exception("Failed to list templates")
-                raise HTTPException(status_code=500, detail=str(e)) from e
+            templates = await self.coordinator.template_manager.list_templates()
+            return [t.to_dict() for t in templates]
 
         @self.app.get("/api/templates/{template_id}")
+        @handle_exceptions("get template")
         async def get_template(template_id: str):
             """Get specific template"""
-            try:
-                template = await self.coordinator.template_manager.get_template(template_id)
-                if not template:
-                    raise HTTPException(status_code=404, detail="Template not found")
-                return template.to_dict()
-            except HTTPException:
-                raise
-            except Exception as e:
-                logger.exception("Failed to get template")
-                raise HTTPException(status_code=500, detail=str(e)) from e
+            template = await self.coordinator.template_manager.get_template(template_id)
+            if not template:
+                raise HTTPException(status_code=404, detail="Template not found")
+            return template.to_dict()
 
         @self.app.post("/api/templates")
+        @handle_exceptions("create template", value_error_status=400)
         async def create_template(request: TemplateCreateRequest):
             """Create new template"""
-            try:
-                config = request.to_session_config()
-                template = await self.coordinator.template_manager.create_template(
-                    name=request.name,
-                    config=config,
-                    role=request.role,
-                    system_prompt=request.system_prompt,
-                    description=request.description,
-                    capabilities=request.capabilities,
-                )
-                return template.to_dict()
-            except ValueError as e:
-                raise HTTPException(status_code=400, detail=str(e)) from e
-            except Exception as e:
-                logger.exception("Failed to create template")
-                raise HTTPException(status_code=500, detail=str(e)) from e
+            config = request.to_session_config()
+            template = await self.coordinator.template_manager.create_template(
+                name=request.name,
+                config=config,
+                role=request.role,
+                system_prompt=request.system_prompt,
+                description=request.description,
+                capabilities=request.capabilities,
+            )
+            return template.to_dict()
 
         @self.app.put("/api/templates/{template_id}")
+        @handle_exceptions("update template", value_error_status=400)
         async def update_template(template_id: str, request: TemplateUpdateRequest):
             """Update existing template"""
-            try:
-                template = await self.coordinator.template_manager.update_template(
-                    template_id=template_id,
-                    name=request.name,
-                    permission_mode=request.permission_mode,
-                    allowed_tools=request.allowed_tools,
-                    disallowed_tools=request.disallowed_tools,
-                    role=request.role,
-                    system_prompt=request.system_prompt,
-                    description=request.description,
-                    model=request.model,
-                    capabilities=request.capabilities,
-                    override_system_prompt=request.override_system_prompt,
-                    sandbox_enabled=request.sandbox_enabled,
-                    sandbox_config=request.sandbox_config,
-                    cli_path=request.cli_path,
-                    additional_directories=request.additional_directories,
-                    # Docker session isolation (issue #496)
-                    docker_enabled=request.docker_enabled,
-                    docker_image=request.docker_image,
-                    docker_extra_mounts=request.docker_extra_mounts,
-                    # Thinking and effort configuration (issue #580)
-                    thinking_mode=request.thinking_mode,
-                    thinking_budget_tokens=request.thinking_budget_tokens,
-                    effort=request.effort,
-                    history_distillation_enabled=request.history_distillation_enabled,
-                    auto_memory_mode=request.auto_memory_mode,
-                    skill_creating_enabled=request.skill_creating_enabled,
-                    mcp_server_ids=request.mcp_server_ids,
-                    enable_claudeai_mcp_servers=request.enable_claudeai_mcp_servers,
-                    strict_mcp_config=request.strict_mcp_config,
-                )
-                return template.to_dict()
-            except ValueError as e:
-                raise HTTPException(status_code=400, detail=str(e)) from e
-            except Exception as e:
-                logger.exception("Failed to update template")
-                raise HTTPException(status_code=500, detail=str(e)) from e
+            template = await self.coordinator.template_manager.update_template(
+                template_id=template_id,
+                name=request.name,
+                permission_mode=request.permission_mode,
+                allowed_tools=request.allowed_tools,
+                disallowed_tools=request.disallowed_tools,
+                role=request.role,
+                system_prompt=request.system_prompt,
+                description=request.description,
+                model=request.model,
+                capabilities=request.capabilities,
+                override_system_prompt=request.override_system_prompt,
+                sandbox_enabled=request.sandbox_enabled,
+                sandbox_config=request.sandbox_config,
+                cli_path=request.cli_path,
+                additional_directories=request.additional_directories,
+                # Docker session isolation (issue #496)
+                docker_enabled=request.docker_enabled,
+                docker_image=request.docker_image,
+                docker_extra_mounts=request.docker_extra_mounts,
+                # Thinking and effort configuration (issue #580)
+                thinking_mode=request.thinking_mode,
+                thinking_budget_tokens=request.thinking_budget_tokens,
+                effort=request.effort,
+                history_distillation_enabled=request.history_distillation_enabled,
+                auto_memory_mode=request.auto_memory_mode,
+                skill_creating_enabled=request.skill_creating_enabled,
+                mcp_server_ids=request.mcp_server_ids,
+                enable_claudeai_mcp_servers=request.enable_claudeai_mcp_servers,
+                strict_mcp_config=request.strict_mcp_config,
+            )
+            return template.to_dict()
 
         @self.app.delete("/api/templates/{template_id}")
+        @handle_exceptions("delete template")
         async def delete_template(template_id: str):
             """Delete template"""
-            try:
-                success = await self.coordinator.template_manager.delete_template(template_id)
-                if not success:
-                    raise HTTPException(status_code=404, detail="Template not found")
-                return {"deleted": True}
-            except HTTPException:
-                raise
-            except Exception as e:
-                logger.exception("Failed to delete template")
-                raise HTTPException(status_code=500, detail=str(e)) from e
+            success = await self.coordinator.template_manager.delete_template(template_id)
+            if not success:
+                raise HTTPException(status_code=404, detail="Template not found")
+            return {"deleted": True}
 
         @self.app.get("/api/templates/{template_id}/export")
+        @handle_exceptions("export template")
         async def export_template(template_id: str):
             """Export template as a downloadable JSON envelope"""
             from fastapi.responses import Response as FastAPIResponse
-            try:
-                template = await self.coordinator.template_manager.get_template(template_id)
-                if not template:
-                    raise HTTPException(status_code=404, detail="Template not found")
-                envelope = {
-                    "version": 1,
-                    "exported_at": datetime.now(UTC).isoformat(),
-                    "template": template.to_dict(),
-                }
-                slug = re.sub(r'[^a-z0-9]+', '_', template.name.strip().lower()).strip('_')
-                filename = f"{slug}.template.json"
-                return FastAPIResponse(
-                    content=json.dumps(envelope, indent=2),
-                    media_type="application/json",
-                    headers={"Content-Disposition": f'attachment; filename="{filename}"'},
-                )
-            except HTTPException:
-                raise
-            except Exception as e:
-                logger.exception("Failed to export template")
-                raise HTTPException(status_code=500, detail=str(e)) from e
+            template = await self.coordinator.template_manager.get_template(template_id)
+            if not template:
+                raise HTTPException(status_code=404, detail="Template not found")
+            envelope = {
+                "version": 1,
+                "exported_at": datetime.now(UTC).isoformat(),
+                "template": template.to_dict(),
+            }
+            slug = re.sub(r'[^a-z0-9]+', '_', template.name.strip().lower()).strip('_')
+            filename = f"{slug}.template.json"
+            return FastAPIResponse(
+                content=json.dumps(envelope, indent=2),
+                media_type="application/json",
+                headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+            )
 
         @self.app.post("/api/templates/import", status_code=201)
+        @handle_exceptions("import template", value_error_status=400)
         async def import_template(request: Request):
             """Import a template from an export envelope"""
+            body = await request.json()
             try:
-                body = await request.json()
                 template = await self.coordinator.template_manager.import_template(
                     data=body,
                     overwrite=bool(body.get("overwrite", False)),
                 )
-                return template.to_dict()
             except TemplateConflictError as e:
                 raise HTTPException(
                     status_code=409,
@@ -3695,11 +3351,7 @@ class ClaudeWebUI:
                         "name": e.name,
                     },
                 ) from e
-            except ValueError as e:
-                raise HTTPException(status_code=400, detail=str(e)) from e
-            except Exception as e:
-                logger.exception("Failed to import template")
-                raise HTTPException(status_code=500, detail=str(e)) from e
+            return template.to_dict()
 
 
 

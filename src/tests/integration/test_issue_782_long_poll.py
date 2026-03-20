@@ -11,9 +11,6 @@ Tests:
 
 import asyncio
 
-import pytest
-
-
 # ===========================================================================
 # EventQueue unit tests (no HTTP client needed)
 # ===========================================================================
@@ -230,14 +227,14 @@ class TestPollSession:
         client = api_integration_env["client"]
         webui = api_integration_env["webui"]
         project = await api_integration_env["create_test_project"]()
-        sessionA = await api_integration_env["create_test_session"](project["project_id"], "Session A")
-        sessionB = await api_integration_env["create_test_session"](project["project_id"], "Session B")
-        sidA = sessionA["session_id"]
-        sidB = sessionB["session_id"]
+        session_a = await api_integration_env["create_test_session"](project["project_id"], "Session A")
+        session_b = await api_integration_env["create_test_session"](project["project_id"], "Session B")
+        sid_a = session_a["session_id"]
+        sid_b = session_b["session_id"]
 
-        webui.session_queues[sidA].append({"type": "only_for_a"})
+        webui.session_queues[sid_a].append({"type": "only_for_a"})
 
-        resp = await client.get(f"/api/poll/session/{sidB}?since=0&timeout=0")
+        resp = await client.get(f"/api/poll/session/{sid_b}?since=0&timeout=0")
         assert resp.status_code == 200
         data = resp.json()
         types = [e["type"] for e in data["events"]]
@@ -281,9 +278,8 @@ class TestInterruptEndpoint:
     async def test_interrupt_unknown_session_returns_error(self, api_integration_env):
         client = api_integration_env["client"]
         resp = await client.post("/api/sessions/nonexistent-id/interrupt")
-        # Coordinator.interrupt_session raises or returns falsy for unknown sessions;
-        # the endpoint catches exceptions and returns 500
-        assert resp.status_code in (200, 500)
+        # interrupt_session_rest now returns 404 for unknown sessions
+        assert resp.status_code == 404
 
 
 # ===========================================================================
@@ -298,7 +294,7 @@ class TestPermissionEndpoint:
         loop = asyncio.get_event_loop()
         future = loop.create_future()
         request_id = "test-perm-allow-001"
-        webui.pending_permissions[request_id] = future
+        webui.permission_service.pending_permissions[request_id] = future
 
         project = await api_integration_env["create_test_project"]()
         session = await api_integration_env["create_test_session"](project["project_id"])
@@ -321,7 +317,7 @@ class TestPermissionEndpoint:
         loop = asyncio.get_event_loop()
         future = loop.create_future()
         request_id = "test-perm-deny-001"
-        webui.pending_permissions[request_id] = future
+        webui.permission_service.pending_permissions[request_id] = future
 
         project = await api_integration_env["create_test_project"]()
         session = await api_integration_env["create_test_session"](project["project_id"])
@@ -356,7 +352,7 @@ class TestPermissionEndpoint:
         loop = asyncio.get_event_loop()
         future = loop.create_future()
         request_id = "test-perm-input-001"
-        webui.pending_permissions[request_id] = future
+        webui.permission_service.pending_permissions[request_id] = future
 
         project = await api_integration_env["create_test_project"]()
         session = await api_integration_env["create_test_session"](project["project_id"])
@@ -379,7 +375,7 @@ class TestPermissionEndpoint:
         loop = asyncio.get_event_loop()
         future = loop.create_future()
         request_id = "test-perm-double-001"
-        webui.pending_permissions[request_id] = future
+        webui.permission_service.pending_permissions[request_id] = future
 
         project = await api_integration_env["create_test_project"]()
         session = await api_integration_env["create_test_session"](project["project_id"])
