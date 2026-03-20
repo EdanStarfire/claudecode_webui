@@ -109,26 +109,7 @@ export const useWebSocketStore = defineStore('websocket', () => {
   function disconnectUI() { stopUIPolling() }
 
   // ========== SESSION POLL LOOP ==========
-  async function connectSession(sessionId) {
-    // Stop any existing session poll
-    await disconnectSession()
-
-    currentSessionId.value = sessionId
-    sessionConnected.value = true
-    sessionRetryCount.value = 0
-
-    // Bootstrap cursor to current head on first connection.
-    // loadMessages() covers history via REST; start poll from now to avoid replay (#875).
-    // On reconnect (cached cursor exists), resume from where we left off.
-    if (sessionCursors[sessionId] === undefined) {
-      try {
-        const result = await api.get(`/api/poll/session/${sessionId}/cursor`)
-        sessionCursors[sessionId] = result?.cursor ?? 0
-      } catch {
-        sessionCursors[sessionId] = 0
-      }
-    }
-
+  async function _runSessionPollLoop(sessionId) {
     while (sessionConnected.value && currentSessionId.value === sessionId) {
       try {
         sessionAbortController = new AbortController()
@@ -169,6 +150,31 @@ export const useWebSocketStore = defineStore('websocket', () => {
         }
       }
     }
+  }
+
+  async function connectSession(sessionId) {
+    // Stop any existing session poll
+    await disconnectSession()
+
+    currentSessionId.value = sessionId
+    sessionConnected.value = true
+    sessionRetryCount.value = 0
+
+    // Bootstrap cursor to current head on first connection.
+    // loadMessages() covers history via REST; start poll from now to avoid replay (#875).
+    // On reconnect (cached cursor exists), resume from where we left off.
+    if (sessionCursors[sessionId] === undefined) {
+      try {
+        const result = await api.get(`/api/poll/session/${sessionId}/cursor`)
+        sessionCursors[sessionId] = result?.cursor ?? 0
+      } catch {
+        sessionCursors[sessionId] = 0
+      }
+    }
+
+    // Start poll loop as fire-and-forget (runs for session lifetime).
+    // Do NOT await — connectSession must return promptly so callers' finally blocks execute.
+    _runSessionPollLoop(sessionId)
   }
 
   function disconnectSession() {
