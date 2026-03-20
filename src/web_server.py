@@ -631,6 +631,17 @@ class ClaudeWebUI:
             """Return current UI event queue cursor position for client initialization."""
             return {"cursor": self.ui_queue.current_cursor}
 
+        @self.app.get("/api/poll/session/{session_id}/cursor")
+        @handle_exceptions("poll session cursor")
+        async def get_session_poll_cursor(session_id: str):
+            """Return current session event queue cursor position for client initialization."""
+            if session_id not in self.session_queues:
+                session_info = await self.coordinator.session_manager.get_session_info(session_id)
+                if not session_info:
+                    raise HTTPException(status_code=404, detail="Session not found")
+                return {"cursor": 0}  # session exists but queue not yet initialized
+            return {"cursor": self.session_queues[session_id].current_cursor}
+
         @self.app.get("/api/poll/session/{session_id}")
         @handle_exceptions("poll session")
         async def poll_session(session_id: str, since: int = 0, timeout: int = 30):
