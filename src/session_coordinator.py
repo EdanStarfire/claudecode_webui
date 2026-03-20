@@ -47,6 +47,10 @@ coord_logger = get_logger('coordinator', category='COORDINATOR')
 # Keep standard logger for errors
 logger = logging.getLogger(__name__)
 
+# Issue #871: Docker wrapper startup noise filtering
+_DOCKER_WRAPPER_PREFIX = '[claude-docker] '
+_DOCKER_ERROR_KEYWORDS = ('exited with code', 'was killed', 'crashed')
+
 
 class SessionCoordinator:
     """
@@ -3380,12 +3384,24 @@ class SessionCoordinator:
 
         Issue #517: Each stderr line becomes a system message with subtype 'stderr',
         persisted to messages.jsonl and broadcast to the frontend via WebSocket.
+        Issue #871: Docker wrapper informational lines are filtered out (they are
+        already logged) to avoid spurious red warning pills on successful Docker startup.
         """
         message_callback = self._create_message_callback(session_id)
 
         async def callback(output: str):
             try:
                 coord_logger.warning(f"[STDERR] Session {session_id}: {output}")
+
+                # Issue #871: Skip Docker wrapper informational diagnostics.
+                # Lines like "[claude-docker] Container: ..., Image: ..., PID: ..."
+                # are startup metadata, not errors. They are already logged above.
+                # Keep lines containing error keywords (exit codes, kills, crashes).
+                if output.startswith(_DOCKER_WRAPPER_PREFIX) and not any(
+                    kw in output for kw in _DOCKER_ERROR_KEYWORDS
+                ):
+                    return
+
                 stderr_message = {
                     "type": "system",
                     "subtype": "stderr",
