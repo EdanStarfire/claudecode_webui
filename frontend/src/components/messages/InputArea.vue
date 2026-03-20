@@ -665,6 +665,7 @@ async function executeClearCommand() {
   const response = await api.post(`/api/sessions/${sessionId}/reset`)
   if (response.success) {
     await wsStore.disconnectSession()
+    wsStore.resetSessionCursor(sessionId)
     sessionStore.currentSessionId = null
     await sessionStore.selectSession(sessionId)
   }
