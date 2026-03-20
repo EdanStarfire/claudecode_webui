@@ -1673,21 +1673,22 @@ class ClaudeWebUI:
             if not session_info:
                 raise HTTPException(status_code=404, detail="Session not found")
 
-            tmp_dir = (self.coordinator.data_dir / "sessions" / session_id / "tmp").resolve()
-            requested = (tmp_dir / path).resolve()
+            tmp_dir = os.path.realpath(self.coordinator.data_dir / "sessions" / session_id / "tmp")
+            requested = os.path.realpath(os.path.join(tmp_dir, path))
 
-            # Security: path must remain within session tmp dir (prevent traversal)
-            if not str(requested).startswith(str(tmp_dir) + "/") and requested != tmp_dir:
+            # Security: canonical path must remain within session tmp dir
+            if not requested.startswith(tmp_dir + os.sep) and requested != tmp_dir:
                 raise HTTPException(status_code=403, detail="Access denied")
 
-            if not requested.exists() or not requested.is_file():
+            requested_path = Path(requested)
+            if not requested_path.exists() or not requested_path.is_file():
                 raise HTTPException(status_code=404, detail="File not found")
 
-            media_type, _ = mimetypes.guess_type(str(requested))
+            media_type, _ = mimetypes.guess_type(str(requested_path))
             return FileResponse(
-                path=str(requested),
+                path=str(requested_path),
                 media_type=media_type or "application/octet-stream",
-                filename=requested.name,
+                filename=requested_path.name,
             )
 
         # Issue #423: Remove resource from session display (soft-remove)
