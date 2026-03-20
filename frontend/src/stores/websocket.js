@@ -181,6 +181,10 @@ export const useWebSocketStore = defineStore('websocket', () => {
     })
   }
 
+  function resetSessionCursor(sessionId) {
+    delete sessionCursors[sessionId]
+  }
+
   // ========== PAGE VISIBILITY ==========
   function setupVisibilityHandler() {
     if (visibilityUnsubscribe) visibilityUnsubscribe()
@@ -321,6 +325,7 @@ export const useWebSocketStore = defineStore('websocket', () => {
           resourceStore.clearResources(resetSessionId)
           const sessionStore2 = useSessionStore()
           sessionStore2.recordSessionReset(resetSessionId)
+          delete sessionCursors[resetSessionId]
         }
         break
       }
@@ -462,6 +467,7 @@ export const useWebSocketStore = defineStore('websocket', () => {
     setupVisibilityHandler,
     connectSession,
     disconnectSession,
+    resetSessionCursor,
     sendMessage,
     sendPermissionResponse,
     sendPermissionResponseWithInput,
