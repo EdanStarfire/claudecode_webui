@@ -91,7 +91,7 @@ class TestCreateSession:
             "project_id": fake_id,
             "name": "Orphan",
         })
-        assert resp.status_code == 500
+        assert resp.status_code == 404
 
 
 class TestListSessions:

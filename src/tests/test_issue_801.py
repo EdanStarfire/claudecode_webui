@@ -108,9 +108,15 @@ async def test_issue_801_restart_registers_message_callback():
         session_id = "test-session-801"
         webui.coordinator._message_callbacks[session_id] = []
 
+        # Mock session_manager.get_session_info to return a non-None session
+        # (the restart_session endpoint now checks session existence first).
+        mock_session = object()
         with patch.object(
             webui.coordinator, "restart_session", new_callable=AsyncMock
-        ) as mock_restart:
+        ) as mock_restart, patch.object(
+            webui.coordinator.session_manager, "get_session_info",
+            new_callable=AsyncMock, return_value=mock_session
+        ):
             mock_restart.return_value = True
 
             async with AsyncClient(
