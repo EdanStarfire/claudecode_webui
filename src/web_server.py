@@ -625,6 +625,12 @@ class ClaudeWebUI:
             events, next_cursor = self.ui_queue.events_since(since)
             return {"events": events, "next_cursor": next_cursor}
 
+        @self.app.get("/api/poll/cursor")
+        @handle_exceptions("poll cursor")
+        async def get_poll_cursor():
+            """Return current UI event queue cursor position for client initialization."""
+            return {"cursor": self.ui_queue.current_cursor}
+
         @self.app.get("/api/poll/session/{session_id}")
         @handle_exceptions("poll session")
         async def poll_session(session_id: str, since: int = 0, timeout: int = 30):

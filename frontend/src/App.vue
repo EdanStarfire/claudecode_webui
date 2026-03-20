@@ -147,15 +147,23 @@ async function onAuthenticated() {
 }
 
 async function initializeApp() {
-  // Start long-polling for global UI events
-  wsStore.startUIPolling()
   wsStore.setupVisibilityHandler()
 
-  // Load initial data
-  await Promise.all([
+  // Fetch cursor alongside initial data so polling starts from current head,
+  // preventing historical events from replaying and corrupting session_ids (#870)
+  const [, , cursorResult] = await Promise.allSettled([
     projectStore.fetchProjects(),
-    sessionStore.fetchSessions()
+    sessionStore.fetchSessions(),
+    apiGet('/api/poll/cursor')
   ])
+
+  const cursor = cursorResult.status === 'fulfilled' ? (cursorResult.value?.cursor ?? 0) : 0
+  if (cursorResult.status === 'rejected') {
+    console.warn('[App] Failed to fetch poll cursor, falling back to 0')
+  }
+
+  // Start polling after initial data is loaded, from current cursor (skips history)
+  wsStore.startUIPolling(cursor)
 
   // Handle URL-based navigation (deep linking)
   const hash = window.location.hash

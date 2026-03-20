@@ -52,8 +52,9 @@ export const useWebSocketStore = defineStore('websocket', () => {
   }
 
   // ========== UI POLL LOOP ==========
-  async function startUIPolling() {
+  async function startUIPolling(initialCursor = 0) {
     if (uiConnected.value) return
+    uiCursor = initialCursor
     uiConnected.value = true
     uiRetryCount.value = 0
     const myGeneration = ++uiPollGeneration

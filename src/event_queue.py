@@ -35,6 +35,10 @@ class EventQueue:
         start_idx = max(0, cursor - self._oldest_cursor + 1)
         return self._events[start_idx:], self._cursor
 
+    @property
+    def current_cursor(self) -> int:
+        return self._cursor
+
     async def wait_for_events(self, cursor: int, timeout: float) -> None:
         _, current = self.events_since(cursor)
         if current > cursor:
