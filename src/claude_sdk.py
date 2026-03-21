@@ -5,7 +5,7 @@ import contextlib
 import logging
 import tempfile
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Coroutine
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from enum import Enum
@@ -56,6 +56,18 @@ sdk_logger = get_logger('sdk_debug', category='SDK')
 perm_logger = get_logger('sdk_debug', category='PERMISSIONS')
 # Keep standard logger for errors
 logger = logging.getLogger(__name__)
+
+
+def _task_done_log_exception(task: asyncio.Task) -> None:
+    """Done callback: log any exception not already caught inside the coroutine."""
+    if not task.cancelled() and (exc := task.exception()):
+        logger.error("Unhandled exception in background task %s: %s", task.get_name(), exc, exc_info=exc)
+
+
+def _schedule_coro(coro: Coroutine) -> None:
+    """Schedule a coroutine as a task and attach error logging done callback."""
+    task = asyncio.ensure_future(coro)
+    task.add_done_callback(_task_done_log_exception)
 
 
 class SessionState(Enum):
@@ -903,7 +915,7 @@ class ClaudeSDK:
                 try:
                     loop = asyncio.get_running_loop()
                     loop.call_soon_threadsafe(
-                        asyncio.ensure_future,
+                        _schedule_coro,
                         self._safe_callback(self.stderr_callback, output)
                     )
                 except RuntimeError:

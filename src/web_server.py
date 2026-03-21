@@ -47,6 +47,12 @@ from .timestamp_utils import normalize_timestamp
 logger = logging.getLogger(__name__)
 
 
+def _task_done_log_exception(task: asyncio.Task) -> None:
+    """Done callback: log any exception not already caught inside the coroutine."""
+    if not task.cancelled() and (exc := task.exception()):
+        logger.error("Unhandled exception in background task %s: %s", task.get_name(), exc, exc_info=exc)
+
+
 class AuthMiddleware(BaseHTTPMiddleware):
     """Authentication middleware for HTTP requests (issue #728).
 
@@ -510,7 +516,8 @@ class ClaudeWebUI:
                 except Exception:
                     logger.exception(f"Error broadcasting project_updated for session {session_id}")
 
-            asyncio.ensure_future(_broadcast_session_added())
+            task = asyncio.create_task(_broadcast_session_added(), name="broadcast_session_added")
+            task.add_done_callback(_task_done_log_exception)
 
         return registrar
 
