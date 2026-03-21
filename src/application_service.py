@@ -51,9 +51,18 @@ class ApplicationService:
         )
         return project.to_dict()
 
-    async def list_projects(self) -> list[dict]:
+    async def list_projects(self, limit: int = 200, offset: int = 0) -> dict:
         projects = await self.coordinator.project_manager.list_projects()
-        return [p.to_dict() for p in projects]
+        all_projects = [p.to_dict() for p in projects]
+        total = len(all_projects)
+        sliced = all_projects[offset : offset + limit]
+        return {
+            "projects": sliced,
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "has_more": offset + len(sliced) < total,
+        }
 
     async def get_project(self, project_id: str) -> dict | None:
         project = await self.coordinator.project_manager.get_project(project_id)
@@ -206,9 +215,18 @@ class ApplicationService:
     # MCP Configs
     # =========================================================================
 
-    async def list_mcp_configs(self) -> list[dict]:
+    async def list_mcp_configs(self, limit: int = 100, offset: int = 0) -> dict:
         configs = await self.coordinator.mcp_config_manager.list_configs()
-        return [c.to_dict() for c in configs]
+        all_configs = [c.to_dict() for c in configs]
+        total = len(all_configs)
+        sliced = all_configs[offset : offset + limit]
+        return {
+            "configs": sliced,
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "has_more": offset + len(sliced) < total,
+        }
 
     async def create_mcp_config(
         self,
@@ -399,9 +417,18 @@ class ApplicationService:
     # Templates
     # =========================================================================
 
-    async def list_templates(self) -> list[dict]:
+    async def list_templates(self, limit: int = 100, offset: int = 0) -> dict:
         templates = await self.coordinator.template_manager.list_templates()
-        return [t.to_dict() for t in templates]
+        all_templates = [t.to_dict() for t in templates]
+        total = len(all_templates)
+        sliced = all_templates[offset : offset + limit]
+        return {
+            "templates": sliced,
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "has_more": offset + len(sliced) < total,
+        }
 
     async def get_template(self, template_id: str) -> dict | None:
         template = await self.coordinator.template_manager.get_template(template_id)

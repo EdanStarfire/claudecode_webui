@@ -898,7 +898,7 @@ function updateSelectedTemplate(templateId) {
 async function loadTemplates() {
   try {
     const data = await api.get('/api/templates')
-    templates.value = data || []
+    templates.value = data.templates || []
   } catch (error) {
     console.error('Failed to load templates:', error)
     templates.value = []
