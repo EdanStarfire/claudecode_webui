@@ -383,6 +383,25 @@ export const useWebSocketStore = defineStore('websocket', () => {
         })
         break
 
+      case 'schedule_monitor_error':
+        import('./schedule').then(({ useScheduleStore }) => {
+          const scheduleStore = useScheduleStore()
+          scheduleStore.handleScheduleMonitorError(
+            payload.legion_id || payload.data?.legion_id, payload
+          )
+        })
+        break
+
+      case 'session_restart_error':
+        console.error(
+          `[session_restart_error] Session ${payload.data?.session_id}: ${payload.data?.error}`
+        )
+        notify('session_restart_error', {
+          sessionId: payload.data?.session_id,
+          error: payload.data?.error,
+        })
+        break
+
       default:
         console.warn('Unknown UI poll message type:', payload.type)
     }

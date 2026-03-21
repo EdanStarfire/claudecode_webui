@@ -23,7 +23,8 @@
         @click="uiStore.setRightSidebarTab(tab.id)"
       >
         {{ tab.label }}
-        <span v-if="tab.badge > 0" class="tab-badge">{{ tab.badge }}</span>
+        <span v-if="tab.badge > 0" class="tab-badge" :class="{ 'tab-badge-error': tab.badgeError }">{{ tab.badge }}</span>
+        <span v-else-if="tab.badgeError" class="tab-badge tab-badge-error">!</span>
       </button>
     </div>
 
@@ -87,12 +88,18 @@ const schedulesCount = computed(() => {
   return all.filter(s => s.status === 'active').length
 })
 
+const schedulesHasError = computed(() => {
+  const projectId = sessionStore.currentSession?.project_id
+  if (!projectId) return false
+  return scheduleStore.getSchedules(projectId).some(s => s.monitor_error)
+})
+
 // Tab definitions
 const tabs = computed(() => [
   { id: 'diff', label: 'Diff', badge: diffFileCount.value },
   { id: 'tasks', label: 'Tasks', badge: taskStats.value.total > 0 ? taskStats.value.total : 0 },
   { id: 'resources', label: 'Resources', badge: resourceCount.value },
-  { id: 'schedules', label: 'Sched', badge: schedulesCount.value }
+  { id: 'schedules', label: 'Sched', badge: schedulesCount.value, badgeError: schedulesHasError.value }
 ])
 
 const isOverlay = computed(() => uiStore.windowWidth < 768)
@@ -197,6 +204,10 @@ function stopResize() {
 
 .sidebar-tab.active .tab-badge {
   background: #3b82f6;
+}
+
+.tab-badge.tab-badge-error {
+  background: #dc3545;
 }
 
 /* Tab content */

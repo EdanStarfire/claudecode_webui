@@ -41,17 +41,12 @@ from .session_config import SessionConfigBase
 from .session_coordinator import SessionCoordinator
 from .session_manager import SessionState
 from .skill_manager import SkillManager
+from .task_utils import task_done_log_exception
 from .template_manager import TemplateConflictError
 from .timestamp_utils import normalize_timestamp
 
 # Keep standard logger for errors
 logger = logging.getLogger(__name__)
-
-
-def _task_done_log_exception(task: asyncio.Task) -> None:
-    """Done callback: log any exception not already caught inside the coroutine."""
-    if not task.cancelled() and (exc := task.exception()):
-        logger.error("Unhandled exception in background task %s: %s", task.get_name(), exc, exc_info=exc)
 
 
 class AuthMiddleware(BaseHTTPMiddleware):
@@ -518,7 +513,7 @@ class ClaudeWebUI:
                     logger.exception(f"Error broadcasting project_updated for session {session_id}")
 
             task = asyncio.create_task(_broadcast_session_added(), name="broadcast_session_added")
-            task.add_done_callback(_task_done_log_exception)
+            task.add_done_callback(task_done_log_exception)
 
         return registrar
 

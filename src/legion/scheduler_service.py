@@ -19,6 +19,7 @@ from src.models.schedule_models import (
     get_next_run,
     validate_cron_expression,
 )
+from src.task_utils import task_done_log_exception
 
 if TYPE_CHECKING:
     from src.legion_system import LegionSystem
@@ -583,9 +584,10 @@ class SchedulerService:
             schedule.failure_count = 0
 
             # Launch monitoring task
-            asyncio.create_task(
-                self._monitor_ephemeral_session(schedule.schedule_id, agent_id)
+            t = asyncio.create_task(
+                self._monitor_ephemeral_session(schedule.schedule_id, agent_id, schedule.legion_id)
             )
+            t.add_done_callback(task_done_log_exception)
 
             legion_logger.info(
                 f"Ephemeral schedule {schedule.schedule_id} fired — agent {agent_id} started"
@@ -640,7 +642,7 @@ class SchedulerService:
             )
             return None
 
-    async def _monitor_ephemeral_session(self, schedule_id: str, session_id: str):
+    async def _monitor_ephemeral_session(self, schedule_id: str, session_id: str, legion_id: str):
         """Monitor an ephemeral session and archive+terminate when it finishes.
 
         Polls every 10 seconds. Once idle for a grace period, archives session
@@ -719,8 +721,19 @@ class SchedulerService:
             return
         except Exception as e:
             legion_logger.error(
-                f"Error monitoring ephemeral session {session_id}: {e}"
+                f"Ephemeral monitor failed for schedule {schedule_id}: {e}", exc_info=True
             )
+            if self._schedule_broadcast_callback:
+                try:
+                    await self._schedule_broadcast_callback(legion_id, {
+                        "type": "schedule_monitor_error",
+                        "legion_id": legion_id,
+                        "schedule_id": schedule_id,
+                        "error": str(e),
+                        "timestamp": datetime.now(UTC).isoformat(),
+                    })
+                except Exception:
+                    legion_logger.exception("Failed to broadcast schedule_monitor_error")
 
         # Archive on completion: archive data, clear messages, terminate
         try:

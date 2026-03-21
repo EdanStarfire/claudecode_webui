@@ -40,21 +40,13 @@ from .queue_manager import QueueManager
 from .queue_processor import QueueProcessor
 from .session_config import SessionConfig
 from .session_manager import SessionManager, SessionState
+from .task_utils import task_done_log_exception
 from .timestamp_utils import get_unix_timestamp
 
 # Get specialized logger for coordinator actions
 coord_logger = get_logger('coordinator', category='COORDINATOR')
 # Keep standard logger for errors
 logger = logging.getLogger(__name__)
-
-
-def _task_done_log_exception(task: asyncio.Task) -> None:
-    """Done callback: log any exception not already caught inside the coroutine."""
-    if not task.cancelled() and (exc := task.exception()):
-        coord_logger.error(
-            "Unhandled exception in background task %s: %s", task.get_name(), exc, exc_info=exc
-        )
-
 
 # Issue #871: Docker wrapper startup noise filtering
 _DOCKER_WRAPPER_PREFIX = '[claude-docker] '
@@ -1930,9 +1922,10 @@ class SessionCoordinator:
 
                     history_output = session_dir / "history" / f"{timestamp}.md"
                     archive_ts = datetime.now(UTC).isoformat()
-                    asyncio.create_task(
+                    t = asyncio.create_task(
                         distill_session_history(archived_messages, history_output, session_id, archive_ts)
                     )
+                    t.add_done_callback(task_done_log_exception)
                     coord_logger.debug(f"Launched history distillation for session {session_id}")
 
             coord_logger.info(f"Archived session {session_id} to {archive_dir}")
@@ -2717,7 +2710,7 @@ class SessionCoordinator:
         task = asyncio.ensure_future(
             self._write_tool_call_update(storage, stored_dict, tool_call.tool_use_id)
         )
-        task.add_done_callback(_task_done_log_exception)
+        task.add_done_callback(task_done_log_exception)
 
     async def _write_tool_call_update(
         self,

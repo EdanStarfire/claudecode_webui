@@ -18,7 +18,8 @@ const DEFAULT_SETTINGS = {
     permission_prompt: true,
     task_complete: true,
     session_error: true,
-    minion_comm: false
+    minion_comm: false,
+    session_restart_error: true,
   }
 }
 
@@ -40,6 +41,10 @@ const TTS_TEMPLATES = {
     const from = ctx?.fromMinion || 'A minion'
     const type = ctx?.commType || 'message'
     return `${from} sent a ${type}`
+  },
+  session_restart_error: (ctx) => {
+    const id = ctx?.sessionId || 'Session'
+    return `Restart error for ${id}: ${ctx?.error || 'unknown error'}`
   }
 }
 
@@ -143,6 +148,10 @@ const TONE_DEFS = {
   minion_comm(gain) {
     // Subtle sine ping
     playTone(660, 0.15, 'sine', gain)
+  },
+  session_restart_error(gain) {
+    // Low square wave warning (same as session_error)
+    playTone(220, 0.4, 'square', gain * 0.5)
   }
 }
 
