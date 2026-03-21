@@ -1189,6 +1189,16 @@ class SessionCoordinator:
             logger.exception(f"Failed to terminate integrated session {session_id}")
             return False
 
+    async def disconnect_sdk(self, session_id: str) -> bool:
+        """Disconnect the active SDK for a session without full termination."""
+        sdk = self._active_sdks.get(session_id)
+        if sdk:
+            success = await sdk.disconnect()
+            if success:
+                del self._active_sdks[session_id]
+            return success
+        return True  # Already disconnected
+
     # =========================================================================
     # Ephemeral Session Lifecycle (Issue #578)
     # =========================================================================
@@ -1513,6 +1523,10 @@ class SessionCoordinator:
             if session_id in project.session_ids:
                 return project
         return None
+
+    async def find_project_for_session(self, session_id: str) -> ProjectInfo | None:
+        """Public wrapper: find the project containing the given session."""
+        return await self._find_project_for_session(session_id)
 
     async def get_descendants(self, session_id: str) -> list[dict]:
         """
@@ -2600,6 +2614,11 @@ class SessionCoordinator:
             self._message_callbacks[session_id] = []
         self._message_callbacks[session_id].append(callback)
         # logger.info(f"Added message callback for session {session_id}, total callbacks: {len(self._message_callbacks[session_id])}")
+
+    def clear_message_callbacks(self, session_id: str) -> None:
+        """Clear all message callbacks for a session (prevents duplicate callbacks on restart)."""
+        if session_id in self._message_callbacks:
+            self._message_callbacks[session_id] = []
 
     def add_error_callback(self, session_id: str, callback: Callable):
         """Add callback for session errors"""

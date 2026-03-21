@@ -29,6 +29,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from starlette.middleware.base import BaseHTTPMiddleware
 
+from .application_service import ApplicationService
 from .event_queue import EventQueue
 from .exception_handlers import handle_exceptions
 from .file_upload import FileUploadError, FileUploadManager
@@ -385,6 +386,7 @@ class ClaudeWebUI:
                  auth_token: str | None = None, auth_enabled: bool = False):
         self.app = FastAPI(title="Claude Code WebUI", version="1.0.0")
         self.coordinator = SessionCoordinator(data_dir, experimental=experimental)
+        self.service = ApplicationService(self.coordinator)
         self.config_file = config_file
 
         # Authentication (issue #728)
@@ -487,8 +489,7 @@ class ClaudeWebUI:
         """
         def registrar(session_id: str):
             # Clear any existing callbacks to prevent duplicates
-            if session_id in self.coordinator._message_callbacks:
-                self.coordinator._message_callbacks[session_id] = []
+            self.coordinator.clear_message_callbacks(session_id)
 
             # Register message callback for this session
             self.coordinator.add_message_callback(
@@ -504,13 +505,13 @@ class ClaudeWebUI:
             # Broadcast project_updated so UI shows new child session in real-time
             async def _broadcast_session_added():
                 try:
-                    session = await self.coordinator.session_manager.get_session_info(session_id)
+                    session = await self.service._get_session_object(session_id)
                     if session and session.project_id:
-                        project = await self.coordinator.project_manager.get_project(session.project_id)
-                        if project:
+                        project_dict = await self.service.get_project(session.project_id)
+                        if project_dict:
                             self.ui_queue.append({
                                 "type": "project_updated",
-                                "data": {"project": project.to_dict()}
+                                "data": {"project": {k: v for k, v in project_dict.items() if k != "sessions"}}
                             })
                             logger.debug(f"Appended project_updated for internally spawned session {session_id}")
                 except Exception:
@@ -643,8 +644,7 @@ class ClaudeWebUI:
         async def get_session_poll_cursor(session_id: str):
             """Return current session event queue cursor position for client initialization."""
             if session_id not in self.session_queues:
-                session_info = await self.coordinator.session_manager.get_session_info(session_id)
-                if not session_info:
+                if not await self.service.get_session_exists(session_id):
                     raise HTTPException(status_code=404, detail="Session not found")
                 return {"cursor": 0}  # session exists but queue not yet initialized
             return {"cursor": self.session_queues[session_id].current_cursor}
@@ -654,8 +654,7 @@ class ClaudeWebUI:
         async def poll_session(session_id: str, since: int = 0, timeout: int = 30):
             """HTTP long-poll endpoint for session-specific events."""
             if session_id not in self.session_queues:
-                session_info = await self.coordinator.session_manager.get_session_info(session_id)
-                if not session_info:
+                if not await self.service.get_session_exists(session_id):
                     raise HTTPException(status_code=404, detail="Session not found")
                 self.session_queues[session_id] = EventQueue()
             queue = self.session_queues[session_id]
@@ -677,10 +676,10 @@ class ClaudeWebUI:
         @handle_exceptions("interrupt session")
         async def interrupt_session_rest(session_id: str):
             """Interrupt a session via REST (replaces WebSocket interrupt_session message)."""
-            session = await self.coordinator.session_manager.get_session_info(session_id)
-            if not session:
+            state = await self.service.get_session_state(session_id)
+            if state is None:
                 raise HTTPException(status_code=404, detail="Session not found")
-            if session.state == SessionState.PAUSED:
+            if state == SessionState.PAUSED:
                 self.permission_service.deny_all_for_interrupt()
             result = await self.coordinator.interrupt_session(session_id)
             return {"success": bool(result)}
@@ -757,45 +756,41 @@ class ClaudeWebUI:
         @handle_exceptions("create project")
         async def create_project(request: ProjectCreateRequest):
             """Create a new project."""
-            project = await self.coordinator.project_manager.create_project(
+            project = await self.service.create_project(
                 name=request.name,
                 working_directory=request.working_directory,
-                max_concurrent_minions=request.max_concurrent_minions
+                max_concurrent_minions=request.max_concurrent_minions,
             )
             self.ui_queue.append({
                 "type": "project_updated",
-                "data": {"project": project.to_dict()}
+                "data": {"project": project}
             })
-            return {"project": project.to_dict()}
+            return {"project": project}
 
         @self.app.get("/api/projects")
         @handle_exceptions("list projects")
         async def list_projects():
             """List all projects."""
-            projects = await self.coordinator.project_manager.list_projects()
-            return {"projects": [p.to_dict() for p in projects]}
+            projects = await self.service.list_projects()
+            return {"projects": projects}
 
         @self.app.get("/api/projects/{project_id}")
         @handle_exceptions("get project")
         async def get_project(project_id: str):
             """Get project with sessions"""
-            project = await self.coordinator.project_manager.get_project(project_id)
-            if not project:
+            result = await self.service.get_project(project_id)
+            if not result:
                 raise HTTPException(status_code=404, detail="Project not found")
-
-            # Get sessions for this project
-            sessions = await self.coordinator.session_manager.get_sessions_by_ids(project.session_ids)
-
             return {
-                "project": project.to_dict(),
-                "sessions": [s.to_dict() for s in sessions]
+                "project": {k: v for k, v in result.items() if k != "sessions"},
+                "sessions": result.get("sessions", []),
             }
 
         @self.app.put("/api/projects/reorder")
         @handle_exceptions("reorder projects")
         async def reorder_projects(request: ProjectReorderRequest):
             """Reorder projects"""
-            success = await self.coordinator.project_manager.reorder_projects(request.project_ids)
+            success = await self.service.reorder_projects(request.project_ids)
             if not success:
                 raise HTTPException(status_code=400, detail="Failed to reorder projects")
             return {"success": True}
@@ -804,19 +799,17 @@ class ClaudeWebUI:
         @handle_exceptions("update project")
         async def update_project(project_id: str, request: ProjectUpdateRequest):
             """Update project metadata"""
-            success = await self.coordinator.project_manager.update_project(
-                project_id=project_id,
+            result = await self.service.update_project(
+                project_id,
                 name=request.name,
-                is_expanded=request.is_expanded
+                is_expanded=request.is_expanded,
             )
-            if not success:
+            if not result:
                 raise HTTPException(status_code=404, detail="Project not found")
 
-            # Broadcast update to UI
-            project = await self.coordinator.project_manager.get_project(project_id)
             self.ui_queue.append({
                 "type": "project_updated",
-                "data": {"project": project.to_dict()}
+                "data": {"project": result}
             })
 
             return {"success": True}
@@ -825,20 +818,21 @@ class ClaudeWebUI:
         @handle_exceptions("delete project")
         async def delete_project(project_id: str):
             """Delete project and all its sessions"""
-            project = await self.coordinator.project_manager.get_project(project_id)
-            if not project:
+            project_result = await self.service.get_project(project_id)
+            if not project_result:
                 raise HTTPException(status_code=404, detail="Project not found")
 
             # Delete all sessions in the project
-            for session_id in project.session_ids:
-                await self.coordinator.delete_session(session_id)
+            for session_id in project_result.get("sessions", []):
+                sid = session_id if isinstance(session_id, str) else session_id.get("session_id")
+                if sid:
+                    await self.coordinator.delete_session(sid)
 
             # Delete the project
-            success = await self.coordinator.project_manager.delete_project(project_id)
-            if not success:
+            del_result = await self.service.delete_project(project_id)
+            if not del_result.get("success"):
                 raise HTTPException(status_code=500, detail="Failed to delete project")
 
-            # Broadcast deletion to UI
             self.ui_queue.append({
                 "type": "project_deleted",
                 "data": {"project_id": project_id}
@@ -850,40 +844,29 @@ class ClaudeWebUI:
         @handle_exceptions("toggle project expansion")
         async def toggle_project_expansion(project_id: str):
             """Toggle project expansion state"""
-            success = await self.coordinator.project_manager.toggle_expansion(project_id)
-            if not success:
+            result = await self.service.toggle_project_expansion(project_id)
+            if not result:
                 raise HTTPException(status_code=404, detail="Project not found")
 
-            # Broadcast update to UI
-            project = await self.coordinator.project_manager.get_project(project_id)
             self.ui_queue.append({
                 "type": "project_updated",
-                "data": {"project": project.to_dict()}
+                "data": {"project": result}
             })
 
-            return {"success": True, "is_expanded": project.is_expanded}
+            return {"success": True, "is_expanded": result.get("is_expanded")}
 
         @self.app.put("/api/projects/{project_id}/sessions/reorder")
         @handle_exceptions("reorder project sessions")
         async def reorder_project_sessions(project_id: str, request: SessionReorderRequest):
             """Reorder sessions within a project"""
-            success = await self.coordinator.project_manager.reorder_project_sessions(
-                project_id=project_id,
-                session_ids=request.session_ids
-            )
-            if not success:
+            result = await self.service.reorder_project_sessions(project_id, request.session_ids)
+            if not result:
                 raise HTTPException(status_code=400, detail="Failed to reorder sessions")
 
-            # Also update session order in session manager
-            await self.coordinator.session_manager.reorder_sessions(request.session_ids)
-
-            # Broadcast project update to all UI clients
-            project = await self.coordinator.project_manager.get_project(project_id)
-            if project:
-                self.ui_queue.append({
-                    "type": "project_updated",
-                    "data": {"project": project.to_dict()}
-                })
+            self.ui_queue.append({
+                "type": "project_updated",
+                "data": {"project": result}
+            })
 
             return {"success": True}
 
@@ -893,8 +876,7 @@ class ClaudeWebUI:
         @handle_exceptions("list session archives")
         async def list_session_archives(project_id: str, session_id: str):
             """List all archives for a session within a project."""
-            project = await self.coordinator.project_manager.get_project(project_id)
-            if not project:
+            if not await self.service.validate_project_exists(project_id):
                 raise HTTPException(status_code=404, detail="Project not found")
             archives = await self.coordinator.get_archives(session_id)
             return {"archives": archives}
@@ -906,8 +888,7 @@ class ClaudeWebUI:
             limit: int | None = 50, offset: int = 0
         ):
             """Get paginated messages from an archive."""
-            project = await self.coordinator.project_manager.get_project(project_id)
-            if not project:
+            if not await self.service.validate_project_exists(project_id):
                 raise HTTPException(status_code=404, detail="Project not found")
             result = await self.coordinator.get_archive_messages(
                 session_id, archive_id, offset=offset, limit=limit
@@ -918,8 +899,7 @@ class ClaudeWebUI:
         @handle_exceptions("get archive state")
         async def get_archive_state(project_id: str, session_id: str, archive_id: str):
             """Get archive state and disposal metadata."""
-            project = await self.coordinator.project_manager.get_project(project_id)
-            if not project:
+            if not await self.service.validate_project_exists(project_id):
                 raise HTTPException(status_code=404, detail="Project not found")
             result = await self.coordinator.get_archive_state(session_id, archive_id)
             if result is None:
@@ -934,8 +914,7 @@ class ClaudeWebUI:
             project_id: str, session_id: str, archive_id: str
         ):
             """List resource metadata from an archive."""
-            project = await self.coordinator.project_manager.get_project(project_id)
-            if not project:
+            if not await self.service.validate_project_exists(project_id):
                 raise HTTPException(status_code=404, detail="Project not found")
             resources = await self.coordinator.get_archive_resources(
                 session_id, archive_id
@@ -953,8 +932,7 @@ class ClaudeWebUI:
             """Get raw file data for a resource in an archive."""
             from fastapi.responses import Response
 
-            project = await self.coordinator.project_manager.get_project(project_id)
-            if not project:
+            if not await self.service.validate_project_exists(project_id):
                 raise HTTPException(status_code=404, detail="Project not found")
 
             resources = await self.coordinator.get_archive_resources(
@@ -993,8 +971,7 @@ class ClaudeWebUI:
         @handle_exceptions("list deleted agents")
         async def list_deleted_agents(project_id: str):
             """List deleted agents with archives for a project."""
-            project = await self.coordinator.project_manager.get_project(project_id)
-            if not project:
+            if not await self.service.validate_project_exists(project_id):
                 raise HTTPException(status_code=404, detail="Project not found")
             agents = await self.coordinator.list_project_deleted_agents(project_id)
             return {"agents": agents}
@@ -1009,8 +986,7 @@ class ClaudeWebUI:
             session_id = str(uuid.uuid4())
 
             if request.project_id:
-                project = await self.coordinator.project_manager.get_project(request.project_id)
-                if not project:
+                if not await self.service.validate_project_exists(request.project_id):
                     raise HTTPException(status_code=404, detail="Project not found")
 
             # Issue #630: Validate additional directories
@@ -1031,24 +1007,24 @@ class ClaudeWebUI:
             self.session_queues[session_id] = EventQueue()
 
             # Broadcast session creation to all UI clients
-            session_info = await self.coordinator.session_manager.get_session_info(session_id)
-            if session_info:
+            session_info_dict = await self.coordinator.get_session_info(session_id)
+            if session_info_dict:
                 self.ui_queue.append({
                     "type": "state_change",
                     "data": {
                         "session_id": session_id,
-                        "session": session_info.to_dict(),
+                        "session": session_info_dict.get("session", session_info_dict),
                         "timestamp": datetime.now().isoformat()
                     }
                 })
                 logger.debug(f"Appended state_change for newly created session {session_id}")
 
             # Broadcast project update to all UI clients (session was added to project)
-            project = await self.coordinator.project_manager.get_project(request.project_id)
-            if project:
+            project_dict = await self.service.get_project(request.project_id) if request.project_id else None
+            if project_dict:
                 self.ui_queue.append({
                     "type": "project_updated",
-                    "data": {"project": project.to_dict()}
+                    "data": {"project": {k: v for k, v in project_dict.items() if k != "sessions"}}
                 })
                 logger.debug(f"Appended project_updated for project {request.project_id} after session creation")
 
@@ -1090,29 +1066,27 @@ class ClaudeWebUI:
         @handle_exceptions("start session")
         async def start_session(session_id: str):
             """Start a session"""
-            session = await self.coordinator.session_manager.get_session_info(session_id)
-            if not session:
+            if not await self.service.get_session_exists(session_id):
                 raise HTTPException(status_code=404, detail="Session not found")
 
-            # Clear any existing callbacks to prevent duplicates (in case session is restarted)
-            if session_id in self.coordinator._message_callbacks:
-                self.coordinator._message_callbacks[session_id] = []
-
-            # Register WebSocket callback for this session (works for both new and resumed sessions)
+            # Clear any existing callbacks to prevent duplicates, then register fresh one
+            self.coordinator.clear_message_callbacks(session_id)
             self.coordinator.add_message_callback(
                 session_id,
                 self._create_message_callback(session_id)
             )
 
-            success = await self.coordinator.start_session(session_id, permission_callback=self.permission_service.create_permission_callback(session_id))
+            success = await self.coordinator.start_session(
+                session_id,
+                permission_callback=self.permission_service.create_permission_callback(session_id),
+            )
             return {"success": success}
 
         @self.app.post("/api/sessions/{session_id}/terminate")
         @handle_exceptions("terminate session")
         async def terminate_session(session_id: str):
             """Terminate a session"""
-            session = await self.coordinator.session_manager.get_session_info(session_id)
-            if not session:
+            if not await self.service.get_session_exists(session_id):
                 raise HTTPException(status_code=404, detail="Session not found")
 
             # Clean up any pending permissions for this session
@@ -1134,8 +1108,7 @@ class ClaudeWebUI:
         @handle_exceptions("update session")
         async def update_session(session_id: str, request: SessionUpdateRequest):
             """Update session fields (generic endpoint)"""
-            session = await self.coordinator.session_manager.get_session_info(session_id)
-            if not session:
+            if not await self.service.get_session_exists(session_id):
                 raise HTTPException(status_code=404, detail="Session not found")
 
             updates = {}
@@ -1197,8 +1170,9 @@ class ClaudeWebUI:
 
             # Handle additional_directories update (issue #630)
             if request.additional_directories is not None:
+                session_wd = await self.service.get_session_working_directory(session_id)
                 validated_dirs = _validate_additional_directories(
-                    request.additional_directories, session.working_directory
+                    request.additional_directories, session_wd
                 )
                 updates["additional_directories"] = validated_dirs
 
@@ -1239,7 +1213,7 @@ class ClaudeWebUI:
             if not updates:
                 return {"success": True, "message": "No fields to update"}
 
-            success = await self.coordinator.session_manager.update_session(session_id, **updates)
+            success = await self.service.update_session(session_id, **updates)
             if not success:
                 raise HTTPException(status_code=500, detail="Failed to update session")
 
@@ -1249,16 +1223,11 @@ class ClaudeWebUI:
         @handle_exceptions("delete session")
         async def delete_session(session_id: str):
             """Delete a session and all its data (including cascaded child sessions)"""
-            # Find the project before deletion (so we can check if it gets auto-deleted)
-            project = await self.coordinator._find_project_for_session(session_id)
-            project_id = project.project_id if project else None
-
             # Clean up any pending permissions for this session
             self._cleanup_pending_permissions_for_session(session_id)
 
-            # Delete the session (may also delete the project if it was the last session)
-            # Returns dict with success and deleted_session_ids (for cascading deletes)
-            result = await self.coordinator.delete_session(session_id)
+            # Delete the session; service handles project state tracking
+            result = await self.service.delete_session(session_id)
             if not result.get("success"):
                 raise HTTPException(status_code=404, detail="Session not found")
 
@@ -1271,23 +1240,25 @@ class ClaudeWebUI:
                     self._cleanup_pending_permissions_for_session(deleted_id)
                     self.session_queues.pop(deleted_id, None)
 
-            # Check if the project still exists - if not, it was auto-deleted
+            # Broadcast project state changes
+            project_id = result.get("project_id")
             if project_id:
-                updated_project = await self.coordinator.project_manager.get_project(project_id)
-                if updated_project is None:
-                    # Project was deleted because it became empty
+                if result.get("project_deleted"):
                     self.ui_queue.append({
                         "type": "project_deleted",
                         "data": {"project_id": project_id}
                     })
                     logger.info(f"Appended project_deleted for auto-deleted project {project_id}")
                 else:
-                    # Project still exists - broadcast update with reduced session count
-                    self.ui_queue.append({
-                        "type": "project_updated",
-                        "data": {"project": updated_project.to_dict()}
-                    })
-                    logger.debug(f"Appended project_updated for project {project_id} after session deletion")
+                    updated_project = result.get("updated_project")
+                    if updated_project:
+                        self.ui_queue.append({
+                            "type": "project_updated",
+                            "data": {"project": updated_project}
+                        })
+                        logger.debug(
+                            f"Appended project_updated for project {project_id} after session deletion"
+                        )
 
             return {
                 "success": result.get("success"),
@@ -1298,10 +1269,10 @@ class ClaudeWebUI:
         @handle_exceptions("send message")
         async def send_message(session_id: str, request: MessageRequest):
             """Send a message to a session"""
-            session = await self.coordinator.session_manager.get_session_info(session_id)
-            if not session:
+            state = await self.service.get_session_state(session_id)
+            if state is None:
                 raise HTTPException(status_code=404, detail="Session not found")
-            if session.state != SessionState.ACTIVE:
+            if state != SessionState.ACTIVE:
                 raise HTTPException(status_code=409, detail="Session is not active")
             success = await self.coordinator.send_message(session_id, request.message)
             return {"success": success}
@@ -1310,8 +1281,7 @@ class ClaudeWebUI:
         @handle_exceptions("get messages")
         async def get_messages(session_id: str, limit: int | None = 50, offset: int = 0):
             """Get messages from a session with pagination metadata"""
-            session = await self.coordinator.session_manager.get_session_info(session_id)
-            if not session:
+            if not await self.service.get_session_exists(session_id):
                 raise HTTPException(status_code=404, detail="Session not found")
             result = await self.coordinator.get_session_messages(
                 session_id, limit=limit, offset=offset
@@ -1330,8 +1300,7 @@ class ClaudeWebUI:
             and paths are passed to Claude for reading via the Read tool.
             """
             # Verify session exists
-            session_info = await self.coordinator.session_manager.get_session_info(session_id)
-            if not session_info:
+            if not await self.service.get_session_exists(session_id):
                 raise HTTPException(status_code=404, detail="Session not found")
 
             # Initialize file upload manager if not already done
@@ -1389,8 +1358,7 @@ class ClaudeWebUI:
         async def list_session_files(session_id: str):
             """List all uploaded files for a session"""
             # Verify session exists
-            session_info = await self.coordinator.session_manager.get_session_info(session_id)
-            if not session_info:
+            if not await self.service.get_session_exists(session_id):
                 raise HTTPException(status_code=404, detail="Session not found")
 
             file_manager = FileUploadManager(self.coordinator.data_dir / "sessions")
@@ -1405,8 +1373,7 @@ class ClaudeWebUI:
         async def delete_file(session_id: str, file_id: str):
             """Delete an uploaded file"""
             # Verify session exists
-            session_info = await self.coordinator.session_manager.get_session_info(session_id)
-            if not session_info:
+            if not await self.service.get_session_exists(session_id):
                 raise HTTPException(status_code=404, detail="Session not found")
 
             file_manager = FileUploadManager(self.coordinator.data_dir / "sessions")
@@ -1428,8 +1395,7 @@ class ClaudeWebUI:
         @handle_exceptions("get session resources")
         async def get_session_resources(session_id: str):
             """Get all resource metadata for a session"""
-            session = await self.coordinator.session_manager.get_session_info(session_id)
-            if not session:
+            if not await self.service.get_session_exists(session_id):
                 raise HTTPException(status_code=404, detail="Session not found")
             resources = await self.coordinator.get_session_resources(session_id)
             return {"resources": resources, "count": len(resources)}
@@ -1503,8 +1469,7 @@ class ClaudeWebUI:
             from fastapi.responses import FileResponse
 
             # Validate session exists
-            session_info = await self.coordinator.session_manager.get_session_info(session_id)
-            if not session_info:
+            if not await self.service.get_session_exists(session_id):
                 raise HTTPException(status_code=404, detail="Session not found")
 
             tmp_dir = os.path.realpath(self.coordinator.data_dir / "sessions" / session_id / "tmp")
@@ -1607,8 +1572,7 @@ class ClaudeWebUI:
         @handle_exceptions("get mcp status")
         async def get_mcp_status(session_id: str):
             """Get MCP server status for a session"""
-            session = await self.coordinator.session_manager.get_session_info(session_id)
-            if not session:
+            if not await self.service.get_session_exists(session_id):
                 raise HTTPException(status_code=404, detail="Session not found")
             result = await self.coordinator.get_mcp_status(session_id)
             return result
@@ -1617,8 +1581,7 @@ class ClaudeWebUI:
         @handle_exceptions("toggle mcp server")
         async def toggle_mcp_server(session_id: str, request: McpToggleRequest):
             """Toggle an MCP server on or off"""
-            session = await self.coordinator.session_manager.get_session_info(session_id)
-            if not session:
+            if not await self.service.get_session_exists(session_id):
                 raise HTTPException(status_code=404, detail="Session not found")
             try:
                 await self.coordinator.toggle_mcp_server(
@@ -1632,8 +1595,7 @@ class ClaudeWebUI:
         @handle_exceptions("reconnect mcp server")
         async def reconnect_mcp_server(session_id: str, request: McpReconnectRequest):
             """Reconnect a failed MCP server"""
-            session = await self.coordinator.session_manager.get_session_info(session_id)
-            if not session:
+            if not await self.service.get_session_exists(session_id):
                 raise HTTPException(status_code=404, detail="Session not found")
             try:
                 await self.coordinator.reconnect_mcp_server(session_id, request.name)
@@ -1645,26 +1607,19 @@ class ClaudeWebUI:
         @handle_exceptions("restart session")
         async def restart_session(session_id: str):
             """Restart a session (disconnect and resume)"""
-            session = await self.coordinator.session_manager.get_session_info(session_id)
-            if not session:
+            if not await self.service.get_session_exists(session_id):
                 raise HTTPException(status_code=404, detail="Session not found")
 
-            # Clear any existing callbacks to prevent duplicates
-            if session_id in self.coordinator._message_callbacks:
-                self.coordinator._message_callbacks[session_id] = []
-
-            # Re-register WebSocket message callback so messages stream after restart
+            # Clear any existing callbacks to prevent duplicates, then register fresh one
+            self.coordinator.clear_message_callbacks(session_id)
             self.coordinator.add_message_callback(
                 session_id,
                 self._create_message_callback(session_id)
             )
 
-            # Get permission callback for this session
-            permission_callback = self.permission_service.create_permission_callback(session_id)
-
             success = await self.coordinator.restart_session(
                 session_id,
-                permission_callback=permission_callback
+                permission_callback=self.permission_service.create_permission_callback(session_id),
             )
             return {"success": success}
 
@@ -1672,16 +1627,11 @@ class ClaudeWebUI:
         @handle_exceptions("reset session")
         async def reset_session(session_id: str):
             """Reset a session (clear messages and start fresh)"""
-            session = await self.coordinator.session_manager.get_session_info(session_id)
-            if not session:
+            if not await self.service.get_session_exists(session_id):
                 raise HTTPException(status_code=404, detail="Session not found")
-
-            # Get permission callback for this session
-            permission_callback = self.permission_service.create_permission_callback(session_id)
-
             success = await self.coordinator.reset_session(
                 session_id,
-                permission_callback=permission_callback
+                permission_callback=self.permission_service.create_permission_callback(session_id),
             )
             return {"success": success}
 
@@ -1709,13 +1659,7 @@ class ClaudeWebUI:
         @handle_exceptions("disconnect session")
         async def disconnect_session(session_id: str):
             """Disconnect SDK but keep session state (for end session)"""
-            sdk = self.coordinator._active_sdks.get(session_id)
-            if sdk:
-                success = await sdk.disconnect()
-                if success:
-                    del self.coordinator._active_sdks[session_id]
-                return {"success": success}
-            return {"success": True}  # Already disconnected
+            return await self.service.disconnect_session(session_id)
 
         # ==================== DIFF ENDPOINTS (Issue #435) ====================
 
@@ -1723,11 +1667,11 @@ class ClaudeWebUI:
         @handle_exceptions("get session diff")
         async def get_session_diff(session_id: str):
             """Get diff summary for a session's working directory vs origin/main."""
-            session = await self.coordinator.session_manager.get_session_info(session_id)
-            if not session:
+            ctx = await self.service.get_session_diff_context(session_id)
+            if not ctx.get("exists"):
                 raise HTTPException(status_code=404, detail="Session not found")
 
-            cwd = session.working_directory
+            cwd = ctx.get("working_directory")
             if not cwd or not Path(cwd).exists():
                 return {"is_git_repo": False}
 
@@ -2011,11 +1955,11 @@ class ClaudeWebUI:
             if not path:
                 raise HTTPException(status_code=400, detail="path query parameter required")
 
-            session = await self.coordinator.session_manager.get_session_info(session_id)
-            if not session:
+            ctx = await self.service.get_session_diff_context(session_id)
+            if not ctx.get("exists"):
                 raise HTTPException(status_code=404, detail="Session not found")
 
-            cwd = session.working_directory
+            cwd = ctx.get("working_directory")
             if not cwd or not Path(cwd).exists():
                 raise HTTPException(status_code=400, detail="Invalid working directory")
 
@@ -2142,8 +2086,7 @@ class ClaudeWebUI:
         @handle_exceptions("get queue")
         async def get_queue(session_id: str):
             """List all queue items for a session."""
-            session = await self.coordinator.session_manager.get_session_info(session_id)
-            if not session:
+            if not await self.service.get_session_exists(session_id):
                 raise HTTPException(status_code=404, detail="Session not found")
             items = await self.coordinator.get_queue(session_id)
             pending_count = sum(1 for i in items if i.get("status") == "pending")
@@ -2178,8 +2121,7 @@ class ClaudeWebUI:
         @handle_exceptions("clear queue")
         async def clear_queue(session_id: str):
             """Clear all pending queue items."""
-            session = await self.coordinator.session_manager.get_session_info(session_id)
-            if not session:
+            if not await self.service.get_session_exists(session_id):
                 raise HTTPException(status_code=404, detail="Session not found")
             count = await self.coordinator.clear_queue(session_id)
             await self._broadcast_queue_update(session_id, "cleared", {"count": count})
@@ -2278,8 +2220,7 @@ class ClaudeWebUI:
         async def get_legion_hierarchy(legion_id: str):
             """Get complete minion hierarchy with user at root (issue #313: universal Legion)"""
             # Issue #313: All projects support hierarchy - verify project exists
-            project = await self.coordinator.project_manager.get_project(legion_id)
-            if not project:
+            if not await self.service.validate_project_exists(legion_id):
                 raise HTTPException(status_code=404, detail="Project not found")
 
             # Get legion coordinator
@@ -2307,9 +2248,7 @@ class ClaudeWebUI:
             # Look up minion name if targeting a minion (for historical display)
             to_minion_name = None
             if request.to_minion_id:
-                minion_session = await self.coordinator.session_manager.get_session_info(request.to_minion_id)
-                if minion_session:
-                    to_minion_name = minion_session.name
+                to_minion_name = await self.service.get_minion_name(request.to_minion_id)
 
             # Create Comm from user
             comm = Comm(
@@ -2335,14 +2274,14 @@ class ClaudeWebUI:
         async def create_minion(legion_id: str, request: MinionCreateRequest):
             """Create a new minion in the project (issue #313: universal Legion)"""
             # Verify project exists (all projects support minions - issue #313)
-            project = await self.coordinator.project_manager.get_project(legion_id)
-            if not project:
+            project_dict = await self.service.get_legion_project(legion_id)
+            if not project_dict:
                 raise HTTPException(status_code=404, detail="Project not found")
 
             # Validate and normalize working directory
             working_dir = validate_and_normalize_working_directory(
                 request.working_directory,
-                str(project.working_directory)
+                str(project_dict.get("working_directory", ""))
             )
 
             # Create minion via OverseerController
@@ -2359,12 +2298,12 @@ class ClaudeWebUI:
             )
 
             # Get the created minion info
-            minion_info = await self.coordinator.session_manager.get_session_info(minion_id)
+            minion_info = await self.service.get_minion_session(minion_id)
 
             return {
                 "success": True,
                 "minion_id": minion_id,
-                "minion": minion_info.to_dict() if minion_info else None
+                "minion": minion_info,
             }
 
         # ==================== FLEET CONTROL ENDPOINTS ====================
@@ -2374,8 +2313,7 @@ class ClaudeWebUI:
         async def emergency_halt_all(legion_id: str):
             """Emergency halt all minions in the project (issue #313: universal Legion)"""
             # Issue #313: All projects support halt-all - verify project exists
-            project = await self.coordinator.project_manager.get_project(legion_id)
-            if not project:
+            if not await self.service.validate_project_exists(legion_id):
                 raise HTTPException(status_code=404, detail="Project not found")
 
             # Call LegionCoordinator.emergency_halt_all() (no-op if no minions)
@@ -2393,8 +2331,7 @@ class ClaudeWebUI:
         async def resume_all(legion_id: str):
             """Resume all minions in the project (issue #313: universal Legion)"""
             # Issue #313: All projects support resume-all - verify project exists
-            project = await self.coordinator.project_manager.get_project(legion_id)
-            if not project:
+            if not await self.service.validate_project_exists(legion_id):
                 raise HTTPException(status_code=404, detail="Project not found")
 
             # Call LegionCoordinator.resume_all() (no-op if no minions)
@@ -2415,8 +2352,7 @@ class ClaudeWebUI:
             legion_id: str, minion_id: str | None = None, status: str | None = None
         ):
             """List schedules for a legion with optional filters."""
-            project = await self.coordinator.project_manager.get_project(legion_id)
-            if not project:
+            if not await self.service.validate_project_exists(legion_id):
                 raise HTTPException(status_code=404, detail="Project not found")
 
             status_filter = None
@@ -2439,8 +2375,7 @@ class ClaudeWebUI:
         @handle_exceptions("create schedule", value_error_status=400)
         async def create_schedule(legion_id: str, request: ScheduleCreateRequest):
             """Create a new schedule (permanent or ephemeral)."""
-            project = await self.coordinator.project_manager.get_project(legion_id)
-            if not project:
+            if not await self.service.validate_project_exists(legion_id):
                 raise HTTPException(status_code=404, detail="Project not found")
 
             # Determine mode: permanent (minion_id) or ephemeral (session_config)
@@ -2451,12 +2386,10 @@ class ClaudeWebUI:
 
             if minion_id:
                 # Permanent mode: resolve minion name
-                session = await self.coordinator.session_manager.get_session_info(
-                    minion_id
-                )
-                if not session:
+                minion_name = await self.service.get_minion_name(minion_id)
+                if minion_name is None and not await self.service.get_session_exists(minion_id):
                     raise HTTPException(status_code=404, detail="Minion not found")
-                minion_name = session.name or minion_id[:8]
+                minion_name = (minion_name or minion_id[:8])
             elif request.session_config:
                 # Ephemeral mode: create the persistent agent session up front
                 ephemeral_agent_id = (
@@ -2970,14 +2903,13 @@ class ClaudeWebUI:
         @handle_exceptions("list MCP configs")
         async def list_mcp_configs():
             """List all global MCP server configurations"""
-            configs = await self.coordinator.mcp_config_manager.list_configs()
-            return [c.to_dict() for c in configs]
+            return await self.service.list_mcp_configs()
 
         @self.app.post("/api/mcp-configs")
         @handle_exceptions("create MCP config", value_error_status=400)
         async def create_mcp_config(request: McpConfigCreateRequest):
             """Create a new global MCP server configuration"""
-            config = await self.coordinator.mcp_config_manager.create_config(
+            return await self.service.create_mcp_config(
                 name=request.name,
                 server_type=request.type,
                 command=request.command,
@@ -2988,16 +2920,12 @@ class ClaudeWebUI:
                 enabled=request.enabled,
                 oauth_enabled=request.oauth_enabled,
             )
-            return config.to_dict()
 
         @self.app.post("/api/mcp-configs/export")
         @handle_exceptions("export MCP configs")
         async def export_mcp_configs(request: McpConfigExportRequest):
             """Export MCP server configurations as portable named dict (issue #788)"""
-            all_configs = await self.coordinator.mcp_config_manager.list_configs()
-            if request.ids is not None:
-                id_set = set(request.ids)
-                all_configs = [c for c in all_configs if c.id in id_set]
+            all_configs = await self.service.export_mcp_configs(ids=request.ids)
             portable: dict = {}
             for c in all_configs:
                 entry: dict = {"type": c.type.value, "enabled": c.enabled}
@@ -3018,102 +2946,25 @@ class ClaudeWebUI:
         @handle_exceptions("import MCP configs")
         async def import_mcp_configs(request: McpConfigImportRequest):
             """Import MCP server configurations with dry_run preview support (issue #788)"""
-            manager = self.coordinator.mcp_config_manager
-            existing_by_name = {c.name: c for c in manager.configs.values()}
-
-            preview = []
-            imported = []
-
-            for name, server_data in request.servers.items():
-                name = name.strip()
-                if not name:
-                    preview.append({"name": "", "action": "skip", "reason": "Missing name"})
-                    continue
-
-                server_type_raw = server_data.get("type", "stdio")
-                try:
-                    server_type = McpServerType(server_type_raw)
-                except ValueError:
-                    preview.append({"name": name, "action": "skip", "reason": f"Invalid type: {server_type_raw}"})
-                    continue
-
-                if server_type == McpServerType.STDIO and not server_data.get("command"):
-                    preview.append({"name": name, "action": "skip", "reason": "Missing command for stdio server"})
-                    continue
-
-                if server_type in (McpServerType.SSE, McpServerType.HTTP) and not server_data.get("url"):
-                    preview.append({"name": name, "action": "skip", "reason": f"Missing url for {server_type} server"})
-                    continue
-
-                existing = existing_by_name.get(name)
-                action = "update" if existing else "create"
-                entry: dict = {
-                    "name": name,
-                    "action": action,
-                    "config": dict(server_data),
-                }
-                if existing:
-                    entry["existing_id"] = existing.id
-
-                if not request.dry_run:
-                    try:
-                        if action == "create":
-                            config = await manager.create_config(
-                                name=name,
-                                server_type=server_type,
-                                command=server_data.get("command"),
-                                args=server_data.get("args") or [],
-                                env=server_data.get("env") or {},
-                                url=server_data.get("url"),
-                                headers=server_data.get("headers") or {},
-                                enabled=server_data.get("enabled", True),
-                            )
-                        else:
-                            config = await manager.update_config(
-                                config_id=existing.id,
-                                name=name,
-                                server_type=server_type,
-                                command=server_data.get("command"),
-                                args=server_data.get("args") or [],
-                                env=server_data.get("env") or {},
-                                url=server_data.get("url"),
-                                headers=server_data.get("headers") or {},
-                                enabled=server_data.get("enabled", True),
-                            )
-                        entry["result"] = config.to_dict()
-                        imported.append(config.to_dict())
-                    except Exception as e:
-                        entry["action"] = "skip"
-                        entry["reason"] = str(e)
-
-                preview.append(entry)
-
-            create_count = sum(1 for p in preview if p["action"] == "create")
-            update_count = sum(1 for p in preview if p["action"] == "update")
-            skip_count = sum(1 for p in preview if p["action"] == "skip")
-
-            return {
-                "dry_run": request.dry_run,
-                "preview": preview,
-                "summary": {"create": create_count, "update": update_count, "skip": skip_count},
-                "imported": imported,
-            }
+            return await self.service.import_mcp_configs(
+                servers=request.servers, dry_run=request.dry_run
+            )
 
         @self.app.get("/api/mcp-configs/{config_id}")
         @handle_exceptions("get MCP config")
         async def get_mcp_config(config_id: str):
             """Get a specific MCP server configuration"""
-            config = await self.coordinator.mcp_config_manager.get_config(config_id)
+            config = await self.service.get_mcp_config(config_id)
             if not config:
                 raise HTTPException(status_code=404, detail="MCP config not found")
-            return config.to_dict()
+            return config
 
         @self.app.put("/api/mcp-configs/{config_id}")
         @handle_exceptions("update MCP config", value_error_status=400)
         async def update_mcp_config(config_id: str, request: McpConfigUpdateRequest):
             """Update an existing MCP server configuration"""
-            config = await self.coordinator.mcp_config_manager.update_config(
-                config_id=config_id,
+            return await self.service.update_mcp_config(
+                config_id,
                 name=request.name,
                 server_type=request.type,
                 command=request.command,
@@ -3124,13 +2975,12 @@ class ClaudeWebUI:
                 enabled=request.enabled,
                 oauth_enabled=request.oauth_enabled,
             )
-            return config.to_dict()
 
         @self.app.delete("/api/mcp-configs/{config_id}")
         @handle_exceptions("delete MCP config")
         async def delete_mcp_config(config_id: str):
             """Delete an MCP server configuration"""
-            success = await self.coordinator.mcp_config_manager.delete_config(config_id)
+            success = await self.service.delete_mcp_config(config_id)
             if not success:
                 raise HTTPException(status_code=404, detail="MCP config not found")
             return {"deleted": True}
@@ -3175,7 +3025,7 @@ class ClaudeWebUI:
                 )
 
             try:
-                server_id = await self.coordinator.oauth_manager.complete_flow(state, code)
+                server_id = await self.service.oauth_complete_flow(state, code)
                 # Append OAuth completion to UI poll queue
                 self.ui_queue.append({
                     "type": "mcp_oauth_complete",
@@ -3210,16 +3060,16 @@ class ClaudeWebUI:
 
             Returns the authorization URL the frontend should open in a popup.
             """
-            config = await self.coordinator.mcp_config_manager.get_config(config_id)
+            config = await self.service.get_mcp_config(config_id)
             if not config:
                 raise HTTPException(status_code=404, detail="MCP config not found")
-            if not config.url:
+            if not config.get("url"):
                 raise HTTPException(status_code=400, detail="OAuth requires a URL-based MCP server")
-            auth_url = await self.coordinator.oauth_manager.start_flow(
-                server_id=config_id,
-                server_url=config.url,
+            auth_url = await self.service.oauth_initiate_flow(
+                config_id=config_id,
+                server_url=config["url"],
                 redirect_uri=request.redirect_uri,
-                client_name=f"Claude Code WebUI — {config.name}",
+                client_name=f"Claude Code WebUI — {config['name']}",
             )
             return {"auth_url": auth_url}
 
@@ -3227,10 +3077,9 @@ class ClaudeWebUI:
         @handle_exceptions("disconnect MCP OAuth")
         async def disconnect_mcp_oauth(config_id: str):
             """Clear stored OAuth tokens for an MCP server."""
-            config = await self.coordinator.mcp_config_manager.get_config(config_id)
-            if not config:
+            success = await self.service.oauth_disconnect(config_id)
+            if not success:
                 raise HTTPException(status_code=404, detail="MCP config not found")
-            await self.coordinator.oauth_manager.disconnect(config_id)
             return {"disconnected": True}
 
         @self.app.get("/api/mcp-configs/{config_id}/oauth/status")
@@ -3241,20 +3090,10 @@ class ClaudeWebUI:
             Returns {"status": "authenticated" | "expired" | "unauthenticated"}.
             Expiry is determined from the timestamp recorded at token storage time.
             """
-            config = await self.coordinator.mcp_config_manager.get_config(config_id)
-            if not config:
+            result = await self.service.oauth_get_status(config_id)
+            if result is None:
                 raise HTTPException(status_code=404, detail="MCP config not found")
-            token = await self.coordinator.oauth_manager.get_stored_token(config_id)
-            if token is None:
-                status = "unauthenticated"
-            else:
-                store = self.coordinator.oauth_manager.get_token_store(config_id)
-                expiry = await store.get_token_expiry()
-                if expiry is not None and expiry < time.time():
-                    status = "expired"
-                else:
-                    status = "authenticated"
-            return {"status": status}
+            return result
 
         # ========== Template Endpoints ==========
 
@@ -3262,24 +3101,23 @@ class ClaudeWebUI:
         @handle_exceptions("list templates")
         async def list_templates():
             """List all minion templates"""
-            templates = await self.coordinator.template_manager.list_templates()
-            return [t.to_dict() for t in templates]
+            return await self.service.list_templates()
 
         @self.app.get("/api/templates/{template_id}")
         @handle_exceptions("get template")
         async def get_template(template_id: str):
             """Get specific template"""
-            template = await self.coordinator.template_manager.get_template(template_id)
+            template = await self.service.get_template(template_id)
             if not template:
                 raise HTTPException(status_code=404, detail="Template not found")
-            return template.to_dict()
+            return template
 
         @self.app.post("/api/templates")
         @handle_exceptions("create template", value_error_status=400)
         async def create_template(request: TemplateCreateRequest):
             """Create new template"""
             config = request.to_session_config()
-            template = await self.coordinator.template_manager.create_template(
+            return await self.service.create_template(
                 name=request.name,
                 config=config,
                 role=request.role,
@@ -3287,14 +3125,13 @@ class ClaudeWebUI:
                 description=request.description,
                 capabilities=request.capabilities,
             )
-            return template.to_dict()
 
         @self.app.put("/api/templates/{template_id}")
         @handle_exceptions("update template", value_error_status=400)
         async def update_template(template_id: str, request: TemplateUpdateRequest):
             """Update existing template"""
-            template = await self.coordinator.template_manager.update_template(
-                template_id=template_id,
+            return await self.service.update_template(
+                template_id,
                 name=request.name,
                 permission_mode=request.permission_mode,
                 allowed_tools=request.allowed_tools,
@@ -3324,13 +3161,12 @@ class ClaudeWebUI:
                 enable_claudeai_mcp_servers=request.enable_claudeai_mcp_servers,
                 strict_mcp_config=request.strict_mcp_config,
             )
-            return template.to_dict()
 
         @self.app.delete("/api/templates/{template_id}")
         @handle_exceptions("delete template")
         async def delete_template(template_id: str):
             """Delete template"""
-            success = await self.coordinator.template_manager.delete_template(template_id)
+            success = await self.service.delete_template(template_id)
             if not success:
                 raise HTTPException(status_code=404, detail="Template not found")
             return {"deleted": True}
@@ -3340,15 +3176,15 @@ class ClaudeWebUI:
         async def export_template(template_id: str):
             """Export template as a downloadable JSON envelope"""
             from fastapi.responses import Response as FastAPIResponse
-            template = await self.coordinator.template_manager.get_template(template_id)
+            template = await self.service.get_template(template_id)
             if not template:
                 raise HTTPException(status_code=404, detail="Template not found")
             envelope = {
                 "version": 1,
                 "exported_at": datetime.now(UTC).isoformat(),
-                "template": template.to_dict(),
+                "template": template,
             }
-            slug = re.sub(r'[^a-z0-9]+', '_', template.name.strip().lower()).strip('_')
+            slug = re.sub(r'[^a-z0-9]+', '_', template["name"].strip().lower()).strip('_')
             filename = f"{slug}.template.json"
             return FastAPIResponse(
                 content=json.dumps(envelope, indent=2),
@@ -3362,7 +3198,7 @@ class ClaudeWebUI:
             """Import a template from an export envelope"""
             body = await request.json()
             try:
-                template = await self.coordinator.template_manager.import_template(
+                return await self.service.import_template(
                     data=body,
                     overwrite=bool(body.get("overwrite", False)),
                 )
@@ -3375,7 +3211,6 @@ class ClaudeWebUI:
                         "name": e.name,
                     },
                 ) from e
-            return template.to_dict()
 
 
 
@@ -3510,9 +3345,9 @@ class ClaudeWebUI:
             session_id = state_data.get("session_id")
             if session_id:
                 # Get full session info for real-time updates
-                session_info = await self.coordinator.session_manager.get_session_info(session_id)
-                if session_info:
-                    session_dict = session_info.to_dict()
+                session_info_dict = await self.coordinator.get_session_info(session_id)
+                if session_info_dict:
+                    session_dict = session_info_dict.get("session", {})
                     # Issue #500: Include queue status in state changes
                     session_dict["queue_pending_count"] = (
                         self.coordinator.queue_manager.get_pending_count(session_id)
