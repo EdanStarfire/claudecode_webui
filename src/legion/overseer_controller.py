@@ -262,14 +262,13 @@ class OverseerController:
         )
 
         # 14. Broadcast project update to UI poll queue (new session added)
-        if self.system.ui_queue:
-            project = await self.system.session_coordinator.project_manager.get_project(legion_id)
-            if project:
-                self.system.ui_queue.append({
-                    "type": "project_updated",
-                    "data": {"project": project.to_dict()}
-                })
-                coord_logger.debug(f"Appended project_updated for legion {legion_id} after minion spawn")
+        project = await self.system.session_coordinator.project_manager.get_project(legion_id)
+        if project:
+            self.system.broadcast_ui_event({
+                "type": "project_updated",
+                "data": {"project": project.to_dict()}
+            })
+            coord_logger.debug(f"Appended project_updated for legion {legion_id} after minion spawn")
 
         coord_logger.info(f"Minion {name} spawned by {parent_session.name} (parent={parent_overseer_id}, child={child_minion_id})")
 
@@ -428,13 +427,12 @@ class OverseerController:
 
         # 9. Broadcast project update to UI poll queue (session state changed or removed)
         legion_id = parent_session.project_id
-        if self.system.ui_queue:
-            project = await self.system.session_coordinator.project_manager.get_project(legion_id)
-            if project:
-                self.system.ui_queue.append({
-                    "type": "project_updated",
-                    "data": {"project": project.to_dict()}
-                })
+        project = await self.system.session_coordinator.project_manager.get_project(legion_id)
+        if project:
+            self.system.broadcast_ui_event({
+                "type": "project_updated",
+                "data": {"project": project.to_dict()}
+            })
 
         coord_logger.info(
             f"Minion {child_minion_name} {action_word} by {parent_session.name} "
