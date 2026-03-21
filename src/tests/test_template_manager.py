@@ -541,3 +541,46 @@ class TestSignatureParity:
         assert missing == set(), (
             f"update_template() is missing parameters for MinionTemplate fields: {missing}"
         )
+
+
+# --- Orchestrator retirement tests ---
+
+
+class TestCreateDefaultTemplatesRetirement:
+    """Verify create_default_templates() retires the Orchestrator template."""
+
+    @pytest.mark.asyncio
+    async def test_create_default_templates_retires_orchestrator(self, manager):
+        """create_default_templates() deletes the Orchestrator template when it exists."""
+        config = SessionConfig(permission_mode="default")
+        orchestrator = await manager.create_template(
+            name="Orchestrator",
+            config=config,
+            system_prompt="Old orchestrator prompt",
+        )
+        assert orchestrator is not None
+        assert "Orchestrator" in {t.name for t in manager.templates.values()}
+
+        # Calling create_default_templates() should retire it
+        await manager.create_default_templates()
+
+        assert "Orchestrator" not in {t.name for t in manager.templates.values()}
+
+    @pytest.mark.asyncio
+    async def test_create_default_templates_does_not_overwrite_existing_prompt(self, manager):
+        """create_default_templates() never overwrites an existing system_prompt."""
+        # Seed one of the real default templates manually with a custom prompt
+        config = SessionConfig(permission_mode="default")
+        custom_prompt = "Custom prompt that must not be overwritten"
+        existing = await manager.create_template(
+            name="Issue Planner",
+            config=config,
+            system_prompt=custom_prompt,
+        )
+        assert existing is not None
+
+        await manager.create_default_templates()
+
+        updated = manager.templates.get(existing.template_id)
+        assert updated is not None
+        assert updated.system_prompt == custom_prompt
