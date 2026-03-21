@@ -47,6 +47,15 @@ coord_logger = get_logger('coordinator', category='COORDINATOR')
 # Keep standard logger for errors
 logger = logging.getLogger(__name__)
 
+
+def _task_done_log_exception(task: asyncio.Task) -> None:
+    """Done callback: log any exception not already caught inside the coroutine."""
+    if not task.cancelled() and (exc := task.exception()):
+        coord_logger.error(
+            "Unhandled exception in background task %s: %s", task.get_name(), exc, exc_info=exc
+        )
+
+
 # Issue #871: Docker wrapper startup noise filtering
 _DOCKER_WRAPPER_PREFIX = '[claude-docker] '
 _DOCKER_ERROR_KEYWORDS = ('exited with code', 'was killed', 'crashed')
@@ -2686,7 +2695,10 @@ class SessionCoordinator:
                 f"Failed to build ToolCallUpdate for {tool_call.tool_use_id}"
             )
             return
-        asyncio.ensure_future(self._write_tool_call_update(storage, stored_dict, tool_call.tool_use_id))
+        task = asyncio.ensure_future(
+            self._write_tool_call_update(storage, stored_dict, tool_call.tool_use_id)
+        )
+        task.add_done_callback(_task_done_log_exception)
 
     async def _write_tool_call_update(
         self,
