@@ -70,6 +70,20 @@ class LegionSystem:
     scheduler_service: 'SchedulerService' = field(init=False)
     mcp_tools: 'LegionMCPTools' = field(init=False)
 
+    def broadcast_ui_event(self, event: dict) -> None:
+        """Append a UI event to the global poll queue.
+
+        All legion components should use this method instead of accessing
+        ui_queue directly. Handles null-check and errors safely.
+        """
+        if self.ui_queue is None:
+            return
+        try:
+            self.ui_queue.append(event)
+        except Exception:
+            import logging
+            logging.getLogger(__name__).exception("Failed to broadcast UI event: %s", event.get("type"))
+
     def __post_init__(self):
         """
         Wire up all Legion components with reference to this system.

@@ -504,10 +504,9 @@ class ClaudeWebUI:
                     if session and session.project_id:
                         project_dict = await self.service.get_project(session.project_id)
                         if project_dict:
-                            self.ui_queue.append({
-                                "type": "project_updated",
-                                "data": {"project": {k: v for k, v in project_dict.items() if k != "sessions"}}
-                            })
+                            self._broadcast_project_updated(
+                                {k: v for k, v in project_dict.items() if k != "sessions"}
+                            )
                             logger.debug(f"Appended project_updated for internally spawned session {session_id}")
                 except Exception:
                     logger.exception(f"Error broadcasting project_updated for session {session_id}")
@@ -535,7 +534,57 @@ class ClaudeWebUI:
 
     async def _broadcast_schedule_event(self, legion_id: str, event: dict):
         """Broadcast schedule event to UI poll queue."""
-        self.ui_queue.append(event)
+        try:
+            self.ui_queue.append(event)
+        except Exception:
+            logger.exception("Error appending schedule event")
+
+    def _broadcast_project_updated(self, project: dict) -> None:
+        """Emit project_updated to the global UI poll queue."""
+        try:
+            self.ui_queue.append({"type": "project_updated", "data": {"project": project}})
+            logger.debug("Appended project_updated for project %s", project.get("project_id"))
+        except Exception:
+            logger.exception("Error appending project_updated")
+
+    def _broadcast_project_deleted(self, project_id: str) -> None:
+        """Emit project_deleted to the global UI poll queue."""
+        try:
+            self.ui_queue.append({"type": "project_deleted", "data": {"project_id": project_id}})
+            logger.debug("Appended project_deleted for project %s", project_id)
+        except Exception:
+            logger.exception("Error appending project_deleted")
+
+    def _broadcast_state_change(self, session_id: str, session_dict: dict, timestamp: str | None = None) -> None:
+        """Emit state_change to the global UI poll queue."""
+        try:
+            self.ui_queue.append({
+                "type": "state_change",
+                "data": {"session_id": session_id, "session": session_dict, "timestamp": timestamp}
+            })
+            logger.info("Appended state_change for session %s", session_id)
+        except Exception:
+            logger.exception("Error appending state_change")
+
+    def _broadcast_server_restarting(self, pull_output: str, sync_output: str) -> None:
+        """Emit server_restarting to the global UI poll queue."""
+        try:
+            self.ui_queue.append({
+                "type": "server_restarting",
+                "message": "Server is restarting...",
+                "pull_output": pull_output,
+                "sync_output": sync_output,
+                "timestamp": datetime.now(UTC).isoformat(),
+            })
+        except Exception:
+            logger.warning("Failed to append restart notice")
+
+    def _broadcast_mcp_oauth_complete(self, server_id: str) -> None:
+        """Emit mcp_oauth_complete to the global UI poll queue."""
+        try:
+            self.ui_queue.append({"type": "mcp_oauth_complete", "server_id": server_id})
+        except Exception:
+            logger.exception("Error appending mcp_oauth_complete")
 
     async def _broadcast_resource_registered(self, session_id: str, resource_metadata: dict):
         """
@@ -756,10 +805,7 @@ class ClaudeWebUI:
                 working_directory=request.working_directory,
                 max_concurrent_minions=request.max_concurrent_minions,
             )
-            self.ui_queue.append({
-                "type": "project_updated",
-                "data": {"project": project}
-            })
+            self._broadcast_project_updated(project)
             return {"project": project}
 
         @self.app.get("/api/projects")
@@ -801,10 +847,7 @@ class ClaudeWebUI:
             if not result:
                 raise HTTPException(status_code=404, detail="Project not found")
 
-            self.ui_queue.append({
-                "type": "project_updated",
-                "data": {"project": result}
-            })
+            self._broadcast_project_updated(result)
 
             return {"success": True}
 
@@ -827,10 +870,7 @@ class ClaudeWebUI:
             if not del_result.get("success"):
                 raise HTTPException(status_code=500, detail="Failed to delete project")
 
-            self.ui_queue.append({
-                "type": "project_deleted",
-                "data": {"project_id": project_id}
-            })
+            self._broadcast_project_deleted(project_id)
 
             return {"success": True}
 
@@ -842,10 +882,7 @@ class ClaudeWebUI:
             if not result:
                 raise HTTPException(status_code=404, detail="Project not found")
 
-            self.ui_queue.append({
-                "type": "project_updated",
-                "data": {"project": result}
-            })
+            self._broadcast_project_updated(result)
 
             return {"success": True, "is_expanded": result.get("is_expanded")}
 
@@ -857,10 +894,7 @@ class ClaudeWebUI:
             if not result:
                 raise HTTPException(status_code=400, detail="Failed to reorder sessions")
 
-            self.ui_queue.append({
-                "type": "project_updated",
-                "data": {"project": result}
-            })
+            self._broadcast_project_updated(result)
 
             return {"success": True}
 
@@ -1001,24 +1035,18 @@ class ClaudeWebUI:
             # Broadcast session creation to all UI clients
             session_info_dict = await self.coordinator.get_session_info(session_id)
             if session_info_dict:
-                self.ui_queue.append({
-                    "type": "state_change",
-                    "data": {
-                        "session_id": session_id,
-                        "session": session_info_dict.get("session", session_info_dict),
-                        "timestamp": datetime.now().isoformat()
-                    }
-                })
-                logger.debug(f"Appended state_change for newly created session {session_id}")
+                self._broadcast_state_change(
+                    session_id,
+                    session_info_dict.get("session", session_info_dict),
+                    datetime.now().isoformat()
+                )
 
             # Broadcast project update to all UI clients (session was added to project)
             project_dict = await self.service.get_project(request.project_id) if request.project_id else None
             if project_dict:
-                self.ui_queue.append({
-                    "type": "project_updated",
-                    "data": {"project": {k: v for k, v in project_dict.items() if k != "sessions"}}
-                })
-                logger.debug(f"Appended project_updated for project {request.project_id} after session creation")
+                self._broadcast_project_updated(
+                    {k: v for k, v in project_dict.items() if k != "sessions"}
+                )
 
             return {"session_id": session_id}
 
@@ -1232,18 +1260,12 @@ class ClaudeWebUI:
             project_id = result.get("project_id")
             if project_id:
                 if result.get("project_deleted"):
-                    self.ui_queue.append({
-                        "type": "project_deleted",
-                        "data": {"project_id": project_id}
-                    })
+                    self._broadcast_project_deleted(project_id)
                     logger.info(f"Appended project_deleted for auto-deleted project {project_id}")
                 else:
                     updated_project = result.get("updated_project")
                     if updated_project:
-                        self.ui_queue.append({
-                            "type": "project_updated",
-                            "data": {"project": updated_project}
-                        })
+                        self._broadcast_project_updated(updated_project)
                         logger.debug(
                             f"Appended project_updated for project {project_id} after session deletion"
                         )
@@ -2820,16 +2842,7 @@ class ClaudeWebUI:
                 raise HTTPException(status_code=500, detail=str(e)) from e
 
             # Append restart notice to UI poll queue
-            try:
-                self.ui_queue.append({
-                    "type": "server_restarting",
-                    "message": "Server is restarting...",
-                    "pull_output": pull_output,
-                    "sync_output": sync_output,
-                    "timestamp": datetime.now(UTC).isoformat(),
-                })
-            except Exception as e:
-                logger.warning(f"Failed to append restart notice: {e}")
+            self._broadcast_server_restarting(pull_output, sync_output)
 
             # Schedule the actual restart after response is sent
             async def _do_restart():
@@ -3025,10 +3038,7 @@ class ClaudeWebUI:
             try:
                 server_id = await self.service.oauth_complete_flow(state, code)
                 # Append OAuth completion to UI poll queue
-                self.ui_queue.append({
-                    "type": "mcp_oauth_complete",
-                    "server_id": server_id,
-                })
+                self._broadcast_mcp_oauth_complete(server_id)
                 return HTMLResponse(
                     content="""<!DOCTYPE html>
 <html><head><title>Connected</title></head>
@@ -3350,17 +3360,7 @@ class ClaudeWebUI:
                     session_dict["queue_pending_count"] = (
                         self.coordinator.queue_manager.get_pending_count(session_id)
                     )
-                    message = {
-                        "type": "state_change",
-                        "data": {
-                            "session_id": session_id,
-                            "session": session_dict,
-                            "timestamp": state_data.get("timestamp")
-                        }
-                    }
-                    # Append to UI poll queue
-                    self.ui_queue.append(message)
-                    logger.info(f"Appended state change for session {session_id} to UI queue")
+                    self._broadcast_state_change(session_id, session_dict, state_data.get("timestamp"))
         except Exception:
             logger.exception("Error handling state change")
 

@@ -2382,16 +2382,15 @@ class LegionMCPTools:
                         )
 
                         # Broadcast poll event
-                        if self.system.ui_queue:
-                            self.system.ui_queue.append({
-                                "type": "session_self_restart",
-                                "data": {
-                                    "session_id": session_id,
-                                    "restart_id": restart_id,
-                                    "reason": reason,
-                                    "timestamp": timestamp,
-                                },
-                            })
+                        self.system.broadcast_ui_event({
+                            "type": "session_self_restart",
+                            "data": {
+                                "session_id": session_id,
+                                "restart_id": restart_id,
+                                "reason": reason,
+                                "timestamp": timestamp,
+                            },
+                        })
 
                         # Queue continuation message
                         continuation = (
@@ -2427,15 +2426,14 @@ class LegionMCPTools:
             logger.error(
                 f"Restart monitor unhandled error for session {session_id}: {e}", exc_info=True
             )
-            if self.system.ui_queue:
-                self.system.ui_queue.append({
-                    "type": "session_restart_error",
-                    "data": {
-                        "session_id": session_id,
-                        "restart_id": restart_id,
-                        "error": str(e),
-                        "timestamp": datetime.now(UTC).isoformat(),
-                    }
-                })
+            self.system.broadcast_ui_event({
+                "type": "session_restart_error",
+                "data": {
+                    "session_id": session_id,
+                    "restart_id": restart_id,
+                    "error": str(e),
+                    "timestamp": datetime.now(UTC).isoformat(),
+                }
+            })
         finally:
             self._pending_restarts.discard(session_id)
