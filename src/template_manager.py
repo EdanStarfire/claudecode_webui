@@ -596,3 +596,11 @@ class TemplateManager:
             )
         if created_count == 0 and prompt_seeded_count == 0:
             template_logger.debug("All default templates already exist")
+
+        # Remove retired built-in templates no longer present in src/default_templates/
+        retired_template_names = ["Orchestrator"]
+        for retired_name in retired_template_names:
+            existing = existing_by_name.get(retired_name)
+            if existing:
+                await self.delete_template(existing.template_id)
+                template_logger.info(f"Removed retired template: {retired_name}")
