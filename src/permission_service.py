@@ -369,8 +369,7 @@ class PermissionService:
                 }
 
                 # Clean up the pending permission
-                if request_id in self.pending_permissions:
-                    del self.pending_permissions[request_id]
+                self.pending_permissions.pop(request_id, None)
 
             # Store permission response message using dataclass (Phase 0, Issue #310)
             decision_time = time.time()
@@ -502,16 +501,16 @@ class PermissionService:
                     "message": "Permission denied due to session interrupt",
                     "interrupt": True
                 })
-                del self.pending_permissions[request_id]
+                self.pending_permissions.pop(request_id, None)
 
     def resolve(self, request_id: str, response: dict) -> bool:
         """Resolve a pending permission request.
 
         Returns True on success, False if request_id not found or Future already done.
         """
-        if request_id not in self.pending_permissions:
+        pending_future = self.pending_permissions.pop(request_id, None)
+        if pending_future is None:
             return False
-        pending_future = self.pending_permissions.pop(request_id)
         if pending_future.done():
             return False
         pending_future.set_result(response)
