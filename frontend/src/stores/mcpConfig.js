@@ -41,7 +41,7 @@ export const useMcpConfigStore = defineStore('mcpConfig', () => {
     try {
       const data = await api.get('/api/mcp-configs')
       configs.value = new Map()
-      for (const config of data) {
+      for (const config of (data.configs || [])) {
         configs.value.set(config.id, config)
       }
       configs.value = new Map(configs.value)

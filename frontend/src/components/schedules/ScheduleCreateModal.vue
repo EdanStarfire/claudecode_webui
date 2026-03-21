@@ -270,7 +270,7 @@ const isValid = computed(() => {
 onMounted(async () => {
   try {
     const data = await api.get('/api/templates')
-    templates.value = data || []
+    templates.value = data.templates || []
   } catch (e) {
     console.error('Failed to load templates:', e)
   }

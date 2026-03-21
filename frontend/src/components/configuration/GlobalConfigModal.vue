@@ -168,8 +168,8 @@ async function loadConfig() {
     readAloudConfig.value = getReadAloudSettings()
     originalReadAloudConfig.value = JSON.parse(JSON.stringify(readAloudConfig.value))
     try {
-      const templates = await apiGet('/api/templates')
-      templateCount.value = templates.length
+      const data = await apiGet('/api/templates')
+      templateCount.value = (data.templates || []).length
     } catch {
       templateCount.value = 0
     }

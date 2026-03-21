@@ -286,10 +286,10 @@ class TestSessionCoordinator:
         session_id_1 = await coordinator.create_session(**config1)
         session_id_2 = await coordinator.create_session(**config2)
 
-        sessions = await coordinator.list_sessions()
+        result = await coordinator.list_sessions()
 
-        assert len(sessions) == 2
-        session_ids = [s["session_id"] for s in sessions]
+        assert result["total"] == 2
+        session_ids = [s["session_id"] for s in result["sessions"]]
         assert session_id_1 in session_ids
         assert session_id_2 in session_ids
 

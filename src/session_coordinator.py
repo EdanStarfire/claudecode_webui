@@ -353,9 +353,18 @@ class SessionCoordinator:
             return 0
         return await self.queue_manager.clear_pending(session_id, session_dir)
 
-    async def get_queue(self, session_id: str) -> list[dict]:
-        """Get all queue items for a session."""
-        return [item.to_dict() for item in self.queue_manager.get_queue(session_id)]
+    async def get_queue(self, session_id: str, limit: int = 100, offset: int = 0) -> dict:
+        """Get queue items for a session, paginated."""
+        all_items = [item.to_dict() for item in self.queue_manager.get_queue(session_id)]
+        total = len(all_items)
+        sliced = all_items[offset : offset + limit]
+        return {
+            "items": sliced,
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "has_more": offset + len(sliced) < total,
+        }
 
     async def pause_queue(self, session_id: str, paused: bool) -> bool:
         """Pause or resume the queue for a session."""
@@ -580,17 +589,19 @@ class SessionCoordinator:
         """Get storage manager for a session"""
         return self._storage_managers.get(session_id)
 
-    async def get_session_images(self, session_id: str) -> list[dict]:
+    async def get_session_images(self, session_id: str, limit: int = 100, offset: int = 0) -> dict:
         """
-        Get all image metadata for a session.
+        Get image metadata for a session, paginated.
 
         Issue #404: Used by REST endpoint to list session images.
 
         Args:
             session_id: Session ID
+            limit: Maximum number of images to return
+            offset: Number of images to skip
 
         Returns:
-            List of image metadata dicts
+            Paginated dict with images, total, limit, offset, has_more
         """
         storage_manager = self._storage_managers.get(session_id)
         if not storage_manager:
@@ -600,10 +611,19 @@ class SessionCoordinator:
                 storage_manager = DataStorageManager(session_dir)
                 await storage_manager.initialize()
 
+        all_images: list[dict] = []
         if storage_manager:
-            return await storage_manager.read_images()
+            all_images = await storage_manager.read_images()
 
-        return []
+        total = len(all_images)
+        sliced = all_images[offset : offset + limit]
+        return {
+            "images": sliced,
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "has_more": offset + len(sliced) < total,
+        }
 
     async def get_session_image_file(self, session_id: str, image_id: str) -> bytes | None:
         """
@@ -630,17 +650,19 @@ class SessionCoordinator:
 
         return None
 
-    async def get_session_resources(self, session_id: str) -> list[dict]:
+    async def get_session_resources(self, session_id: str, limit: int = 100, offset: int = 0) -> dict:
         """
-        Get all resource metadata for a session.
+        Get resource metadata for a session, paginated.
 
         Issue #404: Used by REST endpoint to list session resources.
 
         Args:
             session_id: Session ID
+            limit: Maximum number of resources to return
+            offset: Number of resources to skip
 
         Returns:
-            List of resource metadata dicts
+            Paginated dict with resources, total, limit, offset, has_more
         """
         storage_manager = self._storage_managers.get(session_id)
         if not storage_manager:
@@ -650,10 +672,19 @@ class SessionCoordinator:
                 storage_manager = DataStorageManager(session_dir)
                 await storage_manager.initialize()
 
+        all_resources: list[dict] = []
         if storage_manager:
-            return await storage_manager.read_resources()
+            all_resources = await storage_manager.read_resources()
 
-        return []
+        total = len(all_resources)
+        sliced = all_resources[offset : offset + limit]
+        return {
+            "resources": sliced,
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "has_more": offset + len(sliced) < total,
+        }
 
     async def get_session_resource_file(self, session_id: str, resource_id: str) -> bytes | None:
         """
@@ -1520,7 +1551,7 @@ class SessionCoordinator:
         """Public wrapper: find the project containing the given session."""
         return await self._find_project_for_session(session_id)
 
-    async def get_descendants(self, session_id: str) -> list[dict]:
+    async def _get_all_descendants(self, session_id: str) -> list[dict]:
         """
         Get all descendant sessions (children, grandchildren, etc.) of a session.
 
@@ -1550,10 +1581,27 @@ class SessionCoordinator:
                     "parent_id": session_id
                 })
                 # Recursively get grandchildren
-                grandchildren = await self.get_descendants(child_id)
+                grandchildren = await self._get_all_descendants(child_id)
                 descendants.extend(grandchildren)
 
         return descendants
+
+    async def get_descendants(self, session_id: str, limit: int = 50, offset: int = 0) -> dict:
+        """
+        Get descendant sessions of a session, paginated.
+
+        Returns paginated dict with descendants, total, limit, offset, has_more.
+        """
+        all_descendants = await self._get_all_descendants(session_id)
+        total = len(all_descendants)
+        sliced = all_descendants[offset : offset + limit]
+        return {
+            "descendants": sliced,
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "has_more": offset + len(sliced) < total,
+        }
 
     async def count_descendants(self, session_id: str) -> int:
         """
@@ -1561,7 +1609,7 @@ class SessionCoordinator:
 
         Returns count of all descendant sessions.
         """
-        descendants = await self.get_descendants(session_id)
+        descendants = await self._get_all_descendants(session_id)
         return len(descendants)
 
     async def send_message(self, session_id: str, message: str, metadata: dict | None = None) -> bool:
@@ -1970,14 +2018,23 @@ class SessionCoordinator:
             logger.exception(f"Failed to get session info for {session_id}")
             return None
 
-    async def list_sessions(self) -> list[dict[str, Any]]:
-        """List all sessions with their current status"""
+    async def list_sessions(self, limit: int = 500, offset: int = 0) -> dict[str, Any]:
+        """List all sessions with their current status, paginated."""
         try:
             sessions = await self.session_manager.list_sessions()
-            return [session.to_dict() for session in sessions]
+            all_sessions = [session.to_dict() for session in sessions]
+            total = len(all_sessions)
+            sliced = all_sessions[offset : offset + limit]
+            return {
+                "sessions": sliced,
+                "total": total,
+                "limit": limit,
+                "offset": offset,
+                "has_more": offset + len(sliced) < total,
+            }
         except Exception:
             logger.exception("Failed to list sessions")
-            return []
+            return {"sessions": [], "total": 0, "limit": limit, "offset": offset, "has_more": False}
 
     @staticmethod
     def _extract_agent_name(description: str | None) -> str:
@@ -2215,11 +2272,20 @@ class SessionCoordinator:
 
     # ==================== ARCHIVE METHODS ====================
 
-    async def get_archives(self, session_id: str) -> list[dict]:
-        """List all archives for a session."""
+    async def get_archives(self, session_id: str, limit: int = 50, offset: int = 0) -> dict:
+        """List archives for a session, paginated."""
         if not self.legion_system:
-            return []
-        return await self.legion_system.archive_manager.get_archives(session_id)
+            return {"archives": [], "total": 0, "limit": limit, "offset": offset, "has_more": False}
+        all_archives = await self.legion_system.archive_manager.get_archives(session_id)
+        total = len(all_archives)
+        sliced = all_archives[offset : offset + limit]
+        return {
+            "archives": sliced,
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "has_more": offset + len(sliced) < total,
+        }
 
     async def get_archive_messages(
         self, session_id: str, archive_id: str, offset: int = 0, limit: int | None = 50
@@ -2264,14 +2330,23 @@ class SessionCoordinator:
         return await self.legion_system.archive_manager.get_archive_state(session_id, archive_id)
 
     async def get_archive_resources(
-        self, session_id: str, archive_id: str
-    ) -> list[dict]:
-        """List resource metadata from an archive."""
+        self, session_id: str, archive_id: str, limit: int = 100, offset: int = 0
+    ) -> dict:
+        """List resource metadata from an archive, paginated."""
         if not self.legion_system:
-            return []
-        return await self.legion_system.archive_manager.get_archive_resources(
+            return {"resources": [], "total": 0, "limit": limit, "offset": offset, "has_more": False}
+        all_resources = await self.legion_system.archive_manager.get_archive_resources(
             session_id, archive_id
         )
+        total = len(all_resources)
+        sliced = all_resources[offset : offset + limit]
+        return {
+            "resources": sliced,
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "has_more": offset + len(sliced) < total,
+        }
 
     async def get_archive_resource_file(
         self, session_id: str, archive_id: str, resource_id: str
@@ -2283,11 +2358,20 @@ class SessionCoordinator:
             session_id, archive_id, resource_id
         )
 
-    async def list_project_deleted_agents(self, project_id: str) -> list[dict]:
-        """List deleted agents with archives for a project."""
+    async def list_project_deleted_agents(self, project_id: str, limit: int = 50, offset: int = 0) -> dict:
+        """List deleted agents with archives for a project, paginated."""
         if not self.legion_system:
-            return []
-        return await self.legion_system.archive_manager.list_project_deleted_agents(project_id)
+            return {"agents": [], "total": 0, "limit": limit, "offset": offset, "has_more": False}
+        all_agents = await self.legion_system.archive_manager.list_project_deleted_agents(project_id)
+        total = len(all_agents)
+        sliced = all_agents[offset : offset + limit]
+        return {
+            "agents": sliced,
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "has_more": offset + len(sliced) < total,
+        }
 
     async def erase_history(self, session_id: str) -> bool:
         """Erase distilled history for a session."""

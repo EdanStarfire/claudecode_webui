@@ -84,7 +84,7 @@ class TestMcpImportDryRun:
 
         # Server should NOT actually exist after dry run
         list_resp = await client.get("/api/mcp-configs")
-        names = [c["name"] for c in list_resp.json()]
+        names = [c["name"] for c in list_resp.json()["configs"]]
         assert "import-dry-new" not in names
 
     async def test_import_dry_run_update(self, api_integration_env):
@@ -141,7 +141,7 @@ class TestMcpImportCommit:
 
         # Server should now exist
         list_resp = await client.get("/api/mcp-configs")
-        names = [c["name"] for c in list_resp.json()]
+        names = [c["name"] for c in list_resp.json()["configs"]]
         assert "import-commit-new" in names
 
         config_id = data["imported"][0]["id"]

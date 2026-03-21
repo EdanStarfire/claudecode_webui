@@ -598,8 +598,8 @@ class ClaudeWebUI:
         # Templates are now loaded in SessionCoordinator.initialize()
 
         # Create event queues for all existing sessions
-        sessions = await self.coordinator.list_sessions()
-        for s in sessions:
+        sessions_result = await self.coordinator.list_sessions()
+        for s in sessions_result.get("sessions", []):
             sid = s.get('session_id') or (s.get('session') or {}).get('session_id')
             if sid:
                 self.session_queues[sid] = EventQueue()
@@ -764,10 +764,9 @@ class ClaudeWebUI:
 
         @self.app.get("/api/projects")
         @handle_exceptions("list projects")
-        async def list_projects():
+        async def list_projects(limit: int = 200, offset: int = 0):
             """List all projects."""
-            projects = await self.service.list_projects()
-            return {"projects": projects}
+            return await self.service.list_projects(limit=limit, offset=offset)
 
         @self.app.get("/api/projects/{project_id}")
         @handle_exceptions("get project")
@@ -869,12 +868,11 @@ class ClaudeWebUI:
 
         @self.app.get("/api/projects/{project_id}/archives/{session_id}")
         @handle_exceptions("list session archives")
-        async def list_session_archives(project_id: str, session_id: str):
-            """List all archives for a session within a project."""
+        async def list_session_archives(project_id: str, session_id: str, limit: int = 50, offset: int = 0):
+            """List archives for a session within a project, paginated."""
             if not await self.service.validate_project_exists(project_id):
                 raise HTTPException(status_code=404, detail="Project not found")
-            archives = await self.coordinator.get_archives(session_id)
-            return {"archives": archives}
+            return await self.coordinator.get_archives(session_id, limit=limit, offset=offset)
 
         @self.app.get("/api/projects/{project_id}/archives/{session_id}/{archive_id}/messages")
         @handle_exceptions("get archive messages")
@@ -906,15 +904,15 @@ class ClaudeWebUI:
         )
         @handle_exceptions("get archive resources")
         async def get_archive_resources(
-            project_id: str, session_id: str, archive_id: str
+            project_id: str, session_id: str, archive_id: str,
+            limit: int = 100, offset: int = 0
         ):
-            """List resource metadata from an archive."""
+            """List resource metadata from an archive, paginated."""
             if not await self.service.validate_project_exists(project_id):
                 raise HTTPException(status_code=404, detail="Project not found")
-            resources = await self.coordinator.get_archive_resources(
-                session_id, archive_id
+            return await self.coordinator.get_archive_resources(
+                session_id, archive_id, limit=limit, offset=offset
             )
-            return {"resources": resources, "count": len(resources)}
 
         @self.app.get(
             "/api/projects/{project_id}/archives/{session_id}/{archive_id}"
@@ -930,11 +928,11 @@ class ClaudeWebUI:
             if not await self.service.validate_project_exists(project_id):
                 raise HTTPException(status_code=404, detail="Project not found")
 
-            resources = await self.coordinator.get_archive_resources(
-                session_id, archive_id
+            result = await self.coordinator.get_archive_resources(
+                session_id, archive_id, limit=10000
             )
             resource_meta = next(
-                (r for r in resources if r.get("resource_id") == resource_id), None
+                (r for r in result["resources"] if r.get("resource_id") == resource_id), None
             )
             if not resource_meta:
                 raise HTTPException(status_code=404, detail="Resource not found")
@@ -964,12 +962,11 @@ class ClaudeWebUI:
 
         @self.app.get("/api/projects/{project_id}/deleted-agents")
         @handle_exceptions("list deleted agents")
-        async def list_deleted_agents(project_id: str):
-            """List deleted agents with archives for a project."""
+        async def list_deleted_agents(project_id: str, limit: int = 50, offset: int = 0):
+            """List deleted agents with archives for a project, paginated."""
             if not await self.service.validate_project_exists(project_id):
                 raise HTTPException(status_code=404, detail="Project not found")
-            agents = await self.coordinator.list_project_deleted_agents(project_id)
-            return {"agents": agents}
+            return await self.coordinator.list_project_deleted_agents(project_id, limit=limit, offset=offset)
 
         # ==================== SESSION ENDPOINTS ====================
 
@@ -1027,10 +1024,9 @@ class ClaudeWebUI:
 
         @self.app.get("/api/sessions")
         @handle_exceptions("list sessions")
-        async def list_sessions():
+        async def list_sessions(limit: int = 500, offset: int = 0):
             """List all sessions"""
-            sessions = await self.coordinator.list_sessions()
-            return {"sessions": sessions}
+            return await self.coordinator.list_sessions(limit=limit, offset=offset)
 
         @self.app.get("/api/sessions/{session_id}")
         @handle_exceptions("get session info")
@@ -1048,14 +1044,11 @@ class ClaudeWebUI:
 
         @self.app.get("/api/sessions/{session_id}/descendants")
         @handle_exceptions("get session descendants")
-        async def get_session_descendants(session_id: str):
+        async def get_session_descendants(session_id: str, limit: int = 50, offset: int = 0):
             """Get all descendant sessions (children, grandchildren, etc.) of a session"""
-            descendants = await self.coordinator.get_descendants(session_id)
-            return {
-                "session_id": session_id,
-                "descendants": descendants,
-                "count": len(descendants)
-            }
+            result = await self.coordinator.get_descendants(session_id, limit=limit, offset=offset)
+            result["session_id"] = session_id
+            return result
 
         @self.app.post("/api/sessions/{session_id}/start")
         @handle_exceptions("start session")
@@ -1350,17 +1343,23 @@ class ClaudeWebUI:
 
         @self.app.get("/api/sessions/{session_id}/files")
         @handle_exceptions("list session files")
-        async def list_session_files(session_id: str):
-            """List all uploaded files for a session"""
+        async def list_session_files(session_id: str, limit: int = 100, offset: int = 0):
+            """List uploaded files for a session, paginated"""
             # Verify session exists
             if not await self.service.get_session_exists(session_id):
                 raise HTTPException(status_code=404, detail="Session not found")
 
             file_manager = FileUploadManager(self.coordinator.data_dir / "sessions")
-            files = await file_manager.list_files(session_id)
-
+            all_files = await file_manager.list_files(session_id)
+            all_dicts = [f.to_dict() for f in all_files]
+            total = len(all_dicts)
+            sliced = all_dicts[offset : offset + limit]
             return {
-                "files": [f.to_dict() for f in files]
+                "files": sliced,
+                "total": total,
+                "limit": limit,
+                "offset": offset,
+                "has_more": offset + len(sliced) < total,
             }
 
         @self.app.delete("/api/sessions/{session_id}/files/{file_id}")
@@ -1388,12 +1387,11 @@ class ClaudeWebUI:
         # Issue #404: Resource gallery endpoints
         @self.app.get("/api/sessions/{session_id}/resources")
         @handle_exceptions("get session resources")
-        async def get_session_resources(session_id: str):
-            """Get all resource metadata for a session"""
+        async def get_session_resources(session_id: str, limit: int = 100, offset: int = 0):
+            """Get resource metadata for a session, paginated"""
             if not await self.service.get_session_exists(session_id):
                 raise HTTPException(status_code=404, detail="Session not found")
-            resources = await self.coordinator.get_session_resources(session_id)
-            return {"resources": resources, "count": len(resources)}
+            return await self.coordinator.get_session_resources(session_id, limit=limit, offset=offset)
 
         @self.app.get("/api/sessions/{session_id}/resources/{resource_id}")
         @handle_exceptions("get session resource")
@@ -1402,8 +1400,8 @@ class ClaudeWebUI:
             from fastapi.responses import Response
 
             # Get resource metadata to determine content type
-            resources = await self.coordinator.get_session_resources(session_id)
-            resource_meta = next((r for r in resources if r.get("resource_id") == resource_id), None)
+            result = await self.coordinator.get_session_resources(session_id, limit=10000)
+            resource_meta = next((r for r in result["resources"] if r.get("resource_id") == resource_id), None)
 
             if not resource_meta:
                 raise HTTPException(status_code=404, detail="Resource not found")
@@ -1432,8 +1430,8 @@ class ClaudeWebUI:
             from fastapi.responses import Response
 
             # Get resource metadata
-            resources = await self.coordinator.get_session_resources(session_id)
-            resource_meta = next((r for r in resources if r.get("resource_id") == resource_id), None)
+            result = await self.coordinator.get_session_resources(session_id, limit=10000)
+            resource_meta = next((r for r in result["resources"] if r.get("resource_id") == resource_id), None)
 
             if not resource_meta:
                 raise HTTPException(status_code=404, detail="Resource not found")
@@ -1506,10 +1504,9 @@ class ClaudeWebUI:
         # Issue #404: Legacy image endpoints (backward compatibility)
         @self.app.get("/api/sessions/{session_id}/images")
         @handle_exceptions("get session images")
-        async def get_session_images(session_id: str):
-            """Get all image metadata for a session (deprecated, use /resources)"""
-            images = await self.coordinator.get_session_images(session_id)
-            return {"images": images, "count": len(images)}
+        async def get_session_images(session_id: str, limit: int = 100, offset: int = 0):
+            """Get image metadata for a session, paginated (deprecated, use /resources)"""
+            return await self.coordinator.get_session_images(session_id, limit=limit, offset=offset)
 
         @self.app.get("/api/sessions/{session_id}/images/{image_id}")
         @handle_exceptions("get session image")
@@ -1518,8 +1515,8 @@ class ClaudeWebUI:
             from fastapi.responses import Response
 
             # Get image metadata to determine content type
-            images = await self.coordinator.get_session_images(session_id)
-            image_meta = next((img for img in images if img.get("image_id") == image_id), None)
+            result = await self.coordinator.get_session_images(session_id, limit=10000)
+            image_meta = next((img for img in result["images"] if img.get("image_id") == image_id), None)
 
             if not image_meta:
                 raise HTTPException(status_code=404, detail="Image not found")
@@ -2079,16 +2076,13 @@ class ClaudeWebUI:
 
         @self.app.get("/api/sessions/{session_id}/queue")
         @handle_exceptions("get queue")
-        async def get_queue(session_id: str):
-            """List all queue items for a session."""
+        async def get_queue(session_id: str, limit: int = 100, offset: int = 0):
+            """List queue items for a session, paginated."""
             if not await self.service.get_session_exists(session_id):
                 raise HTTPException(status_code=404, detail="Session not found")
-            items = await self.coordinator.get_queue(session_id)
-            pending_count = sum(1 for i in items if i.get("status") == "pending")
-            return {
-                "items": items,
-                "pending_count": pending_count,
-            }
+            result = await self.coordinator.get_queue(session_id, limit=limit, offset=offset)
+            result["pending_count"] = sum(1 for i in result["items"] if i.get("status") == "pending")
+            return result
 
         @self.app.delete("/api/sessions/{session_id}/queue/{queue_id}")
         @handle_exceptions("cancel queue item")
@@ -2344,9 +2338,10 @@ class ClaudeWebUI:
         @self.app.get("/api/legions/{legion_id}/schedules")
         @handle_exceptions("list schedules")
         async def list_schedules(
-            legion_id: str, minion_id: str | None = None, status: str | None = None
+            legion_id: str, minion_id: str | None = None, status: str | None = None,
+            limit: int = 100, offset: int = 0
         ):
-            """List schedules for a legion with optional filters."""
+            """List schedules for a legion with optional filters, paginated."""
             if not await self.service.validate_project_exists(legion_id):
                 raise HTTPException(status_code=404, detail="Project not found")
 
@@ -2361,10 +2356,18 @@ class ClaudeWebUI:
                         detail=f"Invalid status: {status}. Use active, paused, or cancelled",
                     ) from None
 
-            schedules = await self.coordinator.legion_system.scheduler_service.list_schedules(
+            all_schedules = await self.coordinator.legion_system.scheduler_service.list_schedules(
                 legion_id=legion_id, minion_id=minion_id, status=status_filter
             )
-            return {"schedules": [s.to_dict() for s in schedules]}
+            total = len(all_schedules)
+            sliced = all_schedules[offset : offset + limit]
+            return {
+                "schedules": [s.to_dict() for s in sliced],
+                "total": total,
+                "limit": limit,
+                "offset": offset,
+                "has_more": offset + len(sliced) < total,
+            }
 
         @self.app.post("/api/legions/{legion_id}/schedules")
         @handle_exceptions("create schedule", value_error_status=400)
@@ -2896,9 +2899,9 @@ class ClaudeWebUI:
 
         @self.app.get("/api/mcp-configs")
         @handle_exceptions("list MCP configs")
-        async def list_mcp_configs():
-            """List all global MCP server configurations"""
-            return await self.service.list_mcp_configs()
+        async def list_mcp_configs(limit: int = 100, offset: int = 0):
+            """List global MCP server configurations, paginated"""
+            return await self.service.list_mcp_configs(limit=limit, offset=offset)
 
         @self.app.post("/api/mcp-configs")
         @handle_exceptions("create MCP config", value_error_status=400)
@@ -3094,9 +3097,9 @@ class ClaudeWebUI:
 
         @self.app.get("/api/templates")
         @handle_exceptions("list templates")
-        async def list_templates():
-            """List all minion templates"""
-            return await self.service.list_templates()
+        async def list_templates(limit: int = 100, offset: int = 0):
+            """List minion templates, paginated"""
+            return await self.service.list_templates(limit=limit, offset=offset)
 
         @self.app.get("/api/templates/{template_id}")
         @handle_exceptions("get template")

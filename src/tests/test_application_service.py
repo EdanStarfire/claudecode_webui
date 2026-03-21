@@ -133,9 +133,9 @@ async def test_list_projects_returns_dicts(service, mock_coordinator):
 
     result = await service.list_projects()
 
-    assert len(result) == 2
-    assert result[0] == p1.to_dict()
-    assert result[1] == p2.to_dict()
+    assert result["total"] == 2
+    assert result["projects"][0] == p1.to_dict()
+    assert result["projects"][1] == p2.to_dict()
 
 
 @pytest.mark.asyncio
@@ -325,8 +325,8 @@ async def test_list_mcp_configs_returns_dicts(service, mock_coordinator):
 
     result = await service.list_mcp_configs()
 
-    assert len(result) == 2
-    assert result[0] == c1.to_dict()
+    assert result["total"] == 2
+    assert result["configs"][0] == c1.to_dict()
 
 
 @pytest.mark.asyncio
@@ -444,8 +444,8 @@ async def test_list_templates_returns_dicts(service, mock_coordinator):
 
     result = await service.list_templates()
 
-    assert len(result) == 2
-    assert result[0] == t1.to_dict()
+    assert result["total"] == 2
+    assert result["templates"][0] == t1.to_dict()
 
 
 @pytest.mark.asyncio
