@@ -149,7 +149,7 @@ class TestGetDescendants:
         resp = await client.get(f"/api/sessions/{session['session_id']}/descendants")
         assert resp.status_code == 200
         body = resp.json()
-        assert body["count"] == 0
+        assert body["total"] == 0
         assert body["descendants"] == []
 
 

@@ -136,7 +136,8 @@ class TestTemplates:
 
         resp = await client.get("/api/templates")
         assert resp.status_code == 200
-        assert isinstance(resp.json(), list)
+        assert "templates" in resp.json()
+        assert isinstance(resp.json()["templates"], list)
 
     async def test_create_template(self, api_integration_env):
         client = api_integration_env["client"]

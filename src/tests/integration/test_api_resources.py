@@ -130,7 +130,7 @@ class TestListResources:
         assert resp.status_code == 200
         body = resp.json()
         assert "resources" in body
-        assert "count" in body
+        assert "total" in body
 
     async def test_list_resources_after_upload(self, api_integration_env):
         client = api_integration_env["client"]
@@ -145,7 +145,7 @@ class TestListResources:
 
         resp = await client.get(f"/api/sessions/{sid}/resources")
         assert resp.status_code == 200
-        assert resp.json()["count"] >= 1
+        assert resp.json()["total"] >= 1
 
 
 class TestGetResource:
@@ -235,7 +235,7 @@ class TestLegacyImages:
         assert resp.status_code == 200
         body = resp.json()
         assert "images" in body
-        assert "count" in body
+        assert "total" in body
 
     async def test_get_nonexistent_image(self, api_integration_env):
         client = api_integration_env["client"]
