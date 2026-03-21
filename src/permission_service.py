@@ -121,27 +121,39 @@ class PermissionService:
                         session_id, tool_name, input_params
                     )
 
-                    # Issue #616: Race condition — ToolCall may not exist yet because
-                    # _process_sdk_message() hasn't finished processing the AssistantMessage.
-                    # Retry with backoff before giving up.
-                    # Issue #855 will address the underlying race condition.
+                    # Issue #858: Replace polling loop with asyncio.Event wait.
+                    # create_tool_call() signals the event synchronously when a new
+                    # ToolCall is stored, so we wait at most 5 s instead of polling.
                     if not tool_call:
-                        for attempt in range(10):
-                            await asyncio.sleep(0.1)
+                        event = self.coordinator.get_tool_call_event(session_id)
+                        loop = asyncio.get_running_loop()
+                        deadline = loop.time() + 5.0  # 5-second timeout
+                        while True:
+                            remaining = deadline - loop.time()
+                            if remaining <= 0:
+                                break
+                            # Clear before wait to avoid missing a signal that arrives between
+                            # our find() call and the wait() call.
+                            event.clear()
                             tool_call = self.coordinator.find_tool_call_by_signature(
                                 session_id, tool_name, input_params
                             )
                             if tool_call:
-                                logger.debug(
-                                    f"[PERMISSIONS] Race condition resolved: found ToolCall "
-                                    f"for {tool_name} after {attempt + 1} retries "
-                                    f"({(attempt + 1) * 0.1:.1f}s) in session {session_id}"
-                                )
                                 break
-                        else:
+                            try:
+                                await asyncio.wait_for(event.wait(), timeout=remaining)
+                            except TimeoutError:
+                                break
+                            # Event fired — check again
+                            tool_call = self.coordinator.find_tool_call_by_signature(
+                                session_id, tool_name, input_params
+                            )
+                            if tool_call:
+                                break
+                        if not tool_call:
                             logger.warning(
-                                f"[PERMISSIONS] Race condition NOT resolved after 10 retries "
-                                f"(1.0s) for {tool_name} in session {session_id}. "
+                                f"[PERMISSIONS] Race condition NOT resolved after 5.0s "
+                                f"for {tool_name} in session {session_id}. "
                                 f"Auto-denying permission to prevent deadlock."
                             )
 
