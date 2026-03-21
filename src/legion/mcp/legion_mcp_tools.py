@@ -28,6 +28,7 @@ except ImportError:
 
 from src.docker_utils import translate_docker_tmp_path
 from src.session_config import SessionConfig
+from src.task_utils import task_done_log_exception
 
 logger = logging.getLogger(__name__)
 
@@ -2334,7 +2335,8 @@ class LegionMCPTools:
         )
 
         # Spawn background monitor task
-        asyncio.create_task(self._restart_monitor(session_id, restart_id, reason))
+        t = asyncio.create_task(self._restart_monitor(session_id, restart_id, reason))
+        t.add_done_callback(task_done_log_exception)
 
         return {
             "content": [{
@@ -2422,6 +2424,18 @@ class LegionMCPTools:
             )
 
         except Exception as e:
-            logger.error(f"Restart monitor error for session {session_id}: {e}")
+            logger.error(
+                f"Restart monitor unhandled error for session {session_id}: {e}", exc_info=True
+            )
+            if self.system.ui_queue:
+                self.system.ui_queue.append({
+                    "type": "session_restart_error",
+                    "data": {
+                        "session_id": session_id,
+                        "restart_id": restart_id,
+                        "error": str(e),
+                        "timestamp": datetime.now(UTC).isoformat(),
+                    }
+                })
         finally:
             self._pending_restarts.discard(session_id)

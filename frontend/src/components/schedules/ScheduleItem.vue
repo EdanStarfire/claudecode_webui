@@ -24,6 +24,11 @@
       <div class="header-badges">
         <span v-if="isEphemeral" class="type-badge ephemeral" title="Ephemeral — dedicated agent for this schedule">Ephemeral</span>
         <span v-if="isAgentRunning" class="type-badge running" title="Agent session currently active">Running</span>
+        <span
+          v-if="schedule.monitor_error"
+          class="type-badge monitor-error"
+          :title="`Monitor error: ${schedule.monitor_error}`"
+        >Error</span>
         <span class="status-badge" :class="schedule.status">{{ schedule.status }}</span>
       </div>
     </div>
@@ -682,6 +687,11 @@ watch(() => scheduleStore.executionHistory, (storeHistory) => {
   background: #dcfce7;
   color: #166534;
   animation: pulse 2s ease-in-out infinite;
+}
+
+.type-badge.monitor-error {
+  background: #dc3545;
+  color: #fff;
 }
 
 @keyframes pulse {

@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING
 from src.history_distiller import distill_session_history
 from src.logging_config import get_logger
 from src.models.archive_models import ArchiveResult, DisposalMetadata
+from src.task_utils import task_done_log_exception
 
 if TYPE_CHECKING:
     from src.legion_system import LegionSystem
@@ -159,9 +160,10 @@ class ArchiveManager:
                 if archived_messages.exists():
                     history_output = archive_dir / "history.md"
                     archive_ts = datetime.now(UTC).isoformat()
-                    asyncio.create_task(
+                    t = asyncio.create_task(
                         distill_session_history(archived_messages, history_output, minion_id, archive_ts)
                     )
+                    t.add_done_callback(task_done_log_exception)
                     archive_logger.debug(f"Launched history distillation for minion {minion_id}")
 
             return ArchiveResult(

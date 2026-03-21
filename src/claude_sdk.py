@@ -17,6 +17,7 @@ from .logging_config import get_logger
 from .message_parser import MessageParser, MessageProcessor
 from .models.messages import sdk_message_to_stored
 from .session_config import SessionConfig
+from .task_utils import task_done_log_exception
 
 # Import SDK components
 try:
@@ -58,16 +59,10 @@ perm_logger = get_logger('sdk_debug', category='PERMISSIONS')
 logger = logging.getLogger(__name__)
 
 
-def _task_done_log_exception(task: asyncio.Task) -> None:
-    """Done callback: log any exception not already caught inside the coroutine."""
-    if not task.cancelled() and (exc := task.exception()):
-        logger.error("Unhandled exception in background task %s: %s", task.get_name(), exc, exc_info=exc)
-
-
 def _schedule_coro(coro: Coroutine) -> None:
     """Schedule a coroutine as a task and attach error logging done callback."""
     task = asyncio.ensure_future(coro)
-    task.add_done_callback(_task_done_log_exception)
+    task.add_done_callback(task_done_log_exception)
 
 
 class SessionState(Enum):
@@ -101,7 +96,8 @@ class SDKErrorDetectionHandler(logging.Handler):
                     # Schedule the error callback to run in the event loop
                     loop = asyncio.get_event_loop()
                     if loop.is_running():
-                        loop.create_task(self._trigger_error_callback(record.getMessage()))
+                        t = loop.create_task(self._trigger_error_callback(record.getMessage()))
+                        t.add_done_callback(task_done_log_exception)
                     else:
                         asyncio.run(self._trigger_error_callback(record.getMessage()))
         except Exception:

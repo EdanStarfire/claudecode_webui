@@ -184,6 +184,7 @@ export const useScheduleStore = defineStore('schedule', () => {
   /**
    * Handle WebSocket schedule_execution event (Issue #670)
    * Prepends execution to history if the matching schedule is selected.
+   * Also auto-clears any monitor_error on the schedule (transient errors don't persist).
    */
   function handleScheduleExecution(legionId, event) {
     if (!event || !event.execution) return
@@ -194,6 +195,27 @@ export const useScheduleStore = defineStore('schedule', () => {
       executionHistory.value = [event.execution, ...executionHistory.value]
     }
 
+    // Clear any monitor_error when a new execution fires
+    const schedules = schedulesByLegion.value.get(legionId) || []
+    const idx = schedules.findIndex(s => s.schedule_id === scheduleId)
+    if (idx >= 0 && schedules[idx].monitor_error) {
+      schedules[idx] = { ...schedules[idx], monitor_error: null }
+      schedulesByLegion.value.set(legionId, [...schedules])
+    }
+  }
+
+  /**
+   * Handle WebSocket schedule_monitor_error event (Issue #857)
+   * Sets monitor_error on the affected schedule item.
+   */
+  function handleScheduleMonitorError(legionId, event) {
+    if (!event || !event.schedule_id) return
+    const schedules = schedulesByLegion.value.get(legionId) || []
+    const idx = schedules.findIndex(s => s.schedule_id === event.schedule_id)
+    if (idx >= 0) {
+      schedules[idx] = { ...schedules[idx], monitor_error: event.error }
+      schedulesByLegion.value.set(legionId, [...schedules])
+    }
   }
 
   // ========== INTERNAL HELPERS ==========
@@ -278,5 +300,6 @@ export const useScheduleStore = defineStore('schedule', () => {
     runNow,
     handleScheduleEvent,
     handleScheduleExecution,
+    handleScheduleMonitorError,
   }
 })
