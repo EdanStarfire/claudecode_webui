@@ -7,6 +7,8 @@ import logging
 
 from fastapi import HTTPException
 
+from src.logging_config import get_debug_flag
+
 logger = logging.getLogger(__name__)
 
 
@@ -39,9 +41,11 @@ def handle_exceptions(action: str, *, value_error_status: int | None = None):
                 if value_error_status is not None:
                     raise HTTPException(status_code=value_error_status, detail=str(e)) from e
                 logger.exception("Failed to %s", action)
-                raise HTTPException(status_code=500, detail=str(e)) from e
+                detail = str(e) if get_debug_flag('debug_error_handler') else "An internal error occurred"
+                raise HTTPException(status_code=500, detail=detail) from e
             except Exception as e:
                 logger.exception("Failed to %s", action)
-                raise HTTPException(status_code=500, detail=str(e)) from e
+                detail = str(e) if get_debug_flag('debug_error_handler') else "An internal error occurred"
+                raise HTTPException(status_code=500, detail=detail) from e
         return wrapper
     return decorator

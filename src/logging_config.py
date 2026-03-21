@@ -357,3 +357,15 @@ def get_logger(name: str, category: str | None = None) -> logging.Logger:
 def get_main_logger() -> logging.Logger:
     """Get the main application logger for general errors."""
     return logging.getLogger()
+
+
+def get_debug_flag(key: str) -> bool:
+    """Return True if the named debug flag is currently enabled.
+
+    Args:
+        key: A key from _log_config (e.g., 'debug_error_handler', 'debug_all')
+
+    Returns:
+        True if the flag is enabled, False if disabled or not yet configured.
+    """
+    return bool(_log_config.get(key, False))
