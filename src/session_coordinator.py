@@ -121,6 +121,10 @@ class SessionCoordinator:
         # Maps session_id -> {tool_use_id: ToolCall}
         self._active_tool_calls: dict[str, dict[str, ToolCall]] = {}
 
+        # Issue #858: Per-session event notified on every create_tool_call(), allowing
+        # permission callbacks to wait efficiently instead of polling.
+        self._tool_call_events: dict[str, asyncio.Event] = {}
+
         # Issue #403: Uploaded file paths per session for auto-approve Read permissions
         # Maps session_id -> set of absolute file paths
         self._uploaded_file_paths: dict[str, set[str]] = {}
@@ -1201,6 +1205,8 @@ class SessionCoordinator:
             # Issue #310: Cleanup display projection
             if session_id in self._display_projections:
                 del self._display_projections[session_id]
+            # Issue #858: Cleanup per-session tool-call event
+            self._tool_call_events.pop(session_id, None)
 
             if success:
                 await self._notify_state_change(session_id, SessionState.TERMINATED)
@@ -1508,6 +1514,8 @@ class SessionCoordinator:
                 del self._message_callbacks[session_id]
             if session_id in self._error_callbacks:
                 del self._error_callbacks[session_id]
+            # Issue #858: Cleanup per-session tool-call event
+            self._tool_call_events.pop(session_id, None)
 
             # Step 4: Force multiple garbage collections to ensure all handles are released
             gc.collect()
@@ -1876,6 +1884,9 @@ class SessionCoordinator:
 
             # Issue #310: Reset DisplayProjection state (clears tool tracking)
             self._reset_display_projection(session_id)
+            # Issue #858: Clear event so stale set() signals don't skip the next wait.
+            if session_id in self._tool_call_events:
+                self._tool_call_events[session_id].clear()
 
             # Issue #500: Notify frontend to clear messages for this session
             await self._notify_session_reset(session_id)
@@ -2891,6 +2902,10 @@ class SessionCoordinator:
             self._active_tool_calls[session_id] = {}
         self._active_tool_calls[session_id][tool_use_id] = tool_call
 
+        # Issue #858: Notify any permission callbacks waiting for this tool call.
+        if session_id in self._tool_call_events:
+            self._tool_call_events[session_id].set()
+
         coord_logger.debug(
             f"Created ToolCall {tool_use_id} for {name} in session {session_id}"
         )
@@ -3121,6 +3136,12 @@ class SessionCoordinator:
     def get_active_tool_calls(self, session_id: str) -> list[ToolCall]:
         """Get all active tool calls for a session."""
         return list(self._active_tool_calls.get(session_id, {}).values())
+
+    def get_tool_call_event(self, session_id: str) -> asyncio.Event:
+        """Return (creating if necessary) the per-session tool-call notification event."""
+        if session_id not in self._tool_call_events:
+            self._tool_call_events[session_id] = asyncio.Event()
+        return self._tool_call_events[session_id]
 
     def _get_active_tool_call(self, session_id: str, tool_use_id: str) -> ToolCall | None:
         """Get a specific active tool call."""
