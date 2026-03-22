@@ -2027,10 +2027,34 @@ class SessionCoordinator:
                     "message_count": await storage.get_message_count()
                 }
 
+            # Augment with SDK session metadata if claude_code_session_id is available
+            sdk_session_info = None
+            if session_info.claude_code_session_id:
+                try:
+                    from claude_agent_sdk import get_session_info as sdk_get_session_info
+                    result = await asyncio.to_thread(
+                        sdk_get_session_info,
+                        session_info.claude_code_session_id,
+                        session_info.working_directory,
+                    )
+                    if result:
+                        sdk_session_info = {
+                            "summary": result.summary,
+                            "custom_title": result.custom_title,
+                            "git_branch": result.git_branch,
+                            "first_prompt": result.first_prompt,
+                            "tag": result.tag,
+                            "created_at": str(result.created_at) if result.created_at else None,
+                            "last_modified": str(result.last_modified) if result.last_modified else None,
+                        }
+                except Exception:
+                    logger.warning(f"SDK get_session_info failed for {session_id}")
+
             return {
                 "session": session_info.to_dict(),
                 "sdk": sdk_info,
-                "storage": storage_info
+                "storage": storage_info,
+                "sdk_session_info": sdk_session_info,
             }
 
         except Exception:

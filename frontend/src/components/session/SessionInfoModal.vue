@@ -14,7 +14,17 @@
           <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
         </div>
         <div class="modal-body">
-          <div v-if="!initData" class="text-center text-muted py-4">
+          <!-- Loading state -->
+          <div v-if="isLoading" class="text-center py-4">
+            <div class="spinner-border spinner-border-sm me-2" role="status"></div>
+            Loading session info...
+          </div>
+
+          <!-- Error state -->
+          <div v-else-if="fetchError" class="text-danger small py-2">{{ fetchError }}</div>
+
+          <!-- No data -->
+          <div v-else-if="!displayData" class="text-center text-muted py-4">
             No session configuration data available
           </div>
 
@@ -31,7 +41,7 @@
               <input
                 type="text"
                 class="form-control form-control-sm font-monospace path-input"
-                :value="initData.cwd || 'Not specified'"
+                :value="displayData.cwd || 'Not specified'"
                 readonly
                 @click="selectPath"
               />
@@ -40,13 +50,13 @@
             <!-- Model -->
             <div class="mb-3">
               <h6 class="text-muted">Model</h6>
-              <div>{{ getModelDisplayName(initData.model) }}</div>
+              <div>{{ getModelDisplayName(displayData.model) }}</div>
             </div>
 
             <!-- Permission Mode -->
             <div class="mb-3">
               <h6 class="text-muted">Permission Mode</h6>
-              <div>{{ initData.permissionMode || 'default' }}</div>
+              <div>{{ displayData.permissionMode || 'default' }}</div>
             </div>
 
             <!-- Pre-Authorized Tools -->
@@ -104,24 +114,21 @@
               </div>
             </div>
 
-            <!-- Commands -->
-            <div v-if="initData.commands && initData.commands.length > 0" class="mb-3">
-              <h6 class="text-muted">Commands</h6>
-              <div class="d-flex flex-wrap gap-1">
-                <span
-                  v-for="command in initData.commands"
-                  :key="command"
-                  class="badge bg-info"
-                >
-                  {{ command }}
-                </span>
-              </div>
+            <!-- System Prompt -->
+            <div v-if="displayData.systemPrompt" class="mb-3">
+              <h6 class="text-muted">System Prompt</h6>
+              <pre class="bg-light p-2 rounded small" style="max-height: 200px; overflow-y: auto;">{{ formatSystemPrompt(displayData.systemPrompt) }}</pre>
             </div>
 
-            <!-- System Prompt -->
-            <div v-if="initData.systemPrompt" class="mb-3">
-              <h6 class="text-muted">System Prompt</h6>
-              <pre class="bg-light p-2 rounded small" style="max-height: 200px; overflow-y: auto;">{{ formatSystemPrompt(initData.systemPrompt) }}</pre>
+            <!-- SDK Session Info (git branch, summary) -->
+            <div v-if="sdkSessionInfo" class="mb-3">
+              <h6 class="text-muted">SDK Session</h6>
+              <div v-if="sdkSessionInfo.git_branch" class="small font-monospace">
+                Branch: {{ sdkSessionInfo.git_branch }}
+              </div>
+              <div v-if="sdkSessionInfo.summary" class="small text-muted mt-1">
+                {{ sdkSessionInfo.summary }}
+              </div>
             </div>
 
             <!-- Settings (full data dump for advanced users) -->
@@ -140,11 +147,18 @@
                 v-if="showRawData"
                 class="bg-light p-2 rounded small"
                 style="max-height: 300px; overflow-y: auto;"
-              >{{ JSON.stringify(initData, null, 2) }}</pre>
+              >{{ JSON.stringify(sessionData, null, 2) }}</pre>
             </div>
           </div>
         </div>
         <div class="modal-footer">
+          <button
+            class="btn btn-outline-secondary btn-sm"
+            @click="fetchSessionInfo(sessionId)"
+            :disabled="isLoading || !sessionId"
+          >
+            Refresh
+          </button>
           <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
         </div>
       </div>
@@ -155,14 +169,13 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useSessionStore } from '@/stores/session'
-import { useMessageStore } from '@/stores/message'
 import { useUIStore } from '@/stores/ui'
 import { useMcpStore } from '@/stores/mcp'
 import { useMcpConfigStore } from '@/stores/mcpConfig'
+import { api } from '@/utils/api'
 import McpServerDetail from './McpServerDetail.vue'
 
 const sessionStore = useSessionStore()
-const messageStore = useMessageStore()
 const uiStore = useUIStore()
 const mcpStore = useMcpStore()
 const mcpConfigStore = useMcpConfigStore()
@@ -171,6 +184,9 @@ const mcpConfigStore = useMcpConfigStore()
 const sessionId = ref(null)
 const showRawData = ref(false)
 const modalElement = ref(null)
+const sessionData = ref(null)
+const isLoading = ref(false)
+const fetchError = ref(null)
 let modalInstance = null
 
 // Model display names mapping
@@ -181,32 +197,28 @@ const modelDisplayNames = {
   'opusplan': 'OpusPlan (Opus + Sonnet)'
 }
 
-// Get init data - try session store first, then search messages
-const initData = computed(() => {
-  if (!sessionId.value) {
-    return null
+// Derive display data from API response, falling back to Pinia initData
+const displayData = computed(() => {
+  const s = sessionData.value?.session
+  if (s) {
+    return {
+      cwd: s.working_directory,
+      model: s.model,
+      permissionMode: s.current_permission_mode,
+      allowed_tools: s.allowed_tools || [],
+      systemPrompt: s.system_prompt || s.override_system_prompt,
+    }
   }
-
-  // First check if we have it in session store
-  const storedInitData = sessionStore.initData.get(sessionId.value)
-  if (storedInitData) {
-    return storedInitData
-  }
-
-  // Fall back to searching messages for init message
-  const messages = messageStore.messagesBySession.get(sessionId.value) || []
-  const initMessage = messages.find(msg =>
-    msg.type === 'system' &&
-    (msg.subtype === 'init' || msg.metadata?.subtype === 'init') &&
-    msg.metadata?.init_data
-  )
-
-  return initMessage?.metadata?.init_data || null
+  // Fallback: Pinia initData (populated from SDK init message)
+  if (!sessionId.value) return null
+  return sessionStore.initData.get(sessionId.value) || null
 })
+
+const sdkSessionInfo = computed(() => sessionData.value?.sdk_session_info || null)
 
 // Filter out mcp__* tools from pre-authorized list (shown in MCP section instead)
 const nonMcpTools = computed(() => {
-  const tools = initData.value?.allowed_tools || initData.value?.tools || []
+  const tools = displayData.value?.allowed_tools || displayData.value?.tools || []
   return tools.filter(t => !t.startsWith('mcp__'))
 })
 
@@ -248,6 +260,21 @@ function handleReconnect(name) {
   }
 }
 
+// Fetch session info from API
+async function fetchSessionInfo(sid) {
+  if (!sid) return
+  isLoading.value = true
+  fetchError.value = null
+  try {
+    const result = await api.get(`/api/sessions/${sid}`)
+    sessionData.value = result
+  } catch (e) {
+    fetchError.value = e.message
+  } finally {
+    isLoading.value = false
+  }
+}
+
 // Get human-readable model display name
 function getModelDisplayName(modelId) {
   if (!modelId) {
@@ -276,6 +303,8 @@ function selectPath(event) {
 function resetState() {
   sessionId.value = null
   showRawData.value = false
+  sessionData.value = null
+  fetchError.value = null
 }
 
 // Handle modal hidden event
@@ -291,9 +320,11 @@ watch(
     if (modal?.name === 'session-info' && modalInstance) {
       const data = modal.data || {}
       sessionId.value = data.sessionId
-      showRawData.value = false  // Reset just the raw data toggle, not sessionId
-      // Fetch MCP status if session is active
+      sessionData.value = null
+      showRawData.value = false
       if (data.sessionId) {
+        fetchSessionInfo(data.sessionId)
+        // Fetch MCP status if session is active
         const session = sessionStore.sessions.get(data.sessionId)
         if (session?.state === 'active') {
           mcpStore.fetchMcpStatus(data.sessionId)
