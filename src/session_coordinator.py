@@ -3680,11 +3680,16 @@ class SessionCoordinator:
                 "Check stderr output for details": "See error details above",
                 "Claude Code command failed - see details above": "Claude Code CLI failed - check error details",
                 # Issue #781: Container crash patterns (passthrough — already parsed by ClaudeSDK)
+                # Issue #893: All classification prefixes must be listed here
                 "Container crash detected": None,
+                "Process exited with error": None,
+                "Process terminated": None,
+                "Container setup error": None,
                 "SDK response exceeded maximum buffer size": None,
                 "Docker image not found": None,
                 "Docker daemon is not running": None,
                 "Docker socket permission denied": None,
+                "Nested Claude Code session detected": None,
             }
 
             # Check for known patterns and provide clearer descriptions
