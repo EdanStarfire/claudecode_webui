@@ -1,7 +1,23 @@
 <template>
   <div class="resource-gallery-panel">
-    <!-- View Toggle (Issue #523) -->
-    <div v-if="resources.length > 0" class="view-toggle">
+    <!-- Controls bar: search + sort + view toggle -->
+    <div v-if="resources.length > 0" class="gallery-controls">
+      <!-- Search -->
+      <input
+        v-model="searchQuery"
+        type="search"
+        class="gallery-search"
+        placeholder="Filter…"
+        aria-label="Filter resources"
+      />
+      <!-- Sort -->
+      <select v-model="sortOrder" class="gallery-sort" aria-label="Sort resources">
+        <option value="newest">Newest</option>
+        <option value="oldest">Oldest</option>
+        <option value="name-asc">Name A→Z</option>
+        <option value="name-desc">Name Z→A</option>
+      </select>
+      <!-- View toggle (Issue #523) -->
       <button
         class="toggle-btn"
         :class="{ active: viewMode === 'gallery' }"
@@ -32,10 +48,14 @@
         <span>Resources shared by the agent will appear here</span>
       </div>
 
+      <div v-else-if="filteredResources.length === 0" class="empty-placeholder">
+        <span>No resources match "{{ searchQuery }}"</span>
+      </div>
+
       <!-- Gallery View -->
       <div v-else-if="viewMode === 'gallery'" class="resource-grid">
         <div
-          v-for="(resource, index) in resources"
+          v-for="resource in filteredResources"
           :key="resource.resource_id"
           class="resource-item"
           :class="{ 'is-image': isImage(resource) }"
@@ -56,7 +76,7 @@
           <div
             v-if="isImage(resource)"
             class="resource-thumbnail"
-            @click="openFullView(index)"
+            @click="openFullViewForResource(resource)"
             :title="resource.title || 'Click to view'"
           >
             <img
@@ -72,7 +92,7 @@
             v-else
             class="resource-placeholder"
             :title="resource.title || resource.original_filename || 'Click to view'"
-            @click="openFullView(index)"
+            @click="openFullViewForResource(resource)"
           >
             <span class="file-icon">{{ getIcon(resource) }}</span>
             <span class="file-ext">{{ getExtension(resource) }}</span>
@@ -115,10 +135,10 @@
       <!-- List View (Issue #523) -->
       <div v-else class="resource-list">
         <div
-          v-for="(resource, index) in resources"
+          v-for="resource in filteredResources"
           :key="resource.resource_id"
           class="resource-list-item"
-          @click="openFullView(index)"
+          @click="openFullViewForResource(resource)"
         >
           <span class="list-item-icon">{{ getIcon(resource) }}</span>
           <span class="list-item-title" :title="resource.title || resource.original_filename">
@@ -187,9 +207,59 @@ watch(viewMode, (val) => {
 
 defineExpose({ viewMode, setViewMode })
 
+// Filter state — resets on session switch
+const searchQuery = ref('')
+
+// Sort state — persists across sessions (like viewMode)
+const sortOrder = ref(localStorage.getItem('resource-sort-preference') || 'newest')
+
+watch(sortOrder, (val) => {
+  localStorage.setItem('resource-sort-preference', val)
+})
+
+watch(() => sessionStore.currentSessionId, () => {
+  searchQuery.value = ''
+})
+
 // Computed properties
 const resources = computed(() => resourceStore.currentResources)
-const resourceCount = computed(() => resourceStore.currentResourceCount)
+
+/**
+ * Filter by search query and apply sort order.
+ * Store baseline order is timestamp ascending (oldest first).
+ */
+const filteredResources = computed(() => {
+  let list = resources.value
+
+  // Filter by title / filename
+  const q = searchQuery.value.trim().toLowerCase()
+  if (q) {
+    list = list.filter((r) => {
+      const name = (r.title || r.original_filename || '').toLowerCase()
+      return name.includes(q)
+    })
+  }
+
+  // Sort
+  if (sortOrder.value === 'newest') {
+    list = [...list].reverse()
+  } else if (sortOrder.value === 'name-asc') {
+    list = [...list].sort((a, b) => {
+      const na = (a.title || a.original_filename || '').toLowerCase()
+      const nb = (b.title || b.original_filename || '').toLowerCase()
+      return na.localeCompare(nb)
+    })
+  } else if (sortOrder.value === 'name-desc') {
+    list = [...list].sort((a, b) => {
+      const na = (a.title || a.original_filename || '').toLowerCase()
+      const nb = (b.title || b.original_filename || '').toLowerCase()
+      return nb.localeCompare(na)
+    })
+  }
+  // sortOrder === 'oldest' → store baseline order (timestamp ascending) as-is
+
+  return list
+})
 
 function isImage(resource) {
   return resourceStore.isImageResource(resource)
@@ -212,8 +282,13 @@ function getDownloadUrl(resourceId) {
   return resourceStore.getDownloadUrl(sessionStore.currentSessionId, resourceId)
 }
 
-function openFullView(index) {
-  resourceStore.openFullView(sessionStore.currentSessionId, index)
+/**
+ * Open full view using the resource's index in the unfiltered store array so
+ * next/prev navigation covers all resources regardless of active filters.
+ */
+function openFullViewForResource(resource) {
+  const storeIndex = resources.value.findIndex((r) => r.resource_id === resource.resource_id)
+  resourceStore.openFullView(sessionStore.currentSessionId, storeIndex >= 0 ? storeIndex : 0)
 }
 
 function truncateTitle(title, maxLength = 18) {
@@ -403,15 +478,51 @@ function addToAttachments(resource) {
   display: block;
 }
 
-/* Issue #523: View toggle */
-.view-toggle {
+/* Controls bar: search + sort + view toggle */
+.gallery-controls {
   display: flex;
-  gap: 2px;
+  align-items: center;
+  gap: 4px;
   padding: 6px 8px;
   border-bottom: 1px solid #e2e8f0;
   flex-shrink: 0;
 }
 
+.gallery-search {
+  flex: 1;
+  min-width: 0;
+  padding: 3px 6px;
+  font-size: 0.75rem;
+  border: 1px solid #dee2e6;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  outline: none;
+}
+
+.gallery-search:focus {
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
+}
+
+.gallery-sort {
+  flex-shrink: 0;
+  padding: 3px 4px;
+  font-size: 0.7rem;
+  border: 1px solid #dee2e6;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  max-width: 72px;
+  outline: none;
+}
+
+.gallery-sort:focus {
+  border-color: #3b82f6;
+}
+
+/* Issue #523: View toggle */
 .toggle-btn {
   padding: 4px 8px;
   border: 1px solid #dee2e6;
@@ -423,6 +534,7 @@ function addToAttachments(resource) {
   justify-content: center;
   border-radius: 4px;
   transition: all 0.15s ease;
+  flex-shrink: 0;
 }
 
 .toggle-btn:hover {
