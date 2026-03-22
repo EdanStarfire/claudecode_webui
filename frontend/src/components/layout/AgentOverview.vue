@@ -2,14 +2,11 @@
   <div class="agent-overview" v-if="session">
     <!-- Agent Identity -->
     <div class="overview-identity">
-      <div class="overview-avatar" :style="{ background: avatarColor }">
-        {{ avatarLetter }}
-      </div>
+      <div class="overview-avatar" :class="isArchiveMode ? 'status-archived-sq' : statusClass" :aria-label="`Agent status: ${statusLabel}`"></div>
       <div class="overview-info">
         <div class="overview-name">{{ session.name || 'Agent' }}</div>
+        <div class="overview-sdk-title" v-if="session.sdk_generated_name">{{ session.sdk_generated_name }}</div>
         <div class="overview-role" v-if="session.role">{{ session.role }}</div>
-        <span v-if="isArchiveMode" class="overview-status-badge status-archived" role="status" aria-label="Archived">ARCHIVED</span>
-        <span v-else class="overview-status-badge" :class="statusClass" role="status" :aria-label="`Agent status: ${statusLabel}`">{{ statusLabel }}</span>
       </div>
     </div>
 
@@ -114,21 +111,6 @@ const session = computed(() => {
     return { session_id: id, name: ghost.name, role: ghost.role, state: 'terminated' }
   }
   return null
-})
-
-const avatarLetter = computed(() => {
-  const name = session.value?.name || 'A'
-  return name.charAt(0).toUpperCase()
-})
-
-const avatarColor = computed(() => {
-  const name = session.value?.name || ''
-  let hash = 0
-  for (let i = 0; i < name.length; i++) {
-    hash = name.charCodeAt(i) + ((hash << 5) - hash)
-  }
-  const hue = Math.abs(hash % 360)
-  return `hsl(${hue}, 60%, 55%)`
 })
 
 const statusClass = computed(() => {
@@ -363,21 +345,25 @@ function showInfo() {
   margin-bottom: 10px;
 }
 
+/* Status-colored square (large version — no letter) */
 .overview-avatar {
   width: 40px;
   height: 40px;
-  border-radius: 10px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 18px;
-  font-weight: 700;
-  color: white;
+  border-radius: 8px;
   flex-shrink: 0;
 }
 
+.overview-avatar.status-active      { background: #8b5cf6; }
+.overview-avatar.status-idle        { background: #22c55e; }
+.overview-avatar.status-waiting     { background: #f59e0b; }
+.overview-avatar.status-error       { background: #ef4444; }
+.overview-avatar.status-terminated  { background: #cbd5e1; }
+.overview-avatar.status-none        { background: #94a3b8; }
+.overview-avatar.status-archived-sq { background: #fbbf24; }
+
 .overview-info {
   min-width: 0;
+  overflow: hidden;
 }
 
 .overview-name {
@@ -389,28 +375,20 @@ function showInfo() {
   text-overflow: ellipsis;
 }
 
-.overview-role {
+.overview-sdk-title {
   font-size: 11px;
   color: #64748b;
-  margin-bottom: 2px;
+  font-style: italic;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-bottom: 1px;
 }
 
-.overview-status-badge {
-  display: inline-block;
-  font-size: 10px;
-  font-weight: 600;
-  padding: 1px 8px;
-  border-radius: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.3px;
+.overview-role {
+  font-size: 11px;
+  color: #94a3b8;
 }
-
-.status-active { background: #ede9fe; color: #5b21b6; }
-.status-idle { background: #dcfce7; color: #166534; }
-.status-waiting { background: #ffedd5; color: #9a3412; }
-.status-error { background: #fee2e2; color: #991b1b; }
-.status-terminated { background: #f1f5f9; color: #475569; }
-.status-none { background: #f1f5f9; color: #94a3b8; }
 
 /* Stats Grid */
 .overview-stats {
@@ -478,7 +456,6 @@ function showInfo() {
   color: #1d4ed8;
 }
 
-.status-archived { background: #fef3cd; color: #664d03; }
 
 /* Archive Navigation */
 .archive-nav {

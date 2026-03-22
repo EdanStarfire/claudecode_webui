@@ -231,7 +231,7 @@ function handleGhostDismiss(agentId) {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 16px;
+  padding: 0 16px;
   overflow-x: auto;
   flex-shrink: 0;
 }

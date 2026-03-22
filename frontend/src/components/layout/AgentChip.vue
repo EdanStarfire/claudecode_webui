@@ -17,20 +17,15 @@
     @touchcancel="onTouchCancel"
     :title="chipTooltip"
   >
-    <!-- Letter icon (ghost uses faded style) -->
-    <div v-if="!isGhost" class="ac-letter-icon" :class="statusClass">
-      {{ letterIcon }}
-    </div>
-    <div v-else class="ac-letter-icon ghost">
-      {{ letterIcon }}
-    </div>
+    <!-- Status square (no letter — compact indicator) -->
+    <div class="ac-status-sq" :class="isGhost ? 'ghost' : statusClass"></div>
 
-    <!-- Info stack -->
+    <!-- Info stack — width driven by name; description truncates within it -->
     <div class="ac-info">
       <div class="ac-name">{{ displayName }}</div>
       <div v-if="sdkTitle" class="ac-sdk-title">{{ sdkTitle }}</div>
-      <div v-if="isGhost" class="ac-status">Deleted</div>
-      <div v-else-if="roleDescription" class="ac-description">{{ roleDescription }}</div>
+      <div v-if="isGhost" class="ac-desc-line">Deleted</div>
+      <div v-else-if="roleDescription" class="ac-desc-line">{{ roleDescription }}</div>
     </div>
 
     <!-- Ghost dismiss button -->
@@ -102,10 +97,6 @@ const displayName = computed(() =>
   props.session.name || props.session.role || 'Agent'
 )
 
-const letterIcon = computed(() =>
-  (props.session.name || props.session.role || 'A')[0].toUpperCase()
-)
-
 const sdkTitle = computed(() => props.session.sdk_generated_name || null)
 
 const roleDescription = computed(() => {
@@ -168,9 +159,9 @@ function handleClick() {
 <style scoped>
 .agent-chip {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 8px;
-  padding: 8px 12px;
+  padding: 6px 12px;
   border-radius: 10px;
   border: 1px solid #e2e8f0;
   background: #fff;
@@ -208,34 +199,29 @@ function handleClick() {
   box-shadow: none;
 }
 
-/* Letter icon */
-.ac-letter-icon {
-  width: 32px;
-  height: 32px;
-  border-radius: 6px;
+/* Compact status square — replaces dot, no letter */
+.ac-status-sq {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
   flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 14px;
-  font-weight: 700;
-  color: #fff;
-  border: 2px solid transparent;
 }
 
-.ac-letter-icon.created      { background: #94a3b8; border-color: #94a3b8; }
-.ac-letter-icon.starting     { background: #3b82f6; border-color: #3b82f6; animation: pulse-starting 1.2s infinite; }
-.ac-letter-icon.active       { background: #22c55e; border-color: #22c55e; }
-.ac-letter-icon.active-processing { background: #8b5cf6; border-color: #8b5cf6; }
-.ac-letter-icon.paused       { background: #f59e0b; border-color: #f59e0b; }
-.ac-letter-icon.terminating  { background: #f97316; border-color: #f97316; }
-.ac-letter-icon.terminated   { background: #cbd5e1; border-color: #cbd5e1; color: #94a3b8; }
-.ac-letter-icon.error        { background: #ef4444; border-color: #ef4444; animation: pulse-error 1.5s infinite; }
-.ac-letter-icon.ghost        { background: #f1f5f9; border-color: #cbd5e1; color: #94a3b8; }
+.ac-status-sq.created      { background: #94a3b8; }
+.ac-status-sq.starting     { background: #3b82f6; animation: pulse-starting 1.2s infinite; }
+.ac-status-sq.active       { background: #22c55e; }
+.ac-status-sq.active-processing { background: #8b5cf6; }
+.ac-status-sq.paused       { background: #f59e0b; }
+.ac-status-sq.terminating  { background: #f97316; }
+.ac-status-sq.terminated   { background: #cbd5e1; }
+.ac-status-sq.error        { background: #ef4444; animation: pulse-error 1.5s infinite; }
+.ac-status-sq.ghost        { background: #e2e8f0; }
 
+/* Info column — name drives chip width; subtitle/description truncate within it */
 .ac-info {
   display: flex;
   flex-direction: column;
+  overflow: hidden;
   min-width: 0;
 }
 
@@ -244,41 +230,31 @@ function handleClick() {
   font-weight: 600;
   color: #1e293b;
   line-height: 1.2;
-  max-width: 150px;
-  overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+/* Subtitle lines truncate within the name-determined width */
 .ac-sdk-title {
   font-size: 10px;
   color: #475569;
   font-style: italic;
   line-height: 1.3;
-  max-width: 150px;
+  white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
+  width: 0;
+  min-width: 100%;
 }
 
-.ac-description {
+.ac-desc-line {
   font-size: 10px;
   color: #94a3b8;
   line-height: 1.3;
-  max-width: 150px;
+  white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.ac-status {
-  font-size: 10px;
-  color: #64748b;
-  line-height: 1.2;
-  max-width: 140px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  width: 0;
+  min-width: 100%;
 }
 
 .ac-alert {
