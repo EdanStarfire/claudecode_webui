@@ -205,6 +205,7 @@ class SessionUpdateRequest(BaseModel):
     mcp_server_ids: list[str] | None = None
     enable_claudeai_mcp_servers: bool | None = None
     strict_mcp_config: bool | None = None
+    bare_mode: bool | None = None
 
 
 class SessionReorderRequest(BaseModel):
@@ -1229,6 +1230,8 @@ class ClaudeWebUI:
                 updates["enable_claudeai_mcp_servers"] = request.enable_claudeai_mcp_servers
             if request.strict_mcp_config is not None:
                 updates["strict_mcp_config"] = request.strict_mcp_config
+            if request.bare_mode is not None:
+                updates["bare_mode"] = request.bare_mode
 
             if not updates:
                 return {"success": True, "message": "No fields to update"}
