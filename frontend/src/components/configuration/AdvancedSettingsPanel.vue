@@ -331,7 +331,7 @@
             class="form-control form-control-sm font-monospace"
             id="adv-auto-memory-dir"
             :value="formData.auto_memory_directory || ''"
-            placeholder="Leave blank to use Claude default"
+            placeholder="e.g. /custom/path/to/memory (leave blank for Claude default)"
             @input="$emit('update:form-data', 'auto_memory_directory', $event.target.value || null)"
           />
           <small class="form-text text-muted d-block">
