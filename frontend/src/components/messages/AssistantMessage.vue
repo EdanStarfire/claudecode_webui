@@ -16,19 +16,27 @@
       <div v-if="hasContent" class="msg-content-row">
         <div class="msg-text" ref="contentRef" v-html="renderedContent"></div>
         <button
-          class="copy-md-icon"
-          :style="{ right: tts ? '16px' : '-8px' }"
-          @click.stop="onCopyClick"
-          :aria-label="copyState === 'copied' ? 'Copied!' : 'Copy markdown'"
-          :title="copyState === 'copied' ? 'Copied!' : 'Copy markdown'"
-        >{{ copyState === 'copied' ? '✓' : '&#x1F4CB;' }}</button>
-        <button
           v-if="tts"
           class="tts-play-icon"
           @click.stop="onPlayClick"
           aria-label="Read aloud from this message"
           title="Read aloud"
         >&#x1F50A;</button>
+        <button
+          class="copy-markdown-btn"
+          @click.stop="copyMarkdown"
+          :title="copyFeedback ? 'Copied!' : 'Copy markdown'"
+          :style="{ right: tts ? '16px' : '-8px' }"
+          aria-label="Copy raw markdown"
+        >
+          <svg v-if="copyFeedback" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="20 6 9 17 4 12"></polyline>
+          </svg>
+          <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2 2v1"></path>
+          </svg>
+        </button>
       </div>
 
       <!-- Activity Timeline (compact dot timeline) — excludes Task tools and child tools -->
@@ -98,18 +106,14 @@ function onPlayClick() {
   tts.playMessage(props.message, allMessages.value)
 }
 
-const copyState = ref('idle')
+const copyFeedback = ref(false)
 let copyTimer = null
 
-async function onCopyClick() {
-  try {
-    await navigator.clipboard.writeText(rawContent.value)
-    copyState.value = 'copied'
-    clearTimeout(copyTimer)
-    copyTimer = setTimeout(() => { copyState.value = 'idle' }, 1500)
-  } catch {
-    // clipboard unavailable
-  }
+async function copyMarkdown() {
+  await navigator.clipboard.writeText(rawContent.value)
+  copyFeedback.value = true
+  clearTimeout(copyTimer)
+  copyTimer = setTimeout(() => { copyFeedback.value = false }, 2000)
 }
 
 onUnmounted(() => clearTimeout(copyTimer))
@@ -369,7 +373,7 @@ const hasAnythingToShow = computed(() => {
   position: relative;
 }
 
-.copy-md-icon,
+.copy-markdown-btn,
 .tts-play-icon {
   position: absolute;
   top: 0;
@@ -387,12 +391,12 @@ const hasAnythingToShow = computed(() => {
   right: -8px;
 }
 
-.msg-content-row:hover .copy-md-icon,
+.msg-content-row:hover .copy-markdown-btn,
 .msg-content-row:hover .tts-play-icon {
   opacity: 0.6;
 }
 
-.copy-md-icon:hover,
+.copy-markdown-btn:hover,
 .tts-play-icon:hover {
   opacity: 1 !important;
 }
@@ -412,7 +416,7 @@ const hasAnythingToShow = computed(() => {
     width: 95%;
   }
 
-  .copy-md-icon,
+  .copy-markdown-btn,
   .tts-play-icon {
     opacity: 0.5;
   }
