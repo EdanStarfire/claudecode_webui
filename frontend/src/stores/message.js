@@ -114,6 +114,16 @@ export const useMessageStore = defineStore('message', () => {
           sessionStore.storeInitData(sessionId, message.metadata.init_data)
         }
 
+        // Issue #894: Collapse api_retry sequences — keep only the latest for each retry_message_id
+        if (message.metadata?.subtype === 'api_retry' && message.metadata?.retry_message_id) {
+          const retryId = message.metadata.retry_message_id
+          const existingIdx = regularMessages.findIndex(m => m.metadata?.retry_message_id === retryId)
+          if (existingIdx !== -1) {
+            regularMessages[existingIdx] = message // Replace with later (higher attempt) data
+            return
+          }
+        }
+
         regularMessages.push(message)
       })
 
@@ -248,6 +258,18 @@ export const useMessageStore = defineStore('message', () => {
         console.log(`Skipping duplicate message ${message.id} (already exists at index ${existingIndex})`)
         return // Skip duplicate message
       }
+    }
+
+    // Issue #894: api_retry in-place update — find existing message with same retry_message_id
+    if (message.metadata?.subtype === 'api_retry' && message.metadata?.retry_message_id) {
+      const retryId = message.metadata.retry_message_id
+      const existingIdx = messages.findIndex(m => m.metadata?.retry_message_id === retryId)
+      if (existingIdx !== -1) {
+        messages[existingIdx] = { ...messages[existingIdx], ...message }
+        messagesBySession.value = new Map(messagesBySession.value)
+        return
+      }
+      // No existing message: fall through to normal push (first in sequence)
     }
 
     messages.push(message)
