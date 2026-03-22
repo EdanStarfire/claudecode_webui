@@ -88,6 +88,9 @@ export const useUIStore = defineStore('ui', () => {
     })()
   )
 
+  // Issue #899: Rate limit state (global, not per-session); null = no data yet
+  const rateLimits = ref(null)
+
   // ========== ACTIONS ==========
 
   function toggleRightSidebar() {
@@ -121,6 +124,11 @@ export const useUIStore = defineStore('ui', () => {
   function setTTSReadAloud(enabled) {
     ttsReadAloudEnabled.value = enabled
     try { localStorage.setItem('webui-tts-readaloud-enabled', JSON.stringify(enabled)) } catch {}
+  }
+
+  // Issue #899: Update global rate limit state from UI poll event
+  function setRateLimits(data) {
+    rateLimits.value = data
   }
 
   function setQueuePanelHeight(height, containerHeight = 600) {
@@ -239,6 +247,7 @@ export const useUIStore = defineStore('ui', () => {
     suppressAutoShow,
     queuePanelHeight,
     ttsReadAloudEnabled,
+    rateLimits,
 
     // Actions
     toggleRightSidebar,
@@ -261,6 +270,7 @@ export const useUIStore = defineStore('ui', () => {
     showLoading,
     hideLoading,
     showRestartModal,
-    handleResize
+    handleResize,
+    setRateLimits
   }
 })

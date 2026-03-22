@@ -27,6 +27,7 @@ try:
         ClaudeSDKClient,
         PermissionResultAllow,
         PermissionResultDeny,
+        RateLimitEvent,
         ResultMessage,
         SystemMessage,
         TaskNotificationMessage,
@@ -47,6 +48,7 @@ except ImportError:
     UserMessage = None
     SystemMessage = None
     ResultMessage = None
+    RateLimitEvent = None
     TaskStartedMessage = None
     TaskProgressMessage = None
     TaskNotificationMessage = None
@@ -146,6 +148,7 @@ class ClaudeSDK:
         message_callback: Callable[[dict[str, Any]], None] | None = None,
         error_callback: Callable[[str, Exception], None] | None = None,
         permission_callback: Callable[[str, dict[str, Any]], bool | dict[str, Any]] | None = None,
+        rate_limit_callback: Callable[[Any], None] | None = None,
         resume_session_id: str | None = None,
         mcp_servers: list[Any] | None = None,
         experimental: bool = False,
@@ -181,6 +184,7 @@ class ClaudeSDK:
         self.message_callback = message_callback
         self.error_callback = error_callback
         self.permission_callback = permission_callback
+        self.rate_limit_callback = rate_limit_callback
         sdk_logger.debug(f"ClaudeSDK initialized with permission_callback: {permission_callback is not None}")
         if permission_callback:
             sdk_logger.debug(f"Permission callback type: {type(permission_callback)}")
@@ -985,6 +989,13 @@ class ClaudeSDK:
 
                 # Issue #382: Clean up temp system prompt file after init message received
                 self._cleanup_system_prompt_temp_file()
+
+            # Issue #899: Handle RateLimitEvent before generic conversion
+            if RateLimitEvent and isinstance(sdk_message, RateLimitEvent):
+                sdk_logger.debug(f"RateLimitEvent received: {sdk_message.rate_limit_info}")
+                if self.rate_limit_callback:
+                    await self._safe_callback(self.rate_limit_callback, sdk_message.rate_limit_info)
+                return
 
             converted_message = self._convert_sdk_message(sdk_message)
             self.info.last_activity = time.time()

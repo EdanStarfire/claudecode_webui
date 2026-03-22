@@ -5,6 +5,7 @@ import { useProjectStore } from './project'
 import { useMessageStore } from './message'
 import { useResourceStore } from './resource'
 import { useQueueStore } from './queue'
+import { useUIStore } from './ui'
 import { notify } from '@/composables/useNotifications'
 import { getAuthToken, api } from '@/utils/api'
 
@@ -403,6 +404,12 @@ export const useWebSocketStore = defineStore('websocket', () => {
           error: payload.data?.error,
         })
         break
+
+      case 'rate_limits_update': {
+        const uiStore = useUIStore()
+        uiStore.setRateLimits(payload.data)
+        break
+      }
 
       default:
         console.warn('Unknown UI poll message type:', payload.type)

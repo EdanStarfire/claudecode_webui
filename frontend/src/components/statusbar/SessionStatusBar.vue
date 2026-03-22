@@ -29,6 +29,20 @@
         </button>
       </div>
 
+      <!-- Rate Limit Indicator (Issue #899) -->
+      <div v-if="uiStore.rateLimits" class="d-flex gap-2 align-items-center rate-limit-indicator">
+        <RateLimitBadge
+          label="5h"
+          :pct="uiStore.rateLimits.five_hour?.used_percentage"
+          :resets-at="uiStore.rateLimits.five_hour?.resets_at"
+        />
+        <RateLimitBadge
+          label="7d"
+          :pct="uiStore.rateLimits.seven_day?.used_percentage"
+          :resets-at="uiStore.rateLimits.seven_day?.resets_at"
+        />
+      </div>
+
       <!-- Right side: Read Aloud + Autoscroll -->
       <div class="d-flex gap-2">
         <button
@@ -59,6 +73,7 @@
 import { computed } from 'vue'
 import { useSessionStore } from '@/stores/session'
 import { useUIStore } from '@/stores/ui'
+import RateLimitBadge from './RateLimitBadge.vue'
 
 const props = defineProps({
   sessionId: {
