@@ -59,6 +59,18 @@
               <div>{{ displayData.permissionMode || 'default' }}</div>
             </div>
 
+            <!-- Memory Directory (when custom directory is configured) -->
+            <div v-if="displayData.auto_memory_directory" class="mb-3">
+              <h6 class="text-muted">Memory Directory</h6>
+              <input
+                type="text"
+                class="form-control form-control-sm font-monospace path-input"
+                :value="displayData.auto_memory_directory"
+                readonly
+                @click="selectPath"
+              />
+            </div>
+
             <!-- Pre-Authorized Tools -->
             <div class="mb-3">
               <h6 class="text-muted">Pre-Authorized Tools</h6>
@@ -207,6 +219,8 @@ const displayData = computed(() => {
       permissionMode: s.current_permission_mode,
       allowed_tools: s.allowed_tools || [],
       systemPrompt: s.system_prompt || s.override_system_prompt,
+      auto_memory_mode: s.auto_memory_mode,
+      auto_memory_directory: s.auto_memory_directory,
     }
   }
   // Fallback: Pinia initData (populated from SDK init message)

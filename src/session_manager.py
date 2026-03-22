@@ -141,6 +141,8 @@ class SessionInfo:
 
     # Auto-memory mode (issue #709, replaces #708 disable_auto_memory boolean)
     auto_memory_mode: str = "claude"  # "claude" | "session" | "disabled"
+    # Custom directory for auto-memory when mode is "claude" (issue #906)
+    auto_memory_directory: str | None = None
 
     # Skill creating toggle (issue #749)
     skill_creating_enabled: bool = False
@@ -232,6 +234,7 @@ class SessionInfo:
         else:
             data.pop('disable_auto_memory', None)
             data.setdefault('auto_memory_mode', 'claude')
+        data.setdefault('auto_memory_directory', None)
         data.setdefault('sdk_generated_name', None)
         data.setdefault('skill_creating_enabled', False)
         data.setdefault('mcp_server_ids', None)
@@ -403,6 +406,7 @@ class SessionManager:
             effort=config.effort,
             history_distillation_enabled=config.history_distillation_enabled,
             auto_memory_mode=config.auto_memory_mode,
+            auto_memory_directory=config.auto_memory_directory,
             skill_creating_enabled=config.skill_creating_enabled,
             # MCP server configuration (issue #676)
             mcp_server_ids=config.mcp_server_ids if config.mcp_server_ids is not None else [],

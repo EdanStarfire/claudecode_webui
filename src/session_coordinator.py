@@ -450,6 +450,7 @@ class SessionCoordinator:
                 effort=config.effort,
                 history_distillation_enabled=config.history_distillation_enabled,
                 auto_memory_mode=config.auto_memory_mode,
+                auto_memory_directory=config.auto_memory_directory,
                 skill_creating_enabled=config.skill_creating_enabled,
                 mcp_server_ids=config.mcp_server_ids,
                 enable_claudeai_mcp_servers=config.enable_claudeai_mcp_servers,
@@ -999,6 +1000,10 @@ class SessionCoordinator:
                     memory_dir = session_dir / "memory"
                     memory_dir.mkdir(exist_ok=True)
                     extra_mounts.append(f"{memory_dir}:{memory_dir}")
+                elif session_info.auto_memory_mode == "claude" and session_info.auto_memory_directory:
+                    native_mem = Path(session_info.auto_memory_directory)
+                    native_mem.mkdir(parents=True, exist_ok=True)
+                    extra_mounts.append(f"{native_mem}:{native_mem}")
                 # Issue #773: Mount session data dirs into Docker (read-only)
                 # These host-side dirs contain files the agent needs to Read:
                 #   resources/   - MCP-registered resources, comm file attachments
@@ -1059,6 +1064,7 @@ class SessionCoordinator:
                 thinking_budget_tokens=session_info.thinking_budget_tokens,
                 effort=session_info.effort,
                 auto_memory_mode=session_info.auto_memory_mode,
+                auto_memory_directory=session_info.auto_memory_directory,
                 enable_claudeai_mcp_servers=session_info.enable_claudeai_mcp_servers,
                 strict_mcp_config=session_info.strict_mcp_config,
                 bare_mode=session_info.bare_mode,
@@ -1072,6 +1078,12 @@ class SessionCoordinator:
                 if not guidance_file.exists():
                     guidance_file.touch()
                     coord_logger.debug(f"Created memory/agent-guidance.md for session {session_id}")
+
+            # Issue #906: Custom auto-memory directory (claude mode + directory set) — create dir
+            if session_info.auto_memory_mode == "claude" and session_info.auto_memory_directory:
+                custom_memory_dir = Path(session_info.auto_memory_directory)
+                custom_memory_dir.mkdir(parents=True, exist_ok=True)
+                coord_logger.debug(f"Custom auto-memory directory for session {session_id}: {custom_memory_dir}")
 
             # Issue #707: Build PreToolUse handler for internal tool access control
             permission_handler = self._build_permission_handler(

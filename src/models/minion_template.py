@@ -45,6 +45,8 @@ class MinionTemplate:
     history_distillation_enabled: bool = True
     # Auto-memory mode (issue #709, replaces #708 disable_auto_memory boolean)
     auto_memory_mode: str = "claude"  # "claude" | "session" | "disabled"
+    # Custom directory for auto-memory when mode is "claude" (issue #906)
+    auto_memory_directory: str | None = None
     # Skill creating toggle (issue #749)
     skill_creating_enabled: bool = False
     # MCP server configuration (issue #676)
@@ -113,6 +115,7 @@ class MinionTemplate:
         else:
             data.pop('disable_auto_memory', None)
             data.setdefault('auto_memory_mode', 'claude')
+        data.setdefault('auto_memory_directory', None)
         data.setdefault('skill_creating_enabled', False)
         data.setdefault('mcp_server_ids', None)
         # MCP toggle configuration (issue #786)

@@ -322,6 +322,22 @@
             Disabled: no auto-memory.
           </small>
         </div>
+        <div v-if="formData.auto_memory_mode === 'claude'" class="mb-2">
+          <label class="form-label" for="adv-auto-memory-dir" style="text-transform: none; letter-spacing: normal;">
+            Memory Directory
+          </label>
+          <input
+            type="text"
+            class="form-control form-control-sm font-monospace"
+            id="adv-auto-memory-dir"
+            :value="formData.auto_memory_directory || ''"
+            placeholder="e.g. /custom/path/to/memory (leave blank for Claude default)"
+            @input="$emit('update:form-data', 'auto_memory_directory', $event.target.value || null)"
+          />
+          <small class="form-text text-muted d-block">
+            Custom directory for auto-memory storage. Leave blank to use Claude's default location.
+          </small>
+        </div>
         <div class="form-check form-switch mb-2">
           <input
             class="form-check-input"
