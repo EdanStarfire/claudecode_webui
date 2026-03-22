@@ -25,21 +25,36 @@
             <p class="text-muted mb-0">No archived agents found for this project.</p>
           </div>
 
-          <div v-else class="deleted-agents-list">
-            <div
-              v-for="agent in agents"
-              :key="agent.agent_id"
-              class="deleted-agent-row"
-              @click="selectAgent(agent)"
-            >
-              <div class="da-info">
-                <div class="da-name">{{ agent.name || 'Unknown' }}</div>
-                <div class="da-role" v-if="agent.role">{{ agent.role }}</div>
+          <div v-else>
+            <div class="da-count-label">
+              Showing {{ agents.length }} of {{ total }} archived agents
+            </div>
+            <div class="deleted-agents-list">
+              <div
+                v-for="agent in agents"
+                :key="agent.agent_id"
+                class="deleted-agent-row"
+                @click="selectAgent(agent)"
+              >
+                <div class="da-info">
+                  <div class="da-name">{{ agent.name || 'Unknown' }}</div>
+                  <div class="da-role" v-if="agent.role">{{ agent.role }}</div>
+                </div>
+                <div class="da-meta">
+                  <span class="da-archives">{{ agent.archive_count }} archive{{ agent.archive_count !== 1 ? 's' : '' }}</span>
+                  <span v-if="agent.last_archived_at" class="da-date">{{ formatDate(agent.last_archived_at) }}</span>
+                </div>
               </div>
-              <div class="da-meta">
-                <span class="da-archives">{{ agent.archive_count }} archive{{ agent.archive_count !== 1 ? 's' : '' }}</span>
-                <span v-if="agent.last_archived_at" class="da-date">{{ formatDate(agent.last_archived_at) }}</span>
-              </div>
+            </div>
+            <div v-if="hasMore" class="da-load-more">
+              <button
+                class="btn btn-sm btn-outline-secondary"
+                :disabled="loadingMore"
+                @click="loadMoreAgents"
+              >
+                <span v-if="loadingMore" class="spinner-border spinner-border-sm me-1" role="status"></span>
+                {{ loadingMore ? 'Loading…' : 'Load more' }}
+              </button>
             </div>
           </div>
         </div>
@@ -62,8 +77,13 @@ const uiStore = useUIStore()
 const modalElement = ref(null)
 let modalInstance = null
 
+const LIMIT = 50
 const loading = ref(false)
 const agents = ref([])
+const total = ref(0)
+const hasMore = ref(false)
+const offset = ref(0)
+const loadingMore = ref(false)
 let currentProjectId = null
 
 function formatDate(timestamp) {
@@ -75,13 +95,38 @@ function formatDate(timestamp) {
 async function loadDeletedAgents(projectId) {
   loading.value = true
   agents.value = []
+  offset.value = 0
+  hasMore.value = false
+  total.value = 0
   try {
-    const data = await apiGet(`/api/projects/${projectId}/deleted-agents`)
+    const data = await apiGet(`/api/projects/${projectId}/deleted-agents`, {
+      params: { limit: LIMIT, offset: 0 }
+    })
     agents.value = data.agents || []
+    total.value = data.total ?? agents.value.length
+    hasMore.value = data.has_more ?? false
   } catch (e) {
     console.error('Failed to load deleted agents:', e)
   } finally {
     loading.value = false
+  }
+}
+
+async function loadMoreAgents() {
+  if (loadingMore.value || !hasMore.value) return
+  loadingMore.value = true
+  offset.value += LIMIT
+  try {
+    const data = await apiGet(`/api/projects/${currentProjectId}/deleted-agents`, {
+      params: { limit: LIMIT, offset: offset.value }
+    })
+    agents.value = agents.value.concat(data.agents || [])
+    hasMore.value = data.has_more ?? false
+  } catch (e) {
+    console.error('Failed to load more deleted agents:', e)
+    offset.value -= LIMIT
+  } finally {
+    loadingMore.value = false
   }
 }
 
@@ -197,5 +242,17 @@ onMounted(() => {
 .da-date {
   font-size: 10px;
   color: #94a3b8;
+}
+
+.da-count-label {
+  font-size: 12px;
+  color: #64748b;
+  padding: 4px 0 8px 0;
+}
+
+.da-load-more {
+  display: flex;
+  justify-content: center;
+  padding: 10px 0 4px;
 }
 </style>
