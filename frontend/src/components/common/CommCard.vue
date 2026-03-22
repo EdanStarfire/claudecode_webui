@@ -35,9 +35,26 @@
           </span>
         </div>
 
-        <!-- Right: Expand/Collapse Icon -->
-        <div class="expand-icon" :aria-label="isExpanded ? 'Collapse' : 'Expand'">
-          {{ isExpanded ? '▾' : '▸' }}
+        <!-- Right: Copy + Expand/Collapse -->
+        <div class="comm-header-actions">
+          <button
+            v-if="rawContent"
+            class="copy-markdown-btn"
+            @click.stop="copyMarkdown"
+            :title="copyFeedback ? 'Copied!' : 'Copy markdown'"
+            aria-label="Copy raw markdown"
+          >
+            <svg v-if="copyFeedback" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="20 6 9 17 4 12"></polyline>
+            </svg>
+            <svg v-else width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2 2v1"></path>
+            </svg>
+          </button>
+          <div class="expand-icon" :aria-label="isExpanded ? 'Collapse' : 'Expand'">
+            {{ isExpanded ? '▾' : '▸' }}
+          </div>
         </div>
       </div>
 
@@ -68,7 +85,7 @@
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, onUnmounted } from 'vue'
 import { useMarkdown } from '@/composables/useMarkdown'
 import { useMermaid } from '@/composables/useMermaid'
 import { useResourceStore } from '@/stores/resource'
@@ -104,6 +121,18 @@ useMermaid(contentRef)
 function toggleExpanded() {
   isExpanded.value = !isExpanded.value
 }
+
+const copyFeedback = ref(false)
+let copyTimer = null
+
+async function copyMarkdown() {
+  await navigator.clipboard.writeText(rawContent.value)
+  copyFeedback.value = true
+  clearTimeout(copyTimer)
+  copyTimer = setTimeout(() => { copyFeedback.value = false }, 2000)
+}
+
+onUnmounted(() => clearTimeout(copyTimer))
 
 // Check if comm is from system
 const isSystemComm = computed(() => {
@@ -247,7 +276,29 @@ function openAttachmentPreview(att) {
   text-overflow: ellipsis;
 }
 
-/* Column 3: Expand icon */
+/* Column 3: Copy + Expand */
+.comm-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.copy-markdown-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 2px 4px;
+  color: var(--bs-secondary);
+  opacity: 0.4;
+  transition: opacity 0.15s;
+  line-height: 1;
+}
+
+.copy-markdown-btn:hover {
+  opacity: 1;
+}
+
 .expand-icon {
   flex-shrink: 0;
   color: #6c757d;
