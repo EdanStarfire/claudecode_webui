@@ -571,8 +571,19 @@ async function sendMessage() {
     }
   }
 
-  // Send via WebSocket
-  wsStore.sendMessage(messageContent)
+  // Build structured attachment metadata for new messages
+  const successfulAttachments = attachments.value.filter(a => a.uploaded && a.uploadedInfo)
+  const attachmentsMeta = successfulAttachments.map(a => ({
+    filename: a.name,
+    resource_id: a.uploadedInfo.resource_id ?? null,
+    size: a.size,
+    type: a.type,
+    stored_path: a.uploadedInfo.stored_path ?? null
+  }))
+
+  // Send via REST with optional metadata
+  const sendMetadata = attachmentsMeta.length > 0 ? { attachments: attachmentsMeta } : undefined
+  wsStore.sendMessage(messageContent, sendMetadata)
 
   // Clear input and attachments
   inputText.value = ''

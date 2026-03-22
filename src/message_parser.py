@@ -901,7 +901,7 @@ class UserMessageHandler(MessageHandler):
         # attached by CommRouter for comm-injected messages)
         orig_meta = message_data.get("metadata")
         if isinstance(orig_meta, dict):
-            for key in ("comm",):
+            for key in ("comm", "attachments"):
                 if key in orig_meta:
                     extracted["metadata"][key] = orig_meta[key]
 

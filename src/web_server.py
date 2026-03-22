@@ -165,6 +165,7 @@ class SessionCreateRequest(SessionConfigBase):
 
 class MessageRequest(BaseModel):
     message: str
+    metadata: dict | None = None
 
 
 class SessionNameUpdateRequest(BaseModel):
@@ -1284,7 +1285,7 @@ class ClaudeWebUI:
                 raise HTTPException(status_code=404, detail="Session not found")
             if state != SessionState.ACTIVE:
                 raise HTTPException(status_code=409, detail="Session is not active")
-            success = await self.coordinator.send_message(session_id, request.message)
+            success = await self.coordinator.send_message(session_id, request.message, metadata=request.metadata)
             return {"success": success}
 
         @self.app.get("/api/sessions/{session_id}/messages")
