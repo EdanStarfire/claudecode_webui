@@ -1453,9 +1453,9 @@ class ClaudeSDK:
             "Restart should recover automatically.",
         ),
         1: (
-            "Container exited with error",
-            "The process inside the container exited with a generic error. "
-            "Check stderr output above for details. Restart should recover automatically.",
+            "The Claude Code process exited with an error",
+            "Check the stderr output above for the specific error message. "
+            "Restart should recover the session once the underlying issue is resolved.",
         ),
         126: (
             "Container command not executable",
@@ -1474,6 +1474,13 @@ class ClaudeSDK:
 
     # Stderr patterns that override generic exit code messages with specific diagnostics
     _STDERR_OVERRIDES: list[tuple[str, str, str]] = [
+        (
+            r"Claude Code cannot be launched inside another Claude Code session",
+            "Nested Claude Code session detected",
+            "Claude Code detected it is running inside another Claude Code session and exited. "
+            "To bypass this check, unset the CLAUDECODE environment variable before starting the "
+            "inner session, or run the inner session in a separate terminal without Claude Code active.",
+        ),
         (
             r"Docker image '([^']+)' not found",
             "Docker image not found: {match}",
@@ -1498,6 +1505,17 @@ class ClaudeSDK:
             "Ensure the user has access to /var/run/docker.sock (docker group).",
         ),
     ]
+
+    # Exit codes that represent actual container/process crashes (fatal signals)
+    # Docker: 128 + signal_number; SIGKILL=9→137, SIGSEGV=11→139
+    _CRASH_EXIT_CODES: frozenset[int] = frozenset({137, 139})
+
+    # Exit codes that represent clean process termination via signal (not a crash)
+    # SIGTERM=15→143
+    _SIGNAL_EXIT_CODES: frozenset[int] = frozenset({143})
+
+    # Exit codes that represent container setup/config errors (not runtime failures)
+    _SETUP_EXIT_CODES: frozenset[int] = frozenset({126, 127})
 
     def _parse_container_exit_code(
         self, error_msg: str, stderr_buffer: list[str]
@@ -1570,12 +1588,36 @@ class ClaudeSDK:
             ),
         )
 
-        parts = [f"Container crash detected (exit code {exit_code}): {diagnosis}"]
+        # Classify the exit type to choose an accurate prefix
+        if exit_code in self._CRASH_EXIT_CODES:
+            prefix = f"Container crash detected (exit code {exit_code})"
+        elif exit_code in self._SIGNAL_EXIT_CODES:
+            prefix = f"Process terminated (exit code {exit_code})"
+        elif exit_code in self._SETUP_EXIT_CODES:
+            prefix = f"Container setup error (exit code {exit_code})"
+        elif exit_code >= 128:
+            # Unrecognised signal exit (128 + N)
+            prefix = f"Process terminated by signal (exit code {exit_code})"
+        else:
+            # Normal process exit (exit codes 1–127)
+            prefix = f"Process exited with error (exit code {exit_code})"
+
+        parts = [f"{prefix}: {diagnosis}"]
         parts.append(f"Recovery: {recovery}")
+
         if stderr_buffer:
-            # Include last few lines of stderr for context (limit to avoid huge messages)
+            # For process exits (not crashes), show stderr first since it's the real cause
             recent_stderr = stderr_buffer[-5:]
-            parts.append("Recent stderr:\n" + "\n".join(recent_stderr))
+            # Filter out docker-script noise lines
+            meaningful_stderr = [
+                line for line in recent_stderr
+                if not line.startswith("[claude-docker] Container") or "exited with code" not in line
+            ]
+            if meaningful_stderr:
+                parts.append("Stderr:\n" + "\n".join(meaningful_stderr))
+            elif recent_stderr:
+                parts.append("Recent stderr:\n" + "\n".join(recent_stderr))
+
         return "\n".join(parts)
 
     def _create_system_prompt_temp_file(self, content: str) -> str:
