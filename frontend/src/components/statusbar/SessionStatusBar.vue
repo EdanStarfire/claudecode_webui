@@ -43,6 +43,19 @@
         />
       </div>
 
+      <!-- Center: Context usage indicator (issue #905) -->
+      <div v-if="contextPct !== null" class="d-flex align-items-center gap-1">
+        <small class="text-muted">Ctx</small>
+        <div class="progress" style="width: 60px; height: 8px;" :title="contextTitle">
+          <div
+            class="progress-bar"
+            :class="contextBarClass"
+            :style="{ width: contextPct + '%' }"
+          ></div>
+        </div>
+        <small :class="contextTextClass">{{ contextPct }}%</small>
+      </div>
+
       <!-- Right side: Read Aloud + Autoscroll -->
       <div class="d-flex gap-2">
         <button
@@ -144,6 +157,34 @@ const toggleReadAloud = () => {
 const toggleAutoScroll = () => {
   uiStore.setAutoScroll(!uiStore.autoScrollEnabled)
 }
+
+// Issue #905: Context window usage
+const contextPct = computed(() => session.value?.context_pct ?? null)
+const contextInputTokens = computed(() => session.value?.context_input_tokens ?? null)
+const contextWindow = computed(() => session.value?.context_window ?? null)
+
+const contextTitle = computed(() => {
+  if (contextInputTokens.value === null) return ''
+  const used = (contextInputTokens.value / 1000).toFixed(0)
+  const total = (contextWindow.value / 1000).toFixed(0)
+  return `${used}K / ${total}K tokens (${contextPct.value}%)`
+})
+
+const contextBarClass = computed(() => {
+  const p = contextPct.value
+  if (p === null) return ''
+  if (p >= 80) return 'bg-danger'
+  if (p >= 50) return 'bg-warning'
+  return 'bg-success'
+})
+
+const contextTextClass = computed(() => {
+  const p = contextPct.value
+  if (p === null) return ''
+  if (p >= 80) return 'text-danger'
+  if (p >= 50) return 'text-warning'
+  return 'text-success'
+})
 </script>
 
 <style scoped>

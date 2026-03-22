@@ -478,6 +478,16 @@ export const useWebSocketStore = defineStore('websocket', () => {
         break
       }
 
+      case 'context_update': {
+        const { input_tokens, context_window, context_pct } = payload
+        sessionStore.patchSession(sessionId, {
+          context_input_tokens: input_tokens,
+          context_window: context_window,
+          context_pct: context_pct,
+        })
+        break
+      }
+
       default:
         console.warn('Unknown session poll message type:', payload.type)
     }
