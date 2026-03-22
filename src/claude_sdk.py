@@ -2,6 +2,7 @@
 
 import asyncio
 import contextlib
+import json
 import logging
 import tempfile
 import time
@@ -812,11 +813,6 @@ class ClaudeSDK:
         if self.bare_mode:
             extra_args["bare"] = True
 
-        # Issue #906: Native auto-memory with custom directory
-        if self.auto_memory_mode == "native" and self.auto_memory_directory:
-            extra_args["auto-memory-dir"] = self.auto_memory_directory
-            sdk_logger.info(f"Native auto-memory directory for session {self.session_id}: {self.auto_memory_directory}")
-
         options_kwargs = {
             "cwd": str(self.working_directory),
             "permission_mode": self.current_permission_mode,
@@ -836,6 +832,11 @@ class ClaudeSDK:
         # Add extra_args if any (for file-based system prompts)
         if extra_args:
             options_kwargs["extra_args"] = extra_args
+
+        # Issue #906: Native auto-memory with custom directory via settings JSON
+        if self.auto_memory_mode == "native" and self.auto_memory_directory:
+            options_kwargs["settings"] = json.dumps({"autoMemoryDirectory": self.auto_memory_directory})
+            sdk_logger.info(f"Native auto-memory directory for session {self.session_id}: {self.auto_memory_directory}")
 
         # Only add can_use_tool callback if permission callback is provided and SDK classes are available
         perm_logger.debug("Callback registration check:")
