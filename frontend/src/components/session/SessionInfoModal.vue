@@ -59,13 +59,13 @@
               <div>{{ displayData.permissionMode || 'default' }}</div>
             </div>
 
-            <!-- Memory Directory (native mode only) -->
-            <div v-if="displayData.auto_memory_mode === 'native'" class="mb-3">
+            <!-- Memory Directory (when custom directory is configured) -->
+            <div v-if="displayData.auto_memory_directory" class="mb-3">
               <h6 class="text-muted">Memory Directory</h6>
               <input
                 type="text"
                 class="form-control form-control-sm font-monospace path-input"
-                :value="displayData.auto_memory_directory || '(session default)'"
+                :value="displayData.auto_memory_directory"
                 readonly
                 @click="selectPath"
               />

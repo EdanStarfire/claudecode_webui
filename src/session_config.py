@@ -59,8 +59,8 @@ class SessionConfig:
 
     # Features
     history_distillation_enabled: bool = True
-    auto_memory_mode: str = "claude"  # "claude" | "session" | "disabled" | "native"
-    auto_memory_directory: str | None = None  # Custom directory for native auto-memory (issue #906)
+    auto_memory_mode: str = "claude"  # "claude" | "session" | "disabled"
+    auto_memory_directory: str | None = None  # Custom directory for auto-memory when mode is "claude" (issue #906)
     skill_creating_enabled: bool = False
 
     # MCP servers (issue #676)

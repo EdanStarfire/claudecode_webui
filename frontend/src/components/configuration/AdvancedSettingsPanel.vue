@@ -314,16 +314,15 @@
             @change="$emit('update:form-data', 'auto_memory_mode', $event.target.value)"
           >
             <option value="claude">Claude Auto-Memory</option>
-            <option value="native">Native Auto-Memory</option>
             <option value="session">Session-Specific</option>
             <option value="disabled">Disabled</option>
           </select>
           <small class="form-text text-muted d-block">
-            Claude: built-in working-directory memory. Native: SDK built-in memory with custom directory.
-            Session-Specific: per-session guidance file. Disabled: no auto-memory.
+            Claude: built-in working-directory memory. Session-Specific: per-session guidance file.
+            Disabled: no auto-memory.
           </small>
         </div>
-        <div v-if="formData.auto_memory_mode === 'native'" class="mb-2">
+        <div v-if="formData.auto_memory_mode === 'claude'" class="mb-2">
           <label class="form-label" for="adv-auto-memory-dir" style="text-transform: none; letter-spacing: normal;">
             Memory Directory
           </label>
@@ -332,11 +331,11 @@
             class="form-control form-control-sm font-monospace"
             id="adv-auto-memory-dir"
             :value="formData.auto_memory_directory || ''"
-            placeholder="Leave blank to use session default"
+            placeholder="Leave blank to use Claude default"
             @input="$emit('update:form-data', 'auto_memory_directory', $event.target.value || null)"
           />
           <small class="form-text text-muted d-block">
-            Custom directory for native auto-memory. Leave blank to use per-session default.
+            Custom directory for auto-memory storage. Leave blank to use Claude's default location.
           </small>
         </div>
         <div class="form-check form-switch mb-2">

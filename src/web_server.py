@@ -199,8 +199,8 @@ class SessionUpdateRequest(BaseModel):
     # History distillation toggle (issue #710, renamed #736)
     history_distillation_enabled: bool | None = None
     # Auto-memory mode (issue #709)
-    auto_memory_mode: str | None = None  # "claude" | "session" | "disabled" | "native"
-    # Custom directory for native auto-memory mode (issue #906)
+    auto_memory_mode: str | None = None  # "claude" | "session" | "disabled"
+    # Custom directory for auto-memory when mode is "claude" (issue #906)
     auto_memory_directory: str | None = None
     # Skill creating toggle (issue #749)
     skill_creating_enabled: bool | None = None
@@ -305,8 +305,8 @@ class TemplateUpdateRequest(BaseModel):
     # History distillation toggle (issue #710, renamed #736)
     history_distillation_enabled: bool | None = None
     # Auto-memory mode (issue #709)
-    auto_memory_mode: str | None = None  # "claude" | "session" | "disabled" | "native"
-    # Custom directory for native auto-memory mode (issue #906)
+    auto_memory_mode: str | None = None  # "claude" | "session" | "disabled"
+    # Custom directory for auto-memory when mode is "claude" (issue #906)
     auto_memory_directory: str | None = None
     # Skill creating toggle (issue #749)
     skill_creating_enabled: bool | None = None

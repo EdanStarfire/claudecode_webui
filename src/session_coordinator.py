@@ -1000,12 +1000,8 @@ class SessionCoordinator:
                     memory_dir = session_dir / "memory"
                     memory_dir.mkdir(exist_ok=True)
                     extra_mounts.append(f"{memory_dir}:{memory_dir}")
-                elif session_info.auto_memory_mode == "native":
-                    native_mem = (
-                        Path(session_info.auto_memory_directory)
-                        if session_info.auto_memory_directory
-                        else session_dir / "memory"
-                    )
+                elif session_info.auto_memory_mode == "claude" and session_info.auto_memory_directory:
+                    native_mem = Path(session_info.auto_memory_directory)
                     native_mem.mkdir(parents=True, exist_ok=True)
                     extra_mounts.append(f"{native_mem}:{native_mem}")
                 # Issue #773: Mount session data dirs into Docker (read-only)
@@ -1083,17 +1079,11 @@ class SessionCoordinator:
                     guidance_file.touch()
                     coord_logger.debug(f"Created memory/agent-guidance.md for session {session_id}")
 
-            # Issue #906: Native auto-memory — create memory dir, resolve default path
-            if session_info.auto_memory_mode == "native":
-                native_memory_dir = (
-                    Path(session_info.auto_memory_directory)
-                    if session_info.auto_memory_directory
-                    else session_dir / "memory"
-                )
-                native_memory_dir.mkdir(parents=True, exist_ok=True)
-                # Persist resolved directory back to sdk_config so the SDK receives it
-                sdk_config.auto_memory_directory = str(native_memory_dir)
-                coord_logger.debug(f"Native auto-memory directory for session {session_id}: {native_memory_dir}")
+            # Issue #906: Custom auto-memory directory (claude mode + directory set) — create dir
+            if session_info.auto_memory_mode == "claude" and session_info.auto_memory_directory:
+                custom_memory_dir = Path(session_info.auto_memory_directory)
+                custom_memory_dir.mkdir(parents=True, exist_ok=True)
+                coord_logger.debug(f"Custom auto-memory directory for session {session_id}: {custom_memory_dir}")
 
             # Issue #707: Build PreToolUse handler for internal tool access control
             permission_handler = self._build_permission_handler(
@@ -3344,12 +3334,7 @@ class SessionCoordinator:
         working_directory: Path | None = None,
     ) -> InternalPermissionHandler:
         """Build internal permission handler with consistent path configuration (issue #707)."""
-        if auto_memory_mode == "session":
-            memory_dir = session_dir / "memory"
-        elif auto_memory_mode == "native":
-            memory_dir = session_dir / "memory"
-        else:
-            memory_dir = None
+        memory_dir = session_dir / "memory" if auto_memory_mode == "session" else None
         return InternalPermissionHandler(
             session_data_dir=session_dir,
             plans_dir=Path.home() / ".cc_webui" / "plans",

@@ -140,8 +140,8 @@ class SessionInfo:
     history_distillation_enabled: bool = True  # When False, skip distillation and history references
 
     # Auto-memory mode (issue #709, replaces #708 disable_auto_memory boolean)
-    auto_memory_mode: str = "claude"  # "claude" | "session" | "disabled" | "native"
-    # Custom directory for native auto-memory mode (issue #906)
+    auto_memory_mode: str = "claude"  # "claude" | "session" | "disabled"
+    # Custom directory for auto-memory when mode is "claude" (issue #906)
     auto_memory_directory: str | None = None
 
     # Skill creating toggle (issue #749)

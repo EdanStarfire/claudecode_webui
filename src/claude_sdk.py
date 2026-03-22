@@ -833,10 +833,10 @@ class ClaudeSDK:
         if extra_args:
             options_kwargs["extra_args"] = extra_args
 
-        # Issue #906: Native auto-memory with custom directory via settings JSON
-        if self.auto_memory_mode == "native" and self.auto_memory_directory:
+        # Issue #906: Custom auto-memory directory via settings JSON (claude mode + directory set)
+        if self.auto_memory_mode == "claude" and self.auto_memory_directory:
             options_kwargs["settings"] = json.dumps({"autoMemoryDirectory": self.auto_memory_directory})
-            sdk_logger.info(f"Native auto-memory directory for session {self.session_id}: {self.auto_memory_directory}")
+            sdk_logger.info(f"Custom auto-memory directory for session {self.session_id}: {self.auto_memory_directory}")
 
         # Only add can_use_tool callback if permission callback is provided and SDK classes are available
         perm_logger.debug("Callback registration check:")
