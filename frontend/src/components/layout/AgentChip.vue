@@ -17,14 +17,18 @@
     @touchcancel="onTouchCancel"
     :title="chipTooltip"
   >
-    <div v-if="!isGhost" class="ac-dot" :class="statusClass"></div>
-    <svg v-else class="ac-ghost-icon" width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
-      <path d="M8 0a8 8 0 1 0 0 16A8 8 0 0 0 8 0zm0 14.5A6.5 6.5 0 1 1 8 1.5a6.5 6.5 0 0 1 0 13zM8.5 4H7v5l4.25 2.55.75-1.23L8.5 8.25V4z"/>
-    </svg>
+    <!-- Status square (no letter — compact indicator) -->
+    <div class="ac-status-sq" :class="isGhost ? 'ghost' : statusClass"></div>
+
+    <!-- Info stack — width driven by name; description truncates within it -->
     <div class="ac-info">
       <div class="ac-name">{{ displayName }}</div>
-      <div class="ac-status">{{ isGhost ? 'Deleted' : statusText }}</div>
+      <div v-if="sdkTitle" class="ac-sdk-title">{{ sdkTitle }}</div>
+      <div v-if="isGhost" class="ac-desc-line">Deleted</div>
+      <div v-else-if="roleDescription" class="ac-desc-line">{{ roleDescription }}</div>
     </div>
+
+    <!-- Ghost dismiss button -->
     <button
       v-if="isGhost"
       class="ac-dismiss"
@@ -32,14 +36,20 @@
       title="Remove from strip"
       aria-label="Dismiss ghost agent"
     >&times;</button>
+
+    <!-- Alert badge -->
     <div v-if="alertType && !isGhost" class="ac-alert" :class="alertType" :aria-label="alertType === 'error' ? 'Error alert' : 'Permission required'">
       {{ alertType === 'error' ? '!' : '?' }}
     </div>
+
+    <!-- Schedule badge -->
     <div v-if="hasSchedules" class="ac-schedule-badge" title="Has active schedules" aria-label="Has active schedules">
       <svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor">
         <path d="M8 0a8 8 0 1 0 0 16A8 8 0 0 0 8 0zm0 14.5A6.5 6.5 0 1 1 8 1.5a6.5 6.5 0 0 1 0 13zM8.5 4H7v5l4.25 2.55.75-1.23L8.5 8.25V4z"/>
       </svg>
     </div>
+
+    <!-- Docker badge -->
     <div v-if="session.docker_enabled" class="ac-docker-badge" title="Running with Docker isolation" aria-label="Docker isolated">
       <svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor">
         <rect x="1" y="4" width="5" height="4" rx="0.5" stroke="currentColor" stroke-width="0.8" fill="none"/>
@@ -87,13 +97,26 @@ const displayName = computed(() =>
   props.session.name || props.session.role || 'Agent'
 )
 
+const sdkTitle = computed(() => props.session.sdk_generated_name || null)
+
+const roleDescription = computed(() => {
+  const role = props.session.role
+  if (!role) return null
+  // Avoid duplicating if role is the same as the display name
+  if (role === displayName.value) return null
+  return role
+})
+
 const statusClass = computed(() => {
   const state = props.session.state
   if (state === 'error') return 'error'
-  if (state === 'paused') return 'waiting'
-  if (state === 'active' && props.session.is_processing) return 'active'
-  if (state === 'active') return 'idle'
-  return 'none'
+  if (state === 'starting') return 'starting'
+  if (state === 'active' && props.session.is_processing) return 'active-processing'
+  if (state === 'active') return 'active'
+  if (state === 'paused') return 'paused'
+  if (state === 'terminating') return 'terminating'
+  if (state === 'terminated') return 'terminated'
+  return 'created'
 })
 
 const statusText = computed(() => {
@@ -116,7 +139,8 @@ const alertType = computed(() => {
 
 const chipTooltip = computed(() => {
   const parts = [displayName.value]
-  if (props.session.role) parts.push(`Role: ${props.session.role}`)
+  if (props.session.role && props.session.role !== displayName.value) parts.push(`Role: ${props.session.role}`)
+  if (props.session.sdk_generated_name) parts.push(`Title: ${props.session.sdk_generated_name}`)
   parts.push(`Status: ${statusText.value}`)
   if (props.session.model) parts.push(`Model: ${props.session.model}`)
   if (props.session.docker_enabled) parts.push('Docker isolated')
@@ -144,7 +168,6 @@ function handleClick() {
   cursor: pointer;
   transition: all 0.15s;
   position: relative;
-  white-space: nowrap;
   flex-shrink: 0;
 }
 
@@ -176,26 +199,30 @@ function handleClick() {
   box-shadow: none;
 }
 
-.ac-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
+/* Compact status square — replaces dot, no letter */
+.ac-status-sq {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
   flex-shrink: 0;
-  background: #e2e8f0;
 }
 
-.ac-dot.active { background: #8b5cf6; }
-.ac-dot.idle { background: #22c55e; }
-.ac-dot.waiting { background: #ffc107; }
-.ac-dot.error {
-  background: #ef4444;
-  animation: pulse-error 1.5s infinite;
-}
-.ac-dot.none { background: #e2e8f0; }
+.ac-status-sq.created      { background: #94a3b8; }
+.ac-status-sq.starting     { background: #3b82f6; animation: pulse-starting 1.2s infinite; }
+.ac-status-sq.active       { background: #22c55e; }
+.ac-status-sq.active-processing { background: #8b5cf6; }
+.ac-status-sq.paused       { background: #f59e0b; }
+.ac-status-sq.terminating  { background: #f97316; }
+.ac-status-sq.terminated   { background: #cbd5e1; }
+.ac-status-sq.error        { background: #ef4444; animation: pulse-error 1.5s infinite; }
+.ac-status-sq.ghost        { background: #e2e8f0; }
 
+/* Info column — name drives chip width; subtitle/description truncate within it */
 .ac-info {
   display: flex;
   flex-direction: column;
+  overflow: hidden;
+  min-width: 0;
 }
 
 .ac-name {
@@ -203,15 +230,31 @@ function handleClick() {
   font-weight: 600;
   color: #1e293b;
   line-height: 1.2;
+  white-space: nowrap;
 }
 
-.ac-status {
+/* Subtitle lines truncate within the name-determined width */
+.ac-sdk-title {
   font-size: 10px;
-  color: #64748b;
-  line-height: 1.2;
-  max-width: 140px;
+  color: #475569;
+  font-style: italic;
+  line-height: 1.3;
+  white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  width: 0;
+  min-width: 100%;
+}
+
+.ac-desc-line {
+  font-size: 10px;
+  color: #94a3b8;
+  line-height: 1.3;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  width: 0;
+  min-width: 100%;
 }
 
 .ac-alert {
@@ -274,11 +317,6 @@ function handleClick() {
   border-color: #94a3b8;
 }
 
-.ac-ghost-icon {
-  color: #94a3b8;
-  flex-shrink: 0;
-}
-
 .ac-dismiss {
   background: none;
   border: none;
@@ -288,10 +326,16 @@ function handleClick() {
   padding: 0 2px;
   cursor: pointer;
   flex-shrink: 0;
+  align-self: center;
 }
 
 .ac-dismiss:hover {
   color: #ef4444;
+}
+
+@keyframes pulse-starting {
+  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.4); }
+  50%       { opacity: 0.8; box-shadow: 0 0 0 4px rgba(59, 130, 246, 0); }
 }
 
 @keyframes pulse-error {
