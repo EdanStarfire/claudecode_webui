@@ -180,24 +180,6 @@ class SessionCoordinator:
         """Set custom SDK factory for testing (e.g., MockClaudeSDK)."""
         self._sdk_factory = factory
 
-    @staticmethod
-    def _resolve_template_vars(value: str, variables: dict[str, str]) -> str:
-        """Substitute {key} template variables in a string value.
-
-        Issue #917: Replaces known placeholders with resolved runtime values.
-        Unknown placeholders are left intact (no error raised).
-
-        Args:
-            value: String potentially containing {session_id}, {session_data}, {working_dir}.
-            variables: Mapping of variable name → resolved value.
-
-        Returns:
-            String with all known placeholders replaced.
-        """
-        for key, resolved in variables.items():
-            value = value.replace(f"{{{key}}}", resolved)
-        return value
-
     async def _get_mcp_sdk_config(self, mcp_cfg) -> dict:
         """Return SDK config for an MCP server, injecting OAuth Bearer token when applicable.
 
@@ -891,6 +873,23 @@ class SessionCoordinator:
             await storage_manager.initialize()
             self._storage_managers[session_id] = storage_manager
 
+            # Issue #917: Resolve template variables in path-typed fields.
+            # Mutates session_info in-place (ephemeral — not persisted to disk).
+            from src.template_variables import build_variables, resolve_path, resolve_path_list
+            _tv = build_variables(session_id, session_dir, session_info.working_directory)
+            if session_info.auto_memory_directory:
+                session_info.auto_memory_directory = resolve_path(
+                    session_info.auto_memory_directory, _tv
+                )
+            if session_info.additional_directories:
+                session_info.additional_directories = resolve_path_list(
+                    session_info.additional_directories, _tv
+                )
+            if session_info.docker_extra_mounts:
+                session_info.docker_extra_mounts = resolve_path_list(
+                    session_info.docker_extra_mounts, _tv
+                )
+
             # Check if we have a valid Claude Code session ID to resume
             resume_sdk_session = None
             # if session_info.claude_code_session_id:
@@ -1003,24 +1002,6 @@ class SessionCoordinator:
                 coord_logger.info(f"Escaped system prompt: {len(escaped_prompt)} chars (original: {len(minion_system_prompt)})")
                 minion_system_prompt = escaped_prompt
 
-            # Issue #917: Resolve template variables in path-based config fields.
-            # Must happen BEFORE the Docker block because docker_extra_mounts is
-            # consumed inside it.  Unknown placeholders are left intact.
-            _tmpl_vars = {
-                "session_id": session_id,
-                "session_data": str(session_dir),
-                "working_dir": session_info.working_directory or "",
-            }
-            resolved_docker_extra_mounts = [
-                self._resolve_template_vars(m, _tmpl_vars)
-                for m in (session_info.docker_extra_mounts or [])
-            ]
-            resolved_auto_memory_directory = (
-                self._resolve_template_vars(session_info.auto_memory_directory, _tmpl_vars)
-                if session_info.auto_memory_directory
-                else None
-            )
-
             # Issue #496: Auto-resolve cli_path when Docker mode is enabled
             effective_cli_path = session_info.cli_path
             docker_env_vars = {}
@@ -1031,13 +1012,13 @@ class SessionCoordinator:
                 # are created, backed up, and cleaned up together.
                 docker_data_dir = str(session_dir / "docker_claude_data")
                 # Issue #759: Mount session memory dir into Docker container (RW, at host path)
-                extra_mounts = list(resolved_docker_extra_mounts)
+                extra_mounts = list(session_info.docker_extra_mounts or [])
                 if session_info.auto_memory_mode == "session":
                     memory_dir = session_dir / "memory"
                     memory_dir.mkdir(exist_ok=True)
                     extra_mounts.append(f"{memory_dir}:{memory_dir}")
-                elif session_info.auto_memory_mode == "claude" and resolved_auto_memory_directory:
-                    native_mem = Path(resolved_auto_memory_directory)
+                elif session_info.auto_memory_mode == "claude" and session_info.auto_memory_directory:
+                    native_mem = Path(session_info.auto_memory_directory)
                     native_mem.mkdir(parents=True, exist_ok=True)
                     extra_mounts.append(f"{native_mem}:{native_mem}")
                 # Issue #773: Mount session data dirs into Docker (read-only)
@@ -1100,7 +1081,7 @@ class SessionCoordinator:
                 thinking_budget_tokens=session_info.thinking_budget_tokens,
                 effort=session_info.effort,
                 auto_memory_mode=session_info.auto_memory_mode,
-                auto_memory_directory=resolved_auto_memory_directory,
+                auto_memory_directory=session_info.auto_memory_directory,
                 enable_claudeai_mcp_servers=session_info.enable_claudeai_mcp_servers,
                 strict_mcp_config=session_info.strict_mcp_config,
                 bare_mode=session_info.bare_mode,
@@ -1116,8 +1097,8 @@ class SessionCoordinator:
                     coord_logger.debug(f"Created memory/agent-guidance.md for session {session_id}")
 
             # Issue #906: Custom auto-memory directory (claude mode + directory set) — create dir
-            if session_info.auto_memory_mode == "claude" and resolved_auto_memory_directory:
-                custom_memory_dir = Path(resolved_auto_memory_directory)
+            if session_info.auto_memory_mode == "claude" and session_info.auto_memory_directory:
+                custom_memory_dir = Path(session_info.auto_memory_directory)
                 custom_memory_dir.mkdir(parents=True, exist_ok=True)
                 coord_logger.debug(f"Custom auto-memory directory for session {session_id}: {custom_memory_dir}")
 

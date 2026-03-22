@@ -328,14 +328,19 @@
           </label>
           <input
             type="text"
-            class="form-control form-control-sm font-monospace"
+            :class="['form-control', 'form-control-sm', 'font-monospace', { 'is-invalid': autoMemoryDirError }]"
             id="adv-auto-memory-dir"
             :value="formData.auto_memory_directory || ''"
-            placeholder="e.g. /custom/path/to/memory (leave blank for Claude default)"
-            @input="$emit('update:form-data', 'auto_memory_directory', $event.target.value || null)"
+            placeholder="e.g. {session_data}/memory or /absolute/path/to/memory"
+            @input="(e) => {
+              $emit('update:form-data', 'auto_memory_directory', e.target.value || null)
+              autoMemoryDirError = validateTemplatePath(e.target.value)
+            }"
           />
+          <div v-if="autoMemoryDirError" class="invalid-feedback d-block">{{ autoMemoryDirError }}</div>
           <small class="form-text text-muted d-block">
             Custom directory for auto-memory storage. Leave blank to use Claude's default location.
+            Supports template variables: {session_id}, {session_data}, {working_dir}.
           </small>
         </div>
         <div class="form-check form-switch mb-2">
@@ -439,13 +444,14 @@
               <span class="dir-remove" @click="removeDirectory(index)">&times;</span>
             </div>
           </div>
+          <div v-if="additionalDirsError" class="text-danger small mb-1">{{ additionalDirsError }}</div>
           <div class="d-flex gap-2 mt-1">
             <input
               type="text"
-              class="form-control form-control-sm"
+              :class="['form-control', 'form-control-sm', { 'is-invalid': additionalDirsError }]"
               v-model="newDirectory"
               @keydown.enter.prevent="addDirectory"
-              placeholder="Add directory path..."
+              placeholder="Add directory path... Supports {session_id}, {session_data}, {working_dir}"
               style="flex: 1;"
             />
             <button
@@ -550,10 +556,19 @@
           </div>
           <div class="mb-2">
             <label class="form-label">Mounts</label>
-            <textarea class="form-control form-control-sm"
+            <textarea
+              :class="['form-control', 'form-control-sm', { 'is-invalid': dockerMountsError }]"
               :value="formData.docker_extra_mounts"
-              @input="$emit('update:form-data', 'docker_extra_mounts', $event.target.value)"
-              rows="2" placeholder="/host/path:/container/path:ro (one per line)" />
+              @input="(e) => {
+                $emit('update:form-data', 'docker_extra_mounts', e.target.value)
+                dockerMountsError = validateTemplatePathList(e.target.value)
+              }"
+              rows="2"
+              placeholder="{session_data}/db:/app/db:ro or /host/path:/container/path:ro (one per line)" />
+            <div v-if="dockerMountsError" class="invalid-feedback d-block">{{ dockerMountsError }}</div>
+            <small class="form-text text-muted d-block">
+              Supports template variables in host paths: {session_id}, {session_data}, {working_dir}.
+            </small>
           </div>
           <div class="mb-2">
             <label class="form-label">Home Directory</label>
@@ -667,6 +682,7 @@
 <script setup>
 import { ref, reactive, computed, onMounted, watch, useTemplateRef } from 'vue'
 import { api } from '@/utils/api'
+import { validateTemplatePath, validateTemplatePathList } from '@/utils/templateVariables'
 import { useMcpStore } from '../../stores/mcp'
 import McpServerPanel from './McpServerPanel.vue'
 
@@ -703,7 +719,8 @@ const emit = defineEmits([
   'update:form-data',
   'preview-permissions',
   'show-quick',
-  'browse-additional-dir'
+  'browse-additional-dir',
+  'update:has-errors'
 ])
 
 // Card collapse states (expanded by default for first 4, collapsed for 5 & 6)
@@ -723,6 +740,16 @@ const newDeniedTool = ref('')
 const newCapability = ref('')
 const newDirectory = ref('')
 const dockerStatus = ref(null)
+
+// Issue #917: Template variable validation errors
+const autoMemoryDirError = ref(null)
+const dockerMountsError = ref(null)
+const additionalDirsError = ref(null)
+
+const hasTemplateErrors = computed(() =>
+  !!(autoMemoryDirError.value || dockerMountsError.value || additionalDirsError.value)
+)
+watch(hasTemplateErrors, (val) => emit('update:has-errors', val), { immediate: true })
 
 // Template refs for focusing
 const allowedToolInput = ref(null)
@@ -861,6 +888,13 @@ function toggleSettingSource(source) {
 function addDirectory() {
   const dir = newDirectory.value.trim()
   if (!dir) return
+  // Issue #917: validate template variables before adding
+  const err = validateTemplatePath(dir)
+  if (err) {
+    additionalDirsError.value = err
+    return
+  }
+  additionalDirsError.value = null
   const current = additionalDirsList.value
   if (!current.includes(dir)) {
     current.push(dir)

@@ -275,6 +275,7 @@
                 @preview-permissions="showPermissionPreview"
                 @show-quick="showAdvanced = false"
                 @browse-additional-dir="browseAdditionalDir"
+                @update:has-errors="(v) => { templatePathErrors = v }"
               />
             </div>
           </div>
@@ -721,6 +722,9 @@ const errors = reactive({
   name: ''
 })
 
+// Issue #917: template path validation errors from AdvancedSettingsPanel
+const templatePathErrors = ref(false)
+
 // Track if form has errors (used in validation)
 const hasFormErrors = computed(() => !!errors.name)
 
@@ -758,6 +762,8 @@ const submitButtonText = computed(() => {
 })
 
 const isFormValid = computed(() => {
+  // Issue #917: block save when template path fields have validation errors
+  if (templatePathErrors.value) return false
   // Name is optional for configure-ephemeral mode
   if (mode.value === 'configure-ephemeral') return true
   // Save as template: name required
