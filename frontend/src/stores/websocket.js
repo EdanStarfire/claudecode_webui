@@ -208,7 +208,7 @@ export const useWebSocketStore = defineStore('websocket', () => {
   }
 
   // ========== OUTBOUND REST ACTIONS ==========
-  async function sendMessage(content) {
+  async function sendMessage(content, metadata) {
     const sessionStore = useSessionStore()
     const sid = sessionStore.currentSessionId
     if (!sid) {
@@ -216,7 +216,9 @@ export const useWebSocketStore = defineStore('websocket', () => {
       return
     }
     try {
-      await api.post(`/api/sessions/${sid}/messages`, { message: content })
+      const payload = { message: content }
+      if (metadata) payload.metadata = metadata
+      await api.post(`/api/sessions/${sid}/messages`, payload)
       setTimeout(() => {
         import('./mcp').then(({ useMcpStore }) => {
           useMcpStore().fetchMcpStatus(sid)

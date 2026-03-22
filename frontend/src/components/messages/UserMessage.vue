@@ -104,14 +104,15 @@ const cleanContent = computed(() => splitContent.value.main)
 const { renderedHtml: cleanRenderedContent } = useMarkdown(cleanContent)
 
 /**
- * Parse the attachment block into structured items.
+ * Parse the attachment block into structured items (regex fallback for old messages).
  * Each line follows: "- <name> (<size> KB): <stored_path>"
  * Optionally followed by "  Resource ID: <uuid>"
  * Falls back to extracting uuid from stored_path URL for gallery resources.
  */
-const attachmentItems = computed(() => {
-  const block = splitContent.value.block
-  if (!block) return []
+function parseAttachmentsFromContent(content) {
+  const idx = content.indexOf(ATTACHMENT_SEPARATOR)
+  if (idx === -1) return []
+  const block = content.slice(idx + ATTACHMENT_SEPARATOR.length)
 
   const items = []
   const lines = block.split('\n')
@@ -150,6 +151,24 @@ const attachmentItems = computed(() => {
     i++
   }
   return items
+}
+
+/**
+ * Two-tier attachment rendering:
+ * Tier 1: structured metadata from message.metadata.attachments (new messages)
+ * Tier 2: regex parse of content block (fallback for old messages)
+ */
+const attachmentItems = computed(() => {
+  const meta = props.message?.metadata?.attachments
+  if (meta && meta.length > 0) {
+    return meta.map(a => ({
+      filename: a.filename,
+      storedPath: a.stored_path,
+      resourceId: a.resource_id,
+      icon: getFileIcon(a.filename)
+    }))
+  }
+  return parseAttachmentsFromContent(props.message?.content ?? '')
 })
 
 function openPreview(item) {
