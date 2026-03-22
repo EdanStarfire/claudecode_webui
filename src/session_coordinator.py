@@ -16,6 +16,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from src.docker_utils import cleanup_session_tmp
 from src.legion.minion_system_prompts import get_legion_guide_only
@@ -116,6 +117,9 @@ class SessionCoordinator:
 
         # Track ExitPlanMode that had setMode suggestions applied (to prevent auto-reset)
         self._exitplanmode_with_setmode: dict[str, bool] = {}  # session_id -> bool
+
+        # Issue #894: Track active api_retry sequence per session (session_id -> retry_message_id)
+        self._retry_sequences: dict[str, str] = {}
 
         # Issue #324: Active tool calls per session for unified ToolCall lifecycle
         # Maps session_id -> {tool_use_id: ToolCall}
@@ -1207,6 +1211,8 @@ class SessionCoordinator:
                 del self._display_projections[session_id]
             # Issue #858: Cleanup per-session tool-call event
             self._tool_call_events.pop(session_id, None)
+            # Issue #894: Cleanup retry sequence tracking
+            self._retry_sequences.pop(session_id, None)
 
             if success:
                 await self._notify_state_change(session_id, SessionState.TERMINATED)
@@ -1887,6 +1893,8 @@ class SessionCoordinator:
             # Issue #858: Clear event so stale set() signals don't skip the next wait.
             if session_id in self._tool_call_events:
                 self._tool_call_events[session_id].clear()
+            # Issue #894: Cleanup retry sequence tracking on reset
+            self._retry_sequences.pop(session_id, None)
 
             # Issue #500: Notify frontend to clear messages for this session
             await self._notify_session_reset(session_id)
@@ -3431,6 +3439,17 @@ class SessionCoordinator:
                     if parsed_message.metadata is None:
                         parsed_message.metadata = {}
                     parsed_message.metadata['display'] = display_metadata.to_dict()
+
+                # Issue #894: Inject stable retry_message_id for api_retry sequences
+                msg_subtype = parsed_message.metadata.get('subtype') if parsed_message.metadata else None
+                if msg_subtype == 'api_retry':
+                    if session_id not in self._retry_sequences:
+                        self._retry_sequences[session_id] = str(uuid4())
+                    if parsed_message.metadata is None:
+                        parsed_message.metadata = {}
+                    parsed_message.metadata['retry_message_id'] = self._retry_sequences[session_id]
+                else:
+                    self._retry_sequences.pop(session_id, None)
 
                 for cb in callbacks:
                     try:

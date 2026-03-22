@@ -344,6 +344,20 @@ class SystemMessageHandler(MessageHandler):
                     extracted["content"] = f"Hook: {hook_name} \u2192 {outcome}"
                     if exit_code is not None:
                         extracted["metadata"]["exit_code"] = exit_code
+
+            # Issue #894: Extract retry fields for api_retry messages
+            if subtype in ("api_retry", "tengu_api_retry"):
+                retry_data = sdk_msg.data if hasattr(sdk_msg, 'data') and sdk_msg.data else {}
+                attempt = retry_data.get("attempt") or retry_data.get("attemptNumber")
+                max_retries = retry_data.get("max_retries") or retry_data.get("maxRetries")
+                wait_ms = retry_data.get("wait_ms") or retry_data.get("waitMs") or retry_data.get("retryAfterMs")
+                extracted["metadata"]["attempt"] = attempt
+                extracted["metadata"]["max_retries"] = max_retries
+                extracted["metadata"]["wait_sec"] = round(wait_ms / 1000) if wait_ms else None
+                extracted["metadata"]["subtype"] = "api_retry"
+                attempt_str = f"{attempt}/{max_retries}" if attempt and max_retries else str(attempt or "?")
+                wait_str = f" (~{round(wait_ms / 1000)}s)" if wait_ms else ""
+                extracted["content"] = f"API retry {attempt_str}{wait_str}"
         else:
             # Extract from dictionary data
             # Look for subtype in multiple locations for robustness
@@ -377,6 +391,23 @@ class SystemMessageHandler(MessageHandler):
                     extracted["content"] = f"Hook: {hook_name} \u2192 {outcome}"
                     if exit_code is not None:
                         extracted["metadata"]["exit_code"] = exit_code
+
+            # Issue #894: Restore retry fields for stored api_retry messages
+            if subtype in ("api_retry", "tengu_api_retry"):
+                stored_meta = message_data.get("metadata") or {}
+                init_data = stored_meta.get("init_data") or {}
+                attempt = stored_meta.get("attempt") or init_data.get("attempt") or init_data.get("attemptNumber")
+                max_retries = stored_meta.get("max_retries") or init_data.get("max_retries") or init_data.get("maxRetries")
+                wait_ms = init_data.get("wait_ms") or init_data.get("waitMs") or init_data.get("retryAfterMs")
+                wait_sec = stored_meta.get("wait_sec") or (round(wait_ms / 1000) if wait_ms else None)
+                extracted["metadata"]["attempt"] = attempt
+                extracted["metadata"]["max_retries"] = max_retries
+                extracted["metadata"]["wait_sec"] = wait_sec
+                extracted["metadata"]["subtype"] = "api_retry"
+                if not provided_content:
+                    attempt_str = f"{attempt}/{max_retries}" if attempt and max_retries else str(attempt or "?")
+                    wait_str = f" (~{wait_sec}s)" if wait_sec else ""
+                    extracted["content"] = f"API retry {attempt_str}{wait_str}"
             extracted["metadata"]["working_directory"] = message_data.get("cwd")
             extracted["metadata"]["permissions"] = message_data.get("permissionMode")
             extracted["metadata"]["tools"] = message_data.get("tools", [])

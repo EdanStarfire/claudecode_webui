@@ -25,6 +25,13 @@
         <span class="pill-text">{{ displayContent }}</span>
       </template>
 
+      <!-- API Retry Progress -->
+      <template v-else-if="isApiRetry">
+        <i class="bi bi-arrow-clockwise pill-icon retry-icon"></i>
+        <span class="pill-text">Retrying API connection...</span>
+        <span v-if="retryBadge" class="pill-badge pill-badge-retry">{{ retryBadge }}</span>
+      </template>
+
       <!-- Default system messages -->
       <template v-else>
         <span v-if="isStderr" class="pill-icon">&#x26A0;&#xFE0F;</span>
@@ -108,6 +115,21 @@ const notificationIconClass = computed(() => {
   }
 })
 
+// Issue #894: API retry computed properties
+const isApiRetry = computed(() => subtype.value === 'api_retry')
+
+const retryBadge = computed(() => {
+  if (!isApiRetry.value) return ''
+  const attempt = props.message.metadata?.attempt
+  const maxRetries = props.message.metadata?.max_retries
+  const waitSec = props.message.metadata?.wait_sec
+  const parts = []
+  if (attempt && maxRetries) parts.push(`${attempt}/${maxRetries}`)
+  else if (attempt) parts.push(`attempt ${attempt}`)
+  if (waitSec) parts.push(`~${waitSec}s`)
+  return parts.join(' · ')
+})
+
 // Pill class computation
 const pillClass = computed(() => ({
   'pill-compaction': isCompactionStatus.value,
@@ -115,6 +137,7 @@ const pillClass = computed(() => ({
   'pill-hook': isHook.value && !isHookError.value,
   'pill-hook-error': isHookError.value,
   'pill-expandable': isHook.value,
+  'pill-retry': isApiRetry.value,
   'pill-task-started': subtype.value === 'task_started',
   'pill-task-progress': subtype.value === 'task_progress',
   'pill-task-completed': subtype.value === 'task_notification' && taskStatus.value === 'completed',
@@ -331,6 +354,30 @@ function toggleExpand() {
   background: #dbeafe;
   color: #1e40af;
   font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+}
+
+.pill-badge-retry {
+  background: #fef9c3;
+  color: #713f12;
+}
+
+.pill-retry {
+  background: #fefce8;
+  border-color: #fde047;
+}
+
+.pill-retry .pill-text {
+  color: #713f12;
+}
+
+.retry-icon {
+  color: #ca8a04;
+  animation: spin 1.2s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }
 
 .pill-chevron {
