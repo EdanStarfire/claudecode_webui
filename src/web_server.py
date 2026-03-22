@@ -588,6 +588,13 @@ class ClaudeWebUI:
         except Exception:
             logger.exception("Error appending mcp_oauth_complete")
 
+    def _broadcast_rate_limits_update(self, data: dict) -> None:
+        """Issue #899: Emit rate_limits_update to the global UI poll queue."""
+        try:
+            self.ui_queue.append({"type": "rate_limits_update", "data": data})
+        except Exception:
+            logger.exception("Error appending rate_limits_update")
+
     async def _broadcast_resource_registered(self, session_id: str, resource_metadata: dict):
         """
         Append resource_registered event to session poll queue.
@@ -659,6 +666,7 @@ class ClaudeWebUI:
         self.coordinator.add_state_change_callback(self._on_state_change)
         self.coordinator.add_session_reset_callback(self._on_session_reset)
         self.coordinator.add_tool_call_broadcast_callback(self._on_tool_call_broadcast)
+        self.coordinator.set_rate_limit_broadcast_callback(self._broadcast_rate_limits_update)
 
         # Issue #500: Wire queue processor broadcast callback
         self.coordinator.queue_processor.set_broadcast_callback(self._broadcast_queue_update)

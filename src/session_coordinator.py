@@ -118,6 +118,10 @@ class SessionCoordinator:
         # Track ExitPlanMode that had setMode suggestions applied (to prevent auto-reset)
         self._exitplanmode_with_setmode: dict[str, bool] = {}  # session_id -> bool
 
+        # Issue #899: Rate limit state accumulator (rate_limit_type -> {used_percentage, resets_at})
+        self._rate_limits_state: dict[str, dict] = {}
+        self._rate_limit_broadcast_callback: Callable | None = None
+
         # Issue #894: Track active api_retry sequence per session (session_id -> retry_message_id)
         self._retry_sequences: dict[str, str] = {}
 
@@ -573,6 +577,7 @@ class SessionCoordinator:
                 message_callback=self._create_message_callback(session_id),
                 error_callback=self._create_error_callback(session_id),
                 permission_callback=permission_callback,
+                rate_limit_callback=self._on_rate_limits,
                 mcp_servers=mcp_servers if mcp_servers else None,
                 experimental=self.experimental,
                 stderr_callback=self._create_stderr_callback(session_id),
@@ -1085,6 +1090,7 @@ class SessionCoordinator:
                 message_callback=self._create_message_callback(session_id),
                 error_callback=self._create_error_callback(session_id),
                 permission_callback=permission_callback,
+                rate_limit_callback=self._on_rate_limits,
                 resume_session_id=resume_sdk_session,
                 mcp_servers=mcp_servers if mcp_servers else None,
                 experimental=self.experimental,
@@ -2760,6 +2766,33 @@ class SessionCoordinator:
     def add_tool_call_broadcast_callback(self, callback: Callable):
         """Add callback for broadcasting tool_call messages via WebSocket (Issue #520)."""
         self._tool_call_broadcast_callbacks.append(callback)
+
+    def set_rate_limit_broadcast_callback(self, callback: Callable) -> None:
+        """Issue #899: Set callback for broadcasting rate_limits_update to the UI poll queue."""
+        self._rate_limit_broadcast_callback = callback
+
+    async def _on_rate_limits(self, rate_limit_info: Any) -> None:
+        """Issue #899: Normalize a RateLimitInfo and broadcast updated state to UI poll queue."""
+        try:
+            window = getattr(rate_limit_info, 'rate_limit_type', None)
+            utilization = getattr(rate_limit_info, 'utilization', None)
+            resets_at_ts = getattr(rate_limit_info, 'resets_at', None)
+
+            if window is None:
+                return
+
+            entry: dict = {}
+            if utilization is not None:
+                entry['used_percentage'] = round(utilization * 100, 1)
+            if resets_at_ts is not None:
+                entry['resets_at'] = datetime.fromtimestamp(resets_at_ts, tz=UTC).isoformat()
+
+            self._rate_limits_state[window] = entry
+
+            if self._rate_limit_broadcast_callback:
+                self._rate_limit_broadcast_callback(dict(self._rate_limits_state))
+        except Exception:
+            logger.exception("Error processing rate_limits")
 
     async def _notify_session_reset(self, session_id: str) -> None:
         """Notify registered callbacks that a session was reset."""
