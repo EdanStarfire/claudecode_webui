@@ -27,6 +27,14 @@
         >
           ⚙️ <span class="button-label">Manage</span>
         </button>
+        <button
+          class="btn btn-sm btn-outline-secondary"
+          @click="showEdit"
+          :disabled="!session"
+          aria-label="Edit session"
+        >
+          🖊️ <span class="button-label">Edit</span>
+        </button>
       </div>
 
       <!-- Rate Limit Indicator (Issue #899) -->
@@ -148,6 +156,10 @@ const showInfo = () => {
 
 const showManage = () => {
   uiStore.showModal('manage-session', { session: session.value })
+}
+
+const showEdit = () => {
+  uiStore.showModal('edit-session', { session: session.value })
 }
 
 const toggleReadAloud = () => {
