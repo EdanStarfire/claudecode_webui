@@ -194,7 +194,7 @@ class SessionUpdateRequest(BaseModel):
     # Thinking and effort configuration (issue #540)
     thinking_mode: str | None = None  # "adaptive", "enabled", "disabled"
     thinking_budget_tokens: int | None = None  # Token budget (min 1024)
-    effort: str | None = None  # "low", "medium", "high", "max"
+    effort: str | None = None  # "low", "medium", "high"
     # History distillation toggle (issue #710, renamed #736)
     history_distillation_enabled: bool | None = None
     # Auto-memory mode (issue #709)
@@ -1208,7 +1208,10 @@ class ClaudeWebUI:
             if request.thinking_budget_tokens is not None:
                 updates["thinking_budget_tokens"] = request.thinking_budget_tokens
             if request.effort is not None:
-                updates["effort"] = request.effort if request.effort else None
+                eff = request.effort if request.effort else None
+                if eff == 'max':
+                    eff = 'high'
+                updates["effort"] = eff
 
             if request.history_distillation_enabled is not None:
                 updates["history_distillation_enabled"] = request.history_distillation_enabled

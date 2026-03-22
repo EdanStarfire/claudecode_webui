@@ -103,12 +103,6 @@
               :class="{ active: formData.effort === 'high' }"
               @click="$emit('update:form-data', 'effort', 'high')"
             >High</button>
-            <button
-              type="button"
-              class="model-btn"
-              :class="{ active: formData.effort === 'max' }"
-              @click="$emit('update:form-data', 'effort', 'max')"
-            >Max</button>
           </div>
         </div>
         <div v-if="formData.thinking_mode === 'enabled'">

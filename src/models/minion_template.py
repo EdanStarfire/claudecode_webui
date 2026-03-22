@@ -99,6 +99,8 @@ class MinionTemplate:
         data.setdefault('thinking_mode', None)
         data.setdefault('thinking_budget_tokens', None)
         data.setdefault('effort', None)
+        if data.get('effort') == 'max':
+            data['effort'] = 'high'
         # Migrate knowledge_management_enabled → history_distillation_enabled (issue #736)
         if 'knowledge_management_enabled' in data and 'history_distillation_enabled' not in data:
             data['history_distillation_enabled'] = data.pop('knowledge_management_enabled')

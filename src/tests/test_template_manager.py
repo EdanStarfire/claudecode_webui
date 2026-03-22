@@ -85,6 +85,18 @@ class TestMinionTemplateRoundTrip:
         assert restored.thinking_budget_tokens == 5000
         assert restored.effort == "high"
 
+    def test_effort_max_normalizes_to_high(self):
+        """Legacy effort='max' must be silently downgraded to 'high' on load."""
+        template = MinionTemplate(
+            template_id="legacy",
+            name="Legacy Template",
+            permission_mode="default",
+        )
+        data = template.to_dict()
+        data['effort'] = 'max'  # Simulate legacy data on disk
+        restored = MinionTemplate.from_dict(data)
+        assert restored.effort == "high"
+
     def test_none_defaults_round_trip(self):
         """Fields with None defaults should survive round-trip."""
         template = MinionTemplate(
