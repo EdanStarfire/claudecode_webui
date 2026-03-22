@@ -192,9 +192,10 @@ const contextTextClass = computed(() => {
   background-color: #f8f9fa;
 }
 
-/* Hide button labels on mobile, keep mode label visible */
+/* Hide button labels on mobile */
 @media (max-width: 768px) {
-  .button-label {
+  .button-label,
+  .mode-label {
     display: none;
   }
 }
