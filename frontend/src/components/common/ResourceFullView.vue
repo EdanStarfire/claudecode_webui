@@ -442,18 +442,96 @@ function formatTimestamp(timestamp) {
 }
 
 function printContent() {
-  const originalTitle = document.title
-  let filename = 'document'
+  const markdownRef = isDirectContent.value ? directMarkdownRef.value : resourceMarkdownRef.value
+  if (!markdownRef) return
+
+  const html = markdownRef.innerHTML
+
+  let title = 'document'
   if (isDirectContent.value) {
-    filename = resourceStore.directTitle || 'document'
+    title = resourceStore.directTitle || 'document'
   } else if (currentResource.value) {
-    filename = currentResource.value.title
+    title = currentResource.value.title
       || currentResource.value.original_filename
       || 'document'
   }
-  document.title = filename.replace(/\.[^.]+$/, '')
-  window.print()
-  document.title = originalTitle
+  const windowTitle = title.replace(/\.[^.]+$/, '')
+
+  const win = window.open('', '_blank', 'width=900,height=700')
+  if (!win) return
+
+  win.document.write(`<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>${windowTitle}</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      font-size: 0.9rem;
+      line-height: 1.6;
+      color: #212529;
+      max-width: 860px;
+      margin: 32px auto;
+      padding: 0 24px;
+      word-wrap: break-word;
+    }
+    h1, h2, h3, h4, h5, h6 {
+      margin-top: 1.2em;
+      margin-bottom: 0.6em;
+      font-weight: 600;
+      color: #1a1a1a;
+    }
+    h1 { font-size: 1.6rem; border-bottom: 1px solid #dee2e6; padding-bottom: 0.3em; }
+    h2 { font-size: 1.35rem; border-bottom: 1px solid #dee2e6; padding-bottom: 0.3em; }
+    h3 { font-size: 1.15rem; }
+    p { margin-bottom: 0.8em; }
+    ul, ol { padding-left: 2em; margin-bottom: 0.8em; }
+    li { margin-bottom: 0.3em; }
+    code {
+      background: #e9ecef;
+      padding: 0.15em 0.4em;
+      border-radius: 3px;
+      font-size: 0.85em;
+      font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+    }
+    pre {
+      background: #282c34;
+      color: #abb2bf;
+      padding: 12px 16px;
+      border-radius: 6px;
+      overflow-x: auto;
+      margin-bottom: 0.8em;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    pre code { background: none; padding: 0; color: inherit; }
+    blockquote {
+      border-left: 3px solid #ced4da;
+      padding-left: 1em;
+      margin-left: 0;
+      margin-bottom: 0.8em;
+      color: #6c757d;
+    }
+    a { color: #0d6efd; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    table { width: 100%; border-collapse: collapse; margin-bottom: 0.8em; }
+    th, td { border: 1px solid #dee2e6; padding: 6px 12px; text-align: left; }
+    th { background: #f1f3f5; font-weight: 600; }
+    hr { border: none; border-top: 1px solid #dee2e6; margin: 1.2em 0; }
+    img { max-width: 100%; height: auto; }
+    @media print {
+      body { margin: 0; }
+      pre, h1, h2, h3, table { page-break-inside: avoid; }
+    }
+  </style>
+</head>
+<body>${html}</body>
+</html>`)
+  win.document.close()
+  win.focus()
+  win.print()
+  win.close()
 }
 
 function handleImageError(event) {
@@ -911,59 +989,6 @@ function handleImageError(event) {
 .modal-enter-from,
 .modal-leave-to {
   opacity: 0;
-}
-
-/* ===== Print / Export PDF ===== */
-
-@media print {
-  .resource-full-view-overlay {
-    position: static;
-    background: none;
-    display: block;
-    z-index: auto;
-  }
-
-  .close-btn,
-  .nav-btn,
-  .position-indicator,
-  .thumbnail-strip,
-  .display-mode-toggle,
-  .copy-btn,
-  .print-btn {
-    display: none !important;
-  }
-
-  .text-container {
-    max-width: 100%;
-    max-height: none;
-    width: 100%;
-    box-shadow: none;
-    border-radius: 0;
-    background: white;
-  }
-
-  .text-header {
-    border-bottom: 1px solid #ccc;
-    padding: 8px 0;
-  }
-
-  .text-body {
-    overflow: visible;
-    height: auto;
-  }
-
-  .markdown-content :deep(pre) {
-    white-space: pre-wrap;
-    word-break: break-word;
-  }
-
-  .markdown-content :deep(h1),
-  .markdown-content :deep(h2),
-  .markdown-content :deep(h3),
-  .markdown-content :deep(pre),
-  .markdown-content :deep(table) {
-    page-break-inside: avoid;
-  }
 }
 
 /* ===== Mobile Adjustments ===== */
