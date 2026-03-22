@@ -3480,6 +3480,12 @@ class SessionCoordinator:
                         except Exception:
                             logger.exception(f"Failed to reset processing state for session {session_id}")
 
+                    # Issue #904: Poll for SDK-generated session title after each turn
+                    task = asyncio.create_task(self._check_sdk_generated_name(session_id))
+                    task.add_done_callback(
+                        lambda t: logger.exception("SDK title check task failed") if t.exception() else None
+                    )
+
                 # Also reset processing state on interrupt_success
                 if parsed_message.type.value == 'system' and parsed_message.metadata.get('subtype') == 'interrupt_success':
                     # Only reset if no queries pending (PIVOT sends a new message after interrupt)
@@ -3828,6 +3834,27 @@ class SessionCoordinator:
         """Handle state changes from session manager"""
         # logger.info(f"Received state change from session manager: {session_id} -> {new_state.value}")
         await self._notify_state_change(session_id, new_state)
+
+    async def _check_sdk_generated_name(self, session_id: str) -> None:
+        """Check if SDK has generated a session title and store it (issue #904)."""
+        try:
+            from claude_agent_sdk import get_session_info as sdk_get_session_info
+        except ImportError:
+            return
+        try:
+            session_info = await self.session_manager.get_session_info(session_id)
+            if not session_info:
+                return
+            sdk_session_id = session_info.claude_code_session_id
+            working_dir = str(session_info.working_directory) if session_info.working_directory else None
+            if not sdk_session_id:
+                return
+
+            sdk_info = await asyncio.to_thread(sdk_get_session_info, sdk_session_id, working_dir)
+            if sdk_info and sdk_info.custom_title:
+                await self.session_manager.update_sdk_generated_name(session_id, sdk_info.custom_title)
+        except Exception:
+            coord_logger.debug(f"SDK title check failed for {session_id}", exc_info=True)
 
     async def _validate_and_cleanup_projects(self):
         """

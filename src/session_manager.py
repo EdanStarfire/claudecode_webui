@@ -87,6 +87,7 @@ class SessionInfo:
     claude_code_session_id: str | None = None
     is_processing: bool = False
     name: str | None = None
+    sdk_generated_name: str | None = None  # AI-generated title from SDK (issue #904)
     slug: str | None = None  # Slugified name for MCP tool lookups (issue #546)
     order: int | None = None
     project_id: str | None = None
@@ -231,6 +232,7 @@ class SessionInfo:
         else:
             data.pop('disable_auto_memory', None)
             data.setdefault('auto_memory_mode', 'claude')
+        data.setdefault('sdk_generated_name', None)
         data.setdefault('skill_creating_enabled', False)
         data.setdefault('mcp_server_ids', None)
         data.setdefault('enable_claudeai_mcp_servers', True)
@@ -662,6 +664,25 @@ class SessionManager:
                 return True
             except Exception as e:
                 logger.error(f"Failed to update session {session_id} name: {e}")
+                return False
+
+    async def update_sdk_generated_name(self, session_id: str, sdk_name: str) -> bool:
+        """Update SDK-generated session title (issue #904)"""
+        async with self._get_session_lock(session_id):
+            try:
+                session = self._active_sessions.get(session_id)
+                if not session:
+                    return False
+                if session.sdk_generated_name == sdk_name:
+                    return False  # No change
+                session.sdk_generated_name = sdk_name
+                session.updated_at = datetime.now(UTC)
+                await self._persist_session_state(session_id)
+                await self._notify_state_change_callbacks(session_id, session.state)
+                session_logger.info(f"Updated session {session_id} sdk_generated_name to '{sdk_name}'")
+                return True
+            except Exception as e:
+                logger.error(f"Failed to update session {session_id} sdk_generated_name: {e}")
                 return False
 
     async def update_permission_mode(self, session_id: str, mode: str) -> bool:
