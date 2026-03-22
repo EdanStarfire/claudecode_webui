@@ -1,64 +1,45 @@
 <template>
   <div class="resource-gallery-panel">
-    <!-- Controls bar: view toggle + filter + sort -->
-    <div v-if="resources.length > 0 || filterText || typeFilter !== 'all'" class="controls-bar">
-      <!-- View toggle -->
-      <div class="view-toggle">
-        <button
-          class="toggle-btn"
-          :class="{ active: viewMode === 'gallery' }"
-          @click="setViewMode('gallery')"
-          title="Gallery view"
-          aria-label="Gallery view"
-        >
-          <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
-            <path d="M1 2.5A1.5 1.5 0 0 1 2.5 1h3A1.5 1.5 0 0 1 7 2.5v3A1.5 1.5 0 0 1 5.5 7h-3A1.5 1.5 0 0 1 1 5.5v-3zm8 0A1.5 1.5 0 0 1 10.5 1h3A1.5 1.5 0 0 1 15 2.5v3A1.5 1.5 0 0 1 13.5 7h-3A1.5 1.5 0 0 1 9 5.5v-3zm-8 8A1.5 1.5 0 0 1 2.5 9h3A1.5 1.5 0 0 1 7 10.5v3A1.5 1.5 0 0 1 5.5 15h-3A1.5 1.5 0 0 1 1 13.5v-3zm8 0A1.5 1.5 0 0 1 10.5 9h3a1.5 1.5 0 0 1 1.5 1.5v3a1.5 1.5 0 0 1-1.5 1.5h-3A1.5 1.5 0 0 1 9 13.5v-3z"/>
-          </svg>
-        </button>
-        <button
-          class="toggle-btn"
-          :class="{ active: viewMode === 'list' }"
-          @click="setViewMode('list')"
-          title="List view"
-          aria-label="List view"
-        >
-          <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
-            <path fill-rule="evenodd" d="M2.5 12a.5.5 0 0 1 .5-.5h10a.5.5 0 0 1 0 1H3a.5.5 0 0 1-.5-.5zm0-4a.5.5 0 0 1 .5-.5h10a.5.5 0 0 1 0 1H3a.5.5 0 0 1-.5-.5zm0-4a.5.5 0 0 1 .5-.5h10a.5.5 0 0 1 0 1H3a.5.5 0 0 1-.5-.5z"/>
-          </svg>
-        </button>
-      </div>
-
-      <!-- Filter input -->
+    <!-- Controls bar: search + sort + view toggle -->
+    <div v-if="resources.length > 0" class="gallery-controls">
+      <!-- Search -->
       <input
-        v-model="filterText"
-        class="filter-input"
-        type="text"
+        v-model="searchQuery"
+        type="search"
+        class="gallery-search"
         placeholder="Filter…"
-        aria-label="Filter resources by name"
+        aria-label="Filter resources"
       />
-
-      <!-- Type filter -->
-      <select
-        v-if="availableTypes.length > 1"
-        v-model="typeFilter"
-        class="filter-select"
-        aria-label="Filter by type"
-      >
-        <option value="all">All</option>
-        <option v-for="t in availableTypes" :key="t.value" :value="t.value">{{ t.label }}</option>
-      </select>
-
-      <!-- Sort control -->
-      <select
-        v-model="sortOrder"
-        class="filter-select"
-        aria-label="Sort resources"
-      >
+      <!-- Sort -->
+      <select v-model="sortOrder" class="gallery-sort" aria-label="Sort resources">
         <option value="newest">Newest</option>
         <option value="oldest">Oldest</option>
-        <option value="name-asc">A → Z</option>
-        <option value="name-desc">Z → A</option>
+        <option value="name-asc">Name A→Z</option>
+        <option value="name-desc">Name Z→A</option>
       </select>
+      <!-- View toggle (Issue #523) -->
+      <button
+        class="toggle-btn"
+        :class="{ active: viewMode === 'gallery' }"
+        @click="setViewMode('gallery')"
+        title="Gallery view"
+        aria-label="Gallery view"
+      >
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+          <path d="M1 2.5A1.5 1.5 0 0 1 2.5 1h3A1.5 1.5 0 0 1 7 2.5v3A1.5 1.5 0 0 1 5.5 7h-3A1.5 1.5 0 0 1 1 5.5v-3zm8 0A1.5 1.5 0 0 1 10.5 1h3A1.5 1.5 0 0 1 15 2.5v3A1.5 1.5 0 0 1 13.5 7h-3A1.5 1.5 0 0 1 9 5.5v-3zm-8 8A1.5 1.5 0 0 1 2.5 9h3A1.5 1.5 0 0 1 7 10.5v3A1.5 1.5 0 0 1 5.5 15h-3A1.5 1.5 0 0 1 1 13.5v-3zm8 0A1.5 1.5 0 0 1 10.5 9h3a1.5 1.5 0 0 1 1.5 1.5v3a1.5 1.5 0 0 1-1.5 1.5h-3A1.5 1.5 0 0 1 9 13.5v-3z"/>
+        </svg>
+      </button>
+      <button
+        class="toggle-btn"
+        :class="{ active: viewMode === 'list' }"
+        @click="setViewMode('list')"
+        title="List view"
+        aria-label="List view"
+      >
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+          <path fill-rule="evenodd" d="M2.5 12a.5.5 0 0 1 .5-.5h10a.5.5 0 0 1 0 1H3a.5.5 0 0 1-.5-.5zm0-4a.5.5 0 0 1 .5-.5h10a.5.5 0 0 1 0 1H3a.5.5 0 0 1-.5-.5zm0-4a.5.5 0 0 1 .5-.5h10a.5.5 0 0 1 0 1H3a.5.5 0 0 1-.5-.5z"/>
+        </svg>
+      </button>
     </div>
 
     <!-- Resource Grid / List -->
@@ -68,7 +49,7 @@
       </div>
 
       <div v-else-if="filteredResources.length === 0" class="empty-placeholder">
-        <span>No resources match the current filter</span>
+        <span>No resources match "{{ searchQuery }}"</span>
       </div>
 
       <!-- Gallery View -->
@@ -226,85 +207,58 @@ watch(viewMode, (val) => {
 
 defineExpose({ viewMode, setViewMode })
 
-// Filter and sort state — reset on session change
-const filterText = ref('')
-const typeFilter = ref('all')
-const sortOrder = ref('newest')
+// Filter state — resets on session switch
+const searchQuery = ref('')
+
+// Sort state — persists across sessions (like viewMode)
+const sortOrder = ref(localStorage.getItem('resource-sort-preference') || 'newest')
+
+watch(sortOrder, (val) => {
+  localStorage.setItem('resource-sort-preference', val)
+})
 
 watch(() => sessionStore.currentSessionId, () => {
-  filterText.value = ''
-  typeFilter.value = 'all'
+  searchQuery.value = ''
 })
 
 // Computed properties
 const resources = computed(() => resourceStore.currentResources)
 
 /**
- * Derive unique resource types from the current session's resources.
- * Returns [{value, label}] for the type filter dropdown.
- */
-const availableTypes = computed(() => {
-  const types = new Map()
-  for (const r of resources.value) {
-    if (resourceStore.isImageResource(r)) {
-      types.set('image', 'Images')
-    } else {
-      const ext = resourceStore.getResourceExtension(r)
-      if (ext) {
-        const key = ext.toLowerCase().slice(1) // remove leading dot
-        types.set(key, key.toUpperCase())
-      }
-    }
-  }
-  return Array.from(types.entries())
-    .sort((a, b) => a[1].localeCompare(b[1]))
-    .map(([value, label]) => ({ value, label }))
-})
-
-/**
- * Apply text filter, type filter, and sort to the resources list.
+ * Filter by search query and apply sort order.
+ * Store baseline order is timestamp ascending (oldest first).
  */
 const filteredResources = computed(() => {
-  let result = resources.value.slice()
+  let list = resources.value
 
-  // Text filter
-  const needle = filterText.value.trim().toLowerCase()
-  if (needle) {
-    result = result.filter((r) => {
-      const title = (r.title || r.original_filename || '').toLowerCase()
-      return title.includes(needle)
-    })
-  }
-
-  // Type filter
-  if (typeFilter.value !== 'all') {
-    result = result.filter((r) => {
-      if (typeFilter.value === 'image') return resourceStore.isImageResource(r)
-      const ext = resourceStore.getResourceExtension(r)
-      return ext && ext.toLowerCase().slice(1) === typeFilter.value
+  // Filter by title / filename
+  const q = searchQuery.value.trim().toLowerCase()
+  if (q) {
+    list = list.filter((r) => {
+      const name = (r.title || r.original_filename || '').toLowerCase()
+      return name.includes(q)
     })
   }
 
   // Sort
   if (sortOrder.value === 'newest') {
-    result.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0))
-  } else if (sortOrder.value === 'oldest') {
-    result.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0))
+    list = [...list].reverse()
   } else if (sortOrder.value === 'name-asc') {
-    result.sort((a, b) => {
-      const ta = (a.title || a.original_filename || '').toLowerCase()
-      const tb = (b.title || b.original_filename || '').toLowerCase()
-      return ta.localeCompare(tb)
+    list = [...list].sort((a, b) => {
+      const na = (a.title || a.original_filename || '').toLowerCase()
+      const nb = (b.title || b.original_filename || '').toLowerCase()
+      return na.localeCompare(nb)
     })
   } else if (sortOrder.value === 'name-desc') {
-    result.sort((a, b) => {
-      const ta = (a.title || a.original_filename || '').toLowerCase()
-      const tb = (b.title || b.original_filename || '').toLowerCase()
-      return tb.localeCompare(ta)
+    list = [...list].sort((a, b) => {
+      const na = (a.title || a.original_filename || '').toLowerCase()
+      const nb = (b.title || b.original_filename || '').toLowerCase()
+      return nb.localeCompare(na)
     })
   }
+  // sortOrder === 'oldest' → store baseline order (timestamp ascending) as-is
 
-  return result
+  return list
 })
 
 function isImage(resource) {
@@ -329,13 +283,12 @@ function getDownloadUrl(resourceId) {
 }
 
 /**
- * Open full view using the resource's index in the unfiltered list so
- * next/prev navigation covers all resources, not just the filtered subset.
+ * Open full view using the resource's index in the unfiltered store array so
+ * next/prev navigation covers all resources regardless of active filters.
  */
 function openFullViewForResource(resource) {
-  const allResources = resources.value
-  const index = allResources.findIndex((r) => r.resource_id === resource.resource_id)
-  resourceStore.openFullView(sessionStore.currentSessionId, Math.max(0, index))
+  const storeIndex = resources.value.findIndex((r) => r.resource_id === resource.resource_id)
+  resourceStore.openFullView(sessionStore.currentSessionId, storeIndex >= 0 ? storeIndex : 0)
 }
 
 function truncateTitle(title, maxLength = 18) {
@@ -525,24 +478,51 @@ function addToAttachments(resource) {
   display: block;
 }
 
-/* Controls bar: view toggle + filter + sort */
-.controls-bar {
+/* Controls bar: search + sort + view toggle */
+.gallery-controls {
   display: flex;
   align-items: center;
   gap: 4px;
   padding: 6px 8px;
   border-bottom: 1px solid #e2e8f0;
   flex-shrink: 0;
-  flex-wrap: wrap;
+}
+
+.gallery-search {
+  flex: 1;
+  min-width: 0;
+  padding: 3px 6px;
+  font-size: 0.75rem;
+  border: 1px solid #dee2e6;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  outline: none;
+}
+
+.gallery-search:focus {
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
+}
+
+.gallery-sort {
+  flex-shrink: 0;
+  padding: 3px 4px;
+  font-size: 0.7rem;
+  border: 1px solid #dee2e6;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  max-width: 72px;
+  outline: none;
+}
+
+.gallery-sort:focus {
+  border-color: #3b82f6;
 }
 
 /* Issue #523: View toggle */
-.view-toggle {
-  display: flex;
-  gap: 2px;
-  flex-shrink: 0;
-}
-
 .toggle-btn {
   padding: 4px 8px;
   border: 1px solid #dee2e6;
@@ -554,6 +534,7 @@ function addToAttachments(resource) {
   justify-content: center;
   border-radius: 4px;
   transition: all 0.15s ease;
+  flex-shrink: 0;
 }
 
 .toggle-btn:hover {
@@ -565,48 +546,6 @@ function addToAttachments(resource) {
   background: #3b82f6;
   border-color: #3b82f6;
   color: #fff;
-}
-
-/* Filter input */
-.filter-input {
-  flex: 1 1 60px;
-  min-width: 0;
-  max-width: 120px;
-  padding: 3px 6px;
-  font-size: 0.75rem;
-  border: 1px solid #dee2e6;
-  border-radius: 4px;
-  background: transparent;
-  color: #334155;
-  outline: none;
-  transition: border-color 0.15s ease;
-}
-
-.filter-input:focus {
-  border-color: #3b82f6;
-}
-
-.filter-input::placeholder {
-  color: #94a3b8;
-}
-
-/* Type and sort selects */
-.filter-select {
-  padding: 3px 4px;
-  font-size: 0.72rem;
-  border: 1px solid #dee2e6;
-  border-radius: 4px;
-  background: transparent;
-  color: #334155;
-  cursor: pointer;
-  outline: none;
-  flex-shrink: 0;
-  max-width: 72px;
-  transition: border-color 0.15s ease;
-}
-
-.filter-select:focus {
-  border-color: #3b82f6;
 }
 
 /* Issue #523: List view */
