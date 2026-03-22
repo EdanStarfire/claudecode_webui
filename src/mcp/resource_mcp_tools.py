@@ -369,6 +369,9 @@ At least one of resource_id or filename must be provided.""",
                 # Use extension as format for non-images
                 resource_format = ext.lstrip('.')
 
+            # Get storage manager for this session
+            storage_manager = await self._get_storage_manager(session_id)
+
             # Generate unique resource ID
             resource_id = str(uuid.uuid4())
 
