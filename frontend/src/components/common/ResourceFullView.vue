@@ -68,6 +68,19 @@
               </svg>
               <span class="copy-label">{{ copyFeedback ? 'Copied!' : 'Copy' }}</span>
             </button>
+            <button
+              v-if="displayMode === 'markdown'"
+              class="copy-btn print-btn"
+              @click.stop="printContent"
+              title="Export as PDF"
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="6 9 6 2 18 2 18 9"></polyline>
+                <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"></path>
+                <rect x="6" y="14" width="12" height="8"></rect>
+              </svg>
+              <span class="copy-label">Export PDF</span>
+            </button>
           </div>
           <div class="text-body">
             <pre v-if="directTextContent && displayMode === 'raw'" class="text-content">{{ directTextContent }}</pre>
@@ -156,6 +169,19 @@
                 <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
               </svg>
               <span class="copy-label">{{ copyFeedback ? 'Copied!' : (displayMode === 'markdown' ? 'Copy raw' : 'Copy') }}</span>
+            </button>
+            <button
+              v-if="displayMode === 'markdown'"
+              class="copy-btn print-btn"
+              @click.stop="printContent"
+              title="Export as PDF"
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="6 9 6 2 18 2 18 9"></polyline>
+                <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"></path>
+                <rect x="6" y="14" width="12" height="8"></rect>
+              </svg>
+              <span class="copy-label">Export PDF</span>
             </button>
           </div>
 
@@ -413,6 +439,21 @@ function formatTimestamp(timestamp) {
   if (!timestamp) return ''
   const date = new Date(timestamp * 1000)
   return date.toLocaleString()
+}
+
+function printContent() {
+  const originalTitle = document.title
+  let filename = 'document'
+  if (isDirectContent.value) {
+    filename = resourceStore.directTitle || 'document'
+  } else if (currentResource.value) {
+    filename = currentResource.value.title
+      || currentResource.value.original_filename
+      || 'document'
+  }
+  document.title = filename.replace(/\.[^.]+$/, '')
+  window.print()
+  document.title = originalTitle
 }
 
 function handleImageError(event) {
@@ -870,6 +911,59 @@ function handleImageError(event) {
 .modal-enter-from,
 .modal-leave-to {
   opacity: 0;
+}
+
+/* ===== Print / Export PDF ===== */
+
+@media print {
+  .resource-full-view-overlay {
+    position: static;
+    background: none;
+    display: block;
+    z-index: auto;
+  }
+
+  .close-btn,
+  .nav-btn,
+  .position-indicator,
+  .thumbnail-strip,
+  .display-mode-toggle,
+  .copy-btn,
+  .print-btn {
+    display: none !important;
+  }
+
+  .text-container {
+    max-width: 100%;
+    max-height: none;
+    width: 100%;
+    box-shadow: none;
+    border-radius: 0;
+    background: white;
+  }
+
+  .text-header {
+    border-bottom: 1px solid #ccc;
+    padding: 8px 0;
+  }
+
+  .text-body {
+    overflow: visible;
+    height: auto;
+  }
+
+  .markdown-content :deep(pre) {
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  .markdown-content :deep(h1),
+  .markdown-content :deep(h2),
+  .markdown-content :deep(h3),
+  .markdown-content :deep(pre),
+  .markdown-content :deep(table) {
+    page-break-inside: avoid;
+  }
 }
 
 /* ===== Mobile Adjustments ===== */
