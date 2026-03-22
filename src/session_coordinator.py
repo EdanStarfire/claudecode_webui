@@ -873,6 +873,23 @@ class SessionCoordinator:
             await storage_manager.initialize()
             self._storage_managers[session_id] = storage_manager
 
+            # Issue #917: Resolve template variables in path-typed fields.
+            # Mutates session_info in-place (ephemeral — not persisted to disk).
+            from src.template_variables import build_variables, resolve_path, resolve_path_list
+            _tv = build_variables(session_id, session_dir, session_info.working_directory)
+            if session_info.auto_memory_directory:
+                session_info.auto_memory_directory = resolve_path(
+                    session_info.auto_memory_directory, _tv
+                )
+            if session_info.additional_directories:
+                session_info.additional_directories = resolve_path_list(
+                    session_info.additional_directories, _tv
+                )
+            if session_info.docker_extra_mounts:
+                session_info.docker_extra_mounts = resolve_path_list(
+                    session_info.docker_extra_mounts, _tv
+                )
+
             # Check if we have a valid Claude Code session ID to resume
             resume_sdk_session = None
             # if session_info.claude_code_session_id:
