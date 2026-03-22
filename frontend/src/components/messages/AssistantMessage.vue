@@ -16,7 +16,14 @@
       <div v-if="hasContent" class="msg-content-row">
         <div class="msg-text" ref="contentRef" v-html="renderedContent"></div>
         <button
-          v-if="hasContent && tts"
+          class="copy-md-icon"
+          :style="{ right: tts ? '16px' : '-8px' }"
+          @click.stop="onCopyClick"
+          :aria-label="copyState === 'copied' ? 'Copied!' : 'Copy markdown'"
+          :title="copyState === 'copied' ? 'Copied!' : 'Copy markdown'"
+        >{{ copyState === 'copied' ? '✓' : '&#x1F4CB;' }}</button>
+        <button
+          v-if="tts"
           class="tts-play-icon"
           @click.stop="onPlayClick"
           aria-label="Read aloud from this message"
@@ -49,7 +56,7 @@
 </template>
 
 <script setup>
-import { computed, inject, ref } from 'vue'
+import { computed, inject, onUnmounted, ref } from 'vue'
 import { formatTimestamp } from '@/utils/time'
 import { useMarkdown } from '@/composables/useMarkdown'
 import { useMermaid } from '@/composables/useMermaid'
@@ -90,6 +97,22 @@ function onPlayClick() {
   if (!tts || !allMessages) return
   tts.playMessage(props.message, allMessages.value)
 }
+
+const copyState = ref('idle')
+let copyTimer = null
+
+async function onCopyClick() {
+  try {
+    await navigator.clipboard.writeText(rawContent.value)
+    copyState.value = 'copied'
+    clearTimeout(copyTimer)
+    copyTimer = setTimeout(() => { copyState.value = 'idle' }, 1500)
+  } catch {
+    // clipboard unavailable
+  }
+}
+
+onUnmounted(() => clearTimeout(copyTimer))
 
 const formattedTimestamp = computed(() => {
   return formatTimestamp(props.message.timestamp)
@@ -346,10 +369,10 @@ const hasAnythingToShow = computed(() => {
   position: relative;
 }
 
+.copy-md-icon,
 .tts-play-icon {
   position: absolute;
   top: 0;
-  right: -8px;
   background: none;
   border: none;
   cursor: pointer;
@@ -360,10 +383,16 @@ const hasAnythingToShow = computed(() => {
   line-height: 1;
 }
 
+.tts-play-icon {
+  right: -8px;
+}
+
+.msg-content-row:hover .copy-md-icon,
 .msg-content-row:hover .tts-play-icon {
   opacity: 0.6;
 }
 
+.copy-md-icon:hover,
 .tts-play-icon:hover {
   opacity: 1 !important;
 }
@@ -383,6 +412,7 @@ const hasAnythingToShow = computed(() => {
     width: 95%;
   }
 
+  .copy-md-icon,
   .tts-play-icon {
     opacity: 0.5;
   }

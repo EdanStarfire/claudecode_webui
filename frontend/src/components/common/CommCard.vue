@@ -35,9 +35,17 @@
           </span>
         </div>
 
-        <!-- Right: Expand/Collapse Icon -->
-        <div class="expand-icon" :aria-label="isExpanded ? 'Collapse' : 'Expand'">
-          {{ isExpanded ? '▾' : '▸' }}
+        <!-- Right: Copy + Expand/Collapse -->
+        <div class="comm-header-right">
+          <button
+            class="comm-copy-btn"
+            @click.stop="onCopyClick"
+            :aria-label="copyState === 'copied' ? 'Copied!' : 'Copy markdown'"
+            :title="copyState === 'copied' ? 'Copied!' : 'Copy markdown'"
+          >{{ copyState === 'copied' ? '✓' : '📋' }}</button>
+          <div class="expand-icon" :aria-label="isExpanded ? 'Collapse' : 'Expand'">
+            {{ isExpanded ? '▾' : '▸' }}
+          </div>
         </div>
       </div>
 
@@ -68,7 +76,7 @@
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, onUnmounted } from 'vue'
 import { useMarkdown } from '@/composables/useMarkdown'
 import { useMermaid } from '@/composables/useMermaid'
 import { useResourceStore } from '@/stores/resource'
@@ -104,6 +112,22 @@ useMermaid(contentRef)
 function toggleExpanded() {
   isExpanded.value = !isExpanded.value
 }
+
+const copyState = ref('idle')
+let copyTimer = null
+
+async function onCopyClick() {
+  try {
+    await navigator.clipboard.writeText(props.comm.content || '')
+    copyState.value = 'copied'
+    clearTimeout(copyTimer)
+    copyTimer = setTimeout(() => { copyState.value = 'idle' }, 1500)
+  } catch {
+    // clipboard unavailable
+  }
+}
+
+onUnmounted(() => clearTimeout(copyTimer))
 
 // Check if comm is from system
 const isSystemComm = computed(() => {
@@ -247,7 +271,34 @@ function openAttachmentPreview(att) {
   text-overflow: ellipsis;
 }
 
-/* Column 3: Expand icon */
+/* Column 3: Copy + Expand */
+.comm-header-right {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.comm-copy-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 13px;
+  opacity: 0;
+  transition: opacity 0.15s;
+  padding: 2px 4px;
+  line-height: 1;
+  color: #6c757d;
+}
+
+.comm-header-accordion:hover .comm-copy-btn {
+  opacity: 0.6;
+}
+
+.comm-copy-btn:hover {
+  opacity: 1 !important;
+}
+
 .expand-icon {
   flex-shrink: 0;
   color: #6c757d;
