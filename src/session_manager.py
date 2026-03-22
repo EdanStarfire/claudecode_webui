@@ -130,7 +130,7 @@ class SessionInfo:
     # Thinking and effort configuration (issue #540)
     thinking_mode: str | None = None  # "adaptive", "enabled", "disabled", or None (SDK default)
     thinking_budget_tokens: int | None = None  # Token budget when thinking_mode="enabled" (min 1024)
-    effort: str | None = None  # "low", "medium", "high", "max", or None (SDK default)
+    effort: str | None = None  # "low", "medium", "high", or None (SDK default)
 
     # Ephemeral session support (issue #578)
     is_ephemeral: bool = False  # True for temporary sessions created by ephemeral schedules
@@ -215,6 +215,8 @@ class SessionInfo:
         data.setdefault('thinking_mode', None)
         data.setdefault('thinking_budget_tokens', None)
         data.setdefault('effort', None)
+        if data.get('effort') == 'max':
+            data['effort'] = 'high'
         data.setdefault('is_ephemeral', False)
         # Migrate knowledge_management_enabled → history_distillation_enabled (issue #736)
         if 'knowledge_management_enabled' in data and 'history_distillation_enabled' not in data:
