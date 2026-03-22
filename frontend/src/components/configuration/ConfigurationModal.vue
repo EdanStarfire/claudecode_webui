@@ -584,6 +584,11 @@ const CONFIG_FIELDS = {
     change: 'restart',
     contexts: ['session', 'template', 'ephemeral', 'update'],
   },
+  bare_mode: {
+    default: false,
+    change: 'restart',
+    contexts: ['session', 'template', 'ephemeral', 'update'],
+  },
 }
 
 // Derive fieldStates and templateOriginalValues from schema

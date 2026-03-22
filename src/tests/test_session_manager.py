@@ -106,6 +106,31 @@ class TestSessionInfo:
         assert info.working_directory == "/test/path"
         assert info.allowed_tools == ["bash", "edit"]
 
+    def test_bare_mode_persists(self):
+        """Test bare_mode=True round-trips through to_dict/from_dict."""
+        now = datetime.now(UTC)
+        info = SessionInfo(
+            session_id="test-bare-123",
+            state=SessionState.CREATED,
+            created_at=now,
+            updated_at=now,
+            bare_mode=True,
+        )
+        restored = SessionInfo.from_dict(info.to_dict())
+        assert restored.bare_mode is True
+
+    def test_bare_mode_default_false(self):
+        """Test bare_mode defaults to False when absent from dict."""
+        now = datetime.now(UTC)
+        data = {
+            "session_id": "test-bare-456",
+            "state": "created",
+            "created_at": now.isoformat(),
+            "updated_at": now.isoformat(),
+        }
+        info = SessionInfo.from_dict(data)
+        assert info.bare_mode is False
+
 
 class TestSessionManager:
     """Test SessionManager functionality."""

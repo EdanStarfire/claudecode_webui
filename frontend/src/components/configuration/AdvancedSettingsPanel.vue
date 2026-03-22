@@ -469,6 +469,26 @@
             />
           </div>
         </div>
+
+        <!-- Issue #902: Bare mode -->
+        <div class="mb-3">
+          <div class="form-check form-switch">
+            <input
+              class="form-check-input"
+              type="checkbox"
+              id="bare-mode"
+              :checked="formData.bare_mode"
+              @change="$emit('update:form-data', 'bare_mode', $event.target.checked)"
+            />
+            <label class="form-check-label" for="bare-mode">
+              Bare mode
+            </label>
+          </div>
+          <div class="form-text text-warning-emphasis">
+            Skips hooks, LSP, plugin sync, and skill directory walks.
+            Requires <code>ANTHROPIC_API_KEY</code> (OAuth/keychain auth disabled).
+          </div>
+        </div>
       </div>
     </div>
 

@@ -450,6 +450,7 @@ class SessionCoordinator:
                 mcp_server_ids=config.mcp_server_ids,
                 enable_claudeai_mcp_servers=config.enable_claudeai_mcp_servers,
                 strict_mcp_config=config.strict_mcp_config,
+                bare_mode=config.bare_mode,
             )
 
             # Create session through session manager
@@ -553,6 +554,7 @@ class SessionCoordinator:
                 effort=sm_config.effort,
                 enable_claudeai_mcp_servers=sm_config.enable_claudeai_mcp_servers,
                 strict_mcp_config=sm_config.strict_mcp_config,
+                bare_mode=sm_config.bare_mode,
             )
             # Issue #707: Build PreToolUse handler for internal tool access control
             permission_handler = self._build_permission_handler(
@@ -1054,6 +1056,7 @@ class SessionCoordinator:
                 auto_memory_mode=session_info.auto_memory_mode,
                 enable_claudeai_mcp_servers=session_info.enable_claudeai_mcp_servers,
                 strict_mcp_config=session_info.strict_mcp_config,
+                bare_mode=session_info.bare_mode,
             )
 
             # Issue #709: Create session-specific memory directory and guidance file

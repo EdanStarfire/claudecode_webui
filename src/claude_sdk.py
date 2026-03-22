@@ -208,6 +208,7 @@ class ClaudeSDK:
         self.auto_memory_mode = config.auto_memory_mode
         self.enable_claudeai_mcp_servers = config.enable_claudeai_mcp_servers
         self.strict_mcp_config = config.strict_mcp_config
+        self.bare_mode = config.bare_mode if config else False
         self.permission_handler = permission_handler
         self.auto_approval_callback: Callable | None = None  # Issue #707: notifies coordinator
         self._stderr_buffer: list[str] = []
@@ -801,6 +802,10 @@ class ClaudeSDK:
         # Issue #676: Pass --strict-mcp-config to disable local .mcp.json configs
         if self.strict_mcp_config:
             extra_args["strict-mcp-config"] = True
+
+        # Issue #902: Bare mode skips hooks, LSP, plugin sync, skill walks
+        if self.bare_mode:
+            extra_args["bare"] = True
 
         options_kwargs = {
             "cwd": str(self.working_directory),
