@@ -3294,7 +3294,11 @@ class ClaudeWebUI:
                 if msg_type_str == "result" and session_id in self.session_queues:
                     metadata = getattr(parsed_message, 'metadata', {}) or {}
                     usage = metadata.get("usage") or {}
-                    input_tokens = usage.get("input_tokens")
+                    input_tokens = (
+                        (usage.get("input_tokens") or 0) +
+                        (usage.get("cache_read_input_tokens") or 0) +
+                        (usage.get("cache_creation_input_tokens") or 0)
+                    ) or None
                     if input_tokens is not None:
                         model = self._session_models.get(session_id, "")
                         context_window = get_context_window(model)
