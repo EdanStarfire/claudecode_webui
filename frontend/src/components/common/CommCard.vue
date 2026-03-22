@@ -49,32 +49,17 @@
         <div v-if="attachmentCount > 0" class="comm-attachments">
           <div class="comm-attachments-label text-muted">Attachments</div>
           <div class="comm-attachment-list">
-            <div
+            <AttachmentChip
               v-for="(att, idx) in comm.attachments"
               :key="idx"
-              class="comm-attachment-item"
-            >
-              <span class="comm-attachment-icon">{{ getFileIcon(att.mime_type) }}</span>
-              <span class="comm-attachment-name">{{ basename(att.name) }}</span>
-              <span class="badge bg-light text-muted ms-1">{{ formatFileSize(att.size) }}</span>
-              <span
-                v-if="att.resource_id && att.session_id"
-                class="comm-attachment-preview ms-2"
-                title="Preview"
-                @click="openAttachmentPreview(att)"
-              >
-                &#x2922;
-              </span>
-              <a
-                v-else
-                :href="getDownloadUrl(att)"
-                class="comm-attachment-download ms-2"
-                title="Download"
-                target="_blank"
-              >
-                &darr;
-              </a>
-            </div>
+              :filename="basename(att.name)"
+              :size="att.size"
+              :mime-type="att.mime_type"
+              :resource-id="att.resource_id"
+              :session-id="att.session_id"
+              :download-url="getDownloadUrl(att)"
+              @preview="openAttachmentPreview(att)"
+            />
           </div>
         </div>
       </div>
@@ -87,7 +72,7 @@ import { ref, computed } from 'vue'
 import { useMarkdown } from '@/composables/useMarkdown'
 import { useMermaid } from '@/composables/useMermaid'
 import { useResourceStore } from '@/stores/resource'
-import { getFileIconByMimeType as getFileIcon } from '@/utils/fileTypes'
+import AttachmentChip from '@/components/common/AttachmentChip.vue'
 
 const props = defineProps({
   comm: {
@@ -171,14 +156,6 @@ const { renderedHtml: renderedContent } = useMarkdown(rawContent)
 const attachmentCount = computed(() => {
   return props.comm.attachments ? props.comm.attachments.length : 0
 })
-
-function formatFileSize(bytes) {
-  if (!bytes || bytes === 0) return '0 B'
-  const kb = bytes / 1024
-  if (kb >= 1024) return (kb / 1024).toFixed(1) + ' MB'
-  if (kb >= 1) return kb.toFixed(1) + ' KB'
-  return bytes + ' B'
-}
 
 function getDownloadUrl(att) {
   return resourceStore.getDownloadUrl(att.session_id, att.resource_id)
@@ -374,52 +351,8 @@ function openAttachmentPreview(att) {
 
 .comm-attachment-list {
   display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-}
-
-.comm-attachment-item {
-  display: flex;
-  align-items: center;
-  gap: 0.25rem;
-  padding: 0.25rem 0.5rem;
-  background: rgba(0, 0, 0, 0.03);
-  border-radius: 0.25rem;
-  font-size: 0.85rem;
-}
-
-.comm-attachment-icon {
-  flex-shrink: 0;
-}
-
-.comm-attachment-name {
-  font-family: 'Courier New', monospace;
-  font-size: 0.8rem;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.comm-attachment-download {
-  text-decoration: none;
-  font-weight: bold;
-  color: #0d6efd;
-  flex-shrink: 0;
-}
-
-.comm-attachment-download:hover {
-  color: #0a58ca;
-}
-
-.comm-attachment-preview {
-  cursor: pointer;
-  font-weight: bold;
-  color: #0d6efd;
-  flex-shrink: 0;
-}
-
-.comm-attachment-preview:hover {
-  color: #0a58ca;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 
 </style>
