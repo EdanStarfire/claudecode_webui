@@ -450,6 +450,7 @@ class SessionCoordinator:
                 effort=config.effort,
                 history_distillation_enabled=config.history_distillation_enabled,
                 auto_memory_mode=config.auto_memory_mode,
+                auto_memory_directory=config.auto_memory_directory,
                 skill_creating_enabled=config.skill_creating_enabled,
                 mcp_server_ids=config.mcp_server_ids,
                 enable_claudeai_mcp_servers=config.enable_claudeai_mcp_servers,
@@ -999,6 +1000,14 @@ class SessionCoordinator:
                     memory_dir = session_dir / "memory"
                     memory_dir.mkdir(exist_ok=True)
                     extra_mounts.append(f"{memory_dir}:{memory_dir}")
+                elif session_info.auto_memory_mode == "native":
+                    native_mem = (
+                        Path(session_info.auto_memory_directory)
+                        if session_info.auto_memory_directory
+                        else session_dir / "memory"
+                    )
+                    native_mem.mkdir(parents=True, exist_ok=True)
+                    extra_mounts.append(f"{native_mem}:{native_mem}")
                 # Issue #773: Mount session data dirs into Docker (read-only)
                 # These host-side dirs contain files the agent needs to Read:
                 #   resources/   - MCP-registered resources, comm file attachments
@@ -1059,6 +1068,7 @@ class SessionCoordinator:
                 thinking_budget_tokens=session_info.thinking_budget_tokens,
                 effort=session_info.effort,
                 auto_memory_mode=session_info.auto_memory_mode,
+                auto_memory_directory=session_info.auto_memory_directory,
                 enable_claudeai_mcp_servers=session_info.enable_claudeai_mcp_servers,
                 strict_mcp_config=session_info.strict_mcp_config,
                 bare_mode=session_info.bare_mode,
@@ -1072,6 +1082,18 @@ class SessionCoordinator:
                 if not guidance_file.exists():
                     guidance_file.touch()
                     coord_logger.debug(f"Created memory/agent-guidance.md for session {session_id}")
+
+            # Issue #906: Native auto-memory — create memory dir, resolve default path
+            if session_info.auto_memory_mode == "native":
+                native_memory_dir = (
+                    Path(session_info.auto_memory_directory)
+                    if session_info.auto_memory_directory
+                    else session_dir / "memory"
+                )
+                native_memory_dir.mkdir(parents=True, exist_ok=True)
+                # Persist resolved directory back to sdk_config so the SDK receives it
+                sdk_config.auto_memory_directory = str(native_memory_dir)
+                coord_logger.debug(f"Native auto-memory directory for session {session_id}: {native_memory_dir}")
 
             # Issue #707: Build PreToolUse handler for internal tool access control
             permission_handler = self._build_permission_handler(
@@ -3322,7 +3344,12 @@ class SessionCoordinator:
         working_directory: Path | None = None,
     ) -> InternalPermissionHandler:
         """Build internal permission handler with consistent path configuration (issue #707)."""
-        memory_dir = session_dir / "memory" if auto_memory_mode == "session" else None
+        if auto_memory_mode == "session":
+            memory_dir = session_dir / "memory"
+        elif auto_memory_mode == "native":
+            memory_dir = session_dir / "memory"
+        else:
+            memory_dir = None
         return InternalPermissionHandler(
             session_data_dir=session_dir,
             plans_dir=Path.home() / ".cc_webui" / "plans",

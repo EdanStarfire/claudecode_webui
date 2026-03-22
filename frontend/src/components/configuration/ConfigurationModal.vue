@@ -563,6 +563,10 @@ const CONFIG_FIELDS = {
     change: 'restart',
     contexts: ['session', 'template', 'ephemeral', 'update'],
   },
+  auto_memory_directory: {
+    default: null,
+    contexts: ['session', 'template', 'ephemeral', 'update'],
+  },
   skill_creating_enabled: {
     default: false,
     change: 'restart',

@@ -199,7 +199,9 @@ class SessionUpdateRequest(BaseModel):
     # History distillation toggle (issue #710, renamed #736)
     history_distillation_enabled: bool | None = None
     # Auto-memory mode (issue #709)
-    auto_memory_mode: str | None = None  # "claude" | "session" | "disabled"
+    auto_memory_mode: str | None = None  # "claude" | "session" | "disabled" | "native"
+    # Custom directory for native auto-memory mode (issue #906)
+    auto_memory_directory: str | None = None
     # Skill creating toggle (issue #749)
     skill_creating_enabled: bool | None = None
     # MCP server configuration (issue #676)
@@ -303,7 +305,9 @@ class TemplateUpdateRequest(BaseModel):
     # History distillation toggle (issue #710, renamed #736)
     history_distillation_enabled: bool | None = None
     # Auto-memory mode (issue #709)
-    auto_memory_mode: str | None = None  # "claude" | "session" | "disabled"
+    auto_memory_mode: str | None = None  # "claude" | "session" | "disabled" | "native"
+    # Custom directory for native auto-memory mode (issue #906)
+    auto_memory_directory: str | None = None
     # Skill creating toggle (issue #749)
     skill_creating_enabled: bool | None = None
     # MCP server configuration (issue #676)
@@ -1236,6 +1240,9 @@ class ClaudeWebUI:
 
             if request.auto_memory_mode is not None:
                 updates["auto_memory_mode"] = request.auto_memory_mode
+
+            if request.auto_memory_directory is not None:
+                updates["auto_memory_directory"] = request.auto_memory_directory
 
             if request.skill_creating_enabled is not None:
                 updates["skill_creating_enabled"] = request.skill_creating_enabled
@@ -3188,6 +3195,7 @@ class ClaudeWebUI:
                 effort=request.effort,
                 history_distillation_enabled=request.history_distillation_enabled,
                 auto_memory_mode=request.auto_memory_mode,
+                auto_memory_directory=request.auto_memory_directory,
                 skill_creating_enabled=request.skill_creating_enabled,
                 mcp_server_ids=request.mcp_server_ids,
                 enable_claudeai_mcp_servers=request.enable_claudeai_mcp_servers,

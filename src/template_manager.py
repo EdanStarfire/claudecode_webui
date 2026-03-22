@@ -208,6 +208,7 @@ class TemplateManager:
             effort=config.effort,
             history_distillation_enabled=config.history_distillation_enabled,
             auto_memory_mode=config.auto_memory_mode,
+            auto_memory_directory=config.auto_memory_directory,
             skill_creating_enabled=config.skill_creating_enabled,
             mcp_server_ids=config.mcp_server_ids if config.mcp_server_ids is not None else [],
             enable_claudeai_mcp_servers=config.enable_claudeai_mcp_servers,
@@ -262,6 +263,7 @@ class TemplateManager:
         effort: str | None = None,
         history_distillation_enabled: bool | None = None,
         auto_memory_mode: str | None = None,
+        auto_memory_directory: str | None = None,
         skill_creating_enabled: bool | None = None,
         mcp_server_ids: list[str] | None = None,
         # MCP toggle configuration (issue #786)
@@ -344,6 +346,9 @@ class TemplateManager:
 
         if auto_memory_mode is not None:
             template.auto_memory_mode = auto_memory_mode
+
+        if auto_memory_directory is not None:
+            template.auto_memory_directory = auto_memory_directory
 
         if skill_creating_enabled is not None:
             template.skill_creating_enabled = skill_creating_enabled

@@ -59,7 +59,8 @@ class SessionConfig:
 
     # Features
     history_distillation_enabled: bool = True
-    auto_memory_mode: str = "claude"  # "claude" | "session" | "disabled"
+    auto_memory_mode: str = "claude"  # "claude" | "session" | "disabled" | "native"
+    auto_memory_directory: str | None = None  # Custom directory for native auto-memory (issue #906)
     skill_creating_enabled: bool = False
 
     # MCP servers (issue #676)
@@ -96,6 +97,7 @@ class SessionConfigBase(BaseModel):
     effort: str | None = None
     history_distillation_enabled: bool = True
     auto_memory_mode: str = "claude"
+    auto_memory_directory: str | None = None  # Custom directory for native auto-memory (issue #906)
     skill_creating_enabled: bool = False
     mcp_server_ids: list[str] | None = None
     enable_claudeai_mcp_servers: bool = True
@@ -125,6 +127,7 @@ class SessionConfigBase(BaseModel):
             "effort": self.effort,
             "history_distillation_enabled": self.history_distillation_enabled,
             "auto_memory_mode": self.auto_memory_mode,
+            "auto_memory_directory": self.auto_memory_directory,
             "skill_creating_enabled": self.skill_creating_enabled,
             "mcp_server_ids": self.mcp_server_ids,
             "enable_claudeai_mcp_servers": self.enable_claudeai_mcp_servers,

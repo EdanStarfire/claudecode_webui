@@ -210,6 +210,7 @@ class ClaudeSDK:
         self.thinking_budget_tokens = config.thinking_budget_tokens
         self.effort = config.effort
         self.auto_memory_mode = config.auto_memory_mode
+        self.auto_memory_directory = config.auto_memory_directory
         self.enable_claudeai_mcp_servers = config.enable_claudeai_mcp_servers
         self.strict_mcp_config = config.strict_mcp_config
         self.bare_mode = config.bare_mode if config else False
@@ -811,6 +812,11 @@ class ClaudeSDK:
         if self.bare_mode:
             extra_args["bare"] = True
 
+        # Issue #906: Native auto-memory with custom directory
+        if self.auto_memory_mode == "native" and self.auto_memory_directory:
+            extra_args["auto-memory-dir"] = self.auto_memory_directory
+            sdk_logger.info(f"Native auto-memory directory for session {self.session_id}: {self.auto_memory_directory}")
+
         options_kwargs = {
             "cwd": str(self.working_directory),
             "permission_mode": self.current_permission_mode,
@@ -901,6 +907,7 @@ class ClaudeSDK:
             env_vars["CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"] = "1"
             sdk_logger.info(f"Experimental Agent Teams enabled for session {self.session_id}")
         # Issue #709: Disable Claude auto-memory for session and disabled modes
+        # Issue #906: "native" mode uses SDK built-in auto-memory with custom directory — do NOT disable
         if self.auto_memory_mode in ("session", "disabled"):
             env_vars["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "1"
         # Issue #676: Disable Claude AI MCP servers when toggled off
