@@ -33,7 +33,6 @@ logger = logging.getLogger(__name__)
 
 # Constants
 MAX_RESOURCE_SIZE_BYTES = 10 * 1024 * 1024  # 10MB limit per resource
-MAX_RESOURCES_PER_SESSION = 100  # Maximum resources per session
 
 # Supported file extensions (matching file_upload.py)
 SUPPORTED_EXTENSIONS = {
@@ -164,8 +163,7 @@ Examples:
   register_resource(file_path="/var/log/app.log", title="Application Log")
 
 Supported types: Text, Code, Config, Images, Data files
-Maximum size: 10MB per resource
-Maximum resources per session: 100""",
+Maximum size: 10MB per resource""",
             {
                 "file_path": str,      # Absolute path to file (required)
                 "title": str,          # Short caption (optional, default: filename)
@@ -370,19 +368,6 @@ At least one of resource_id or filename must be provided.""",
             else:
                 # Use extension as format for non-images
                 resource_format = ext.lstrip('.')
-
-            # Check session resource count limit
-            storage_manager = await self._get_storage_manager(session_id)
-            if storage_manager:
-                resource_count = await storage_manager.count_resources()
-                if resource_count >= MAX_RESOURCES_PER_SESSION:
-                    return {
-                        "content": [{
-                            "type": "text",
-                            "text": f"Error: Maximum resources per session reached ({MAX_RESOURCES_PER_SESSION})"
-                        }],
-                        "is_error": True
-                    }
 
             # Generate unique resource ID
             resource_id = str(uuid.uuid4())
