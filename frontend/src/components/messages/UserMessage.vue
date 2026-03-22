@@ -15,17 +15,14 @@
       <!-- Attachment chips (parsed from content; display only — content sent to Claude is unchanged) -->
       <!-- NOTE: Format contract with InputArea.vue: "\n\n---\nAttached files (use Read tool...)\n- name (X KB): path\n  Resource ID: uuid" -->
       <div v-if="attachmentItems.length > 0" class="msg-attachments">
-        <span
+        <AttachmentChip
           v-for="(item, idx) in attachmentItems"
           :key="idx"
-          class="attachment-chip"
-          :class="{ clickable: item.resourceId }"
-          @click="item.resourceId ? openPreview(item) : null"
-          :title="item.resourceId ? 'Click to preview' : item.filename"
-        >
-          <span class="file-icon">{{ item.icon }}</span>
-          <span class="attachment-name">{{ item.filename }}</span>
-        </span>
+          :filename="item.filename"
+          :resource-id="item.resourceId"
+          :session-id="sessionStore.currentSessionId"
+          @preview="openPreview(item)"
+        />
       </div>
 
       <!-- Tool Results (if any) -->
@@ -63,6 +60,7 @@ import { useResourceImages } from '@/composables/useResourceImages'
 import { useSessionStore } from '@/stores/session'
 import { useResourceStore } from '@/stores/resource'
 import { getFileIcon } from '@/utils/fileTypes'
+import AttachmentChip from '@/components/common/AttachmentChip.vue'
 
 const props = defineProps({
   message: {
@@ -328,38 +326,6 @@ function truncate(text, maxLength) {
   margin-top: 8px;
   padding-top: 6px;
   border-top: 1px dashed rgba(0, 0, 0, 0.12);
-}
-
-.attachment-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 3px 8px;
-  background: rgba(255, 255, 255, 0.7);
-  border: 1px solid #c7d2fe;
-  border-radius: 12px;
-  font-size: 12px;
-  font-family: 'Courier New', monospace;
-  color: #374151;
-  white-space: nowrap;
-  max-width: 200px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.attachment-chip.clickable {
-  cursor: pointer;
-  color: #3730a3;
-}
-
-.attachment-chip.clickable:hover {
-  background: rgba(238, 242, 255, 0.9);
-  border-color: #818cf8;
-}
-
-.attachment-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 /* Tool results */

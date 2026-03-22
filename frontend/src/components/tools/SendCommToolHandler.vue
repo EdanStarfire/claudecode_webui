@@ -25,10 +25,11 @@
     >
       <div class="outbound-comm-content" ref="contentRef" v-html="renderedContent"></div>
       <div v-if="attachments.length > 0" class="outbound-comm-attachments">
-        <div v-for="(name, idx) in attachments" :key="idx" class="outbound-comm-attachment-item">
-          <span class="outbound-comm-attachment-icon">{{ getFileIcon(name) }}</span>
-          <span class="outbound-comm-attachment-name">{{ name }}</span>
-        </div>
+        <AttachmentChip
+          v-for="(name, idx) in attachments"
+          :key="idx"
+          :filename="name"
+        />
       </div>
     </div>
     <!-- Result indicator -->
@@ -46,7 +47,7 @@ import { useResourceImages } from '@/composables/useResourceImages'
 import { useToolResult } from '@/composables/useToolResult'
 import { getAgentColor, slugifyAgentName } from '@/composables/useAgentColor'
 import { useSessionStore } from '@/stores/session'
-import { getFileIcon } from '@/utils/fileTypes'
+import AttachmentChip from '@/components/common/AttachmentChip.vue'
 
 const props = defineProps({
   toolCall: { type: Object, required: true }
@@ -234,30 +235,11 @@ defineExpose({ summary, params, result })
 }
 
 .outbound-comm-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
   margin-top: 0.75rem;
   padding-top: 0.5rem;
   border-top: 1px solid rgba(0, 0, 0, 0.1);
-}
-
-.outbound-comm-attachment-item {
-  display: flex;
-  align-items: center;
-  gap: 0.25rem;
-  padding: 0.25rem 0.5rem;
-  background: rgba(0, 0, 0, 0.03);
-  border-radius: 0.25rem;
-  font-size: 0.85rem;
-}
-
-.outbound-comm-attachment-icon {
-  flex-shrink: 0;
-}
-
-.outbound-comm-attachment-name {
-  font-family: 'Courier New', monospace;
-  font-size: 0.8rem;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 </style>
