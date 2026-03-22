@@ -38,15 +38,17 @@
       </div>
 
       <!-- Rate Limit Indicator (Issue #899) -->
-      <div v-if="uiStore.rateLimits" class="d-flex gap-2 align-items-center rate-limit-indicator">
+      <div v-if="hasRateLimitData" class="d-flex gap-2 align-items-center rate-limit-indicator">
         <RateLimitBadge
+          v-if="uiStore.rateLimits?.five_hour?.used_percentage != null"
           label="5h"
-          :pct="uiStore.rateLimits.five_hour?.used_percentage"
+          :pct="uiStore.rateLimits.five_hour.used_percentage"
           :resets-at="uiStore.rateLimits.five_hour?.resets_at"
         />
         <RateLimitBadge
+          v-if="uiStore.rateLimits?.seven_day?.used_percentage != null"
           label="7d"
-          :pct="uiStore.rateLimits.seven_day?.used_percentage"
+          :pct="uiStore.rateLimits.seven_day.used_percentage"
           :resets-at="uiStore.rateLimits.seven_day?.resets_at"
         />
       </div>
@@ -197,6 +199,11 @@ const contextTextClass = computed(() => {
   if (p >= 50) return 'text-warning'
   return 'text-success'
 })
+
+const hasRateLimitData = computed(() =>
+  uiStore.rateLimits?.five_hour?.used_percentage != null ||
+  uiStore.rateLimits?.seven_day?.used_percentage != null
+)
 </script>
 
 <style scoped>

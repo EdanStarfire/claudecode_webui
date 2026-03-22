@@ -332,6 +332,8 @@ export const useWebSocketStore = defineStore('websocket', () => {
           messageStore.clearMessages(resetSessionId)
           const resourceStore = useResourceStore()
           resourceStore.clearResources(resetSessionId)
+          const uiStore = useUIStore()
+          uiStore.setRateLimits(null)
           const sessionStore2 = useSessionStore()
           sessionStore2.recordSessionReset(resetSessionId)
           delete sessionCursors[resetSessionId]
