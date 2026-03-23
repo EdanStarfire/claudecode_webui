@@ -3300,6 +3300,11 @@ class ClaudeWebUI:
                         (usage.get("cache_creation_input_tokens") or 0)
                     ) or None
                     if input_tokens is not None:
+                        # Issue #938: Lazy-populate model cache after server restart
+                        if session_id not in self._session_models:
+                            session_info = await self.coordinator.session_manager.get_session_info(session_id)
+                            if session_info and session_info.model:
+                                self._session_models[session_id] = session_info.model
                         model = self._session_models.get(session_id, "")
                         context_window = get_context_window(model)
                         pct = round((input_tokens / context_window) * 100, 1)
