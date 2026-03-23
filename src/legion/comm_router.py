@@ -369,7 +369,7 @@ class CommRouter:
                             attachment_lines.append(f"- {att['name']}: [delivery failed]")
 
                 if attachment_lines:
-                    formatted_message += "\n\n---\nAttached files (use Read tool to access):\n"
+                    formatted_message += "\n\n---\nAttached files (use Read tool to access, or embed via markdown URL):\n"
                     formatted_message += "\n".join(attachment_lines)
 
             formatted_message += f"\n\n---\nAlways send messages to {from_name} using the `send_comm` tool."
@@ -384,6 +384,18 @@ class CommRouter:
                     "comm_type": comm.comm_type.value if hasattr(comm.comm_type, 'value') else str(comm.comm_type),
                 }
             }
+
+            # Add processed attachment metadata for frontend chip rendering (issue #939)
+            delivered_attachments = [a for a in comm.attachments if a.get("stored_path")]
+            if delivered_attachments:
+                comm_metadata["attachments"] = [
+                    {
+                        "filename": a["name"],
+                        "stored_path": a.get("stored_path", ""),
+                        "resource_id": a.get("resource_id"),
+                    }
+                    for a in delivered_attachments
+                ]
 
             # Handle interrupt priority (issue #748)
             if comm.interrupt_priority == InterruptPriority.HALT:

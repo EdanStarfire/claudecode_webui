@@ -341,3 +341,52 @@ class TestCommRouter:
             await comm_router._persist_comm(comm)
             # Should append to destination minion's log
             mock_append.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_issue_939_attachment_metadata_in_comm(self, comm_router, tmp_path):
+        """Regression test: _send_to_minion must include attachment metadata in comm_metadata
+        so the frontend can render attachment chips on received comms."""
+        # Point data_dir to tmp_path so attachment directory creation succeeds
+        comm_router.system.session_coordinator.data_dir = tmp_path
+
+        # Create a real source file for the attachment delivery code to copy
+        source_file = tmp_path / "report.txt"
+        source_file.write_bytes(b"test file content")
+
+        # Mock async session methods called during attachment delivery
+        comm_router.system.session_coordinator.register_uploaded_resource = AsyncMock(
+            return_value={"resource_id": "res-abc123"}
+        )
+        comm_router.system.session_coordinator.register_uploaded_file = AsyncMock()
+
+        comm = Comm(
+            comm_id=str(uuid.uuid4()),
+            from_user=True,
+            to_minion_id="test-minion-123",
+            content="Here is a file",
+            comm_type=CommType.TASK,
+            attachments=[
+                {
+                    "name": "report.txt",
+                    "size": 1024,
+                    "source_path": str(source_file),
+                }
+            ],
+        )
+
+        result = await comm_router._send_to_minion(comm)
+        assert result is True
+
+        # Verify send_message was called with metadata containing attachments
+        send_message_mock = comm_router.system.session_coordinator.send_message
+        send_message_mock.assert_called_once()
+        call_kwargs = send_message_mock.call_args
+        metadata = call_kwargs.kwargs.get("metadata")
+
+        assert metadata is not None, "send_message must be called with metadata"
+        assert "attachments" in metadata, "metadata must contain 'attachments' key for frontend chip rendering"
+        attachments = metadata["attachments"]
+        assert len(attachments) == 1
+        assert attachments[0]["filename"] == "report.txt"
+        assert attachments[0]["stored_path"] != "", "stored_path must be set after delivery"
+        assert attachments[0]["resource_id"] == "res-abc123"
