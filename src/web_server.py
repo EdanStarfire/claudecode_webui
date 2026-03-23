@@ -3307,7 +3307,10 @@ class ClaudeWebUI:
                                 self._session_models[session_id] = session_info.model
                         model = self._session_models.get(session_id, "")
                         context_window = get_context_window(model)
-                        pct = round((input_tokens / context_window) * 100, 1)
+                        # Issue #944: SDK double-counts tokens in usage reporting (known upstream bug).
+                        # Halve the raw sum as a temporary workaround. Remove this division once the
+                        # upstream SDK bug is fixed and token counts are reported correctly.
+                        pct = round(((input_tokens / 2) / context_window) * 100, 1)
                         self.session_queues[session_id].append({
                             "type": "context_update",
                             "session_id": session_id,
