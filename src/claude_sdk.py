@@ -580,6 +580,17 @@ class ClaudeSDK:
             async with ClaudeSDKClient(self._sdk_options) as client:
                 self._sdk_client = client
 
+                # Log the actual CLI command for MCP debugging (issue #947)
+                try:
+                    transport = getattr(client, "_transport", None)
+                    if transport and hasattr(transport, "_build_command"):
+                        cli_cmd = transport._build_command()
+                        sdk_logger.debug(
+                            "[CLI command] session=%s cmd=%s", self.session_id, cli_cmd
+                        )
+                except Exception:
+                    pass
+
                 # Update health monitoring state
                 self._session_health_checks["context_manager_active"] = True
                 self._session_health_checks["client_object_valid"] = True
