@@ -209,10 +209,25 @@ class SessionCoordinator:
                     headers = dict(config.get("headers") or {})
                     headers["Authorization"] = f"Bearer {token.access_token}"
                     config["headers"] = headers
+                    logger.debug(
+                        "[MCP config] server=%s oauth=True token=%s expiry=%s config=%s",
+                        mcp_cfg.id,
+                        token.access_token,
+                        expiry,
+                        config,
+                    )
+                else:
+                    logger.debug(
+                        "[MCP config] server=%s oauth=True token=None (not authenticated) config=%s",
+                        mcp_cfg.id,
+                        config,
+                    )
             except Exception as exc:
                 logger.warning(
                     "Failed to inject OAuth token for MCP server %s: %s", mcp_cfg.id, exc
                 )
+        else:
+            logger.debug("[MCP config] server=%s oauth=False config=%s", mcp_cfg.id, config)
         return config
 
     async def initialize(self):
@@ -533,6 +548,10 @@ class SessionCoordinator:
                     coord_logger.info(
                         f"Attaching global MCP server '{mcp_cfg.name}' to session {session_id}"
                     )
+
+            coord_logger.debug(
+                "[MCP launch] session=%s servers=%s", session_id, list(mcp_servers.keys())
+            )
 
             # Merge MCP tools with any provided allowed_tools
             all_tools = allowed_tools if allowed_tools else []
@@ -939,6 +958,10 @@ class SessionCoordinator:
                     coord_logger.info(
                         f"Attaching global MCP server '{mcp_cfg.name}' to session {session_id}"
                     )
+
+            coord_logger.debug(
+                "[MCP launch] session=%s servers=%s", session_id, list(mcp_servers.keys())
+            )
 
             # Merge MCP tools with session's stored allowed_tools
             all_tools = session_info.allowed_tools if session_info.allowed_tools else []
