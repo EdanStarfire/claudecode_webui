@@ -832,12 +832,14 @@ class ClaudeSDK:
             sdk_logger.info("Using DEFAULT mode - Claude Code preset only")
 
         # Issue #676: Pass --strict-mcp-config to disable local .mcp.json configs
+        # Use None (not True) so the SDK transport emits a bare flag without a value.
+        # True would produce "--strict-mcp-config True" which the CLI misinterprets.
         if self.strict_mcp_config:
-            extra_args["strict-mcp-config"] = True
+            extra_args["strict-mcp-config"] = None
 
         # Issue #902: Bare mode skips hooks, LSP, plugin sync, skill walks
         if self.bare_mode:
-            extra_args["bare"] = True
+            extra_args["bare"] = None
 
         options_kwargs = {
             "cwd": str(self.working_directory),
