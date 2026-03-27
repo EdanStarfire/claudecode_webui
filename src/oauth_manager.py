@@ -208,6 +208,15 @@ class OAuthFlowManager:
                 except Exception:
                     continue
 
+            # --- Derive requested scopes from discovery metadata ---
+            # Prefer PRM scopes (RFC 9728) as they represent what the resource needs.
+            # Fall back to AS scopes (RFC 8414). Omit if neither advertises scopes.
+            requested_scopes: list[str] | None = None
+            if prm and prm.scopes_supported:
+                requested_scopes = prm.scopes_supported
+            elif oauth_metadata and oauth_metadata.scopes_supported:
+                requested_scopes = oauth_metadata.scopes_supported
+
             # --- Derive endpoints ---
             parsed = urlparse(server_url)
             base = f"{parsed.scheme}://{parsed.netloc}"
@@ -268,6 +277,8 @@ class OAuthFlowManager:
                 "code_challenge": pkce.code_challenge,
                 "code_challenge_method": "S256",
             }
+            if requested_scopes:
+                params["scope"] = " ".join(requested_scopes)
             auth_url = f"{auth_endpoint}?{urlencode(params)}"
 
             # --- Step 6: Persist pending state ---
@@ -277,6 +288,7 @@ class OAuthFlowManager:
                 "client_id": client_id,
                 "code_verifier": pkce.code_verifier,
                 "redirect_uri": redirect_uri,
+                "requested_scopes": requested_scopes,
             }
 
             logger.info(
@@ -301,6 +313,7 @@ class OAuthFlowManager:
         client_id: str = pending["client_id"]
         code_verifier: str = pending["code_verifier"]
         redirect_uri: str = pending["redirect_uri"]
+        requested_scopes: list[str] | None = pending.get("requested_scopes")
 
         token_data = {
             "grant_type": "authorization_code",
@@ -309,6 +322,8 @@ class OAuthFlowManager:
             "client_id": client_id,
             "code_verifier": code_verifier,
         }
+        if requested_scopes:
+            token_data["scope"] = " ".join(requested_scopes)
         headers = {"Content-Type": "application/x-www-form-urlencoded"}
 
         async with httpx.AsyncClient() as http:
