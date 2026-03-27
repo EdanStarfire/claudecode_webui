@@ -209,7 +209,7 @@ class SessionCoordinator:
                     headers = dict(config.get("headers") or {})
                     headers["Authorization"] = f"Bearer {token.access_token}"
                     config["headers"] = headers
-                    logger.debug(
+                    coord_logger.debug(
                         "[MCP config] server=%s oauth=True token=%s expiry=%s config=%s",
                         mcp_cfg.id,
                         token.access_token,
@@ -217,7 +217,7 @@ class SessionCoordinator:
                         config,
                     )
                 else:
-                    logger.debug(
+                    coord_logger.debug(
                         "[MCP config] server=%s oauth=True token=None (not authenticated) config=%s",
                         mcp_cfg.id,
                         config,
@@ -227,7 +227,9 @@ class SessionCoordinator:
                     "Failed to inject OAuth token for MCP server %s: %s", mcp_cfg.id, exc
                 )
         else:
-            logger.debug("[MCP config] server=%s oauth=False config=%s", mcp_cfg.id, config)
+            coord_logger.debug(
+                "[MCP config] server=%s oauth=False config=%s", mcp_cfg.id, config
+            )
         return config
 
     async def initialize(self):
