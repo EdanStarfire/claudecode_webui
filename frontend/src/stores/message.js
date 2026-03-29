@@ -23,6 +23,7 @@ export const useMessageStore = defineStore('message', () => {
 
   // Tool call manager state (tracking tool lifecycle)
   // Per-session signature map: Map<sessionId, Map<signature, toolUseId>>
+  // Issue #953: Deprecated — direct tool_use_id from backend preferred (SDK v0.1.52+)
   const toolSignatureToId = ref(new Map())
   const permissionToToolMap = ref(new Map())
 
@@ -365,8 +366,13 @@ export const useMessageStore = defineStore('message', () => {
 
     console.log('Extracted data:', { toolName, inputParams, requestId, suggestions })
 
-    const signature = createToolSignature(toolName, inputParams)
-    const toolUseId = toolSignatureToId.value.get(sessionId)?.get(signature)
+    // Issue #953: Prefer direct tool_use_id from backend (SDK v0.1.52+), fall back to signature
+    let toolUseId = permissionRequest.metadata?.tool_use_id || permissionRequest.tool_use_id
+    if (!toolUseId) {
+      // Fallback: signature-based lookup (deprecated, kept for backward compatibility)
+      const signature = createToolSignature(toolName, inputParams)
+      toolUseId = toolSignatureToId.value.get(sessionId)?.get(signature)
+    }
 
     if (toolUseId) {
       permissionToToolMap.value.set(requestId, toolUseId)
@@ -379,10 +385,10 @@ export const useMessageStore = defineStore('message', () => {
 
       console.log(`Permission required for tool ${toolUseId}`, { suggestions })
     } else {
-      console.warn('No tool use ID found for permission request signature:', signature, {
+      console.warn('No tool use ID found for permission request', {
         toolName,
         inputParams,
-        availableSignatures: Array.from(toolSignatureToId.value.keys())
+        tool_use_id: permissionRequest.metadata?.tool_use_id
       })
     }
   }
@@ -579,7 +585,9 @@ export const useMessageStore = defineStore('message', () => {
         // Issue #195: Track parent Task tool for subagent grouping
         parent_tool_use_id: toolCall.parent_tool_use_id || null,
         // Issue #707: Auto-approval indicator
-        autoApprovedReason: toolCall.auto_approved_reason || null
+        autoApprovedReason: toolCall.auto_approved_reason || null,
+        // Issue #953: Sub-agent ID for parallel permission disambiguation
+        agentId: toolCall.agent_id || null,
       }
 
       if (toolCall.error) {
@@ -635,6 +643,8 @@ export const useMessageStore = defineStore('message', () => {
 
   /**
    * Create tool signature for matching (tool name + params hash)
+   * @deprecated Issue #953: Use tool_use_id from backend (SDK v0.1.52+) instead.
+   * Retained as fallback for older SDK versions.
    */
   function createToolSignature(toolName, inputParams) {
     if (!toolName) return 'unknown:{}'

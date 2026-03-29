@@ -54,7 +54,14 @@ class PermissionService:
             request_id = str(uuid.uuid4())
             request_time = time.time()
 
-            logger.info(f"PERMISSION CALLBACK TRIGGERED: tool={tool_name}, session={session_id}, request_id={request_id}")
+            # Issue #953: Extract tool_use_id and agent_id from SDK v0.1.52+ context
+            tool_use_id = getattr(context, 'tool_use_id', None) if context else None
+            agent_id = getattr(context, 'agent_id', None) if context else None
+
+            logger.info(
+                f"PERMISSION CALLBACK TRIGGERED: tool={tool_name}, session={session_id}, "
+                f"request_id={request_id}, tool_use_id={tool_use_id}, agent_id={agent_id}"
+            )
             logger.info(f"Permission requested for tool: {tool_name} (request_id: {request_id})")
 
             # Issue #403: Auto-approve Read tool for user-uploaded files
@@ -108,6 +115,8 @@ class PermissionService:
                     suggestions=suggestion_objects,
                     timestamp=request_time,
                     session_id=session_id,
+                    tool_use_id=tool_use_id,   # Issue #953
+                    agent_id=agent_id,          # Issue #953
                 )
 
                 # Wrap in StoredMessage for triggering_message data (Issue #494: no longer stored separately)
@@ -116,40 +125,55 @@ class PermissionService:
 
                 # Issue #324: Update ToolCall to awaiting_permission and emit unified tool_call message
                 try:
-                    # Find the matching tool by signature
-                    tool_call = self.coordinator.find_tool_call_by_signature(
-                        session_id, tool_name, input_params
-                    )
-
-                    # Issue #858: Replace polling loop with asyncio.Event wait.
-                    # create_tool_call() signals the event synchronously when a new
-                    # ToolCall is stored, so we wait at most 5 s instead of polling.
-                    if not tool_call:
-                        event = self.coordinator.get_tool_call_event(session_id)
-                        loop = asyncio.get_running_loop()
-                        deadline = loop.time() + 5.0  # 5-second timeout
-                        while True:
-                            remaining = deadline - loop.time()
-                            if remaining <= 0:
-                                break
-                            # Clear before wait to avoid missing a signal that arrives between
-                            # our find() call and the wait() call.
+                    # Issue #953: Prefer direct O(1) lookup by tool_use_id (SDK v0.1.52+)
+                    tool_call = None
+                    if tool_use_id:
+                        tool_call = self.coordinator.get_tool_call_by_id(session_id, tool_use_id)
+                        if not tool_call:
+                            # Tool call not yet tracked — short wait for async creation
+                            event = self.coordinator.get_tool_call_event(session_id)
                             event.clear()
-                            tool_call = self.coordinator.find_tool_call_by_signature(
-                                session_id, tool_name, input_params
-                            )
-                            if tool_call:
-                                break
                             try:
-                                await asyncio.wait_for(event.wait(), timeout=remaining)
+                                await asyncio.wait_for(event.wait(), timeout=2.0)
                             except TimeoutError:
-                                break
-                            # Event fired — check again
-                            tool_call = self.coordinator.find_tool_call_by_signature(
-                                session_id, tool_name, input_params
-                            )
-                            if tool_call:
-                                break
+                                pass
+                            tool_call = self.coordinator.get_tool_call_by_id(session_id, tool_use_id)
+
+                    # Fallback: signature matching for SDK versions without tool_use_id
+                    if not tool_call:
+                        tool_call = self.coordinator.find_tool_call_by_signature(
+                            session_id, tool_name, input_params
+                        )
+
+                        # Issue #858: Replace polling loop with asyncio.Event wait.
+                        # create_tool_call() signals the event synchronously when a new
+                        # ToolCall is stored, so we wait at most 5 s instead of polling.
+                        if not tool_call:
+                            event = self.coordinator.get_tool_call_event(session_id)
+                            loop = asyncio.get_running_loop()
+                            deadline = loop.time() + 5.0  # 5-second timeout
+                            while True:
+                                remaining = deadline - loop.time()
+                                if remaining <= 0:
+                                    break
+                                # Clear before wait to avoid missing a signal that arrives between
+                                # our find() call and the wait() call.
+                                event.clear()
+                                tool_call = self.coordinator.find_tool_call_by_signature(
+                                    session_id, tool_name, input_params
+                                )
+                                if tool_call:
+                                    break
+                                try:
+                                    await asyncio.wait_for(event.wait(), timeout=remaining)
+                                except TimeoutError:
+                                    break
+                                # Event fired — check again
+                                tool_call = self.coordinator.find_tool_call_by_signature(
+                                    session_id, tool_name, input_params
+                                )
+                                if tool_call:
+                                    break
                         if not tool_call:
                             logger.warning(
                                 f"[PERMISSIONS] Race condition NOT resolved after 5.0s "
@@ -422,10 +446,14 @@ class PermissionService:
 
                 # Issue #324: Update ToolCall after permission response and emit unified tool_call message
                 try:
-                    # Find the tool by signature and update status
-                    tool_call = self.coordinator.find_tool_call_by_signature(
-                        session_id, tool_name, input_params
-                    )
+                    # Issue #953: Prefer direct lookup by tool_use_id, fall back to signature
+                    tool_call = None
+                    if tool_use_id:
+                        tool_call = self.coordinator.get_tool_call_by_id(session_id, tool_use_id)
+                    if not tool_call:
+                        tool_call = self.coordinator.find_tool_call_by_signature(
+                            session_id, tool_name, input_params
+                        )
 
                     if tool_call:
                         # Update tool call with permission decision

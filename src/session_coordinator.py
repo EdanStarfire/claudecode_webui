@@ -3250,6 +3250,10 @@ class SessionCoordinator:
             self._tool_call_events[session_id] = asyncio.Event()
         return self._tool_call_events[session_id]
 
+    def get_tool_call_by_id(self, session_id: str, tool_use_id: str) -> ToolCall | None:
+        """O(1) lookup of an active tool call by its tool_use_id (Issue #953)."""
+        return self._active_tool_calls.get(session_id, {}).get(tool_use_id)
+
     def _get_active_tool_call(self, session_id: str, tool_use_id: str) -> ToolCall | None:
         """Get a specific active tool call."""
         session_tools = self._active_tool_calls.get(session_id, {})
