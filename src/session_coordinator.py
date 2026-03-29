@@ -3834,6 +3834,9 @@ class SessionCoordinator:
                 "Docker daemon is not running": None,
                 "Docker socket permission denied": None,
                 "Nested Claude Code session detected": None,
+                # Issue #958: Sandbox unavailability — passthrough (SDK message is descriptive)
+                "Sandbox is not available": None,
+                "sandbox": None,
             }
 
             # Check for known patterns and provide clearer descriptions
