@@ -681,6 +681,16 @@ class LegionMCPTools:
                     "resource_id": None,
                     "session_id": None,
                 }
+                # Register in sender's session for outbound preview (issue #949)
+                sender_resource = await self.system.session_coordinator.register_uploaded_resource(
+                    session_id=from_minion_id,
+                    file_path=str(fpath),
+                    title=fpath.name,
+                    description=f"Outbound attachment to {to_minion_name}",
+                )
+                if sender_resource:
+                    meta["sender_resource_id"] = sender_resource.get("resource_id")
+
                 attachment_metadata.append(meta)
                 attachment_file_data[fpath.name] = file_bytes
 

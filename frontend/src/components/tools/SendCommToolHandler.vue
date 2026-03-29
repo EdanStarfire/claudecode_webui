@@ -26,9 +26,14 @@
       <div class="outbound-comm-content" ref="contentRef" v-html="renderedContent"></div>
       <div v-if="attachments.length > 0" class="outbound-comm-attachments">
         <AttachmentChip
-          v-for="(name, idx) in attachments"
+          v-for="(att, idx) in attachments"
           :key="idx"
-          :filename="name"
+          :filename="att.filename"
+          :resource-id="att.resourceId"
+          :session-id="att.sessionId"
+          :size="att.size"
+          :mime-type="att.mimeType"
+          @preview="openAttachmentPreview(att)"
         />
       </div>
     </div>
@@ -47,6 +52,7 @@ import { useResourceImages } from '@/composables/useResourceImages'
 import { useToolResult } from '@/composables/useToolResult'
 import { getAgentColor, slugifyAgentName } from '@/composables/useAgentColor'
 import { useSessionStore } from '@/stores/session'
+import { useResourceStore } from '@/stores/resource'
 import AttachmentChip from '@/components/common/AttachmentChip.vue'
 
 const props = defineProps({
@@ -60,25 +66,44 @@ const summaryText = computed(() => props.toolCall.input?.summary || '')
 const commType = computed(() => props.toolCall.input?.comm_type || '')
 const interruptPriority = computed(() => props.toolCall.input?.interrupt_priority || '')
 
+const sessionStore = useSessionStore()
+const resourceStore = useResourceStore()
+
 const attachments = computed(() => {
   const raw = props.toolCall.input?.attachments
   if (!raw) return []
   try {
     const paths = typeof raw === 'string' ? JSON.parse(raw) : raw
-    return Array.isArray(paths) ? paths.map(p => p.split('/').pop()) : []
+    const list = Array.isArray(paths) ? paths : [String(raw)]
+    return list.map(p => {
+      const filename = p.split('/').pop()
+      const sid = sessionStore.currentSessionId
+      const resources = resourceStore.resourcesBySession.get(sid) || []
+      const resource = resources.find(r => r.title === filename || r.filename === filename)
+      return {
+        filename,
+        resourceId: resource?.resource_id || null,
+        sessionId: resource ? sid : null,
+        size: resource?.size || null,
+        mimeType: resource?.mime_type || null,
+      }
+    })
   } catch {
-    // single path string (not JSON array)
-    return [String(raw).split('/').pop()]
+    return [{ filename: String(raw).split('/').pop(), resourceId: null, sessionId: null, size: null, mimeType: null }]
   }
 })
+
+function openAttachmentPreview(att) {
+  if (att.resourceId) {
+    resourceStore.openFullViewById(att.resourceId, att.sessionId)
+  }
+}
 
 // Agent color from recipient name
 const recipientColor = computed(() => getAgentColor(slugifyAgentName(recipientName.value)))
 
 // Render content as markdown
 const renderedContent = computed(() => renderMarkdown(content.value || summaryText.value))
-
-const sessionStore = useSessionStore()
 
 // Mermaid diagram rendering
 const contentRef = ref(null)
