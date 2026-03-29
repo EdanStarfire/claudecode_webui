@@ -153,6 +153,54 @@ class TestMessageHandlers:
         assert parsed.metadata["subtype"] == "conversation_completed"
         assert parsed.metadata["duration_ms"] == 1500
         assert parsed.metadata["num_turns"] == 3
+        assert parsed.metadata["errors"] is None
+
+    def test_result_message_handler_with_errors(self):
+        """Test ResultMessageHandler extracts errors field."""
+        handler = ResultMessageHandler()
+
+        message_data = {
+            "type": "result",
+            "subtype": "conversation_completed",
+            "result": "Done",
+            "session_id": "test-123",
+            "errors": ["Tool X failed: file not found", "API rate limit exceeded"],
+            "timestamp": time.time()
+        }
+
+        parsed = handler.parse(message_data)
+        assert parsed.metadata["errors"] == ["Tool X failed: file not found", "API rate limit exceeded"]
+
+    def test_result_message_handler_with_empty_errors(self):
+        """Test ResultMessageHandler handles empty errors list."""
+        handler = ResultMessageHandler()
+
+        message_data = {
+            "type": "result",
+            "subtype": "conversation_completed",
+            "result": "Done",
+            "session_id": "test-123",
+            "errors": [],
+            "timestamp": time.time()
+        }
+
+        parsed = handler.parse(message_data)
+        assert parsed.metadata["errors"] == []
+
+    def test_result_message_handler_errors_none(self):
+        """Test ResultMessageHandler handles missing errors field (backward compat)."""
+        handler = ResultMessageHandler()
+
+        message_data = {
+            "type": "result",
+            "subtype": "conversation_completed",
+            "result": "Done",
+            "session_id": "test-123",
+            "timestamp": time.time()
+        }
+
+        parsed = handler.parse(message_data)
+        assert parsed.metadata["errors"] is None
 
     def test_tool_use_handler(self):
         """Test ToolUseHandler."""

@@ -1018,6 +1018,7 @@ class ResultMessageHandler(MessageHandler):
                 "usage": message_data.get("usage", {}),
                 "stop_reason": message_data.get("stop_reason"),
                 "permission_denials": message_data.get("permission_denials", []),
+                "errors": message_data.get("errors"),
                 "has_tool_uses": False,
                 "has_tool_results": False,
                 "has_thinking": False,
