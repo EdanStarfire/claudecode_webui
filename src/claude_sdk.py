@@ -17,6 +17,7 @@ from .data_storage import DataStorageManager
 from .logging_config import get_logger
 from .message_parser import MessageParser, MessageProcessor
 from .models.messages import sdk_message_to_stored
+from .models.permission_mode import PermissionMode
 from .session_config import SessionConfig
 from .task_utils import task_done_log_exception
 
@@ -454,8 +455,7 @@ class ClaudeSDK:
             perm_logger.info(f"Setting permission mode to '{mode}' for session {self.session_id}")
 
             # Validate mode
-            valid_modes = ["default", "acceptEdits", "plan", "bypassPermissions"]
-            if mode not in valid_modes:
+            if mode not in PermissionMode._value2member_map_:
                 logger.error(f"Invalid permission mode: {mode}")
                 return False
 

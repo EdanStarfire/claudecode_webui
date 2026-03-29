@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from .logging_config import get_logger
+from .models.permission_mode import PermissionMode
 from .session_config import SessionConfig
 
 # Get specialized logger for session manager actions
@@ -699,8 +700,7 @@ class SessionManager:
                     return False
 
                 # Validate mode
-                valid_modes = ["default", "acceptEdits", "plan", "bypassPermissions"]
-                if mode not in valid_modes:
+                if mode not in PermissionMode._value2member_map_:
                     logger.error(f"Invalid permission mode: {mode}")
                     return False
 

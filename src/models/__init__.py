@@ -39,6 +39,7 @@ from src.models.messages import (
     ToolDisplayInfo,
     ToolState,
 )
+from src.models.permission_mode import PermissionMode
 from src.models.schedule_models import (
     Schedule,
     ScheduleExecution,
@@ -46,6 +47,8 @@ from src.models.schedule_models import (
 )
 
 __all__ = [
+    # Permission mode enum (Issue #955)
+    "PermissionMode",
     # Message models (Issue #310)
     "StoredMessage",
     "PermissionRequestMessage",

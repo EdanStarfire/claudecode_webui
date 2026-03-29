@@ -11,6 +11,7 @@ Responsibilities:
 import uuid
 from typing import TYPE_CHECKING
 
+from src.models.permission_mode import PermissionMode
 from src.session_config import SessionConfig
 from src.session_manager import slugify_name
 
@@ -60,9 +61,8 @@ class OverseerController:
             raise ValueError(f"Project {legion_id} not found")
 
         # Validate permission_mode
-        valid_modes = ["default", "acceptEdits", "plan", "bypassPermissions"]
-        if config.permission_mode not in valid_modes:
-            raise ValueError(f"Invalid permission_mode '{config.permission_mode}'. Must be one of: {', '.join(valid_modes)}")
+        if config.permission_mode not in PermissionMode._value2member_map_:
+            raise ValueError(f"Invalid permission_mode '{config.permission_mode}'. Must be one of: {', '.join(PermissionMode._value2member_map_)}")
 
         # Check minion limit (max 20 concurrent minions per legion)
         # Issue #349: All sessions are minions
