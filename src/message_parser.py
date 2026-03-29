@@ -1289,7 +1289,9 @@ class PermissionRequestHandler(MessageHandler):
                 "has_tool_results": False,
                 "has_thinking": False,
                 "has_permission_requests": True,
-                "has_permission_responses": False
+                "has_permission_responses": False,
+                "tool_use_id": message_data.get("tool_use_id"),   # Issue #953
+                "agent_id": message_data.get("agent_id"),          # Issue #953
             }
         }
 
@@ -1340,7 +1342,8 @@ class PermissionResponseHandler(MessageHandler):
                 "has_tool_results": False,
                 "has_thinking": False,
                 "has_permission_requests": False,
-                "has_permission_responses": True
+                "has_permission_responses": True,
+                "tool_use_id": message_data.get("tool_use_id"),   # Issue #953
             }
         }
 

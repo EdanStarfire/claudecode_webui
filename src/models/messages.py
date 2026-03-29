@@ -312,6 +312,8 @@ class PermissionRequestMessage:
     suggestions: list[PermissionSuggestion] = field(default_factory=list)
     timestamp: float = 0.0
     session_id: str | None = None
+    tool_use_id: str | None = None  # Issue #953: direct tool invocation ID from SDK v0.1.52+
+    agent_id: str | None = None     # Issue #953: sub-agent ID from ToolPermissionContext
 
     @property
     def content(self) -> str:
@@ -327,6 +329,8 @@ class PermissionRequestMessage:
             'suggestions': [s.to_dict() for s in self.suggestions],
             'timestamp': self.timestamp,
             'session_id': self.session_id,
+            'tool_use_id': self.tool_use_id,
+            'agent_id': self.agent_id,
             'content': self.content,
         }
 
@@ -967,9 +971,14 @@ class DisplayProjection:
         tool_name = message.data.get('tool_name', '')
         input_params = message.data.get('input_params', {})
 
-        # Find matching tool by signature
-        signature = self._create_tool_signature(tool_name, input_params)
-        tool_id = self._tool_signatures.get(signature)
+        # Issue #953: Prefer direct tool_use_id match (SDK v0.1.52+), fall back to signature
+        direct_tool_use_id = message.data.get('tool_use_id')
+        if direct_tool_use_id and direct_tool_use_id in self._tool_states:
+            tool_id = direct_tool_use_id
+        else:
+            # Fallback: find matching tool by signature
+            signature = self._create_tool_signature(tool_name, input_params)
+            tool_id = self._tool_signatures.get(signature)
 
         if tool_id:
             # Link permission to tool

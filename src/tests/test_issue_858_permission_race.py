@@ -347,3 +347,106 @@ async def test_issue_858_event_cleaned_up_on_terminate():
         assert session_id not in coord._tool_call_events, (
             "Event must be removed from _tool_call_events after terminate_session()"
         )
+
+
+# ---------------------------------------------------------------------------
+# Test 7 (Issue #953): tool_use_id direct path skips signature matching
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_issue_953_direct_lookup_skips_signature_matching():
+    """When context.tool_use_id is set and the tool call exists, signature matching is bypassed."""
+    session_id = "sess-953-direct"
+    tool_use_id = "tu_953_001"
+    coord = _make_coordinator(session_id)
+    tc = _make_tool_call(session_id, "Write", {"file_path": "/x.txt"})
+    tc.tool_use_id = tool_use_id
+
+    # Register via get_tool_call_by_id side_effect
+    def direct_lookup(sid: str, tuid: str):
+        return tc if tuid == tool_use_id else None
+
+    coord.get_tool_call_by_id = MagicMock(side_effect=direct_lookup)
+
+    ctx = MagicMock()
+    ctx.tool_use_id = tool_use_id
+    ctx.agent_id = None
+    ctx.suggestions = []
+
+    mock_session_info = MagicMock()
+    mock_session_info.current_permission_mode = "default"
+    coord.session_manager = MagicMock()
+    coord.session_manager.get_session_info = AsyncMock(return_value=mock_session_info)
+    coord.update_tool_call_permission_request = MagicMock(return_value=None)
+
+    from src.permission_service import PermissionService
+
+    svc = PermissionService(coordinator=coord, session_queues={})
+
+    with (
+        patch("src.permission_service.PermissionRequestMessage") as mock_pr,
+        patch("src.permission_service.StoredMessage") as mock_sm,
+        patch("src.permission_service.PermissionInfo"),
+    ):
+        mock_pr.return_value = MagicMock()
+        mock_sm.from_permission_request.return_value = MagicMock(to_dict=lambda: {})
+
+        cb = svc.create_permission_callback(session_id)
+        task = asyncio.create_task(cb("Write", {"file_path": "/x.txt"}, ctx))
+        await asyncio.sleep(0.1)
+        task.cancel()
+        try:
+            await task
+        except (asyncio.CancelledError, Exception):
+            pass
+
+    coord.get_tool_call_by_id.assert_called_with(session_id, tool_use_id)
+    coord.find_tool_call_by_signature.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Test 8 (Issue #953): fallback to signature when tool_use_id is None
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_issue_953_fallback_to_signature_when_no_tool_use_id():
+    """When context.tool_use_id is None, signature matching is used (backward compat)."""
+    session_id = "sess-953-fallback"
+    coord = _make_coordinator(session_id)
+    tc = _make_tool_call(session_id, "Edit", {"file_path": "/y.py"})
+    coord._tool_calls["Edit"] = tc
+
+    ctx = MagicMock()
+    ctx.tool_use_id = None
+    ctx.agent_id = None
+    ctx.suggestions = []
+
+    coord.session_manager = MagicMock()
+    coord.session_manager.get_session_info = AsyncMock(
+        return_value=MagicMock(current_permission_mode="default")
+    )
+    coord.update_tool_call_permission_request = MagicMock(return_value=None)
+
+    from src.permission_service import PermissionService
+
+    svc = PermissionService(coordinator=coord, session_queues={})
+
+    with (
+        patch("src.permission_service.PermissionRequestMessage") as mock_pr,
+        patch("src.permission_service.StoredMessage") as mock_sm,
+        patch("src.permission_service.PermissionInfo"),
+    ):
+        mock_pr.return_value = MagicMock()
+        mock_sm.from_permission_request.return_value = MagicMock(to_dict=lambda: {})
+
+        cb = svc.create_permission_callback(session_id)
+        task = asyncio.create_task(cb("Edit", {"file_path": "/y.py"}, ctx))
+        await asyncio.sleep(0.1)
+        task.cancel()
+        try:
+            await task
+        except (asyncio.CancelledError, Exception):
+            pass
+
+    # With no tool_use_id, signature matching should be used
+    coord.find_tool_call_by_signature.assert_called()
