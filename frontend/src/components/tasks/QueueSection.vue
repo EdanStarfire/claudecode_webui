@@ -116,6 +116,17 @@
           </svg>
         </button>
       </div>
+
+      <!-- Load More -->
+      <div v-if="canLoadMore" class="load-more-row px-3 py-2">
+        <button
+          class="btn btn-sm btn-outline-secondary w-100"
+          :disabled="loadingMore"
+          @click="doLoadMore"
+        >
+          {{ loadingMore ? 'Loading…' : 'Load More' }}
+        </button>
+      </div>
     </div>
   </div>
 </template>
@@ -136,6 +147,7 @@ const queueStore = useQueueStore()
 const sessionStore = useSessionStore()
 
 const collapsed = ref(false)
+const loadingMore = ref(false)
 
 const sectionStyle = computed(() => {
   if (collapsed.value) return {}
@@ -177,6 +189,11 @@ const pendingCount = computed(() => {
   return queueStore.getPendingCount(sessionId.value)
 })
 
+const canLoadMore = computed(() => {
+  if (!sessionId.value || collapsed.value) return false
+  return queueStore.hasMore(sessionId.value)
+})
+
 const isPaused = computed(() => {
   if (!sessionId.value) return false
   // Check store state first, fall back to session data
@@ -209,6 +226,16 @@ async function doPause() {
 async function resumeQueue() {
   if (!sessionId.value) return
   await queueStore.pauseQueue(sessionId.value, false)
+}
+
+async function doLoadMore() {
+  if (!sessionId.value || loadingMore.value) return
+  loadingMore.value = true
+  try {
+    await queueStore.loadMore(sessionId.value)
+  } finally {
+    loadingMore.value = false
+  }
 }
 </script>
 
@@ -324,5 +351,9 @@ async function resumeQueue() {
 
 .history-count {
   font-size: 0.7rem;
+}
+
+.load-more-row {
+  border-top: 1px solid #f0f0f0;
 }
 </style>

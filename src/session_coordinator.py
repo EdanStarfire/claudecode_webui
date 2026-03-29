@@ -366,9 +366,11 @@ class SessionCoordinator:
         return await self.queue_manager.clear_pending(session_id, session_dir)
 
     async def get_queue(self, session_id: str, limit: int = 100, offset: int = 0) -> dict:
-        """Get queue items for a session, paginated."""
+        """Get queue items for a session, paginated, most recent first."""
         all_items = [item.to_dict() for item in self.queue_manager.get_queue(session_id)]
+        all_items.reverse()  # Most recent (highest position) first
         total = len(all_items)
+        pending_count = sum(1 for i in all_items if i.get("status") == "pending")
         sliced = all_items[offset : offset + limit]
         return {
             "items": sliced,
@@ -376,6 +378,7 @@ class SessionCoordinator:
             "limit": limit,
             "offset": offset,
             "has_more": offset + len(sliced) < total,
+            "pending_count": pending_count,
         }
 
     async def pause_queue(self, session_id: str, paused: bool) -> bool:
