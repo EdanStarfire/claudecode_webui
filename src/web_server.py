@@ -35,7 +35,6 @@ from .exception_handlers import handle_exceptions
 from .file_upload import FileUploadError, FileUploadManager
 from .mcp_config_manager import McpServerType
 from .message_parser import MessageParser, MessageProcessor
-from .model_limits import get_context_window
 from .permission_resolver import resolve_effective_permissions
 from .permission_service import PermissionService
 from .session_config import SessionConfigBase
@@ -416,9 +415,6 @@ class ClaudeWebUI:
 
         # Permission lifecycle management (session_queues must be initialized first)
         self.permission_service = PermissionService(self.coordinator, self.session_queues)
-
-        # Issue #905: Per-session model cache for context window lookup
-        self._session_models: dict[str, str] = {}
 
         # Rate limiting for restart endpoint (issue #434)
         self._last_restart_time: float = 0
@@ -1109,11 +1105,6 @@ class ClaudeWebUI:
                 session_id,
                 self._create_message_callback(session_id)
             )
-
-            # Issue #905: Cache model for context window lookup
-            session_info = await self.coordinator.session_manager.get_session_info(session_id)
-            if session_info and session_info.model:
-                self._session_models[session_id] = session_info.model
 
             success = await self.coordinator.start_session(
                 session_id,
@@ -3284,38 +3275,21 @@ class ClaudeWebUI:
                     self.session_queues[session_id].append(serialized)
                     logger.info(f"Appended message to session queue for {session_id}")
 
-                # Issue #905: Emit context_update after result messages
+                # Issue #952: Emit context_update after result messages using SDK API
                 msg_type = getattr(parsed_message, 'type', None)
                 if msg_type is not None:
                     msg_type_str = msg_type.value if hasattr(msg_type, 'value') else str(msg_type)
                 else:
                     msg_type_str = websocket_data.get("type", "")
                 if msg_type_str == "result" and session_id in self.session_queues:
-                    metadata = getattr(parsed_message, 'metadata', {}) or {}
-                    usage = metadata.get("usage") or {}
-                    input_tokens = (
-                        (usage.get("input_tokens") or 0) +
-                        (usage.get("cache_read_input_tokens") or 0) +
-                        (usage.get("cache_creation_input_tokens") or 0)
-                    ) or None
-                    if input_tokens is not None:
-                        # Issue #938: Lazy-populate model cache after server restart
-                        if session_id not in self._session_models:
-                            session_info = await self.coordinator.session_manager.get_session_info(session_id)
-                            if session_info and session_info.model:
-                                self._session_models[session_id] = session_info.model
-                        model = self._session_models.get(session_id, "")
-                        context_window = get_context_window(model)
-                        # Issue #944: SDK double-counts tokens in usage reporting (known upstream bug).
-                        # Halve the raw sum as a temporary workaround. Remove this division once the
-                        # upstream SDK bug is fixed and token counts are reported correctly.
-                        pct = round(((input_tokens / 2) / context_window) * 100, 1)
+                    ctx = await self.coordinator.get_context_usage(session_id)
+                    if ctx and ctx.get("totalTokens"):
                         self.session_queues[session_id].append({
                             "type": "context_update",
                             "session_id": session_id,
-                            "input_tokens": input_tokens,
-                            "context_window": context_window,
-                            "context_pct": pct,
+                            "input_tokens": ctx["totalTokens"],
+                            "context_window": ctx["maxTokens"],
+                            "context_pct": round(ctx["percentage"], 1),
                             "timestamp": datetime.now(UTC).isoformat(),
                         })
 
