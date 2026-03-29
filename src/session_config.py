@@ -68,6 +68,7 @@ class SessionConfig:
     enable_claudeai_mcp_servers: bool = True  # Toggle ENABLE_CLAUDEAI_MCP_SERVERS env var
     strict_mcp_config: bool = False  # Pass --strict-mcp-config to disable local .mcp.json
     bare_mode: bool = False  # Pass --bare to skip hooks, LSP, plugin sync, skill walks
+    env_scrub_enabled: bool = False  # Issue #957: Strip credentials from subprocess envs
 
 
 class SessionConfigBase(BaseModel):
@@ -103,6 +104,7 @@ class SessionConfigBase(BaseModel):
     enable_claudeai_mcp_servers: bool = True
     strict_mcp_config: bool = False
     bare_mode: bool = False
+    env_scrub_enabled: bool = False  # Issue #957: Strip credentials from subprocess envs
 
     def to_session_config(self, **overrides) -> SessionConfig:
         """Convert to SessionConfig dataclass, with optional field overrides."""
@@ -133,6 +135,7 @@ class SessionConfigBase(BaseModel):
             "enable_claudeai_mcp_servers": self.enable_claudeai_mcp_servers,
             "strict_mcp_config": self.strict_mcp_config,
             "bare_mode": self.bare_mode,
+            "env_scrub_enabled": self.env_scrub_enabled,
         }
         data.update(overrides)
         return SessionConfig(**data)
