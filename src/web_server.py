@@ -35,6 +35,7 @@ from .exception_handlers import handle_exceptions
 from .file_upload import FileUploadError, FileUploadManager
 from .mcp_config_manager import McpServerType
 from .message_parser import MessageParser, MessageProcessor
+from .models.permission_mode import PermissionMode
 from .permission_resolver import resolve_effective_permissions
 from .permission_service import PermissionService
 from .session_config import SessionConfigBase
@@ -1595,8 +1596,7 @@ class ClaudeWebUI:
         async def set_permission_mode(session_id: str, request: PermissionModeRequest):
             """Set the permission mode for a session"""
             # Validate mode
-            valid_modes = ["default", "acceptEdits", "plan", "bypassPermissions"]
-            if request.mode not in valid_modes:
+            if request.mode not in PermissionMode._value2member_map_:
                 raise HTTPException(status_code=400, detail=f"Invalid permission mode: {request.mode}")
 
             success = await self.coordinator.set_permission_mode(session_id, request.mode)

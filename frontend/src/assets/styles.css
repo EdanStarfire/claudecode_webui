@@ -1039,6 +1039,9 @@ button:focus {
 .perm-btn-group .perm-btn.active.perm-accept {
     background: #198754;
 }
+.perm-btn-group .perm-btn.active.perm-dontask {
+    background: #e07b00;
+}
 .perm-btn-group .perm-btn.disabled {
     opacity: 0.5;
     cursor: not-allowed;

@@ -24,6 +24,7 @@ from pathlib import Path
 
 from .logging_config import get_logger
 from .models.minion_template import MinionTemplate
+from .models.permission_mode import PermissionMode
 from .session_config import SessionConfig
 
 
@@ -178,10 +179,9 @@ class TemplateManager:
         if any(t.name == name for t in self.templates.values()):
             raise ValueError(f"Template with name '{name}' already exists")
 
-        valid_modes = ["default", "acceptEdits", "plan", "bypassPermissions"]
-        if config.permission_mode not in valid_modes:
+        if config.permission_mode not in PermissionMode._value2member_map_:
             raise ValueError(
-                f"Invalid permission_mode. Must be one of: {', '.join(valid_modes)}"
+                f"Invalid permission_mode. Must be one of: {', '.join(PermissionMode._value2member_map_)}"
             )
 
         template = MinionTemplate(
@@ -284,8 +284,7 @@ class TemplateManager:
             template.name = name.strip()
 
         if permission_mode:
-            valid_modes = ["default", "acceptEdits", "plan", "bypassPermissions"]
-            if permission_mode not in valid_modes:
+            if permission_mode not in PermissionMode._value2member_map_:
                 raise ValueError("Invalid permission_mode")
             template.permission_mode = permission_mode
 

@@ -90,6 +90,14 @@
           @click="setPermissionMode('plan')"
         >Plan</button>
         <button
+          type="button"
+          class="perm-btn perm-dontask"
+          :class="{ active: formData.permission_mode === 'dontAsk', disabled: permDisabled }"
+          :disabled="permDisabled"
+          @click="setPermissionMode('dontAsk')"
+          title="No permission prompts — agent limited to pre-approved tools only"
+        >Don't Ask</button>
+        <button
           v-if="!isEditSession || canUseBypassPermissions"
           type="button"
           class="perm-btn perm-bypass"

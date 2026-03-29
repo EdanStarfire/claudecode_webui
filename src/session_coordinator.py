@@ -36,6 +36,7 @@ from .models.messages import (
     ToolState,
     legacy_to_stored,
 )
+from .models.permission_mode import PermissionMode
 from .project_manager import ProjectInfo, ProjectManager
 from .queue_manager import QueueManager
 from .queue_processor import QueueProcessor
@@ -1762,8 +1763,7 @@ class SessionCoordinator:
             coord_logger.info(f"Setting permission mode to '{mode}' for session {session_id}")
 
             # Validate mode
-            valid_modes = ["default", "acceptEdits", "plan", "bypassPermissions"]
-            if mode not in valid_modes:
+            if mode not in PermissionMode._value2member_map_:
                 logger.error(f"Invalid permission mode: {mode}")
                 return False
 
