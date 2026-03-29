@@ -887,12 +887,14 @@ class ClaudeSDK:
             options_kwargs["cli_path"] = self.cli_path
             sdk_logger.info(f"Using custom CLI path for session {self.session_id}: {self.cli_path}")
 
-        # Add sandbox configuration (issue #319)
+        # Add sandbox configuration (issue #319, #958)
         if self.sandbox_enabled:
-            sandbox_settings = {"enabled": True}
+            sandbox_settings = {"enabled": True, "failIfUnavailable": True}
             # Merge custom sandbox config if provided
             if self.sandbox_config:
                 sandbox_settings.update(self.sandbox_config)
+            # Issue #958: Enforce failIfUnavailable after merge to prevent silent fallback
+            sandbox_settings["failIfUnavailable"] = True
             options_kwargs["sandbox"] = sandbox_settings
             sdk_logger.info(f"Sandbox enabled for session {self.session_id}: {sandbox_settings}")
 
