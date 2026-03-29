@@ -1810,6 +1810,13 @@ class SessionCoordinator:
             logger.exception(f"Failed to get MCP status for session {session_id}")
             return {"servers": []}
 
+    async def get_context_usage(self, session_id: str) -> dict:
+        """Get context usage for a session via SDK."""
+        sdk = self._active_sdks.get(session_id)
+        if not sdk:
+            return {}
+        return await sdk.get_context_usage()
+
     async def toggle_mcp_server(self, session_id: str, name: str, enabled: bool) -> None:
         """Toggle an MCP server on or off for a session. Raises on failure."""
         sdk = self._active_sdks.get(session_id)

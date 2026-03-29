@@ -501,6 +501,20 @@ class ClaudeSDK:
             logger.exception(f"Failed to get MCP status for session {self.session_id}")
             return {"servers": []}
 
+    async def get_context_usage(self) -> dict:
+        """Get context window usage from the SDK."""
+        try:
+            if not self._sdk_client:
+                logger.warning(f"No active SDK client for session {self.session_id}")
+                return {}
+            if self.info.state not in [SessionState.RUNNING, SessionState.PROCESSING]:
+                return {}
+            result = await self._sdk_client.get_context_usage()
+            return dict(result)
+        except Exception:
+            logger.exception(f"Failed to get context usage for session {self.session_id}")
+            return {}
+
     async def toggle_mcp_server(self, name: str, enabled: bool) -> None:
         """Toggle an MCP server on or off. Raises on failure."""
         if not self._sdk_client:
