@@ -674,6 +674,26 @@
               placeholder="Network patterns to ignore" />
           </div>
         </div>
+
+        <!-- Issue #957: Subprocess credential scrubbing -->
+        <div class="mb-3">
+          <div class="form-check form-switch">
+            <input
+              class="form-check-input"
+              type="checkbox"
+              id="env-scrub-toggle"
+              :checked="formData.env_scrub_enabled"
+              @change="$emit('update:form-data', 'env_scrub_enabled', $event.target.checked)"
+            />
+            <label class="form-check-label" for="env-scrub-toggle">
+              Scrub subprocess credentials
+            </label>
+          </div>
+          <div class="form-text text-warning-emphasis">
+            Strips Anthropic API keys and cloud provider credentials from subprocess
+            environments. Recommended for untrusted code execution.
+          </div>
+        </div>
       </div>
     </div>
   </div>

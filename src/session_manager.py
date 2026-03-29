@@ -153,6 +153,7 @@ class SessionInfo:
     enable_claudeai_mcp_servers: bool = True  # Toggle ENABLE_CLAUDEAI_MCP_SERVERS env var
     strict_mcp_config: bool = False  # Pass --strict-mcp-config to disable local .mcp.json
     bare_mode: bool = False  # Pass --bare to skip hooks, LSP, plugin sync, skill walks
+    env_scrub_enabled: bool = False  # Issue #957: Strip credentials from subprocess envs
 
     def __post_init__(self):
         if self.additional_directories is None:
@@ -242,6 +243,7 @@ class SessionInfo:
         data.setdefault('enable_claudeai_mcp_servers', True)
         data.setdefault('strict_mcp_config', False)
         data.setdefault('bare_mode', False)
+        data.setdefault('env_scrub_enabled', False)
         return cls(**data)
 
 
@@ -414,6 +416,7 @@ class SessionManager:
             enable_claudeai_mcp_servers=config.enable_claudeai_mcp_servers,
             strict_mcp_config=config.strict_mcp_config,
             bare_mode=config.bare_mode,
+            env_scrub_enabled=config.env_scrub_enabled,
         )
 
         try:

@@ -216,6 +216,7 @@ class ClaudeSDK:
         self.enable_claudeai_mcp_servers = config.enable_claudeai_mcp_servers
         self.strict_mcp_config = config.strict_mcp_config
         self.bare_mode = config.bare_mode if config else False
+        self.env_scrub_enabled = config.env_scrub_enabled if config else False
         self.permission_handler = permission_handler
         self.auto_approval_callback: Callable | None = None  # Issue #707: notifies coordinator
         self._stderr_buffer: list[str] = []
@@ -928,6 +929,9 @@ class ClaudeSDK:
         # Issue #676: Disable Claude AI MCP servers when toggled off
         if not self.enable_claudeai_mcp_servers:
             env_vars["ENABLE_CLAUDEAI_MCP_SERVERS"] = "false"
+        # Issue #957: Scrub subprocess credentials
+        if self.env_scrub_enabled:
+            env_vars["CLAUDE_CODE_SUBPROCESS_ENV_SCRUB"] = "1"
         # Issue #496: Merge extra env vars (e.g., Docker wrapper config like CLAUDE_DOCKER_*)
         if self.extra_env:
             env_vars.update(self.extra_env)

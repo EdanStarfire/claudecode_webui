@@ -594,6 +594,11 @@ const CONFIG_FIELDS = {
     change: 'restart',
     contexts: ['session', 'template', 'ephemeral', 'update'],
   },
+  env_scrub_enabled: {
+    default: false,
+    change: 'restart',
+    contexts: ['session', 'template', 'ephemeral', 'update'],
+  },
 }
 
 // Derive fieldStates and templateOriginalValues from schema
