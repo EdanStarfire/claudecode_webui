@@ -2134,7 +2134,6 @@ class ClaudeWebUI:
             if not await self.service.get_session_exists(session_id):
                 raise HTTPException(status_code=404, detail="Session not found")
             result = await self.coordinator.get_queue(session_id, limit=limit, offset=offset)
-            result["pending_count"] = sum(1 for i in result["items"] if i.get("status") == "pending")
             return result
 
         @self.app.delete("/api/sessions/{session_id}/queue/{queue_id}")

@@ -14,6 +14,9 @@ export const useQueueStore = defineStore('queue', () => {
   // Per-session pause state: Map<sessionId, boolean>
   const pausedBySession = ref(new Map())
 
+  // Per-session pagination state: Map<sessionId, { offset, hasMore, total, pendingCount }>
+  const paginationBySession = ref(new Map())
+
   // ========== GETTERS ==========
 
   function getItems(sessionId) {
@@ -21,24 +24,59 @@ export const useQueueStore = defineStore('queue', () => {
   }
 
   function getPendingCount(sessionId) {
-    return getItems(sessionId).filter(i => i.status === 'pending').length
+    return paginationBySession.value.get(sessionId)?.pendingCount
+      ?? getItems(sessionId).filter(i => i.status === 'pending').length
   }
 
   function isPaused(sessionId) {
     return pausedBySession.value.get(sessionId) || false
   }
 
+  function hasMore(sessionId) {
+    return paginationBySession.value.get(sessionId)?.hasMore || false
+  }
+
   // ========== ACTIONS ==========
 
   async function fetchQueue(sessionId) {
     try {
-      const data = await api.get(`/api/sessions/${sessionId}/queue`)
+      const data = await api.get(`/api/sessions/${sessionId}/queue?limit=100&offset=0`)
       queuesBySession.value.set(sessionId, data.items || [])
-      // Trigger reactivity
       queuesBySession.value = new Map(queuesBySession.value)
+      paginationBySession.value.set(sessionId, {
+        offset: data.items?.length || 0,
+        hasMore: data.has_more || false,
+        total: data.total || 0,
+        pendingCount: data.pending_count ?? null,
+      })
+      paginationBySession.value = new Map(paginationBySession.value)
       return data.items
     } catch (error) {
       console.error('Failed to fetch queue:', error)
+      return []
+    }
+  }
+
+  async function loadMore(sessionId) {
+    const pagination = paginationBySession.value.get(sessionId)
+    if (!pagination?.hasMore) return
+    try {
+      const { offset } = pagination
+      const data = await api.get(`/api/sessions/${sessionId}/queue?limit=100&offset=${offset}`)
+      const existing = queuesBySession.value.get(sessionId) || []
+      const combined = [...existing, ...(data.items || [])]
+      queuesBySession.value.set(sessionId, combined)
+      queuesBySession.value = new Map(queuesBySession.value)
+      paginationBySession.value.set(sessionId, {
+        offset: offset + (data.items?.length || 0),
+        hasMore: data.has_more || false,
+        total: data.total || 0,
+        pendingCount: data.pending_count ?? null,
+      })
+      paginationBySession.value = new Map(paginationBySession.value)
+      return data.items
+    } catch (error) {
+      console.error('Failed to load more queue items:', error)
       return []
     }
   }
@@ -105,10 +143,8 @@ export const useQueueStore = defineStore('queue', () => {
    */
   function handleQueueUpdate(sessionId, payload) {
     const action = payload.action
-    const item = payload.item
-    const pendingCount = payload.pending_count
 
-    // Re-fetch to stay in sync (simplest reliable approach)
+    // Re-fetch from page 1 to stay current with real-time changes
     fetchQueue(sessionId)
 
     // Update pause state from action
@@ -133,12 +169,15 @@ export const useQueueStore = defineStore('queue', () => {
     // State
     queuesBySession,
     pausedBySession,
+    paginationBySession,
     // Getters
     getItems,
     getPendingCount,
     isPaused,
+    hasMore,
     // Actions
     fetchQueue,
+    loadMore,
     enqueueMessage,
     cancelItem,
     requeueItem,
