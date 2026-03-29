@@ -52,6 +52,11 @@
     <div v-if="isHook && expanded" class="hook-detail">
       <pre class="hook-json">{{ hookJson }}</pre>
     </div>
+    <div v-if="resultErrors.length" class="result-errors">
+      <div v-for="(err, i) in resultErrors" :key="i" class="result-error-item">
+        {{ err }}
+      </div>
+    </div>
   </div>
 </template>
 
@@ -193,6 +198,12 @@ const hookJson = computed(() => {
   } catch {
     return String(data)
   }
+})
+
+// ResultMessage turn-level errors
+const resultErrors = computed(() => {
+  if (props.message.type !== 'result') return []
+  return props.message.metadata?.errors || []
 })
 
 function toggleExpand() {
@@ -389,6 +400,27 @@ function toggleExpand() {
 
 .chevron-open {
   transform: rotate(90deg);
+}
+
+.result-errors {
+  margin-top: 4px;
+  max-width: 80%;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.result-error-item {
+  background: var(--tool-error-bg, #fef2f2);
+  border: 1px solid var(--tool-error-border, #fecaca);
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 12px;
+  color: #991b1b;
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  word-break: break-word;
+  white-space: pre-wrap;
 }
 
 .hook-detail {

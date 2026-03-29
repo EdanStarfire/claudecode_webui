@@ -2321,6 +2321,11 @@ class SessionCoordinator:
                 # Copy stop_reason for truncation detection
                 if "stop_reason" in data:
                     metadata["stop_reason"] = data["stop_reason"]
+                # Copy errors and permission_denials for error display
+                if "errors" in data:
+                    metadata["errors"] = data["errors"]
+                if "permission_denials" in data:
+                    metadata["permission_denials"] = data["permission_denials"]
 
             # Handle PermissionRequestMessage
             if _type == "PermissionRequestMessage":
@@ -3512,6 +3517,14 @@ class SessionCoordinator:
                                 # Mark this session to skip mode reset for ExitPlanMode
                                 self._exitplanmode_with_setmode[session_id] = True
                                 coord_logger.info(f"ExitPlanMode for session {session_id} had setMode applied - will skip auto-reset")
+
+                # Log turn-level errors from ResultMessage.errors
+                if parsed_message.type.value == 'result' and parsed_message.metadata:
+                    errors = parsed_message.metadata.get('errors')
+                    if errors:
+                        coord_logger.warning(
+                            f"Turn completed with {len(errors)} error(s) for session {session_id}: {errors}"
+                        )
 
                 # Check if this message indicates processing completion
                 if parsed_message.type.value == 'result':
