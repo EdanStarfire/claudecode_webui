@@ -220,7 +220,7 @@ def configure_logging(
             'file': f"{log_dir}/coordinator.log",
             'enabled': True,  # Always enabled
             'console': True,  # Always to console
-            'level': logging.INFO
+            'level': logging.DEBUG if debug_all else logging.INFO
         },
         'storage': {
             'file': f"{log_dir}/storage.log",
