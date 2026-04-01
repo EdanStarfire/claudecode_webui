@@ -17,6 +17,19 @@
       <span class="activity-timestamp">{{ activityTime }}</span>
     </div>
 
+    <!-- Issue #975: Subagent Prompt (collapsed by default) -->
+    <div v-if="!collapsed && prompt" class="subagent-prompt">
+      <div class="prompt-toggle" @click.stop="promptCollapsed = !promptCollapsed">
+        <svg class="prompt-chevron" :class="{ expanded: !promptCollapsed }" width="10" height="10" viewBox="0 0 12 12">
+          <path d="M4.5 2L8.5 6L4.5 10" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+        </svg>
+        Subagent Prompt
+        <span class="prompt-length">({{ prompt.length }} chars)</span>
+        <a v-if="prompt.length > 500" class="view-full-link" @click.stop="openFullPrompt">View Full</a>
+      </div>
+      <pre v-if="!promptCollapsed" class="prompt-content">{{ promptDisplay }}</pre>
+    </div>
+
     <div v-if="!collapsed" class="subagent-body">
       <!-- Child tools timeline -->
       <ActivityTimeline
@@ -72,6 +85,20 @@ const sessionStore = useSessionStore()
 const resourceStore = useResourceStore()
 const collapsed = ref(false)
 const resultCollapsed = ref(true)
+const promptCollapsed = ref(true)
+
+const prompt = computed(() => {
+  return props.taskToolCall.input?.prompt || null
+})
+
+const promptDisplay = computed(() => {
+  if (!prompt.value) return ''
+  return prompt.value.length > 500 ? prompt.value.slice(0, 500) + '...' : prompt.value
+})
+
+function openFullPrompt() {
+  resourceStore.openWithDirectContent('Subagent Prompt', prompt.value)
+}
 
 // Extract Task tool metadata
 const subagentType = computed(() => {
@@ -432,6 +459,60 @@ function openFullResult() {
 
 .view-full-link:hover {
   text-decoration: underline;
+}
+
+.subagent-prompt {
+  margin: 0;
+  border-top: 1px solid #d8b4fe;
+  overflow: hidden;
+}
+
+.prompt-toggle {
+  padding: 4px 12px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #7c3aed;
+  background: #f5f3ff;
+  cursor: pointer;
+  user-select: none;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.prompt-toggle:hover {
+  background: #ede9fe;
+}
+
+.prompt-chevron {
+  color: #7c3aed;
+  flex-shrink: 0;
+  transition: transform 0.2s ease;
+}
+
+.prompt-chevron.expanded {
+  transform: rotate(90deg);
+}
+
+.prompt-length {
+  color: #a78bfa;
+  font-weight: 400;
+  font-style: italic;
+}
+
+.prompt-content {
+  margin: 0;
+  padding: 8px 12px;
+  font-family: 'Courier New', monospace;
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 200px;
+  overflow-y: auto;
+  line-height: 1.4;
+  color: #334155;
+  background: #faf5ff;
+  border-top: 1px solid #ede9fe;
 }
 
 /* Status-specific border colors */
