@@ -1206,8 +1206,7 @@ class SessionCoordinator:
             # else:
             #     logger.info(f"NOT calling _send_client_launched_message for session {session_id} because sdk_was_created = False")
 
-            coord_logger.info(f"Session {session_id} started")
-            await self._notify_state_change(session_id, SessionState.ACTIVE)
+            coord_logger.info(f"Session {session_id} SDK task started - state will update to ACTIVE when SDK is ready")
             return True
 
         except Exception as e:
@@ -1695,6 +1694,15 @@ class SessionCoordinator:
         """
         descendants = await self._get_all_descendants(session_id)
         return len(descendants)
+
+    async def wait_for_session_ready(self, session_id: str, timeout: float = 60.0) -> bool:
+        """Wait until session's SDK is ready to accept messages."""
+        sdk = self._active_sdks.get(session_id)
+        if not sdk:
+            return False
+        if sdk.is_running():
+            return True
+        return await sdk.wait_until_ready(timeout=timeout)
 
     async def send_message(self, session_id: str, message: str, metadata: dict | None = None) -> bool:
         """Send a message through the integrated pipeline"""

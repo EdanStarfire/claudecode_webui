@@ -233,6 +233,7 @@ class ClaudeSDK:
 
         # Control
         self._shutdown_event = asyncio.Event()
+        self._ready_event = asyncio.Event()
 
         # Claude Code's actual session ID (captured from init message)
         self._claude_code_session_id: str | None = None
@@ -306,6 +307,7 @@ class ClaudeSDK:
 
             # Reset shutdown event to ensure clean start (fixes resumed session disconnect loops)
             self._shutdown_event.clear()
+            self._ready_event.clear()
 
             self.info.state = SessionState.STARTING
             self.info.start_time = time.time()
@@ -598,6 +600,7 @@ class ClaudeSDK:
 
                 # NOW the SDK is truly ready - change session state to RUNNING
                 self.info.state = SessionState.RUNNING
+                self._ready_event.set()  # Signal readiness to waiting comm_router callers
                 sdk_logger.info(f"Session {self.session_id} state changed to RUNNING")
 
                 # Also notify session manager that SDK is ready
@@ -769,6 +772,7 @@ class ClaudeSDK:
                 logger.exception("Health check failed during fatal error handling")
 
             self.info.state = SessionState.FAILED
+            self._ready_event.set()  # Unblock any waiters even on fatal failure
             # Include buffered stderr in error message (issue #517)
             error_msg = str(e)
             # Issue #781: Parse container exit codes for actionable error reporting
@@ -1416,6 +1420,14 @@ class ClaudeSDK:
     def is_running(self) -> bool:
         """Check if the session is currently running."""
         return self.info.state in [SessionState.RUNNING, SessionState.PROCESSING]
+
+    async def wait_until_ready(self, timeout: float = 60.0) -> bool:
+        """Wait until SDK is ready to accept messages. Returns False on timeout."""
+        try:
+            await asyncio.wait_for(self._ready_event.wait(), timeout=timeout)
+            return True
+        except TimeoutError:
+            return False
 
     def _perform_session_health_check(self, client: ClaudeSDKClient | None = None) -> dict[str, Any]:
         """
