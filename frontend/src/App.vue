@@ -142,8 +142,7 @@ onMounted(async () => {
 })
 
 async function onAuthenticated() {
-  showAuthPrompt.value = false
-  initializeApp()
+  window.location.reload()
 }
 
 async function initializeApp() {
