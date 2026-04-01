@@ -10,7 +10,6 @@ Responsibilities:
 - Parse #minion-name tags for explicit references
 """
 
-import asyncio
 import json
 import re
 import uuid
@@ -224,7 +223,26 @@ class CommRouter:
 
             # Auto-start minion if not active
             from src.session_manager import SessionState
-            if target_minion.state not in [SessionState.ACTIVE, SessionState.STARTING]:
+            if target_minion.state == SessionState.STARTING:
+                # Session is starting but SDK may not be ready yet — wait for readiness
+                legion_logger.info(
+                    f"Target minion {comm.to_minion_id} is STARTING - waiting for SDK readiness"
+                )
+                ready = await self.system.session_coordinator.wait_for_session_ready(
+                    comm.to_minion_id, timeout=60.0
+                )
+                if not ready:
+                    legion_logger.error(
+                        f"Minion {comm.to_minion_id} did not become ready within timeout"
+                    )
+                    if comm.from_minion_id:
+                        await self._send_system_error_comm(
+                            to_minion_id=comm.from_minion_id,
+                            error_message="Failed to deliver message: Minion did not become ready within 60 seconds",
+                            original_comm_id=comm.comm_id
+                        )
+                    return False
+            elif target_minion.state not in [SessionState.ACTIVE]:
                 legion_logger.info(f"Target minion {comm.to_minion_id} is in {target_minion.state} state - auto-starting")
 
                 # Register WebSocket message callback before starting
@@ -260,29 +278,21 @@ class CommRouter:
                         )
                     return False
 
-                # Wait for session to become active (with timeout)
-                max_wait = 30  # 30 seconds timeout
-                wait_interval = 0.5
-                elapsed = 0
-
-                while elapsed < max_wait:
+                # Wait for session to become ready (event-based, no polling)
+                ready = await self.system.session_coordinator.wait_for_session_ready(
+                    comm.to_minion_id, timeout=30.0
+                )
+                if not ready:
                     session_info = await self.system.session_coordinator.session_manager.get_session_info(comm.to_minion_id)
-                    if session_info and session_info.state == SessionState.ACTIVE:
-                        legion_logger.info(f"Minion {comm.to_minion_id} is now active after {elapsed}s")
-                        break
-
-                    await asyncio.sleep(wait_interval)
-                    elapsed += wait_interval
-                else:
-                    legion_logger.warning(f"Minion {comm.to_minion_id} did not become active within {max_wait}s - sending error to sender")
-                    # Send timeout error comm back to sender
+                    legion_logger.warning(f"Minion {comm.to_minion_id} did not become ready within 30s - sending error to sender")
                     if comm.from_minion_id:
                         await self._send_system_error_comm(
                             to_minion_id=comm.from_minion_id,
-                            error_message=f"Failed to deliver message: Target minion did not start within {max_wait} seconds (state: {session_info.state if session_info else 'unknown'})",
+                            error_message=f"Failed to deliver message: Target minion did not start within 30 seconds (state: {session_info.state if session_info else 'unknown'})",
                             original_comm_id=comm.comm_id
                         )
                     return False
+                legion_logger.info(f"Minion {comm.to_minion_id} is now ready")
 
             # Get sender name for formatting
             # Use "Minion #user" to signal that replies should use send_comm MCP tool
@@ -424,11 +434,22 @@ class CommRouter:
                 # Fall through to send_message below
 
             # Send message to target minion via SessionCoordinator (PIVOT and NORMAL)
-            await self.system.session_coordinator.send_message(
+            success = await self.system.session_coordinator.send_message(
                 session_id=comm.to_minion_id,
                 message=formatted_message,
                 metadata=comm_metadata
             )
+            if not success:
+                legion_logger.error(
+                    f"Failed to deliver comm {comm.comm_id} to minion {comm.to_minion_id} - send_message returned False"
+                )
+                if comm.from_minion_id:
+                    await self._send_system_error_comm(
+                        to_minion_id=comm.from_minion_id,
+                        error_message="Failed to deliver message: SDK rejected the message",
+                        original_comm_id=comm.comm_id
+                    )
+                return False
 
             legion_logger.info(f"Delivered comm {comm.comm_id} from {from_name} to minion {comm.to_minion_id}")
             return True
