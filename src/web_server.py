@@ -953,14 +953,26 @@ class ClaudeWebUI:
         )
         @handle_exceptions("get archive resources")
         async def get_archive_resources(
-            project_id: str, session_id: str, archive_id: str,
-            limit: int = 100, offset: int = 0
+            project_id: str,
+            session_id: str,
+            archive_id: str,
+            limit: int = 50,
+            offset: int = 0,
+            search: str | None = None,
+            format_filter: str | None = None,
+            sort: str = "newest",
         ):
-            """List resource metadata from an archive, paginated."""
+            """List resource metadata from an archive, paginated with optional filter/sort."""
             if not await self.service.validate_project_exists(project_id):
                 raise HTTPException(status_code=404, detail="Project not found")
             return await self.coordinator.get_archive_resources(
-                session_id, archive_id, limit=limit, offset=offset
+                session_id,
+                archive_id,
+                limit=limit,
+                offset=offset,
+                search=search,
+                format_filter=format_filter,
+                sort=sort,
             )
 
         @self.app.get(
@@ -1432,11 +1444,25 @@ class ClaudeWebUI:
         # Issue #404: Resource gallery endpoints
         @self.app.get("/api/sessions/{session_id}/resources")
         @handle_exceptions("get session resources")
-        async def get_session_resources(session_id: str, limit: int = 100, offset: int = 0):
-            """Get resource metadata for a session, paginated"""
+        async def get_session_resources(
+            session_id: str,
+            limit: int = 50,
+            offset: int = 0,
+            search: str | None = None,
+            format_filter: str | None = None,
+            sort: str = "newest",
+        ):
+            """Get resource metadata for a session, paginated with optional filter/sort"""
             if not await self.service.get_session_exists(session_id):
                 raise HTTPException(status_code=404, detail="Session not found")
-            return await self.coordinator.get_session_resources(session_id, limit=limit, offset=offset)
+            return await self.coordinator.get_session_resources(
+                session_id,
+                limit=limit,
+                offset=offset,
+                search=search,
+                format_filter=format_filter,
+                sort=sort,
+            )
 
         @self.app.get("/api/sessions/{session_id}/resources/{resource_id}")
         @handle_exceptions("get session resource")

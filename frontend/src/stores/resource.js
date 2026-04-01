@@ -13,6 +13,8 @@ import { IMAGE_EXTENSIONS, FILE_TYPE_ICONS } from '../utils/fileTypes'
  * - Full view modal state for images
  * - Navigation between resources
  * - Download functionality for all resource types
+ *
+ * Issue #972: Added server-side pagination, filtering, and sorting.
  */
 
 export const useResourceStore = defineStore('resource', () => {
@@ -21,6 +23,12 @@ export const useResourceStore = defineStore('resource', () => {
   // Resources per session (sessionId -> Array<ResourceMetadata>)
   // ResourceMetadata shape: { resource_id, session_id, title, description, format, size_bytes, timestamp, file_path, original_filename }
   const resourcesBySession = ref(new Map())
+
+  // Pagination state per session (sessionId -> { total, hasMore, loading, offset })
+  const paginationBySession = ref(new Map())
+
+  // Current filter/sort state (shared across all sessions — resets on session switch)
+  const currentFilter = ref({ search: '', formatFilter: '', sort: 'newest' })
 
   // Full view modal state (for images)
   const fullViewOpen = ref(false)
@@ -31,7 +39,7 @@ export const useResourceStore = defineStore('resource', () => {
   const directContent = ref(null)
   const directTitle = ref(null)
 
-  // Loading state
+  // Loading state (legacy global; per-session loading is in paginationBySession)
   const loading = ref(false)
 
   // Text content cache (resourceId -> { content, loading, error })
@@ -123,18 +131,14 @@ export const useResourceStore = defineStore('resource', () => {
   // ========== COMPUTED ==========
 
   /**
-   * Get resources for a specific session as a sorted array
+   * Get resources for a specific session as an array
    */
   function resourcesForSession(sessionId) {
-    const resources = resourcesBySession.value.get(sessionId)
-    if (!resources) return []
-
-    // Already sorted by timestamp during load/add
-    return resources
+    return resourcesBySession.value.get(sessionId) || []
   }
 
   /**
-   * Get resource count for a session
+   * Get resource count for a session (loaded count, not total)
    */
   function resourceCount(sessionId) {
     return resourcesBySession.value.get(sessionId)?.length || 0
@@ -145,6 +149,13 @@ export const useResourceStore = defineStore('resource', () => {
    */
   function hasResources(sessionId) {
     return resourceCount(sessionId) > 0
+  }
+
+  /**
+   * Get pagination state for a session
+   */
+  function paginationForSession(sessionId) {
+    return paginationBySession.value.get(sessionId) || { total: 0, hasMore: false, loading: false, offset: 0 }
   }
 
   /**
@@ -191,6 +202,14 @@ export const useResourceStore = defineStore('resource', () => {
     return currentResourceCount.value > 0
   })
 
+  /**
+   * Current session pagination state (computed)
+   */
+  const currentPagination = computed(() => {
+    const sessionStore = useSessionStore()
+    return paginationForSession(sessionStore.currentSessionId)
+  })
+
   // Backward compatibility aliases
   const currentImages = computed(() => {
     return currentResources.value.filter(isImageResource)
@@ -230,30 +249,66 @@ export const useResourceStore = defineStore('resource', () => {
   // ========== ACTIONS ==========
 
   /**
-   * Load resources for a session from the backend
+   * Load resources for a session from the backend.
+   * Issue #972: Supports pagination (append mode) and passes current filter/sort to server.
    */
-  async function loadResources(sessionId) {
+  async function loadResources(sessionId, { append = false } = {}) {
     if (!sessionId) return
 
+    const existing = paginationBySession.value.get(sessionId) || { total: 0, hasMore: false, loading: false, offset: 0 }
+    if (existing.loading) return
+
+    // Mark loading
+    paginationBySession.value.set(sessionId, { ...existing, loading: true })
+    paginationBySession.value = new Map(paginationBySession.value)
     loading.value = true
+
+    const offset = append ? (resourcesBySession.value.get(sessionId)?.length || 0) : 0
+    const limit = 50
+
+    const params = { limit, offset, sort: currentFilter.value.sort }
+    if (currentFilter.value.search) params.search = currentFilter.value.search
+    if (currentFilter.value.formatFilter) params.format_filter = currentFilter.value.formatFilter
+
     try {
-      const response = await apiGet(`/api/sessions/${sessionId}/resources`)
-      const resources = response.resources || []
+      const ctx = archiveContext.value.get(sessionId)
+      let response
+      if (ctx) {
+        response = await apiGet(
+          `/api/projects/${ctx.projectId}/archives/${sessionId}/${ctx.archiveId}/resources`,
+          { params }
+        )
+      } else {
+        response = await apiGet(`/api/sessions/${sessionId}/resources`, { params })
+      }
 
-      // Sort by timestamp (oldest first)
-      resources.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0))
+      const newResources = response.resources || []
 
-      resourcesBySession.value.set(sessionId, resources)
-
-      // Trigger reactivity
+      if (append) {
+        const prev = resourcesBySession.value.get(sessionId) || []
+        resourcesBySession.value.set(sessionId, [...prev, ...newResources])
+      } else {
+        resourcesBySession.value.set(sessionId, newResources)
+      }
       resourcesBySession.value = new Map(resourcesBySession.value)
 
-      console.log(`Loaded ${resources.length} resources for session ${sessionId}`)
+      paginationBySession.value.set(sessionId, {
+        total: response.total ?? newResources.length,
+        hasMore: response.has_more ?? false,
+        loading: false,
+        offset: offset + newResources.length,
+      })
+      paginationBySession.value = new Map(paginationBySession.value)
+
+      console.log(`Loaded ${newResources.length} resources for session ${sessionId} (total ${response.total})`)
     } catch (error) {
       console.error(`Failed to load resources for session ${sessionId}:`, error)
-      // Set empty array to prevent repeated loading attempts
-      resourcesBySession.value.set(sessionId, [])
-      resourcesBySession.value = new Map(resourcesBySession.value)
+      if (!append) {
+        resourcesBySession.value.set(sessionId, [])
+        resourcesBySession.value = new Map(resourcesBySession.value)
+      }
+      paginationBySession.value.set(sessionId, { ...existing, loading: false })
+      paginationBySession.value = new Map(paginationBySession.value)
     } finally {
       loading.value = false
     }
@@ -263,35 +318,38 @@ export const useResourceStore = defineStore('resource', () => {
   const loadImages = loadResources
 
   /**
-   * Load resources for an archived session from the archive endpoint
+   * Load more resources (append next page).
+   * Issue #972: Called by Load More button in ResourceGallery.
+   */
+  async function loadMore(sessionId) {
+    await loadResources(sessionId, { append: true })
+  }
+
+  /**
+   * Apply a filter/sort and reload from scratch.
+   * Issue #972: Called when search, formatFilter, or sort changes.
+   */
+  async function applyFilter(sessionId, { search, formatFilter, sort } = {}) {
+    currentFilter.value = {
+      search: search ?? '',
+      formatFilter: formatFilter ?? '',
+      sort: sort ?? 'newest',
+    }
+    await loadResources(sessionId)
+  }
+
+  /**
+   * Load resources for an archived session from the archive endpoint.
+   * Issue #972: Uses unified loadResources() with archive context set.
    */
   async function loadArchiveResources(sessionId, projectId, archiveId) {
     if (!sessionId || !projectId || !archiveId) return
 
-    loading.value = true
-    try {
-      const response = await apiGet(
-        `/api/projects/${projectId}/archives/${sessionId}/${archiveId}/resources`
-      )
-      const resources = response.resources || []
+    // Store archive context so loadResources() builds the correct URL
+    archiveContext.value.set(sessionId, { projectId, archiveId })
+    archiveContext.value = new Map(archiveContext.value)
 
-      resources.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0))
-
-      resourcesBySession.value.set(sessionId, resources)
-      resourcesBySession.value = new Map(resourcesBySession.value)
-
-      // Store archive context so getResourceUrl can build correct URLs
-      archiveContext.value.set(sessionId, { projectId, archiveId })
-      archiveContext.value = new Map(archiveContext.value)
-
-      console.log(`Loaded ${resources.length} archived resources for session ${sessionId}`)
-    } catch (error) {
-      console.error(`Failed to load archive resources for session ${sessionId}:`, error)
-      resourcesBySession.value.set(sessionId, [])
-      resourcesBySession.value = new Map(resourcesBySession.value)
-    } finally {
-      loading.value = false
-    }
+    await loadResources(sessionId)
   }
 
   /**
@@ -303,32 +361,41 @@ export const useResourceStore = defineStore('resource', () => {
   }
 
   /**
-   * Add a new resource from WebSocket resource_registered event
+   * Add a new resource from WebSocket resource_registered event.
+   * Issue #972: Increments total; only prepends if no active filter (or resource matches filter).
    */
   function addResource(sessionId, resourceMetadata) {
     if (!sessionId || !resourceMetadata) return
 
-    let resources = resourcesBySession.value.get(sessionId)
-    if (!resources) {
-      resources = []
-      resourcesBySession.value.set(sessionId, resources)
-    }
-
     // Check if resource already exists (prevent duplicates)
-    const existingIndex = resources.findIndex(r => r.resource_id === resourceMetadata.resource_id)
+    const existing = resourcesBySession.value.get(sessionId) || []
+    const existingIndex = existing.findIndex(r => r.resource_id === resourceMetadata.resource_id)
+
+    const hasActiveFilter = currentFilter.value.search || currentFilter.value.formatFilter
+
     if (existingIndex >= 0) {
       // Update existing
-      resources[existingIndex] = resourceMetadata
+      existing[existingIndex] = resourceMetadata
+      resourcesBySession.value = new Map(resourcesBySession.value)
+    } else if (!hasActiveFilter) {
+      // No active filter: prepend (newest first to match default sort)
+      resourcesBySession.value.set(sessionId, [resourceMetadata, ...existing])
+      resourcesBySession.value = new Map(resourcesBySession.value)
+
+      // Increment total
+      const pagination = paginationBySession.value.get(sessionId)
+      if (pagination) {
+        paginationBySession.value.set(sessionId, { ...pagination, total: pagination.total + 1 })
+        paginationBySession.value = new Map(paginationBySession.value)
+      }
     } else {
-      // Add new
-      resources.push(resourceMetadata)
+      // Active filter: only increment total count (resource may or may not match)
+      const pagination = paginationBySession.value.get(sessionId)
+      if (pagination) {
+        paginationBySession.value.set(sessionId, { ...pagination, total: pagination.total + 1 })
+        paginationBySession.value = new Map(paginationBySession.value)
+      }
     }
-
-    // Sort by timestamp
-    resources.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0))
-
-    // Trigger reactivity
-    resourcesBySession.value = new Map(resourcesBySession.value)
 
     console.log(`Added resource ${resourceMetadata.resource_id} to session ${sessionId}`)
   }
@@ -450,9 +517,10 @@ export const useResourceStore = defineStore('resource', () => {
    */
   function clearResources(sessionId) {
     resourcesBySession.value.delete(sessionId)
-
-    // Trigger reactivity
     resourcesBySession.value = new Map(resourcesBySession.value)
+
+    paginationBySession.value.delete(sessionId)
+    paginationBySession.value = new Map(paginationBySession.value)
 
     // Close full view if viewing this session
     if (fullViewSessionId.value === sessionId) {
@@ -503,6 +571,13 @@ export const useResourceStore = defineStore('resource', () => {
 
     // Trigger reactivity
     resourcesBySession.value = new Map(resourcesBySession.value)
+
+    // Decrement total count
+    const pagination = paginationBySession.value.get(sessionId)
+    if (pagination && pagination.total > 0) {
+      paginationBySession.value.set(sessionId, { ...pagination, total: pagination.total - 1 })
+      paginationBySession.value = new Map(paginationBySession.value)
+    }
 
     // Adjust full view index if viewing this session
     if (fullViewOpen.value && fullViewSessionId.value === sessionId) {
@@ -600,6 +675,8 @@ export const useResourceStore = defineStore('resource', () => {
   return {
     // State
     resourcesBySession,
+    paginationBySession,
+    currentFilter,
     fullViewOpen,
     currentResourceIndex,
     fullViewSessionId,
@@ -612,6 +689,7 @@ export const useResourceStore = defineStore('resource', () => {
     currentResources,
     currentResourceCount,
     currentHasResources,
+    currentPagination,
     currentFullViewResource,
     fullViewTotalResources,
     isDirectContentMode,
@@ -630,6 +708,7 @@ export const useResourceStore = defineStore('resource', () => {
     resourcesForSession,
     resourceCount,
     hasResources,
+    paginationForSession,
     getResourceUrl,
     getDownloadUrl,
     isImageResource,
@@ -647,6 +726,8 @@ export const useResourceStore = defineStore('resource', () => {
 
     // Actions
     loadResources,
+    loadMore,
+    applyFilter,
     loadArchiveResources,
     clearArchiveContext,
     addResource,

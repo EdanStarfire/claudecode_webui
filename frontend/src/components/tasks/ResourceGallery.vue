@@ -1,7 +1,7 @@
 <template>
   <div class="resource-gallery-panel">
-    <!-- Controls bar: search + sort + view toggle -->
-    <div v-if="resources.length > 0" class="gallery-controls">
+    <!-- Controls bar: search + type filter + sort + view toggle -->
+    <div class="gallery-controls">
       <!-- Search -->
       <input
         v-model="searchQuery"
@@ -10,6 +10,12 @@
         placeholder="Filter…"
         aria-label="Filter resources"
       />
+      <!-- Type filter -->
+      <select v-model="typeFilter" class="gallery-sort" aria-label="Filter by type">
+        <option value="">All</option>
+        <option value="image">Images</option>
+        <option value="text">Text</option>
+      </select>
       <!-- Sort -->
       <select v-model="sortOrder" class="gallery-sort" aria-label="Sort resources">
         <option value="newest">Newest</option>
@@ -44,18 +50,24 @@
 
     <!-- Resource Grid / List -->
     <div class="resource-grid-container p-2">
-      <div v-if="resources.length === 0" class="empty-placeholder">
+      <!-- Initial loading spinner -->
+      <div v-if="pagination.loading && resources.length === 0" class="empty-placeholder">
+        <span class="spinner-border spinner-border-sm me-1" role="status"></span>
+        Loading…
+      </div>
+
+      <div v-else-if="resources.length === 0 && !hasActiveFilter" class="empty-placeholder">
         <span>Resources shared by the agent will appear here</span>
       </div>
 
-      <div v-else-if="filteredResources.length === 0" class="empty-placeholder">
-        <span>No resources match "{{ searchQuery }}"</span>
+      <div v-else-if="resources.length === 0 && hasActiveFilter" class="empty-placeholder">
+        <span>No resources match your filters</span>
       </div>
 
       <!-- Gallery View -->
       <div v-else-if="viewMode === 'gallery'" class="resource-grid">
         <div
-          v-for="resource in filteredResources"
+          v-for="resource in resources"
           :key="resource.resource_id"
           class="resource-item"
           :class="{ 'is-image': isImage(resource) }"
@@ -135,7 +147,7 @@
       <!-- List View (Issue #523) -->
       <div v-else class="resource-list">
         <div
-          v-for="resource in filteredResources"
+          v-for="resource in resources"
           :key="resource.resource_id"
           class="resource-list-item"
           @click="openFullViewForResource(resource)"
@@ -178,6 +190,21 @@
           </div>
         </div>
       </div>
+
+      <!-- Load More button (Issue #972) -->
+      <div v-if="pagination.hasMore" class="text-center mt-3 mb-2">
+        <button
+          class="btn btn-outline-secondary btn-sm"
+          :disabled="pagination.loading"
+          @click="loadMoreResources"
+        >
+          <span v-if="pagination.loading">
+            <span class="spinner-border spinner-border-sm me-1" role="status"></span>
+            Loading…
+          </span>
+          <span v-else>Load More ({{ resources.length }} of {{ pagination.total }})</span>
+        </button>
+      </div>
     </div>
   </div>
 </template>
@@ -209,6 +236,7 @@ defineExpose({ viewMode, setViewMode })
 
 // Filter state — resets on session switch
 const searchQuery = ref('')
+const typeFilter = ref('')
 
 // Sort state — persists across sessions (like viewMode)
 const sortOrder = ref(localStorage.getItem('resource-sort-preference') || 'newest')
@@ -217,48 +245,50 @@ watch(sortOrder, (val) => {
   localStorage.setItem('resource-sort-preference', val)
 })
 
-watch(() => sessionStore.currentSessionId, () => {
+// Debounce timer for search
+let searchTimer = null
+
+// On session switch: reset filters and reload
+watch(() => sessionStore.currentSessionId, (newId) => {
   searchQuery.value = ''
+  typeFilter.value = ''
+  if (newId) {
+    resourceStore.applyFilter(newId, { search: '', formatFilter: '', sort: sortOrder.value })
+  }
+})
+
+// Debounced server-side search
+watch(searchQuery, (val) => {
+  clearTimeout(searchTimer)
+  searchTimer = setTimeout(() => {
+    const sid = sessionStore.currentSessionId
+    if (sid) {
+      resourceStore.applyFilter(sid, { search: val, formatFilter: typeFilter.value, sort: sortOrder.value })
+    }
+  }, 300)
+})
+
+// Immediate filter for type and sort
+watch(typeFilter, (val) => {
+  const sid = sessionStore.currentSessionId
+  if (sid) {
+    resourceStore.applyFilter(sid, { search: searchQuery.value, formatFilter: val, sort: sortOrder.value })
+  }
+})
+
+watch(sortOrder, (val) => {
+  const sid = sessionStore.currentSessionId
+  if (sid) {
+    resourceStore.applyFilter(sid, { search: searchQuery.value, formatFilter: typeFilter.value, sort: val })
+  }
 })
 
 // Computed properties
 const resources = computed(() => resourceStore.currentResources)
+const pagination = computed(() => resourceStore.currentPagination)
 
-/**
- * Filter by search query and apply sort order.
- * Store baseline order is timestamp ascending (oldest first).
- */
-const filteredResources = computed(() => {
-  let list = resources.value
-
-  // Filter by title / filename
-  const q = searchQuery.value.trim().toLowerCase()
-  if (q) {
-    list = list.filter((r) => {
-      const name = (r.title || r.original_filename || '').toLowerCase()
-      return name.includes(q)
-    })
-  }
-
-  // Sort
-  if (sortOrder.value === 'newest') {
-    list = [...list].reverse()
-  } else if (sortOrder.value === 'name-asc') {
-    list = [...list].sort((a, b) => {
-      const na = (a.title || a.original_filename || '').toLowerCase()
-      const nb = (b.title || b.original_filename || '').toLowerCase()
-      return na.localeCompare(nb)
-    })
-  } else if (sortOrder.value === 'name-desc') {
-    list = [...list].sort((a, b) => {
-      const na = (a.title || a.original_filename || '').toLowerCase()
-      const nb = (b.title || b.original_filename || '').toLowerCase()
-      return nb.localeCompare(na)
-    })
-  }
-  // sortOrder === 'oldest' → store baseline order (timestamp ascending) as-is
-
-  return list
+const hasActiveFilter = computed(() => {
+  return !!(searchQuery.value.trim() || typeFilter.value)
 })
 
 function isImage(resource) {
@@ -283,8 +313,8 @@ function getDownloadUrl(resourceId) {
 }
 
 /**
- * Open full view using the resource's index in the unfiltered store array so
- * next/prev navigation covers all resources regardless of active filters.
+ * Open full view using the resource's index in the store array so
+ * next/prev navigation covers all loaded resources.
  */
 function openFullViewForResource(resource) {
   const storeIndex = resources.value.findIndex((r) => r.resource_id === resource.resource_id)
@@ -311,6 +341,13 @@ function addToAttachments(resource) {
     addAttachmentFromResource(resource)
   } else {
     console.warn('addAttachmentFromResource not provided')
+  }
+}
+
+function loadMoreResources() {
+  const sid = sessionStore.currentSessionId
+  if (sid) {
+    resourceStore.loadMore(sid)
   }
 }
 </script>
@@ -478,7 +515,7 @@ function addToAttachments(resource) {
   display: block;
 }
 
-/* Controls bar: search + sort + view toggle */
+/* Controls bar: search + type filter + sort + view toggle */
 .gallery-controls {
   display: flex;
   align-items: center;
