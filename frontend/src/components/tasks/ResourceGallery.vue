@@ -48,13 +48,6 @@
       </button>
     </div>
 
-    <!-- Total count bar -->
-    <div v-if="pagination.total > 0 || resources.length > 0" class="gallery-count-bar">
-      <span class="count-label">
-        {{ pagination.total > 0 ? pagination.total : resources.length }} resource{{ (pagination.total !== 1 && resources.length !== 1) ? 's' : '' }}
-      </span>
-    </div>
-
     <!-- Resource Grid / List -->
     <div class="resource-grid-container p-2">
       <!-- Initial loading spinner -->
@@ -564,15 +557,6 @@ function loadMoreResources() {
 
 .gallery-sort:focus {
   border-color: #3b82f6;
-}
-
-/* Issue #972: Total count bar */
-.gallery-count-bar {
-  padding: 2px 8px;
-  font-size: 0.7rem;
-  color: #94a3b8;
-  border-bottom: 1px solid #e2e8f0;
-  flex-shrink: 0;
 }
 
 /* Issue #523: View toggle */

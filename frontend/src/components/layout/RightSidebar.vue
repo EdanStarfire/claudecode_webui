@@ -79,7 +79,10 @@ const activeTab = computed(() => uiStore.rightSidebarActiveTab)
 
 // Badge counts
 const taskStats = computed(() => taskStore.currentTaskStats)
-const resourceCount = computed(() => resourceStore.currentResourceCount)
+const resourceCount = computed(() => {
+  const total = resourceStore.currentPagination.total
+  return total > 0 ? total : resourceStore.currentResourceCount
+})
 const diffFileCount = computed(() => diffStore.fileCount)
 const schedulesCount = computed(() => {
   const projectId = sessionStore.currentSession?.project_id
