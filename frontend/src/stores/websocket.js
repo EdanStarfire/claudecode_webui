@@ -374,6 +374,17 @@ export const useWebSocketStore = defineStore('websocket', () => {
         break
       }
 
+      case 'mcp_oauth_refreshed': {
+        // Issue #976: Background refresh succeeded — update status indicator
+        const serverId = payload.server_id
+        if (serverId) {
+          import('./mcpConfig').then(({ useMcpConfigStore }) => {
+            useMcpConfigStore().fetchOAuthStatus(serverId)
+          })
+        }
+        break
+      }
+
       case 'schedule_updated':
         import('./schedule').then(({ useScheduleStore }) => {
           const scheduleStore = useScheduleStore()

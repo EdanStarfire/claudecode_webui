@@ -49,9 +49,11 @@ class FernetTokenStore:
         self._tokens_dir = data_dir / "oauth_tokens"
         self._clients_dir = data_dir / "oauth_clients"
         self._expiry_dir = data_dir / "oauth_expiry"
+        self._endpoints_dir = data_dir / "oauth_endpoints"
         self._tokens_dir.mkdir(parents=True, exist_ok=True)
         self._clients_dir.mkdir(parents=True, exist_ok=True)
         self._expiry_dir.mkdir(parents=True, exist_ok=True)
+        self._endpoints_dir.mkdir(parents=True, exist_ok=True)
         self._fernet = Fernet(self._get_or_create_key())
 
     def _get_or_create_key(self) -> bytes:
@@ -121,12 +123,26 @@ class FernetTokenStore:
         encrypted = self._fernet.encrypt(client_info.model_dump_json().encode())
         client_file.write_bytes(encrypted)
 
+    def set_token_endpoint(self, token_endpoint: str) -> None:
+        """Persist the token endpoint URL for this server (plaintext — not a secret)."""
+        endpoint_file = self._endpoints_dir / f"{self._server_id}.endpoint"
+        endpoint_file.write_text(token_endpoint)
+
+    def get_token_endpoint(self) -> str | None:
+        """Return the stored token endpoint URL, or None if not recorded."""
+        endpoint_file = self._endpoints_dir / f"{self._server_id}.endpoint"
+        if not endpoint_file.exists():
+            return None
+        text = endpoint_file.read_text().strip()
+        return text if text else None
+
     async def clear(self) -> None:
-        """Delete all stored data (tokens + client info + expiry) for this server."""
+        """Delete all stored data (tokens + client info + expiry + endpoint) for this server."""
         for f in (
             self._tokens_dir / f"{self._server_id}.enc",
             self._clients_dir / f"{self._server_id}.enc",
             self._expiry_dir / f"{self._server_id}.expiry",
+            self._endpoints_dir / f"{self._server_id}.endpoint",
         ):
             if f.exists():
                 f.unlink()
@@ -337,8 +353,85 @@ class OAuthFlowManager:
 
         store = self.get_token_store(server_id)
         await store.set_tokens(token)
+        # Issue #976: Persist token endpoint so refresh_token() can use it later.
+        store.set_token_endpoint(token_endpoint)
         logger.info("OAuth flow complete for MCP server %s", server_id)
         return server_id
+
+    async def refresh_token(self, server_id: str) -> OAuthToken | None:
+        """Refresh the OAuth access token for a server using the stored refresh token.
+
+        Implements RFC 6749 §6. If the refresh response includes a new refresh_token
+        it replaces the old one; otherwise the original refresh_token is preserved.
+
+        Returns the new OAuthToken on success, or None if refresh is not possible
+        (no stored token/refresh_token, no persisted endpoint, or server rejected the
+        refresh — in which case stored tokens are cleared so the user must re-authenticate).
+        """
+        store = self.get_token_store(server_id)
+
+        # Read stored token
+        token = await store.get_tokens()
+        if token is None:
+            logger.debug("No stored token for MCP server %s — cannot refresh", server_id)
+            return None
+        if not token.refresh_token:
+            logger.debug("No refresh_token for MCP server %s — cannot refresh", server_id)
+            return None
+
+        # Read stored client info for client_id
+        client_info = await store.get_client_info()
+        if client_info is None:
+            logger.warning("No stored client info for MCP server %s — cannot refresh", server_id)
+            return None
+
+        # Retrieve persisted token endpoint
+        token_endpoint = store.get_token_endpoint()
+        if not token_endpoint:
+            logger.warning(
+                "No stored token endpoint for MCP server %s — cannot refresh", server_id
+            )
+            return None
+
+        refresh_data = {
+            "grant_type": "refresh_token",
+            "refresh_token": token.refresh_token,
+            "client_id": client_info.client_id,
+        }
+        headers = {"Content-Type": "application/x-www-form-urlencoded"}
+
+        try:
+            async with httpx.AsyncClient() as http:
+                resp = await http.post(token_endpoint, data=refresh_data, headers=headers)
+                if resp.status_code != 200:
+                    body = await resp.aread()
+                    logger.warning(
+                        "OAuth refresh failed for MCP server %s (%s): %s",
+                        server_id,
+                        resp.status_code,
+                        body.decode()[:200],
+                    )
+                    # Refresh token is invalid/revoked — clear everything so user re-auths
+                    await store.clear()
+                    return None
+                new_token = await handle_token_response_scopes(resp)
+        except Exception as exc:
+            logger.warning("OAuth refresh request failed for MCP server %s: %s", server_id, exc)
+            return None
+
+        # RFC 6749 §6: refresh response may omit refresh_token — keep the old one if so
+        if not new_token.refresh_token and token.refresh_token:
+            new_token = OAuthToken(
+                access_token=new_token.access_token,
+                token_type=new_token.token_type,
+                expires_in=new_token.expires_in,
+                scope=new_token.scope,
+                refresh_token=token.refresh_token,
+            )
+
+        await store.set_tokens(new_token)
+        logger.info("OAuth token refreshed for MCP server %s", server_id)
+        return new_token
 
     async def disconnect(self, server_id: str) -> None:
         """Clear stored tokens and client info for a server."""

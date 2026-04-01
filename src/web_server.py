@@ -452,6 +452,10 @@ class ClaudeWebUI:
         self.coordinator.set_resource_broadcast_callback(self._broadcast_resource_registered)
         logger.info("Resource broadcast callback injected into SessionCoordinator")
 
+        # Issue #976: Inject OAuth refresh broadcast callback into SessionCoordinator
+        self.coordinator.set_oauth_refresh_broadcast_callback(self._broadcast_mcp_oauth_refreshed)
+        logger.info("OAuth refresh broadcast callback injected into SessionCoordinator")
+
         # Setup static files (Vue 3 production build)
         static_dir = Path(__file__).parent.parent / "frontend" / "dist"
         if not static_dir.exists():
@@ -592,6 +596,13 @@ class ClaudeWebUI:
             self.ui_queue.append({"type": "mcp_oauth_complete", "server_id": server_id})
         except Exception:
             logger.exception("Error appending mcp_oauth_complete")
+
+    def _broadcast_mcp_oauth_refreshed(self, server_id: str) -> None:
+        """Issue #976: Emit mcp_oauth_refreshed to the global UI poll queue."""
+        try:
+            self.ui_queue.append({"type": "mcp_oauth_refreshed", "server_id": server_id})
+        except Exception:
+            logger.exception("Error appending mcp_oauth_refreshed")
 
     def _broadcast_rate_limits_update(self, data: dict) -> None:
         """Issue #899: Emit rate_limits_update to the global UI poll queue."""
