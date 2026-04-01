@@ -30,7 +30,7 @@
     </div>
 
     <!-- Input Area -->
-    <InputArea :is-archived="isArchiveMode" />
+    <InputArea ref="inputAreaRef" :is-archived="isArchiveMode" />
 
     <!-- Session State Status Line (above status bar) -->
     <SessionStateStatusLine v-if="currentSession && !isArchiveMode" :session-id="props.sessionId" />
@@ -41,7 +41,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, onUnmounted, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useSessionStore } from '@/stores/session'
 import { useMessageStore } from '@/stores/message'
@@ -69,6 +69,7 @@ const props = defineProps({
 })
 
 const route = useRoute()
+const inputAreaRef = ref(null)
 const sessionStore = useSessionStore()
 const messageStore = useMessageStore()
 const resourceStore = useResourceStore()
@@ -125,6 +126,9 @@ onMounted(async () => {
       uiStore.hideLoading()
     }
   }
+  if (!isArchiveMode.value) {
+    nextTick(() => inputAreaRef.value?.focusInput())
+  }
 })
 
 watch([() => props.sessionId, () => effectiveArchiveId.value], async ([newSessionId, newArchiveId], [oldSessionId, oldArchiveId]) => {
@@ -150,6 +154,7 @@ watch([() => props.sessionId, () => effectiveArchiveId.value], async ([newSessio
     } finally {
       uiStore.hideLoading()
     }
+    nextTick(() => inputAreaRef.value?.focusInput())
   } else if (newSessionId !== oldSessionId && newSessionId !== sessionStore.currentSessionId) {
     uiStore.showLoading('Loading session...')
     try {
@@ -157,8 +162,18 @@ watch([() => props.sessionId, () => effectiveArchiveId.value], async ([newSessio
     } finally {
       uiStore.hideLoading()
     }
+    nextTick(() => inputAreaRef.value?.focusInput())
   }
 })
+
+watch(
+  () => currentSession.value?.state,
+  (newState, oldState) => {
+    if (newState === 'active' && (oldState === 'starting' || oldState === 'created')) {
+      nextTick(() => inputAreaRef.value?.focusInput())
+    }
+  }
+)
 
 onUnmounted(() => {
   if (isArchiveMode.value) {
