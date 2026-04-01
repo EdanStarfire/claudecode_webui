@@ -147,6 +147,16 @@ const pendingResourceAttachment = inject('pendingResourceAttachment', ref(null))
 
 const messageTextarea = ref(null)
 const fileInput = ref(null)
+
+function focusInput() {
+  nextTick(() => {
+    if (messageTextarea.value && !props.isArchived) {
+      messageTextarea.value.focus()
+    }
+  })
+}
+
+defineExpose({ focusInput })
 const windowWidth = ref(window.innerWidth)
 
 // File upload state - backed by session store for per-session persistence
@@ -679,6 +689,7 @@ async function executeClearCommand() {
     wsStore.resetSessionCursor(sessionId)
     sessionStore.currentSessionId = null
     await sessionStore.selectSession(sessionId)
+    focusInput()
   }
 }
 
