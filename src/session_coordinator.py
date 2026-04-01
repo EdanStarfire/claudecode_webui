@@ -93,8 +93,11 @@ class SessionCoordinator:
 
         # Issue #976: Per-server refresh locks (prevent concurrent refresh calls)
         self._oauth_refresh_locks: dict[str, asyncio.Lock] = {}
-        # Issue #976: Background OAuth refresh tasks per session
-        self._oauth_refresh_tasks: dict[str, list[asyncio.Task]] = {}
+        # Issue #976: App-level background refresh tasks keyed by server_id (not session_id).
+        # Tokens are application-scoped — one task per server_id, shared across sessions.
+        self._oauth_refresh_tasks: dict[str, asyncio.Task] = {}
+        # Issue #976: Reference counts per server_id — task cancelled when count hits zero.
+        self._oauth_refresh_refcounts: dict[str, int] = {}
         # Issue #976: Callback for broadcasting mcp_oauth_refreshed UI events
         self._oauth_refresh_broadcast_callback: Callable[[str], None] | None = None
 
@@ -275,12 +278,13 @@ class SessionCoordinator:
         async with self._oauth_refresh_locks[server_id]:
             return await self.oauth_manager.refresh_token(server_id)
 
-    async def _oauth_refresh_loop(self, session_id: str, server_id: str) -> None:
+    async def _oauth_refresh_loop(self, server_id: str) -> None:
         """Background task: refresh an OAuth token before it expires.
 
-        Issue #976: Wakes up _OAUTH_REFRESH_BUFFER_SECONDS before the stored expiry
-        and performs a token refresh. Broadcasts mcp_oauth_refreshed on success so the
-        UI status indicator stays accurate. Repeats until cancelled.
+        Issue #976: App-level task (one per server_id). Wakes up
+        _OAUTH_REFRESH_BUFFER_SECONDS before the stored expiry and performs a token
+        refresh. Broadcasts mcp_oauth_refreshed on success so the UI status indicator
+        stays accurate. Repeats until cancelled or refresh token is revoked.
         """
         import time as _time
 
@@ -301,9 +305,7 @@ class SessionCoordinator:
                 new_token = await self._refresh_oauth_token(server_id)
                 if new_token:
                     logger.info(
-                        "Background OAuth refresh succeeded for MCP server %s (session %s)",
-                        server_id,
-                        session_id,
+                        "Background OAuth refresh succeeded for MCP server %s", server_id
                     )
                     if self._oauth_refresh_broadcast_callback:
                         try:
@@ -312,10 +314,9 @@ class SessionCoordinator:
                             logger.exception("Error broadcasting mcp_oauth_refreshed for %s", server_id)
                 else:
                     logger.warning(
-                        "Background OAuth refresh failed for MCP server %s (session %s). "
+                        "Background OAuth refresh failed for MCP server %s. "
                         "Session restart will re-authenticate if a valid token is available.",
                         server_id,
-                        session_id,
                     )
                     # Token cleared by refresh_token() on revocation — stop looping
                     break
@@ -323,42 +324,40 @@ class SessionCoordinator:
                 break
             except Exception:
                 logger.exception(
-                    "Unexpected error in OAuth refresh loop for server %s (session %s)",
-                    server_id,
-                    session_id,
+                    "Unexpected error in OAuth refresh loop for server %s", server_id
                 )
                 await asyncio.sleep(60)  # Back off before retrying
 
-    def _start_oauth_refresh_tasks(self, session_id: str, mcp_server_ids: list[str]) -> None:
-        """Schedule background OAuth refresh tasks for each OAuth-enabled MCP server.
+    def _ensure_oauth_refresh(self, server_id: str) -> None:
+        """Increment the ref count for server_id and start a refresh task if needed.
 
-        Issue #976: Called after SDK start succeeds. Tasks are cancelled in
-        _cancel_oauth_refresh_tasks() when the session terminates or resets.
+        Issue #976: Tokens are application-scoped — one background task per server_id
+        shared across all sessions that use the same MCP server config.
         """
-        tasks: list[asyncio.Task] = []
-        selected_configs = self.mcp_config_manager.get_configs_by_ids(mcp_server_ids)
-        for mcp_cfg in selected_configs:
-            server_id = mcp_cfg.id
-            if mcp_cfg.oauth_enabled:
-                task = asyncio.create_task(
-                    self._oauth_refresh_loop(session_id, server_id),
-                    name=f"oauth-refresh-{server_id}-{session_id}",
-                )
-                task_done_log_exception(task, logger)
-                tasks.append(task)
-                coord_logger.info(
-                    "Scheduled background OAuth refresh for server %s (session %s)",
-                    server_id,
-                    session_id,
-                )
-        if tasks:
-            self._oauth_refresh_tasks[session_id] = tasks
+        self._oauth_refresh_refcounts[server_id] = self._oauth_refresh_refcounts.get(server_id, 0) + 1
+        if server_id not in self._oauth_refresh_tasks:
+            task = asyncio.create_task(
+                self._oauth_refresh_loop(server_id),
+                name=f"oauth-refresh-{server_id}",
+            )
+            task.add_done_callback(task_done_log_exception)
+            self._oauth_refresh_tasks[server_id] = task
+            coord_logger.info("Started background OAuth refresh task for server %s", server_id)
 
-    def _cancel_oauth_refresh_tasks(self, session_id: str) -> None:
-        """Cancel any running background OAuth refresh tasks for a session."""
-        tasks = self._oauth_refresh_tasks.pop(session_id, [])
-        for task in tasks:
-            task.cancel()
+    def _release_oauth_refresh(self, server_id: str) -> None:
+        """Decrement the ref count for server_id and cancel the task when it hits zero.
+
+        Issue #976: Called when a session terminates or resets.
+        """
+        count = self._oauth_refresh_refcounts.get(server_id, 0)
+        if count <= 1:
+            self._oauth_refresh_refcounts.pop(server_id, None)
+            task = self._oauth_refresh_tasks.pop(server_id, None)
+            if task:
+                task.cancel()
+                coord_logger.info("Cancelled background OAuth refresh task for server %s", server_id)
+        else:
+            self._oauth_refresh_refcounts[server_id] = count - 1
 
     def set_oauth_refresh_broadcast_callback(self, callback: Callable[[str], None]) -> None:
         """Set the callback for broadcasting mcp_oauth_refreshed events to the UI.
@@ -1393,9 +1392,12 @@ class SessionCoordinator:
             # else:
             #     logger.info(f"NOT calling _send_client_launched_message for session {session_id} because sdk_was_created = False")
 
-            # Issue #976: Schedule background OAuth refresh for OAuth-enabled MCP servers
+            # Issue #976: Ensure app-level background refresh tasks for OAuth-enabled servers
             if session_info.mcp_server_ids:
-                self._start_oauth_refresh_tasks(session_id, session_info.mcp_server_ids)
+                selected_configs = self.mcp_config_manager.get_configs_by_ids(session_info.mcp_server_ids)
+                for mcp_cfg in selected_configs:
+                    if mcp_cfg.oauth_enabled:
+                        self._ensure_oauth_refresh(mcp_cfg.id)
 
             coord_logger.info(f"Session {session_id} SDK task started - state will update to ACTIVE when SDK is ready")
             return True
@@ -1435,8 +1437,13 @@ class SessionCoordinator:
     async def terminate_session(self, session_id: str) -> bool:
         """Terminate a session and cleanup resources"""
         try:
-            # Issue #976: Cancel background OAuth refresh tasks
-            self._cancel_oauth_refresh_tasks(session_id)
+            # Issue #976: Release per-server OAuth refresh ref counts for this session
+            _term_info = await self.session_manager.get_session_info(session_id)
+            if _term_info and _term_info.mcp_server_ids:
+                _term_configs = self.mcp_config_manager.get_configs_by_ids(_term_info.mcp_server_ids)
+                for _cfg in _term_configs:
+                    if _cfg.oauth_enabled:
+                        self._release_oauth_refresh(_cfg.id)
 
             # Issue #500: Stop queue processor before termination
             self.queue_processor.stop(session_id)
@@ -2127,8 +2134,13 @@ class SessionCoordinator:
         try:
             coord_logger.info(f"Resetting session {session_id}")
 
-            # Issue #976: Cancel background OAuth refresh tasks
-            self._cancel_oauth_refresh_tasks(session_id)
+            # Issue #976: Release per-server OAuth refresh ref counts for this session
+            _reset_info = await self.session_manager.get_session_info(session_id)
+            if _reset_info and _reset_info.mcp_server_ids:
+                _reset_configs = self.mcp_config_manager.get_configs_by_ids(_reset_info.mcp_server_ids)
+                for _cfg in _reset_configs:
+                    if _cfg.oauth_enabled:
+                        self._release_oauth_refresh(_cfg.id)
 
             # Issue #500: Stop queue processor and mark any in-flight item as failed
             # Skip when called from the processor itself to avoid self-cancellation
