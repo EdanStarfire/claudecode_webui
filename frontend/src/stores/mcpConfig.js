@@ -11,6 +11,7 @@ import { api } from '../utils/api'
  */
 export const OAUTH_STATUS = {
   AUTHENTICATED: 'authenticated',
+  EXPIRING_SOON: 'expiring_soon',
   EXPIRED: 'expired',
   UNAUTHENTICATED: 'unauthenticated',
 }

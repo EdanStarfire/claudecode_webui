@@ -403,15 +403,23 @@ class ApplicationService:
             return None
         token = await self.coordinator.oauth_manager.get_stored_token(config_id)
         if token is None:
-            status = "unauthenticated"
+            return {"status": "unauthenticated", "expires_at": None, "has_refresh_token": False}
+
+        store = self.coordinator.oauth_manager.get_token_store(config_id)
+        expiry = await store.get_token_expiry()
+        now = time.time()
+        # Issue #976: Distinguish expiring_soon (within 5 min) from fully authenticated
+        if expiry is not None and expiry < now:
+            status = "expired"
+        elif expiry is not None and expiry < (now + 300):
+            status = "expiring_soon"
         else:
-            store = self.coordinator.oauth_manager.get_token_store(config_id)
-            expiry = await store.get_token_expiry()
-            if expiry is not None and expiry < time.time():
-                status = "expired"
-            else:
-                status = "authenticated"
-        return {"status": status}
+            status = "authenticated"
+        return {
+            "status": status,
+            "expires_at": expiry,
+            "has_refresh_token": bool(token.refresh_token),
+        }
 
     # =========================================================================
     # Templates
