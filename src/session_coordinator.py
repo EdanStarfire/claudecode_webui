@@ -693,16 +693,28 @@ class SessionCoordinator:
 
         return None
 
-    async def get_session_resources(self, session_id: str, limit: int = 100, offset: int = 0) -> dict:
+    async def get_session_resources(
+        self,
+        session_id: str,
+        limit: int = 50,
+        offset: int = 0,
+        search: str | None = None,
+        format_filter: str | None = None,
+        sort: str = "newest",
+    ) -> dict:
         """
-        Get resource metadata for a session, paginated.
+        Get resource metadata for a session, paginated with optional filter/sort.
 
         Issue #404: Used by REST endpoint to list session resources.
+        Issue #972: Added server-side search, format_filter, and sort params.
 
         Args:
             session_id: Session ID
             limit: Maximum number of resources to return
             offset: Number of resources to skip
+            search: Substring match on title or original_name (case-insensitive)
+            format_filter: "image", "text", or a specific extension (e.g. "pdf")
+            sort: "newest" | "oldest" | "name-asc" | "name-desc"
 
         Returns:
             Paginated dict with resources, total, limit, offset, has_more
@@ -718,6 +730,45 @@ class SessionCoordinator:
         all_resources: list[dict] = []
         if storage_manager:
             all_resources = await storage_manager.read_resources()
+
+        # Filter by search query (case-insensitive substring on title or original_name)
+        if search:
+            q = search.lower()
+            all_resources = [
+                r
+                for r in all_resources
+                if q in (r.get("title") or "").lower() or q in (r.get("original_name") or "").lower()
+            ]
+
+        # Filter by format/type
+        if format_filter:
+            if format_filter == "image":
+                all_resources = [r for r in all_resources if r.get("is_image")]
+            elif format_filter == "text":
+                text_formats = {
+                    "py", "js", "ts", "json", "md", "txt", "yaml", "yml",
+                    "toml", "cfg", "ini", "log", "csv", "xml", "html", "css",
+                    "sh", "bash", "rs", "go", "java", "c", "cpp", "h", "rb",
+                    "php", "sql", "r", "swift", "kt",
+                }
+                all_resources = [r for r in all_resources if r.get("format") in text_formats]
+            else:
+                all_resources = [r for r in all_resources if r.get("format") == format_filter]
+
+        # Sort
+        if sort == "newest":
+            all_resources.sort(key=lambda x: x.get("timestamp", 0), reverse=True)
+        elif sort == "oldest":
+            all_resources.sort(key=lambda x: x.get("timestamp", 0))
+        elif sort == "name-asc":
+            all_resources.sort(
+                key=lambda x: (x.get("title") or x.get("original_name") or "").lower()
+            )
+        elif sort == "name-desc":
+            all_resources.sort(
+                key=lambda x: (x.get("title") or x.get("original_name") or "").lower(),
+                reverse=True,
+            )
 
         total = len(all_resources)
         sliced = all_resources[offset : offset + limit]
@@ -2462,14 +2513,61 @@ class SessionCoordinator:
         return await self.legion_system.archive_manager.get_archive_state(session_id, archive_id)
 
     async def get_archive_resources(
-        self, session_id: str, archive_id: str, limit: int = 100, offset: int = 0
+        self,
+        session_id: str,
+        archive_id: str,
+        limit: int = 50,
+        offset: int = 0,
+        search: str | None = None,
+        format_filter: str | None = None,
+        sort: str = "newest",
     ) -> dict:
-        """List resource metadata from an archive, paginated."""
+        """List resource metadata from an archive, paginated with optional filter/sort."""
         if not self.legion_system:
             return {"resources": [], "total": 0, "limit": limit, "offset": offset, "has_more": False}
         all_resources = await self.legion_system.archive_manager.get_archive_resources(
             session_id, archive_id
         )
+
+        # Filter by search query
+        if search:
+            q = search.lower()
+            all_resources = [
+                r
+                for r in all_resources
+                if q in (r.get("title") or "").lower() or q in (r.get("original_name") or "").lower()
+            ]
+
+        # Filter by format/type
+        if format_filter:
+            if format_filter == "image":
+                all_resources = [r for r in all_resources if r.get("is_image")]
+            elif format_filter == "text":
+                text_formats = {
+                    "py", "js", "ts", "json", "md", "txt", "yaml", "yml",
+                    "toml", "cfg", "ini", "log", "csv", "xml", "html", "css",
+                    "sh", "bash", "rs", "go", "java", "c", "cpp", "h", "rb",
+                    "php", "sql", "r", "swift", "kt",
+                }
+                all_resources = [r for r in all_resources if r.get("format") in text_formats]
+            else:
+                all_resources = [r for r in all_resources if r.get("format") == format_filter]
+
+        # Sort
+        if sort == "newest":
+            all_resources.sort(key=lambda x: x.get("timestamp", 0), reverse=True)
+        elif sort == "oldest":
+            all_resources.sort(key=lambda x: x.get("timestamp", 0))
+        elif sort == "name-asc":
+            all_resources.sort(
+                key=lambda x: (x.get("title") or x.get("original_name") or "").lower()
+            )
+        elif sort == "name-desc":
+            all_resources.sort(
+                key=lambda x: (x.get("title") or x.get("original_name") or "").lower(),
+                reverse=True,
+            )
+
         total = len(all_resources)
         sliced = all_resources[offset : offset + limit]
         return {
