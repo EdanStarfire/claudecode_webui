@@ -452,9 +452,9 @@ class ClaudeWebUI:
         self.coordinator.set_resource_broadcast_callback(self._broadcast_resource_registered)
         logger.info("Resource broadcast callback injected into SessionCoordinator")
 
-        # Issue #976: Inject OAuth refresh broadcast callback into SessionCoordinator
-        self.coordinator.set_oauth_refresh_broadcast_callback(self._broadcast_mcp_oauth_refreshed)
-        logger.info("OAuth refresh broadcast callback injected into SessionCoordinator")
+        # Issue #976/#989: Inject OAuth refresh broadcast callback into OAuthRefreshManager
+        self.coordinator.oauth_refresh_manager.set_broadcast_callback(self._broadcast_mcp_oauth_refreshed)
+        logger.info("OAuth refresh broadcast callback injected into OAuthRefreshManager")
 
         # Setup static files (Vue 3 production build)
         static_dir = Path(__file__).parent.parent / "frontend" / "dist"
