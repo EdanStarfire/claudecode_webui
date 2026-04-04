@@ -4053,9 +4053,9 @@ class SessionCoordinator:
                 "Docker daemon is not running": None,
                 "Docker socket permission denied": None,
                 "Nested Claude Code session detected": None,
-                # Issue #958: Sandbox unavailability — passthrough (SDK message is descriptive)
-                "Sandbox is not available": None,
-                "sandbox": None,
+                # Issue #958: Sandbox unavailable with failIfUnavailable=True — passthrough.
+                # Full error: "Error: sandbox required but unavailable: ... sandbox.failIfUnavailable is set"
+                "sandbox.failIfUnavailable is set": None,
             }
 
             # Check for known patterns and provide clearer descriptions
