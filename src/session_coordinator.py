@@ -54,6 +54,54 @@ logger = logging.getLogger(__name__)
 _DOCKER_WRAPPER_PREFIX = '[claude-docker] '
 _DOCKER_ERROR_KEYWORDS = ('exited with code', 'was killed', 'crashed')
 
+# Resource format groups for filtering
+_TEXT_RESOURCE_FORMATS = {
+    "py", "js", "ts", "json", "md", "txt", "yaml", "yml",
+    "toml", "cfg", "ini", "log", "csv", "xml", "html", "css",
+    "sh", "bash", "rs", "go", "java", "c", "cpp", "h", "rb",
+    "php", "sql", "r", "swift", "kt",
+}
+
+
+def _apply_resource_filters(
+    resources: list[dict],
+    search: str | None,
+    format_filter: str | None,
+    sort: str,
+) -> list[dict]:
+    """Filter and sort a list of resource dicts. Returns a new list."""
+    result = list(resources)
+
+    if search:
+        q = search.lower()
+        result = [
+            r
+            for r in result
+            if q in (r.get("title") or "").lower() or q in (r.get("original_name") or "").lower()
+        ]
+
+    if format_filter:
+        if format_filter == "image":
+            result = [r for r in result if r.get("is_image")]
+        elif format_filter == "text":
+            result = [r for r in result if r.get("format") in _TEXT_RESOURCE_FORMATS]
+        else:
+            result = [r for r in result if r.get("format") == format_filter]
+
+    if sort == "newest":
+        result.sort(key=lambda x: x.get("timestamp", 0), reverse=True)
+    elif sort == "oldest":
+        result.sort(key=lambda x: x.get("timestamp", 0))
+    elif sort == "name-asc":
+        result.sort(key=lambda x: (x.get("title") or x.get("original_name") or "").lower())
+    elif sort == "name-desc":
+        result.sort(
+            key=lambda x: (x.get("title") or x.get("original_name") or "").lower(),
+            reverse=True,
+        )
+
+    return result
+
 
 class SessionCoordinator:
     """
@@ -822,44 +870,7 @@ class SessionCoordinator:
         if storage_manager:
             all_resources = await storage_manager.read_resources()
 
-        # Filter by search query (case-insensitive substring on title or original_name)
-        if search:
-            q = search.lower()
-            all_resources = [
-                r
-                for r in all_resources
-                if q in (r.get("title") or "").lower() or q in (r.get("original_name") or "").lower()
-            ]
-
-        # Filter by format/type
-        if format_filter:
-            if format_filter == "image":
-                all_resources = [r for r in all_resources if r.get("is_image")]
-            elif format_filter == "text":
-                text_formats = {
-                    "py", "js", "ts", "json", "md", "txt", "yaml", "yml",
-                    "toml", "cfg", "ini", "log", "csv", "xml", "html", "css",
-                    "sh", "bash", "rs", "go", "java", "c", "cpp", "h", "rb",
-                    "php", "sql", "r", "swift", "kt",
-                }
-                all_resources = [r for r in all_resources if r.get("format") in text_formats]
-            else:
-                all_resources = [r for r in all_resources if r.get("format") == format_filter]
-
-        # Sort
-        if sort == "newest":
-            all_resources.sort(key=lambda x: x.get("timestamp", 0), reverse=True)
-        elif sort == "oldest":
-            all_resources.sort(key=lambda x: x.get("timestamp", 0))
-        elif sort == "name-asc":
-            all_resources.sort(
-                key=lambda x: (x.get("title") or x.get("original_name") or "").lower()
-            )
-        elif sort == "name-desc":
-            all_resources.sort(
-                key=lambda x: (x.get("title") or x.get("original_name") or "").lower(),
-                reverse=True,
-            )
+        all_resources = _apply_resource_filters(all_resources, search, format_filter, sort)
 
         total = len(all_resources)
         sliced = all_resources[offset : offset + limit]
@@ -2643,44 +2654,7 @@ class SessionCoordinator:
             session_id, archive_id
         )
 
-        # Filter by search query
-        if search:
-            q = search.lower()
-            all_resources = [
-                r
-                for r in all_resources
-                if q in (r.get("title") or "").lower() or q in (r.get("original_name") or "").lower()
-            ]
-
-        # Filter by format/type
-        if format_filter:
-            if format_filter == "image":
-                all_resources = [r for r in all_resources if r.get("is_image")]
-            elif format_filter == "text":
-                text_formats = {
-                    "py", "js", "ts", "json", "md", "txt", "yaml", "yml",
-                    "toml", "cfg", "ini", "log", "csv", "xml", "html", "css",
-                    "sh", "bash", "rs", "go", "java", "c", "cpp", "h", "rb",
-                    "php", "sql", "r", "swift", "kt",
-                }
-                all_resources = [r for r in all_resources if r.get("format") in text_formats]
-            else:
-                all_resources = [r for r in all_resources if r.get("format") == format_filter]
-
-        # Sort
-        if sort == "newest":
-            all_resources.sort(key=lambda x: x.get("timestamp", 0), reverse=True)
-        elif sort == "oldest":
-            all_resources.sort(key=lambda x: x.get("timestamp", 0))
-        elif sort == "name-asc":
-            all_resources.sort(
-                key=lambda x: (x.get("title") or x.get("original_name") or "").lower()
-            )
-        elif sort == "name-desc":
-            all_resources.sort(
-                key=lambda x: (x.get("title") or x.get("original_name") or "").lower(),
-                reverse=True,
-            )
+        all_resources = _apply_resource_filters(all_resources, search, format_filter, sort)
 
         total = len(all_resources)
         sliced = all_resources[offset : offset + limit]
