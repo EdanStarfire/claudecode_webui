@@ -81,6 +81,8 @@ class OAuthRefreshManager:
             if task:
                 task.cancel()
                 coord_logger.info("Cancelled background OAuth refresh task for server %s", server_id)
+            if server_id in self._refresh_locks:
+                del self._refresh_locks[server_id]
         else:
             self._refresh_refcounts[server_id] = count - 1
 

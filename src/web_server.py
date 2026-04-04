@@ -241,7 +241,7 @@ class MinionCreateRequest(SessionConfig):
     system_prompt: str | None = ""
     capabilities: list[str] | None = None
     working_directory: str | None = None  # Optional custom working directory for this minion
-    permission_mode: str = "default"  # Override default from SessionConfigBase
+    permission_mode: str = "default"  # Override default from SessionConfig
 
 
 class ScheduleCreateRequest(BaseModel):
