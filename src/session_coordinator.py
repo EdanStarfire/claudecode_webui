@@ -2667,7 +2667,8 @@ class SessionCoordinator:
                             "content": raw_message["content"],
                             "timestamp": raw_message.get("timestamp"),
                             "metadata": metadata,
-                            "session_id": raw_message.get("session_id")
+                            "session_id": raw_message.get("session_id"),
+                            "message_id": raw_message.get("message_id"),  # Issue #1000
                         }
                         # Maintain backward compatibility with subtype at root level
                         if metadata.get('subtype'):
@@ -2676,6 +2677,9 @@ class SessionCoordinator:
                         # Message needs processing - run through MessageProcessor
                         processed_message = self.message_processor.process_message(raw_message, source="storage")
                         websocket_data = self.message_processor.prepare_for_websocket(processed_message)
+                        # Issue #1000: Propagate message_id from storage for frontend dedup
+                        if raw_message.get("message_id"):
+                            websocket_data["message_id"] = raw_message["message_id"]
 
                     if not websocket_data:
                         continue

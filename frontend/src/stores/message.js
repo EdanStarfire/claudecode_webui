@@ -27,6 +27,10 @@ export const useMessageStore = defineStore('message', () => {
   const toolSignatureToId = ref(new Map())
   const permissionToToolMap = ref(new Map())
 
+  // Issue #1000: Event cursors returned by REST /messages endpoint.
+  // Used by websocket.connectSession() to start polling from the correct position.
+  const loadedEventCursors = new Map()
+
   // Orphaned tool tracking (sessionId -> Set<tool_use_id>)
   const activeToolUses = ref(new Map())
   const orphanedToolUses = ref(new Map()) // sessionId -> Map<tool_use_id -> {reason, message}>
@@ -81,6 +85,11 @@ export const useMessageStore = defineStore('message', () => {
       const messages = data.messages || []
       const totalCount = data.total_count || messages.length
       const hasMore = data.has_more || false
+
+      // Issue #1000: Store event cursor from REST response for poll alignment
+      if (data.event_cursor !== undefined) {
+        loadedEventCursors.set(sessionId, data.event_cursor)
+      }
 
       console.log(`Loaded ${messages.length} of ${totalCount} messages for session ${sessionId}`)
 
@@ -252,11 +261,12 @@ export const useMessageStore = defineStore('message', () => {
 
     const messages = messagesBySession.value.get(sessionId)
 
-    // Deduplicate: Check if message with this ID already exists
-    if (message.id) {
-      const existingIndex = messages.findIndex(m => m.id === message.id)
+    // Issue #1000: Deduplicate by message_id (stable UUID from backend) or id
+    const dedupKey = message.message_id || message.id
+    if (dedupKey) {
+      const existingIndex = messages.findIndex(m => (m.message_id || m.id) === dedupKey)
       if (existingIndex !== -1) {
-        console.log(`Skipping duplicate message ${message.id} (already exists at index ${existingIndex})`)
+        console.log(`Skipping duplicate message ${dedupKey} (already exists at index ${existingIndex})`)
         return // Skip duplicate message
       }
     }
@@ -1116,6 +1126,9 @@ export const useMessageStore = defineStore('message', () => {
 
     // Issue #689: Task activity tracking for SubagentTimeline
     taskActivityByToolUseId: readonly(taskActivityByToolUseId),
-    getTaskActivity
+    getTaskActivity,
+
+    // Issue #1000: Event cursors from REST /messages, consumed by connectSession()
+    loadedEventCursors
   }
 })

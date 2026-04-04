@@ -161,10 +161,14 @@ export const useWebSocketStore = defineStore('websocket', () => {
     sessionConnected.value = true
     sessionRetryCount.value = 0
 
-    // Bootstrap cursor to current head on first connection.
-    // loadMessages() covers history via REST; start poll from now to avoid replay (#875).
-    // On reconnect (cached cursor exists), resume from where we left off.
-    if (sessionCursors[sessionId] === undefined) {
+    // Issue #1000: Prefer cursor from loadMessages() REST response (aligned with
+    // loaded history). Fall back to API bootstrap for first-time connections.
+    const messageStore = useMessageStore()
+    const restCursor = messageStore.loadedEventCursors.get(sessionId)
+    if (restCursor !== undefined) {
+      sessionCursors[sessionId] = restCursor
+      messageStore.loadedEventCursors.delete(sessionId)
+    } else if (sessionCursors[sessionId] === undefined) {
       try {
         const result = await api.get(`/api/poll/session/${sessionId}/cursor`)
         sessionCursors[sessionId] = result?.cursor ?? 0
