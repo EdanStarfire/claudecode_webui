@@ -522,12 +522,11 @@ class TestSignatureParity:
         We verify that every template field is covered by either a direct
         create_template() parameter or a SessionConfig field.
         """
-        import dataclasses
         import inspect
 
         sig = inspect.signature(TemplateManager.create_template)
         create_params = set(sig.parameters.keys()) - {"self"}
-        session_config_fields = {f.name for f in dataclasses.fields(SessionConfig)}
+        session_config_fields = set(SessionConfig.model_fields.keys())
         template_fields = self._get_template_field_names()
 
         # Fields covered by direct params OR SessionConfig

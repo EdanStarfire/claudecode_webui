@@ -9,13 +9,10 @@ direct function parameters.
 Issue #713: Reduce parameter sprawl across session creation APIs.
 """
 
-from dataclasses import dataclass
-
 from pydantic import BaseModel
 
 
-@dataclass
-class SessionConfig:
+class SessionConfig(BaseModel):
     """Bundled configuration for session/minion/template creation.
 
     Groups configuration toggle parameters that were previously threaded
@@ -69,73 +66,3 @@ class SessionConfig:
     strict_mcp_config: bool = False  # Pass --strict-mcp-config to disable local .mcp.json
     bare_mode: bool = False  # Pass --bare to skip hooks, LSP, plugin sync, skill walks
     env_scrub_enabled: bool = False  # Issue #957: Strip credentials from subprocess envs
-
-
-class SessionConfigBase(BaseModel):
-    """Shared Pydantic base for session/minion/template request models.
-
-    All request models that create sessions, minions, or templates inherit
-    from this base to avoid duplicating the common config fields.
-    """
-
-    permission_mode: str = "acceptEdits"
-    system_prompt: str | None = None
-    override_system_prompt: bool = False
-    allowed_tools: list[str] | None = None
-    disallowed_tools: list[str] | None = None
-    model: str | None = None
-    cli_path: str | None = None
-    additional_directories: list[str] | None = None
-    setting_sources: list[str] | None = None
-    sandbox_enabled: bool = False
-    sandbox_config: dict | None = None
-    docker_enabled: bool = False
-    docker_image: str | None = None
-    docker_extra_mounts: list[str] | None = None
-    docker_home_directory: str | None = None
-    thinking_mode: str | None = None
-    thinking_budget_tokens: int | None = None
-    effort: str | None = None
-    history_distillation_enabled: bool = True
-    auto_memory_mode: str = "claude"
-    auto_memory_directory: str | None = None  # Custom directory for native auto-memory (issue #906)
-    skill_creating_enabled: bool = False
-    mcp_server_ids: list[str] | None = None
-    enable_claudeai_mcp_servers: bool = True
-    strict_mcp_config: bool = False
-    bare_mode: bool = False
-    env_scrub_enabled: bool = False  # Issue #957: Strip credentials from subprocess envs
-
-    def to_session_config(self, **overrides) -> SessionConfig:
-        """Convert to SessionConfig dataclass, with optional field overrides."""
-        data = {
-            "permission_mode": self.permission_mode,
-            "system_prompt": self.system_prompt,
-            "override_system_prompt": self.override_system_prompt,
-            "allowed_tools": self.allowed_tools,
-            "disallowed_tools": self.disallowed_tools,
-            "model": self.model,
-            "cli_path": self.cli_path,
-            "additional_directories": self.additional_directories,
-            "setting_sources": self.setting_sources,
-            "sandbox_enabled": self.sandbox_enabled,
-            "sandbox_config": self.sandbox_config,
-            "docker_enabled": self.docker_enabled,
-            "docker_image": self.docker_image,
-            "docker_extra_mounts": self.docker_extra_mounts,
-            "docker_home_directory": self.docker_home_directory,
-            "thinking_mode": self.thinking_mode,
-            "thinking_budget_tokens": self.thinking_budget_tokens,
-            "effort": self.effort,
-            "history_distillation_enabled": self.history_distillation_enabled,
-            "auto_memory_mode": self.auto_memory_mode,
-            "auto_memory_directory": self.auto_memory_directory,
-            "skill_creating_enabled": self.skill_creating_enabled,
-            "mcp_server_ids": self.mcp_server_ids,
-            "enable_claudeai_mcp_servers": self.enable_claudeai_mcp_servers,
-            "strict_mcp_config": self.strict_mcp_config,
-            "bare_mode": self.bare_mode,
-            "env_scrub_enabled": self.env_scrub_enabled,
-        }
-        data.update(overrides)
-        return SessionConfig(**data)
