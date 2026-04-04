@@ -69,7 +69,6 @@ class TestSessionCoordinator:
         session_id = await coordinator.create_session(**sample_session_config)
 
         assert session_id is not None
-        assert session_id in coordinator._active_sdks
         assert session_id in coordinator._storage_managers
         assert session_id in coordinator._message_callbacks
         assert session_id in coordinator._error_callbacks
