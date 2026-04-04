@@ -677,6 +677,150 @@ class TestIssue811IsProcessingStuck:
         )
 
 
+class TestIssue1002IsProcessingStuckDuringProcessing:
+    """Regression tests for issue #1002 — is_processing stuck true after
+    message sent during active processing."""
+
+    @pytest.mark.asyncio
+    async def test_issue_1002_error_callback_resets_pending_results(
+        self, temp_coordinator, sample_session_config
+    ):
+        """Error callback must reset _pending_results to 0 so phantom counts
+        don't prevent is_processing from clearing on future messages."""
+        coordinator = temp_coordinator
+        session_id = await coordinator.create_session(**sample_session_config)
+        await coordinator.session_manager.update_session_state(session_id, SessionState.ACTIVE)
+
+        # Simulate 2 messages in flight
+        coordinator._pending_results[session_id] = 2
+        await coordinator.session_manager.update_processing_state(session_id, True)
+
+        # Fire the error callback (as SDK would on client.query() failure)
+        error_cb = coordinator._create_error_callback(session_id)
+        await error_cb("message_processing_error", RuntimeError("query failed"))
+
+        assert coordinator._pending_results.get(session_id, 0) == 0
+        session_info = await coordinator.session_manager.get_session_info(session_id)
+        assert session_info.is_processing is False
+
+    @pytest.mark.asyncio
+    async def test_issue_1002_send_message_failure_preserves_is_processing_when_pending(
+        self, temp_coordinator, sample_session_config
+    ):
+        """When send_message() fails but other queries are still in flight,
+        is_processing must remain True."""
+        coordinator = temp_coordinator
+        session_id = await coordinator.create_session(**sample_session_config)
+        await coordinator.session_manager.update_session_state(session_id, SessionState.ACTIVE)
+
+        # Simulate 1 message already in flight
+        coordinator._pending_results[session_id] = 1
+        await coordinator.session_manager.update_processing_state(session_id, True)
+
+        # Second message fails at SDK level
+        mock_sdk = AsyncMock()
+        mock_sdk.send_message.return_value = False
+        coordinator._active_sdks[session_id] = mock_sdk
+
+        result = await coordinator.send_message(session_id, "Second message")
+
+        assert result is False
+        # Counter was incremented to 2 then decremented to 1
+        assert coordinator._pending_results.get(session_id, 0) == 1
+        # is_processing must stay True because first message is still in flight
+        session_info = await coordinator.session_manager.get_session_info(session_id)
+        assert session_info.is_processing is True
+
+    @pytest.mark.asyncio
+    async def test_issue_1002_send_message_exception_preserves_is_processing_when_pending(
+        self, temp_coordinator, sample_session_config
+    ):
+        """When send_message() throws but other queries are in flight,
+        is_processing must remain True."""
+        coordinator = temp_coordinator
+        session_id = await coordinator.create_session(**sample_session_config)
+        await coordinator.session_manager.update_session_state(session_id, SessionState.ACTIVE)
+
+        coordinator._pending_results[session_id] = 1
+        await coordinator.session_manager.update_processing_state(session_id, True)
+
+        mock_sdk = AsyncMock()
+        mock_sdk.send_message.side_effect = RuntimeError("SDK blew up")
+        coordinator._active_sdks[session_id] = mock_sdk
+
+        result = await coordinator.send_message(session_id, "Boom!")
+
+        assert result is False
+        assert coordinator._pending_results.get(session_id, 0) == 1
+        session_info = await coordinator.session_manager.get_session_info(session_id)
+        assert session_info.is_processing is True
+
+    @pytest.mark.asyncio
+    async def test_issue_1002_interrupt_success_decrements_pending_results(
+        self, temp_coordinator, sample_session_config
+    ):
+        """interrupt_success must decrement _pending_results for the interrupted
+        query that won't produce a ResultMessage."""
+        coordinator = temp_coordinator
+        session_id = await coordinator.create_session(**sample_session_config)
+        await coordinator.session_manager.update_session_state(session_id, SessionState.ACTIVE)
+
+        coordinator._pending_results[session_id] = 1
+        await coordinator.session_manager.update_processing_state(session_id, True)
+
+        # Simulate interrupt_success message arriving via the message callback
+        callback = coordinator._create_message_callback(session_id)
+        await callback({
+            "type": "system",
+            "content": "Session interrupted successfully",
+            "subtype": "interrupt_success",
+            "session_id": session_id,
+            "timestamp": 1234567890.0,
+        })
+
+        assert coordinator._pending_results.get(session_id, 0) == 0
+        session_info = await coordinator.session_manager.get_session_info(session_id)
+        assert session_info.is_processing is False
+
+    @pytest.mark.asyncio
+    async def test_issue_1002_pivot_interrupt_then_send_keeps_counter_accurate(
+        self, temp_coordinator, sample_session_config
+    ):
+        """PIVOT: interrupt decrements for interrupted query, then send_message
+        increments for new query — counter must reflect exactly 1 in-flight."""
+        coordinator = temp_coordinator
+        session_id = await coordinator.create_session(**sample_session_config)
+        await coordinator.session_manager.update_session_state(session_id, SessionState.ACTIVE)
+
+        # 1 message in flight
+        coordinator._pending_results[session_id] = 1
+        await coordinator.session_manager.update_processing_state(session_id, True)
+
+        # Simulate interrupt_success
+        callback = coordinator._create_message_callback(session_id)
+        await callback({
+            "type": "system",
+            "content": "Session interrupted successfully",
+            "subtype": "interrupt_success",
+            "session_id": session_id,
+            "timestamp": 1234567890.0,
+        })
+
+        assert coordinator._pending_results.get(session_id, 0) == 0
+
+        # PIVOT sends new message
+        mock_sdk = AsyncMock()
+        mock_sdk.send_message.return_value = True
+        coordinator._active_sdks[session_id] = mock_sdk
+
+        result = await coordinator.send_message(session_id, "New direction")
+
+        assert result is True
+        assert coordinator._pending_results.get(session_id, 0) == 1
+        session_info = await coordinator.session_manager.get_session_info(session_id)
+        assert session_info.is_processing is True
+
+
 class TestIssue819DockerHistoryMount:
     """Regression tests for issue #819 — history/ dir must be mounted in Docker sessions."""
 
