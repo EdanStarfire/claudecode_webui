@@ -79,6 +79,10 @@ const currentSession = computed(() => sessionStore.currentSession)
 const isLoading = computed(() => uiStore.isLoading)
 const loadingMessage = computed(() => uiStore.loadingMessage)
 
+function focusInputWhenReady() {
+  nextTick(() => inputAreaRef.value?.focusInput())
+}
+
 const isArchiveMode = computed(() => !!(props.archiveId || route.params.archiveId))
 const effectiveArchiveId = computed(() => props.archiveId || route.params.archiveId)
 
@@ -126,9 +130,7 @@ onMounted(async () => {
       uiStore.hideLoading()
     }
   }
-  if (!isArchiveMode.value) {
-    nextTick(() => inputAreaRef.value?.focusInput())
-  }
+  focusInputWhenReady()
 })
 
 watch([() => props.sessionId, () => effectiveArchiveId.value], async ([newSessionId, newArchiveId], [oldSessionId, oldArchiveId]) => {
@@ -154,7 +156,7 @@ watch([() => props.sessionId, () => effectiveArchiveId.value], async ([newSessio
     } finally {
       uiStore.hideLoading()
     }
-    nextTick(() => inputAreaRef.value?.focusInput())
+    focusInputWhenReady()
   } else if (newSessionId !== oldSessionId && newSessionId !== sessionStore.currentSessionId) {
     uiStore.showLoading('Loading session...')
     try {
@@ -162,7 +164,7 @@ watch([() => props.sessionId, () => effectiveArchiveId.value], async ([newSessio
     } finally {
       uiStore.hideLoading()
     }
-    nextTick(() => inputAreaRef.value?.focusInput())
+    focusInputWhenReady()
   }
 })
 
@@ -170,7 +172,7 @@ watch(
   () => currentSession.value?.state,
   (newState, oldState) => {
     if (newState === 'active' && (oldState === 'starting' || oldState === 'created')) {
-      nextTick(() => inputAreaRef.value?.focusInput())
+      focusInputWhenReady()
     }
   }
 )
