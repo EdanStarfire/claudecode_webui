@@ -1685,10 +1685,12 @@ class SessionCoordinator:
             # The SDK should echo the user message back through the stream
             result = await sdk.send_message(message, metadata=metadata)
 
-            # If message sending failed, reset processing state
+            # If message sending failed, decrement counter and conditionally reset processing
             if not result:
-                await self.session_manager.update_processing_state(session_id, False)
                 self._pending_results[session_id] = max(0, self._pending_results.get(session_id, 0) - 1)
+                # Issue #1002: Only reset is_processing if no other queries are in flight
+                if self._pending_results.get(session_id, 0) == 0:
+                    await self.session_manager.update_processing_state(session_id, False)
 
             return result
 
@@ -1696,10 +1698,12 @@ class SessionCoordinator:
             logger.exception(f"Failed to send message to session {session_id}")
             # Reset processing state on error
             try:
-                await self.session_manager.update_processing_state(session_id, False)
                 # Decrement the counter that was incremented before the exception so
                 # it doesn't leave is_processing permanently stuck true.
                 self._pending_results[session_id] = max(0, self._pending_results.get(session_id, 0) - 1)
+                # Issue #1002: Only reset is_processing if no other queries are in flight
+                if self._pending_results.get(session_id, 0) == 0:
+                    await self.session_manager.update_processing_state(session_id, False)
             except Exception:
                 pass  # Don't fail on state update error
             return False
@@ -3566,7 +3570,11 @@ class SessionCoordinator:
 
                 # Also reset processing state on interrupt_success
                 if parsed_message.type.value == 'system' and parsed_message.metadata.get('subtype') == 'interrupt_success':
-                    # Only reset if no queries pending (PIVOT sends a new message after interrupt)
+                    # Issue #1002: The interrupted query won't produce a ResultMessage,
+                    # so decrement _pending_results to account for it.
+                    if self._pending_results.get(session_id, 0) > 0:
+                        self._pending_results[session_id] = self._pending_results[session_id] - 1
+                    # Only reset is_processing if no queries pending (PIVOT sends a new message after interrupt)
                     if self._pending_results.get(session_id, 0) == 0:
                         try:
                             await self.session_manager.update_processing_state(session_id, False)
@@ -3625,6 +3633,9 @@ class SessionCoordinator:
                 # Reset processing state on any error
                 try:
                     await self.session_manager.update_processing_state(session_id, False)
+                    # Issue #1002: Reset pending results counter to prevent phantom counts
+                    # from leaving is_processing stuck true on subsequent messages.
+                    self._pending_results[session_id] = 0
                     # logger.info(f"Reset processing state for session {session_id} after error: {error_type}")
                 except Exception:
                     logger.exception(f"Failed to reset processing state for session {session_id}")
