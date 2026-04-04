@@ -9,7 +9,7 @@ Covers:
 - SessionCoordinator._get_mcp_sdk_config() proactive refresh before expiry
 - SessionCoordinator._get_mcp_sdk_config() reactive refresh on expired token
 - SessionCoordinator._get_mcp_sdk_config() fallback when refresh fails
-- SessionCoordinator._ensure_oauth_refresh / _release_oauth_refresh ref counting
+- OAuthRefreshManager.ensure_refresh / release_refresh ref counting (issue #989)
 """
 
 import json
@@ -357,61 +357,65 @@ async def test_get_mcp_sdk_config_fallback_when_refresh_fails(tmp_path: Path):
 
 
 # ---------------------------------------------------------------------------
-# Step 4: _ensure_oauth_refresh / _release_oauth_refresh reference counting
+# Step 4: OAuthRefreshManager.ensure_refresh / release_refresh ref counting
+# (issue #989: extracted from SessionCoordinator)
 # ---------------------------------------------------------------------------
 
 
+def _make_manager(tmp_path):
+    """Build an OAuthRefreshManager backed by a real OAuthFlowManager."""
+    from src.oauth_manager import OAuthFlowManager
+    from src.oauth_refresh_manager import OAuthRefreshManager
+
+    oauth_mgr = OAuthFlowManager(tmp_path)
+    return OAuthRefreshManager(oauth_mgr)
+
+
 def test_ensure_oauth_refresh_creates_task_once(tmp_path):
-    """_ensure_oauth_refresh() creates a single task and increments ref count."""
+    """ensure_refresh() creates a single task and increments ref count."""
     import asyncio
 
-    from src.session_coordinator import SessionCoordinator
-
-    coordinator = SessionCoordinator(data_dir=tmp_path)
+    manager = _make_manager(tmp_path)
 
     loop = asyncio.new_event_loop()
     try:
-        loop.run_until_complete(_run_ensure_release(coordinator))
+        loop.run_until_complete(_run_ensure_release(manager))
     finally:
         loop.close()
 
 
-async def _run_ensure_release(coordinator):
-    from src.session_coordinator import SessionCoordinator  # noqa: F401
+async def _run_ensure_release(manager):
+    manager.ensure_refresh("srv1")
+    manager.ensure_refresh("srv1")  # second session, same server
 
-    coordinator._ensure_oauth_refresh("srv1")
-    coordinator._ensure_oauth_refresh("srv1")  # second session, same server
-
-    assert coordinator._oauth_refresh_refcounts["srv1"] == 2
-    assert "srv1" in coordinator._oauth_refresh_tasks
-    task_id = id(coordinator._oauth_refresh_tasks["srv1"])
+    assert manager._refresh_refcounts["srv1"] == 2
+    assert "srv1" in manager._refresh_tasks
+    task_id = id(manager._refresh_tasks["srv1"])
 
     # Second ensure does NOT replace the existing task
-    coordinator._ensure_oauth_refresh("srv1")
-    assert coordinator._oauth_refresh_refcounts["srv1"] == 3
-    assert id(coordinator._oauth_refresh_tasks["srv1"]) == task_id
+    manager.ensure_refresh("srv1")
+    assert manager._refresh_refcounts["srv1"] == 3
+    assert id(manager._refresh_tasks["srv1"]) == task_id
 
     # Releasing twice — task should still be alive
-    coordinator._release_oauth_refresh("srv1")
-    coordinator._release_oauth_refresh("srv1")
-    assert coordinator._oauth_refresh_refcounts.get("srv1") == 1
-    assert "srv1" in coordinator._oauth_refresh_tasks
+    manager.release_refresh("srv1")
+    manager.release_refresh("srv1")
+    assert manager._refresh_refcounts.get("srv1") == 1
+    assert "srv1" in manager._refresh_tasks
 
     # Final release — task cancelled and removed
-    coordinator._release_oauth_refresh("srv1")
-    assert "srv1" not in coordinator._oauth_refresh_refcounts
-    assert "srv1" not in coordinator._oauth_refresh_tasks
+    manager.release_refresh("srv1")
+    assert "srv1" not in manager._refresh_refcounts
+    assert "srv1" not in manager._refresh_tasks
 
 
 def test_release_below_zero_is_safe(tmp_path):
-    """_release_oauth_refresh() does not error when called with no matching task."""
+    """release_refresh() does not error when called with no matching task."""
     import asyncio
 
-    from src.session_coordinator import SessionCoordinator
-
-    coordinator = SessionCoordinator(data_dir=tmp_path)
+    manager = _make_manager(tmp_path)
 
     async def _run():
-        coordinator._release_oauth_refresh("nonexistent")
+        manager.release_refresh("nonexistent")
 
     asyncio.run(_run())
