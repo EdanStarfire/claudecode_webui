@@ -585,35 +585,7 @@ class SessionCoordinator:
             # Issue #349: All sessions are minions (is_minion field removed)
 
             # Build a config copy with resolved working directory for session manager
-            sm_config = SessionConfig(
-                permission_mode=config.permission_mode,
-                system_prompt=config.system_prompt,
-                override_system_prompt=config.override_system_prompt,
-                allowed_tools=config.allowed_tools,
-                disallowed_tools=config.disallowed_tools,
-                model=config.model,
-                working_directory=effective_working_directory,
-                additional_directories=config.additional_directories,
-                cli_path=config.cli_path,
-                setting_sources=config.setting_sources,
-                sandbox_enabled=config.sandbox_enabled,
-                sandbox_config=config.sandbox_config,
-                docker_enabled=config.docker_enabled,
-                docker_image=config.docker_image,
-                docker_extra_mounts=config.docker_extra_mounts,
-                thinking_mode=config.thinking_mode,
-                thinking_budget_tokens=config.thinking_budget_tokens,
-                effort=config.effort,
-                history_distillation_enabled=config.history_distillation_enabled,
-                auto_memory_mode=config.auto_memory_mode,
-                auto_memory_directory=config.auto_memory_directory,
-                skill_creating_enabled=config.skill_creating_enabled,
-                mcp_server_ids=config.mcp_server_ids,
-                enable_claudeai_mcp_servers=config.enable_claudeai_mcp_servers,
-                strict_mcp_config=config.strict_mcp_config,
-                bare_mode=config.bare_mode,
-                env_scrub_enabled=config.env_scrub_enabled,
-            )
+            sm_config = config.model_copy(update={"working_directory": effective_working_directory})
 
             # Create session through session manager
             # Store raw system_prompt (guide will be prepended later in start_session)
@@ -706,23 +678,7 @@ class SessionCoordinator:
 
             # Create SDK instance (uses factory for testability — issue #559)
             # Build SDK config from session config with resolved tools and prompt
-            sdk_config = SessionConfig(
-                permission_mode=sm_config.permission_mode,
-                system_prompt=escaped_system_prompt,
-                override_system_prompt=sm_config.override_system_prompt,
-                allowed_tools=all_tools,
-                disallowed_tools=sm_config.disallowed_tools,
-                model=sm_config.model,
-                sandbox_enabled=sm_config.sandbox_enabled,
-                sandbox_config=sm_config.sandbox_config,
-                thinking_mode=sm_config.thinking_mode,
-                thinking_budget_tokens=sm_config.thinking_budget_tokens,
-                effort=sm_config.effort,
-                enable_claudeai_mcp_servers=sm_config.enable_claudeai_mcp_servers,
-                strict_mcp_config=sm_config.strict_mcp_config,
-                bare_mode=sm_config.bare_mode,
-                env_scrub_enabled=sm_config.env_scrub_enabled,
-            )
+            sdk_config = sm_config.model_copy(update={"system_prompt": escaped_system_prompt, "allowed_tools": all_tools})
             # Issue #707: Build PreToolUse handler for internal tool access control
             permission_handler = self._build_permission_handler(
                 session_dir, config.history_distillation_enabled, config.auto_memory_mode,

@@ -38,7 +38,7 @@ from .message_parser import MessageParser, MessageProcessor
 from .models.permission_mode import PermissionMode
 from .permission_resolver import resolve_effective_permissions
 from .permission_service import PermissionService
-from .session_config import SessionConfigBase
+from .session_config import SessionConfig
 from .session_coordinator import SessionCoordinator
 from .session_manager import SessionState
 from .skill_manager import SkillManager
@@ -159,7 +159,7 @@ class ProjectReorderRequest(BaseModel):
     project_ids: list[str]
 
 
-class SessionCreateRequest(SessionConfigBase):
+class SessionCreateRequest(SessionConfig):
     project_id: str
     name: str | None = None
 
@@ -235,7 +235,7 @@ class CommSendRequest(BaseModel):
     comm_type: str = "task"
 
 
-class MinionCreateRequest(SessionConfigBase):
+class MinionCreateRequest(SessionConfig):
     name: str
     role: str | None = ""
     system_prompt: str | None = ""
@@ -271,7 +271,7 @@ class ScheduleUpdateRequest(BaseModel):
 
 
 
-class TemplateCreateRequest(SessionConfigBase):
+class TemplateCreateRequest(SessionConfig):
     name: str
     role: str | None = None
     system_prompt: str | None = None
@@ -1058,7 +1058,7 @@ class ClaudeWebUI:
                 request.additional_directories, None
             )
 
-            config = request.to_session_config(additional_directories=validated_dirs)
+            config = request.model_copy(update={"additional_directories": validated_dirs})
             session_id = await self.coordinator.create_session(
                 session_id=session_id,
                 project_id=request.project_id,
@@ -2354,10 +2354,7 @@ class ClaudeWebUI:
             )
 
             # Create minion via OverseerController
-            config = request.to_session_config(
-                system_prompt=request.system_prompt,
-                working_directory=str(working_dir),
-            )
+            config = request.model_copy(update={"working_directory": str(working_dir)})
             minion_id = await self.coordinator.legion_system.overseer_controller.create_minion_for_user(
                 legion_id=legion_id,
                 name=request.name,
@@ -3182,7 +3179,7 @@ class ClaudeWebUI:
         @handle_exceptions("create template", value_error_status=400)
         async def create_template(request: TemplateCreateRequest):
             """Create new template"""
-            config = request.to_session_config()
+            config = request
             return await self.service.create_template(
                 name=request.name,
                 config=config,
