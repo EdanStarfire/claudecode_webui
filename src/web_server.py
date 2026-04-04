@@ -1342,6 +1342,11 @@ class ClaudeWebUI:
             result = await self.coordinator.get_session_messages(
                 session_id, limit=limit, offset=offset
             )
+            # Issue #1000: Include event queue cursor so frontend poll starts
+            # exactly where REST left off, preventing duplicate message replay.
+            queue = self.session_queues.get(session_id)
+            if queue:
+                result["event_cursor"] = queue.current_cursor
             return result
 
         # ==================== FILE UPLOAD ENDPOINTS ====================
@@ -3296,6 +3301,10 @@ class ClaudeWebUI:
 
                 # Issue #324: Emit tool_call messages for tool lifecycle events
                 await self._emit_tool_call_updates(session_id, parsed_message)
+
+                # Issue #1000: Propagate message_id from storage for frontend dedup
+                if isinstance(message_data, dict) and 'message_id' in message_data:
+                    websocket_data['message_id'] = message_data['message_id']
 
                 # Wrap in standard poll queue envelope
                 serialized = {

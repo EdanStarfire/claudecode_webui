@@ -9,6 +9,7 @@ import gc
 import json
 import logging
 import os
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -61,6 +62,10 @@ class DataStorageManager:
             # Add timestamp if not present (Unix timestamp float for consistency)
             if 'timestamp' not in message_data:
                 message_data['timestamp'] = get_unix_timestamp()
+
+            # Issue #1000: Assign stable message ID for frontend deduplication
+            if 'message_id' not in message_data:
+                message_data['message_id'] = str(uuid.uuid4())
 
             # Append to JSONL file
             with open(self.messages_file, 'a', encoding='utf-8') as f:
