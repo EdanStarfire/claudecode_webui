@@ -1,6 +1,6 @@
 # Claude WebUI
 
-_A web-based command center for Claude Agent SDK — single-agent conversations and multi-agent teams, from any device._
+_A web-based command center for Claude Agent SDK — single-session conversations and multi-minion legions, from any device._
 
 ![Python: 3.13+](https://img.shields.io/badge/python-3.13+-blue)
 ![Vue: 3.4+](https://img.shields.io/badge/vue-3.4+-brightgreen)
@@ -10,61 +10,68 @@ _A web-based command center for Claude Agent SDK — single-agent conversations 
 <!-- screenshot: hero-session-view.png -->
 ![Hero: Full session view](docs/screenshots/hero-session-view.png)
 
-Claude WebUI is Claude Code, plus a persistent browser interface you can reach from your phone, a visual activity timeline for every tool call, and a full multi-agent orchestration layer for complex tasks. It wraps [Claude Agent SDK](https://github.com/anthropics/claude-agent-sdk) with a FastAPI backend and a Vue 3 frontend, so every feature of the CLI is available — alongside capabilities the CLI doesn't offer at all.
+Claude Code WebUI is Claude Code via the [Claude Agent SDK](https://github.com/anthropics/claude-agent-sdk), plus a persistent browser interface you can reach from your phone, a visual activity timeline for every tool call, and a full multi-minion orchestration layer for complex tasks. It wraps the Claude Agent SDK with a FastAPI backend and a Vue 3 frontend, so almost every feature of the CLI is available — alongside capabilities the CLI doesn't offer at all.
+
+Its three main pillars are:
+* **Observability** See, review, and analyze everything the minions (sessions) do
+* **Customization** Each session, not just folder, can be uniquely configured top to bottom.
+* **Orchestration** Long-lived minions with dynamically created hierarchies, schedules, and real-time cross-session communications.
 
 ---
+> **Emoji legend**
+>   - ✨ net new capability (not available in Claude Code CLI)
+>   - ⚡ meaningfully enhanced over CLI equivalent
+
 
 ## Single-Agent Features
-
-> **Emoji legend** — ✨ net new capability (not available in Claude Code CLI) · ⚡ meaningfully enhanced over CLI equivalent
 
 ### Access From Any Device
 
 - ✨ Network-accessible from phone, tablet, or any browser on your LAN
-- Mobile-responsive design
+- ✨ Browser-based, mobile-responsive design
 
-<!-- screenshot: mobile-responsive.png -->
-![Mobile: Responsive layout](docs/screenshots/mobile-responsive.png)
+    <!-- screenshot: mobile-responsive.png -->
+    ![Mobile: Responsive layout](docs/screenshots/mobile-responsive.png)
 
 ### Tool Visualization
 
 - ✨ Activity timeline with status nodes (running / success / error)
-- ✨ 22 specialized tool handlers: file diffs, search results, bash output, task lists, web tools, notebooks, and more
+- ✨ Customized tool handlers for clean display: file diffs, search results, bash output, task lists, web tools, notebooks, and more
 
-<!-- screenshot: tool-activity-timeline.png -->
-![Tool activity timeline with expanded EditToolHandler diff](docs/screenshots/tool-activity-timeline.png)
+    <!-- screenshot: tool-activity-timeline.png -->
+    ![Tool activity timeline with expanded EditToolHandler diff](docs/screenshots/tool-activity-timeline.png)
 
-<!-- gif: tool-execution-flow.gif -->
-![Demo: message sent → tools appear → results stream in](docs/screenshots/tool-execution-flow.gif)
+    <!-- gif: tool-execution-flow.gif -->
+    ![Demo: message sent → tools appear → results stream in](docs/screenshots/tool-execution-flow.gif)
 
 ### Project & Session Management
 
+- ⚡ Simplified session management: start, stop, restart, reset (clear), delete
 - ✨ Hierarchical organization — projects contain sessions
-- Persistent state across restarts
-- Session controls: start, terminate, restart, reset
 
-<!-- screenshot: project-session-sidebar.png -->
-![Project and session sidebar](docs/screenshots/project-session-sidebar.png)
+    <!-- screenshot: project-session-sidebar.png -->
+    ![Project and agent chips](docs/screenshots/project-session-sidebar.png)
 
 ### Permission System
 
-- Four modes: `default`, `acceptEdits`, `plan`, `bypassPermissions`
-- ⚡ Smart suggestions from SDK with one-click apply
+- ⚡ Smart suggestions from SDK with selective and updateable one-click apply
+- ⚡ In-prompt "deny with guidance"
+- ⚡ Always support free-form responses for AskUserQuestion tool responses
+- ⚡ Full per-session permission customization
 - ✨ Permission preview from settings files before starting sessions
-- Runtime mode switching
 
-<!-- screenshot: permission-prompt.png -->
-![Permission modal with smart suggestions](docs/screenshots/permission-prompt.png)
+    <!-- screenshot: permission-prompt.png -->
+    ![Permission modal with smart suggestions](docs/screenshots/permission-prompt.png)
 
-### Right Sidebar Panels
+### Session Data Management
 
+- ⚡ Task tracking viewing panel
 - ✨ Git diff viewer (total / per-commit modes, file-level detail)
-- Task tracking panel (SDK TaskCreate / Update / List / Get)
 - ✨ Resource gallery (images, files, filtering, search, full-screen view)
-- Schedule panel (cron management)
+- ✨ Schedule panel (cron management)
 
-<!-- screenshot: right-sidebar-diff.png -->
-![DiffPanel showing file changes](docs/screenshots/right-sidebar-diff.png)
+    <!-- screenshot: right-sidebar-diff.png -->
+    ![DiffPanel showing file changes](docs/screenshots/right-sidebar-diff.png)
 
 ### Message Queue
 
@@ -74,52 +81,55 @@ Claude WebUI is Claude Code, plus a persistent browser interface you can reach f
 
 ### Additional Features
 
-- File attachments (drag-and-drop and paste upload)
-- Slash command autocomplete
-- ✨ Mermaid diagram rendering in agent responses
+- ⚡ File attachments (drag-and-drop and paste upload)
+- ✨ Full inbound/outbound markdown support, including copy message's mardown
+- ✨ Mermaid diagram rendering in message stream
 
-<!-- screenshot: mermaid-diagram.png -->
-![Auto-rendered Mermaid diagram in agent response](docs/screenshots/mermaid-diagram.png)
+    <!-- screenshot: mermaid-diagram.png -->
+    ![Auto-rendered Mermaid diagram in message stream](docs/screenshots/mermaid-diagram.png)
 
 - ✨ Read-aloud / TTS with voice selection
 - ✨ Sound notifications for permissions, completion, and errors
 - ✨ Context usage indicators
 - ✨ Session archival with distilled history
+- ✨ Session replay (view-only) via archives (recover before /clear)
 
-<!-- gif: session-archival.gif -->
-![Demo: session archive and in-app review flow](docs/screenshots/session-archival.gif)
+    <!-- gif: session-archival.gif -->
+    ![Demo: session archive and in-app review flow](docs/screenshots/session-archival.gif)
 
 ---
 
-## Multi-Agent Mode (Legion)
+## Multi-Minion Mode (Legion)
 
-### Agent Teams
+### Minion Legions
 
-- ✨ Create specialized minions with roles and initialization context
+- ✨ Create specialized minions (session-spawned sessions) with roles and customized system prompts
+- ✨ Dynamic hierarchies - create legions (teams) the way you need
+- ✨ Turtles all the way down - minions can create their own legions
 - ✨ Fully templated session management for user or minion spawning
 - ✨ Custom template CRUD with import/export
 
-<!-- screenshot: legion-agent-hierarchy.png -->
-![AgentStrip with StackedChips and MinionTreeNode hierarchy](docs/screenshots/legion-agent-hierarchy.png)
+    <!-- screenshot: legion-minion-hierarchy.png -->
+    ![MinionStrip with StackedChips and MinionTreeNode hierarchy](docs/screenshots/legion-minion-hierarchy.png)
 
-<!-- gif: legion-agent-spawning.gif -->
-![Demo: agent creates child → appears in hierarchy → sends first comm](docs/screenshots/legion-agent-spawning.gif)
+    <!-- gif: legion-minion-spawning.gif -->
+    ![Demo: minion creates child → appears in hierarchy → sends first comm](docs/screenshots/legion-minion-spawning.gif)
 
-### Inter-Agent Communication
+### Inter-Minion Communication
 
 - ⚡ Structured comms: task, question, report, info, halt, pivot
 - ⚡ Direct injection into minion's active conversation — no polling, no waiting
-- ✨ Full hierarchy visibility (ancestors, descendants, siblings)
-- ✨ Comm cards with markdown, attachments, type badges
-- ✨ Direct file passing between agents
+- ✨ Full hierarchy messaging (ancestors, descendants, siblings)
+- ✨ Visually distinct comm cards with markdown and attachment previews
+- ✨ Direct file passing between minions
 
-<!-- screenshot: legion-comms.png -->
-![CommCards showing agent-to-agent communication](docs/screenshots/legion-comms.png)
+    <!-- screenshot: legion-comms.png -->
+    ![CommCards showing minion-to-minion communication](docs/screenshots/legion-comms.png)
 
 ### Observability & Control
 
 - ✨ Full visibility into all sessions by default
-- ✨ Fleet controls: emergency halt and resume all agents
+- ✨ Fleet controls: emergency halt and resume all minions
 - ✨ Session archival on disposal with distilled history
 - ✨ View previous sessions in-app
 
@@ -127,15 +137,15 @@ Claude WebUI is Claude Code, plus a persistent browser interface you can reach f
 
 - ⚡ Cron-based scheduled prompts, assignable to a session
 - ✨ Clear context before running scheduled prompt
-- ✨ Ephemeral agent schedules (fire-and-forget)
+- ✨ Ephemeral minion schedules (starts up automatically, ends session after completion)
 - ✨ Execution history with success/failure tracking
 
 ---
 
 ## Configuration & Customization
 
-- ✨ Per-session Docker isolation (image, mounts, home directory)
 - ⚡ Per-session MCP server configuration (STDIO / SSE / HTTP, OAuth 2.1, enable/disable)
+- ✨ Per-session Docker isolation (image, mounts, home directory)
 - Near-full Claude Code configuration management via templates
 - 12 built-in skills auto-deployed to `~/.claude/skills/`
 - Custom skill creation
@@ -154,45 +164,26 @@ uv run python main.py
 ```
 
 Prerequisites: Python 3.13+, `uv`, Claude Code installed and authenticated.
-See [Setup Guide](./run_guide.md) for Docker, network access, frontend dev, and advanced configuration.
+
+### Network Access
+
+Remote access is disabled by default. You must enable it via the following process:
+
+1. Update the configuration at `~/.config/cc_webui/config.json`:
+    ```
+    {
+      "networking": {
+        "allow_network_binding": true,
+        "acknowledged_risk": true
+      }
+    }
+    ```
+2. Launch the app via `uv run python main.py --host=0.0.0.0`
+3. When starting up, it'll output a token to use to authenticate the web app and API. Once networking listening is active, it'll require entering the randomized token to authenticate to the server, preventing open network access. NOTE: This can be set to a specific value with `--token=` CLI argument.
 
 ---
 
-## Architecture
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                       Browser (Vue 3)                        │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐      │
-│  │ Pinia Stores │  │  Components  │  │ Vue Router   │      │
-│  │ (12 stores)  │  │ (85+ files)  │  │  (routing)   │      │
-│  └──────────────┘  └──────────────┘  └──────────────┘      │
-└────────────┬────────────────────────────────────────────────┘
-             │ HTTP long-polling + REST API
-┌────────────▼────────────────────────────────────────────────┐
-│                   FastAPI Server (Python)                    │
-│  ┌──────────────────────────────────────────────────────┐   │
-│  │              SessionCoordinator                       │   │
-│  │  ┌────────────┐  ┌────────────┐  ┌────────────────┐ │   │
-│  │  │ SessionMgr │  │ ProjectMgr │  │  ClaudeSDK     │ │   │
-│  │  └────────────┘  └────────────┘  └────────────────┘ │   │
-│  └──────────────────────────────────────────────────────┘   │
-│  ┌──────────────────────────────────────────────────────┐   │
-│  │              LegionSystem (Multi-Agent)               │   │
-│  │  ┌─────────────┐  ┌──────────┐  ┌────────────────┐  │   │
-│  │  │ Legion      │  │ Overseer │  │  CommRouter    │  │   │
-│  │  │ Coordinator │  │ Control  │  │  (minion comms)│  │   │
-│  │  └─────────────┘  └──────────┘  └────────────────┘  │   │
-│  └──────────────────────────────────────────────────────┘   │
-└────────────┬────────────────────────────────────────────────┘
-             │ query() API
-┌────────────▼────────────────────────────────────────────────┐
-│                   Claude Agent SDK                           │
-│              (Anthropic's official package)                  │
-└──────────────────────────────────────────────────────────────┘
-```
-
-**Key technologies**: Vue 3.4 · Pinia 2.1 · Vite 5.2 · Bootstrap 5.3 · FastAPI · uvicorn · JSONL/JSON storage · HTTP long-polling
+**Key technologies**: Vue 3.4 · Pinia 2.1 · Vite 7.1 · Bootstrap 5.3 · FastAPI · uvicorn · JSONL/JSON storage · HTTP long-polling
 
 See [CLAUDE.md](./CLAUDE.md) for deep architecture documentation.
 
