@@ -7,13 +7,13 @@ Agent-oriented guide to the Claude WebUI frontend. For backend architecture, see
 | Metric | Value |
 |--------|-------|
 | Framework | Vue 3.4 + Composition API |
-| State | Pinia 2.1 (12 stores) |
-| Build | Vite 5.2 |
+| State | Pinia 2.1 (14 stores) |
+| Build | Vite 7.1 |
 | Router | Vue Router 4 (hash history) |
 | CSS | Bootstrap 5.3 + scoped component styles |
-| Components | 85+ `.vue` files |
-| Composables | 3 |
-| Utils | 3 |
+| Components | 99+ `.vue` files |
+| Composables | 9 |
+| Utils | 5 |
 
 ## Directory Structure
 
@@ -22,24 +22,24 @@ frontend/
 ├── src/
 │   ├── main.js                    # App entry: createApp, Pinia, Router
 │   ├── App.vue                    # Root component
-│   ├── router/index.js            # 4 routes (home, project, session, timeline)
-│   ├── stores/                    # 12 Pinia stores
-│   ├── composables/               # 3 reusable composition functions
-│   ├── utils/                     # 3 utility modules
+│   ├── router/index.js            # 5 routes (home, project, session, session/archive, archive/agent)
+│   ├── stores/                    # 14 Pinia stores
+│   ├── composables/               # 9 reusable composition functions
+│   ├── utils/                     # 5 utility modules
 │   ├── components/
-│   │   ├── layout/        (12)    # Navigation: ProjectPillBar, AgentStrip, AgentChip, etc.
-│   │   ├── configuration/ (6)     # ConfigurationModal + tabs + PermissionPreview
+│   │   ├── layout/        (13)    # Navigation: ProjectPillBar, AgentStrip, AgentChip, DeletedAgentsModal, etc.
+│   │   ├── configuration/ (12)    # ConfigurationModal, McpConfigTab, McpServerPanel, FeaturesTab, ReadAloudTab, etc.
 │   │   ├── project/       (4)     # ProjectOverview, ProjectCreateModal, etc.
-│   │   ├── session/       (7)     # SessionView, SessionInfoBar, modals, etc.
-│   │   ├── messages/      (7)     # MessageList, MessageItem, InputArea, etc.
-│   │   ├── messages/tools/ (5)    # ActivityTimeline, TimelineNode/Detail/Segment/Overflow
-│   │   ├── tools/         (21)    # Tool handlers: Read, Edit, Bash, Task*, Skill, etc.
-│   │   ├── legion/        (4)     # TimelineView, CommComposer, MinionTreeNode, etc.
+│   │   ├── session/       (7)     # SessionView, SessionInfoBar, McpServerDetail, modals, etc.
+│   │   ├── messages/      (12)    # MessageList, MessageItem, InputArea, SubagentTimeline, TruncationBanner, etc.
+│   │   ├── messages/tools/ (6)    # ActivityTimeline, PermissionPrompt, TimelineNode/Detail/Segment/Overflow
+│   │   ├── tools/         (22)    # Tool handlers: Read, Edit, Bash, Agent, SendComm, Task*, Skill, etc.
+│   │   ├── legion/        (2)     # MinionTreeNode, MinionViewModal
 │   │   ├── header/        (1)     # TimelineHeader
-│   │   ├── statusbar/     (2)     # SessionStatusBar, TimelineStatusBar
+│   │   ├── statusbar/     (3)     # SessionStatusBar, TimelineStatusBar, RateLimitBadge
 │   │   ├── schedules/     (3)     # SchedulePanel, ScheduleItem, ScheduleCreateModal
-│   │   ├── tasks/         (7)     # TaskListPanel, TaskItem, DiffPanel, ResourceGallery, etc.
-│   │   └── common/        (4)     # FolderBrowserModal, CommCard, DiffFullView, ResourceFullView
+│   │   ├── tasks/         (6)     # TaskListPanel, TaskItem, DiffPanel, ResourceGallery, QueueSection, etc.
+│   │   └── common/        (6)     # FolderBrowserModal, CommCard, DiffFullView, ResourceFullView, AttachmentChip, AuthPrompt
 │   └── assets/
 │       ├── styles.css             # Global styles
 │       └── tool-theme.css         # Tool handler CSS variables
@@ -57,9 +57,10 @@ Hash-based routing (`createWebHashHistory`):
 | `/` | `NoSessionSelected` | Landing page |
 | `/project/:projectId` | `ProjectOverview` | Project management |
 | `/session/:sessionId` | `SessionView` | Chat interface |
-| `/timeline/:legionId` | `TimelineView` | Multi-agent timeline |
+| `/session/:sessionId/archive/:archiveId` | `SessionView` | Archived session (read-only) |
+| `/archive/agent/:agentId/:archiveId` | `SessionView` | Deleted agent archive (read-only) |
 
-## Pinia Stores (12)
+## Pinia Stores (14)
 
 ### Core Stores (6)
 
@@ -78,10 +79,10 @@ Hash-based routing (`createWebHashHistory`):
 - **Key actions**: `loadMessages()`, `addMessage()`, `handleToolCall()` (unified handler), `handlePermissionRequest()`, `handlePermissionResponse()`, `toggleToolExpansion()`, `syncMessages()`
 - **Features**: Orphaned tool detection on restart/interrupt/termination, backend display metadata cache, deduplication on reconnect
 
-#### `websocket.js` — 3 WebSocket connections
-- **Connections**: UI (global state), Session (message streaming), Legion (comms)
-- **Key actions**: `connectUI()`, `connectSession()`, `connectLegion()`, `sendMessage()`, `sendPermissionResponse()`, `sendPermissionResponseWithInput()`, `interruptSession()`
-- **Features**: Heartbeat monitoring (10s timeout), exponential backoff reconnection, generation tracking to prevent stale connections
+#### `websocket.js` — HTTP long-polling (named for legacy reasons)
+- **State**: `uiConnected`, `uiRetryCount`, `sessionConnected`, `sessionRetryCount`, `sessionCursors` (Map)
+- **Key actions**: `startUIPolling()`, `startSessionPolling(sessionId)`, `sendMessage()`, `sendPermissionResponse()`, `sendPermissionResponseWithInput()`, `interruptSession()`
+- **Features**: Cursor-based incremental polling (`/api/poll/ui`, `/api/poll/session/{id}`), exponential backoff (up to 30s), page-visibility pause/resume
 
 #### `legion.js` — Multi-agent data
 - **State**: `commsByLegion` (Map), `minionsByLegion` (Map), `currentLegionId`
@@ -92,7 +93,7 @@ Hash-based routing (`createWebHashHistory`):
 - **Persistence**: localStorage with `webui-sidebar-` prefix
 - **Key actions**: `toggleRightSidebar()`, `setBrowsingProject()`, `toggleStack()`, `showModal()`, `hideModal()`, `showRestartModal()`
 
-### Specialized Stores (6)
+### Specialized Stores (8)
 
 #### `queue.js` — Message queue per session
 - **State**: `queuesBySession` (Map), `pausedBySession` (Map)
@@ -117,10 +118,16 @@ Hash-based routing (`createWebHashHistory`):
 - **Key actions**: `createTask()`, `updateTask()`, `clearTasks()`, `reconstructFromMessages()`, `handleTaskToolResult()`
 - **Helpers**: `tasksForSession()`, `activeTask()`, `taskStats()`
 
+#### `mcp.js` — Active MCP server state per session
+- Runtime state of active MCP servers, synced from backend
+
+#### `mcpConfig.js` — MCP server configuration CRUD
+- Persistent MCP server definitions (STDIO/SSE/HTTP, OAuth 2.1, enable/disable)
+
 #### `image.js` — Deprecated shim
 - Re-exports `useResourceStore` for backward compatibility. All functionality lives in `resource.js`.
 
-## Composables (3)
+## Composables (9)
 
 #### `useToolResult.js` — Tool result extraction
 - **Input**: `toolCallRef` (reactive)
@@ -133,12 +140,28 @@ Hash-based routing (`createWebHashHistory`):
 - **Helpers**: `getEffectiveStatusForTool()`, `getColorForStatus()` (non-reactive versions)
 - **Used by**: TimelineNode, ToolCallCard, tool handlers
 
-#### `useWebSocket.js` — Generic WebSocket hook
-- **Input**: URL + options (maxRetries, autoReconnect, callbacks)
-- **Returns**: `socket`, `connected`, `retryCount`, `connect()`, `disconnect()`, `send()`
-- **Note**: Main WebSocket connections use the WebSocket store; this composable is for custom one-off connections
+#### `useAgentColor.js` — Per-agent color assignment
+- Stable deterministic color per agent/session ID for visual differentiation
 
-## Utils (3)
+#### `useLongPress.js` — Long-press gesture handler
+- Touch/mouse long-press detection for mobile context menus
+
+#### `useMarkdown.js` — Markdown rendering
+- Renders markdown via `marked` + sanitizes with `DOMPurify`
+
+#### `useMermaid.js` — Mermaid diagram rendering
+- Detects and renders Mermaid code blocks in agent messages
+
+#### `useNotifications.js` — Sound/browser notifications
+- Plays audio cues (permission, completion, error) and fires browser notifications
+
+#### `useResourceImages.js` — Resource image helpers
+- Resolves resource URLs, handles image load errors, provides thumbnail logic
+
+#### `useTTSReadAloud.js` — Text-to-speech / read-aloud
+- Web Speech API integration with voice selection and queue management
+
+## Utils (5)
 
 #### `api.js` — HTTP client
 - **Functions**: `apiGet()`, `apiPost()`, `apiPut()`, `apiDelete()`, `apiPatch()`
@@ -153,11 +176,17 @@ Hash-based routing (`createWebHashHistory`):
 #### `toolSummary.js` — Tool description generation
 - **Functions**: `generateToolSummary(toolCall, status)`, `generateShortToolSummary(toolCall)`
 - **Helpers**: `getBasename()`, `extractBashCommand()`, `truncateBashCommand()`, `getExitCode()`, `countDiffLines()`
-- Custom formatting for 20+ tools
+- Custom formatting for 22+ tools
+
+#### `fileTypes.js` — File type detection
+- Extension-to-MIME mapping, icon selection, text/binary classification
+
+#### `templateVariables.js` — Template variable substitution
+- Resolves `{{variable}}` placeholders in session prompts and names
 
 ## Component Organization
 
-### Layout (`layout/`) — 12 components
+### Layout (`layout/`) — 13 components
 Navigation architecture follows a horizontal strip pattern:
 
 ```
@@ -177,22 +206,29 @@ ProjectPillBar → AgentStrip → AgentChip / StackedChip
 | `HeaderRow1` | Top-level header row |
 | `AgentOverview` | Agent summary panel |
 | `PeekCard` | Hover preview card for sessions |
-| `ConnectionIndicator` | WebSocket connection status |
+| `ConnectionIndicator` | Poll connection status |
 | `RightSidebar` | Tabbed right panel (Diff, Tasks, Resources, Comms, Queue, Schedules) |
 | `RestartModal` | Server restart confirmation |
+| `DeletedAgentsModal` | Browse and restore archived deleted agents |
 
-### Configuration (`configuration/`) — 6 components
+### Configuration (`configuration/`) — 12 components
 
 | Component | Purpose |
 |-----------|---------|
 | `ConfigurationModal` | Main configuration dialog with tabs |
-| `GeneralTab` | General settings (name, model, tools) |
-| `PermissionsTab` | Permission mode and allowed tools |
-| `AdvancedTab` | Advanced session options |
-| `SandboxTab` | Sandbox mode configuration |
+| `GlobalConfigModal` | Global app configuration |
+| `QuickSettingsPanel` | Quick-access settings overlay |
+| `AdvancedSettingsPanel` | Advanced session options |
+| `FeaturesTab` | Feature flags and experimental options |
+| `McpConfigTab` | MCP server list and management |
+| `McpServerPanel` | Per-server configuration panel |
+| `McpServerPicker` | Server selection dropdown |
+| `McpServerRow` | Individual server row in list |
+| `NotificationsTab` | Sound/browser notification preferences |
+| `ReadAloudTab` | TTS voice selection and settings |
 | `PermissionPreviewModal` | Preview effective permissions from settings files |
 
-### Messages (`messages/`) — 7 components
+### Messages (`messages/`) — 12 components
 
 | Component | Purpose |
 |-----------|---------|
@@ -206,20 +242,23 @@ ProjectPillBar → AgentStrip → AgentChip / StackedChip
 | `AttachmentList` | File attachment display |
 | `CompactionEventGroup` | Context compaction indicator |
 | `SlashCommandDropdown` | Slash command autocomplete |
+| `SubagentTimeline` | Nested subagent activity display |
+| `TruncationBanner` | Context truncation warning banner |
 
-### Activity Timeline (`messages/tools/`) — 5 components
+### Activity Timeline (`messages/tools/`) — 6 components
 
 Horizontal timeline showing tool calls within an assistant message:
 
 | Component | Purpose |
 |-----------|---------|
 | `ActivityTimeline` | Container: renders nodes + segments, manages expansion |
+| `PermissionPrompt` | Inline permission request UI within timeline |
 | `TimelineNode` | Circular dot per tool with status color and pulse animations |
-| `TimelineDetail` | Expanded detail panel with tool handler + permission UI |
+| `TimelineDetail` | Expanded detail panel with tool handler |
 | `TimelineSegment` | Gradient connecting line between nodes |
 | `TimelineOverflow` | "+N" pill for collapsed earlier tools |
 
-### Tool Handlers (`tools/`) — 21 components
+### Tool Handlers (`tools/`) — 22 components
 
 See [TOOL_HANDLERS.md](../TOOL_HANDLERS.md) for detailed documentation.
 
@@ -227,13 +266,14 @@ See [TOOL_HANDLERS.md](../TOOL_HANDLERS.md) for detailed documentation.
 **Shell**: `BashToolHandler`, `ShellToolHandler`, `CommandToolHandler`
 **Search**: `SearchToolHandler` (Grep/Glob)
 **Web**: `WebToolHandler` (WebFetch/WebSearch)
-**Task management**: `TodoToolHandler`, `TaskToolHandler`, `TaskCreateToolHandler`, `TaskGetToolHandler`, `TaskListToolHandler`, `TaskUpdateToolHandler`
+**Task management**: `TodoToolHandler`, `TaskCreateToolHandler`, `TaskGetToolHandler`, `TaskListToolHandler`, `TaskUpdateToolHandler`
 **Interactive**: `AskUserQuestionToolHandler`
 **Skills**: `SkillToolHandler`, `SlashCommandToolHandler`
+**Agent/Comms**: `AgentToolHandler`, `SendCommToolHandler`
 **Other**: `ExitPlanModeToolHandler`, `NotebookEditToolHandler`
 **Shared**: `ToolSuccessMessage` (success banner), `BaseToolHandler` (fallback)
 
-### Right Sidebar Panels (`tasks/`) — 7 components
+### Right Sidebar Panels (`tasks/`) — 6 components
 
 | Component | Purpose |
 |-----------|---------|
@@ -242,7 +282,6 @@ See [TOOL_HANDLERS.md](../TOOL_HANDLERS.md) for detailed documentation.
 | `DiffPanel` | Git diff summary with file list |
 | `ResourceGallery` | Resource thumbnails and file icons |
 | `ImageGallery` | Legacy image gallery (deprecated) |
-| `CommsPanel` | Legion communications panel |
 | `QueueSection` | Message queue display |
 
 ### Schedules (`schedules/`) — 3 components
@@ -262,6 +301,7 @@ See [TOOL_HANDLERS.md](../TOOL_HANDLERS.md) for detailed documentation.
 | `SessionStateStatusLine` | Session state indicator |
 | `SessionInfoModal` | Session details dialog |
 | `SessionManageModal` | Restart/reset/delete actions |
+| `McpServerDetail` | Per-session MCP server detail view |
 | `NoSessionSelected` | Landing page placeholder |
 
 ### Project (`project/`) — 4 components
@@ -273,16 +313,22 @@ See [TOOL_HANDLERS.md](../TOOL_HANDLERS.md) for detailed documentation.
 | `ProjectCreateModal` | New project dialog |
 | `ProjectEditModal` | Edit/delete project dialog |
 
-### Legion (`legion/`) — 4 components
+### Legion (`legion/`) — 2 components
 
 | Component | Purpose |
 |-----------|---------|
-| `TimelineView` | Unified comm timeline display |
-| `CommComposer` | Send comm to minion |
-| `MinionTreeNode` | Hierarchical minion tree |
+| `MinionTreeNode` | Hierarchical minion tree node |
 | `MinionViewModal` | Minion details dialog |
 
-### Common (`common/`) — 4 components
+### Status Bar (`statusbar/`) — 3 components
+
+| Component | Purpose |
+|-----------|---------|
+| `SessionStatusBar` | Session state and processing indicator |
+| `TimelineStatusBar` | Legion timeline status |
+| `RateLimitBadge` | API rate limit indicator |
+
+### Common (`common/`) — 6 components
 
 | Component | Purpose |
 |-----------|---------|
@@ -290,6 +336,8 @@ See [TOOL_HANDLERS.md](../TOOL_HANDLERS.md) for detailed documentation.
 | `CommCard` | Formatted communication card |
 | `DiffFullView` | Full-screen diff viewer |
 | `ResourceFullView` | Full-screen resource viewer |
+| `AttachmentChip` | File attachment chip/badge |
+| `AuthPrompt` | Authentication token entry prompt |
 
 ## Naming Conventions
 
