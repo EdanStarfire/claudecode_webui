@@ -10,7 +10,7 @@ We are building a web-based interface for Claude Agent SDK that provides:
 1. **Single-Agent Mode**: Real-time streaming conversations with rich tool visualization
 2. **Multi-Agent Mode (Legion)**: Teams of AI agents (minions) collaborating on complex tasks through structured communication
 
-The SDK's streaming message responses are proxied through WebSockets to a Vue 3 frontend which displays messages, tool executions, permissions, and multi-agent activity.
+The SDK's streaming message responses are delivered via HTTP long-polling to a Vue 3 frontend which displays messages, tool executions, permissions, and multi-agent activity.
 
 # Claude Agent SDK Integration - CRITICAL TECHNICAL KNOWLEDGE
 
@@ -156,7 +156,7 @@ multi-agent isolation, or cross-reset persistence is needed.
 
 ## Current Status
 
-The Vue 3 migration is **complete** and in production use. The frontend has grown significantly beyond the original migration scope with 12 Pinia stores, 85+ Vue components, 21 tool handlers, and 3 composables.
+The Vue 3 migration is **complete** and in production use. The frontend has grown significantly beyond the original migration scope with 14 Pinia stores, 99+ Vue components, 22 tool handlers, and 9 composables.
 
 **Documentation**: See [frontend/CLAUDE.md](./frontend/CLAUDE.md) for detailed frontend architecture.
 
@@ -165,11 +165,11 @@ The Vue 3 migration is **complete** and in production use. The frontend has grow
 ```
 frontend/
 ├── src/
-│   ├── stores/                    # 12 Pinia stores
+│   ├── stores/                    # 14 Pinia stores
 │   │   ├── session.js             # Session CRUD, selection, deep linking
 │   │   ├── project.js             # Project hierarchy, ordering
 │   │   ├── message.js             # Messages, tool calls, orphaned detection
-│   │   ├── websocket.js           # 3 WebSocket connections (UI, session, legion)
+│   │   ├── websocket.js           # HTTP long-polling (UI + session event streams)
 │   │   ├── legion.js              # Multi-agent: comms, minions
 │   │   ├── ui.js                  # Sidebar, modals, loading, responsive
 │   │   ├── queue.js               # Per-session message queue
@@ -177,35 +177,43 @@ frontend/
 │   │   ├── resource.js            # Per-session resources (images/files)
 │   │   ├── diff.js                # Per-session git diff data
 │   │   ├── task.js                # Per-session SDK task tracking
+│   │   ├── mcp.js                 # MCP server state (active servers)
+│   │   ├── mcpConfig.js           # MCP server configuration CRUD
 │   │   └── image.js               # Deprecated shim → resource.js
 │   │
-│   ├── composables/               # 3 reusable composition functions
+│   ├── composables/               # 9 reusable composition functions
 │   │   ├── useToolResult.js       # Shared tool result extraction
 │   │   ├── useToolStatus.js       # Tool status computation
-│   │   └── useWebSocket.js        # Generic WebSocket hook
+│   │   ├── useAgentColor.js       # Per-agent color assignment
+│   │   ├── useLongPress.js        # Long-press gesture handler
+│   │   ├── useMarkdown.js         # Markdown rendering with DOMPurify
+│   │   ├── useMermaid.js          # Mermaid diagram rendering
+│   │   ├── useNotifications.js    # Sound/browser notifications
+│   │   ├── useResourceImages.js   # Resource image helpers
+│   │   └── useTTSReadAloud.js     # Text-to-speech / read-aloud
 │   │
 │   ├── components/
-│   │   ├── layout/        (12)    # ProjectPillBar, AgentStrip, AgentChip, RightSidebar, etc.
-│   │   ├── configuration/ (6)     # ConfigurationModal + tabs + PermissionPreview
+│   │   ├── layout/        (13)    # ProjectPillBar, AgentStrip, AgentChip, RightSidebar, DeletedAgentsModal, etc.
+│   │   ├── configuration/ (12)    # ConfigurationModal, McpConfigTab, McpServerPanel, FeaturesTab, ReadAloudTab, etc.
 │   │   ├── project/       (4)     # ProjectOverview, ProjectCreateModal, etc.
-│   │   ├── session/       (7)     # SessionView, SessionInfoBar, modals, etc.
-│   │   ├── messages/      (7)     # MessageList, MessageItem, InputArea, AttachmentList, etc.
-│   │   ├── messages/tools/ (5)    # ActivityTimeline, TimelineNode/Detail/Segment/Overflow
-│   │   ├── tools/         (21)    # Tool handlers: Read, Edit, Bash, Task*, Skill, etc.
-│   │   ├── legion/        (4)     # TimelineView, CommComposer, MinionTreeNode, etc.
+│   │   ├── session/       (7)     # SessionView, SessionInfoBar, McpServerDetail, modals, etc.
+│   │   ├── messages/      (12)    # MessageList, MessageItem, InputArea, SubagentTimeline, TruncationBanner, etc.
+│   │   ├── messages/tools/ (6)    # ActivityTimeline, PermissionPrompt, TimelineNode/Detail/Segment/Overflow
+│   │   ├── tools/         (22)    # Tool handlers: Read, Edit, Bash, Agent, SendComm, Task*, Skill, etc.
+│   │   ├── legion/        (2)     # MinionTreeNode, MinionViewModal
 │   │   ├── header/        (1)     # TimelineHeader
-│   │   ├── statusbar/     (2)     # SessionStatusBar, TimelineStatusBar
+│   │   ├── statusbar/     (3)     # SessionStatusBar, TimelineStatusBar, RateLimitBadge
 │   │   ├── schedules/     (3)     # SchedulePanel, ScheduleItem, ScheduleCreateModal
-│   │   ├── tasks/         (7)     # TaskListPanel, DiffPanel, ResourceGallery, QueueSection, etc.
-│   │   └── common/        (4)     # FolderBrowserModal, CommCard, DiffFullView, ResourceFullView
+│   │   ├── tasks/         (6)     # TaskListPanel, DiffPanel, ResourceGallery, QueueSection, etc.
+│   │   └── common/        (6)     # FolderBrowserModal, CommCard, DiffFullView, ResourceFullView, AttachmentChip, AuthPrompt
 │   │
-│   ├── router/                    # Vue Router: /, /project/:id, /session/:id, /timeline/:id
-│   ├── utils/                     # API client, time formatting, tool summaries
+│   ├── router/                    # Vue Router: /, /project/:id, /session/:id, /session/:id/archive/:id
+│   ├── utils/                     # API client, time formatting, tool summaries, file types, template vars
 │   └── assets/                    # CSS (styles.css, tool-theme.css)
 │
 ├── vite.config.js                 # Vite dev server + proxy + build config
 ├── index.html                     # Entry point
-└── package.json                   # Dependencies (Vue 3.4, Pinia 2.1, Vite 5.2, Bootstrap 5.3)
+└── package.json                   # Dependencies (Vue 3.4, Pinia 2.1, Vite 7.1, Bootstrap 5.3)
 ```
 
 ## Development Workflow
@@ -237,15 +245,15 @@ npm run build  # Output: frontend/dist/
 
 ## Key Benefits Over Vanilla JS
 
-1. **State Management**: 12 Pinia stores replace 135+ instance variables and dual Map+Array storage
+1. **State Management**: 14 Pinia stores replace 135+ instance variables and dual Map+Array storage
 2. **Automatic Reactivity**: No manual `renderSessions()` calls - Vue reactivity handles all UI updates
-3. **Component Architecture**: 6767-line monolith split into 85+ focused, reusable components
+3. **Component Architecture**: 6767-line monolith split into 99+ focused, reusable components
 4. **Event Listener Cleanup**: Automatic cleanup prevents memory leaks
 5. **Developer Experience**: Instant HMR, Vue DevTools, TypeScript support, clear separation of concerns
 
-## Pinia Stores (12 Stores)
+## Pinia Stores (14 Stores)
 
-For detailed store documentation, see [frontend/CLAUDE.md](./frontend/CLAUDE.md#pinia-stores-12).
+For detailed store documentation, see [frontend/CLAUDE.md](./frontend/CLAUDE.md#pinia-stores-14).
 
 ### 1. Session Store (`stores/session.js`)
 **Responsibility**: Session lifecycle, CRUD operations, selection
@@ -292,19 +300,20 @@ For detailed store documentation, see [frontend/CLAUDE.md](./frontend/CLAUDE.md#
 - `toggleToolExpansion()`: Collapse/expand tool cards
 - Orphaned tool detection: session restart, interrupt, termination
 
-### 4. WebSocket Store (`stores/websocket.js`)
-**Responsibility**: 3 WebSocket connections, message routing
+### 4. Polling Store (`stores/websocket.js`)
+**Responsibility**: HTTP long-polling event streams (UI + per-session), outbound message dispatch
 
 **State**:
-- `uiSocket`, `uiConnected`, `uiRetryCount`: Global UI updates
-- `sessionSocket`, `sessionConnected`, `sessionRetryCount`: Session messages
-- `legionSocket`, `legionConnected`, `legionRetryCount`: Legion comms
+- `uiConnected`, `uiRetryCount`: Global UI poll status
+- `sessionConnected`, `sessionRetryCount`: Session poll status
+- `sessionCursors` (Map): Cursor position per session for incremental polling
 
 **Key Actions**:
-- `connectUI()`, `connectSession()`, `connectLegion()`: Establish connections
-- `sendMessage()`, `sendPermissionResponse()`, `interruptSession()`
-- `handleUIMessage()`, `handleSessionMessage()`, `handleLegionMessage()`: Route incoming messages
-- Automatic reconnection with exponential backoff (max 10 UI retries, 5 session/legion)
+- `startUIPolling()`: Long-poll loop against `/api/poll/ui`
+- `startSessionPolling(sessionId)`: Long-poll loop against `/api/poll/session/{id}`
+- `sendMessage()`: POST to `/api/sessions/{id}/messages`
+- `sendPermissionResponse()`, `interruptSession()`: REST calls
+- Exponential backoff on error (up to 30 seconds), page-visibility pause/resume
 
 ### 5. Legion Store (`stores/legion.js`)
 **Responsibility**: Multi-agent data (comms, minions)
@@ -336,7 +345,7 @@ For detailed store documentation, see [frontend/CLAUDE.md](./frontend/CLAUDE.md#
 **Responsibility**: Per-session message queue state, pause/resume, item lifecycle
 
 ### 8. Schedule Store (`stores/schedule.js`)
-**Responsibility**: Per-legion cron schedules, execution history, WebSocket updates
+**Responsibility**: Per-legion cron schedules, execution history, real-time updates
 
 ### 9. Resource Store (`stores/resource.js`)
 **Responsibility**: Per-session resources (images/files), gallery state, full view modal, text content cache
@@ -350,54 +359,63 @@ For detailed store documentation, see [frontend/CLAUDE.md](./frontend/CLAUDE.md#
 ### 12. Image Store (`stores/image.js`)
 **Responsibility**: Deprecated shim re-exporting `useResourceStore`
 
-## Vue Components (85+ files)
+### 13. MCP Store (`stores/mcp.js`)
+**Responsibility**: Active MCP server state per session
+
+### 14. MCP Config Store (`stores/mcpConfig.js`)
+**Responsibility**: MCP server configuration CRUD (STDIO/SSE/HTTP, OAuth 2.1)
+
+## Vue Components (99+ files)
 
 For detailed component documentation, see [frontend/CLAUDE.md](./frontend/CLAUDE.md#component-organization).
 
-### Layout (12)
+### Layout (13)
 - `ProjectPillBar`, `ProjectPill`, `AgentStrip`, `AgentChip`, `StackedChip`, `ChipConnector`
-- `HeaderRow1`, `AgentOverview`, `PeekCard`, `ConnectionIndicator`, `RightSidebar`, `RestartModal`
+- `HeaderRow1`, `AgentOverview`, `PeekCard`, `ConnectionIndicator`, `RightSidebar`, `RestartModal`, `DeletedAgentsModal`
 
-### Configuration (6)
-- `ConfigurationModal`, `GeneralTab`, `PermissionsTab`, `AdvancedTab`, `SandboxTab`, `PermissionPreviewModal`
+### Configuration (12)
+- `ConfigurationModal`, `GlobalConfigModal`, `QuickSettingsPanel`, `AdvancedSettingsPanel`
+- `FeaturesTab`, `McpConfigTab`, `McpServerPanel`, `McpServerPicker`, `McpServerRow`
+- `NotificationsTab`, `ReadAloudTab`, `PermissionPreviewModal`
 
 ### Session (7)
-- `SessionView`, `SessionInfoBar`, `SessionStateStatusLine`, `SessionInfoModal`, `SessionManageModal`, `NoSessionSelected`
+- `SessionView`, `SessionInfoBar`, `SessionStateStatusLine`, `SessionInfoModal`, `SessionManageModal`, `McpServerDetail`, `NoSessionSelected`
 
 ### Project (4)
 - `ProjectOverview`, `ProjectStatusLine`, `ProjectCreateModal`, `ProjectEditModal`
 
-### Messages (7)
+### Messages (12)
 - `MessageList`, `MessageItem`, `UserMessage`, `AssistantMessage`, `SystemMessage`, `ThinkingBlock`, `InputArea`
-- `AttachmentList`, `CompactionEventGroup`, `SlashCommandDropdown`
+- `AttachmentList`, `CompactionEventGroup`, `SlashCommandDropdown`, `SubagentTimeline`, `TruncationBanner`
 
-### Activity Timeline (5)
-- `ActivityTimeline`, `TimelineNode`, `TimelineDetail`, `TimelineSegment`, `TimelineOverflow`
+### Activity Timeline (6)
+- `ActivityTimeline`, `PermissionPrompt`, `TimelineNode`, `TimelineDetail`, `TimelineSegment`, `TimelineOverflow`
 
-### Tool Handlers (21)
+### Tool Handlers (22)
 **See [TOOL_HANDLERS.md](./TOOL_HANDLERS.md) for detailed documentation**
 
 - **File**: `ReadToolHandler`, `EditToolHandler`, `WriteToolHandler`
 - **Shell**: `BashToolHandler`, `ShellToolHandler`, `CommandToolHandler`
 - **Search**: `SearchToolHandler` (Grep/Glob)
 - **Web**: `WebToolHandler` (WebFetch/WebSearch)
-- **Tasks**: `TodoToolHandler`, `TaskToolHandler`, `TaskCreateToolHandler`, `TaskGetToolHandler`, `TaskListToolHandler`, `TaskUpdateToolHandler`
+- **Tasks**: `TodoToolHandler`, `TaskCreateToolHandler`, `TaskGetToolHandler`, `TaskListToolHandler`, `TaskUpdateToolHandler`
 - **Interactive**: `AskUserQuestionToolHandler`
 - **Skills**: `SkillToolHandler`, `SlashCommandToolHandler`
+- **Agent/Comms**: `AgentToolHandler`, `SendCommToolHandler`
 - **Other**: `ExitPlanModeToolHandler`, `NotebookEditToolHandler`
 - **Shared**: `ToolSuccessMessage` (success banner), `BaseToolHandler` (fallback)
 
-### Right Sidebar Panels (7)
-- `TaskListPanel`, `TaskItem`, `DiffPanel`, `ResourceGallery`, `ImageGallery`, `CommsPanel`, `QueueSection`
+### Right Sidebar Panels (6)
+- `TaskListPanel`, `TaskItem`, `DiffPanel`, `ResourceGallery`, `ImageGallery`, `QueueSection`
 
 ### Schedules (3)
 - `SchedulePanel`, `ScheduleItem`, `ScheduleCreateModal`
 
-### Legion (4)
-- `TimelineView`, `CommComposer`, `MinionTreeNode`, `MinionViewModal`
+### Legion (2)
+- `MinionTreeNode`, `MinionViewModal`
 
-### Common (4)
-- `FolderBrowserModal`, `CommCard`, `DiffFullView`, `ResourceFullView`
+### Common (6)
+- `FolderBrowserModal`, `CommCard`, `DiffFullView`, `ResourceFullView`, `AttachmentChip`, `AuthPrompt`
 
 ## Naming Conventions
 
@@ -414,11 +432,11 @@ For detailed component documentation, see [frontend/CLAUDE.md](./frontend/CLAUDE
 │                       Browser (Vue 3 Frontend)                       │
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐             │
 │  │ Pinia Stores │  │ Components   │  │ Vue Router   │             │
-│  │ (12 stores)  │  │  (85+ files) │  │  (routing)   │             │
+│  │ (14 stores)  │  │  (99+ files) │  │  (routing)   │             │
 │  └──────────────┘  └──────────────┘  └──────────────┘             │
 └────────┬────────────────────┬────────────────────┬──────────────────┘
          │                    │                    │
-         │ WebSocket (3 connections) + REST API    │
+         │ HTTP long-polling + REST API            │
          │                    │                    │
 ┌────────▼────────────────────▼────────────────────▼──────────────────┐
 │                   FastAPI Server (src/web_server.py)                 │
@@ -454,19 +472,22 @@ For detailed component documentation, see [frontend/CLAUDE.md](./frontend/CLAUDE
 
 ### Core Backend Modules (`src/`)
 
-#### `src/web_server.py` (1230 lines) - **HTTP + WebSocket Server**
+#### `src/web_server.py` - **HTTP + Long-Polling Server**
 **Main Class**: `ClaudeWebUI`
 
 **Responsibilities**:
 - REST API endpoints (projects, sessions, legion, utility)
-- 3 WebSocket managers: `UIWebSocketManager`, `WebSocketManager`, `LegionWebSocketManager`
+- HTTP long-polling endpoints: `GET /api/poll/ui`, `GET /api/poll/session/{id}`
+- `EventQueue` instances per session for cursor-based event streaming
 - Permission callback creation with asyncio.Future for async approval
 - Session state change broadcasting
 
 **Key Methods**:
-- `_create_permission_callback()`: Async permission prompts (lines 984-1185)
-- `_create_message_callback()`: Message wrapping for WebSocket broadcast (lines 931-960)
-- `_on_state_change()`: Broadcast session state changes (lines 962-982)
+- `poll_ui()`: Long-poll for global UI events (returns `{events, next_cursor}`)
+- `poll_session()`: Long-poll for session-specific events
+- `_create_permission_callback()`: Async permission prompts
+- `_create_message_callback()`: Message wrapping for event queue broadcast
+- `_on_state_change()`: Broadcast session state changes
 
 #### `src/session_coordinator.py` (1050 lines) - **Central Orchestrator**
 **Main Class**: `SessionCoordinator`
@@ -540,7 +561,7 @@ For detailed component documentation, see [frontend/CLAUDE.md](./frontend/CLAUDE
 **Main Classes**: `MessageType` (enum), `ParsedMessage` (dataclass), `MessageProcessor`
 
 **Responsibilities**:
-- Convert between SDK objects, storage format, WebSocket format
+- Convert between SDK objects, storage format, and event-queue format
 - Unified processing for consistency
 
 **Handlers**: `SystemMessageHandler`, `AssistantMessageHandler`, `UserMessageHandler`, `ResultMessageHandler`, `PermissionRequestHandler`, `PermissionResponseHandler`
@@ -559,6 +580,26 @@ For detailed component documentation, see [frontend/CLAUDE.md](./frontend/CLAUDE
 
 **Key Methods**:
 - `append_message()`, `read_messages()`, `get_message_count()`, `cleanup()`
+
+#### Additional Backend Modules (`src/`)
+
+- **`application_service.py`**: Top-level service facade used by `web_server.py`
+- **`config_manager.py`**: `~/.config/cc_webui/config.json` read/write (network binding, auth settings)
+- **`docker_utils.py`**: Docker image/mount configuration helpers for per-session isolation
+- **`event_queue.py`**: `EventQueue` — cursor-based async event buffer backing long-polling endpoints
+- **`exception_handlers.py`**: FastAPI exception handler registration
+- **`file_upload.py`**: Multipart file upload handling and session attachment storage
+- **`history_distiller.py`**: Session history summarization for archival context continuity
+- **`legion_system.py`**: Top-level Legion system wiring (coordinator + overseer + comm router)
+- **`mcp_config_manager.py`**: Per-session MCP server configuration persistence (STDIO/SSE/HTTP, OAuth)
+- **`mock_sdk.py`**: `MockClaudeSDK` — fixture replay for testing without live SDK calls
+- **`oauth_manager.py`**: OAuth 2.1 token acquisition and storage
+- **`oauth_refresh_manager.py`**: Background OAuth token refresh loop
+- **`permission_service.py`**: Permission evaluation and decision routing
+- **`session_config.py`**: Session configuration dataclass combining all per-session options
+- **`task_utils.py`**: SDK task reconstruction helpers used by `task.js` store sync
+- **`template_variables.py`**: Template variable substitution (e.g., `{{session_id}}`)
+- **`timestamp_utils.py`**: Consistent timestamp parsing/formatting across storage and API
 
 ## Legion Multi-Agent System
 
@@ -708,11 +749,11 @@ data/
 
 For the complete endpoint reference with request/response details, see [.claude/API_REFERENCE.md](./.claude/API_REFERENCE.md).
 
-**Summary**: 50+ REST endpoints across 10 domains (projects, sessions, files, resources, diffs, queue, legion, schedules, templates, system) + 3 WebSocket endpoints (UI, Session, Legion).
+**Summary**: 50+ REST endpoints across 10 domains (projects, sessions, files, resources, diffs, queue, legion, schedules, templates, system) + 2 HTTP long-polling endpoints (`/api/poll/ui`, `/api/poll/session/{id}`).
 
 ## Message Flow Architecture
 
-### SDK Message → Storage → WebSocket Flow
+### SDK Message → Storage → Long-Poll Event Flow
 
 ```
 1. ClaudeSDK receives message from claude_agent_sdk
@@ -727,11 +768,10 @@ For the complete endpoint reference with request/response details, see [.claude/
    ├─ MessageProcessor.prepare_for_storage() converts to dict
    └─ Writes to messages.jsonl
    ↓
-6. SessionCoordinator broadcasts to WebSocket
-   ├─ MessageProcessor.prepare_for_websocket() formats for frontend
-   └─ WebSocketManager.send_message() pushes to connected clients
+6. SessionCoordinator pushes event to session EventQueue
+   └─ EventQueue.put() wakes any waiting poll request
    ↓
-7. Frontend (Vue stores) receives and updates state reactively
+7. Frontend poll loop receives {events, next_cursor}, updates Pinia stores reactively
 ```
 
 ### User Message → SDK Flow
@@ -739,9 +779,9 @@ For the complete endpoint reference with request/response details, see [.claude/
 ```
 1. User types in frontend, clicks Send
    ↓
-2. Frontend sends via session WebSocket: {type: "send_message", content: "..."}
+2. Frontend POST /api/sessions/{id}/messages {message: "..."}
    ↓
-3. web_server.py websocket handler receives message
+3. web_server.py REST handler receives request
    ↓
 4. Calls SessionCoordinator.send_message(session_id, content)
    ↓
@@ -767,13 +807,13 @@ For the complete endpoint reference with request/response details, see [.claude/
    ↓
 3. web_server.py stores permission request message (with suggestions if any)
    ↓
-4. web_server.py broadcasts permission_request to WebSocket
+4. web_server.py pushes permission_request event to session EventQueue
    ↓
-5. Frontend displays permission modal with suggestions
+5. Frontend poll loop receives event, displays permission modal with suggestions
    ↓
 6. User clicks Allow/Deny (optionally applies suggestions)
    ↓
-7. Frontend sends permission_response via WebSocket
+7. Frontend POST /api/sessions/{id}/permission/{request_id}
    ↓
 8. web_server.py resolves asyncio.Future with user's decision
    ↓
@@ -792,8 +832,8 @@ For the complete endpoint reference with request/response details, see [.claude/
 **Problem**: Session not starting, need to debug SDK initialization
 → **Solution**: `src/session_coordinator.py:177-289` (start_session()) + enable `--debug-sdk`
 
-**Problem**: WebSocket not connecting
-→ **Solution**: `src/web_server.py:684-930` (websocket_endpoint) + enable `--debug-websocket`
+**Problem**: Long-poll events not arriving
+→ **Solution**: Check `src/web_server.py` poll endpoints and `src/event_queue.py`; enable `--debug-websocket` (covers polling)
 
 **Problem**: Messages not persisting
 → **Solution**: `src/data_storage.py:51-67` (append_message()) + enable `--debug-storage`
@@ -949,8 +989,8 @@ npm run dev  # http://localhost:5173
 
 **Why asyncio.Future for permissions?**
 - SDK permission callback is synchronous from its perspective
-- WebSocket communication is asynchronous
-- Future bridges sync callback ↔ async WebSocket response
+- HTTP long-polling response is asynchronous
+- Future bridges sync callback ↔ async REST response
 
 **Why Vue 3 + Pinia?**
 - Reactive state management eliminates manual UI updates
@@ -992,7 +1032,7 @@ npm run dev  # http://localhost:5173
 
 - **User Guide**: [run_guide.md](./run_guide.md) - Setup, usage, troubleshooting
 - **Frontend Architecture**: [frontend/CLAUDE.md](./frontend/CLAUDE.md) - Vue 3 stores, components, composables
-- **API Reference**: [.claude/API_REFERENCE.md](./.claude/API_REFERENCE.md) - All REST + WebSocket endpoints
+- **API Reference**: [.claude/API_REFERENCE.md](./.claude/API_REFERENCE.md) - All REST + long-polling endpoints
 - **Tool Handlers**: [TOOL_HANDLERS.md](./TOOL_HANDLERS.md) - Vue 3 tool handler development
 - **Legion Proposal**: [legion_proposal/LEGION_PROPOSAL.md](./legion_proposal/LEGION_PROPOSAL.md) - Multi-agent design
 - **MCP Tools**: [legion_proposal/MCP_TOOLS_ARCHITECTURE.md](./legion_proposal/MCP_TOOLS_ARCHITECTURE.md) - Inter-agent communication
@@ -1004,7 +1044,7 @@ npm run dev  # http://localhost:5173
 Claude WebUI is a **production-ready web interface** for Claude Agent SDK with:
 
 **Single-Agent Features**:
-- Real-time streaming conversations with rich tool visualization (21 tool handlers)
+- Real-time streaming conversations with rich tool visualization (22 tool handlers)
 - Project/session hierarchy with drag-and-drop reordering
 - Four permission modes with smart suggestions and permission preview
 - Message queue with timed delivery and auto-start
@@ -1012,7 +1052,7 @@ Claude WebUI is a **production-ready web interface** for Claude Agent SDK with:
 - Git diff viewer with per-commit and aggregate views
 - Orphaned tool detection and cleanup
 - Persistent message storage (JSONL + JSON)
-- Vue 3 + Pinia reactive UI (12 stores, 85+ components)
+- Vue 3 + Pinia reactive UI (14 stores, 99+ components)
 - Mobile-responsive design
 
 **Multi-Agent Features (Legion)**:
@@ -1026,8 +1066,8 @@ Claude WebUI is a **production-ready web interface** for Claude Agent SDK with:
 
 **Developer Experience**:
 - Comprehensive debugging tools (per-category logs)
-- 50+ REST endpoints + 3 WebSocket endpoints
-- Extensible architecture (21 tool handlers, easy to add more)
+- 50+ REST endpoints + HTTP long-polling event streams
+- Extensible architecture (22 tool handlers, easy to add more)
 - Hot Module Replacement for instant feedback
 - Vue DevTools integration
 

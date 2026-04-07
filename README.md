@@ -1,381 +1,209 @@
 # Claude WebUI
 
-A web-based interface for [Claude Agent SDK](https://github.com/anthropics/claude-agent-sdk) that provides both single-agent conversations and multi-agent collaboration through an accessible browser interface.
+_A web-based command center for Claude Agent SDK — single-session conversations and multi-minion legions, from any device._
 
-![Status: Feature Development](https://img.shields.io/badge/status-Feature%20Development-green)
 ![Python: 3.13+](https://img.shields.io/badge/python-3.13+-blue)
 ![Vue: 3.4+](https://img.shields.io/badge/vue-3.4+-brightgreen)
+![Last Commit](https://img.shields.io/github/last-commit/EdanStarfire/claudecode_webui)
 ![License: CC BY-NC-SA 4.0](https://img.shields.io/badge/license-CC%20BY--NC--SA%204.0-blue)
 
-## What is Claude WebUI?
+<!-- gif: hero-view.gif -->
+![Hero: Full session view](docs/screenshots/hero-view.gif)
 
-Claude WebUI transforms Claude Agent SDK into a powerful web-based development environment with:
+Claude Code WebUI is Claude Code via the [Claude Agent SDK](https://github.com/anthropics/claude-agent-sdk), plus a persistent browser interface you can reach from your phone, a visual activity timeline for every tool call, and a full multi-minion orchestration layer for complex tasks. It wraps the Claude Agent SDK with a FastAPI backend and a Vue 3 frontend, so almost every feature of the CLI is available — alongside capabilities the CLI doesn't offer at all.
 
-**Single-Agent Features:**
-- 🌐 **Network access** - Use Claude Code from any device on your network (phone, tablet, browser)
-- 💬 **Real-time streaming** - See responses, tool executions, and thinking blocks as they happen
-- 📁 **Project organization** - Group sessions by working directory with drag-and-drop reordering
-- 🔧 **Rich tool visualization** - File diffs, search results, task lists, bash output with syntax highlighting
-- 🔒 **Granular permissions** - Approve tools with smart suggestions and runtime mode switching
-- 💾 **Persistent sessions** - Resume conversations across restarts with full history preservation
-- 🎨 **Modern Vue 3 UI** - Responsive, mobile-first interface with real-time updates
+Its three main pillars are:
+* **Observability** See, review, and analyze everything the minions (sessions) do
+* **Customization** Each session, not just folder, can be uniquely configured top to bottom.
+* **Orchestration** Long-lived minions with dynamically created hierarchies, schedules, and real-time cross-session communications.
 
-**Multi-Agent Features (Legion):**
-- 🏛️ **Multi-agent orchestration** - Create teams of specialized AI agents (minions) working together
-- 📡 **Inter-agent communication** - Minions communicate via structured messages in real-time
-- 🌳 **Hierarchical organization** - Parent-children relationships for task decomposition
-- 🤖 **Autonomous spawning** - Minions can dynamically create and dispose of child minions
-- 👁️ **Complete observability** - Timeline view shows all agent activity
-- 🔎 **Direct Minion Control** - Spy view inspects individual minions, interrupt them, treat them as interactive sessions
-- 🎛️ **Fleet controls** - Emergency halt and resume all agents instantly
+---
+> **Emoji legend**
+>   - ✨ net new capability (not available in Claude Code CLI)
+>   - ⚡ meaningfully enhanced over CLI equivalent
+
+
+## Single-Agent Features
+
+### Access From Any Device
+
+- ✨ Network-accessible from phone, tablet, or any browser on your LAN
+- ✨ Browser-based, mobile-responsive design
+
+    <!-- screenshot: mobile-responsive.png -->
+    ![Mobile: Responsive layout](docs/screenshots/mobile-responsive.png)
+
+### Tool Visualization
+
+- ✨ Activity timeline with status nodes (running / success / error)
+- ✨ Customized tool handlers for clean display: file diffs, search results, bash output, task lists, web tools, notebooks, and more
+
+    <!-- screenshot: tool-activity-timeline.png -->
+    ![Tool activity timeline with expanded EditToolHandler diff](docs/screenshots/tool-activity-timeline.png)
+
+    <!-- gif: tool-execution-flow.gif -->
+    ![Demo: message sent → tools appear → results stream in](docs/screenshots/tool-execution-flow.gif)
+
+### Project & Session Management
+
+- ⚡ Simplified session management: start, stop, restart, reset (clear), delete
+- ✨ Hierarchical organization — projects contain sessions
+
+    <!-- screenshot: project-session-hierarchy.png -->
+    ![Project and agent chips](docs/screenshots/project-session-hierarchy.png)
+
+### Permission System
+
+- ⚡ Smart suggestions from SDK with selective and updateable one-click apply
+- ⚡ In-prompt "deny with guidance"
+- ⚡ Always support free-form responses for AskUserQuestion tool responses
+- ⚡ Full per-session permission customization
+- ✨ Permission preview from settings files before starting sessions
+
+    <!-- screenshot: permission-prompt.png -->
+    ![Permission modal with smart suggestions](docs/screenshots/permission-prompt.png)
+
+### Session Data Management
+
+- ⚡ Task tracking viewing panel
+- ✨ Git diff viewer (total / per-commit modes, file-level detail)
+- ✨ Resource gallery (images, files, filtering, search, full-screen view)
+- ✨ Schedule panel (cron management)
+
+    <!-- screenshot: right-sidebar-diff.png -->
+    ![DiffPanel showing file changes](docs/screenshots/right-sidebar-diff.png)
+
+### Message Queue
+
+- ✨ Timed delivery with configurable delays
+- ✨ Auto-start sessions for queued messages
+- ✨ Pause / resume / cancel / requeue controls
+
+### Additional Features
+
+- ⚡ File attachments (drag-and-drop and paste upload)
+- ✨ Full inbound/outbound markdown support, including copy message's mardown
+- ✨ Mermaid diagram rendering in message stream
+
+    <!-- screenshot: mermaid-diagram.png -->
+    ![Auto-rendered Mermaid diagram in message stream](docs/screenshots/mermaid-diagram.png)
+
+- ✨ Read-aloud / TTS with voice selection
+- ✨ Sound notifications for permissions, completion, and errors
+- ✨ Context usage indicators
+- ✨ Session archival with distilled history
+- ✨ Session replay (view-only) via archives (recover before /clear)
+
+    <!-- gif: session-archival.gif -->
+    ![Demo: session archive and in-app review flow](docs/screenshots/session-archival.gif)
+
+---
+
+## Multi-Minion Mode (Legion)
+
+### Minion Legions
+
+- ✨ Create specialized minions (session-spawned sessions) with roles and customized system prompts
+- ✨ Dynamic hierarchies - create legions (teams) the way you need
+- ✨ Turtles all the way down - minions can create their own legions
+- ✨ Fully templated session management for user or minion spawning
+- ✨ Custom template CRUD with import/export
+
+    <!-- screenshot: legion-minion-hierarchy.png -->
+    ![MinionStrip with StackedChips and MinionTreeNode hierarchy](docs/screenshots/legion-minion-hierarchy.png)
+
+    <!-- gif: legion-minion-spawning.gif -->
+    ![Demo: minion creates child → appears in hierarchy → sends first comm](docs/screenshots/legion-minion-spawning.gif)
+
+### Inter-Minion Communication
+
+- ⚡ Structured comms: task, question, report, info, halt, pivot
+- ⚡ Direct injection into minion's active conversation — no polling, no waiting
+- ✨ Full hierarchy messaging (ancestors, descendants, siblings)
+- ✨ Visually distinct comm cards with markdown and attachment previews
+- ✨ Direct file passing between minions
+
+    <!-- screenshot: legion-comms.png -->
+    ![CommCards showing minion-to-minion communication](docs/screenshots/legion-comms.png)
+
+### Observability & Control
+
+- ✨ Full visibility into all sessions by default
+- ✨ Fleet controls: emergency halt and resume all minions
+- ✨ Session archival on disposal with distilled history
+- ✨ View previous sessions in-app
+
+### Scheduling
+
+- ⚡ Cron-based scheduled prompts, assignable to a session
+- ✨ Clear context before running scheduled prompt
+- ✨ Ephemeral minion schedules (starts up automatically, ends session after completion)
+- ✨ Execution history with success/failure tracking
+
+---
+
+## Configuration & Customization
+
+- ⚡ Per-session MCP server configuration (STDIO / SSE / HTTP, OAuth 2.1, enable/disable)
+- ✨ Per-session Docker isolation (image, mounts, home directory)
+- Near-full Claude Code configuration management via templates
+- 12 built-in skills auto-deployed to `~/.claude/skills/`
+- Custom skill creation
+- Self-update and server restart from UI
+
+---
 
 ## Quick Start
 
-### Prerequisites
-- **Python 3.13+** installed
-- **uv** package manager ([installation guide](https://docs.astral.sh/uv/getting-started/installation/))
-- **Claude Code** installed and authenticated (you can even re-login in the background to refresh auth tokens)
-- Modern browser (Chrome, Firefox, Safari, Edge)
-
-### Installation
-
-**1. Clone the repository**:
 ```bash
 git clone https://github.com/EdanStarfire/claudecode_webui.git
 cd claudecode_webui
-```
-
-**2. Install dependencies**:
-```bash
 uv sync
-```
-
-**3. Start the server**:
-```bash
 uv run python main.py
+# Open http://localhost:8000
 ```
 
-**4. Open your browser**:
-```
-http://localhost:8000
-```
-
-**5. Create your first project**:
-- Click "New Project" in the sidebar
-- Choose a working directory (use folder browser)
-- Create a session and start chatting
-
-### Optional: Frontend Development
-
-If you want to modify the Vue 3 frontend:
-
-```bash
-# Terminal 1: Start backend (use test port to avoid conflicts)
-uv run python main.py --port 8001 --debug-all
-
-# Terminal 2: Start frontend dev server with hot reload
-cd frontend
-npm install
-npm run dev
-
-# Access dev server at http://localhost:5173
-```
-
-### Optional: Docker Development Environment
-
-A development Docker image is available at `docker/Dockerfile.dev` for working on Claude WebUI inside Docker isolation. It includes UV, Node.js 22 LTS, and Chromium — everything needed to run the backend, frontend, and headless browser tests without installing tooling locally.
-
-```bash
-# Build the dev image
-docker build -f docker/Dockerfile.dev -t claudecode-webui-dev:local docker/
-
-# Use it with claude-docker by setting the image
-CLAUDE_DOCKER_IMAGE=claudecode-webui-dev:local claude-docker ...
-
-# Or configure it in your session's Docker image setting within the WebUI
-```
-
-Inside the container, dev servers work as usual:
-```bash
-uv run python main.py --host 0.0.0.0 --port 8001
-cd frontend && npm run dev -- --host   # --host required for Docker HMR
-```
-
-### Code Quality
-
-The project uses **Ruff** for Python linting to maintain code quality:
-
-```bash
-# Lint specific files you changed
-uv run ruff check --fix src/web_server.py src/session_manager.py
-
-# Or use git to find changed files
-uv run ruff check --fix $(git diff --name-only --diff-filter=AM | grep '\.py$')
-
-# View violations without fixing
-uv run ruff check src/module_name.py
-```
-
-**Important**: Only run Ruff on files you've modified, not the entire `src/` directory. Running `--fix` on the whole codebase will auto-fix unrelated violations.
-
-**Progressive Strictness Strategy**: The codebase currently has existing linting violations that are being addressed incrementally. New code must not introduce violations, and violations should be fixed when modifying existing files.
-
-See [CLAUDE.md](./CLAUDE.md#code-quality---ruff-linting-workflow) for detailed workflow and requirements.
-
-## Core Features
-
-### Single-Agent Mode (Standard Sessions)
-Use your browser to manage local claude code instances from your phone.
-
-#### 🗂️ Project & Session Management
-- **Hierarchical organization** - Projects group sessions by working directory
-- **Drag-and-drop reordering** - Customize project and session order
-- **Persistent state** - Resume conversations after crashes or restarts
-- **Session controls** - Start, terminate, restart, or reset sessions
-- **Name customization** - Rename projects and sessions for clarity
-
-#### 🛠️ Rich Tool Visualization
-Custom UI for 21+ Claude Agent SDK tools:
-- **File operations** - Syntax-highlighted previews for Read, color-coded diffs for Edit/Write
-- **Search results** - Formatted Grep/Glob output with file paths and context
-- **Task management** - SDK task tracking (TaskCreate/Get/List/Update) with status icons
-- **Todo lists** - Visual task tracking (☐ pending, ◐ in-progress, ☑ completed)
-- **Shell commands** - Bash execution with real-time output display
-- **Web tools** - WebFetch/WebSearch with prompt and result visibility
-- **Interactive Q&A** - AskUserQuestion with selectable options and free-text input
-- **Skills & slash commands** - Collapsible content display for skill invocations
-- **Notebooks** - Jupyter notebook editing with cell-by-cell changes
-- **Activity timeline** - Horizontal timeline of tool calls with status dots and expand-to-detail
-- **Fallback handler** - Generic display for new/unconfigured tools
-
-#### 🔐 Permission System
-- **Supports CC modes**: `default` (prompt), `acceptEdits` (permissive), `plan` (auto-resets), `bypassPermissions` (no prompts)
-- **Smart suggestions** - SDK-provided permission updates you can apply instantly
-- **Runtime switching** - Supports both manual and SDK-driven mode changes
-- **Permission preview** - Preview effective permissions from settings files before starting sessions
-- **Session state indication** - Visual indicators when a session is awaiting permissions
-
-#### 💬 Real-Time Updates
-- **WebSocket streaming** - See messages, tool calls, and thinking blocks as they arrive
-- **Connection resilience** - Automatic reconnection with exponential backoff
-- **Multi-session support** - Run dozens of conversations simultaneously
-- **Context compaction display** - Visual indicators when context is compressed
-
-#### 📎 File & Resource Management
-- **File uploads** - Attach files to messages for agent processing
-- **Resource gallery** - Browse images and files registered by agents
-- **Git diff viewer** - Per-commit and aggregate diff views with file-level detail
-
-#### 📬 Message Queue
-- **Timed delivery** - Queue messages for sequential delivery with configurable delays
-- **Auto-start** - Automatically start sessions to deliver queued messages
-- **Queue controls** - Pause, resume, cancel, re-queue, and clear items
-
-#### ⏰ Cron Scheduling
-- **Recurring tasks** - Schedule agent prompts with cron expressions
-- **Execution history** - Track schedule runs with success/failure status
-- **Schedule controls** - Pause, resume, and cancel schedules
-
-#### 🧩 Templates & Configuration
-- **Minion templates** - Pre-configured permission sets for spawning agents
-- **Sandbox mode** - OS-level sandboxing for restricted agent environments
-- **Slash command autocomplete** - Auto-suggest available slash commands while typing
-
-#### 🔄 Server Management
-- **Self-update & restart** - Restart the backend server from the UI
-
-### Multi-Agent Mode (Legion) - In Progress
-
-Legion enables teams of AI agents (minions) to collaborate on complex tasks:
-
-#### ✅ Implemented Features
-- **Minion creation** - User can manually create specialized agents with roles and initialization context
-- **Dynamic minion creation** - Minions are able to spawn out their own dynamic minions for focused purposes.
-- **Minion equivalency** - All minions support full features of claude code, including subagents, interactive permission management, and complex tool usage.
-- **Inter-agent communication** - Minions send structured Comms (TASK, QUESTION, REPORT, etc.) to each other
-- **Timeline view** - Unified chronological display of all agent communications across the legion
-- **Spy view** - Inspect individual minion sessions and message history
-- **Minion hierarchy** - Parent-child relationships visualized in tree structure
-- **MCP tools integration** - Minions have access to Legion tools: send_comm, spawn_minion, list_minions, etc.
-- **Real-time updates** - WebSocket broadcasting for instant comm delivery
-- **Capability tracking** - Minions register expertise for discoverability
-
-#### 🚧 In Development
-- **Autonomous spawning enhancements** - Minions can develop custom specialization and expertise context for their children (MCP handlers implemented, system prompt handling needed)
-
-__Longer-term Goals__
-- **Memory & learning** - Distillation, reinforcement, knowledge transfer (architecture designed, implementation pending)
-- **Minion forking** - Duplicate agents with identical memory for A/B testing (planned)
-
-### 📊 Developer Experience
-- **Vue 3 + Pinia** - 12 stores, 85+ components, 3 composables for reactive state management
-- **REST API** - 50+ endpoints for programmatic access to projects, sessions, messages, and Legion features
-- **Debug logging** - Per-category logs (SDK, WebSocket, storage, parser, coordinator) with `--debug-all`
-- **Extensible architecture** - 21 tool handlers, MCP tools, and modular component system
-- **Comprehensive documentation** - Architecture guides, API references, and development workflows
-
-## Configuration
-
-### Command-Line Options
-```bash
-# Default: binds to localhost only (127.0.0.1:8000)
-uv run python main.py
-
-# Custom port (default: 8000)
-uv run python main.py --port 8080
-
-# Allow remote access (bind to all interfaces, requires config — see Network Access)
-uv run python main.py --host 0.0.0.0
-
-# Custom data directory (default: ./data)
-uv run python main.py --data-dir /path/to/data
-
-# Debug logging (per-category or all)
-uv run python main.py --debug-all
-uv run python main.py --debug-sdk --debug-websocket --debug-permissions
-
-# Combined example: remote access + custom port + debug
-uv run python main.py --host 0.0.0.0 --port 8080 --debug-all
-```
-
-### Permission Modes
-
-Choose the right permission level for your workflow:
-
-| Mode | Behavior | Best For |
-|------|----------|----------|
-| `default` | Prompt for tools not pre-approved in `.claude/settings.json` | Recommended - balanced control |
-| `acceptEdits` | Auto-approve file operations (Read, Write, Edit) | Trusted codebases, rapid iteration |
-| `plan` | Planning mode, auto-resets to `default` after `ExitPlanMode` | Task planning workflows |
-| `bypassPermissions` | No prompts for any tools | High-trust environments only |
-
-**Tip**: Pre-approve frequently-used tools in `.claude/settings.json` to avoid repetitive prompts in `default` mode.
+Prerequisites: Python 3.13+, `uv`, Claude Code installed and authenticated.
 
 ### Network Access
 
-By default, the server binds to `127.0.0.1` (localhost only) for security. Non-localhost binding (e.g., `--host 0.0.0.0`) requires explicit opt-in via the config file.
+Remote access is disabled by default. You must enable it via the following process:
 
-**First run** automatically creates `~/.config/cc_webui/config.json` with safe defaults.
+1. Update the configuration at `~/.config/cc_webui/config.json`:
+    ```
+    {
+      "networking": {
+        "allow_network_binding": true,
+        "acknowledged_risk": true
+      }
+    }
+    ```
+2. Launch the app via `uv run python main.py --host=0.0.0.0`
+3. When starting up, it'll output a token to use to authenticate the web app and API. Once networking listening is active, it'll require entering the randomized token to authenticate to the server, preventing open network access. NOTE: This can be set to a specific value with `--token=` CLI argument.
 
-To enable network access:
+---
 
-1. Edit `~/.config/cc_webui/config.json`
-2. Set both `allow_network_binding` and `acknowledged_risk` to `true`
-3. Start with `--host 0.0.0.0` to bind to all interfaces
-4. Find your machine's IP address (`ip addr` on Linux, `ipconfig` on Windows, `ifconfig` on Mac)
-5. Access from other devices at `http://<your-ip>:8000`
+**Key technologies**: Vue 3.4 · Pinia 2.1 · Vite 7.1 · Bootstrap 5.3 · FastAPI · uvicorn · JSONL/JSON storage · HTTP long-polling
 
-**Security Warning**: Binding to `0.0.0.0` exposes the server to your local network, potentially granting anyone with network access full command execution privileges on your machine with your credentials. Use VPN or firewall rules for internet access.
+See [CLAUDE.md](./CLAUDE.md) for deep architecture documentation.
+
+---
 
 ## Documentation
 
-### Technical Documentation
-- **[CLAUDE.md](./CLAUDE.md)** - Backend architecture, SDK integration, system design
-- **[frontend/CLAUDE.md](./frontend/CLAUDE.md)** - Frontend architecture (stores, components, composables)
-- **[.claude/API_REFERENCE.md](./.claude/API_REFERENCE.md)** - REST and WebSocket API reference
-- **[TOOL_HANDLERS.md](./TOOL_HANDLERS.md)** - Tool handler development guide
+- [Architecture Guide](./CLAUDE.md)
+- [Frontend Architecture](./frontend/CLAUDE.md)
+- [API Reference](./.claude/API_REFERENCE.md)
+- [Tool Handler Guide](./TOOL_HANDLERS.md)
 
-## Architecture Overview
+---
 
-### High-Level System Architecture
+## Contributing & License
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                       Browser (Vue 3)                        │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐      │
-│  │ Pinia Stores │  │  Components  │  │ Vue Router   │      │
-│  │ (12 stores)  │  │ (85+ files)  │  │  (routing)   │      │
-│  └──────────────┘  └──────────────┘  └──────────────┘      │
-└────────────┬────────────────────────────────────────────────┘
-             │ WebSocket (3 connections) + REST API
-┌────────────▼────────────────────────────────────────────────┐
-│                   FastAPI Server (Python)                    │
-│  ┌──────────────────────────────────────────────────────┐   │
-│  │              SessionCoordinator                       │   │
-│  │  ┌────────────┐  ┌────────────┐  ┌────────────────┐ │   │
-│  │  │ SessionMgr │  │ ProjectMgr │  │  ClaudeSDK     │ │   │
-│  │  └────────────┘  └────────────┘  └────────────────┘ │   │
-│  └──────────────────────────────────────────────────────┘   │
-│  ┌──────────────────────────────────────────────────────┐   │
-│  │              LegionSystem (Multi-Agent)               │   │
-│  │  ┌─────────────┐  ┌──────────┐  ┌────────────────┐  │   │
-│  │  │ Legion      │  │ Overseer │  │  CommRouter    │  │   │
-│  │  │ Coordinator │  │ Control  │  │  (minion comms)│  │   │
-│  │  └─────────────┘  └──────────┘  └────────────────┘  │   │
-│  └──────────────────────────────────────────────────────┘   │
-└────────────┬────────────────────────────────────────────────┘
-             │ query() API
-┌────────────▼────────────────────────────────────────────────┐
-│                   Claude Agent SDK                           │
-│              (Anthropic's official package)                  │
-└──────────────────────────────────────────────────────────────┘
-```
-
-### Storage Architecture
-
-```
-data/
-├── projects/{uuid}/state.json      # Project metadata
-├── sessions/{uuid}/                # Session data
-│   ├── state.json                  # Session state
-│   └── messages.jsonl              # Append-only message log
-└── legions/{uuid}/                 # Multi-agent legions
-    ├── timeline.jsonl              # Unified comm log
-```
-
-**Key Technologies:**
-- **Frontend**: Vue 3.4 + Pinia 2.1 + Vite 5.2 + Bootstrap 5.3
-- **Backend**: Python 3.13 + FastAPI + uvicorn
-- **Storage**: JSONL (messages) + JSON (state)
-- **Real-time**: WebSockets with auto-reconnection
-
-## Use Cases
-
-### Single-Agent Development
-- **Code generation** - Build features, refactor codebases, write tests
-- **Debugging** - Investigate issues with full tool visibility
-- **Documentation** - Generate docs, READMEs, API references
-- **Learning** - Explore unfamiliar codebases interactively
-
-### Multi-Agent Collaboration (Legion)
-- **Complex software projects** - Coordinate specialists (AuthExpert, DatabaseArchitect) on large-scale changes
-- **Research tasks** - Deploy domain experts (MedicalResearcher, BiochemistrySpecialist) to synthesize findings
-- **Creative projects** - Simulate multi-character interactions (D&D campaigns, scenario planning)
-- **Parallel exploration** - Fork agents to test multiple approaches simultaneously
-
-## Contributing
-
-This is a personal project, but contributions are welcome!
-
-**Areas for contribution:**
-- Additional tool handler visualizations
-- Legion memory & learning system implementation
-- Mobile UI refinements
-- Multi-user authentication
-- Performance optimizations
-
-**Development workflow:**
 1. Fork the repository
-2. Create feature branch
-3. Make changes with tests
-4. Submit pull request with clear description
+2. Create a feature branch
+3. Submit a pull request with a clear description
 
-## License
+**License**: [Creative Commons Attribution-NonCommercial-ShareAlike 4.0](./LICENSE.md) (CC BY-NC-SA 4.0) — free for personal, educational, and research use; commercial use requires permission; share adaptations under the same license.
 
-**Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International** (CC BY-NC-SA 4.0)
-
-- ✅ Free for personal, educational, and research use
-- ✅ Modifications allowed with attribution
-- ✅ Share adaptations under same license
-- ❌ Commercial use prohibited without permission
-
-See [LICENSE.md](./LICENSE.md) for full terms. For commercial licensing, contact the project maintainer.
-
-## Acknowledgments
-
-Built on [Claude Agent SDK](https://github.com/anthropics/claude-agent-sdk) by Anthropic.
-
-## Support
-
-- **Issues**: Report bugs at [GitHub Issues](https://github.com/EdanStarfire/claudecode_webui/issues)
-- **Discussions**: Share ideas in GitHub Discussions
+**Support**: [GitHub Issues](https://github.com/EdanStarfire/claudecode_webui/issues)
