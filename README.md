@@ -7,8 +7,8 @@ _A web-based command center for Claude Agent SDK — single-session conversation
 ![Last Commit](https://img.shields.io/github/last-commit/EdanStarfire/claudecode_webui)
 ![License: CC BY-NC-SA 4.0](https://img.shields.io/badge/license-CC%20BY--NC--SA%204.0-blue)
 
-<!-- screenshot: hero-session-view.png -->
-![Hero: Full session view](docs/screenshots/hero-session-view.png)
+<!-- gif: hero-view.gif -->
+![Hero: Full session view](docs/screenshots/hero-view.gif)
 
 Claude Code WebUI is Claude Code via the [Claude Agent SDK](https://github.com/anthropics/claude-agent-sdk), plus a persistent browser interface you can reach from your phone, a visual activity timeline for every tool call, and a full multi-minion orchestration layer for complex tasks. It wraps the Claude Agent SDK with a FastAPI backend and a Vue 3 frontend, so almost every feature of the CLI is available — alongside capabilities the CLI doesn't offer at all.
 
@@ -49,8 +49,8 @@ Its three main pillars are:
 - ⚡ Simplified session management: start, stop, restart, reset (clear), delete
 - ✨ Hierarchical organization — projects contain sessions
 
-    <!-- screenshot: project-session-sidebar.png -->
-    ![Project and agent chips](docs/screenshots/project-session-sidebar.png)
+    <!-- screenshot: project-session-hierarchy.png -->
+    ![Project and agent chips](docs/screenshots/project-session-hierarchy.png)
 
 ### Permission System
 
