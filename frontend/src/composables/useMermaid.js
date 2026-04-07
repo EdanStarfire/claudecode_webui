@@ -1,8 +1,15 @@
-import { onMounted, onUnmounted, watch } from 'vue'
+import { onMounted, onUnmounted, ref, watch } from 'vue'
 
 let mermaidModule = null
 let mermaidLoadPromise = null
 let diagramCounter = 0
+
+/**
+ * Shared reactive refs for fullscreen modal communication.
+ * Set fullViewSource to open the modal; MermaidFullView.vue watches this.
+ */
+export const fullViewSource = ref(null)
+export const fullViewDiagramId = ref(null)
 
 /**
  * Lazily load and initialize mermaid.
@@ -99,6 +106,10 @@ function fitDiagramToContainer(diagramDiv, wrapper) {
         svgEl.style.width = `${contentWidth}px`
         svgEl.style.height = `${contentHeight}px`
       }
+    } else if (!foreignObj && contentWidth > 0 && contentWidth < containerWidth) {
+      // Standard SVG narrower than container — let it fill available width
+      svgEl.style.width = '100%'
+      svgEl.style.height = 'auto'
     }
   })
 }
@@ -164,7 +175,33 @@ async function renderBlock(mermaid, preElement) {
     })
     wrapper.appendChild(toggleBtn)
 
+    // Fullscreen button
+    const fullscreenBtn = document.createElement('button')
+    fullscreenBtn.className = 'mermaid-fullscreen-btn'
+    fullscreenBtn.textContent = '\u26F6'
+    fullscreenBtn.title = 'View fullscreen'
+    fullscreenBtn.addEventListener('click', (e) => {
+      e.stopPropagation()
+      fullViewSource.value = source
+      fullViewDiagramId.value = diagramId
+    })
+    wrapper.appendChild(fullscreenBtn)
+
+    // Click on diagram area also opens fullscreen
+    diagramDiv.addEventListener('click', () => {
+      fullViewSource.value = source
+      fullViewDiagramId.value = diagramId
+    })
+
     preElement.replaceWith(wrapper)
+
+    // :has() CSS fallback — add class to parent .msg-bubble-assistant so older browsers
+    // still get the wider bubble (mirrors the :has(.mermaid-container) CSS rule)
+    const bubble = wrapper.closest('.msg-bubble-assistant')
+    if (bubble) {
+      bubble.classList.add('has-mermaid-diagram')
+    }
+
     fitDiagramToContainer(diagramDiv, wrapper)
     return true
   } catch (err) {

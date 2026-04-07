@@ -45,6 +45,7 @@
     <DeletedAgentsModal />
     <RestartModal />
     <GlobalConfigModal />
+    <MermaidFullView />
   </div>
 </template>
 
@@ -66,6 +67,7 @@ import DeletedAgentsModal from './components/layout/DeletedAgentsModal.vue'
 import RestartModal from './components/layout/RestartModal.vue'
 import GlobalConfigModal from './components/configuration/GlobalConfigModal.vue'
 import AuthPrompt from './components/common/AuthPrompt.vue'
+import MermaidFullView from './components/common/MermaidFullView.vue'
 import { useUIStore } from './stores/ui'
 import { useWebSocketStore } from './stores/websocket'
 import { useSessionStore } from './stores/session'
