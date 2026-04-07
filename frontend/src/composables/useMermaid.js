@@ -14,7 +14,7 @@ export const fullViewDiagramId = ref(null)
 /**
  * Lazily load and initialize mermaid.
  */
-async function loadMermaid() {
+export async function loadMermaid() {
   if (mermaidModule) return mermaidModule
   if (mermaidLoadPromise) return mermaidLoadPromise
 

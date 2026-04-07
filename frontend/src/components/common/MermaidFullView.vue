@@ -42,7 +42,7 @@
           >{{ pngExporting ? '…' : 'PNG' }}</button>
         </div>
 
-        <!-- Content -->
+        <!-- Content — fills viewport below toolbar -->
         <div class="mfv-content" @click.stop ref="contentRef">
           <!-- Source view -->
           <div v-if="showSource" class="mfv-source">
@@ -66,7 +66,7 @@
 
 <script setup>
 import { ref, watch, nextTick, onUnmounted } from 'vue'
-import { fullViewSource, fullViewDiagramId } from '@/composables/useMermaid.js'
+import { fullViewSource, fullViewDiagramId, loadMermaid } from '@/composables/useMermaid.js'
 
 const isOpen = ref(false)
 const currentSource = ref('')
@@ -121,12 +121,8 @@ async function renderDiagram() {
   diagramRef.value.innerHTML = ''
 
   try {
-    const [{ default: mermaid }, zenuml] = await Promise.all([
-      import('mermaid'),
-      import('@mermaid-js/mermaid-zenuml')
-    ])
-    mermaid.registerExternalDiagrams([zenuml.default])
-    mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', theme: 'default' })
+    // Re-use the shared lazy-loaded mermaid instance (same config as inline rendering)
+    const mermaid = await loadMermaid()
 
     const id = `mermaid-fullscreen-${++fullscreenDiagramCounter}`
     const { svg } = await Promise.race([
@@ -138,18 +134,22 @@ async function renderDiagram() {
 
     if (diagramRef.value) {
       diagramRef.value.innerHTML = svg
-      // Make SVG fill available space
+      // Scale SVG to fill the content area width while preserving aspect ratio
       const svgEl = diagramRef.value.querySelector('svg')
-      if (svgEl && !svgEl.querySelector('foreignObject')) {
-        svgEl.style.maxWidth = '100%'
+      if (svgEl) {
+        svgEl.style.width = '100%'
         svgEl.style.height = 'auto'
+        // Preserve the intrinsic width attribute for PNG export canvas sizing
+        // (CSS styles don't affect img.naturalWidth when serializing the SVG)
       }
     }
   } catch (err) {
     renderError.value = `Diagram error: ${err.message || 'Invalid syntax'}`
   } finally {
     rendering.value = false
-    // Clean up any leftover mermaid render artifacts outside the modal
+    // Clean up any mermaid render artifacts that ended up outside the modal.
+    // Note: 'd' + id is Mermaid's internal detached-element naming convention
+    // and is version-sensitive — it may break silently on a Mermaid version bump.
     const id = `mermaid-fullscreen-${fullscreenDiagramCounter}`
     const leftover = document.getElementById(id)
     if (leftover && !diagramRef.value?.contains(leftover)) leftover.remove()
@@ -195,8 +195,13 @@ async function exportPNG() {
   const svgEl = getSvgElement()
   if (!svgEl) return
 
-  // Detect foreignObject (ZenUML) — canvas drawImage fails for these
-  if (svgEl.querySelector('foreignObject')) {
+  // ZenUML renders its entire diagram as an HTML block inside <foreignObject>.
+  // Canvas drawImage is tainted by this and toBlob() throws SecurityError.
+  // We detect ZenUML specifically by the .inline-block wrapper it injects,
+  // rather than blocking all foreignObject (which flowcharts may also contain
+  // for text labels without tainting the canvas).
+  const foEl = svgEl.querySelector('foreignObject')
+  if (foEl && foEl.querySelector('.inline-block')) {
     showPngWarning('PNG export is not available for this diagram type. Use SVG export instead.')
     return
   }
@@ -205,6 +210,14 @@ async function exportPNG() {
   pngWarning.value = ''
 
   try {
+    // Read the SVG's intrinsic dimensions from its attributes (not CSS styles,
+    // which are layout-only and are not reflected in img.naturalWidth)
+    const attrW = parseFloat(svgEl.getAttribute('width')) || 0
+    const attrH = parseFloat(svgEl.getAttribute('height')) || 0
+    const bbox = svgEl.getBoundingClientRect()
+    const natW = attrW > 0 ? attrW : (bbox.width || 800)
+    const natH = attrH > 0 ? attrH : (bbox.height || 600)
+
     const svgData = new XMLSerializer().serializeToString(svgEl)
     const blob = new Blob([svgData], { type: 'image/svg+xml;charset=utf-8' })
     const url = URL.createObjectURL(blob)
@@ -212,26 +225,34 @@ async function exportPNG() {
     await new Promise((resolve, reject) => {
       const img = new Image()
       img.onload = () => {
+        const w = img.naturalWidth || natW
+        const h = img.naturalHeight || natH
         const scale = 2 // retina
         const canvas = document.createElement('canvas')
-        canvas.width = (img.naturalWidth || img.width) * scale
-        canvas.height = (img.naturalHeight || img.height) * scale
+        canvas.width = w * scale
+        canvas.height = h * scale
         const ctx = canvas.getContext('2d')
         ctx.scale(scale, scale)
         ctx.drawImage(img, 0, 0)
-        canvas.toBlob((pngBlob) => {
-          if (!pngBlob) {
-            reject(new Error('Canvas toBlob returned null'))
-            return
-          }
-          const a = document.createElement('a')
-          a.href = URL.createObjectURL(pngBlob)
-          a.download = 'diagram.png'
-          a.click()
-          setTimeout(() => URL.revokeObjectURL(a.href), 1000)
+        // canvas.toBlob throws SecurityError if canvas is tainted
+        try {
+          canvas.toBlob((pngBlob) => {
+            URL.revokeObjectURL(url)
+            if (!pngBlob) {
+              reject(new Error('Canvas toBlob returned null'))
+              return
+            }
+            const a = document.createElement('a')
+            a.href = URL.createObjectURL(pngBlob)
+            a.download = 'diagram.png'
+            a.click()
+            setTimeout(() => URL.revokeObjectURL(a.href), 1000)
+            resolve()
+          }, 'image/png')
+        } catch (e) {
           URL.revokeObjectURL(url)
-          resolve()
-        }, 'image/png')
+          reject(new Error('Canvas is tainted — diagram contains embedded HTML content'))
+        }
       }
       img.onerror = () => {
         URL.revokeObjectURL(url)
@@ -259,6 +280,7 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
+/* Full-viewport overlay — column flex so content fills space below toolbar */
 .mermaid-full-view-overlay {
   position: fixed;
   top: 0;
@@ -267,21 +289,23 @@ onUnmounted(() => {
   bottom: 0;
   background-color: rgba(0, 0, 0, 0.88);
   display: flex;
+  flex-direction: column;
   align-items: center;
-  justify-content: center;
+  padding: 52px 30px 20px;
   z-index: 9999;
   outline: none;
+  box-sizing: border-box;
 }
 
 .mfv-close-btn {
   position: absolute;
-  top: 16px;
+  top: 10px;
   right: 16px;
   background: rgba(255, 255, 255, 0.1);
   border: none;
   color: white;
-  width: 44px;
-  height: 44px;
+  width: 36px;
+  height: 36px;
   border-radius: 50%;
   cursor: pointer;
   display: flex;
@@ -297,7 +321,7 @@ onUnmounted(() => {
 
 .mfv-toolbar {
   position: absolute;
-  top: 16px;
+  top: 10px;
   left: 50%;
   transform: translateX(-50%);
   display: flex;
@@ -331,25 +355,27 @@ onUnmounted(() => {
   cursor: not-allowed;
 }
 
+/* Content fills all space below toolbar — diagram or source scrolls inside */
 .mfv-content {
-  margin-top: 60px;
-  max-width: calc(100% - 80px);
-  max-height: calc(100% - 100px);
+  flex: 1;
+  width: 100%;
+  max-width: 1600px;
+  min-height: 0;
   overflow: auto;
   background: #fff;
   border-radius: 8px;
   padding: 24px;
   box-shadow: 0 4px 32px rgba(0, 0, 0, 0.5);
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: center;
-  min-width: 200px;
-  min-height: 100px;
+  box-sizing: border-box;
 }
 
+/* Diagram container fills content width; SVG scales to 100% width */
 .mfv-diagram {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: center;
   width: 100%;
 }
@@ -357,6 +383,7 @@ onUnmounted(() => {
 .mfv-diagram :deep(svg) {
   max-width: 100%;
   height: auto;
+  display: block;
 }
 
 .mfv-source {
@@ -418,15 +445,16 @@ onUnmounted(() => {
 
 /* Mobile */
 @media (max-width: 576px) {
+  .mermaid-full-view-overlay {
+    padding: 48px 12px 12px;
+  }
+
   .mfv-content {
-    max-width: calc(100% - 24px);
-    max-height: calc(100% - 80px);
     padding: 16px;
-    margin-top: 56px;
   }
 
   .mfv-close-btn {
-    top: 10px;
+    top: 8px;
     right: 10px;
   }
 }
