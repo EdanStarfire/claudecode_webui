@@ -72,14 +72,19 @@
               v-if="displayMode === 'markdown'"
               class="copy-btn print-btn"
               @click.stop="printContent"
+              :disabled="printFeedback === 'printing'"
               title="Export as PDF"
             >
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <svg v-if="printFeedback === 'done'" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="20 6 9 17 4 12"></polyline>
+              </svg>
+              <span v-else-if="printFeedback === 'printing'" class="spinner-border spinner-border-sm" role="status"></span>
+              <svg v-else width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <polyline points="6 9 6 2 18 2 18 9"></polyline>
                 <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"></path>
                 <rect x="6" y="14" width="12" height="8"></rect>
               </svg>
-              <span class="copy-label">Export PDF</span>
+              <span class="copy-label">{{ printFeedback === 'done' ? 'Done!' : printFeedback === 'printing' ? 'Printing...' : 'Export PDF' }}</span>
             </button>
           </div>
           <div class="text-body">
@@ -174,14 +179,19 @@
               v-if="displayMode === 'markdown'"
               class="copy-btn print-btn"
               @click.stop="printContent"
+              :disabled="printFeedback === 'printing'"
               title="Export as PDF"
             >
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <svg v-if="printFeedback === 'done'" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="20 6 9 17 4 12"></polyline>
+              </svg>
+              <span v-else-if="printFeedback === 'printing'" class="spinner-border spinner-border-sm" role="status"></span>
+              <svg v-else width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <polyline points="6 9 6 2 18 2 18 9"></polyline>
                 <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"></path>
                 <rect x="6" y="14" width="12" height="8"></rect>
               </svg>
-              <span class="copy-label">Export PDF</span>
+              <span class="copy-label">{{ printFeedback === 'done' ? 'Done!' : printFeedback === 'printing' ? 'Printing...' : 'Export PDF' }}</span>
             </button>
           </div>
 
@@ -259,10 +269,12 @@ import { useMermaid } from '@/composables/useMermaid'
 const resourceStore = useResourceStore()
 const overlayRef = ref(null)
 const copyFeedback = ref(false)
+const printFeedback = ref('')  // '', 'printing', 'done'
 const displayMode = ref('raw')
 const directMarkdownRef = ref(null)
 const resourceMarkdownRef = ref(null)
 let copyTimeout = null
+let printIframe = null
 
 // Mermaid diagram rendering for markdown content views
 useMermaid(directMarkdownRef)
@@ -345,6 +357,10 @@ watch([currentIndex, isOpen], () => {
 onUnmounted(() => {
   document.body.style.overflow = ''
   if (copyTimeout) clearTimeout(copyTimeout)
+  if (printIframe && printIframe.parentNode) {
+    printIframe.parentNode.removeChild(printIframe)
+    printIframe = null
+  }
 })
 
 function getResourceUrl(resourceId) {
@@ -442,8 +458,12 @@ function formatTimestamp(timestamp) {
 }
 
 function printContent() {
+  if (printFeedback.value === 'printing') return
+
   const markdownRef = isDirectContent.value ? directMarkdownRef.value : resourceMarkdownRef.value
   if (!markdownRef) return
+
+  printFeedback.value = 'printing'
 
   const html = markdownRef.innerHTML
 
@@ -457,10 +477,20 @@ function printContent() {
   }
   const windowTitle = title.replace(/\.[^.]+$/, '')
 
-  const win = window.open('', '_blank', 'width=900,height=700')
-  if (!win) return
+  // Create hidden iframe to avoid popup blockers
+  const iframe = document.createElement('iframe')
+  iframe.style.position = 'fixed'
+  iframe.style.right = '0'
+  iframe.style.bottom = '0'
+  iframe.style.width = '0'
+  iframe.style.height = '0'
+  iframe.style.border = 'none'
+  document.body.appendChild(iframe)
+  printIframe = iframe
 
-  win.document.write(`<!DOCTYPE html>
+  const doc = iframe.contentDocument || iframe.contentWindow.document
+  doc.open()
+  doc.write(`<!DOCTYPE html>
 <html>
 <head>
   <meta charset="utf-8">
@@ -528,10 +558,19 @@ function printContent() {
 </head>
 <body>${html}</body>
 </html>`)
-  win.document.close()
-  win.focus()
-  win.print()
-  win.close()
+  doc.close()
+
+  iframe.contentWindow.focus()
+  iframe.contentWindow.print()
+
+  printFeedback.value = 'done'
+  setTimeout(() => {
+    printFeedback.value = ''
+    if (printIframe && printIframe.parentNode) {
+      printIframe.parentNode.removeChild(printIframe)
+    }
+    printIframe = null
+  }, 1500)
 }
 
 function handleImageError(event) {
