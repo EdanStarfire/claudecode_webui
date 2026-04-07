@@ -195,13 +195,10 @@ async function exportPNG() {
   const svgEl = getSvgElement()
   if (!svgEl) return
 
-  // ZenUML renders its entire diagram as an HTML block inside <foreignObject>.
-  // Canvas drawImage is tainted by this and toBlob() throws SecurityError.
-  // We detect ZenUML specifically by the .inline-block wrapper it injects,
-  // rather than blocking all foreignObject (which flowcharts may also contain
-  // for text labels without tainting the canvas).
-  const foEl = svgEl.querySelector('foreignObject')
-  if (foEl && foEl.querySelector('.inline-block')) {
+  // Any <foreignObject> in the SVG taints the canvas when drawn via drawImage,
+  // causing toBlob() to throw SecurityError. This affects ZenUML, flowcharts
+  // with HTML labels, and state diagrams — block all of them.
+  if (svgEl.querySelector('foreignObject') !== null) {
     showPngWarning('PNG export is not available for this diagram type. Use SVG export instead.')
     return
   }
@@ -210,13 +207,18 @@ async function exportPNG() {
   pngWarning.value = ''
 
   try {
-    // Read the SVG's intrinsic dimensions from its attributes (not CSS styles,
-    // which are layout-only and are not reflected in img.naturalWidth)
-    const attrW = parseFloat(svgEl.getAttribute('width')) || 0
-    const attrH = parseFloat(svgEl.getAttribute('height')) || 0
+    // Resolve pixel dimensions from the rendered bounding rect, falling back to
+    // the SVG viewBox. Attribute width/height may be "100%" or absent, so they
+    // are unreliable for canvas sizing and cause clipping on wide diagrams.
     const bbox = svgEl.getBoundingClientRect()
-    const natW = attrW > 0 ? attrW : (bbox.width || 800)
-    const natH = attrH > 0 ? attrH : (bbox.height || 600)
+    const vb = svgEl.viewBox?.baseVal
+    const width = (bbox.width > 0 ? bbox.width : (vb?.width || 800))
+    const height = (bbox.height > 0 ? bbox.height : (vb?.height || 600))
+
+    // Stamp explicit px dimensions onto the SVG before serialization so that
+    // the browser assigns correct naturalWidth/naturalHeight to the Image.
+    svgEl.setAttribute('width', width)
+    svgEl.setAttribute('height', height)
 
     const svgData = new XMLSerializer().serializeToString(svgEl)
     const blob = new Blob([svgData], { type: 'image/svg+xml;charset=utf-8' })
@@ -225,15 +227,18 @@ async function exportPNG() {
     await new Promise((resolve, reject) => {
       const img = new Image()
       img.onload = () => {
-        const w = img.naturalWidth || natW
-        const h = img.naturalHeight || natH
+        const w = img.naturalWidth || width
+        const h = img.naturalHeight || height
         const scale = 2 // retina
         const canvas = document.createElement('canvas')
         canvas.width = w * scale
         canvas.height = h * scale
         const ctx = canvas.getContext('2d')
+        // White background — prevents transparent areas rendering as black
+        ctx.fillStyle = '#ffffff'
+        ctx.fillRect(0, 0, canvas.width, canvas.height)
         ctx.scale(scale, scale)
-        ctx.drawImage(img, 0, 0)
+        ctx.drawImage(img, 0, 0, w, h)
         // canvas.toBlob throws SecurityError if canvas is tainted
         try {
           canvas.toBlob((pngBlob) => {
