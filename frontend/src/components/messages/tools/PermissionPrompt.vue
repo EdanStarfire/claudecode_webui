@@ -677,6 +677,8 @@ function autoResizeGuidance() {
   display: flex;
   flex-direction: column;
   gap: 1px;
+  flex: 1;
+  min-width: 0;
 }
 
 .editable-rule {
