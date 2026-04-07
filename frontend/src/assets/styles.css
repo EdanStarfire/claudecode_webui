@@ -1389,7 +1389,20 @@ button:focus {
     line-height: 1;
 }
 
-/* ========== MERMAID DIAGRAM STYLES (Issue #740) ========== */
+/* ========== MERMAID DIAGRAM STYLES (Issue #740, #1010) ========== */
+
+/* Allow assistant bubbles with diagrams to use more horizontal space (Issue #1010) */
+.msg-bubble-assistant:has(.mermaid-container),
+.msg-bubble-assistant.has-mermaid-diagram {
+    max-width: 95%;
+}
+
+@media (min-width: 1200px) {
+    .msg-bubble-assistant:has(.mermaid-container),
+    .msg-bubble-assistant.has-mermaid-diagram {
+        max-width: 98%;
+    }
+}
 
 /* Wrapper for rendered mermaid diagrams */
 .mermaid-container {
@@ -1408,6 +1421,7 @@ button:focus {
     display: flex;
     justify-content: center;
     overflow: hidden;
+    cursor: pointer;
 }
 
 .mermaid-diagram svg {
@@ -1461,6 +1475,33 @@ button:focus {
     color: #24292e;
 }
 
+/* Fullscreen button (bottom-right, left of toggle button) */
+.mermaid-fullscreen-btn {
+    position: absolute;
+    bottom: 6px;
+    right: 42px;
+    padding: 2px 6px;
+    font-size: 12px;
+    color: #586069;
+    background: rgba(255, 255, 255, 0.85);
+    border: 1px solid #d1d5db;
+    border-radius: 4px;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.15s, background 0.15s;
+    z-index: 1;
+    line-height: 1.4;
+}
+
+.mermaid-container:hover .mermaid-fullscreen-btn {
+    opacity: 1;
+}
+
+.mermaid-fullscreen-btn:hover {
+    background: #e9ecef;
+    color: #24292e;
+}
+
 /* Error banner for invalid mermaid syntax */
 .mermaid-error {
     padding: 6px 10px;
@@ -1479,7 +1520,8 @@ button:focus {
         padding: 8px;
     }
 
-    .mermaid-toggle {
+    .mermaid-toggle,
+    .mermaid-fullscreen-btn {
         opacity: 0.7;
     }
 }
