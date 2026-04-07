@@ -53,39 +53,16 @@
                 title="Rendered markdown (M)"
               >Markdown</button>
             </div>
-            <button
-              class="copy-btn"
-              @click.stop="copyDirectContent"
-              :title="copyFeedback ? 'Copied!' : 'Copy to clipboard'"
+            <CopyButton
+              :copied="copyFeedback"
               :disabled="!directTextContent"
-            >
-              <svg v-if="copyFeedback" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <polyline points="20 6 9 17 4 12"></polyline>
-              </svg>
-              <svg v-else width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
-                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
-              </svg>
-              <span class="copy-label">{{ copyFeedback ? 'Copied!' : 'Copy' }}</span>
-            </button>
-            <button
-              v-if="displayMode === 'markdown'"
-              class="copy-btn print-btn"
-              @click.stop="printContent"
-              :disabled="printFeedback === 'printing'"
-              title="Export as PDF"
-            >
-              <svg v-if="printFeedback === 'done'" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <polyline points="20 6 9 17 4 12"></polyline>
-              </svg>
-              <span v-else-if="printFeedback === 'printing'" class="spinner-border spinner-border-sm" role="status"></span>
-              <svg v-else width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <polyline points="6 9 6 2 18 2 18 9"></polyline>
-                <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"></path>
-                <rect x="6" y="14" width="12" height="8"></rect>
-              </svg>
-              <span class="copy-label">{{ printFeedback === 'done' ? 'Done!' : printFeedback === 'printing' ? 'Printing...' : 'Export PDF' }}</span>
-            </button>
+              @click="copyDirectContent"
+            />
+            <ExportPdfButton
+              :feedback="printFeedback"
+              :display-mode="displayMode"
+              @click="printContent"
+            />
           </div>
           <div class="text-body">
             <pre v-if="directTextContent && displayMode === 'raw'" class="text-content">{{ directTextContent }}</pre>
@@ -158,41 +135,18 @@
                 title="Rendered markdown (M)"
               >Markdown</button>
             </div>
-            <button
-              class="copy-btn"
-              @click.stop="copyToClipboard"
-              :title="copyFeedback ? 'Copied!' : (displayMode === 'markdown' ? 'Copy raw text' : 'Copy to clipboard')"
+            <CopyButton
+              :copied="copyFeedback"
               :disabled="!textContent"
-            >
-              <!-- Checkmark icon when copied -->
-              <svg v-if="copyFeedback" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <polyline points="20 6 9 17 4 12"></polyline>
-              </svg>
-              <!-- Copy icon -->
-              <svg v-else width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
-                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
-              </svg>
-              <span class="copy-label">{{ copyFeedback ? 'Copied!' : (displayMode === 'markdown' ? 'Copy raw' : 'Copy') }}</span>
-            </button>
-            <button
-              v-if="displayMode === 'markdown'"
-              class="copy-btn print-btn"
-              @click.stop="printContent"
-              :disabled="printFeedback === 'printing'"
-              title="Export as PDF"
-            >
-              <svg v-if="printFeedback === 'done'" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <polyline points="20 6 9 17 4 12"></polyline>
-              </svg>
-              <span v-else-if="printFeedback === 'printing'" class="spinner-border spinner-border-sm" role="status"></span>
-              <svg v-else width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <polyline points="6 9 6 2 18 2 18 9"></polyline>
-                <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"></path>
-                <rect x="6" y="14" width="12" height="8"></rect>
-              </svg>
-              <span class="copy-label">{{ printFeedback === 'done' ? 'Done!' : printFeedback === 'printing' ? 'Printing...' : 'Export PDF' }}</span>
-            </button>
+              :label="displayMode === 'markdown' ? 'Copy raw' : 'Copy'"
+              :title="displayMode === 'markdown' ? 'Copy raw text' : 'Copy to clipboard'"
+              @click="copyToClipboard"
+            />
+            <ExportPdfButton
+              :feedback="printFeedback"
+              :display-mode="displayMode"
+              @click="printContent"
+            />
           </div>
 
           <!-- Text Body -->
@@ -265,6 +219,8 @@ import { computed, watch, ref, nextTick, onUnmounted } from 'vue'
 import { useResourceStore } from '@/stores/resource'
 import { renderMarkdown } from '@/composables/useMarkdown'
 import { useMermaid } from '@/composables/useMermaid'
+import CopyButton from './CopyButton.vue'
+import ExportPdfButton from './ExportPdfButton.vue'
 
 const resourceStore = useResourceStore()
 const overlayRef = ref(null)
@@ -735,7 +691,7 @@ function handleImageError(event) {
   margin-top: 2px;
 }
 
-.copy-btn {
+:deep(.copy-btn) {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -751,17 +707,17 @@ function handleImageError(event) {
   margin-left: 12px;
 }
 
-.copy-btn:hover:not(:disabled) {
+:deep(.copy-btn:hover:not(:disabled)) {
   background: #dee2e6;
   color: #212529;
 }
 
-.copy-btn:disabled {
+:deep(.copy-btn:disabled) {
   opacity: 0.5;
   cursor: not-allowed;
 }
 
-.copy-label {
+:deep(.copy-label) {
   white-space: nowrap;
 }
 
