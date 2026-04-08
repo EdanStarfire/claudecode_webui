@@ -402,6 +402,16 @@ const isImporting = ref(false)
 const showImportRename = ref(false)
 const importRenameTo = ref('')
 
+// --- CONFIG_FIELDS helpers ---
+const compareNewlineField = (form, orig) =>
+  (form || '') !== ((orig || []).join?.('\n') ?? '')
+
+const compareCommaSeparated = (form, orig) => {
+  const formList = (form || '').split(',').map(s => s.trim()).filter(Boolean).sort().join(',')
+  const origList = (Array.isArray(orig) ? orig : (orig || '').split(',').map(s => s.trim()).filter(Boolean)).sort().join(',')
+  return formList !== origList
+}
+
 // --- CONFIG_FIELDS schema (issue #731) ---
 // Each field: { default, change, contexts, trackState?, toPayload?, toUpdatePayload?, fromSource?, compare? }
 const CONFIG_FIELDS = {
@@ -474,11 +484,7 @@ const CONFIG_FIELDS = {
     trackState: true,
     toPayload: (v) => { const l = v.split(',').map(s => s.trim()).filter(Boolean); return l.length ? l : null },
     fromSource: (s) => s.allowed_tools?.join?.(', ') ?? (s.allowed_tools || ''),
-    compare: (form, orig) => {
-      const formList = (form || '').split(',').map(s => s.trim()).filter(Boolean).sort().join(',')
-      const origList = (Array.isArray(orig) ? orig : (orig || '').split(',').map(s => s.trim()).filter(Boolean)).sort().join(',')
-      return formList !== origList
-    },
+    compare: compareCommaSeparated,
   },
   disallowed_tools: {
     default: '',
@@ -533,7 +539,7 @@ const CONFIG_FIELDS = {
     toPayload: (v) => v.trim() ? v.trim().split('\n').map(d => d.trim()).filter(Boolean) : null,
     toUpdatePayload: (v) => v.trim() ? v.trim().split('\n').map(d => d.trim()).filter(Boolean) : [],
     fromSource: (s) => Array.isArray(s.additional_directories) ? s.additional_directories.join('\n') : '',
-    compare: (form, orig) => (form || '') !== ((orig || []).join?.('\n') ?? ''),
+    compare: compareNewlineField,
   },
   docker_enabled: {
     default: false,
@@ -552,7 +558,7 @@ const CONFIG_FIELDS = {
     contexts: ['session', 'template', 'ephemeral', 'update'],
     toPayload: (v) => v.trim() ? v.trim().split('\n').map(m => m.trim()).filter(Boolean) : null,
     fromSource: (s) => Array.isArray(s.docker_extra_mounts) ? s.docker_extra_mounts.join('\n') : '',
-    compare: (form, orig) => (form || '') !== ((orig || []).join?.('\n') ?? ''),
+    compare: compareNewlineField,
   },
   docker_home_directory: {
     default: '',
