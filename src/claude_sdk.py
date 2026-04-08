@@ -1617,6 +1617,30 @@ class ClaudeSDK:
                     parts.append("Recent stderr:\n" + "\n".join(recent_stderr))
                 return "\n".join(parts)
 
+        # Phase 1.5: Detect stale resume ID (issue #1017)
+        # When --resume points to a CLI session that no longer exists, the CLI exits
+        # immediately with code 1, empty stderr, and zero queries sent.
+        if (
+            self.resume_session_id is not None
+            and not stderr_buffer
+            and self._session_health_checks.get("total_queries_sent", 0) == 0
+        ):
+            stale_patterns = [
+                r"exit code[:\s]+(\d+)",
+                r"exited with code\s+(\d+)",
+                r"exit status\s+(\d+)",
+                r"returned non-zero exit status\s+(\d+)",
+                r"Command failed with exit code\s+(\d+)",
+            ]
+            for pattern in stale_patterns:
+                match = re.search(pattern, combined, re.IGNORECASE)
+                if match and int(match.group(1)) == 1:
+                    return (
+                        "Process exited with error: The stored session ID is no longer valid "
+                        "(the Claude Code conversation history may have been cleared or expired).\n\n"
+                        "Recovery: Use **Reset Session** instead of Restart to start a fresh conversation."
+                    )
+
         # Phase 2: Extract exit code from error message
         exit_code = None
         patterns = [
