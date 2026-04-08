@@ -531,6 +531,27 @@ class TestSessionCoordinator:
         assert storage_manager.session_dir.exists()
         assert storage_manager.messages_file.exists()
 
+    @pytest.mark.asyncio
+    async def test_issue_1019_reset_errored_session_succeeds(self, temp_coordinator, sample_session_config):
+        """reset_session() on an ERROR-state session (no active SDK) transitions to TERMINATED then starts fresh."""
+        coordinator = temp_coordinator
+        session_id = await coordinator.create_session(**sample_session_config)
+
+        # Force session into ERROR state (simulates a failed start)
+        await coordinator.session_manager.update_session_state(session_id, SessionState.ERROR, "simulated error")
+        session_info = await coordinator.session_manager.get_session_info(session_id)
+        assert session_info.state == SessionState.ERROR
+
+        # No active SDK (as happens with errored sessions)
+        assert session_id not in coordinator._active_sdks
+
+        # Mock start_session to succeed without actually launching SDK
+        with patch.object(coordinator, "start_session", return_value=True) as mock_start:
+            success = await coordinator.reset_session(session_id)
+
+        assert success is True
+        mock_start.assert_called_once_with(session_id, None)
+
 
 class TestDeleteSessionScheduleCancellation:
     """Tests for schedule cancellation when deleting sessions (Issue #671)."""
