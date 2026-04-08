@@ -1586,6 +1586,15 @@ class ClaudeSDK:
     # Exit codes that represent container setup/config errors (not runtime failures)
     _SETUP_EXIT_CODES: frozenset[int] = frozenset({126, 127})
 
+    # Regex patterns for extracting exit codes from error messages (used in Phase 1.5 and Phase 2)
+    _EXIT_CODE_PATTERNS: list[str] = [
+        r"exit code[:\s]+(\d+)",
+        r"exited with code\s+(\d+)",
+        r"exit status\s+(\d+)",
+        r"returned non-zero exit status\s+(\d+)",
+        r"Command failed with exit code\s+(\d+)",
+    ]
+
     def _parse_container_exit_code(
         self, error_msg: str, stderr_buffer: list[str]
     ) -> str | None:
@@ -1625,14 +1634,7 @@ class ClaudeSDK:
             and not stderr_buffer
             and self._session_health_checks.get("total_queries_sent", 0) == 0
         ):
-            stale_patterns = [
-                r"exit code[:\s]+(\d+)",
-                r"exited with code\s+(\d+)",
-                r"exit status\s+(\d+)",
-                r"returned non-zero exit status\s+(\d+)",
-                r"Command failed with exit code\s+(\d+)",
-            ]
-            for pattern in stale_patterns:
+            for pattern in self._EXIT_CODE_PATTERNS:
                 match = re.search(pattern, combined, re.IGNORECASE)
                 if match and int(match.group(1)) == 1:
                     return (
@@ -1643,14 +1645,7 @@ class ClaudeSDK:
 
         # Phase 2: Extract exit code from error message
         exit_code = None
-        patterns = [
-            r"exit code[:\s]+(\d+)",
-            r"exited with code\s+(\d+)",
-            r"exit status\s+(\d+)",
-            r"returned non-zero exit status\s+(\d+)",
-            r"Command failed with exit code\s+(\d+)",
-        ]
-        for pattern in patterns:
+        for pattern in self._EXIT_CODE_PATTERNS:
             match = re.search(pattern, combined, re.IGNORECASE)
             if match:
                 exit_code = int(match.group(1))
