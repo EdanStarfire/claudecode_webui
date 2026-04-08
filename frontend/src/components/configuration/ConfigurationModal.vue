@@ -474,6 +474,11 @@ const CONFIG_FIELDS = {
     trackState: true,
     toPayload: (v) => { const l = v.split(',').map(s => s.trim()).filter(Boolean); return l.length ? l : null },
     fromSource: (s) => s.allowed_tools?.join?.(', ') ?? (s.allowed_tools || ''),
+    compare: (form, orig) => {
+      const formList = (form || '').split(',').map(s => s.trim()).filter(Boolean).sort().join(',')
+      const origList = (Array.isArray(orig) ? orig : (orig || '').split(',').map(s => s.trim()).filter(Boolean)).sort().join(',')
+      return formList !== origList
+    },
   },
   disallowed_tools: {
     default: '',
@@ -547,6 +552,7 @@ const CONFIG_FIELDS = {
     contexts: ['session', 'template', 'ephemeral', 'update'],
     toPayload: (v) => v.trim() ? v.trim().split('\n').map(m => m.trim()).filter(Boolean) : null,
     fromSource: (s) => Array.isArray(s.docker_extra_mounts) ? s.docker_extra_mounts.join('\n') : '',
+    compare: (form, orig) => (form || '') !== ((orig || []).join?.('\n') ?? ''),
   },
   docker_home_directory: {
     default: '',
@@ -577,7 +583,7 @@ const CONFIG_FIELDS = {
     default: [],
     change: 'restart',
     contexts: ['session', 'template', 'ephemeral', 'update'],
-    compare: (a, b) => JSON.stringify(a || []) === JSON.stringify(b || []),
+    compare: (a, b) => JSON.stringify(a || []) !== JSON.stringify(b || []),
   },
   enable_claudeai_mcp_servers: {
     default: true,
