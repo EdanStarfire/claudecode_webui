@@ -1922,6 +1922,13 @@ class SessionCoordinator:
                 await asyncio.sleep(0.5)
                 del self._active_sdks[session_id]
 
+            # Issue #1019: If session is in ERROR state (no active SDK to disconnect),
+            # transition to TERMINATED so start_session() will accept it.
+            _pre_reset_info = await self.session_manager.get_session_info(session_id)
+            if _pre_reset_info and _pre_reset_info.state == SessionState.ERROR:
+                await self.session_manager.update_session_state(session_id, SessionState.TERMINATED)
+                coord_logger.info(f"Transitioned errored session {session_id} to TERMINATED for reset")
+
             # Clear Claude Code session ID from state (prevents resume)
             session_info = await self.session_manager.get_session_info(session_id)
             if session_info:
