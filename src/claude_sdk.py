@@ -485,7 +485,7 @@ class ClaudeSDK:
             logger.exception(f"Failed to set permission mode for session {self.session_id}")
             if self.error_callback:
                 await self._safe_callback(self.error_callback, "set_permission_mode_failed", e)
-            return False
+            raise  # Propagate so callers can surface the SDK error message to the user
 
     async def get_mcp_status(self) -> dict:
         """Get MCP server status for the current session."""

@@ -1782,7 +1782,7 @@ class SessionCoordinator:
                 logger.warning(f"Session {session_id} not in active state (state: {session_info.state})")
                 return False
 
-            # Call SDK set_permission_mode method
+            # Call SDK set_permission_mode method (may raise if SDK rejects the mode)
             sdk_result = await sdk.set_permission_mode(mode)
 
             if sdk_result:
@@ -1794,9 +1794,12 @@ class SessionCoordinator:
 
             return sdk_result
 
-        except Exception:
+        except ValueError:
+            raise
+        except Exception as e:
+            # Re-raise as ValueError so web_server can surface the SDK error message to the user
             logger.exception(f"Failed to set permission mode for session {session_id}")
-            return False
+            raise ValueError(str(e)) from e
 
     async def get_mcp_status(self, session_id: str) -> dict:
         """Get MCP server status for a session."""

@@ -1505,7 +1505,14 @@ async function updateSession() {
 
   // Update permission mode if changed and session is active (this goes through SDK)
   if (isActive && formData.permission_mode !== editSession.value.current_permission_mode) {
-    await sessionStore.setPermissionMode(sessionId, formData.permission_mode)
+    const previousMode = editSession.value.current_permission_mode
+    try {
+      await sessionStore.setPermissionMode(sessionId, formData.permission_mode)
+    } catch (e) {
+      // Revert form to the current session mode so the UI reflects reality
+      formData.permission_mode = previousMode
+      throw e
+    }
   }
 }
 

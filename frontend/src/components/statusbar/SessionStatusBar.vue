@@ -139,14 +139,16 @@ const modeOrder = ['default', 'acceptEdits', 'plan', 'dontAsk', 'auto', 'bypassP
 const cycleMode = async () => {
   if (!session.value) return
 
+  // Try each subsequent mode in order, skipping any that the SDK rejects
   const currentIndex = modeOrder.indexOf(currentMode.value)
-  const nextIndex = (currentIndex + 1) % modeOrder.length
-  const nextMode = modeOrder[nextIndex]
-
-  try {
-    await sessionStore.setPermissionMode(props.sessionId, nextMode)
-  } catch (error) {
-    console.error('Failed to cycle permission mode:', error)
+  for (let i = 1; i <= modeOrder.length; i++) {
+    const tryMode = modeOrder[(currentIndex + i) % modeOrder.length]
+    try {
+      await sessionStore.setPermissionMode(props.sessionId, tryMode)
+      return
+    } catch {
+      // Mode not available (e.g. plan restriction) — try next
+    }
   }
 }
 
