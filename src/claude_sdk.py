@@ -845,6 +845,11 @@ class ClaudeSDK:
         if self.bare_mode:
             extra_args["bare"] = None
 
+        # Issue #1027: Always enable auto mode and allow mid-session mode cycling
+        # Use None (not True) so the SDK transport emits bare flags without values.
+        extra_args["enable-auto-mode"] = None
+        extra_args["allow-dangerously-skip-permissions"] = None
+
         options_kwargs = {
             "cwd": str(self.working_directory),
             "permission_mode": self.current_permission_mode,

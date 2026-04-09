@@ -358,6 +358,15 @@ class SystemMessageHandler(MessageHandler):
                 attempt_str = f"{attempt}/{max_retries}" if attempt and max_retries else str(attempt or "?")
                 wait_str = f" (~{round(wait_ms / 1000)}s)" if wait_ms else ""
                 extracted["content"] = f"API retry {attempt_str}{wait_str}"
+
+            # Issue #1027: Detect status SystemMessages carrying permissionMode updates
+            if subtype == "status":
+                status_data = sdk_msg.data if hasattr(sdk_msg, 'data') and sdk_msg.data else {}
+                permission_mode = status_data.get("permissionMode")
+                if permission_mode:
+                    extracted["metadata"]["subtype"] = "permission_mode_change"
+                    extracted["metadata"]["permission_mode"] = permission_mode
+                    extracted["content"] = f"Permission mode changed to {permission_mode}"
         else:
             # Extract from dictionary data
             # Look for subtype in multiple locations for robustness
