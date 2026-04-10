@@ -564,7 +564,7 @@ class SessionManager:
 
                 session.is_processing = is_processing
                 session.updated_at = datetime.now(UTC)
-                await self._persist_session_state(session_id)
+                await self._persist_processing_state_only(session_id)
                 await self._notify_state_change_callbacks(session_id, session.state)
                 session_logger.info(f"Updated session {session_id} processing state to {is_processing}")
                 return True
@@ -642,6 +642,34 @@ class SessionManager:
 
         except Exception as e:
             logger.error(f"Failed to persist session state for {session_id}: {e}")
+            raise
+
+    async def _persist_processing_state_only(self, session_id: str):
+        """Persist only is_processing and updated_at to state.json (targeted write).
+
+        Reads the existing file, patches two fields, and writes back.
+        Falls back to full write if the file doesn't exist yet.
+        """
+        try:
+            session = self._active_sessions[session_id]
+            state_file = self.sessions_dir / session_id / "state.json"
+
+            if not state_file.exists():
+                # No existing file — fall back to full write
+                await self._persist_session_state(session_id)
+                return
+
+            with open(state_file) as f:
+                data = json.load(f)
+
+            data['is_processing'] = session.is_processing
+            data['updated_at'] = session.updated_at.isoformat()
+
+            with open(state_file, 'w') as f:
+                json.dump(data, f, indent=2)
+
+        except Exception as e:
+            logger.error(f"Failed to persist processing state for {session_id}: {e}")
             raise
 
     async def update_claude_code_session_id(self, session_id: str, claude_code_session_id: str | None):
