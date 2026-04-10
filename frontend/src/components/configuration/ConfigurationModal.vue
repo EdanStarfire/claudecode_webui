@@ -1431,7 +1431,7 @@ async function handleSubmit() {
   } catch (error) {
     console.error('Submit failed:', error)
     // Issue #580: Show friendly slug conflict message
-    const detail = error.response?.data?.detail || error.message || 'Operation failed. Please try again.'
+    const detail = error.data?.detail || error.response?.data?.detail || error.message || 'Operation failed. Please try again.'
     if (mode.value === 'save-as-template' && detail.includes('already exists')) {
       errorMessage.value = `A template with a similar name already exists. Choose a different name or use Update Template to overwrite it.`
     } else {
@@ -1498,6 +1498,12 @@ async function updateSession() {
   const updates = {
     ...extractPayload('update'),
     sandbox_config: formData.sandbox_enabled ? buildSandboxConfig() : null,
+  }
+
+  // For active sessions, permission_mode is applied live via SDK below — exclude it from
+  // the PATCH so the stored config isn't polluted if the SDK rejects the mode.
+  if (isActive) {
+    delete updates.permission_mode
   }
 
   // Update session via PATCH (takes effect on next restart if session is active)
