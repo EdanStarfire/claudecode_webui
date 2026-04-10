@@ -555,6 +555,13 @@ class SessionManager:
                     logger.error(f"Session {session_id} not found")
                     return False
 
+                # Issue #1029: Early-return if value unchanged. The reactive approach
+                # fires update_processing_state(True) on every assistant message
+                # (every streaming chunk). Without this guard, each token triggers
+                # a full JSON file write + callback dispatch.
+                if session.is_processing == is_processing:
+                    return True
+
                 session.is_processing = is_processing
                 session.updated_at = datetime.now(UTC)
                 await self._persist_session_state(session_id)

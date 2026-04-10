@@ -150,10 +150,6 @@ class SessionCoordinator:
         self._session_reset_callbacks: list[Callable] = []
         self._tool_call_broadcast_callbacks: list[Callable] = []
 
-        # Issue #748: Track pending result messages per session.
-        # Incremented on send_message(), decremented on ResultMessage.
-        # If >0 after decrement, a newer query is in flight — don't reset is_processing.
-        self._pending_results: dict[str, int] = {}
 
         # Track applied permission updates for state management
         self._permission_updates: dict[str, list[dict]] = {}  # session_id -> list of applied updates
@@ -804,9 +800,6 @@ class SessionCoordinator:
 
             # Defensively reset processing state on session start
             await self.session_manager.update_processing_state(session_id, False)
-            # Reset pending results counter — stale count from a previous run would cause
-            # is_processing to get stuck true after the next send_message completes.
-            self._pending_results[session_id] = 0
 
             # Check if SDK exists and is running
             sdk = self._active_sdks.get(session_id)
@@ -1672,32 +1665,22 @@ class SessionCoordinator:
 
             # Mark session as processing before sending message
             await self.session_manager.update_processing_state(session_id, True)
-            # Issue #748: Track that we expect a ResultMessage for this query
-            self._pending_results[session_id] = self._pending_results.get(session_id, 0) + 1
 
             # Send message through SDK (will be queued and processed)
-            # The SDK should echo the user message back through the stream
             result = await sdk.send_message(message, metadata=metadata)
 
-            # If message sending failed, decrement counter and conditionally reset processing
             if not result:
-                self._pending_results[session_id] = max(0, self._pending_results.get(session_id, 0) - 1)
-                # Issue #1002: Only reset is_processing if no other queries are in flight
-                if self._pending_results.get(session_id, 0) == 0:
-                    await self.session_manager.update_processing_state(session_id, False)
+                # Issue #1029: Send failed — set is_processing False directly.
+                # If another query is in flight, the next assistant message
+                # from the SDK stream will set it back to True.
+                await self.session_manager.update_processing_state(session_id, False)
 
             return result
 
         except Exception:
             logger.exception(f"Failed to send message to session {session_id}")
-            # Reset processing state on error
             try:
-                # Decrement the counter that was incremented before the exception so
-                # it doesn't leave is_processing permanently stuck true.
-                self._pending_results[session_id] = max(0, self._pending_results.get(session_id, 0) - 1)
-                # Issue #1002: Only reset is_processing if no other queries are in flight
-                if self._pending_results.get(session_id, 0) == 0:
-                    await self.session_manager.update_processing_state(session_id, False)
+                await self.session_manager.update_processing_state(session_id, False)
             except Exception:
                 pass  # Don't fail on state update error
             return False
@@ -3516,18 +3499,19 @@ class SessionCoordinator:
                             f"Turn completed with {len(errors)} error(s) for session {session_id}: {errors}"
                         )
 
-                # Check if this message indicates processing completion
+                # Issue #1029: Reactive is_processing tracking based on message type.
+                # Instead of counting pending ResultMessages (which breaks when the SDK
+                # folds injected messages into the active turn), we react to message types:
+                # - 'result' → turn done, set is_processing = False
+                # - 'assistant' → SDK actively responding, set is_processing = True
+                # This is self-correcting: if a result briefly sets False, the next
+                # assistant message from a folded query immediately re-sets True.
+
                 if parsed_message.type.value == 'result':
-                    # Issue #748: Decrement pending results counter.
-                    # Only reset is_processing if no more queries are in flight.
-                    pending = self._pending_results.get(session_id, 0)
-                    if pending > 0:
-                        self._pending_results[session_id] = pending - 1
-                    if self._pending_results.get(session_id, 0) == 0:
-                        try:
-                            await self.session_manager.update_processing_state(session_id, False)
-                        except Exception:
-                            logger.exception(f"Failed to reset processing state for session {session_id}")
+                    try:
+                        await self.session_manager.update_processing_state(session_id, False)
+                    except Exception:
+                        logger.exception(f"Failed to reset processing state for session {session_id}")
 
                     # Issue #904: Poll for SDK-generated session title after each turn
                     task = asyncio.create_task(self._check_sdk_generated_name(session_id))
@@ -3535,19 +3519,19 @@ class SessionCoordinator:
                         lambda t: logger.exception("SDK title check task failed") if t.exception() else None
                     )
 
-                # Also reset processing state on interrupt_success
+                elif parsed_message.type.value == 'assistant':
+                    try:
+                        await self.session_manager.update_processing_state(session_id, True)
+                    except Exception:
+                        logger.exception(f"Failed to set processing state for session {session_id}")
+
+                # Reset processing state on interrupt_success
                 if parsed_message.type.value == 'system' and parsed_message.metadata.get('subtype') == 'interrupt_success':
-                    # Issue #1002: The interrupted query won't produce a ResultMessage,
-                    # so decrement _pending_results to account for it.
-                    if self._pending_results.get(session_id, 0) > 0:
-                        self._pending_results[session_id] = self._pending_results[session_id] - 1
-                    # Only reset is_processing if no queries pending (PIVOT sends a new message after interrupt)
-                    if self._pending_results.get(session_id, 0) == 0:
-                        try:
-                            await self.session_manager.update_processing_state(session_id, False)
-                            coord_logger.info(f"Reset processing state for session {session_id} after interrupt")
-                        except Exception:
-                            logger.exception(f"Failed to reset processing state after interrupt for session {session_id}")
+                    try:
+                        await self.session_manager.update_processing_state(session_id, False)
+                        coord_logger.info(f"Reset processing state for session {session_id} after interrupt")
+                    except Exception:
+                        logger.exception(f"Failed to reset processing state after interrupt for session {session_id}")
 
                 # Call registered callbacks with processed message (maintain backward compatibility)
                 callbacks = self._message_callbacks.get(session_id, [])
@@ -3600,10 +3584,6 @@ class SessionCoordinator:
                 # Reset processing state on any error
                 try:
                     await self.session_manager.update_processing_state(session_id, False)
-                    # Issue #1002: Reset pending results counter to prevent phantom counts
-                    # from leaving is_processing stuck true on subsequent messages.
-                    self._pending_results[session_id] = 0
-                    # logger.info(f"Reset processing state for session {session_id} after error: {error_type}")
                 except Exception:
                     logger.exception(f"Failed to reset processing state for session {session_id}")
 
