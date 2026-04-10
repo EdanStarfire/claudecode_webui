@@ -42,7 +42,7 @@ from .project_manager import ProjectInfo, ProjectManager
 from .queue_manager import QueueManager
 from .queue_processor import QueueProcessor
 from .session_config import SessionConfig
-from .session_manager import SessionManager, SessionState
+from .session_manager import STOPPED_STATES, SessionManager, SessionState
 from .task_utils import task_done_log_exception
 from .timestamp_utils import get_unix_timestamp
 
@@ -1755,7 +1755,7 @@ class SessionCoordinator:
                 return False
 
             # For non-running sessions, just persist to disk — the mode will be applied at startup
-            if session_info.state in [SessionState.CREATED, SessionState.PAUSED, SessionState.TERMINATED, SessionState.ERROR]:
+            if session_info.state in STOPPED_STATES:
                 await self.session_manager.update_permission_mode(session_id, mode)
                 coord_logger.info(f"Permission mode persisted to '{mode}' for stopped session {session_id}")
                 return True

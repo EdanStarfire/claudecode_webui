@@ -11,7 +11,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from .logging_config import get_logger
-from .session_manager import SessionState
+from .session_manager import AUTO_START_STATES, SessionState
 
 if TYPE_CHECKING:
     from .session_coordinator import SessionCoordinator
@@ -142,7 +142,7 @@ class QueueProcessor:
                     break
 
                 # Auto-start session if needed
-                if session_info.state in (SessionState.CREATED, SessionState.TERMINATED):
+                if session_info.state in AUTO_START_STATES:
                     queue_proc_logger.info(f"Auto-starting session {session_id} for queue processing")
                     # Register WebSocket message callback so messages are broadcast to frontend
                     self._ensure_message_callback(session_id)

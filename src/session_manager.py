@@ -68,6 +68,22 @@ class SessionState(Enum):
     ERROR = "error"
 
 
+# Named SessionState groupings — update these when adding new states
+STOPPED_STATES: frozenset[SessionState] = frozenset({
+    SessionState.CREATED, SessionState.PAUSED,
+    SessionState.TERMINATED, SessionState.ERROR,
+})
+STARTABLE_STATES: frozenset[SessionState] = frozenset({
+    SessionState.CREATED, SessionState.PAUSED, SessionState.TERMINATED,
+})
+RUNNABLE_STATES: frozenset[SessionState] = frozenset({
+    SessionState.ACTIVE, SessionState.STARTING,
+})
+AUTO_START_STATES: frozenset[SessionState] = frozenset({
+    SessionState.CREATED, SessionState.TERMINATED,
+})
+
+
 @dataclass
 class SessionInfo:
     """Session metadata and state information (all sessions are minions - issue #349)"""
@@ -291,7 +307,7 @@ class SessionManager:
                             original_processing = session_info.is_processing
                             state_changed = False
 
-                            if session_info.state in [SessionState.ACTIVE, SessionState.STARTING]:
+                            if session_info.state in RUNNABLE_STATES:
                                 session_info.state = SessionState.CREATED
                                 session_info.updated_at = datetime.now(UTC)
                                 state_changed = True
@@ -450,7 +466,7 @@ class SessionManager:
                     logger.error(f"Session {session_id} not found")
                     return False
 
-                if session.state not in [SessionState.CREATED, SessionState.PAUSED, SessionState.TERMINATED]:
+                if session.state not in STARTABLE_STATES:
                     session_logger.warning(f"Cannot start session {session_id} in state {session.state}")
                     return False
 
