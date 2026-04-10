@@ -457,6 +457,12 @@ export const useWebSocketStore = defineStore('websocket', () => {
             message.metadata?.init_data) {
           sessionStore.storeInitData(sessionId, message.metadata.init_data)
         }
+        // Issue #1027: SDK status events carrying permission mode changes
+        if (message.type === 'system' &&
+            (message.subtype === 'permission_mode_change' || message.metadata?.subtype === 'permission_mode_change') &&
+            message.metadata?.permission_mode) {
+          sessionStore.updateSession(sessionId, { current_permission_mode: message.metadata.permission_mode })
+        }
         messageStore.addMessage(sessionId, message)
         break
       }

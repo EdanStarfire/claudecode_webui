@@ -1634,7 +1634,7 @@ class ClaudeWebUI:
         # ==================== PERMISSION MODE ENDPOINT ====================
 
         @self.app.post("/api/sessions/{session_id}/permission-mode")
-        @handle_exceptions("set permission mode")
+        @handle_exceptions("set permission mode", value_error_status=400)
         async def set_permission_mode(session_id: str, request: PermissionModeRequest):
             """Set the permission mode for a session"""
             # Validate mode

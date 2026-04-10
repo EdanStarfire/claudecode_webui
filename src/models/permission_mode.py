@@ -16,3 +16,4 @@ class PermissionMode(str, Enum):
     PLAN = "plan"
     BYPASS_PERMISSIONS = "bypassPermissions"
     DONT_ASK = "dontAsk"
+    AUTO = "auto"

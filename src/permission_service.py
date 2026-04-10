@@ -81,24 +81,6 @@ class PermissionService:
                         suggestions.append(s)
                 logger.info(f"Permission context has {len(suggestions)} suggestions")
 
-            # INJECT: Add setMode suggestion for ExitPlanMode when in plan mode
-            if tool_name == 'ExitPlanMode':
-                try:
-                    session_info = await self.coordinator.session_manager.get_session_info(session_id)
-                    if session_info and session_info.current_permission_mode == 'plan':
-                        # Create setMode suggestion to allow transition to acceptEdits
-                        setmode_suggestion = {
-                            'type': 'setMode',
-                            'mode': 'acceptEdits',
-                            'destination': 'session'
-                        }
-
-                        # Prepend so it appears first in UI
-                        suggestions.insert(0, setmode_suggestion)
-                        logger.info(f"Injected setMode suggestion for ExitPlanMode in session {session_id}")
-                except Exception:
-                    logger.exception("Failed to inject setMode suggestion for ExitPlanMode")
-
             # Store permission request message using dataclass (Phase 0, Issue #310)
             try:
                 # Convert suggestions to dataclass format
@@ -306,15 +288,6 @@ class PermissionService:
                         )
                         updated_permissions.append(update)
                         applied_updates_for_storage.append(suggestion_dict)
-
-                        # Immediately update our session state to reflect the SDK's internal mode change
-                        if suggestion_dict['type'] == 'setMode' and suggestion_dict.get('mode'):
-                            new_mode = suggestion_dict['mode']
-                            try:
-                                await self.coordinator.session_manager.update_permission_mode(session_id, new_mode)
-                                logger.info(f"Updated session {session_id} permission mode to {new_mode}")
-                            except Exception:
-                                logger.exception("Failed to update session mode")
 
                         # Issue #630: Persist addDirectories to session configuration
                         if suggestion_dict['type'] == 'addDirectories' and suggestion_dict.get('directories'):

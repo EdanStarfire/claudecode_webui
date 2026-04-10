@@ -98,6 +98,14 @@
           title="No permission prompts — agent limited to pre-approved tools only"
         >Don't Ask</button>
         <button
+          type="button"
+          class="perm-btn perm-auto"
+          :class="{ active: formData.permission_mode === 'auto', disabled: permDisabled }"
+          :disabled="permDisabled"
+          @click="setPermissionMode('auto')"
+          title="Autonomous mode — agent makes its own tool decisions"
+        >Auto</button>
+        <button
           v-if="!isEditSession || canUseBypassPermissions"
           type="button"
           class="perm-btn perm-bypass"

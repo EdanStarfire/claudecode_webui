@@ -485,7 +485,7 @@ class ClaudeSDK:
             logger.exception(f"Failed to set permission mode for session {self.session_id}")
             if self.error_callback:
                 await self._safe_callback(self.error_callback, "set_permission_mode_failed", e)
-            return False
+            raise  # Propagate so callers can surface the SDK error message to the user
 
     async def get_mcp_status(self) -> dict:
         """Get MCP server status for the current session."""
@@ -844,6 +844,11 @@ class ClaudeSDK:
         # Issue #902: Bare mode skips hooks, LSP, plugin sync, skill walks
         if self.bare_mode:
             extra_args["bare"] = None
+
+        # Issue #1027: Always enable auto mode and allow mid-session mode cycling
+        # Use None (not True) so the SDK transport emits bare flags without values.
+        extra_args["enable-auto-mode"] = None
+        extra_args["allow-dangerously-skip-permissions"] = None
 
         options_kwargs = {
             "cwd": str(self.working_directory),
