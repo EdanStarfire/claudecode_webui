@@ -253,9 +253,7 @@ const isSessionActive = computed(() => {
   return props.session?.state === 'active' || props.session?.state === 'starting'
 })
 
-const permDisabled = computed(() => {
-  return isEditSession.value && !isSessionActive.value
-})
+const permDisabled = computed(() => false)
 
 const canUseBypassPermissions = computed(() => {
   return props.session?.initial_permission_mode === 'bypassPermissions'

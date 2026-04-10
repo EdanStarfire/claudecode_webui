@@ -1765,19 +1765,25 @@ class SessionCoordinator:
                 logger.error(f"Invalid permission mode: {mode}")
                 return False
 
-            # Check if SDK exists and is active
-            sdk = self._active_sdks.get(session_id)
-            if not sdk:
-                logger.warning(f"No active SDK found for session {session_id} - cannot set permission mode")
-                return False
-
             # Check session state
             session_info = await self.session_manager.get_session_info(session_id)
             if not session_info:
                 logger.warning(f"Session {session_id} not found - cannot set permission mode")
                 return False
 
-            # Only allow permission mode change for active sessions
+            # For non-running sessions, just persist to disk — the mode will be applied at startup
+            if session_info.state in [SessionState.CREATED, SessionState.TERMINATED, SessionState.ERROR]:
+                await self.session_manager.update_permission_mode(session_id, mode)
+                coord_logger.info(f"Permission mode persisted to '{mode}' for stopped session {session_id}")
+                return True
+
+            # Check if SDK exists for live update
+            sdk = self._active_sdks.get(session_id)
+            if not sdk:
+                logger.warning(f"No active SDK found for session {session_id} - cannot set permission mode")
+                return False
+
+            # Only allow live permission mode change for active sessions
             if session_info.state not in [SessionState.ACTIVE]:
                 logger.warning(f"Session {session_id} not in active state (state: {session_info.state})")
                 return False

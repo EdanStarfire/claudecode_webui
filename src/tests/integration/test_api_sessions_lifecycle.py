@@ -89,7 +89,7 @@ class TestDisconnectSession:
 
 class TestPermissionMode:
     async def test_set_permission_mode_on_created_session(self, api_integration_env):
-        """Setting permission mode on a non-active session returns 400."""
+        """Setting permission mode on a non-active (created) session persists the mode."""
         client = api_integration_env["client"]
         session = await _create_named_session(api_integration_env, "single_turn")
         sid = session["session_id"]
@@ -98,8 +98,12 @@ class TestPermissionMode:
             f"/api/sessions/{sid}/permission-mode",
             json={"mode": "bypassPermissions"},
         )
-        # Session must be active to change permission mode
-        assert resp.status_code == 400
+        # Non-running sessions can have their permission mode changed (persisted to disk)
+        assert resp.status_code == 200
+        # Verify the mode is reflected in the session state
+        session_resp = await client.get(f"/api/sessions/{sid}")
+        assert session_resp.status_code == 200
+        assert session_resp.json()["session"]["current_permission_mode"] == "bypassPermissions"
 
     async def test_set_permission_mode_invalid(self, api_integration_env):
         client = api_integration_env["client"]
