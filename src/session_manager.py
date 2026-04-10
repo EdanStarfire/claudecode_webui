@@ -689,7 +689,7 @@ class SessionManager:
                 if not session:
                     return False
                 if session.sdk_generated_name == sdk_name:
-                    return False  # No change
+                    return True  # No change needed — idempotent success
                 session.sdk_generated_name = sdk_name
                 session.updated_at = datetime.now(UTC)
                 await self._persist_session_state(session_id)
