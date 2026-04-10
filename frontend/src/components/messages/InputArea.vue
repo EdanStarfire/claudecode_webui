@@ -126,7 +126,7 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted, watch, inject, nextTick } from 'vue'
 import { useSessionStore } from '@/stores/session'
-import { useWebSocketStore } from '@/stores/websocket'
+import { usePollingStore } from '@/stores/polling'
 import { useResourceStore } from '@/stores/resource'
 import { useUIStore } from '@/stores/ui'
 import { useSessionState } from '@/composables/useSessionState'
@@ -139,7 +139,7 @@ const props = defineProps({
 })
 
 const sessionStore = useSessionStore()
-const wsStore = useWebSocketStore()
+const wsStore = usePollingStore()
 const resourceStore = useResourceStore()
 const uiStore = useUIStore()
 

@@ -187,7 +187,7 @@
 import { ref, computed, toRef, watch, nextTick } from 'vue'
 import { useMessageStore } from '@/stores/message'
 import { useSessionStore } from '@/stores/session'
-import { useWebSocketStore } from '@/stores/websocket'
+import { usePollingStore } from '@/stores/polling'
 import { useToolStatus } from '@/composables/useToolStatus'
 import AskUserQuestionToolHandler from '@/components/tools/AskUserQuestionToolHandler.vue'
 
@@ -197,7 +197,7 @@ const props = defineProps({
 
 const messageStore = useMessageStore()
 const sessionStore = useSessionStore()
-const wsStore = useWebSocketStore()
+const wsStore = usePollingStore()
 
 const { effectiveStatus, isOrphaned, orphanedInfo } = useToolStatus(toRef(props, 'toolCall'))
 

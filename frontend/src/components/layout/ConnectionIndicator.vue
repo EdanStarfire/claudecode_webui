@@ -26,9 +26,9 @@
 
 <script setup>
 import { computed } from 'vue'
-import { useWebSocketStore } from '@/stores/websocket'
+import { usePollingStore } from '@/stores/polling'
 
-const wsStore = useWebSocketStore()
+const wsStore = usePollingStore()
 
 /**
  * Get indicator background class based on connection state

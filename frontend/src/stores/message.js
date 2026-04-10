@@ -512,7 +512,7 @@ export const useMessageStore = defineStore('message', () => {
       if (toolCall.request_id && toolCall.status === 'awaiting_permission') {
         permissionToToolMap.value.set(toolCall.request_id, toolUseId)
         // Issue #699: Permission prompt notifications now driven by UI WebSocket
-        // state_change → paused (see websocket.js handleUIMessage)
+        // state_change → paused (see polling.js handleUIMessage)
       }
       if (toolCall.permission_granted !== null && toolCall.permission_granted !== undefined) {
         existing.permissionDecision = toolCall.permission_granted ? 'allow' : 'deny'
@@ -612,7 +612,7 @@ export const useMessageStore = defineStore('message', () => {
       if (toolCall.request_id && toolCall.status === 'awaiting_permission') {
         permissionToToolMap.value.set(toolCall.request_id, toolUseId)
         // Issue #699: Permission prompt notifications now driven by UI WebSocket
-        // state_change → paused (see websocket.js handleUIMessage)
+        // state_change → paused (see polling.js handleUIMessage)
       }
       console.log(`Created new tool call ${toolUseId} for ${toolCall.name} with status: ${frontendStatus}`)
     }
