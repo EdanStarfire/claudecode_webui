@@ -141,6 +141,7 @@ import { computed } from 'vue'
 import { useSessionStore } from '@/stores/session'
 import { useMessageStore } from '@/stores/message'
 import { useUIStore } from '@/stores/ui'
+import { getDisplayState, getStatusColor } from '@/composables/useSessionState'
 
 const props = defineProps({
   minionData: {
@@ -300,17 +301,7 @@ const isOverseerWithChildren = computed(() => {
 })
 
 // Display state (matches SessionItem logic) - now uses live data
-const displayState = computed(() => {
-  const data = minionWithLiveData.value
-  if (!data) return 'created'
-
-  // Special case: PAUSED + processing = waiting for permission response (yellow blinking)
-  if (data.state === 'paused' && data.is_processing) {
-    return 'pending-prompt'
-  }
-  // Normal case: processing overrides state (purple blinking)
-  return data.is_processing ? 'processing' : (data.state || 'created')
-})
+const displayState = computed(() => getDisplayState(minionWithLiveData.value))
 
 // Status dot CSS classes (matches SessionItem)
 const statusDotClass = computed(() => {
@@ -331,24 +322,9 @@ const statusDotClass = computed(() => {
 })
 
 // Status dot inline styles (matches SessionItem)
-const statusDotStyle = computed(() => {
-  const state = displayState.value
-  const bgColorMap = {
-    'created': '#d3d3d3',
-    'starting': '#90ee90',
-    'active': '#90ee90',
-    'running': '#90ee90',
-    'processing': '#dda0dd',
-    'paused': '#d3d3d3',
-    'pending-prompt': '#ffc107',
-    'terminated': '#d3d3d3',
-    'error': '#ffb3b3',
-    'failed': '#ffb3b3'
-  }
-  return {
-    backgroundColor: bgColorMap[state] || '#d3d3d3'
-  }
-})
+const statusDotStyle = computed(() => ({
+  backgroundColor: getStatusColor(minionWithLiveData.value)
+}))
 
 // Latest message display (issue #291) - now uses live data
 const messagePrefix = computed(() => {

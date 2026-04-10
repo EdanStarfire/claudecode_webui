@@ -129,6 +129,7 @@ import { useSessionStore } from '@/stores/session'
 import { useWebSocketStore } from '@/stores/websocket'
 import { useResourceStore } from '@/stores/resource'
 import { useUIStore } from '@/stores/ui'
+import { useSessionState } from '@/composables/useSessionState'
 import { api, getAuthToken } from '@/utils/api'
 import AttachmentList from './AttachmentList.vue'
 import SlashCommandDropdown from './SlashCommandDropdown.vue'
@@ -182,8 +183,8 @@ const inputText = computed({
 
 const isProcessing = computed(() => sessionStore.currentSession?.is_processing || false)
 const isConnected = computed(() => wsStore.sessionConnected)
-const isStarting = computed(() => sessionStore.currentSession?.state === 'starting')
-const isPaused = computed(() => sessionStore.currentSession?.state === 'paused')
+const currentSession = computed(() => sessionStore.currentSession)
+const { isStarting, isPaused } = useSessionState(currentSession)
 const currentSessionId = computed(() => sessionStore.currentSessionId)
 
 // Check if input has content (text or valid attachments)
