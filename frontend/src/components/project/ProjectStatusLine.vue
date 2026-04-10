@@ -10,10 +10,10 @@
         v-for="session in sessions"
         :key="session.session_id"
         class="progress-bar"
-        :class="{ 'progress-bar-striped progress-bar-animated': isAnimated(session) }"
+        :class="{ 'progress-bar-striped progress-bar-animated': isAnimatedState(session) }"
         :style="{
           width: segmentWidth,
-          backgroundColor: getColor(session),
+          backgroundColor: getStatusColor(session),
           cursor: 'help'
         }"
         :title="getTooltip(session)"
@@ -24,6 +24,7 @@
 
 <script setup>
 import { computed } from 'vue'
+import { getDisplayState, getStatusColor, isAnimatedState } from '@/composables/useSessionState'
 
 const props = defineProps({
   project: {
@@ -40,37 +41,6 @@ const segmentWidth = computed(() => {
   if (!props.sessions || props.sessions.length === 0) return '100%'
   return `${100 / props.sessions.length}%`
 })
-
-function getDisplayState(session) {
-  // Special case: PAUSED + processing = waiting for permission response (yellow blinking)
-  if (session.state === 'paused' && session.is_processing) {
-    return 'pending-prompt'
-  }
-  // Normal case: processing overrides state
-  return session.is_processing ? 'processing' : session.state
-}
-
-function getColor(session) {
-  const state = getDisplayState(session)
-  const colorMap = {
-    'created': '#d3d3d3',      // grey
-    'starting': '#90ee90',     // light green
-    'active': '#90ee90',       // light green
-    'running': '#90ee90',      // light green
-    'processing': '#dda0dd',   // light purple
-    'paused': '#d3d3d3',       // grey
-    'pending-prompt': '#ffc107',  // warning yellow (permission waiting)
-    'terminated': '#d3d3d3',   // grey
-    'error': '#ffb3b3',        // light red
-    'failed': '#ffb3b3'        // light red
-  }
-  return colorMap[state] || '#d3d3d3'
-}
-
-function isAnimated(session) {
-  const state = getDisplayState(session)
-  return state === 'starting' || state === 'processing' || state === 'pending-prompt'
-}
 
 function getTooltip(session) {
   const state = getDisplayState(session)

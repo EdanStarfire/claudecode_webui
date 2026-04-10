@@ -22,6 +22,7 @@
 <script setup>
 import { computed } from 'vue'
 import { useSessionStore } from '@/stores/session'
+import { useSessionState } from '@/composables/useSessionState'
 
 const props = defineProps({
   sessionId: {
@@ -34,52 +35,7 @@ const sessionStore = useSessionStore()
 
 const session = computed(() => sessionStore.sessions.get(props.sessionId))
 
-/**
- * Get display state - matches ProjectStatusLine.vue logic
- * Processing state overrides session state
- * Special case: paused + processing = pending-prompt (waiting for permission)
- */
-const displayState = computed(() => {
-  if (!session.value) return 'unknown'
-
-  // Special case: PAUSED + processing = waiting for permission response (yellow blinking)
-  if (session.value.state === 'paused' && session.value.is_processing) {
-    return 'pending-prompt'
-  }
-
-  // Normal case: processing overrides state
-  return session.value.is_processing ? 'processing' : session.value.state
-})
-
-/**
- * Get color for current state - matches ProjectStatusLine.vue color mapping
- */
-const statusColor = computed(() => {
-  const state = displayState.value
-  const colorMap = {
-    'created': '#d3d3d3',      // grey
-    'starting': '#90ee90',     // light green
-    'active': '#90ee90',       // light green
-    'running': '#90ee90',      // light green
-    'processing': '#dda0dd',   // light purple
-    'paused': '#d3d3d3',       // grey
-    'pending-prompt': '#ffc107',  // warning yellow (permission waiting)
-    'terminated': '#d3d3d3',   // grey
-    'error': '#ffb3b3',        // light red
-    'failed': '#ffb3b3',       // light red
-    'unknown': '#d3d3d3'       // grey
-  }
-  return colorMap[state] || '#d3d3d3'
-})
-
-/**
- * Determine if status line should be animated
- * Active states: starting, processing, pending-prompt
- */
-const isAnimated = computed(() => {
-  const state = displayState.value
-  return state === 'starting' || state === 'processing' || state === 'pending-prompt'
-})
+const { displayState, statusColor, isAnimated } = useSessionState(session)
 
 /**
  * Generate tooltip text for status line

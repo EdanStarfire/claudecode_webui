@@ -67,6 +67,7 @@ import { useSessionStore } from '@/stores/session'
 import { useScheduleStore } from '@/stores/schedule'
 import { useUIStore } from '@/stores/ui'
 import { useLongPress } from '@/composables/useLongPress'
+import { useSessionState } from '@/composables/useSessionState'
 
 const props = defineProps({
   session: { type: Object, required: true },
@@ -81,6 +82,7 @@ const emit = defineEmits(['select', 'manage', 'dismiss'])
 const sessionStore = useSessionStore()
 const scheduleStore = useScheduleStore()
 const uiStore = useUIStore()
+const { isError, isPaused } = useSessionState(computed(() => props.session))
 
 function handleManage() {
   uiStore.showModal('manage-session', { session: props.session })
@@ -132,8 +134,8 @@ const statusText = computed(() => {
 })
 
 const alertType = computed(() => {
-  if (props.session.state === 'error') return 'error'
-  if (props.session.state === 'paused') return 'permission'
+  if (isError.value) return 'error'
+  if (isPaused.value) return 'permission'
   return null
 })
 
