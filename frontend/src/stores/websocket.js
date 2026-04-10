@@ -230,7 +230,7 @@ export const useWebSocketStore = defineStore('websocket', () => {
         })
       }, 2000)
     } catch (err) {
-      if (err.response?.status === 409) {
+      if (err.status === 409) {
         console.warn('Message rejected: session is not active (permission pending?)')
       } else {
         console.error('Failed to send message:', err)

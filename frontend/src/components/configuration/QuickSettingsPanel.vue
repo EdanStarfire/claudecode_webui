@@ -114,9 +114,6 @@
           @click="setPermissionMode('bypassPermissions')"
         >Bypass</button>
       </div>
-      <div v-if="permDisabled" class="form-text text-warning" style="text-transform: none; letter-spacing: normal;">
-        Session must be active to change permission mode.
-      </div>
     </div>
 
     <!-- Role -->

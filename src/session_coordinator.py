@@ -1755,7 +1755,7 @@ class SessionCoordinator:
                 return False
 
             # For non-running sessions, just persist to disk — the mode will be applied at startup
-            if session_info.state in [SessionState.CREATED, SessionState.TERMINATED, SessionState.ERROR]:
+            if session_info.state in [SessionState.CREATED, SessionState.PAUSED, SessionState.TERMINATED, SessionState.ERROR]:
                 await self.session_manager.update_permission_mode(session_id, mode)
                 coord_logger.info(f"Permission mode persisted to '{mode}' for stopped session {session_id}")
                 return True
@@ -1767,7 +1767,7 @@ class SessionCoordinator:
                 return False
 
             # Only allow live permission mode change for active sessions
-            if session_info.state not in [SessionState.ACTIVE]:
+            if session_info.state != SessionState.ACTIVE:
                 logger.warning(f"Session {session_id} not in active state (state: {session_info.state})")
                 return False
 
@@ -3526,7 +3526,7 @@ class SessionCoordinator:
                         logger.exception(f"Failed to set processing state for session {session_id}")
 
                 # Reset processing state on interrupt_success
-                if parsed_message.type.value == 'system' and parsed_message.metadata.get('subtype') == 'interrupt_success':
+                elif parsed_message.type.value == 'system' and parsed_message.metadata.get('subtype') == 'interrupt_success':
                     try:
                         await self.session_manager.update_processing_state(session_id, False)
                         coord_logger.info(f"Reset processing state for session {session_id} after interrupt")
