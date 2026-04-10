@@ -21,7 +21,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
-from .claude_sdk import SessionInfo, SessionState
+from .claude_sdk import SDK_ACTIVE_STATES, SessionInfo, SessionState
 
 logger = logging.getLogger(__name__)
 
@@ -797,7 +797,7 @@ class MockClaudeSDK:
 
     def is_running(self) -> bool:
         """Check if mock session is running."""
-        return self.info.state in (SessionState.RUNNING, SessionState.PROCESSING)
+        return self.info.state in SDK_ACTIVE_STATES
 
     async def _safe_callback(self, callback, *args):
         """Safely execute a callback."""

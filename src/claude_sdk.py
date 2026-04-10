@@ -80,6 +80,12 @@ class SessionState(Enum):
     TERMINATED = "terminated"
 
 
+# Named SessionState groupings — update these when adding new states
+SDK_ACTIVE_STATES: frozenset[SessionState] = frozenset({
+    SessionState.RUNNING, SessionState.PROCESSING,
+})
+
+
 class SDKErrorDetectionHandler(logging.Handler):
     """Custom log handler to detect immediate SDK CLI failures."""
 
@@ -411,7 +417,7 @@ class ClaudeSDK:
                 return False
 
             # Check if we're in a state that can be interrupted
-            if self.info.state not in [SessionState.RUNNING, SessionState.PROCESSING]:
+            if self.info.state not in SDK_ACTIVE_STATES:
                 sdk_logger.debug(f"Session {self.session_id} not in interruptible state: {self.info.state}")
                 return False
 
@@ -468,7 +474,7 @@ class ClaudeSDK:
                 return False
 
             # Check if we're in a valid state
-            if self.info.state not in [SessionState.RUNNING, SessionState.PROCESSING]:
+            if self.info.state not in SDK_ACTIVE_STATES:
                 logger.warning(f"Session {self.session_id} not in valid state for permission mode change: {self.info.state}")
                 return False
 
@@ -494,7 +500,7 @@ class ClaudeSDK:
                 logger.warning(f"No active SDK client for session {self.session_id} - cannot get MCP status")
                 return {"servers": []}
 
-            if self.info.state not in [SessionState.RUNNING, SessionState.PROCESSING]:
+            if self.info.state not in SDK_ACTIVE_STATES:
                 logger.warning(f"Session {self.session_id} not in valid state for MCP status: {self.info.state}")
                 return {"servers": []}
 
@@ -510,7 +516,7 @@ class ClaudeSDK:
             if not self._sdk_client:
                 logger.warning(f"No active SDK client for session {self.session_id}")
                 return {}
-            if self.info.state not in [SessionState.RUNNING, SessionState.PROCESSING]:
+            if self.info.state not in SDK_ACTIVE_STATES:
                 return {}
             result = await self._sdk_client.get_context_usage()
             return dict(result)
@@ -523,7 +529,7 @@ class ClaudeSDK:
         if not self._sdk_client:
             raise RuntimeError(f"No active SDK client for session {self.session_id}")
 
-        if self.info.state not in [SessionState.RUNNING, SessionState.PROCESSING]:
+        if self.info.state not in SDK_ACTIVE_STATES:
             raise RuntimeError(f"Session not in valid state for MCP toggle: {self.info.state}")
 
         await self._sdk_client.toggle_mcp_server(name, enabled)
@@ -533,7 +539,7 @@ class ClaudeSDK:
         if not self._sdk_client:
             raise RuntimeError(f"No active SDK client for session {self.session_id}")
 
-        if self.info.state not in [SessionState.RUNNING, SessionState.PROCESSING]:
+        if self.info.state not in SDK_ACTIVE_STATES:
             raise RuntimeError(f"Session not in valid state for MCP reconnect: {self.info.state}")
 
         await self._sdk_client.reconnect_mcp_server(name)
@@ -1424,7 +1430,7 @@ class ClaudeSDK:
 
     def is_running(self) -> bool:
         """Check if the session is currently running."""
-        return self.info.state in [SessionState.RUNNING, SessionState.PROCESSING]
+        return self.info.state in SDK_ACTIVE_STATES
 
     async def wait_until_ready(self, timeout: float = 60.0) -> bool:
         """Wait until SDK is ready to accept messages. Returns False on timeout."""
@@ -1475,7 +1481,7 @@ class ClaudeSDK:
             health_status["context_manager_active"] and
             health_status["client_object_valid"] and
             not health_status["shutdown_event_set"] and
-            self.info.state in [SessionState.RUNNING, SessionState.PROCESSING]
+            self.info.state in SDK_ACTIVE_STATES
         )
 
         health_status["overall_health"] = "healthy" if is_healthy else "unhealthy"
