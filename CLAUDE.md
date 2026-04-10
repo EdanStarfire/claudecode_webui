@@ -169,7 +169,7 @@ frontend/
 │   │   ├── session.js             # Session CRUD, selection, deep linking
 │   │   ├── project.js             # Project hierarchy, ordering
 │   │   ├── message.js             # Messages, tool calls, orphaned detection
-│   │   ├── websocket.js           # HTTP long-polling (UI + session event streams)
+│   │   ├── polling.js             # HTTP long-polling (UI + session event streams)
 │   │   ├── legion.js              # Multi-agent: comms, minions
 │   │   ├── ui.js                  # Sidebar, modals, loading, responsive
 │   │   ├── queue.js               # Per-session message queue
@@ -300,7 +300,7 @@ For detailed store documentation, see [frontend/CLAUDE.md](./frontend/CLAUDE.md#
 - `toggleToolExpansion()`: Collapse/expand tool cards
 - Orphaned tool detection: session restart, interrupt, termination
 
-### 4. Polling Store (`stores/websocket.js`)
+### 4. Polling Store (`stores/polling.js`)
 **Responsibility**: HTTP long-polling event streams (UI + per-session), outbound message dispatch
 
 **State**:

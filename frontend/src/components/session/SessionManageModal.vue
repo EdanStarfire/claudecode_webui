@@ -188,14 +188,14 @@ import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useSessionStore } from '@/stores/session'
 import { useUIStore } from '@/stores/ui'
-import { useWebSocketStore } from '@/stores/websocket'
+import { usePollingStore } from '@/stores/polling'
 import { useMessageStore } from '@/stores/message'
 import { api } from '@/utils/api'
 
 const router = useRouter()
 const sessionStore = useSessionStore()
 const uiStore = useUIStore()
-const wsStore = useWebSocketStore()
+const wsStore = usePollingStore()
 const messageStore = useMessageStore()
 
 // State

@@ -9,7 +9,7 @@ import { useUIStore } from './ui'
 import { notify } from '@/composables/useNotifications'
 import { getAuthToken, api } from '@/utils/api'
 
-export const useWebSocketStore = defineStore('websocket', () => {
+export const usePollingStore = defineStore('polling', () => {
   // ========== STATE ==========
   const uiConnected = ref(false)
   const uiRetryCount = ref(0)

@@ -69,7 +69,7 @@ import GlobalConfigModal from './components/configuration/GlobalConfigModal.vue'
 import AuthPrompt from './components/common/AuthPrompt.vue'
 import MermaidFullView from './components/common/MermaidFullView.vue'
 import { useUIStore } from './stores/ui'
-import { useWebSocketStore } from './stores/websocket'
+import { usePollingStore } from './stores/polling'
 import { useSessionStore } from './stores/session'
 import { useProjectStore } from './stores/project'
 import { useTaskStore } from './stores/task'
@@ -77,7 +77,7 @@ import { apiGet, getAuthToken, setAuthToken } from './utils/api'
 
 const uiStore = useUIStore()
 const showAuthPrompt = ref(false)
-const wsStore = useWebSocketStore()
+const wsStore = usePollingStore()
 const sessionStore = useSessionStore()
 const projectStore = useProjectStore()
 const taskStore = useTaskStore()

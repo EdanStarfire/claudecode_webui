@@ -79,7 +79,7 @@ Hash-based routing (`createWebHashHistory`):
 - **Key actions**: `loadMessages()`, `addMessage()`, `handleToolCall()` (unified handler), `handlePermissionRequest()`, `handlePermissionResponse()`, `toggleToolExpansion()`, `syncMessages()`
 - **Features**: Orphaned tool detection on restart/interrupt/termination, backend display metadata cache, deduplication on reconnect
 
-#### `websocket.js` — HTTP long-polling (named for legacy reasons)
+#### `polling.js` — HTTP long-polling
 - **State**: `uiConnected`, `uiRetryCount`, `sessionConnected`, `sessionRetryCount`, `sessionCursors` (Map)
 - **Key actions**: `startUIPolling()`, `startSessionPolling(sessionId)`, `sendMessage()`, `sendPermissionResponse()`, `sendPermissionResponseWithInput()`, `interruptSession()`
 - **Features**: Cursor-based incremental polling (`/api/poll/ui`, `/api/poll/session/{id}`), exponential backoff (up to 30s), page-visibility pause/resume

@@ -41,10 +41,10 @@
 <script setup>
 import { computed } from 'vue'
 import { useUIStore } from '@/stores/ui'
-import { useWebSocketStore } from '@/stores/websocket'
+import { usePollingStore } from '@/stores/polling'
 
 const uiStore = useUIStore()
-const wsStore = useWebSocketStore()
+const wsStore = usePollingStore()
 
 const uiConnected = computed(() => wsStore.uiConnected)
 </script>

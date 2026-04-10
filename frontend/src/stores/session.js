@@ -133,7 +133,7 @@ export const useSessionStore = defineStore('session', () => {
 
   /**
    * Lightweight state sync — polls /api/sessions and merges into existing Map.
-   * Used by periodic polling to detect and correct state drift from missed WebSocket messages.
+   * Used by periodic polling to detect and correct state drift from missed polling messages.
    */
   async function syncSessionStates() {
     try {
@@ -325,8 +325,8 @@ export const useSessionStore = defineStore('session', () => {
 
         if (abortController.signal.aborted) return
 
-        const wsStore = await import('./websocket')
-        await wsStore.useWebSocketStore().connectSession(sessionId)
+        const wsStore = await import('./polling')
+        await wsStore.usePollingStore().connectSession(sessionId)
 
         if (!abortController.signal.aborted) {
           console.log(`Selected ephemeral session ${sessionId} (no auto-start)`)
@@ -347,7 +347,7 @@ export const useSessionStore = defineStore('session', () => {
 
           console.log(`Auto-started session ${sessionId} (was in ${session.state} state)`)
 
-          // Wait for session to start before connecting WebSocket
+          // Wait for session to start before connecting polling
           // Poll for state change with timeout to avoid race condition
           // SDK can take 20-30 seconds to start, so wait up to 60 seconds
           const maxWaitMs = 60000
@@ -365,7 +365,7 @@ export const useSessionStore = defineStore('session', () => {
 
             const currentSession = sessions.value.get(sessionId)
             // Only proceed when session is fully active (not just 'starting')
-            // The 'starting' state means backend accepted the request, but SDK/WebSocket not ready yet
+            // The 'starting' state means backend accepted the request, but SDK/polling not ready yet
             if (currentSession && currentSession.state === 'active') {
               console.log(`Session ${sessionId} is now active after ${elapsedMs}ms`)
               break
@@ -390,7 +390,7 @@ export const useSessionStore = defineStore('session', () => {
           }
 
           // If still not active after timeout, log warning but continue
-          // (WebSocket retry logic will handle eventual connection)
+          // (polling retry logic will handle eventual connection)
           const finalSession = sessions.value.get(sessionId)
           if (finalSession && finalSession.state !== 'active') {
             console.warn(`Session ${sessionId} did not become active within ${maxWaitMs / 1000}s (state: ${finalSession.state}), continuing anyway`)
@@ -427,9 +427,9 @@ export const useSessionStore = defineStore('session', () => {
         return
       }
 
-      // CRITICAL: Await websocket connection to prevent race conditions
-      const wsStore = await import('./websocket')
-      await wsStore.useWebSocketStore().connectSession(sessionId)
+      // CRITICAL: Await polling connection to prevent race conditions
+      const wsStore = await import('./polling')
+      await wsStore.usePollingStore().connectSession(sessionId)
 
       // Final check - only log success if not aborted
       if (!abortController.signal.aborted) {
@@ -453,7 +453,7 @@ export const useSessionStore = defineStore('session', () => {
   }
 
   /**
-   * Update session data (called from WebSocket updates)
+   * Update session data (called from polling updates)
    * If session doesn't exist, add it (for newly created sessions)
    */
   function updateSession(sessionId, updates) {
@@ -464,7 +464,7 @@ export const useSessionStore = defineStore('session', () => {
     } else {
       // Add new session (e.g., from state_change broadcast after creation)
       sessions.value.set(sessionId, updates)
-      console.log(`Added new session ${sessionId} via WebSocket update`)
+      console.log(`Added new session ${sessionId} via polling update`)
     }
 
     // Trigger reactivity

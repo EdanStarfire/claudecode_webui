@@ -9,7 +9,7 @@
 
 import { ref, watch, onUnmounted } from 'vue'
 import { useSessionStore } from '@/stores/session'
-import { useWebSocketStore } from '@/stores/websocket'
+import { usePollingStore } from '@/stores/polling'
 import { useUIStore } from '@/stores/ui'
 import { isTTSAvailable, getVoices } from '@/composables/useNotifications'
 
@@ -103,7 +103,7 @@ export function normalizeForSpeech(text) {
 
 export function useTTSReadAloud() {
   const sessionStore = useSessionStore()
-  const wsStore = useWebSocketStore()
+  const wsStore = usePollingStore()
   const uiStore = useUIStore()
 
   const isPlaying = ref(false)
