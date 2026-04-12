@@ -55,7 +55,21 @@ docker run -d \
 # Wait for proxy to initialize
 info "Waiting for proxy to start..."
 sleep 5
-docker logs "$PROXY_CONTAINER" --tail 10
+
+info "Proxy startup logs:"
+docker logs "$PROXY_CONTAINER" 2>&1
+
+info "Proxy process list:"
+docker exec "$PROXY_CONTAINER" ps aux 2>/dev/null || true
+
+info "Listening sockets in proxy namespace:"
+docker exec "$PROXY_CONTAINER" ss -tlunp 2>/dev/null || true
+
+info "iptables nat OUTPUT rules:"
+docker exec "$PROXY_CONTAINER" iptables -t nat -L OUTPUT -n -v 2>/dev/null || true
+
+info "iptables filter OUTPUT rules:"
+docker exec "$PROXY_CONTAINER" iptables -L OUTPUT -n -v 2>/dev/null || true
 
 # Agent containers share the proxy's network namespace; CoreDNS listens on
 # loopback :53, so 127.0.0.1 resolves allowlisted domains and blocks others.

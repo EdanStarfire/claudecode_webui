@@ -144,7 +144,7 @@ iptables -A OUTPUT -p udp -j DROP
 echo "Starting mitmdump (transparent mode) on :8080..."
 echo "Addon: /etc/proxy/addon.py"
 exec setpriv --reuid=9999 --regid=9999 --clear-groups -- \
-    mitmdump --mode transparent --showhost \
+    mitmdump --mode transparent --showhost -v \
     --set confdir="$CERTS_DIR" \
     --listen-port 8080 \
     --ssl-insecure \
