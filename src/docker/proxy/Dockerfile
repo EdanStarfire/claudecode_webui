@@ -8,6 +8,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     iproute2 \
     util-linux \
     libcap2-bin \
+    procps \
     curl \
     jq \
     ca-certificates \
