@@ -103,29 +103,20 @@ iptables -t nat -A OUTPUT -p tcp --dport 443 \
 # the 2B gap (raw IP + non-HTTP/HTTPS was previously unrestricted).
 #
 # Rule order:
-#   lo ACCEPT (all protocols): agent TCP port 80/443 is REDIRECT-ed to
-#     127.0.0.1:8080 by nat OUTPUT before filter runs, so the output
-#     interface becomes lo. This rule catches all redirected agent traffic
-#     and all mitmdump→agent reply traffic.
-#   ! -o lo dport 80 ACCEPT: mitmdump upstream HTTP connections.
-#     Safe: agent port 80 is always redirected to lo first, so agent traffic
-#     never reaches this rule. Only mitmdump (excluded from nat REDIRECT via
-#     ! --uid-owner 9999) sends port 80 on the bridge interface.
-#   ! -o lo dport 443 ACCEPT: same as above for HTTPS.
-#   ! -o lo dport 53 uid 9998 ACCEPT: CoreDNS TCP upstream (DNS-over-TCP
-#     fallback to 8.8.8.8). CoreDNS port 53 TCP goes to the bridge interface
-#     (not lo). uid-owner 9998 match works for CoreDNS (verified by UDP counts).
-#   tcp DROP: everything else (agent TCP to port 22, arbitrary ports, etc.).
+#   lo ACCEPT: covers redirected agent traffic (nat REDIRECT rewrites dst to
+#     127.0.0.1:8080 → routing picks lo → filter sees -o lo → ACCEPT) and
+#     all loopback communication between processes in this namespace.
+#   uid 9999 ACCEPT: mitmdump upstream connections to the real internet.
+#     Works because mitmdump is a child process (not PID 1); xt_owner uid
+#     matching is reliable for non-PID-1 processes.
+#   tcp DROP: everything else (agent TCP to non-80/443 ports, port 22, etc.).
 #
-# Note: -m owner --uid-owner 9999 is intentionally NOT used here because
-# iptables owner match does not reliably match PID 1 connections created by
-# exec setpriv; using ! -o lo + dport-based rules achieves the same security
-# guarantee without relying on uid matching for mitmproxy.
+# The dport 80/443 rules are intentionally absent: agent TCP to those ports
+# is always redirected to lo by nat OUTPUT before filter runs, so they are
+# caught by the lo ACCEPT rule and never reach the DROP.
 echo "Configuring default-deny TCP OUTPUT..."
 iptables -A OUTPUT -o lo -j ACCEPT
-iptables -A OUTPUT ! -o lo -p tcp --dport 80 -j ACCEPT
-iptables -A OUTPUT ! -o lo -p tcp --dport 443 -j ACCEPT
-iptables -A OUTPUT ! -o lo -p tcp --dport 53 -m owner --uid-owner 9998 -j ACCEPT
+iptables -A OUTPUT -p tcp -m owner --uid-owner 9999 -j ACCEPT
 iptables -A OUTPUT -p tcp -j DROP
 
 # --- Default-deny UDP OUTPUT ---
@@ -144,15 +135,31 @@ iptables -A OUTPUT -p udp -j DROP
 # --- Start mitmdump in transparent mode as uid 9999 ---
 # setpriv drops to uid/gid 9999. CAP_NET_ADMIN is not needed for
 # transparent mode (it uses SO_ORIGINAL_DST, not IP_TRANSPARENT).
-# Running as uid 9999 is what the OUTPUT MARK rule excludes, preventing
-# mitmdump's own upstream connections from being re-intercepted.
+#
+# IMPORTANT: do NOT use exec here. The iptables nat OUTPUT REDIRECT rule
+# uses "! --uid-owner 9999" to exclude mitmproxy's own upstream connections
+# from being re-intercepted. The Linux kernel's xt_owner module does not
+# reliably match uid for PID 1; if mitmdump were exec'd into PID 1, its
+# upstream connections would fail the uid match and be redirected back to
+# itself (loop). Running as a child process (non-PID-1) ensures uid 9999
+# is matched correctly by the owner module.
+#
+# PID 1 (this shell) remains as the container's init process and forwards
+# SIGTERM/SIGINT to the child processes for clean shutdown.
 echo "Starting mitmdump (transparent mode) on :8080..."
 echo "Addon: /etc/proxy/addon.py"
-exec setpriv --reuid=9999 --regid=9999 --clear-groups -- \
+setpriv --reuid=9999 --regid=9999 --clear-groups -- \
     mitmdump --mode transparent --showhost -v \
     --set confdir="$CERTS_DIR" \
     --listen-port 8080 \
     --ssl-insecure \
     -s /etc/proxy/addon.py \
     --set block_global=false \
-    --set stream_large_bodies=1m
+    --set stream_large_bodies=1m &
+MITM_PID=$!
+
+# Forward signals to child processes so Docker stop works cleanly.
+trap 'kill "$MITM_PID" "$COREDNS_PID" 2>/dev/null; wait' TERM INT
+
+echo "Proxy ready (coredns PID=$COREDNS_PID, mitmdump PID=$MITM_PID)"
+wait "$MITM_PID"
