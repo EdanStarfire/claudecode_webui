@@ -218,3 +218,6 @@ test_data_*/
 
 # Workstrees
 worktrees/
+
+# Proxy CA certificates (private key must not be committed)
+src/docker/proxy/certs/

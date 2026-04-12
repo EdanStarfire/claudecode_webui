@@ -1,0 +1,36 @@
+# Allowlisted domains — forward to upstream
+api.github.com {
+    forward . 8.8.8.8 8.8.4.4
+    log
+}
+
+github.com {
+    forward . 8.8.8.8 8.8.4.4
+    log
+}
+
+registry.npmjs.org {
+    forward . 8.8.8.8 8.8.4.4
+    log
+}
+
+pypi.org {
+    forward . 8.8.8.8 8.8.4.4
+    log
+}
+
+files.pythonhosted.org {
+    forward . 8.8.8.8 8.8.4.4
+    log
+}
+
+# Default: deny everything else
+. {
+    template IN A {
+        rcode NXDOMAIN
+    }
+    template IN AAAA {
+        rcode NXDOMAIN
+    }
+    log
+}
