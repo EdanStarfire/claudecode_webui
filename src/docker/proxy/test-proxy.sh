@@ -54,6 +54,7 @@ docker run -d \
     --name "$PROXY_CONTAINER" \
     --network "$BRIDGE_NET" \
     --cap-add NET_ADMIN \
+    --sysctl net.ipv4.ip_forward=1 \
     -v "$CERTS_DIR:/root/.mitmproxy" \
     "$PROXY_IMAGE"
 

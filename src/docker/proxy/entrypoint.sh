@@ -61,8 +61,13 @@ fi
 # --- Enable IP forwarding and NAT ---
 # Required to act as a gateway: forward packets from agent-net to internet
 # (bridge-net), and masquerade the source IP so return traffic routes back.
+# ip_forward is set via --sysctl net.ipv4.ip_forward=1 at docker run time;
+# the write below is a belt-and-suspenders attempt that may be a no-op if
+# /proc/sys is read-only (which is normal for non-privileged containers).
 echo "Enabling IP forwarding and NAT..."
-echo 1 > /proc/sys/net/ipv4/ip_forward
+echo 1 > /proc/sys/net/ipv4/ip_forward 2>/dev/null || true
+IP_FWD=$(cat /proc/sys/net/ipv4/ip_forward 2>/dev/null || echo "unknown")
+echo "ip_forward = $IP_FWD"
 iptables -t nat -A POSTROUTING -j MASQUERADE
 iptables -A FORWARD -j ACCEPT
 
