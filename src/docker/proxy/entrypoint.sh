@@ -49,6 +49,11 @@ setpriv --reuid=9998 --regid=9998 --clear-groups -- \
     coredns -conf "$COREFILE" -dns.port 53 &
 COREDNS_PID=$!
 
+# --- Ensure cert directory is writable by mitmproxy uid ---
+# Volume bind mounts override Dockerfile ownership; re-apply here as root
+# before dropping privileges to uid 9999 for cert generation.
+chown 9999:9999 "$CERTS_DIR"
+
 # --- Generate CA cert if not present ---
 if [ ! -f "$CERTS_DIR/mitmproxy-ca-cert.pem" ]; then
     echo "Generating mitmproxy CA certificate..."
@@ -66,72 +71,67 @@ else
     echo "Using existing CA certificate"
 fi
 
-# --- Set up TPROXY transparent interception ---
+# --- Set up NAT transparent interception ---
 # Agent containers share this container's network namespace via
 # --network container:<proxy>. All TCP 80/443 originating from any process
 # whose UID != 9999 (i.e. every non-mitmdump process) is intercepted.
 #
-# How it works (TPROXY for locally-generated traffic):
-#   1. mangle OUTPUT marks agent TCP 80/443 with fwmark 1.
-#   2. Policy routing (ip rule) sends fwmark-1 packets to table 100.
-#   3. Table 100 routes everything to loopback, re-injecting packets into
-#      the PREROUTING chain as if they arrived from outside.
-#   4. mangle PREROUTING TPROXY assigns packets directly to mitmdump's
-#      listening socket via IP_TRANSPARENT, WITHOUT changing the destination.
-#      mitmdump sees the original destination (e.g. 140.82.114.6:443) as the
-#      accepted socket's local address.
-#   Loop prevention: mitmdump runs as uid 9999; the mangle OUTPUT MARK rule
-#      has ! --uid-owner 9999, so mitmdump's upstream connections are never
-#      marked and never re-intercepted.
+# How it works (nat OUTPUT DNAT to the container's own eth0 IP):
 #
-# Why TPROXY instead of REDIRECT/DNAT?
-#   Both REDIRECT and DNAT in the nat OUTPUT chain fail for locally-generated
-#   traffic: REDIRECT rewrites dst to 127.0.0.1 (kernel drops non-loopback src
-#   on lo); DNAT to the container's bridge IP also silently fails to deliver
-#   packets to the local socket. TPROXY avoids both issues by operating in
-#   mangle PREROUTING after policy-routing re-injects packets through lo.
+#   mitmproxy's transparent mode reads the original destination via SO_ORIGINAL_DST,
+#   which requires a conntrack entry created by NAT in the OUTPUT chain. Two
+#   previous approaches failed:
+#     - REDIRECT to 127.0.0.1: the kernel implicitly changes the source address
+#       to 127.0.0.1 for loopback-bound traffic, so the conntrack lookup by
+#       SO_ORIGINAL_DST can't find the entry (wrong source key).
+#     - MARK + policy routing + PREROUTING REDIRECT: conntrack already has an
+#       entry for the flow from the OUTPUT path; re-injected packets arrive at
+#       PREROUTING as ESTABLISHED and the nat table is skipped entirely.
+#
+#   The fix: DNAT to the container's own eth0 IP (not 127.0.0.1).
+#   1. nat OUTPUT DNAT changes dst to $CONTAINER_IP:8080.
+#   2. ip_route_me_harder() (called inside the nat OUTPUT hook) detects that
+#      the new destination is a local address and re-routes to local delivery
+#      BEFORE filter OUTPUT runs. Because $CONTAINER_IP is the eth0 address
+#      (not a loopback address), the kernel routes via eth0, so filter OUTPUT
+#      sees -o eth0 (not -o lo). A dedicated filter rule allows these packets.
+#   3. Since the destination is a non-loopback local IP, the kernel does NOT
+#      change the source address. The original source (e.g. 172.19.0.2:SP)
+#      is preserved.
+#   4. mitmproxy accepts at $CONTAINER_IP:8080.
+#   5. SO_ORIGINAL_DST: conntrack finds the entry (source matches) and returns
+#      the pre-DNAT destination (e.g. 140.82.113.6:80). ✓
+#   Loop prevention: mitmdump runs as uid 9999; the DNAT rule excludes uid 9999
+#      so mitmdump's upstream connections go directly to the internet.
 
-echo "Configuring TPROXY transparent proxy..."
+# Determine the container's primary outbound IP (used as DNAT destination to
+# avoid loopback source-address rewriting).
+CONTAINER_IP=$(ip route get 8.8.8.8 2>/dev/null | awk 'NR==1 {for(i=1;i<=NF;i++) if ($i=="src") {print $(i+1); exit}}')
+if [ -z "$CONTAINER_IP" ]; then
+    CONTAINER_IP=$(ip -4 addr show eth0 | awk '/inet / {gsub(/\/.*/, "", $2); print $2; exit}')
+fi
+echo "Container IP for DNAT: $CONTAINER_IP"
 
-# Step 1: Mark agent TCP 80/443 in mangle OUTPUT.
-# uid 9999 (mitmdump) is excluded to prevent re-interception loops.
-iptables -t mangle -A OUTPUT -p tcp --dport 80 \
-    -m owner ! --uid-owner 9999 -j MARK --set-mark 1
-iptables -t mangle -A OUTPUT -p tcp --dport 443 \
-    -m owner ! --uid-owner 9999 -j MARK --set-mark 1
+echo "Configuring NAT transparent proxy (OUTPUT DNAT → $CONTAINER_IP:8080)..."
 
-# Step 2: Policy routing — fwmark 1 → table 100 → local delivery via lo.
-# This re-injects marked packets into PREROUTING as if they arrived externally.
-ip rule add fwmark 1 lookup 100
-ip route add local 0.0.0.0/0 dev lo table 100
-
-# Step 3: TPROXY in mangle PREROUTING intercepts re-injected packets.
-# --on-port 8080 delivers to mitmdump's listening socket.
-# --tproxy-mark re-applies fwmark so return traffic uses the same routing.
-iptables -t mangle -A PREROUTING -p tcp --dport 80 \
-    -j TPROXY --tproxy-mark 0x1/0x1 --on-port 8080
-iptables -t mangle -A PREROUTING -p tcp --dport 443 \
-    -j TPROXY --tproxy-mark 0x1/0x1 --on-port 8080
+# DNAT agent TCP 80/443 to mitmdump. uid 9999 (mitmdump) is excluded to
+# prevent re-interception of mitmdump's own upstream connections.
+iptables -t nat -A OUTPUT -p tcp --dport 80 \
+    -m owner ! --uid-owner 9999 -j DNAT --to-destination "$CONTAINER_IP:8080"
+iptables -t nat -A OUTPUT -p tcp --dport 443 \
+    -m owner ! --uid-owner 9999 -j DNAT --to-destination "$CONTAINER_IP:8080"
 
 # --- Default-deny TCP OUTPUT ---
 # Block all TCP from non-proxy processes on ports other than 80/443, closing
 # the raw-IP gap (non-HTTP/HTTPS TCP was previously unrestricted).
 #
-# CRITICAL ordering note: filter OUTPUT runs BEFORE the fwmark policy-routing
-# reroute. When mangle OUTPUT sets fwmark 1, the packet still has its original
-# output interface (eth0). The reroute to lo only happens AFTER all OUTPUT
-# hooks complete. Therefore, fwmark-1 packets must be explicitly accepted in
-# filter OUTPUT — they will NOT match the -o lo rule.
-#
 # Rule order:
-#   1. lo ACCEPT: inter-process loopback communication (CoreDNS, mitmdump
-#      return traffic, etc.).
-#   2. fwmark 1 ACCEPT: TPROXY-bound agent TCP 80/443. These packets were
-#      marked by mangle OUTPUT and will be rerouted to lo after filter, then
-#      TPROXY-ed in PREROUTING. Must pass filter first since the reroute
-#      hasn't happened yet (packet still shows -o eth0 at this point).
-#   3. ESTABLISHED,RELATED ACCEPT: allows TCP handshakes to complete and
-#      return traffic for established connections.
+#   1. lo ACCEPT: loopback traffic (inter-process comms, CoreDNS responses).
+#   2. DNAT'd HTTP/HTTPS ACCEPT: nat OUTPUT DNAT changes dst to $CONTAINER_IP:8080.
+#      ip_route_me_harder() re-routes to local delivery via eth0 (because
+#      $CONTAINER_IP is an eth0 address, not a loopback address), so filter
+#      OUTPUT sees -o eth0 for intercepted packets. This rule allows them through.
+#   3. ESTABLISHED,RELATED ACCEPT: TCP handshake completion, return traffic.
 #   4. uid 9999 NEW ACCEPT: mitmdump upstream connections to the real internet.
 #      Works because mitmdump is a child process (not PID 1); xt_owner uid
 #      matching is reliable for non-PID-1 processes.
@@ -141,10 +141,12 @@ echo "Configuring default-deny TCP OUTPUT..."
 # 1. Allow all loopback traffic (inter-process comms).
 iptables -A OUTPUT -o lo -j ACCEPT
 
-# 2. Allow TPROXY-marked packets (fwmark 1) to pass filter before reroute.
-# These are agent TCP 80/443 that mangle OUTPUT marked; they'll be rerouted
-# to lo and TPROXY-ed in PREROUTING after filter OUTPUT completes.
-iptables -A OUTPUT -m mark --mark 1 -j ACCEPT
+# 2. Allow DNAT'd agent HTTP/HTTPS traffic to reach mitmproxy at $CONTAINER_IP:8080.
+#    After nat OUTPUT DNAT, ip_route_me_harder() routes these via eth0 (not lo)
+#    because $CONTAINER_IP is an eth0 address. The -o lo rule above does not
+#    match; this rule fills the gap so they reach mitmdump.
+iptables -A OUTPUT -p tcp -d "$CONTAINER_IP" --dport 8080 \
+    -m conntrack --ctstate NEW -j ACCEPT
 
 # 3. Allow established/related traffic (TCP handshake completion, return traffic).
 iptables -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
@@ -170,21 +172,19 @@ iptables -A OUTPUT -p udp -j DROP
 
 # --- Start mitmdump in transparent mode as uid 9999 ---
 # setpriv drops to uid/gid 9999 but retains CAP_NET_ADMIN as an ambient
-# capability. TPROXY requires IP_TRANSPARENT on the listening socket, which
-# needs CAP_NET_ADMIN. The --inh-caps and --ambient-caps flags promote
-# the capability so it's effective for the unprivileged mitmdump process.
+# capability so mitmproxy can use privileged socket options if needed.
 #
-# IMPORTANT: do NOT use exec here. The mangle OUTPUT MARK rule uses
+# IMPORTANT: do NOT use exec here. The nat OUTPUT DNAT rule uses
 # "! --uid-owner 9999" to exclude mitmproxy's own upstream connections
 # from being re-intercepted. The Linux kernel's xt_owner module does not
 # reliably match uid for PID 1; if mitmdump were exec'd into PID 1, its
-# upstream connections would fail the uid match and be re-marked back to
+# upstream connections would fail the uid match and be DNAT-ed back to
 # itself (loop). Running as a child process (non-PID-1) ensures uid 9999
 # is matched correctly by the owner module.
 #
 # PID 1 (this shell) remains as the container's init process and forwards
 # SIGTERM/SIGINT to the child processes for clean shutdown.
-echo "Starting mitmdump (transparent mode + TPROXY) on :8080..."
+echo "Starting mitmdump (transparent mode) on :8080..."
 echo "Addon: /etc/proxy/addon.py"
 PYTHONUNBUFFERED=1 setpriv --reuid=9999 --regid=9999 --clear-groups \
     --inh-caps +net_admin --ambient-caps +net_admin -- \
