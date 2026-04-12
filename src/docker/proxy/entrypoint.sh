@@ -117,30 +117,42 @@ iptables -t mangle -A PREROUTING -p tcp --dport 443 \
 # Block all TCP from non-proxy processes on ports other than 80/443, closing
 # the raw-IP gap (non-HTTP/HTTPS TCP was previously unrestricted).
 #
+# CRITICAL ordering note: filter OUTPUT runs BEFORE the fwmark policy-routing
+# reroute. When mangle OUTPUT sets fwmark 1, the packet still has its original
+# output interface (eth0). The reroute to lo only happens AFTER all OUTPUT
+# hooks complete. Therefore, fwmark-1 packets must be explicitly accepted in
+# filter OUTPUT — they will NOT match the -o lo rule.
+#
 # Rule order:
-#   1. lo ACCEPT: covers TPROXY-redirected agent traffic (mangle OUTPUT marks
-#      it → policy routing sends to lo → filter sees -o lo → ACCEPT) and all
-#      inter-process loopback communication.
-#   2. ESTABLISHED,RELATED ACCEPT: allows TCP handshakes to complete and
+#   1. lo ACCEPT: inter-process loopback communication (CoreDNS, mitmdump
+#      return traffic, etc.).
+#   2. fwmark 1 ACCEPT: TPROXY-bound agent TCP 80/443. These packets were
+#      marked by mangle OUTPUT and will be rerouted to lo after filter, then
+#      TPROXY-ed in PREROUTING. Must pass filter first since the reroute
+#      hasn't happened yet (packet still shows -o eth0 at this point).
+#   3. ESTABLISHED,RELATED ACCEPT: allows TCP handshakes to complete and
 #      return traffic for established connections.
-#   3. uid 9999 NEW ACCEPT: mitmdump upstream connections to the real internet.
+#   4. uid 9999 NEW ACCEPT: mitmdump upstream connections to the real internet.
 #      Works because mitmdump is a child process (not PID 1); xt_owner uid
 #      matching is reliable for non-PID-1 processes.
-#   4. tcp NEW DROP: everything else (agent TCP to port 22, 8443, etc.).
-#      Agent TCP to 80/443 is safe: it's already marked and routed to lo
-#      by mangle OUTPUT, so it never reaches this rule.
+#   5. tcp NEW DROP: everything else (agent TCP to port 22, 8443, etc.).
 echo "Configuring default-deny TCP OUTPUT..."
 
-# 1. Allow all loopback traffic (TPROXY-marked agent traffic + inter-process comms).
+# 1. Allow all loopback traffic (inter-process comms).
 iptables -A OUTPUT -o lo -j ACCEPT
 
-# 2. Allow established/related traffic (TCP handshake completion, return traffic).
+# 2. Allow TPROXY-marked packets (fwmark 1) to pass filter before reroute.
+# These are agent TCP 80/443 that mangle OUTPUT marked; they'll be rerouted
+# to lo and TPROXY-ed in PREROUTING after filter OUTPUT completes.
+iptables -A OUTPUT -m mark --mark 1 -j ACCEPT
+
+# 3. Allow established/related traffic (TCP handshake completion, return traffic).
 iptables -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 
-# 3. Allow mitmdump (uid 9999) to initiate new upstream connections.
+# 4. Allow mitmdump (uid 9999) to initiate new upstream connections.
 iptables -A OUTPUT -p tcp -m owner --uid-owner 9999 -m conntrack --ctstate NEW -j ACCEPT
 
-# 4. Drop all other new outbound TCP (port 22, 8443, arbitrary ports, etc.).
+# 5. Drop all other new outbound TCP (port 22, 8443, arbitrary ports, etc.).
 iptables -A OUTPUT -p tcp -m conntrack --ctstate NEW -j DROP
 
 # --- Default-deny UDP OUTPUT ---
