@@ -580,6 +580,35 @@
               Home directory inside the container (for custom images)
             </small>
           </div>
+          <!-- Proxy Sidecar (issue #1050) -->
+          <div class="mt-3 mb-2">
+            <div class="form-check mb-2">
+              <input
+                class="form-check-input"
+                type="checkbox"
+                id="adv-proxy-toggle"
+                :checked="formData.docker_proxy_enabled"
+                @change="$emit('update:form-data', 'docker_proxy_enabled', $event.target.checked)"
+              />
+              <label class="form-check-label" for="adv-proxy-toggle" style="text-transform: none; letter-spacing: normal;">
+                Network Proxy
+              </label>
+              <small class="form-text text-muted d-block">
+                Intercepts outbound traffic via a dedicated proxy sidecar. Requires <code>claude-proxy:local</code> image.
+              </small>
+            </div>
+            <div v-if="formData.docker_proxy_enabled" class="ms-4 mb-2">
+              <label class="form-label">Proxy Image</label>
+              <input type="text" class="form-control form-control-sm"
+                :value="formData.docker_proxy_image"
+                @input="$emit('update:form-data', 'docker_proxy_image', $event.target.value || null)"
+                placeholder="claude-proxy:local (default)" />
+              <small class="form-text text-muted d-block">
+                Leave blank to use the server default.
+              </small>
+            </div>
+          </div>
+
           <small v-if="isEditSession" class="form-text text-warning d-block mt-1">
             Changes take effect after restarting the session.
           </small>
