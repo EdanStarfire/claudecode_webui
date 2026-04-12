@@ -50,13 +50,22 @@ setpriv --reuid=9998 --regid=9998 --clear-groups -- \
 COREDNS_PID=$!
 
 # --- Generate CA cert if not present ---
+# The entrypoint starts as root; transfer ownership of the certs dir to
+# uid 9999 now so mitmdump can write (init) and read (tproxy mode) it.
+# chmod 755 lets the host user traverse the directory to read the public cert.
+chown 9999:9999 "$CERTS_DIR"
+chmod 755 "$CERTS_DIR"
 if [ ! -f "$CERTS_DIR/mitmproxy-ca-cert.pem" ]; then
     echo "Generating mitmproxy CA certificate..."
-    mitmdump --set confdir="$CERTS_DIR" -q &
+    setpriv --reuid=9999 --regid=9999 --clear-groups -- \
+        mitmdump --set confdir="$CERTS_DIR" -q &
     MITM_INIT_PID=$!
     sleep 2
     kill "$MITM_INIT_PID" 2>/dev/null || true
     wait "$MITM_INIT_PID" 2>/dev/null || true
+    # Public cert must be readable by the host user for volume-mounting into agents.
+    # Private key (mitmproxy-ca.pem) stays 600, owned by uid 9999.
+    chmod 644 "$CERTS_DIR/mitmproxy-ca-cert.pem" 2>/dev/null || true
     echo "CA certificate generated at $CERTS_DIR/mitmproxy-ca-cert.pem"
 else
     echo "Using existing CA certificate"
