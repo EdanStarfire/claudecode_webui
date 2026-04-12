@@ -127,6 +127,20 @@ def resolve_docker_cli_path(
     return wrapper_path, env_vars
 
 
+async def check_proxy_image_available(image_name: str) -> bool:
+    """Check if a proxy Docker image exists locally. Returns True if found."""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "docker", "image", "inspect", image_name,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        await asyncio.wait_for(proc.communicate(), timeout=10)
+        return proc.returncode == 0
+    except Exception:
+        return False
+
+
 async def translate_docker_tmp_path(
     file_path: str,
     session_id: str,

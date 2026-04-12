@@ -31,9 +31,15 @@ class FeaturesConfig:
 
 
 @dataclass
+class ProxyConfig:
+    proxy_image: str = "claude-proxy:local"  # Default proxy image for sessions that don't override
+
+
+@dataclass
 class AppConfig:
     networking: NetworkingConfig = field(default_factory=NetworkingConfig)
     features: FeaturesConfig = field(default_factory=FeaturesConfig)
+    proxy: ProxyConfig = field(default_factory=ProxyConfig)
 
     @classmethod
     def from_dict(cls, data: dict) -> "AppConfig":
@@ -46,7 +52,11 @@ class AppConfig:
         features = FeaturesConfig(
             skill_sync_enabled=features_data.get("skill_sync_enabled", True),
         )
-        return cls(networking=networking, features=features)
+        proxy_data = data.get("proxy", {})
+        proxy = ProxyConfig(
+            proxy_image=proxy_data.get("proxy_image", "claude-proxy:local"),
+        )
+        return cls(networking=networking, features=features, proxy=proxy)
 
     def to_dict(self) -> dict:
         return {
@@ -60,6 +70,9 @@ class AppConfig:
             },
             "features": {
                 "skill_sync_enabled": self.features.skill_sync_enabled,
+            },
+            "proxy": {
+                "proxy_image": self.proxy.proxy_image,
             },
         }
 
