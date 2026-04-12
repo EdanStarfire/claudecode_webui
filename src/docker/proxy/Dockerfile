@@ -5,14 +5,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-pip \
     pipx \
     iptables \
+    iproute2 \
+    util-linux \
     curl \
     jq \
     ca-certificates \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Install mitmproxy via pipx (isolated, no system conflicts)
-RUN pipx install mitmproxy && pipx ensurepath
-ENV PATH="/root/.local/bin:${PATH}"
+# Install mitmproxy system-wide so uid 9999 can execute mitmdump
+ENV PIPX_HOME=/opt/pipx
+ENV PIPX_BIN_DIR=/usr/local/bin
+RUN pipx install mitmproxy
+
+# Dedicated non-root user for mitmdump; UID 9999 used in iptables owner match
+# to exclude mitmdump's upstream connections from TPROXY re-interception loop.
+RUN useradd -r -u 9999 -s /bin/false mitmproxy
 
 # Install CoreDNS
 ARG COREDNS_VERSION=1.12.1

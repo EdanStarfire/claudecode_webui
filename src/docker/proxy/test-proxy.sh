@@ -4,8 +4,6 @@ set -euo pipefail
 # Configuration
 PROXY_IMAGE="claude-proxy:local"
 PROXY_CONTAINER="claude-proxy-test"
-NETINIT_CONTAINER="net-init-test"
-AGENT_NET="agent-net-test"
 BRIDGE_NET="bridge-net-test"
 CERTS_DIR="$(cd "$(dirname "$0")" && pwd)/certs"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -25,9 +23,7 @@ FAILURES=0
 cleanup() {
     info "Cleaning up..."
     docker rm -f "$PROXY_CONTAINER" 2>/dev/null || true
-    docker rm -f "$NETINIT_CONTAINER" 2>/dev/null || true
     docker rm -f test-agent 2>/dev/null || true
-    docker network rm "$AGENT_NET" 2>/dev/null || true
     docker network rm "$BRIDGE_NET" 2>/dev/null || true
     info "Cleanup complete"
 }
@@ -39,13 +35,10 @@ info "Building proxy image..."
 docker build -t "$PROXY_IMAGE" "$SCRIPT_DIR"
 
 info "Creating networks..."
-# agent-net: --internal so agents have no default internet route (must use proxy).
-# --subnet 10.100.0.0/24 gives deterministic addressing for the static proxy IP.
-# The proxy container is multi-homed (bridge-net + agent-net) and bridges them
-# within its own network namespace via IP forwarding + MASQUERADE. Docker's
-# --internal isolation rules only block host-level forwarding between bridges,
-# not forwarding done inside the proxy container's network namespace.
-docker network create --internal --subnet 10.100.0.0/24 "$AGENT_NET" 2>/dev/null || true
+# bridge-net: gives the proxy container outbound internet access.
+# Agent containers share the proxy's network namespace via
+# --network container:<proxy>; they inherit all proxy interfaces and routing,
+# but TPROXY iptables rules intercept their traffic before it leaves.
 docker network create "$BRIDGE_NET" 2>/dev/null || true
 
 info "Creating certs directory..."
@@ -56,19 +49,16 @@ docker run -d \
     --name "$PROXY_CONTAINER" \
     --network "$BRIDGE_NET" \
     --cap-add NET_ADMIN \
-    --sysctl net.ipv4.ip_forward=1 \
     -v "$CERTS_DIR:/root/.mitmproxy" \
     "$PROXY_IMAGE"
-
-# Attach proxy to agent network with a static IP so PROXY_IP is predictable.
-PROXY_IP="10.100.0.2"
-docker network connect --ip "$PROXY_IP" "$AGENT_NET" "$PROXY_CONTAINER"
 
 # Wait for proxy to initialize
 info "Waiting for proxy to start..."
 sleep 5
 
-info "Proxy IP on agent network: $PROXY_IP"
+# Agent containers share the proxy's network namespace; CoreDNS listens on
+# loopback :53, so 127.0.0.1 resolves allowlisted domains and blocks others.
+PROXY_IP="127.0.0.1"
 
 # Verify CA cert was generated
 if [ -f "$CERTS_DIR/mitmproxy-ca-cert.pem" ]; then
@@ -78,34 +68,24 @@ else
     exit 1
 fi
 
-# --- Network init sidecar ---
-# A single sidecar container with NET_ADMIN configures the default route
-# through the proxy. Agent test containers use --network container:net-init
-# to inherit the pre-configured network namespace without needing NET_ADMIN
-# themselves. DNS is set by writing /etc/resolv.conf in each container's
-# wrapper command (--dns is not available with --network container:).
-info "Starting network init sidecar..."
-docker run -d \
-    --name "$NETINIT_CONTAINER" \
-    --network "$AGENT_NET" \
-    --cap-add NET_ADMIN \
-    alpine \
-    sh -c "ip route add default via $PROXY_IP 2>/dev/null || true && sleep infinity"
-sleep 1
-
-# --- Helper: run test container sharing net-init's network namespace ---
+# --- Helper: run test container sharing the proxy's network namespace ---
+# --network container:<proxy> gives the agent the same network interfaces,
+# iptables rules, and loopback as the proxy. TPROXY intercepts all TCP 80/443
+# from non-uid-9999 processes; no capability or route configuration needed in
+# the agent container. DNS is set by pointing resolv.conf at 127.0.0.1 where
+# CoreDNS is listening (--dns is not usable with --network container:).
 run_agent() {
     local name="$1"
     local image="$2"
     local cmd="$3"
     docker run --rm \
         --name test-agent \
-        --network "container:$NETINIT_CONTAINER" \
+        --network "container:$PROXY_CONTAINER" \
         -e "NODE_EXTRA_CA_CERTS=/etc/proxy-ca/mitmproxy-ca-cert.pem" \
         -v "$CERTS_DIR/mitmproxy-ca-cert.pem:/etc/proxy-ca/mitmproxy-ca-cert.pem:ro" \
         --entrypoint sh \
         "$image" \
-        -c "echo 'nameserver $PROXY_IP' > /etc/resolv.conf; cat /etc/proxy-ca/mitmproxy-ca-cert.pem >> /etc/ssl/certs/ca-certificates.crt 2>/dev/null || true; $cmd"
+        -c "echo 'nameserver 127.0.0.1' > /etc/resolv.conf; cat /etc/proxy-ca/mitmproxy-ca-cert.pem >> /etc/ssl/certs/ca-certificates.crt 2>/dev/null || true; $cmd"
 }
 
 # --- Test 1: Allowlisted domain (HTTPS, transparent interception) ---
@@ -161,17 +141,19 @@ else
     pass "Node.js fetch blocked for non-allowlisted domain (DNS-level)"
 fi
 
-# --- Test 6: Direct TCP to raw IP (bypass DNS, test iptables interception) ---
-# Connects to a raw IP (example.com's address) on port 80, bypassing DNS.
-# iptables PREROUTING redirects this to mitmdump transparent mode.
-# The IP does not match any allowlisted domain → mitmproxy blocks it.
-info "Test 6: Direct TCP to raw IP — iptables transparent interception..."
+# --- Test 6: Direct HTTP to raw IP (bypass DNS, test TPROXY interception) ---
+# Sends an HTTP GET to example.com's IP (93.184.216.34) on port 80, bypassing
+# DNS entirely. TPROXY OUTPUT MARK rule catches the outbound SYN, policy
+# routing re-injects it via loopback, PREROUTING TPROXY redirects it to
+# mitmdump :8080. The raw IP does not match any allowlisted domain so the
+# addon returns HTTP 403. wget treats 4xx as an error and exits non-zero.
+info "Test 6: Direct HTTP to raw IP — TPROXY interception and block..."
 if run_agent "test-direct" alpine \
-    "timeout 5 nc -w 3 93.184.216.34 80 </dev/null 2>/dev/null" \
+    "wget -qO- http://93.184.216.34/ >/dev/null 2>&1" \
     >/dev/null 2>&1; then
-    fail "Direct TCP to raw IP should have been intercepted and blocked"
+    fail "Direct HTTP to raw IP should have been intercepted and blocked (403)"
 else
-    pass "Direct TCP to raw IP blocked (transparently intercepted by iptables)"
+    pass "Direct HTTP to raw IP blocked (TPROXY intercepted, addon returned 403)"
 fi
 
 # --- Results ---

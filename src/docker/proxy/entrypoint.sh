@@ -58,40 +58,48 @@ else
     echo "Using existing CA certificate"
 fi
 
-# --- Enable IP forwarding and NAT ---
-# Required to act as a gateway: forward packets from agent-net to internet
-# (bridge-net), and masquerade the source IP so return traffic routes back.
-# ip_forward is set via --sysctl net.ipv4.ip_forward=1 at docker run time;
-# the write below is a belt-and-suspenders attempt that may be a no-op if
-# /proc/sys is read-only (which is normal for non-privileged containers).
-echo "Enabling IP forwarding and NAT..."
-echo 1 > /proc/sys/net/ipv4/ip_forward 2>/dev/null || true
-IP_FWD=$(cat /proc/sys/net/ipv4/ip_forward 2>/dev/null || echo "unknown")
-echo "ip_forward = $IP_FWD"
-iptables -t nat -A POSTROUTING -j MASQUERADE
-iptables -A FORWARD -j ACCEPT
+# --- Set up TPROXY transparent interception ---
+# Agent containers share this container's network namespace via
+# --network container:<proxy>. All TCP 80/443 originating from any process
+# whose UID != 9999 (i.e. every non-mitmdump process) is intercepted.
+#
+# How it works:
+#   OUTPUT chain:  mark packets from non-mitmdump processes (UID != 9999)
+#                  with fwmark 1.
+#   Policy routing: fwmark 1 → routing table 100; table 100 routes everything
+#                  to loopback, re-injecting packets into the netfilter
+#                  PREROUTING hook as if they arrived from outside.
+#   PREROUTING:    TPROXY target on port 80/443 redirects to mitmdump :8080
+#                  while preserving the original destination address via the
+#                  IP_TRANSPARENT socket option.
+#   Loop prevention: mitmdump runs as uid 9999; the OUTPUT MARK rule has
+#                  ! --uid-owner 9999, so mitmdump's upstream connections
+#                  to the real internet are never re-marked and never looped.
+echo "Configuring TPROXY policy routing and iptables..."
+ip rule add fwmark 1 lookup 100 2>/dev/null || true
+ip route add local 0.0.0.0/0 dev lo table 100 2>/dev/null || true
 
-# --- Set up iptables for transparent proxying ---
-# Redirect all TCP 80/443 arriving at any interface to mitmdump on :8080.
-# No -i restriction: the proxy container connects to multiple Docker networks
-# (bridge-net for internet egress, agent-net for agent traffic) and the
-# interface name for agent-net is not predictable at build time.
-# Agent containers route through the proxy as their default gateway, so their
-# traffic arrives at the proxy's agent-net interface and is caught here.
-# Exclude traffic originating from this container itself (OUTPUT chain handles
-# local traffic separately; PREROUTING only sees forwarded/incoming packets).
-echo "Configuring iptables for transparent proxy..."
-iptables -t nat -A PREROUTING -p tcp --dport 80 -j REDIRECT --to-port 8080
-iptables -t nat -A PREROUTING -p tcp --dport 443 -j REDIRECT --to-port 8080
+iptables -t mangle -A PREROUTING -p tcp --dport 80 -j TPROXY \
+    --tproxy-mark 1 --on-port 8080
+iptables -t mangle -A PREROUTING -p tcp --dport 443 -j TPROXY \
+    --tproxy-mark 1 --on-port 8080
 
-# --- Start mitmdump in transparent mode ---
-# mitmdump is the headless version of mitmproxy (no interactive TUI).
-# Transparent mode uses SO_ORIGINAL_DST to recover the original destination
-# after iptables REDIRECT has rewritten it, enabling MITM of all TCP 80/443
-# regardless of whether the client has proxy env vars set.
-echo "Starting mitmdump (transparent mode) on :8080..."
+iptables -t mangle -A OUTPUT -p tcp --dport 80 \
+    -m owner ! --uid-owner 9999 -j MARK --set-mark 1
+iptables -t mangle -A OUTPUT -p tcp --dport 443 \
+    -m owner ! --uid-owner 9999 -j MARK --set-mark 1
+
+# --- Start mitmdump in TPROXY mode as uid 9999 ---
+# setpriv drops to uid/gid 9999 while preserving CAP_NET_ADMIN in the ambient
+# capability set. CAP_NET_ADMIN is required for the IP_TRANSPARENT socket
+# option that TPROXY mode uses to bind on behalf of the original destination.
+# --inh-caps promotes cap_net_admin into the inheritable set first; Linux
+# requires a cap to be inheritable before it can be made ambient.
+echo "Starting mitmdump (tproxy mode) on :8080..."
 echo "Addon: /etc/proxy/addon.py"
-exec mitmdump --mode transparent --showhost \
+exec setpriv --reuid=9999 --regid=9999 --clear-groups \
+    --inh-caps +cap_net_admin --ambient-caps +cap_net_admin -- \
+    mitmdump --mode tproxy --showhost \
     --set confdir="$CERTS_DIR" \
     --listen-port 8080 \
     --ssl-insecure \
