@@ -7,7 +7,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.docker_utils import cleanup_session_tmp, get_session_tmp_dir, translate_docker_tmp_path
+from src.docker_utils import (
+    cleanup_session_tmp,
+    get_session_tmp_dir,
+    resolve_docker_cli_path,
+    translate_docker_tmp_path,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -127,3 +132,21 @@ class TestCleanupSessionTmp:
         with patch("src.docker_utils.shutil.rmtree", side_effect=OSError("disk error")):
             # Should not propagate the exception
             cleanup_session_tmp("sess-err", sessions_dir)
+
+
+# ---------------------------------------------------------------------------
+# resolve_docker_cli_path — proxy mode (issue #1049)
+# ---------------------------------------------------------------------------
+
+
+class TestResolveDockerCliPathProxy:
+    def test_proxy_mode_basic(self):
+        """CLAUDE_DOCKER_PROXY_IMAGE is set when proxy_image is provided."""
+        _, env = resolve_docker_cli_path(proxy_image="claude-proxy:local")
+        assert env["CLAUDE_DOCKER_PROXY_IMAGE"] == "claude-proxy:local"
+
+    def test_no_proxy_no_env_vars(self):
+        """No proxy env vars are set when proxy_image is None (regression guard)."""
+        _, env = resolve_docker_cli_path(docker_image="my-image")
+        assert "CLAUDE_DOCKER_PROXY_IMAGE" not in env
+        assert env == {"CLAUDE_DOCKER_IMAGE": "my-image"}

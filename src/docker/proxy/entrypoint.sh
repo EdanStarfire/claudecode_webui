@@ -170,9 +170,12 @@ echo "Configuring default-deny UDP OUTPUT..."
 iptables -A OUTPUT -p udp -m owner --uid-owner 9998 -j ACCEPT
 iptables -A OUTPUT -p udp -j DROP
 
-# --- Start mitmdump in transparent mode as uid 9999 ---
+# --- Start mitmdump with multiple modes as uid 9999 ---
 # setpriv drops to uid/gid 9999 but retains CAP_NET_ADMIN as an ambient
 # capability so mitmproxy can use privileged socket options if needed.
+#
+# Transparent mode: agent containers sharing this network namespace have their
+# TCP 80/443 transparently intercepted via the DNAT rules above.
 #
 # IMPORTANT: do NOT use exec here. The nat OUTPUT DNAT rule uses
 # "! --uid-owner 9999" to exclude mitmproxy's own upstream connections
@@ -189,13 +192,20 @@ echo "Addon: /etc/proxy/addon.py"
 PYTHONUNBUFFERED=1 setpriv --reuid=9999 --regid=9999 --clear-groups \
     --inh-caps +net_admin --ambient-caps +net_admin -- \
     mitmdump --mode transparent --showhost -v \
-    --set confdir="$CERTS_DIR" \
     --listen-port 8080 \
+    --set confdir="$CERTS_DIR" \
     --ssl-insecure \
     -s /etc/proxy/addon.py \
     --set block_global=false \
     --set stream_large_bodies=1m &
 MITM_PID=$!
+
+# Signal to claude-docker that iptables DNAT rules + mitmdump are fully up.
+# Polling only the CA cert file is insufficient — it appears during cert-gen,
+# before iptables setup and mitmdump startup. The .ready marker is written here,
+# after all three are complete, so the host-side poll starts the agent at the
+# right time.
+touch "$CERTS_DIR/.ready"
 
 # Forward signals to child processes so Docker stop works cleanly.
 trap 'kill "$MITM_PID" "$COREDNS_PID" 2>/dev/null; wait' TERM INT

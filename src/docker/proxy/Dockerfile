@@ -48,7 +48,7 @@ RUN chmod +x /entrypoint.sh
 RUN mkdir -p /var/lib/mitmproxy && chown 9999:9999 /var/lib/mitmproxy
 VOLUME /var/lib/mitmproxy
 
-# mitmdump: transparent HTTP/HTTPS (single port handles both)
+# mitmdump: transparent HTTP/HTTPS interception
 EXPOSE 8080
 # CoreDNS
 EXPOSE 53/udp 53/tcp

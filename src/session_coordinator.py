@@ -1024,6 +1024,8 @@ class SessionCoordinator:
                     workspace=session_info.working_directory,
                     session_data_dir=docker_data_dir,
                     docker_home_directory=session_info.docker_home_directory,
+                    # Issue #1049: Proxy mode
+                    proxy_image=session_info.docker_proxy_image,
                 )
                 coord_logger.info(
                     f"Docker mode enabled for session {session_id}: "
