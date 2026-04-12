@@ -76,53 +76,56 @@ else
     exit 1
 fi
 
-# --- Helper: run test container ---
+# --- Helper: run test container with transparent proxy routing ---
+# Agent containers use --cap-add NET_ADMIN to add a default route through the
+# proxy. This routes all TCP through the proxy's iptables PREROUTING rules,
+# which redirect ports 80/443 to mitmdump (transparent mode). No explicit
+# proxy env vars needed — interception is transparent to the application.
+# Uses alpine as base (wget, nslookup, nc, ip all included via busybox).
 run_agent() {
     local name="$1"
-    shift
+    local image="$2"
+    local cmd="$3"
     docker run --rm \
         --name test-agent \
         --network "$AGENT_NET" \
         --dns "$PROXY_IP" \
-        -e "REQUESTS_CA_BUNDLE=/etc/proxy-ca/mitmproxy-ca-cert.pem" \
+        --cap-add NET_ADMIN \
         -e "SSL_CERT_FILE=/etc/proxy-ca/mitmproxy-ca-cert.pem" \
         -e "NODE_EXTRA_CA_CERTS=/etc/proxy-ca/mitmproxy-ca-cert.pem" \
-        -e "CURL_CA_BUNDLE=/etc/proxy-ca/mitmproxy-ca-cert.pem" \
-        -e "GIT_SSL_CAINFO=/etc/proxy-ca/mitmproxy-ca-cert.pem" \
-        -e "http_proxy=http://$PROXY_IP:8080" \
-        -e "https_proxy=http://$PROXY_IP:8080" \
-        -e "HTTP_PROXY=http://$PROXY_IP:8080" \
-        -e "HTTPS_PROXY=http://$PROXY_IP:8080" \
         -v "$CERTS_DIR/mitmproxy-ca-cert.pem:/etc/proxy-ca/mitmproxy-ca-cert.pem:ro" \
-        "$@"
+        --entrypoint sh \
+        "$image" \
+        -c "ip route add default via $PROXY_IP 2>/dev/null || true; $cmd"
 }
 
-# --- Test 1: Allowlisted domain (HTTPS) ---
-# Uses curlimages/curl — curl pre-installed, no apt-get needed
-info "Test 1: HTTPS request to allowlisted domain (api.github.com)..."
-if run_agent "test-allow" curlimages/curl \
-    -sf --max-time 15 --cacert /etc/proxy-ca/mitmproxy-ca-cert.pem https://api.github.com/ >/dev/null 2>&1; then
-    pass "Allowlisted HTTPS request succeeded"
+# --- Test 1: Allowlisted domain (HTTPS, transparent interception) ---
+# No proxy env vars. Traffic routes through proxy via iptables REDIRECT.
+# mitmdump intercepts TLS, presents mitmproxy CA-signed cert; wget trusts it.
+info "Test 1: HTTPS request to allowlisted domain (api.github.com) — transparent..."
+if run_agent "test-allow" alpine \
+    "wget -qO- --ca-certificate=/etc/proxy-ca/mitmproxy-ca-cert.pem https://api.github.com/ >/dev/null" \
+    >/dev/null 2>&1; then
+    pass "Allowlisted HTTPS request succeeded (transparently intercepted)"
 else
     fail "Allowlisted HTTPS request failed"
 fi
 
-# --- Test 2: Non-allowlisted domain (HTTPS) ---
-info "Test 2: HTTPS request to non-allowlisted domain (example.com)..."
-HTTP_CODE=$(run_agent "test-deny" curlimages/curl \
-    -s --max-time 15 --cacert /etc/proxy-ca/mitmproxy-ca-cert.pem -o /dev/null -w '%{http_code}' https://example.com/ 2>/dev/null || echo "BLOCKED")
-
-if [ "$HTTP_CODE" = "403" ] || [ "$HTTP_CODE" = "BLOCKED" ]; then
-    pass "Non-allowlisted HTTPS request blocked (code: $HTTP_CODE)"
+# --- Test 2: Non-allowlisted domain (HTTPS, transparent interception) ---
+# DNS returns NXDOMAIN for example.com (CoreDNS catch-all block).
+info "Test 2: HTTPS request to non-allowlisted domain (example.com) — transparent..."
+if run_agent "test-deny" alpine \
+    "wget -qO- --ca-certificate=/etc/proxy-ca/mitmproxy-ca-cert.pem https://example.com/ >/dev/null 2>&1"; then
+    fail "Non-allowlisted HTTPS request should have been blocked"
 else
-    fail "Non-allowlisted HTTPS request not blocked (code: $HTTP_CODE)"
+    pass "Non-allowlisted HTTPS request blocked (DNS NXDOMAIN or mitmproxy 403)"
 fi
 
 # --- Test 3: DNS allowlisted domain ---
-# Uses busybox — nslookup pre-installed, no apt-get needed
 info "Test 3: DNS resolution for allowlisted domain..."
-if run_agent "test-dns-allow" busybox \
-    nslookup api.github.com "$PROXY_IP" >/dev/null 2>&1; then
+if run_agent "test-dns-allow" alpine \
+    "nslookup api.github.com $PROXY_IP >/dev/null 2>&1" \
+    >/dev/null 2>&1; then
     pass "DNS resolution for allowlisted domain succeeded"
 else
     fail "DNS resolution for allowlisted domain failed"
@@ -130,30 +133,36 @@ fi
 
 # --- Test 4: DNS non-allowlisted domain (NXDOMAIN) ---
 info "Test 4: DNS resolution for non-allowlisted domain..."
-if run_agent "test-dns-deny" busybox \
-    nslookup example.com "$PROXY_IP" >/dev/null 2>&1; then
+if run_agent "test-dns-deny" alpine \
+    "nslookup example.com $PROXY_IP >/dev/null 2>&1" \
+    >/dev/null 2>&1; then
     fail "DNS resolution for non-allowlisted domain should have failed"
 else
     pass "DNS for non-allowlisted domain returned NXDOMAIN"
 fi
 
-# --- Test 5: Node.js DNS bypass path ---
-info "Test 5: Node.js native fetch to non-allowlisted domain..."
+# --- Test 5: Node.js native fetch to non-allowlisted domain ---
+# No proxy env vars. DNS NXDOMAIN prevents resolution.
+info "Test 5: Node.js native fetch to non-allowlisted domain (transparent)..."
 if run_agent "test-node-bypass" node:22-slim \
-    node -e "fetch('https://blocked.example.com').then(r => { console.log(r.status); process.exit(0); }).catch(e => { console.error(e.cause?.code || e.message); process.exit(1); })" 2>/dev/null; then
+    "node -e \"fetch('https://blocked.example.com').then(r => { console.log(r.status); process.exit(0); }).catch(e => { console.error(e.cause?.code || e.message); process.exit(1); })\"" \
+    >/dev/null 2>&1; then
     fail "Node.js fetch to non-allowlisted domain should have failed"
 else
     pass "Node.js fetch blocked for non-allowlisted domain (DNS-level)"
 fi
 
-# --- Test 6: Direct connection attempt (no proxy) ---
-# Uses busybox — nc pre-installed, no apt-get needed
-info "Test 6: Direct TCP connection attempt (bypassing proxy)..."
-if run_agent "test-direct" busybox \
-    sh -c "timeout 5 nc -w 3 93.184.216.34 80 </dev/null 2>/dev/null"; then
-    fail "Direct TCP connection should have failed on internal network"
+# --- Test 6: Direct TCP to raw IP (bypass DNS, test iptables interception) ---
+# Connects to a raw IP (example.com's address) on port 80, bypassing DNS.
+# iptables PREROUTING redirects this to mitmdump transparent mode.
+# The IP does not match any allowlisted domain → mitmproxy blocks it.
+info "Test 6: Direct TCP to raw IP — iptables transparent interception..."
+if run_agent "test-direct" alpine \
+    "timeout 5 nc -w 3 93.184.216.34 80 </dev/null 2>/dev/null" \
+    >/dev/null 2>&1; then
+    fail "Direct TCP to raw IP should have been intercepted and blocked"
 else
-    pass "Direct TCP connection blocked (no internet route on internal network)"
+    pass "Direct TCP to raw IP blocked (transparently intercepted by iptables)"
 fi
 
 # --- Results ---

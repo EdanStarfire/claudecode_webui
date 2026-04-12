@@ -59,22 +59,24 @@ else
 fi
 
 # --- Set up iptables for transparent proxying ---
-# Both ports redirect to 8080 — mitmdump transparent mode auto-detects TLS
-# by inspecting the ClientHello on the same listener port.
+# Redirect all TCP 80/443 arriving at any interface to mitmdump on :8080.
+# No -i restriction: the proxy container connects to multiple Docker networks
+# (bridge-net for internet egress, agent-net for agent traffic) and the
+# interface name for agent-net is not predictable at build time.
+# Agent containers route through the proxy as their default gateway, so their
+# traffic arrives at the proxy's agent-net interface and is caught here.
 echo "Configuring iptables for transparent proxy..."
-iptables -t nat -A PREROUTING -i eth0 -p tcp --dport 80 -j REDIRECT --to-port 8080
-iptables -t nat -A PREROUTING -i eth0 -p tcp --dport 443 -j REDIRECT --to-port 8080
+iptables -t nat -A PREROUTING -p tcp --dport 80 -j REDIRECT --to-port 8080
+iptables -t nat -A PREROUTING -p tcp --dport 443 -j REDIRECT --to-port 8080
 
-# --- Start mitmdump as explicit HTTP/HTTPS proxy ---
+# --- Start mitmdump in transparent mode ---
 # mitmdump is the headless version of mitmproxy (no interactive TUI).
-# Default (regular) mode accepts explicit HTTP CONNECT proxy requests.
-# Agent containers set http_proxy/https_proxy env vars pointing to port 8080.
-# For HTTPS, mitmdump performs MITM via CONNECT interception + cert injection.
-# The iptables rules above additionally redirect any direct port 80/443 traffic
-# (e.g., from tools that bypass proxy env vars) to port 8080.
-echo "Starting mitmdump (explicit proxy mode) on :8080..."
+# Transparent mode uses SO_ORIGINAL_DST to recover the original destination
+# after iptables REDIRECT has rewritten it, enabling MITM of all TCP 80/443
+# regardless of whether the client has proxy env vars set.
+echo "Starting mitmdump (transparent mode) on :8080..."
 echo "Addon: /etc/proxy/addon.py"
-exec mitmdump --showhost \
+exec mitmdump --mode transparent --showhost \
     --set confdir="$CERTS_DIR" \
     --listen-port 8080 \
     --ssl-insecure \
