@@ -143,12 +143,10 @@ DIAG_D=$(run_agent "test-diag" alpine \
 info "  Result:"
 echo "$DIAG_D" | head -10
 
-info "Diag E: SO_ORIGINAL_DST test — does OUTPUT REDIRECT store original dest in conntrack?"
+info "Diag E: SO_ORIGINAL_DST — loopback src (127.0.0.1→127.0.0.1:18080 REDIRECT→18999)..."
 docker exec "$PROXY_CONTAINER" python3 -c "
-import socket, struct, sys, threading, time
-
-SO_ORIGINAL_DST = 80  # SOL_IP=0, SO_ORIGINAL_DST=80
-
+import socket, struct, subprocess, threading, time
+SO_ORIGINAL_DST = 80
 result = []
 def server():
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -160,31 +158,54 @@ def server():
         dst = conn.getsockopt(socket.SOL_IP, SO_ORIGINAL_DST, 16)
         port = struct.unpack('!H', dst[2:4])[0]
         ip = '.'.join(str(b) for b in dst[4:8])
-        result.append(f'SO_ORIGINAL_DST={ip}:{port}')
+        result.append(f'peer={addr[0]}:{addr[1]} SO_ORIGINAL_DST={ip}:{port}')
     except Exception as e:
-        result.append(f'SO_ORIGINAL_DST error: {e}')
+        result.append(f'peer={addr[0]}:{addr[1]} SO_ORIGINAL_DST error: {e}')
     conn.close()
     s.close()
-
-t = threading.Thread(target=server, daemon=True)
-t.start()
-time.sleep(0.2)
-
-# Temp REDIRECT: port 18080 → 18999
-import subprocess
+t = threading.Thread(target=server, daemon=True); t.start(); time.sleep(0.2)
 subprocess.run(['iptables','-t','nat','-A','OUTPUT','-p','tcp','--dport','18080','-j','REDIRECT','--to-port','18999'], check=True)
 try:
-    c = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    c.settimeout(3)
-    c.connect(('127.0.0.1', 18080))  # goes to 18999 via REDIRECT
-    c.close()
-except Exception as e:
-    result.append(f'connect error: {e}')
-finally:
-    subprocess.run(['iptables','-t','nat','-D','OUTPUT','-p','tcp','--dport','18080','-j','REDIRECT','--to-port','18999'])
+    c = socket.socket(socket.AF_INET, socket.SOCK_STREAM); c.settimeout(3)
+    c.connect(('127.0.0.1', 18080)); c.close()
+except Exception as e: result.append(f'connect error: {e}')
+finally: subprocess.run(['iptables','-t','nat','-D','OUTPUT','-p','tcp','--dport','18080','-j','REDIRECT','--to-port','18999'])
+t.join(timeout=3); print(result[0] if result else 'no result')
+" 2>&1 || true
 
-t.join(timeout=3)
-print(result[0] if result else 'no result')
+info "Diag F: SO_ORIGINAL_DST — external src (→1.1.1.1:18080 REDIRECT→18999, non-lo source)..."
+docker exec "$PROXY_CONTAINER" python3 -c "
+import socket, struct, subprocess, threading, time
+SO_ORIGINAL_DST = 80
+result = []
+def server():
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    s.bind(('0.0.0.0', 18999))
+    s.listen(1)
+    s.settimeout(5)
+    try:
+        conn, addr = s.accept()
+        try:
+            dst = conn.getsockopt(socket.SOL_IP, SO_ORIGINAL_DST, 16)
+            port = struct.unpack('!H', dst[2:4])[0]
+            ip = '.'.join(str(b) for b in dst[4:8])
+            result.append(f'peer={addr[0]}:{addr[1]} SO_ORIGINAL_DST={ip}:{port}')
+        except Exception as e:
+            result.append(f'peer={addr[0]}:{addr[1]} SO_ORIGINAL_DST error: {e}')
+        conn.close()
+    except socket.timeout:
+        result.append('server accept() TIMED OUT — packet never reached server')
+    s.close()
+t = threading.Thread(target=server, daemon=True); t.start(); time.sleep(0.2)
+subprocess.run(['iptables','-t','nat','-A','OUTPUT','-p','tcp','--dport','18080','-j','REDIRECT','--to-port','18999'], check=True)
+try:
+    c = socket.socket(socket.AF_INET, socket.SOCK_STREAM); c.settimeout(4)
+    c.connect(('1.1.1.1', 18080))  # external IP — source will be bridge IP, not 127.0.0.1
+    c.close()
+except Exception as e: result.append(f'connect error: {e}')
+finally: subprocess.run(['iptables','-t','nat','-D','OUTPUT','-p','tcp','--dport','18080','-j','REDIRECT','--to-port','18999'])
+t.join(timeout=6); print('; '.join(result) if result else 'no result')
 " 2>&1 || true
 
 echo ""
