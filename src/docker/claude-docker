@@ -163,6 +163,13 @@ if [ -n "$PROXY_IMAGE" ]; then
     # directory owner to uid 9999. Pre-set 755 so the host user retains read access
     # as "other" (the cert file itself is chmod 644 by entrypoint.sh).
     chmod 755 "$PROXY_CERTS"
+
+    # Write resolv.conf before launching the sidecar. entrypoint.sh runs
+    # chown 9999:9999 on the bind-mount directory; writing after that would
+    # fail with EACCES since the host user loses write permission on the dir.
+    PROXY_RESOLV="$PROXY_CERTS/resolv.conf"
+    printf 'nameserver 127.0.0.1\n' > "$PROXY_RESOLV"
+
     echo "[claude-docker] Proxy mode: launching $PROXY_IMAGE as $PROXY_NAME" >&2
 
     # Tear down sidecar and certs when the agent container exits.
@@ -197,11 +204,6 @@ if [ -n "$PROXY_IMAGE" ]; then
     echo "[claude-docker] Proxy ready (${PROXY_WAIT}s), CA cert: $PROXY_CA" >&2
 
     # Join proxy network namespace — transparent DNAT + CoreDNS filtering.
-    # --network container: copies the proxy container's resolv.conf which points to
-    # Docker's DNS resolver, not CoreDNS at 127.0.0.1. Override with a bind-mount.
-    PROXY_RESOLV="$PROXY_CERTS/resolv.conf"
-    printf 'nameserver 127.0.0.1\n' > "$PROXY_RESOLV"
-
     PROXY_FLAGS="$PROXY_FLAGS --network container:$PROXY_NAME"
     PROXY_FLAGS="$PROXY_FLAGS -v ${PROXY_RESOLV}:/etc/resolv.conf:ro"
 
