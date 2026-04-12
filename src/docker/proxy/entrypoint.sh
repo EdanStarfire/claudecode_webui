@@ -58,6 +58,14 @@ else
     echo "Using existing CA certificate"
 fi
 
+# --- Enable IP forwarding and NAT ---
+# Required to act as a gateway: forward packets from agent-net to internet
+# (bridge-net), and masquerade the source IP so return traffic routes back.
+echo "Enabling IP forwarding and NAT..."
+echo 1 > /proc/sys/net/ipv4/ip_forward
+iptables -t nat -A POSTROUTING -j MASQUERADE
+iptables -A FORWARD -j ACCEPT
+
 # --- Set up iptables for transparent proxying ---
 # Redirect all TCP 80/443 arriving at any interface to mitmdump on :8080.
 # No -i restriction: the proxy container connects to multiple Docker networks
@@ -65,6 +73,8 @@ fi
 # interface name for agent-net is not predictable at build time.
 # Agent containers route through the proxy as their default gateway, so their
 # traffic arrives at the proxy's agent-net interface and is caught here.
+# Exclude traffic originating from this container itself (OUTPUT chain handles
+# local traffic separately; PREROUTING only sees forwarded/incoming packets).
 echo "Configuring iptables for transparent proxy..."
 iptables -t nat -A PREROUTING -p tcp --dport 80 -j REDIRECT --to-port 8080
 iptables -t nat -A PREROUTING -p tcp --dport 443 -j REDIRECT --to-port 8080

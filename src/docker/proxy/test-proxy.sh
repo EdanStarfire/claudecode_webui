@@ -37,7 +37,11 @@ info "Building proxy image..."
 docker build -t "$PROXY_IMAGE" "$SCRIPT_DIR"
 
 info "Creating networks..."
-docker network create --internal "$AGENT_NET" 2>/dev/null || true
+# agent-net: specific subnet, no --internal. --internal would add a host-level
+# iptables isolation rule that blocks the proxy from forwarding traffic, even
+# with IP forwarding enabled. Instead, the proxy's own iptables (PREROUTING +
+# MASQUERADE) enforces policy, and mitmproxy's addon enforces the allowlist.
+docker network create --subnet 10.100.0.0/24 "$AGENT_NET" 2>/dev/null || true
 docker network create "$BRIDGE_NET" 2>/dev/null || true
 
 info "Creating certs directory..."
@@ -51,20 +55,15 @@ docker run -d \
     -v "$CERTS_DIR:/root/.mitmproxy" \
     "$PROXY_IMAGE"
 
-# Attach proxy to agent network
-docker network connect "$AGENT_NET" "$PROXY_CONTAINER"
+# Attach proxy to agent network with a static IP so PROXY_IP is predictable.
+# Agent containers add a default route to this IP via ip route, routing all
+# their traffic through the proxy for transparent interception.
+PROXY_IP="10.100.0.1"
+docker network connect --ip "$PROXY_IP" "$AGENT_NET" "$PROXY_CONTAINER"
 
 # Wait for proxy to initialize
 info "Waiting for proxy to start..."
 sleep 5
-
-# Get proxy IP on agent network
-PROXY_IP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{if eq .NetworkID "'$(docker network inspect "$AGENT_NET" -f '{{.Id}}')'"}}{{.IPAddress}}{{end}}{{end}}' "$PROXY_CONTAINER")
-
-if [ -z "$PROXY_IP" ]; then
-    # Fallback: try simpler inspection
-    PROXY_IP=$(docker inspect "$PROXY_CONTAINER" --format '{{json .NetworkSettings.Networks}}' | jq -r '."'"$AGENT_NET"'".IPAddress')
-fi
 
 info "Proxy IP on agent network: $PROXY_IP"
 
