@@ -65,8 +65,8 @@ docker exec "$PROXY_CONTAINER" ps aux 2>/dev/null || true
 info "Listening sockets in proxy namespace:"
 docker exec "$PROXY_CONTAINER" ss -tlunp 2>/dev/null || true
 
-info "Container DNAT target IP:"
-docker exec "$PROXY_CONTAINER" ip -4 addr show eth0 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}' || echo "  (could not detect eth0 IP)"
+info "TPROXY policy routing:"
+docker exec "$PROXY_CONTAINER" sh -c 'echo "  ip rules:"; ip rule show | grep fwmark; echo "  table 100:"; ip route show table 100 2>/dev/null || echo "    (empty)"' 2>/dev/null || true
 
 info "Mitmdump uid check:"
 docker exec "$PROXY_CONTAINER" sh -c '
@@ -171,44 +171,38 @@ finally: subprocess.run(['iptables','-t','nat','-D','OUTPUT','-p','tcp','--dport
 t.join(timeout=3); print(result[0] if result else 'no result')
 " 2>&1 || true
 
-info "Diag F: SO_ORIGINAL_DST — DNAT to container IP (→1.1.1.1:18080 DNAT→PROXY_IP:18999)..."
+info "Diag F: TPROXY pipeline — mark + policy route + TPROXY to local server on :18999..."
 docker exec "$PROXY_CONTAINER" python3 -c "
 import socket, struct, subprocess, threading, time
-SO_ORIGINAL_DST = 80
+IP_TRANSPARENT = 19
 result = []
-# Detect container IP (same logic as entrypoint.sh)
-import re
-ip_out = subprocess.check_output(['ip','-4','addr','show','eth0'], text=True)
-m = re.search(r'inet (\d+\.\d+\.\d+\.\d+)', ip_out)
-proxy_ip = m.group(1) if m else '127.0.0.1'
-print(f'DNAT target: {proxy_ip}:18999')
 def server():
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    s.setsockopt(socket.SOL_IP, IP_TRANSPARENT, 1)
     s.bind(('0.0.0.0', 18999))
     s.listen(1)
     s.settimeout(5)
     try:
         conn, addr = s.accept()
-        try:
-            dst = conn.getsockopt(socket.SOL_IP, SO_ORIGINAL_DST, 16)
-            port = struct.unpack('!H', dst[2:4])[0]
-            ip = '.'.join(str(b) for b in dst[4:8])
-            result.append(f'peer={addr[0]}:{addr[1]} SO_ORIGINAL_DST={ip}:{port}')
-        except Exception as e:
-            result.append(f'peer={addr[0]}:{addr[1]} SO_ORIGINAL_DST error: {e}')
+        local = conn.getsockname()
+        result.append(f'peer={addr[0]}:{addr[1]} getsockname={local[0]}:{local[1]}')
         conn.close()
     except socket.timeout:
         result.append('server accept() TIMED OUT — packet never reached server')
     s.close()
 t = threading.Thread(target=server, daemon=True); t.start(); time.sleep(0.2)
-subprocess.run(['iptables','-t','nat','-A','OUTPUT','-p','tcp','--dport','18080','-j','DNAT','--to-destination',f'{proxy_ip}:18999'], check=True)
+# Set up TPROXY pipeline for port 18080: mark → policy route (reuses table 100) → TPROXY
+subprocess.run(['iptables','-t','mangle','-A','OUTPUT','-p','tcp','--dport','18080','-j','MARK','--set-mark','1'], check=True)
+subprocess.run(['iptables','-t','mangle','-A','PREROUTING','-p','tcp','--dport','18080','-j','TPROXY','--tproxy-mark','0x1/0x1','--on-port','18999'], check=True)
 try:
     c = socket.socket(socket.AF_INET, socket.SOCK_STREAM); c.settimeout(4)
-    c.connect(('1.1.1.1', 18080))  # external IP — DNAT rewrites to proxy_ip:18999
+    c.connect(('1.1.1.1', 18080))  # external IP — should be TPROXY-ed to :18999
     c.close()
 except Exception as e: result.append(f'connect error: {e}')
-finally: subprocess.run(['iptables','-t','nat','-D','OUTPUT','-p','tcp','--dport','18080','-j','DNAT','--to-destination',f'{proxy_ip}:18999'])
+finally:
+    subprocess.run(['iptables','-t','mangle','-D','OUTPUT','-p','tcp','--dport','18080','-j','MARK','--set-mark','1'])
+    subprocess.run(['iptables','-t','mangle','-D','PREROUTING','-p','tcp','--dport','18080','-j','TPROXY','--tproxy-mark','0x1/0x1','--on-port','18999'])
 t.join(timeout=6); print('; '.join(result) if result else 'no result')
 " 2>&1 || true
 
@@ -353,6 +347,9 @@ echo "============================"
 # --- iptables packet counters (post-test) ---
 # Non-zero counters on nat OUTPUT REDIRECT rules confirm REDIRECT is firing.
 # Zero counters after tests = REDIRECT never matched (likely -m owner issue).
+echo ""
+echo "=== iptables mangle table (post-test) ==="
+docker exec "$PROXY_CONTAINER" iptables -t mangle -L -v -n 2>/dev/null || true
 echo ""
 echo "=== iptables nat table (post-test) ==="
 docker exec "$PROXY_CONTAINER" iptables -t nat -L -v -n 2>/dev/null || true
