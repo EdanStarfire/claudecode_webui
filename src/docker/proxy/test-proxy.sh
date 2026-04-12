@@ -67,7 +67,6 @@ docker network connect --ip "$PROXY_IP" "$AGENT_NET" "$PROXY_CONTAINER"
 # Wait for proxy to initialize
 info "Waiting for proxy to start..."
 sleep 5
-docker logs "$PROXY_CONTAINER" || true
 
 info "Proxy IP on agent network: $PROXY_IP"
 
