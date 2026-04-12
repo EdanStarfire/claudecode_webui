@@ -98,9 +98,10 @@ run_agent() {
 }
 
 # --- Test 1: Allowlisted domain (HTTPS) ---
+# Uses curlimages/curl — curl pre-installed, no apt-get needed
 info "Test 1: HTTPS request to allowlisted domain (api.github.com)..."
-if run_agent "test-allow" debian:bookworm-slim \
-    bash -c "apt-get update -qq && apt-get install -y -qq curl >/dev/null 2>&1 && curl -sf --max-time 15 --cacert /etc/proxy-ca/mitmproxy-ca-cert.pem https://api.github.com/ >/dev/null 2>&1"; then
+if run_agent "test-allow" curlimages/curl \
+    -sf --max-time 15 --cacert /etc/proxy-ca/mitmproxy-ca-cert.pem https://api.github.com/ >/dev/null 2>&1; then
     pass "Allowlisted HTTPS request succeeded"
 else
     fail "Allowlisted HTTPS request failed"
@@ -108,8 +109,8 @@ fi
 
 # --- Test 2: Non-allowlisted domain (HTTPS) ---
 info "Test 2: HTTPS request to non-allowlisted domain (example.com)..."
-HTTP_CODE=$(run_agent "test-deny" debian:bookworm-slim \
-    bash -c "apt-get update -qq && apt-get install -y -qq curl >/dev/null 2>&1 && curl -s --max-time 15 --cacert /etc/proxy-ca/mitmproxy-ca-cert.pem -o /dev/null -w '%{http_code}' https://example.com/ 2>/dev/null || echo 'BLOCKED'" || echo "BLOCKED")
+HTTP_CODE=$(run_agent "test-deny" curlimages/curl \
+    -s --max-time 15 --cacert /etc/proxy-ca/mitmproxy-ca-cert.pem -o /dev/null -w '%{http_code}' https://example.com/ 2>/dev/null || echo "BLOCKED")
 
 if [ "$HTTP_CODE" = "403" ] || [ "$HTTP_CODE" = "BLOCKED" ]; then
     pass "Non-allowlisted HTTPS request blocked (code: $HTTP_CODE)"
@@ -118,9 +119,10 @@ else
 fi
 
 # --- Test 3: DNS allowlisted domain ---
+# Uses busybox — nslookup pre-installed, no apt-get needed
 info "Test 3: DNS resolution for allowlisted domain..."
-if run_agent "test-dns-allow" debian:bookworm-slim \
-    bash -c "apt-get update -qq && apt-get install -y -qq dnsutils >/dev/null 2>&1 && nslookup api.github.com $PROXY_IP >/dev/null 2>&1"; then
+if run_agent "test-dns-allow" busybox \
+    nslookup api.github.com "$PROXY_IP" >/dev/null 2>&1; then
     pass "DNS resolution for allowlisted domain succeeded"
 else
     fail "DNS resolution for allowlisted domain failed"
@@ -128,8 +130,8 @@ fi
 
 # --- Test 4: DNS non-allowlisted domain (NXDOMAIN) ---
 info "Test 4: DNS resolution for non-allowlisted domain..."
-if run_agent "test-dns-deny" debian:bookworm-slim \
-    bash -c "apt-get update -qq && apt-get install -y -qq dnsutils >/dev/null 2>&1 && nslookup example.com $PROXY_IP >/dev/null 2>&1"; then
+if run_agent "test-dns-deny" busybox \
+    nslookup example.com "$PROXY_IP" >/dev/null 2>&1; then
     fail "DNS resolution for non-allowlisted domain should have failed"
 else
     pass "DNS for non-allowlisted domain returned NXDOMAIN"
@@ -145,9 +147,10 @@ else
 fi
 
 # --- Test 6: Direct connection attempt (no proxy) ---
+# Uses busybox — nc pre-installed, no apt-get needed
 info "Test 6: Direct TCP connection attempt (bypassing proxy)..."
-if run_agent "test-direct" debian:bookworm-slim \
-    bash -c "timeout 5 bash -c 'echo | nc -w 3 93.184.216.34 80' 2>/dev/null"; then
+if run_agent "test-direct" busybox \
+    sh -c "timeout 5 nc -w 3 93.184.216.34 80 </dev/null 2>/dev/null"; then
     fail "Direct TCP connection should have failed on internal network"
 else
     pass "Direct TCP connection blocked (no internet route on internal network)"
