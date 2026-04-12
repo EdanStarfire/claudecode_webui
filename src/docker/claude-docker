@@ -182,8 +182,10 @@ if [ -n "$PROXY_HOST" ]; then
     PROXY_FLAGS="$PROXY_FLAGS --dns $PROXY_HOST"
 
     # Proxy env vars — token passed via env var (not command arg) for security
-    PROXY_FLAGS="$PROXY_FLAGS -e HTTPS_PROXY=http://${SESSION_TOKEN}:x@${PROXY_HOST}:8080"
-    PROXY_FLAGS="$PROXY_FLAGS -e HTTP_PROXY=http://${SESSION_TOKEN}:x@${PROXY_HOST}:8080"
+    # Port 8888: regular HTTP proxy mode (handles CONNECT for HTTPS)
+    # Port 1080: SOCKS5 proxy mode (SSH ProxyCommand, generic TCP tunneling)
+    PROXY_FLAGS="$PROXY_FLAGS -e HTTPS_PROXY=http://${SESSION_TOKEN}:x@${PROXY_HOST}:8888"
+    PROXY_FLAGS="$PROXY_FLAGS -e HTTP_PROXY=http://${SESSION_TOKEN}:x@${PROXY_HOST}:8888"
     PROXY_FLAGS="$PROXY_FLAGS -e ALL_PROXY=socks5://${SESSION_TOKEN}:x@${PROXY_HOST}:1080"
 
     # CA cert trust — covers curl, Python requests, Node.js, git

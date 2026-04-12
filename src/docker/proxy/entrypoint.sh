@@ -147,6 +147,14 @@ iptables -A OUTPUT -o lo -j ACCEPT
 #    match; this rule fills the gap so they reach mitmdump.
 iptables -A OUTPUT -p tcp -d "$CONTAINER_IP" --dport 8080 \
     -m conntrack --ctstate NEW -j ACCEPT
+# Allow connections to the regular HTTP proxy port (8888) and SOCKS5 port (1080).
+# These are used by agents on a separate Docker network that connect via explicit
+# proxy env vars (HTTPS_PROXY=http://...@proxy:8888, ALL_PROXY=socks5://...@proxy:1080)
+# rather than sharing this container's network namespace.
+iptables -A OUTPUT -p tcp -d "$CONTAINER_IP" --dport 8888 \
+    -m conntrack --ctstate NEW -j ACCEPT
+iptables -A OUTPUT -p tcp -d "$CONTAINER_IP" --dport 1080 \
+    -m conntrack --ctstate NEW -j ACCEPT
 
 # 3. Allow established/related traffic (TCP handshake completion, return traffic).
 iptables -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
@@ -170,9 +178,16 @@ echo "Configuring default-deny UDP OUTPUT..."
 iptables -A OUTPUT -p udp -m owner --uid-owner 9998 -j ACCEPT
 iptables -A OUTPUT -p udp -j DROP
 
-# --- Start mitmdump in transparent mode as uid 9999 ---
+# --- Start mitmdump with multiple modes as uid 9999 ---
 # setpriv drops to uid/gid 9999 but retains CAP_NET_ADMIN as an ambient
 # capability so mitmproxy can use privileged socket options if needed.
+#
+# Three proxy modes run in a single mitmdump process (mitmproxy 10+ feature):
+#   :8080 transparent — DNAT interception for containers sharing this namespace
+#   :8888 regular     — explicit HTTP/HTTPS proxy (HTTPS_PROXY env var clients)
+#   :1080 socks5      — explicit SOCKS5 proxy (ALL_PROXY env var, SSH ProxyCommand)
+#
+# All three modes share the same addon (domain allowlist filter) and CA cert.
 #
 # IMPORTANT: do NOT use exec here. The nat OUTPUT DNAT rule uses
 # "! --uid-owner 9999" to exclude mitmproxy's own upstream connections
@@ -184,13 +199,16 @@ iptables -A OUTPUT -p udp -j DROP
 #
 # PID 1 (this shell) remains as the container's init process and forwards
 # SIGTERM/SIGINT to the child processes for clean shutdown.
-echo "Starting mitmdump (transparent mode) on :8080..."
+echo "Starting mitmdump (transparent:8080, regular:8888, socks5:1080)..."
 echo "Addon: /etc/proxy/addon.py"
 PYTHONUNBUFFERED=1 setpriv --reuid=9999 --regid=9999 --clear-groups \
     --inh-caps +net_admin --ambient-caps +net_admin -- \
-    mitmdump --mode transparent --showhost -v \
+    mitmdump \
+    --mode transparent:8080 \
+    --mode regular:8888 \
+    --mode socks5:1080 \
+    --showhost -v \
     --set confdir="$CERTS_DIR" \
-    --listen-port 8080 \
     --ssl-insecure \
     -s /etc/proxy/addon.py \
     --set block_global=false \
