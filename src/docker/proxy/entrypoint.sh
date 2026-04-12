@@ -83,14 +83,16 @@ fi
 #   Loop prevention: mitmdump runs as uid 9999; the OUTPUT MARK rule has
 #                  ! --uid-owner 9999, so mitmdump's upstream connections
 #                  to the real internet are never re-marked and never looped.
-echo "Configuring TPROXY policy routing and iptables..."
+# Policy routing re-injects marked packets via loopback so they re-enter
+# PREROUTING. REDIRECT in the NAT table then catches them for mitmdump.
+# mitmproxy --mode transparent uses SO_ORIGINAL_DST to recover the original
+# destination after REDIRECT — no IP_TRANSPARENT socket binding required.
+echo "Configuring transparent proxy routing and iptables..."
 ip rule add fwmark 1 lookup 100 2>/dev/null || true
 ip route add local 0.0.0.0/0 dev lo table 100 2>/dev/null || true
 
-iptables -t mangle -A PREROUTING -p tcp --dport 80 -j TPROXY \
-    --tproxy-mark 1 --on-port 8080
-iptables -t mangle -A PREROUTING -p tcp --dport 443 -j TPROXY \
-    --tproxy-mark 1 --on-port 8080
+iptables -t nat -A PREROUTING -p tcp --dport 80 -j REDIRECT --to-port 8080
+iptables -t nat -A PREROUTING -p tcp --dport 443 -j REDIRECT --to-port 8080
 
 iptables -t mangle -A OUTPUT -p tcp --dport 80 \
     -m owner ! --uid-owner 9999 -j MARK --set-mark 1
@@ -131,17 +133,15 @@ iptables -A OUTPUT -p udp -m owner --uid-owner 9999 -j ACCEPT
 iptables -A OUTPUT -p udp -m owner --uid-owner 9998 -j ACCEPT
 iptables -A OUTPUT -p udp -j DROP
 
-# --- Start mitmdump in TPROXY mode as uid 9999 ---
-# setpriv drops to uid/gid 9999 while preserving CAP_NET_ADMIN in the ambient
-# capability set. CAP_NET_ADMIN is required for the IP_TRANSPARENT socket
-# option that TPROXY mode uses to bind on behalf of the original destination.
-# --inh-caps promotes cap_net_admin into the inheritable set first; Linux
-# requires a cap to be inheritable before it can be made ambient.
-echo "Starting mitmdump (tproxy mode) on :8080..."
+# --- Start mitmdump in transparent mode as uid 9999 ---
+# setpriv drops to uid/gid 9999. CAP_NET_ADMIN is not needed for
+# transparent mode (it uses SO_ORIGINAL_DST, not IP_TRANSPARENT).
+# Running as uid 9999 is what the OUTPUT MARK rule excludes, preventing
+# mitmdump's own upstream connections from being re-intercepted.
+echo "Starting mitmdump (transparent mode) on :8080..."
 echo "Addon: /etc/proxy/addon.py"
-exec setpriv --reuid=9999 --regid=9999 --clear-groups \
-    --inh-caps +net_admin --ambient-caps +net_admin -- \
-    mitmdump --mode tproxy --showhost \
+exec setpriv --reuid=9999 --regid=9999 --clear-groups -- \
+    mitmdump --mode transparent --showhost \
     --set confdir="$CERTS_DIR" \
     --listen-port 8080 \
     --ssl-insecure \
