@@ -53,7 +53,7 @@ COREDNS_PID=$!
 # The entrypoint starts as root; transfer ownership of the certs dir to
 # uid 9999 now so mitmdump can write (init) and read (tproxy mode) it.
 # chmod 755 lets the host user traverse the directory to read the public cert.
-chown 9999:9999 "$CERTS_DIR"
+chown -R 9999:9999 "$CERTS_DIR"
 chmod 755 "$CERTS_DIR"
 if [ ! -f "$CERTS_DIR/mitmproxy-ca-cert.pem" ]; then
     echo "Generating mitmproxy CA certificate..."
