@@ -136,7 +136,7 @@ iptables -A OUTPUT -p udp -j DROP
 echo "Starting mitmdump (tproxy mode) on :8080..."
 echo "Addon: /etc/proxy/addon.py"
 exec setpriv --reuid=9999 --regid=9999 --clear-groups \
-    --inh-caps +cap_net_admin --ambient-caps +cap_net_admin -- \
+    --inh-caps +net_admin --ambient-caps +net_admin -- \
     mitmdump --mode tproxy --showhost \
     --set confdir="$CERTS_DIR" \
     --listen-port 8080 \
