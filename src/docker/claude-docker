@@ -157,10 +157,15 @@ PROXY_FLAGS=""
 if [ -n "$PROXY_IMAGE" ]; then
     PROXY_NAME="claude-proxy-$$"
     PROXY_CERTS=$(mktemp -d)
+    # entrypoint.sh runs chown 9999:9999 on the bind-mount, changing the host-side
+    # directory owner to uid 9999. Pre-set 755 so the host user retains read access
+    # as "other" (the cert file itself is chmod 644 by entrypoint.sh).
+    chmod 755 "$PROXY_CERTS"
     echo "[claude-docker] Proxy mode: launching $PROXY_IMAGE as $PROXY_NAME" >&2
 
-    # Tear down sidecar and certs when the agent container exits
-    trap 'docker rm -f "$PROXY_NAME" 2>/dev/null || true; rm -rf "$PROXY_CERTS"' EXIT
+    # Tear down sidecar and certs when the agent container exits.
+    # rm -rf may fail if uid 9999-owned files remain; || true prevents exit-code noise.
+    trap 'docker rm -f "$PROXY_NAME" 2>/dev/null || true; rm -rf "$PROXY_CERTS" 2>/dev/null || true' EXIT
 
     docker run -d \
         --name "$PROXY_NAME" \
