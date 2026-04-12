@@ -49,12 +49,13 @@ docker run -d \
     --name "$PROXY_CONTAINER" \
     --network "$BRIDGE_NET" \
     --cap-add NET_ADMIN \
-    -v "$CERTS_DIR:/root/.mitmproxy" \
+    -v "$CERTS_DIR:/var/lib/mitmproxy" \
     "$PROXY_IMAGE"
 
 # Wait for proxy to initialize
 info "Waiting for proxy to start..."
 sleep 5
+docker logs "$PROXY_CONTAINER" --tail 10
 
 # Agent containers share the proxy's network namespace; CoreDNS listens on
 # loopback :53, so 127.0.0.1 resolves allowlisted domains and blocks others.

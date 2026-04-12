@@ -42,8 +42,10 @@ COPY addon.py /etc/proxy/addon.py
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
-# CA cert output directory (mounted as volume at runtime)
-VOLUME /root/.mitmproxy
+# CA cert output directory — outside /root/ so uid 9999 can traverse to it.
+# /root/ is mode 700; any path under it is unreachable by non-root users.
+RUN mkdir -p /var/lib/mitmproxy && chown 9999:9999 /var/lib/mitmproxy
+VOLUME /var/lib/mitmproxy
 
 # mitmdump: transparent HTTP/HTTPS (single port handles both)
 EXPOSE 8080

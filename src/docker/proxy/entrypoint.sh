@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-CERTS_DIR="/root/.mitmproxy"
+CERTS_DIR="/var/lib/mitmproxy"
 ALLOWLIST="/etc/proxy/allowlist.json"
 COREFILE="/etc/coredns/Corefile"
 
@@ -50,11 +50,6 @@ setpriv --reuid=9998 --regid=9998 --clear-groups -- \
 COREDNS_PID=$!
 
 # --- Generate CA cert if not present ---
-# The entrypoint starts as root; transfer ownership of the certs dir to
-# uid 9999 now so mitmdump can write (init) and read (tproxy mode) it.
-# chmod 755 lets the host user traverse the directory to read the public cert.
-chown -R 9999:9999 "$CERTS_DIR"
-chmod 755 "$CERTS_DIR"
 if [ ! -f "$CERTS_DIR/mitmproxy-ca-cert.pem" ]; then
     echo "Generating mitmproxy CA certificate..."
     setpriv --reuid=9999 --regid=9999 --clear-groups -- \
