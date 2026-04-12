@@ -83,21 +83,20 @@ fi
 #   Loop prevention: mitmdump runs as uid 9999; the OUTPUT MARK rule has
 #                  ! --uid-owner 9999, so mitmdump's upstream connections
 #                  to the real internet are never re-marked and never looped.
-# Policy routing re-injects marked packets via loopback so they re-enter
-# PREROUTING. REDIRECT in the NAT table then catches them for mitmdump.
+# PREROUTING: intercept TCP 80/443 arriving from outside this namespace.
+# OUTPUT: intercept TCP 80/443 generated locally (agent processes sharing
+#         this network namespace via --network container:<proxy>).
+# uid 9999 (mitmdump) is excluded from OUTPUT REDIRECT so its upstream
+# connections to the real internet are never re-intercepted (loop prevention).
 # mitmproxy --mode transparent uses SO_ORIGINAL_DST to recover the original
-# destination after REDIRECT — no IP_TRANSPARENT socket binding required.
-echo "Configuring transparent proxy routing and iptables..."
-ip rule add fwmark 1 lookup 100 2>/dev/null || true
-ip route add local 0.0.0.0/0 dev lo table 100 2>/dev/null || true
-
+# destination after REDIRECT. No policy routing or IP_TRANSPARENT needed.
+echo "Configuring transparent proxy iptables..."
 iptables -t nat -A PREROUTING -p tcp --dport 80 -j REDIRECT --to-port 8080
 iptables -t nat -A PREROUTING -p tcp --dport 443 -j REDIRECT --to-port 8080
-
-iptables -t mangle -A OUTPUT -p tcp --dport 80 \
-    -m owner ! --uid-owner 9999 -j MARK --set-mark 1
-iptables -t mangle -A OUTPUT -p tcp --dport 443 \
-    -m owner ! --uid-owner 9999 -j MARK --set-mark 1
+iptables -t nat -A OUTPUT -p tcp --dport 80 \
+    -m owner ! --uid-owner 9999 -j REDIRECT --to-port 8080
+iptables -t nat -A OUTPUT -p tcp --dport 443 \
+    -m owner ! --uid-owner 9999 -j REDIRECT --to-port 8080
 
 # --- Default-deny TCP OUTPUT ---
 # Block all TCP from non-proxy processes on ports other than 80/443, closing
@@ -113,6 +112,10 @@ iptables -t mangle -A OUTPUT -p tcp --dport 443 \
 # To add a future protocol proxy (sshpiper uid 9998, SOCKS uid 9997, etc.),
 # insert an additional uid ACCEPT rule before the final DROP.
 echo "Configuring default-deny TCP OUTPUT..."
+# nat OUTPUT REDIRECT fires before filter OUTPUT. After REDIRECT rewrites the
+# destination to 127.0.0.1:8080, the routing decision picks lo, so filter
+# OUTPUT sees -o lo and ACCEPTs. The explicit dport 80/443 rules below are
+# therefore redundant but kept as documentation of intent.
 iptables -A OUTPUT -o lo -j ACCEPT
 iptables -A OUTPUT -p tcp -m owner --uid-owner 9999 -j ACCEPT
 iptables -A OUTPUT -p tcp --dport 80 -j ACCEPT
