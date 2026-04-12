@@ -67,6 +67,9 @@ docker exec "$PROXY_CONTAINER" ps aux 2>/dev/null || true
 info "Listening sockets in proxy namespace:"
 docker exec "$PROXY_CONTAINER" ss -tlunp 2>/dev/null || true
 
+info "rp_filter values (must be 0 for OUTPUT REDIRECT):"
+docker exec "$PROXY_CONTAINER" sh -c 'echo "  all=$(cat /proc/sys/net/ipv4/conf/all/rp_filter) lo=$(cat /proc/sys/net/ipv4/conf/lo/rp_filter) eth0=$(cat /proc/sys/net/ipv4/conf/eth0/rp_filter 2>/dev/null || echo N/A)"' 2>/dev/null || true
+
 info "Mitmdump uid check:"
 docker exec "$PROXY_CONTAINER" sh -c '
   for pid in /proc/[0-9]*; do
