@@ -4,6 +4,7 @@ set -euo pipefail
 # Configuration
 PROXY_IMAGE="claude-proxy:local"
 PROXY_CONTAINER="claude-proxy-test"
+NETINIT_CONTAINER="net-init-test"
 AGENT_NET="agent-net-test"
 BRIDGE_NET="bridge-net-test"
 CERTS_DIR="$(cd "$(dirname "$0")" && pwd)/certs"
@@ -24,6 +25,7 @@ FAILURES=0
 cleanup() {
     info "Cleaning up..."
     docker rm -f "$PROXY_CONTAINER" 2>/dev/null || true
+    docker rm -f "$NETINIT_CONTAINER" 2>/dev/null || true
     docker rm -f test-agent 2>/dev/null || true
     docker network rm "$AGENT_NET" 2>/dev/null || true
     docker network rm "$BRIDGE_NET" 2>/dev/null || true
@@ -59,8 +61,6 @@ docker run -d \
     "$PROXY_IMAGE"
 
 # Attach proxy to agent network with a static IP so PROXY_IP is predictable.
-# Agent containers add a default route to this IP via ip route, routing all
-# their traffic through the proxy for transparent interception.
 PROXY_IP="10.100.0.2"
 docker network connect --ip "$PROXY_IP" "$AGENT_NET" "$PROXY_CONTAINER"
 
@@ -78,27 +78,34 @@ else
     exit 1
 fi
 
-# --- Helper: run test container with transparent proxy routing ---
-# Agent containers use --cap-add NET_ADMIN to add a default route through the
-# proxy. This routes all TCP through the proxy's iptables PREROUTING rules,
-# which redirect ports 80/443 to mitmdump (transparent mode). No explicit
-# proxy env vars needed — interception is transparent to the application.
-# Uses alpine as base (wget, nslookup, nc, ip all included via busybox).
+# --- Network init sidecar ---
+# A single sidecar container with NET_ADMIN configures the default route
+# through the proxy. Agent test containers use --network container:net-init
+# to inherit the pre-configured network namespace without needing NET_ADMIN
+# themselves. DNS is set by writing /etc/resolv.conf in each container's
+# wrapper command (--dns is not available with --network container:).
+info "Starting network init sidecar..."
+docker run -d \
+    --name "$NETINIT_CONTAINER" \
+    --network "$AGENT_NET" \
+    --cap-add NET_ADMIN \
+    alpine \
+    sh -c "ip route add default via $PROXY_IP 2>/dev/null || true && sleep infinity"
+sleep 1
+
+# --- Helper: run test container sharing net-init's network namespace ---
 run_agent() {
     local name="$1"
     local image="$2"
     local cmd="$3"
     docker run --rm \
         --name test-agent \
-        --network "$AGENT_NET" \
-        --dns "$PROXY_IP" \
-        --cap-add NET_ADMIN \
-        -e "SSL_CERT_FILE=/etc/proxy-ca/mitmproxy-ca-cert.pem" \
+        --network "container:$NETINIT_CONTAINER" \
         -e "NODE_EXTRA_CA_CERTS=/etc/proxy-ca/mitmproxy-ca-cert.pem" \
         -v "$CERTS_DIR/mitmproxy-ca-cert.pem:/etc/proxy-ca/mitmproxy-ca-cert.pem:ro" \
         --entrypoint sh \
         "$image" \
-        -c "cat /etc/proxy-ca/mitmproxy-ca-cert.pem >> /etc/ssl/certs/ca-certificates.crt 2>/dev/null || true; ip route add default via $PROXY_IP 2>/dev/null || true; $cmd"
+        -c "echo 'nameserver $PROXY_IP' > /etc/resolv.conf; cat /etc/proxy-ca/mitmproxy-ca-cert.pem >> /etc/ssl/certs/ca-certificates.crt 2>/dev/null || true; $cmd"
 }
 
 # --- Test 1: Allowlisted domain (HTTPS, transparent interception) ---
@@ -117,7 +124,7 @@ fi
 # DNS returns NXDOMAIN for example.com (CoreDNS catch-all block).
 info "Test 2: HTTPS request to non-allowlisted domain (example.com) — transparent..."
 if run_agent "test-deny" alpine \
-    "wget -qO- --ca-certificate=/etc/proxy-ca/mitmproxy-ca-cert.pem https://example.com/ >/dev/null 2>&1"; then
+    "wget -qO- https://example.com/ >/dev/null 2>&1"; then
     fail "Non-allowlisted HTTPS request should have been blocked"
 else
     pass "Non-allowlisted HTTPS request blocked (DNS NXDOMAIN or mitmproxy 403)"
