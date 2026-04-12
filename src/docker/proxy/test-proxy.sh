@@ -156,6 +156,34 @@ else
     pass "Direct HTTP to raw IP blocked (TPROXY intercepted, addon returned 403)"
 fi
 
+# --- Test 7: SSH TCP to allowlisted domain (port 22, unintercepted) ---
+# TPROXY rules only cover ports 80 and 443. Port 22 traffic from the agent
+# process exits through the proxy's bridge-net interface directly, with no
+# iptables interception. DNS for github.com resolves (it is allowlisted).
+# nc connects; GitHub returns the SSH banner; nc exits 0 when stdin closes.
+# This verifies that non-HTTP/HTTPS traffic on allowlisted domains is permitted.
+info "Test 7: SSH TCP connect to allowlisted domain (github.com:22) — port 22 unintercepted..."
+if run_agent "test-ssh" alpine \
+    "timeout 5 nc -w 3 github.com 22 </dev/null 2>/dev/null" \
+    >/dev/null 2>&1; then
+    pass "SSH to allowlisted domain succeeded (port 22 bypasses TPROXY, DNS resolved)"
+else
+    fail "SSH to allowlisted domain failed"
+fi
+
+# --- Test 8: SSH TCP to non-allowlisted domain (DNS blocks it) ---
+# DNS NXDOMAIN for example.com prevents nc from resolving the host, so the
+# TCP connection is never attempted. Port 22 is not intercepted by TPROXY;
+# the only enforcement is DNS-level blocking for non-allowlisted domains.
+info "Test 8: SSH TCP connect to non-allowlisted domain (example.com:22) — DNS blocked..."
+if run_agent "test-ssh-deny" alpine \
+    "timeout 5 nc -w 3 example.com 22 </dev/null 2>/dev/null" \
+    >/dev/null 2>&1; then
+    fail "SSH to non-allowlisted domain should have failed (DNS NXDOMAIN)"
+else
+    pass "SSH to non-allowlisted domain blocked (DNS NXDOMAIN)"
+fi
+
 # --- Results ---
 echo ""
 echo "=============================="
