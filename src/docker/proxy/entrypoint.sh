@@ -116,7 +116,9 @@ iptables -t nat -A OUTPUT -p tcp --dport 443 \
 # caught by the lo ACCEPT rule and never reach the DROP.
 echo "Configuring default-deny TCP OUTPUT..."
 iptables -A OUTPUT -o lo -j ACCEPT
+iptables -A OUTPUT -m owner --uid-owner 9999 -m state --state ESTABLISHED,RELATED -j ACCEPT
 iptables -A OUTPUT -p tcp -m owner --uid-owner 9999 -j ACCEPT
+iptables -A OUTPUT -p tcp -j LOG --log-prefix "TCP-DROP: " --log-level 4
 iptables -A OUTPUT -p tcp -j DROP
 
 # --- Default-deny UDP OUTPUT ---
@@ -130,6 +132,7 @@ iptables -A OUTPUT -p tcp -j DROP
 # To add future protocol proxies: insert uid ACCEPT before the DROP.
 echo "Configuring default-deny UDP OUTPUT..."
 iptables -A OUTPUT -p udp -m owner --uid-owner 9998 -j ACCEPT
+iptables -A OUTPUT -p udp -j LOG --log-prefix "UDP-DROP: " --log-level 4
 iptables -A OUTPUT -p udp -j DROP
 
 # --- Start mitmdump in transparent mode as uid 9999 ---

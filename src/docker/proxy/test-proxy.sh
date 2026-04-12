@@ -257,6 +257,9 @@ docker exec "$PROXY_CONTAINER" iptables -t nat -L -v -n 2>/dev/null || true
 echo ""
 echo "=== iptables filter table (post-test) ==="
 docker exec "$PROXY_CONTAINER" iptables -L -v -n 2>/dev/null || true
+echo ""
+echo "=== kernel log — dropped packets ==="
+docker exec "$PROXY_CONTAINER" dmesg 2>/dev/null | grep -E "TCP-DROP|UDP-DROP" | tail -30 || echo "(no dmesg access or no matches)"
 echo "========================================"
 
 # --- Results ---
