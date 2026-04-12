@@ -65,11 +65,8 @@ docker exec "$PROXY_CONTAINER" ps aux 2>/dev/null || true
 info "Listening sockets in proxy namespace:"
 docker exec "$PROXY_CONTAINER" ss -tlunp 2>/dev/null || true
 
-info "iptables nat OUTPUT rules:"
-docker exec "$PROXY_CONTAINER" iptables -t nat -L OUTPUT -n -v 2>/dev/null || true
-
-info "iptables filter OUTPUT rules:"
-docker exec "$PROXY_CONTAINER" iptables -L OUTPUT -n -v 2>/dev/null || true
+info "Mitmdump uid check:"
+docker exec "$PROXY_CONTAINER" sh -c 'cat /proc/$(pgrep mitmdump)/status 2>/dev/null | grep -E "^(Name|Uid)" || echo "mitmdump not found in proc"'
 
 # Agent containers share the proxy's network namespace; CoreDNS listens on
 # loopback :53, so 127.0.0.1 resolves allowlisted domains and blocks others.
@@ -103,6 +100,29 @@ run_agent() {
         "$image" \
         -c "echo 'nameserver 127.0.0.1' > /etc/resolv.conf; cat /etc/proxy-ca/mitmproxy-ca-cert.pem >> /etc/ssl/certs/ca-certificates.crt 2>/dev/null || true; $cmd"
 }
+
+# --- Probe: direct TCP to mitmproxy :8080 (no REDIRECT needed) ---
+# Verifies mitmdump is reachable at all before any iptables rules are involved.
+# An HTTP request to the proxy port directly should return a 400 (bad request /
+# upstream connection error) — anything other than a connection refusal means
+# mitmdump is up and accepting connections.
+info "Probe: direct HTTP to mitmdump :8080 (bypasses iptables)..."
+DIRECT_RESP=$(run_agent "test-probe" alpine \
+    "wget -qO- --timeout=5 http://127.0.0.1:8080/ 2>&1 | head -3" 2>/dev/null || true)
+info "  Direct :8080 response: ${DIRECT_RESP:-<no output>}"
+
+# --- Test 1a: Allowlisted domain (HTTP, transparent interception) ---
+# Isolates REDIRECT firing from TLS/CA trust. HTTP goes through REDIRECT to
+# mitmdump :8080 which then forwards upstream. If this passes but 1b fails,
+# the issue is TLS certificate trust, not REDIRECT.
+info "Test 1a: HTTP (port 80) request to allowlisted domain (api.github.com) — transparent..."
+if run_agent "test-allow-http" alpine \
+    "timeout 15 wget -T 10 -qO- http://api.github.com/ >/dev/null" \
+    >/dev/null 2>&1; then
+    pass "Allowlisted HTTP request succeeded (transparently intercepted)"
+else
+    fail "Allowlisted HTTP request failed (REDIRECT may not be firing)"
+fi
 
 # --- Test 1: Allowlisted domain (HTTPS, transparent interception) ---
 # No proxy env vars. Traffic routes through proxy via iptables REDIRECT.
@@ -216,6 +236,17 @@ echo ""
 echo "=== Proxy container logs ==="
 docker logs "$PROXY_CONTAINER" 2>&1
 echo "============================"
+
+# --- iptables packet counters (post-test) ---
+# Non-zero counters on nat OUTPUT REDIRECT rules confirm REDIRECT is firing.
+# Zero counters after tests = REDIRECT never matched (likely -m owner issue).
+echo ""
+echo "=== iptables nat table (post-test) ==="
+docker exec "$PROXY_CONTAINER" iptables -t nat -L -v -n 2>/dev/null || true
+echo ""
+echo "=== iptables filter table (post-test) ==="
+docker exec "$PROXY_CONTAINER" iptables -L -v -n 2>/dev/null || true
+echo "========================================"
 
 # --- Results ---
 echo ""
