@@ -89,6 +89,26 @@ iptables -t mangle -A OUTPUT -p tcp --dport 80 \
 iptables -t mangle -A OUTPUT -p tcp --dport 443 \
     -m owner ! --uid-owner 9999 -j MARK --set-mark 1
 
+# --- Default-deny TCP OUTPUT ---
+# Block all TCP from non-proxy processes on ports other than 80/443, closing
+# the 2B gap (raw IP + non-HTTP/HTTPS was previously unrestricted).
+#
+# Rule order:
+#   lo ACCEPT first: covers CoreDNS TCP fallback and TPROXY re-injection
+#                    (marked 80/443 packets route to lo before filter runs).
+#   uid 9999 ACCEPT: mitmdump upstream connections exit freely to internet.
+#   dport 80/443 ACCEPT: agent HTTP/HTTPS — caught by TPROXY, never reach wire.
+#   tcp DROP: everything else (port 22, raw-IP non-HTTP, etc.) is blocked.
+#
+# To add a future protocol proxy (sshpiper uid 9998, SOCKS uid 9997, etc.),
+# insert an additional uid ACCEPT rule before the final DROP.
+echo "Configuring default-deny TCP OUTPUT..."
+iptables -A OUTPUT -o lo -j ACCEPT
+iptables -A OUTPUT -p tcp -m owner --uid-owner 9999 -j ACCEPT
+iptables -A OUTPUT -p tcp --dport 80 -j ACCEPT
+iptables -A OUTPUT -p tcp --dport 443 -j ACCEPT
+iptables -A OUTPUT -p tcp -j DROP
+
 # --- Start mitmdump in TPROXY mode as uid 9999 ---
 # setpriv drops to uid/gid 9999 while preserving CAP_NET_ADMIN in the ambient
 # capability set. CAP_NET_ADMIN is required for the IP_TRANSPARENT socket
