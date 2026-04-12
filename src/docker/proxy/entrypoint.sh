@@ -90,6 +90,18 @@ fi
 # connections to the real internet are never re-intercepted (loop prevention).
 # mitmproxy --mode transparent uses SO_ORIGINAL_DST to recover the original
 # destination after REDIRECT. No policy routing or IP_TRANSPARENT needed.
+# --- Disable reverse-path filtering on loopback ---
+# nat OUTPUT REDIRECT rewrites external destinations (e.g. 140.82.114.6:443) to
+# 127.0.0.1:8080, causing the packet to be re-routed through lo. The packet
+# arrives on lo with its ORIGINAL source address (the container's bridge IP,
+# e.g. 172.18.0.2), which is NOT in 127.0.0.0/8. With rp_filter=1 (strict,
+# the Fedora/RHEL default), the kernel silently drops the packet because the
+# source is not reachable via lo. Disabling rp_filter on lo and all interfaces
+# allows these REDIRECT-ed packets through.
+echo "Disabling rp_filter for transparent proxy..."
+sysctl -w net.ipv4.conf.all.rp_filter=0 >/dev/null 2>&1
+sysctl -w net.ipv4.conf.lo.rp_filter=0 >/dev/null 2>&1
+
 echo "Configuring transparent proxy iptables..."
 iptables -t nat -A PREROUTING -p tcp --dport 80 -j REDIRECT --to-port 8080
 iptables -t nat -A PREROUTING -p tcp --dport 443 -j REDIRECT --to-port 8080
