@@ -65,13 +65,16 @@ echo "Configuring iptables for transparent proxy..."
 iptables -t nat -A PREROUTING -i eth0 -p tcp --dport 80 -j REDIRECT --to-port 8080
 iptables -t nat -A PREROUTING -i eth0 -p tcp --dport 443 -j REDIRECT --to-port 8080
 
-# --- Start mitmdump in transparent mode ---
+# --- Start mitmdump as explicit HTTP/HTTPS proxy ---
 # mitmdump is the headless version of mitmproxy (no interactive TUI).
-# Transparent mode on a single port handles both plain HTTP and TLS — it
-# detects TLS via the ClientHello and performs MITM interception automatically.
-echo "Starting mitmdump (transparent mode) on :8080..."
+# Default (regular) mode accepts explicit HTTP CONNECT proxy requests.
+# Agent containers set http_proxy/https_proxy env vars pointing to port 8080.
+# For HTTPS, mitmdump performs MITM via CONNECT interception + cert injection.
+# The iptables rules above additionally redirect any direct port 80/443 traffic
+# (e.g., from tools that bypass proxy env vars) to port 8080.
+echo "Starting mitmdump (explicit proxy mode) on :8080..."
 echo "Addon: /etc/proxy/addon.py"
-exec mitmdump --mode transparent --showhost \
+exec mitmdump --showhost \
     --set confdir="$CERTS_DIR" \
     --listen-port 8080 \
     --ssl-insecure \
