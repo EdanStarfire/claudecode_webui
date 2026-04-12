@@ -41,8 +41,12 @@ CATCHALL
 echo "Corefile generated with $(echo "$DOMAINS" | wc -w) domains"
 
 # --- Start CoreDNS in background ---
+# Run as uid 9998 so the UDP default-deny OUTPUT rule can exempt it.
+# cap_net_bind_service is set on the binary via setcap (Dockerfile), allowing
+# it to bind :53 without root.
 echo "Starting CoreDNS on :53..."
-coredns -conf "$COREFILE" -dns.port 53 &
+setpriv --reuid=9998 --regid=9998 --clear-groups -- \
+    coredns -conf "$COREFILE" -dns.port 53 &
 COREDNS_PID=$!
 
 # --- Generate CA cert if not present ---
@@ -108,6 +112,20 @@ iptables -A OUTPUT -p tcp -m owner --uid-owner 9999 -j ACCEPT
 iptables -A OUTPUT -p tcp --dport 80 -j ACCEPT
 iptables -A OUTPUT -p tcp --dport 443 -j ACCEPT
 iptables -A OUTPUT -p tcp -j DROP
+
+# --- Default-deny UDP OUTPUT ---
+# Same pattern as TCP: loopback always allowed, then per-service UID exemptions,
+# then drop everything else. This blocks DNS exfiltration to external resolvers
+# (e.g. nc/nslookup directly to 1.1.1.1:53) and any other UDP to raw IPs.
+#
+# uid 9998 (CoreDNS) must be exempted so it can forward DNS queries upstream
+# to 8.8.8.8. uid 9999 (mitmdump) exempted for any internal UDP it may use.
+#
+# To add future protocol proxies: insert uid ACCEPT before the DROP.
+echo "Configuring default-deny UDP OUTPUT..."
+iptables -A OUTPUT -p udp -m owner --uid-owner 9999 -j ACCEPT
+iptables -A OUTPUT -p udp -m owner --uid-owner 9998 -j ACCEPT
+iptables -A OUTPUT -p udp -j DROP
 
 # --- Start mitmdump in TPROXY mode as uid 9999 ---
 # setpriv drops to uid/gid 9999 while preserving CAP_NET_ADMIN in the ambient

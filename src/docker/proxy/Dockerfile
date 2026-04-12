@@ -7,6 +7,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     iptables \
     iproute2 \
     util-linux \
+    libcap2-bin \
     curl \
     jq \
     ca-certificates \
@@ -21,11 +22,18 @@ RUN pipx install mitmproxy
 # to exclude mitmdump's upstream connections from TPROXY re-interception loop.
 RUN useradd -r -u 9999 -s /bin/false mitmproxy
 
+# Dedicated non-root user for CoreDNS; UID 9998 exempted in UDP default-deny
+# so CoreDNS can make upstream UDP DNS queries (e.g. to 8.8.8.8).
+# setcap grants cap_net_bind_service on the binary so it can bind :53 as
+# a non-root user without needing ambient capabilities at runtime.
+RUN useradd -r -u 9998 -s /bin/false coredns
+
 # Install CoreDNS
 ARG COREDNS_VERSION=1.12.1
 RUN curl -fsSL "https://github.com/coredns/coredns/releases/download/v${COREDNS_VERSION}/coredns_${COREDNS_VERSION}_linux_amd64.tgz" \
     | tar -xz -C /usr/local/bin/ \
-    && chmod +x /usr/local/bin/coredns
+    && chmod +x /usr/local/bin/coredns \
+    && setcap cap_net_bind_service=+ep /usr/local/bin/coredns
 
 # Copy configuration
 COPY allowlist.json /etc/proxy/allowlist.json

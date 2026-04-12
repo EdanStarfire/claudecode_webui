@@ -170,9 +170,8 @@ else
 fi
 
 # --- Test 8: SSH TCP to non-allowlisted domain (DNS blocks it) ---
-# DNS NXDOMAIN for example.com prevents nc from resolving the host, so the
-# TCP connection is never attempted. Port 22 is not intercepted by TPROXY;
-# the only enforcement is DNS-level blocking for non-allowlisted domains.
+# DNS NXDOMAIN for example.com prevents nc from resolving the host; the
+# default-deny TCP DROP would also block it if DNS somehow resolved.
 info "Test 8: SSH TCP connect to non-allowlisted domain (example.com:22) — DNS blocked..."
 if run_agent "test-ssh-deny" alpine \
     "timeout 5 nc -w 3 example.com 22 </dev/null 2>/dev/null" \
@@ -180,6 +179,21 @@ if run_agent "test-ssh-deny" alpine \
     fail "SSH to non-allowlisted domain should have failed (DNS NXDOMAIN)"
 else
     pass "SSH to non-allowlisted domain blocked (DNS NXDOMAIN)"
+fi
+
+# --- Test 9: UDP to external resolver (DNS exfiltration path, now blocked) ---
+# nslookup with an explicit server address sends UDP directly to 1.1.1.1:53,
+# bypassing CoreDNS entirely. The default-deny UDP OUTPUT DROP blocks it;
+# the query times out and nslookup exits non-zero.
+# This closes the 2B gap for UDP: raw IP + non-HTTP/HTTPS protocol was
+# previously unrestricted; default-deny now covers both TCP and UDP.
+info "Test 9: UDP DNS query to external resolver (1.1.1.1) — blocked by default-deny UDP..."
+if run_agent "test-udp-exfil" alpine \
+    "nslookup api.github.com 1.1.1.1 >/dev/null 2>&1" \
+    >/dev/null 2>&1; then
+    fail "Direct UDP to external resolver should be blocked by default-deny"
+else
+    pass "UDP to external resolver blocked (default-deny UDP OUTPUT)"
 fi
 
 # --- Results ---
