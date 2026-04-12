@@ -1024,10 +1024,8 @@ class SessionCoordinator:
                     workspace=session_info.working_directory,
                     session_data_dir=docker_data_dir,
                     docker_home_directory=session_info.docker_home_directory,
-                    # Issue #1049: Proxy mode
-                    proxy_host=session_info.docker_proxy_host,
-                    session_token=session_info.docker_session_token,
-                    proxy_network=session_info.docker_proxy_network,
+                    # Issue #1049: Proxy mode (sidecar model)
+                    proxy_container=session_info.docker_proxy_container,
                     proxy_ca_cert=session_info.docker_proxy_ca_cert,
                 )
                 coord_logger.info(

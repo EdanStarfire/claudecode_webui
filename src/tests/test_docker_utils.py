@@ -141,31 +141,23 @@ class TestCleanupSessionTmp:
 
 class TestResolveDockerCliPathProxy:
     def test_proxy_mode_basic(self):
-        """Proxy env vars are set when proxy_host is provided with session_token."""
-        _, env = resolve_docker_cli_path(proxy_host="10.0.0.1", session_token="tok123")
-        assert env["CLAUDE_DOCKER_PROXY_HOST"] == "10.0.0.1"
-        assert env["CLAUDE_DOCKER_SESSION_TOKEN"] == "tok123"
-        assert "CLAUDE_DOCKER_NETWORK" not in env
+        """CLAUDE_DOCKER_PROXY_CONTAINER is set when proxy_container is provided."""
+        _, env = resolve_docker_cli_path(proxy_container="claude-proxy")
+        assert env["CLAUDE_DOCKER_PROXY_CONTAINER"] == "claude-proxy"
         assert "CLAUDE_DOCKER_PROXY_CA_CERT" not in env
 
     def test_proxy_mode_all_params(self):
-        """All four proxy env vars are set when all params are provided."""
+        """Both proxy env vars are set when proxy_container and proxy_ca_cert provided."""
         _, env = resolve_docker_cli_path(
-            proxy_host="10.0.0.1",
-            session_token="tok123",
-            proxy_network="my-net",
+            proxy_container="claude-proxy",
             proxy_ca_cert="/certs/ca.pem",
         )
-        assert env["CLAUDE_DOCKER_PROXY_HOST"] == "10.0.0.1"
-        assert env["CLAUDE_DOCKER_SESSION_TOKEN"] == "tok123"
-        assert env["CLAUDE_DOCKER_NETWORK"] == "my-net"
+        assert env["CLAUDE_DOCKER_PROXY_CONTAINER"] == "claude-proxy"
         assert env["CLAUDE_DOCKER_PROXY_CA_CERT"] == "/certs/ca.pem"
 
     def test_no_proxy_no_env_vars(self):
-        """No proxy env vars are set when proxy_host is None (regression guard)."""
+        """No proxy env vars are set when proxy_container is None (regression guard)."""
         _, env = resolve_docker_cli_path(docker_image="my-image")
-        assert "CLAUDE_DOCKER_PROXY_HOST" not in env
-        assert "CLAUDE_DOCKER_SESSION_TOKEN" not in env
-        assert "CLAUDE_DOCKER_NETWORK" not in env
+        assert "CLAUDE_DOCKER_PROXY_CONTAINER" not in env
         assert "CLAUDE_DOCKER_PROXY_CA_CERT" not in env
         assert env == {"CLAUDE_DOCKER_IMAGE": "my-image"}

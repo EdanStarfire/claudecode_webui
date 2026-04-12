@@ -25,10 +25,12 @@ set -euo pipefail
 #   CLAUDE_DOCKER_HOME          - Home directory inside the container (default: /home/claude)
 #   CLAUDE_DOCKER_MEMORY_LIMIT  - Container memory limit (default: none, e.g. "4g", "2048m")
 #   CLAUDE_DOCKER_SHM_SIZE      - /dev/shm size for Chromium (default: 256m)
-#   CLAUDE_DOCKER_PROXY_HOST    - IP/hostname of proxy container (enables proxy mode when set)
-#   CLAUDE_DOCKER_SESSION_TOKEN - Session token for proxy auth (required when proxy mode active)
-#   CLAUDE_DOCKER_NETWORK       - Docker network name (default: agent-net)
-#   CLAUDE_DOCKER_PROXY_CA_CERT - Path to proxy CA cert on host (default: auto-detect from proxy)
+#   CLAUDE_DOCKER_PROXY_CONTAINER - Name of running proxy container (enables proxy mode when set)
+#   CLAUDE_DOCKER_PROXY_CA_CERT   - Path to proxy CA cert on host (default: auto-detect from proxy)
+#
+# Proxy mode (sidecar model): the agent joins the proxy container's network namespace via
+# --network container:<name>. Transparent DNAT interception and CoreDNS filtering apply
+# automatically. The CA cert is mounted so curl/Python/Node/git trust the mitmproxy CA.
 #
 # Proxy mode limitation: tools that ignore env vars and only read the system
 # trust store may need: sudo cp /run/proxy-ca/ca.crt /usr/local/share/ca-certificates/proxy-ca.crt
@@ -46,10 +48,8 @@ DOCKER_HOME="${CLAUDE_DOCKER_HOME:-/home/claude}"
 MEMORY_LIMIT="${CLAUDE_DOCKER_MEMORY_LIMIT:-}"
 SHM_SIZE="${CLAUDE_DOCKER_SHM_SIZE:-256m}"
 
-# Issue #1049: Proxy mode (all gated on CLAUDE_DOCKER_PROXY_HOST)
-PROXY_HOST="${CLAUDE_DOCKER_PROXY_HOST:-}"
-SESSION_TOKEN="${CLAUDE_DOCKER_SESSION_TOKEN:-}"
-PROXY_NETWORK="${CLAUDE_DOCKER_NETWORK:-agent-net}"
+# Issue #1049: Proxy mode (sidecar model — all gated on CLAUDE_DOCKER_PROXY_CONTAINER)
+PROXY_CONTAINER="${CLAUDE_DOCKER_PROXY_CONTAINER:-}"
 PROXY_CA_CERT="${CLAUDE_DOCKER_PROXY_CA_CERT:-}"
 
 # Issue #781: Log container identity for crash correlation
@@ -69,19 +69,15 @@ if ! docker image inspect "$IMAGE_NAME" &>/dev/null; then
     fi
 fi
 
-# Validate proxy mode prerequisites
-if [ -n "$PROXY_HOST" ]; then
-    if [ -z "$SESSION_TOKEN" ]; then
-        echo "Error: CLAUDE_DOCKER_SESSION_TOKEN is required when CLAUDE_DOCKER_PROXY_HOST is set" >&2
-        exit 1
-    fi
-    echo "[claude-docker] Proxy mode: host=$PROXY_HOST, network=$PROXY_NETWORK" >&2
+# Log proxy mode activation
+if [ -n "$PROXY_CONTAINER" ]; then
+    echo "[claude-docker] Proxy mode: container=$PROXY_CONTAINER" >&2
 fi
 
-# Auto-detect CA cert from proxy container's mitmproxy volume
-if [ -n "$PROXY_HOST" ] && [ -z "$PROXY_CA_CERT" ]; then
+# Auto-detect CA cert from the named proxy container's mitmproxy volume
+if [ -n "$PROXY_CONTAINER" ] && [ -z "$PROXY_CA_CERT" ]; then
     PROXY_CA_CERT=$(docker inspect --format '{{range .Mounts}}{{if eq .Destination "/var/lib/mitmproxy"}}{{.Source}}{{end}}{{end}}' \
-        $(docker ps -q --filter "network=$PROXY_NETWORK" | head -1) 2>/dev/null || true)
+        "$PROXY_CONTAINER" 2>/dev/null || true)
     if [ -n "$PROXY_CA_CERT" ]; then
         PROXY_CA_CERT="$PROXY_CA_CERT/mitmproxy-ca-cert.pem"
     fi
@@ -174,19 +170,11 @@ fi
 # Always set --shm-size for Chromium stability (default 256m vs Docker's 64m default)
 RESOURCE_FLAGS="$RESOURCE_FLAGS --shm-size=$SHM_SIZE"
 
-# Issue #1049: Build proxy mode flags
+# Issue #1049: Build proxy mode flags (sidecar model)
 PROXY_FLAGS=""
-CLEANUP_FILES=""
-if [ -n "$PROXY_HOST" ]; then
-    PROXY_FLAGS="$PROXY_FLAGS --network $PROXY_NETWORK"
-    PROXY_FLAGS="$PROXY_FLAGS --dns $PROXY_HOST"
-
-    # Proxy env vars — token passed via env var (not command arg) for security
-    # Port 8888: regular HTTP proxy mode (handles CONNECT for HTTPS)
-    # Port 1080: SOCKS5 proxy mode (SSH ProxyCommand, generic TCP tunneling)
-    PROXY_FLAGS="$PROXY_FLAGS -e HTTPS_PROXY=http://${SESSION_TOKEN}:x@${PROXY_HOST}:8888"
-    PROXY_FLAGS="$PROXY_FLAGS -e HTTP_PROXY=http://${SESSION_TOKEN}:x@${PROXY_HOST}:8888"
-    PROXY_FLAGS="$PROXY_FLAGS -e ALL_PROXY=socks5://${SESSION_TOKEN}:x@${PROXY_HOST}:1080"
+if [ -n "$PROXY_CONTAINER" ]; then
+    # Join proxy container's network namespace — inherits transparent DNAT and CoreDNS
+    PROXY_FLAGS="$PROXY_FLAGS --network container:$PROXY_CONTAINER"
 
     # CA cert trust — covers curl, Python requests, Node.js, git
     PROXY_FLAGS="$PROXY_FLAGS -v ${PROXY_CA_CERT}:/run/proxy-ca/ca.crt:ro"
@@ -195,27 +183,6 @@ if [ -n "$PROXY_HOST" ]; then
     PROXY_FLAGS="$PROXY_FLAGS -e NODE_EXTRA_CA_CERTS=/run/proxy-ca/ca.crt"
     PROXY_FLAGS="$PROXY_FLAGS -e CURL_CA_BUNDLE=/run/proxy-ca/ca.crt"
     PROXY_FLAGS="$PROXY_FLAGS -e GIT_SSL_CAINFO=/run/proxy-ca/ca.crt"
-
-    # SSH config via host temp file — routes all SSH through SOCKS5 proxy
-    SSH_CONFIG_TMP=$(mktemp)
-    cat > "$SSH_CONFIG_TMP" <<SSHEOF
-Host *
-    ProxyCommand ncat --proxy ${PROXY_HOST}:1080 --proxy-type socks5 --proxy-auth ${SESSION_TOKEN}:x %h %p
-    StrictHostKeyChecking accept-new
-SSHEOF
-    PROXY_FLAGS="$PROXY_FLAGS -v ${SSH_CONFIG_TMP}:${DOCKER_HOME}/.ssh/config:ro"
-    CLEANUP_FILES="$SSH_CONFIG_TMP"
-
-    # Propagate proxy identity into container for informational use
-    PROXY_FLAGS="$PROXY_FLAGS -e CLAUDE_DOCKER_PROXY_HOST=$PROXY_HOST"
-    PROXY_FLAGS="$PROXY_FLAGS -e CLAUDE_DOCKER_SESSION_TOKEN=$SESSION_TOKEN"
-
-    # When proxy mode is active, disable SSH agent forwarding — SSH routes through SOCKS5
-    SSH_AGENT_FLAGS=""
-fi
-
-if [ -n "$CLEANUP_FILES" ]; then
-    trap 'rm -f $CLEANUP_FILES' EXIT
 fi
 
 # Run the container (capture exit code for diagnostics)
