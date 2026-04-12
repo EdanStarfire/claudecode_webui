@@ -37,11 +37,13 @@ info "Building proxy image..."
 docker build -t "$PROXY_IMAGE" "$SCRIPT_DIR"
 
 info "Creating networks..."
-# agent-net: specific subnet, no --internal. --internal would add a host-level
-# iptables isolation rule that blocks the proxy from forwarding traffic, even
-# with IP forwarding enabled. Instead, the proxy's own iptables (PREROUTING +
-# MASQUERADE) enforces policy, and mitmproxy's addon enforces the allowlist.
-docker network create --subnet 10.100.0.0/24 "$AGENT_NET" 2>/dev/null || true
+# agent-net: --internal so agents have no default internet route (must use proxy).
+# --subnet 10.100.0.0/24 gives deterministic addressing for the static proxy IP.
+# The proxy container is multi-homed (bridge-net + agent-net) and bridges them
+# within its own network namespace via IP forwarding + MASQUERADE. Docker's
+# --internal isolation rules only block host-level forwarding between bridges,
+# not forwarding done inside the proxy container's network namespace.
+docker network create --internal --subnet 10.100.0.0/24 "$AGENT_NET" 2>/dev/null || true
 docker network create "$BRIDGE_NET" 2>/dev/null || true
 
 info "Creating certs directory..."
