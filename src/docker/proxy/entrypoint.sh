@@ -103,36 +103,41 @@ iptables -t nat -A OUTPUT -p tcp --dport 443 \
 # the 2B gap (raw IP + non-HTTP/HTTPS was previously unrestricted).
 #
 # Rule order:
-#   lo ACCEPT first: covers CoreDNS TCP fallback and TPROXY re-injection
-#                    (marked 80/443 packets route to lo before filter runs).
-#   uid 9999 ACCEPT: mitmdump upstream connections exit freely to internet.
-#   dport 80/443 ACCEPT: agent HTTP/HTTPS — caught by TPROXY, never reach wire.
-#   tcp DROP: everything else (port 22, raw-IP non-HTTP, etc.) is blocked.
+#   lo ACCEPT (all protocols): agent TCP port 80/443 is REDIRECT-ed to
+#     127.0.0.1:8080 by nat OUTPUT before filter runs, so the output
+#     interface becomes lo. This rule catches all redirected agent traffic
+#     and all mitmdump→agent reply traffic.
+#   ! -o lo dport 80 ACCEPT: mitmdump upstream HTTP connections.
+#     Safe: agent port 80 is always redirected to lo first, so agent traffic
+#     never reaches this rule. Only mitmdump (excluded from nat REDIRECT via
+#     ! --uid-owner 9999) sends port 80 on the bridge interface.
+#   ! -o lo dport 443 ACCEPT: same as above for HTTPS.
+#   ! -o lo dport 53 uid 9998 ACCEPT: CoreDNS TCP upstream (DNS-over-TCP
+#     fallback to 8.8.8.8). CoreDNS port 53 TCP goes to the bridge interface
+#     (not lo). uid-owner 9998 match works for CoreDNS (verified by UDP counts).
+#   tcp DROP: everything else (agent TCP to port 22, arbitrary ports, etc.).
 #
-# To add a future protocol proxy (sshpiper uid 9998, SOCKS uid 9997, etc.),
-# insert an additional uid ACCEPT rule before the final DROP.
+# Note: -m owner --uid-owner 9999 is intentionally NOT used here because
+# iptables owner match does not reliably match PID 1 connections created by
+# exec setpriv; using ! -o lo + dport-based rules achieves the same security
+# guarantee without relying on uid matching for mitmproxy.
 echo "Configuring default-deny TCP OUTPUT..."
-# nat OUTPUT REDIRECT fires before filter OUTPUT. After REDIRECT rewrites the
-# destination to 127.0.0.1:8080, the routing decision picks lo, so filter
-# OUTPUT sees -o lo and ACCEPTs. The explicit dport 80/443 rules below are
-# therefore redundant but kept as documentation of intent.
 iptables -A OUTPUT -o lo -j ACCEPT
-iptables -A OUTPUT -p tcp -m owner --uid-owner 9999 -j ACCEPT
-iptables -A OUTPUT -p tcp --dport 80 -j ACCEPT
-iptables -A OUTPUT -p tcp --dport 443 -j ACCEPT
+iptables -A OUTPUT ! -o lo -p tcp --dport 80 -j ACCEPT
+iptables -A OUTPUT ! -o lo -p tcp --dport 443 -j ACCEPT
+iptables -A OUTPUT ! -o lo -p tcp --dport 53 -m owner --uid-owner 9998 -j ACCEPT
 iptables -A OUTPUT -p tcp -j DROP
 
 # --- Default-deny UDP OUTPUT ---
-# Same pattern as TCP: loopback always allowed, then per-service UID exemptions,
-# then drop everything else. This blocks DNS exfiltration to external resolvers
-# (e.g. nc/nslookup directly to 1.1.1.1:53) and any other UDP to raw IPs.
+# Block all UDP from non-proxy processes. This prevents DNS exfiltration via
+# direct UDP queries to external resolvers (e.g. nslookup 1.1.1.1) and any
+# other raw-IP UDP protocol bypasses.
 #
-# uid 9998 (CoreDNS) must be exempted so it can forward DNS queries upstream
-# to 8.8.8.8. uid 9999 (mitmdump) exempted for any internal UDP it may use.
+# uid 9998 (CoreDNS) exempted so it can forward UDP DNS queries upstream to
+# 8.8.8.8. All other UDP (from agents or system) is dropped.
 #
 # To add future protocol proxies: insert uid ACCEPT before the DROP.
 echo "Configuring default-deny UDP OUTPUT..."
-iptables -A OUTPUT -p udp -m owner --uid-owner 9999 -j ACCEPT
 iptables -A OUTPUT -p udp -m owner --uid-owner 9998 -j ACCEPT
 iptables -A OUTPUT -p udp -j DROP
 
