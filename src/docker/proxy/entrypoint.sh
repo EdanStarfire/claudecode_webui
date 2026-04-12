@@ -204,9 +204,10 @@ echo "Addon: /etc/proxy/addon.py"
 PYTHONUNBUFFERED=1 setpriv --reuid=9999 --regid=9999 --clear-groups \
     --inh-caps +net_admin --ambient-caps +net_admin -- \
     mitmdump \
-    --mode transparent:8080 \
-    --mode regular:8888 \
-    --mode socks5:1080 \
+    --mode transparent \
+    --mode regular@8888 \
+    --mode socks5@1080 \
+    --listen-port 8080 \
     --showhost -v \
     --set confdir="$CERTS_DIR" \
     --ssl-insecure \
