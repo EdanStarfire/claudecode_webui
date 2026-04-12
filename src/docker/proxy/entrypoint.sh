@@ -200,6 +200,13 @@ PYTHONUNBUFFERED=1 setpriv --reuid=9999 --regid=9999 --clear-groups \
     --set stream_large_bodies=1m &
 MITM_PID=$!
 
+# Signal to claude-docker that iptables DNAT rules + mitmdump are fully up.
+# Polling only the CA cert file is insufficient — it appears during cert-gen,
+# before iptables setup and mitmdump startup. The .ready marker is written here,
+# after all three are complete, so the host-side poll starts the agent at the
+# right time.
+touch "$CERTS_DIR/.ready"
+
 # Forward signals to child processes so Docker stop works cleanly.
 trap 'kill "$MITM_PID" "$COREDNS_PID" 2>/dev/null; wait' TERM INT
 

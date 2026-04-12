@@ -31,7 +31,9 @@ set -euo pipefail
 # Proxy mode: claude-docker launches a dedicated proxy sidecar, attaches the agent to it
 # via --network container:<sidecar>, and tears both down on exit. Transparent DNAT
 # interception and CoreDNS allowlist filtering apply automatically. The sidecar generates
-# a CA cert which is mounted into the agent for curl/Python/Node/git trust.
+# a CA cert and writes a .ready marker after iptables+mitmdump are up; claude-docker
+# polls for .ready before starting the agent. resolv.conf is bind-mounted to route
+# DNS through CoreDNS at 127.0.0.1. CA cert is mounted for curl/Python/Node/git trust.
 #
 # Proxy mode limitation: tools that ignore env vars and only read the system
 # trust store may need: sudo cp /run/proxy-ca/ca.crt /usr/local/share/ca-certificates/proxy-ca.crt
@@ -175,22 +177,33 @@ if [ -n "$PROXY_IMAGE" ]; then
         -v "$PROXY_CERTS:/var/lib/mitmproxy" \
         "$PROXY_IMAGE" >/dev/null
 
-    # Wait up to 15s for the proxy to generate its CA certificate
+    # Wait up to 30s for the proxy to be fully ready.
+    # entrypoint.sh writes .ready AFTER iptables DNAT rules and mitmdump are up.
+    # Polling the CA cert file is insufficient — it appears during cert-gen (before
+    # iptables setup and mitmdump startup), which would start the agent too early
+    # and cause traffic to bypass interception.
     PROXY_CA="$PROXY_CERTS/mitmproxy-ca-cert.pem"
+    PROXY_READY="$PROXY_CERTS/.ready"
     PROXY_WAIT=0
-    until [ -f "$PROXY_CA" ] || [ "$PROXY_WAIT" -ge 15 ]; do
+    until [ -f "$PROXY_READY" ] || [ "$PROXY_WAIT" -ge 30 ]; do
         sleep 1
         PROXY_WAIT=$((PROXY_WAIT + 1))
     done
-    if [ ! -f "$PROXY_CA" ]; then
-        echo "Error: Proxy CA cert not generated after ${PROXY_WAIT}s. Proxy logs:" >&2
+    if [ ! -f "$PROXY_READY" ]; then
+        echo "Error: Proxy not ready after ${PROXY_WAIT}s. Proxy logs:" >&2
         docker logs "$PROXY_NAME" >&2 2>&1 || true
         exit 1
     fi
     echo "[claude-docker] Proxy ready (${PROXY_WAIT}s), CA cert: $PROXY_CA" >&2
 
-    # Join proxy network namespace — transparent DNAT + CoreDNS filtering
+    # Join proxy network namespace — transparent DNAT + CoreDNS filtering.
+    # --network container: copies the proxy container's resolv.conf which points to
+    # Docker's DNS resolver, not CoreDNS at 127.0.0.1. Override with a bind-mount.
+    PROXY_RESOLV="$PROXY_CERTS/resolv.conf"
+    printf 'nameserver 127.0.0.1\n' > "$PROXY_RESOLV"
+
     PROXY_FLAGS="$PROXY_FLAGS --network container:$PROXY_NAME"
+    PROXY_FLAGS="$PROXY_FLAGS -v ${PROXY_RESOLV}:/etc/resolv.conf:ro"
 
     # CA cert trust — covers curl, Python requests, Node.js, git
     PROXY_FLAGS="$PROXY_FLAGS -v ${PROXY_CA}:/run/proxy-ca/ca.crt:ro"
