@@ -61,7 +61,7 @@
 
     <!-- Proxy badge -->
     <div v-if="session.docker_proxy_enabled" class="ac-proxy-badge" title="Network proxy active" aria-label="Network proxy active">
-      <i class="bi bi-shield-lock-fill"></i>
+      🛡️
     </div>
   </div>
 </template>
@@ -313,17 +313,19 @@ function handleClick() {
 }
 
 .ac-proxy-badge {
+  position: absolute;
+  left: -3px;
+  top: -3px;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  background: #20c997;
+  color: #fff;
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
-  background: var(--bs-teal, #20c997);
-  color: white;
   font-size: 0.55rem;
-  margin-left: 2px;
-  flex-shrink: 0;
+  line-height: 1;
 }
 
 /* Ghost chip variant */
