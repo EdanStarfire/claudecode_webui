@@ -67,6 +67,7 @@ docker network connect --ip "$PROXY_IP" "$AGENT_NET" "$PROXY_CONTAINER"
 # Wait for proxy to initialize
 info "Waiting for proxy to start..."
 sleep 5
+docker logs "$PROXY_CONTAINER" || true
 
 info "Proxy IP on agent network: $PROXY_IP"
 
@@ -98,7 +99,7 @@ run_agent() {
         -v "$CERTS_DIR/mitmproxy-ca-cert.pem:/etc/proxy-ca/mitmproxy-ca-cert.pem:ro" \
         --entrypoint sh \
         "$image" \
-        -c "ip route add default via $PROXY_IP 2>/dev/null || true; $cmd"
+        -c "cat /etc/proxy-ca/mitmproxy-ca-cert.pem >> /etc/ssl/certs/ca-certificates.crt 2>/dev/null || true; ip route add default via $PROXY_IP 2>/dev/null || true; $cmd"
 }
 
 # --- Test 1: Allowlisted domain (HTTPS, transparent interception) ---
@@ -106,7 +107,7 @@ run_agent() {
 # mitmdump intercepts TLS, presents mitmproxy CA-signed cert; wget trusts it.
 info "Test 1: HTTPS request to allowlisted domain (api.github.com) — transparent..."
 if run_agent "test-allow" alpine \
-    "wget -qO- --ca-certificate=/etc/proxy-ca/mitmproxy-ca-cert.pem https://api.github.com/ >/dev/null" \
+    "wget -qO- https://api.github.com/ >/dev/null" \
     >/dev/null 2>&1; then
     pass "Allowlisted HTTPS request succeeded (transparently intercepted)"
 else
