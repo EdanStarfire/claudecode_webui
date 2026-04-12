@@ -53,9 +53,8 @@ class SessionConfig(BaseModel):
     docker_image: str | None = None
     docker_extra_mounts: list[str] | None = None
     docker_home_directory: str | None = None
-    # Issue #1049: Proxy mode (sidecar model)
-    docker_proxy_container: str | None = None
-    docker_proxy_ca_cert: str | None = None
+    # Issue #1049: Proxy mode
+    docker_proxy_image: str | None = None
 
     # Features
     history_distillation_enabled: bool = True

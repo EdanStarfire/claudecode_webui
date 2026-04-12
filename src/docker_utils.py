@@ -81,9 +81,8 @@ def resolve_docker_cli_path(
     workspace: str | None = None,
     session_data_dir: str | None = None,
     docker_home_directory: str | None = None,
-    # Issue #1049: Proxy mode (sidecar model)
-    proxy_container: str | None = None,
-    proxy_ca_cert: str | None = None,
+    # Issue #1049: Proxy mode
+    proxy_image: str | None = None,
 ) -> tuple[str, dict[str, str]]:
     """
     Resolve the cli_path and environment variables for Docker mode.
@@ -97,10 +96,9 @@ def resolve_docker_cli_path(
                           session transcripts survive container restarts (enabling --resume).
         docker_home_directory: Home directory inside the container (for custom images).
                                Sets CLAUDE_DOCKER_HOME env var. Default: /home/claude.
-        proxy_container: Name of running proxy container (enables sidecar proxy mode).
-                         Agent joins the proxy container's network namespace via
-                         --network container:<name>.
-        proxy_ca_cert: Path to proxy CA cert on host (default: auto-detect from proxy).
+        proxy_image: Proxy sidecar image name (enables proxy mode when set).
+                     claude-docker launches a dedicated sidecar per session and wires
+                     the agent into its network namespace automatically.
 
     Returns:
         Tuple of (cli_path_string, env_vars_dict)
@@ -123,10 +121,8 @@ def resolve_docker_cli_path(
     if docker_home_directory:
         env_vars["CLAUDE_DOCKER_HOME"] = docker_home_directory
 
-    if proxy_container:
-        env_vars["CLAUDE_DOCKER_PROXY_CONTAINER"] = proxy_container
-        if proxy_ca_cert:
-            env_vars["CLAUDE_DOCKER_PROXY_CA_CERT"] = proxy_ca_cert
+    if proxy_image:
+        env_vars["CLAUDE_DOCKER_PROXY_IMAGE"] = proxy_image
 
     return wrapper_path, env_vars
 

@@ -141,23 +141,12 @@ class TestCleanupSessionTmp:
 
 class TestResolveDockerCliPathProxy:
     def test_proxy_mode_basic(self):
-        """CLAUDE_DOCKER_PROXY_CONTAINER is set when proxy_container is provided."""
-        _, env = resolve_docker_cli_path(proxy_container="claude-proxy")
-        assert env["CLAUDE_DOCKER_PROXY_CONTAINER"] == "claude-proxy"
-        assert "CLAUDE_DOCKER_PROXY_CA_CERT" not in env
-
-    def test_proxy_mode_all_params(self):
-        """Both proxy env vars are set when proxy_container and proxy_ca_cert provided."""
-        _, env = resolve_docker_cli_path(
-            proxy_container="claude-proxy",
-            proxy_ca_cert="/certs/ca.pem",
-        )
-        assert env["CLAUDE_DOCKER_PROXY_CONTAINER"] == "claude-proxy"
-        assert env["CLAUDE_DOCKER_PROXY_CA_CERT"] == "/certs/ca.pem"
+        """CLAUDE_DOCKER_PROXY_IMAGE is set when proxy_image is provided."""
+        _, env = resolve_docker_cli_path(proxy_image="claude-proxy:local")
+        assert env["CLAUDE_DOCKER_PROXY_IMAGE"] == "claude-proxy:local"
 
     def test_no_proxy_no_env_vars(self):
-        """No proxy env vars are set when proxy_container is None (regression guard)."""
+        """No proxy env vars are set when proxy_image is None (regression guard)."""
         _, env = resolve_docker_cli_path(docker_image="my-image")
-        assert "CLAUDE_DOCKER_PROXY_CONTAINER" not in env
-        assert "CLAUDE_DOCKER_PROXY_CA_CERT" not in env
+        assert "CLAUDE_DOCKER_PROXY_IMAGE" not in env
         assert env == {"CLAUDE_DOCKER_IMAGE": "my-image"}
