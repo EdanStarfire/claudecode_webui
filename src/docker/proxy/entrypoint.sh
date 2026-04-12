@@ -66,71 +66,90 @@ else
     echo "Using existing CA certificate"
 fi
 
-# --- Set up TPROXY transparent interception ---
+# --- Set up transparent interception via DNAT ---
 # Agent containers share this container's network namespace via
 # --network container:<proxy>. All TCP 80/443 originating from any process
 # whose UID != 9999 (i.e. every non-mitmdump process) is intercepted.
 #
 # How it works:
-#   OUTPUT chain:  mark packets from non-mitmdump processes (UID != 9999)
-#                  with fwmark 1.
-#   Policy routing: fwmark 1 → routing table 100; table 100 routes everything
-#                  to loopback, re-injecting packets into the netfilter
-#                  PREROUTING hook as if they arrived from outside.
-#   PREROUTING:    TPROXY target on port 80/443 redirects to mitmdump :8080
-#                  while preserving the original destination address via the
-#                  IP_TRANSPARENT socket option.
-#   Loop prevention: mitmdump runs as uid 9999; the OUTPUT MARK rule has
-#                  ! --uid-owner 9999, so mitmdump's upstream connections
-#                  to the real internet are never re-marked and never looped.
-# PREROUTING: intercept TCP 80/443 arriving from outside this namespace.
-# OUTPUT: intercept TCP 80/443 generated locally (agent processes sharing
-#         this network namespace via --network container:<proxy>).
-# uid 9999 (mitmdump) is excluded from OUTPUT REDIRECT so its upstream
-# connections to the real internet are never re-intercepted (loop prevention).
-# mitmproxy --mode transparent uses SO_ORIGINAL_DST to recover the original
-# destination after REDIRECT. No policy routing or IP_TRANSPARENT needed.
-# --- Disable reverse-path filtering on loopback ---
-# nat OUTPUT REDIRECT rewrites external destinations (e.g. 140.82.114.6:443) to
-# 127.0.0.1:8080, causing the packet to be re-routed through lo. The packet
-# arrives on lo with its ORIGINAL source address (the container's bridge IP,
-# e.g. 172.18.0.2), which is NOT in 127.0.0.0/8. With rp_filter=1 (strict,
-# the Fedora/RHEL default), the kernel silently drops the packet because the
-# source is not reachable via lo. Disabling rp_filter on lo and all interfaces
-# allows these REDIRECT-ed packets through.
-echo "Disabling rp_filter for transparent proxy..."
-sysctl -w net.ipv4.conf.all.rp_filter=0 >/dev/null 2>&1 || echo "  (sysctl failed — pass --sysctl net.ipv4.conf.all.rp_filter=0 to docker run)"
-sysctl -w net.ipv4.conf.lo.rp_filter=0 >/dev/null 2>&1 || true
+#   PREROUTING: REDIRECT intercepts TCP 80/443 arriving from external
+#               interfaces (e.g. if containers route through this namespace).
+#   OUTPUT:     DNAT rewrites locally-generated TCP 80/443 to PROXY_IP:8080.
+#               The kernel re-routes the packet to the local address, delivering
+#               it to mitmdump's listening socket on :8080.
+#   Loop prevention: mitmdump runs as uid 9999; the OUTPUT DNAT rule has
+#               ! --uid-owner 9999, so mitmdump's upstream connections to the
+#               real internet are never re-intercepted (no loop).
+#   SO_ORIGINAL_DST: mitmproxy --mode transparent uses getsockopt(SOL_IP, 80)
+#               to recover the original destination from conntrack. This works
+#               identically with DNAT and REDIRECT.
+#
+# Why DNAT instead of REDIRECT?
+#   REDIRECT in OUTPUT always rewrites the destination to 127.0.0.1, routing
+#   the packet through lo. The packet arrives on lo with the container's bridge
+#   IP as source (e.g. 172.18.0.2), which is NOT in 127.0.0.0/8. The Linux
+#   kernel silently drops these packets — a check beyond rp_filter rejects
+#   non-loopback sources on the lo interface.
+#   DNAT to the container's own bridge IP avoids this: both source and
+#   destination are the same local address, so the kernel accepts the packet.
+
+# Detect the container's primary IP for DNAT target.
+PROXY_IP=$(ip -4 addr show eth0 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}' || true)
+if [ -z "$PROXY_IP" ]; then
+    # Fallback: first non-loopback IPv4 address
+    PROXY_IP=$(ip -4 addr show scope global 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | head -1 || true)
+fi
+if [ -z "$PROXY_IP" ]; then
+    echo "ERROR: Could not detect container IP for DNAT. Transparent proxy will not work."
+    PROXY_IP="127.0.0.1"  # Fallback (will likely fail, but avoids syntax error)
+fi
+echo "Container IP for DNAT: $PROXY_IP"
 
 echo "Configuring transparent proxy iptables..."
+# PREROUTING: intercept traffic arriving from external interfaces.
+# REDIRECT is fine here — packets arrive on a real interface with matching source.
 iptables -t nat -A PREROUTING -p tcp --dport 80 -j REDIRECT --to-port 8080
 iptables -t nat -A PREROUTING -p tcp --dport 443 -j REDIRECT --to-port 8080
+# OUTPUT: intercept locally-generated TCP 80/443 (agent processes).
+# DNAT to the container's own IP avoids the lo routing issue with REDIRECT.
 iptables -t nat -A OUTPUT -p tcp --dport 80 \
-    -m owner ! --uid-owner 9999 -j REDIRECT --to-port 8080
+    -m owner ! --uid-owner 9999 -j DNAT --to-destination "${PROXY_IP}:8080"
 iptables -t nat -A OUTPUT -p tcp --dport 443 \
-    -m owner ! --uid-owner 9999 -j REDIRECT --to-port 8080
+    -m owner ! --uid-owner 9999 -j DNAT --to-destination "${PROXY_IP}:8080"
 
 # --- Default-deny TCP OUTPUT ---
 # Block all TCP from non-proxy processes on ports other than 80/443, closing
-# the 2B gap (raw IP + non-HTTP/HTTPS was previously unrestricted).
+# the raw-IP gap (non-HTTP/HTTPS TCP was previously unrestricted).
 #
 # Rule order:
-#   lo ACCEPT: covers redirected agent traffic (nat REDIRECT rewrites dst to
-#     127.0.0.1:8080 → routing picks lo → filter sees -o lo → ACCEPT) and
-#     all loopback communication between processes in this namespace.
-#   uid 9999 ACCEPT: mitmdump upstream connections to the real internet.
-#     Works because mitmdump is a child process (not PID 1); xt_owner uid
-#     matching is reliable for non-PID-1 processes.
-#   tcp DROP: everything else (agent TCP to non-80/443 ports, port 22, etc.).
-#
-# The dport 80/443 rules are intentionally absent: agent TCP to those ports
-# is always redirected to lo by nat OUTPUT before filter runs, so they are
-# caught by the lo ACCEPT rule and never reach the DROP.
+#   1. lo ACCEPT: covers DNAT-ed agent traffic (nat OUTPUT DNAT rewrites dst
+#      to PROXY_IP:8080 → kernel recognizes local address → routes through
+#      lo → filter sees -o lo → ACCEPT) and all inter-process loopback comms.
+#   2. ESTABLISHED,RELATED ACCEPT: allows TCP handshakes to complete and
+#      return traffic for all established connections.
+#   3. uid 9999 NEW ACCEPT: mitmdump upstream connections to the real internet.
+#      Works because mitmdump is a child process (not PID 1); xt_owner uid
+#      matching is reliable for non-PID-1 processes.
+#   4. dport 80,443 NEW ACCEPT: agent TCP to these ports must pass filter
+#      before nat OUTPUT DNAT fires. Without this, they'd hit the DROP rule
+#      and never reach the DNAT target.
+#   5. tcp NEW DROP: everything else (agent TCP to port 22, 8443, etc.).
 echo "Configuring default-deny TCP OUTPUT..."
+
+# 1. Allow all loopback traffic (DNAT-ed agent traffic + inter-process comms).
 iptables -A OUTPUT -o lo -j ACCEPT
-iptables -A OUTPUT -m owner --uid-owner 9999 -m state --state ESTABLISHED,RELATED -j ACCEPT
-iptables -A OUTPUT -p tcp -m owner --uid-owner 9999 -j ACCEPT
-iptables -A OUTPUT -p tcp -j DROP
+
+# 2. Allow established/related traffic (TCP handshake completion, return traffic).
+iptables -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+
+# 3. Allow mitmdump (uid 9999) to initiate new upstream connections.
+iptables -A OUTPUT -p tcp -m owner --uid-owner 9999 -m conntrack --ctstate NEW -j ACCEPT
+
+# 4. Allow agent NEW TCP to ports 80/443 so packets reach nat OUTPUT DNAT.
+iptables -A OUTPUT -p tcp -m multiport --dports 80,443 -m conntrack --ctstate NEW -j ACCEPT
+
+# 5. Drop all other new outbound TCP (port 22, 8443, arbitrary ports, etc.).
+iptables -A OUTPUT -p tcp -m conntrack --ctstate NEW -j DROP
 
 # --- Default-deny UDP OUTPUT ---
 # Block all UDP from non-proxy processes. This prevents DNS exfiltration via
@@ -149,11 +168,11 @@ iptables -A OUTPUT -p udp -j DROP
 # setpriv drops to uid/gid 9999. CAP_NET_ADMIN is not needed for
 # transparent mode (it uses SO_ORIGINAL_DST, not IP_TRANSPARENT).
 #
-# IMPORTANT: do NOT use exec here. The iptables nat OUTPUT REDIRECT rule
+# IMPORTANT: do NOT use exec here. The iptables nat OUTPUT DNAT rule
 # uses "! --uid-owner 9999" to exclude mitmproxy's own upstream connections
 # from being re-intercepted. The Linux kernel's xt_owner module does not
 # reliably match uid for PID 1; if mitmdump were exec'd into PID 1, its
-# upstream connections would fail the uid match and be redirected back to
+# upstream connections would fail the uid match and be DNAT-ed back to
 # itself (loop). Running as a child process (non-PID-1) ensures uid 9999
 # is matched correctly by the owner module.
 #

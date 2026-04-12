@@ -49,8 +49,6 @@ docker run -d \
     --name "$PROXY_CONTAINER" \
     --network "$BRIDGE_NET" \
     --cap-add NET_ADMIN \
-    --sysctl net.ipv4.conf.all.rp_filter=0 \
-    --sysctl net.ipv4.conf.lo.rp_filter=0 \
     -v "$CERTS_DIR:/var/lib/mitmproxy" \
     "$PROXY_IMAGE"
 
@@ -67,8 +65,8 @@ docker exec "$PROXY_CONTAINER" ps aux 2>/dev/null || true
 info "Listening sockets in proxy namespace:"
 docker exec "$PROXY_CONTAINER" ss -tlunp 2>/dev/null || true
 
-info "rp_filter values (must be 0 for OUTPUT REDIRECT):"
-docker exec "$PROXY_CONTAINER" sh -c 'echo "  all=$(cat /proc/sys/net/ipv4/conf/all/rp_filter) lo=$(cat /proc/sys/net/ipv4/conf/lo/rp_filter) eth0=$(cat /proc/sys/net/ipv4/conf/eth0/rp_filter 2>/dev/null || echo N/A)"' 2>/dev/null || true
+info "Container DNAT target IP:"
+docker exec "$PROXY_CONTAINER" ip -4 addr show eth0 2>/dev/null | grep -oP '(?<=inet\s)\d+(\.\d+){3}' || echo "  (could not detect eth0 IP)"
 
 info "Mitmdump uid check:"
 docker exec "$PROXY_CONTAINER" sh -c '
@@ -173,11 +171,17 @@ finally: subprocess.run(['iptables','-t','nat','-D','OUTPUT','-p','tcp','--dport
 t.join(timeout=3); print(result[0] if result else 'no result')
 " 2>&1 || true
 
-info "Diag F: SO_ORIGINAL_DST — external src (→1.1.1.1:18080 REDIRECT→18999, non-lo source)..."
+info "Diag F: SO_ORIGINAL_DST — DNAT to container IP (→1.1.1.1:18080 DNAT→PROXY_IP:18999)..."
 docker exec "$PROXY_CONTAINER" python3 -c "
 import socket, struct, subprocess, threading, time
 SO_ORIGINAL_DST = 80
 result = []
+# Detect container IP (same logic as entrypoint.sh)
+import re
+ip_out = subprocess.check_output(['ip','-4','addr','show','eth0'], text=True)
+m = re.search(r'inet (\d+\.\d+\.\d+\.\d+)', ip_out)
+proxy_ip = m.group(1) if m else '127.0.0.1'
+print(f'DNAT target: {proxy_ip}:18999')
 def server():
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -198,13 +202,13 @@ def server():
         result.append('server accept() TIMED OUT — packet never reached server')
     s.close()
 t = threading.Thread(target=server, daemon=True); t.start(); time.sleep(0.2)
-subprocess.run(['iptables','-t','nat','-A','OUTPUT','-p','tcp','--dport','18080','-j','REDIRECT','--to-port','18999'], check=True)
+subprocess.run(['iptables','-t','nat','-A','OUTPUT','-p','tcp','--dport','18080','-j','DNAT','--to-destination',f'{proxy_ip}:18999'], check=True)
 try:
     c = socket.socket(socket.AF_INET, socket.SOCK_STREAM); c.settimeout(4)
-    c.connect(('1.1.1.1', 18080))  # external IP — source will be bridge IP, not 127.0.0.1
+    c.connect(('1.1.1.1', 18080))  # external IP — DNAT rewrites to proxy_ip:18999
     c.close()
 except Exception as e: result.append(f'connect error: {e}')
-finally: subprocess.run(['iptables','-t','nat','-D','OUTPUT','-p','tcp','--dport','18080','-j','REDIRECT','--to-port','18999'])
+finally: subprocess.run(['iptables','-t','nat','-D','OUTPUT','-p','tcp','--dport','18080','-j','DNAT','--to-destination',f'{proxy_ip}:18999'])
 t.join(timeout=6); print('; '.join(result) if result else 'no result')
 " 2>&1 || true
 
