@@ -99,8 +99,8 @@ fi
 # source is not reachable via lo. Disabling rp_filter on lo and all interfaces
 # allows these REDIRECT-ed packets through.
 echo "Disabling rp_filter for transparent proxy..."
-sysctl -w net.ipv4.conf.all.rp_filter=0 >/dev/null 2>&1
-sysctl -w net.ipv4.conf.lo.rp_filter=0 >/dev/null 2>&1
+sysctl -w net.ipv4.conf.all.rp_filter=0 >/dev/null 2>&1 || echo "  (sysctl failed — pass --sysctl net.ipv4.conf.all.rp_filter=0 to docker run)"
+sysctl -w net.ipv4.conf.lo.rp_filter=0 >/dev/null 2>&1 || true
 
 echo "Configuring transparent proxy iptables..."
 iptables -t nat -A PREROUTING -p tcp --dport 80 -j REDIRECT --to-port 8080
