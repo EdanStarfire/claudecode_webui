@@ -71,10 +71,11 @@ fi
 
 # --- Helper: run test container sharing the proxy's network namespace ---
 # --network container:<proxy> gives the agent the same network interfaces,
-# iptables rules, and loopback as the proxy. TPROXY intercepts all TCP 80/443
-# from non-uid-9999 processes; no capability or route configuration needed in
-# the agent container. DNS is set by pointing resolv.conf at 127.0.0.1 where
-# CoreDNS is listening (--dns is not usable with --network container:).
+# iptables rules, and loopback as the proxy. nat OUTPUT REDIRECT intercepts
+# all TCP 80/443 from non-uid-9999 processes; no capability or route
+# configuration needed in the agent container. DNS is set by pointing
+# resolv.conf at 127.0.0.1 where CoreDNS is listening
+# (--dns is not usable with --network container:).
 run_agent() {
     local name="$1"
     local image="$2"
@@ -94,7 +95,7 @@ run_agent() {
 # mitmdump intercepts TLS, presents mitmproxy CA-signed cert; wget trusts it.
 info "Test 1: HTTPS request to allowlisted domain (api.github.com) — transparent..."
 if run_agent "test-allow" alpine \
-    "wget -qO- https://api.github.com/ >/dev/null" \
+    "timeout 15 wget -T 10 -qO- https://api.github.com/ >/dev/null" \
     >/dev/null 2>&1; then
     pass "Allowlisted HTTPS request succeeded (transparently intercepted)"
 else
@@ -105,7 +106,7 @@ fi
 # DNS returns NXDOMAIN for example.com (CoreDNS catch-all block).
 info "Test 2: HTTPS request to non-allowlisted domain (example.com) — transparent..."
 if run_agent "test-deny" alpine \
-    "wget -qO- https://example.com/ >/dev/null 2>&1"; then
+    "timeout 15 wget -T 10 -qO- https://example.com/ >/dev/null 2>&1"; then
     fail "Non-allowlisted HTTPS request should have been blocked"
 else
     pass "Non-allowlisted HTTPS request blocked (DNS NXDOMAIN or mitmproxy 403)"
@@ -142,15 +143,14 @@ else
     pass "Node.js fetch blocked for non-allowlisted domain (DNS-level)"
 fi
 
-# --- Test 6: Direct HTTP to raw IP (bypass DNS, test TPROXY interception) ---
+# --- Test 6: Direct HTTP to raw IP (bypass DNS, test OUTPUT REDIRECT) ---
 # Sends an HTTP GET to example.com's IP (93.184.216.34) on port 80, bypassing
-# DNS entirely. TPROXY OUTPUT MARK rule catches the outbound SYN, policy
-# routing re-injects it via loopback, PREROUTING TPROXY redirects it to
+# DNS entirely. The nat OUTPUT REDIRECT rule catches port 80 and redirects to
 # mitmdump :8080. The raw IP does not match any allowlisted domain so the
 # addon returns HTTP 403. wget treats 4xx as an error and exits non-zero.
-info "Test 6: Direct HTTP to raw IP — TPROXY interception and block..."
+info "Test 6: Direct HTTP to raw IP — OUTPUT REDIRECT interception and block..."
 if run_agent "test-direct" alpine \
-    "wget -qO- http://93.184.216.34/ >/dev/null 2>&1" \
+    "timeout 15 wget -T 10 -qO- http://93.184.216.34/ >/dev/null 2>&1" \
     >/dev/null 2>&1; then
     fail "Direct HTTP to raw IP should have been intercepted and blocked (403)"
 else
@@ -196,6 +196,12 @@ if run_agent "test-udp-exfil" alpine \
 else
     pass "UDP to external resolver blocked (default-deny UDP OUTPUT)"
 fi
+
+# --- Proxy traffic log ---
+echo ""
+echo "=== Proxy container logs ==="
+docker logs "$PROXY_CONTAINER" 2>&1
+echo "============================"
 
 # --- Results ---
 echo ""
