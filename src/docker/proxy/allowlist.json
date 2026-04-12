@@ -1,0 +1,9 @@
+{
+  "domains": [
+    "api.github.com",
+    "github.com",
+    "registry.npmjs.org",
+    "pypi.org",
+    "files.pythonhosted.org"
+  ]
+}
