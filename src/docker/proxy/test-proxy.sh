@@ -1,14 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Configuration
+# Usage: test-proxy.sh [-v|--verbose]
+#   -v / --verbose  Show startup state, per-rule diagnostics, and post-test
+#                   iptables counters. Useful when a test fails unexpectedly.
+
 PROXY_IMAGE="claude-proxy:local"
 PROXY_CONTAINER="claude-proxy-test"
 BRIDGE_NET="bridge-net-test"
 CERTS_DIR="$(cd "$(dirname "$0")" && pwd)/certs"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+VERBOSE=0
 
-# Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -20,28 +23,31 @@ info() { echo -e "${YELLOW}INFO${NC}: $1"; }
 
 FAILURES=0
 
+for arg in "$@"; do
+    case "$arg" in
+        -v|--verbose) VERBOSE=1 ;;
+        -h|--help) echo "Usage: $0 [-v|--verbose]"; exit 0 ;;
+        *) echo "Unknown argument: $arg" >&2; exit 1 ;;
+    esac
+done
+
 cleanup() {
-    info "Cleaning up..."
     docker rm -f "$PROXY_CONTAINER" 2>/dev/null || true
     docker rm -f test-agent 2>/dev/null || true
     docker network rm "$BRIDGE_NET" 2>/dev/null || true
-    info "Cleanup complete"
 }
 
 trap cleanup EXIT
 
 # --- Setup ---
 info "Building proxy image..."
-docker build -t "$PROXY_IMAGE" "$SCRIPT_DIR"
+if [ "$VERBOSE" -eq 1 ]; then
+    docker build -t "$PROXY_IMAGE" "$SCRIPT_DIR"
+else
+    docker build -q -t "$PROXY_IMAGE" "$SCRIPT_DIR" >/dev/null
+fi
 
-info "Creating networks..."
-# bridge-net: gives the proxy container outbound internet access.
-# Agent containers share the proxy's network namespace via
-# --network container:<proxy>; they inherit all proxy interfaces and routing,
-# but TPROXY iptables rules intercept their traffic before it leaves.
 docker network create "$BRIDGE_NET" 2>/dev/null || true
-
-info "Creating certs directory..."
 mkdir -p "$CERTS_DIR"
 
 info "Starting proxy container..."
@@ -52,40 +58,36 @@ docker run -d \
     --sysctl net.ipv4.ip_forward=1 \
     --sysctl net.ipv4.conf.lo.accept_local=1 \
     -v "$CERTS_DIR:/var/lib/mitmproxy" \
-    "$PROXY_IMAGE"
+    "$PROXY_IMAGE" >/dev/null
 
-# Wait for proxy to initialize
 info "Waiting for proxy to start..."
 sleep 5
 
-info "Proxy startup logs:"
-docker logs "$PROXY_CONTAINER" 2>&1
-
-info "Proxy process list:"
-docker exec "$PROXY_CONTAINER" ps aux 2>/dev/null || true
-
-info "Listening sockets in proxy namespace:"
-docker exec "$PROXY_CONTAINER" ss -tlunp 2>/dev/null || true
-
-info "Policy routing (fwmark rules, if any):"
-docker exec "$PROXY_CONTAINER" sh -c 'echo "  ip rules:"; ip rule show | grep fwmark || echo "    (none)"; echo "  table 100:"; ip route show table 100 2>/dev/null || echo "    (empty)"' 2>/dev/null || true
-
-info "Mitmdump uid check:"
-docker exec "$PROXY_CONTAINER" sh -c '
-  for pid in /proc/[0-9]*; do
-    cmd=$(cat "$pid/cmdline" 2>/dev/null | tr "\0" " ")
-    case "$cmd" in
-      *mitmdump*)
-        echo "Found mitmdump PID ${pid##*/}:"
-        grep -E "^(Name|Uid)" "$pid/status" 2>/dev/null
-        break
-        ;;
-    esac
-  done || echo "mitmdump not found in /proc"
-'
+if [ "$VERBOSE" -eq 1 ]; then
+    echo ""
+    info "Proxy startup logs:"
+    docker logs "$PROXY_CONTAINER" 2>&1
+    echo ""
+    info "Proxy process list:"
+    docker exec "$PROXY_CONTAINER" ps aux 2>/dev/null || true
+    info "Listening sockets:"
+    docker exec "$PROXY_CONTAINER" ss -tlunp 2>/dev/null || true
+    info "Mitmdump uid:"
+    docker exec "$PROXY_CONTAINER" sh -c '
+      for pid in /proc/[0-9]*; do
+        cmd=$(cat "$pid/cmdline" 2>/dev/null | tr "\0" " ")
+        case "$cmd" in
+          *mitmdump*)
+            grep -E "^(Name|Uid)" "$pid/status" 2>/dev/null
+            break;;
+        esac
+      done' 2>/dev/null || true
+    echo ""
+fi
 
 # Agent containers share the proxy's network namespace; CoreDNS listens on
-# loopback :53, so 127.0.0.1 resolves allowlisted domains and blocks others.
+# loopback :53, so 127.0.0.1 resolves allowlisted domains and returns NXDOMAIN
+# for everything else.
 PROXY_IP="127.0.0.1"
 
 # Verify CA cert was generated
@@ -93,19 +95,18 @@ if [ -f "$CERTS_DIR/mitmproxy-ca-cert.pem" ]; then
     pass "CA certificate generated at $CERTS_DIR/mitmproxy-ca-cert.pem"
 else
     fail "CA certificate not found"
+    info "Proxy logs:"
+    docker logs "$PROXY_CONTAINER" 2>&1
     exit 1
 fi
 
-# --- Helper: run test container sharing the proxy's network namespace ---
-# --network container:<proxy> gives the agent the same network interfaces,
-# iptables rules, and routing as the proxy. nat OUTPUT DNAT redirects agent
-# TCP 80/443 to $CONTAINER_IP:8080 (the proxy's own eth0 IP); ip_route_me_harder()
-# re-routes to local delivery before filter OUTPUT runs, so the loopback ACCEPT
-# rule covers intercepted traffic. mitmproxy reads the pre-DNAT destination via
-# SO_ORIGINAL_DST (conntrack preserves the original source, so lookup succeeds).
-# No capability or route configuration needed in the agent container.
-# DNS is set by pointing resolv.conf at 127.0.0.1 where CoreDNS is listening
-# (--dns is not usable with --network container:).
+# --- Helper: run a test container sharing the proxy's network namespace ---
+# --network container:<proxy> gives the agent the same interfaces, iptables
+# rules, and routing as the proxy. nat OUTPUT DNAT redirects agent TCP 80/443
+# to the proxy's own eth0 IP:8080; mitmproxy reads the pre-DNAT destination via
+# SO_ORIGINAL_DST. No extra capabilities needed in the agent container.
+# DNS is set by pointing resolv.conf at 127.0.0.1 (CoreDNS); --dns is not
+# usable with --network container:.
 run_agent() {
     local name="$1"
     local image="$2"
@@ -120,126 +121,53 @@ run_agent() {
         -c "echo 'nameserver 127.0.0.1' > /etc/resolv.conf; cat /etc/proxy-ca/mitmproxy-ca-cert.pem >> /etc/ssl/certs/ca-certificates.crt 2>/dev/null || true; $cmd"
 }
 
-# --- Diagnostics: test REDIRECT + uid-owner from INSIDE the proxy container ---
-# These run curl from the proxy container itself (no agent container involved)
-# to isolate whether the issue is REDIRECT/mitmproxy or --network container: sharing.
-echo ""
-info "Diag A: curl as root (uid 0) from proxy container → should be marked+re-injected → REDIRECT-ed to mitmproxy..."
-DIAG_A=$(docker exec "$PROXY_CONTAINER" \
-    curl -s --max-time 8 -o /dev/null -w "HTTP_%{http_code}" http://api.github.com/ 2>&1 || true)
-info "  Result: ${DIAG_A:-<no output>}"
+# --- Verbose diagnostics ---
+# Run before the main tests to confirm interception is working from both
+# inside the proxy container and from an agent container.
+if [ "$VERBOSE" -eq 1 ]; then
+    echo ""
+    info "Diag A: curl as root (uid 0) from proxy container → DNAT → mitmproxy..."
+    DIAG_A=$(docker exec "$PROXY_CONTAINER" \
+        curl -s --max-time 8 -o /dev/null -w "HTTP_%{http_code}" http://api.github.com/ 2>&1 || true)
+    info "  Result: ${DIAG_A:-<no output>}"
 
-info "Diag B: curl as uid 9999 from proxy container → should BYPASS REDIRECT, go direct..."
-DIAG_B=$(docker exec "$PROXY_CONTAINER" \
-    setpriv --reuid=9999 --regid=9999 --clear-groups -- \
-    curl -s --max-time 8 -o /dev/null -w "HTTP_%{http_code}" http://api.github.com/ 2>&1 || true)
-info "  Result: ${DIAG_B:-<no output>}"
+    info "Diag B: curl as uid 9999 from proxy container → bypasses DNAT, goes direct..."
+    DIAG_B=$(docker exec "$PROXY_CONTAINER" \
+        setpriv --reuid=9999 --regid=9999 --clear-groups -- \
+        curl -s --max-time 8 -o /dev/null -w "HTTP_%{http_code}" http://api.github.com/ 2>&1 || true)
+    info "  Result: ${DIAG_B:-<no output>}"
 
-info "Diag C: curl as uid 0 to raw IP :80 from proxy container → should be REDIRECT-ed, addon 403..."
-DIAG_C=$(docker exec "$PROXY_CONTAINER" \
-    curl -s --max-time 8 -o /dev/null -w "HTTP_%{http_code}" http://93.184.216.34/ 2>&1 || true)
-info "  Result: ${DIAG_C:-<no output>}"
+    info "Diag C: curl as root to raw IP :80 from proxy container → DNAT → addon 403..."
+    DIAG_C=$(docker exec "$PROXY_CONTAINER" \
+        curl -s --max-time 8 -o /dev/null -w "HTTP_%{http_code}" http://93.184.216.34/ 2>&1 || true)
+    info "  Result: ${DIAG_C:-<no output>}"
 
-info "Diag D: agent container wget with verbose stderr → shows connection/TLS details..."
-DIAG_D=$(run_agent "test-diag" alpine \
-    "wget -T 8 -O /dev/null http://api.github.com/ 2>&1 | head -5" 2>&1 || true)
-info "  Result:"
-echo "$DIAG_D" | head -10
+    info "Diag D: agent container wget → shows connection/TLS details..."
+    DIAG_D=$(run_agent "test-diag" alpine \
+        "wget -T 8 -O /dev/null http://api.github.com/ 2>&1 | head -5" 2>&1 || true)
+    info "  Result:"
+    echo "$DIAG_D" | head -10
+    echo ""
+fi
 
-info "Diag E: SO_ORIGINAL_DST — loopback src (127.0.0.1→127.0.0.1:18080 REDIRECT→18999)..."
-docker exec "$PROXY_CONTAINER" python3 -c "
-import socket, struct, subprocess, threading, time
-SO_ORIGINAL_DST = 80
-result = []
-def server():
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    s.bind(('0.0.0.0', 18999))
-    s.listen(1)
-    conn, addr = s.accept()
-    try:
-        dst = conn.getsockopt(socket.SOL_IP, SO_ORIGINAL_DST, 16)
-        port = struct.unpack('!H', dst[2:4])[0]
-        ip = '.'.join(str(b) for b in dst[4:8])
-        result.append(f'peer={addr[0]}:{addr[1]} SO_ORIGINAL_DST={ip}:{port}')
-    except Exception as e:
-        result.append(f'peer={addr[0]}:{addr[1]} SO_ORIGINAL_DST error: {e}')
-    conn.close()
-    s.close()
-t = threading.Thread(target=server, daemon=True); t.start(); time.sleep(0.2)
-subprocess.run(['iptables','-t','nat','-A','OUTPUT','-p','tcp','--dport','18080','-j','REDIRECT','--to-port','18999'], check=True)
-try:
-    c = socket.socket(socket.AF_INET, socket.SOCK_STREAM); c.settimeout(3)
-    c.connect(('127.0.0.1', 18080)); c.close()
-except Exception as e: result.append(f'connect error: {e}')
-finally: subprocess.run(['iptables','-t','nat','-D','OUTPUT','-p','tcp','--dport','18080','-j','REDIRECT','--to-port','18999'])
-t.join(timeout=3); print(result[0] if result else 'no result')
-" 2>&1 || true
+# --- Tests ---
 
-info "Diag F: TPROXY pipeline — mark + policy route + TPROXY to local server on :18999..."
-docker exec "$PROXY_CONTAINER" python3 -c "
-import socket, struct, subprocess, threading, time
-IP_TRANSPARENT = 19
-result = []
-def server():
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    s.setsockopt(socket.SOL_IP, IP_TRANSPARENT, 1)
-    s.bind(('0.0.0.0', 18999))
-    s.listen(1)
-    s.settimeout(5)
-    try:
-        conn, addr = s.accept()
-        local = conn.getsockname()
-        result.append(f'peer={addr[0]}:{addr[1]} getsockname={local[0]}:{local[1]}')
-        conn.close()
-    except socket.timeout:
-        result.append('server accept() TIMED OUT — packet never reached server')
-    s.close()
-t = threading.Thread(target=server, daemon=True); t.start(); time.sleep(0.2)
-# Set up TPROXY pipeline for port 18080: mark → policy route (reuses table 100) → TPROXY
-subprocess.run(['iptables','-t','mangle','-A','OUTPUT','-p','tcp','--dport','18080','-j','MARK','--set-mark','1'], check=True)
-subprocess.run(['iptables','-t','mangle','-A','PREROUTING','-p','tcp','--dport','18080','-j','TPROXY','--tproxy-mark','0x1/0x1','--on-port','18999'], check=True)
-try:
-    c = socket.socket(socket.AF_INET, socket.SOCK_STREAM); c.settimeout(4)
-    c.connect(('1.1.1.1', 18080))  # external IP — should be TPROXY-ed to :18999
-    c.close()
-except Exception as e: result.append(f'connect error: {e}')
-finally:
-    subprocess.run(['iptables','-t','mangle','-D','OUTPUT','-p','tcp','--dport','18080','-j','MARK','--set-mark','1'])
-    subprocess.run(['iptables','-t','mangle','-D','PREROUTING','-p','tcp','--dport','18080','-j','TPROXY','--tproxy-mark','0x1/0x1','--on-port','18999'])
-t.join(timeout=6); print('; '.join(result) if result else 'no result')
-" 2>&1 || true
-
-echo ""
-
-# --- Probe: direct TCP to mitmproxy :8080 (no REDIRECT needed) ---
-# Verifies mitmdump is reachable at all before any iptables rules are involved.
-# An HTTP request to the proxy port directly should return a 400 (bad request /
-# upstream connection error) — anything other than a connection refusal means
-# mitmdump is up and accepting connections.
-info "Probe: direct HTTP to mitmdump :8080 (bypasses iptables)..."
-DIRECT_RESP=$(run_agent "test-probe" alpine \
-    "wget -qO- --timeout=5 http://127.0.0.1:8080/ 2>&1 | head -3" 2>/dev/null || true)
-info "  Direct :8080 response: ${DIRECT_RESP:-<no output>}"
-
-# --- Test 1a: Allowlisted domain (HTTP, transparent interception) ---
-# Isolates REDIRECT firing from TLS/CA trust. HTTP goes through REDIRECT to
-# mitmdump :8080 which then forwards upstream. If this passes but 1b fails,
-# the issue is TLS certificate trust, not REDIRECT.
-info "Test 1a: HTTP (port 80) request to allowlisted domain (api.github.com) — transparent..."
+# Test 1: Allowlisted domain (HTTP)
+# Confirms DNAT is firing and the addon allows the domain. If this passes
+# but Test 2 fails, the issue is TLS certificate trust, not interception.
+info "Test 1: HTTP request to allowlisted domain (api.github.com) — transparent..."
 if run_agent "test-allow-http" alpine \
     "timeout 15 wget -T 10 -qO- http://api.github.com/ >/dev/null" \
     >/dev/null 2>&1; then
     pass "Allowlisted HTTP request succeeded (transparently intercepted)"
 else
-    fail "Allowlisted HTTP request failed (REDIRECT may not be firing)"
+    fail "Allowlisted HTTP request failed"
 fi
 
-# --- Test 1: Allowlisted domain (HTTPS, transparent interception) ---
-# No proxy env vars. Traffic routes through proxy via iptables REDIRECT.
-# mitmdump intercepts TLS, presents mitmproxy CA-signed cert; wget trusts it.
-info "Test 1: HTTPS request to allowlisted domain (api.github.com) — transparent..."
+# Test 2: Allowlisted domain (HTTPS)
+# No proxy env vars. DNAT intercepts TCP 443; mitmdump terminates TLS and
+# presents a CA-signed cert; wget trusts it via the mounted CA bundle.
+info "Test 2: HTTPS request to allowlisted domain (api.github.com) — transparent..."
 if run_agent "test-allow" alpine \
     "timeout 15 wget -T 10 -qO- https://api.github.com/ >/dev/null" \
     >/dev/null 2>&1; then
@@ -248,18 +176,18 @@ else
     fail "Allowlisted HTTPS request failed"
 fi
 
-# --- Test 2: Non-allowlisted domain (HTTPS, transparent interception) ---
-# DNS returns NXDOMAIN for example.com (CoreDNS catch-all block).
-info "Test 2: HTTPS request to non-allowlisted domain (example.com) — transparent..."
+# Test 3: Non-allowlisted domain (HTTPS)
+# CoreDNS returns NXDOMAIN for example.com; wget cannot connect.
+info "Test 3: HTTPS request to non-allowlisted domain (example.com) — should be blocked..."
 if run_agent "test-deny" alpine \
     "timeout 15 wget -T 10 -qO- https://example.com/ >/dev/null 2>&1"; then
     fail "Non-allowlisted HTTPS request should have been blocked"
 else
-    pass "Non-allowlisted HTTPS request blocked (DNS NXDOMAIN or mitmproxy 403)"
+    pass "Non-allowlisted HTTPS request blocked (DNS NXDOMAIN)"
 fi
 
-# --- Test 3: DNS allowlisted domain ---
-info "Test 3: DNS resolution for allowlisted domain..."
+# Test 4: DNS — allowlisted domain resolves
+info "Test 4: DNS resolution for allowlisted domain..."
 if run_agent "test-dns-allow" alpine \
     "nslookup api.github.com $PROXY_IP >/dev/null 2>&1" \
     >/dev/null 2>&1; then
@@ -268,8 +196,8 @@ else
     fail "DNS resolution for allowlisted domain failed"
 fi
 
-# --- Test 4: DNS non-allowlisted domain (NXDOMAIN) ---
-info "Test 4: DNS resolution for non-allowlisted domain..."
+# Test 5: DNS — non-allowlisted domain returns NXDOMAIN
+info "Test 5: DNS resolution for non-allowlisted domain — should return NXDOMAIN..."
 if run_agent "test-dns-deny" alpine \
     "nslookup example.com $PROXY_IP >/dev/null 2>&1" \
     >/dev/null 2>&1; then
@@ -278,9 +206,10 @@ else
     pass "DNS for non-allowlisted domain returned NXDOMAIN"
 fi
 
-# --- Test 5: Node.js native fetch to non-allowlisted domain ---
-# No proxy env vars. DNS NXDOMAIN prevents resolution.
-info "Test 5: Node.js native fetch to non-allowlisted domain (transparent)..."
+# Test 6: Node.js native fetch to non-allowlisted domain
+# DNS NXDOMAIN prevents resolution; verifies that Node's built-in fetch is
+# also blocked (no http_proxy env var required).
+info "Test 6: Node.js native fetch to non-allowlisted domain — should be blocked..."
 if run_agent "test-node-bypass" node:22-slim \
     "node -e \"fetch('https://blocked.example.com').then(r => { console.log(r.status); process.exit(0); }).catch(e => { console.error(e.cause?.code || e.message); process.exit(1); })\"" \
     >/dev/null 2>&1; then
@@ -289,26 +218,23 @@ else
     pass "Node.js fetch blocked for non-allowlisted domain (DNS-level)"
 fi
 
-# --- Test 6: Direct HTTP to raw IP (bypass DNS, test mangle OUTPUT MARK + PREROUTING REDIRECT) ---
-# Sends an HTTP GET to example.com's IP (93.184.216.34) on port 80, bypassing
-# DNS entirely. mangle OUTPUT marks port 80 traffic; policy routing re-injects
-# via loopback; nat PREROUTING REDIRECT delivers to mitmdump :8080. The raw IP
-# does not match any allowlisted domain so the addon returns HTTP 403. wget
-# treats 4xx as an error and exits non-zero.
-info "Test 6: Direct HTTP to raw IP — OUTPUT REDIRECT interception and block..."
+# Test 7: Direct HTTP to raw IP (bypasses DNS)
+# Sends HTTP to 93.184.216.34:80 without DNS. DNAT intercepts it; the raw IP
+# does not match any allowlisted domain so the addon returns 403. wget treats
+# 4xx as an error and exits non-zero.
+info "Test 7: Direct HTTP to raw IP — should be intercepted and blocked (addon 403)..."
 if run_agent "test-direct" alpine \
     "timeout 15 wget -T 10 -qO- http://93.184.216.34/ >/dev/null 2>&1" \
     >/dev/null 2>&1; then
     fail "Direct HTTP to raw IP should have been intercepted and blocked (403)"
 else
-    pass "Direct HTTP to raw IP blocked (TPROXY intercepted, addon returned 403)"
+    pass "Direct HTTP to raw IP blocked (DNAT intercepted, addon returned 403)"
 fi
 
-# --- Test 7: SSH TCP to allowlisted domain (port 22, blocked by default-deny) ---
+# Test 8: SSH TCP to allowlisted domain (port 22, default-deny)
 # DNS for github.com resolves (it is allowlisted), but the default-deny OUTPUT
-# rule drops all TCP that is not port 80/443 or from uid 9999. Port 22 never
-# reaches the wire regardless of whether the domain is allowlisted.
-info "Test 7: SSH TCP to allowlisted domain (github.com:22) — blocked by default-deny OUTPUT..."
+# rule drops all TCP that is not port 80/443 or from uid 9999.
+info "Test 8: SSH TCP to allowlisted domain (github.com:22) — blocked by default-deny..."
 if run_agent "test-ssh" alpine \
     "timeout 5 nc -w 3 github.com 22 </dev/null 2>/dev/null" \
     >/dev/null 2>&1; then
@@ -317,25 +243,22 @@ else
     pass "SSH to allowlisted domain blocked (default-deny OUTPUT, port 22 not permitted)"
 fi
 
-# --- Test 8: SSH TCP to non-allowlisted domain (DNS blocks it) ---
-# DNS NXDOMAIN for example.com prevents nc from resolving the host; the
-# default-deny TCP DROP would also block it if DNS somehow resolved.
-info "Test 8: SSH TCP connect to non-allowlisted domain (example.com:22) — DNS blocked..."
+# Test 9: SSH TCP to non-allowlisted domain (DNS + default-deny)
+# DNS NXDOMAIN prevents nc from resolving example.com; default-deny would
+# also block it if resolution somehow succeeded.
+info "Test 9: SSH TCP to non-allowlisted domain (example.com:22) — should be blocked..."
 if run_agent "test-ssh-deny" alpine \
     "timeout 5 nc -w 3 example.com 22 </dev/null 2>/dev/null" \
     >/dev/null 2>&1; then
-    fail "SSH to non-allowlisted domain should have failed (DNS NXDOMAIN)"
+    fail "SSH to non-allowlisted domain should have failed"
 else
     pass "SSH to non-allowlisted domain blocked (DNS NXDOMAIN)"
 fi
 
-# --- Test 9: UDP to external resolver (DNS exfiltration path, now blocked) ---
+# Test 10: UDP to external resolver (DNS exfiltration path)
 # nslookup with an explicit server address sends UDP directly to 1.1.1.1:53,
-# bypassing CoreDNS entirely. The default-deny UDP OUTPUT DROP blocks it;
-# the query times out and nslookup exits non-zero.
-# This closes the 2B gap for UDP: raw IP + non-HTTP/HTTPS protocol was
-# previously unrestricted; default-deny now covers both TCP and UDP.
-info "Test 9: UDP DNS query to external resolver (1.1.1.1) — blocked by default-deny UDP..."
+# bypassing CoreDNS. The default-deny UDP OUTPUT DROP blocks it.
+info "Test 10: UDP DNS query to external resolver (1.1.1.1) — blocked by default-deny UDP..."
 if run_agent "test-udp-exfil" alpine \
     "nslookup api.github.com 1.1.1.1 >/dev/null 2>&1" \
     >/dev/null 2>&1; then
@@ -344,32 +267,22 @@ else
     pass "UDP to external resolver blocked (default-deny UDP OUTPUT)"
 fi
 
-# --- Proxy traffic log ---
-echo ""
-echo "=== Proxy container logs ==="
-docker logs "$PROXY_CONTAINER" 2>&1
-echo "============================"
-
-# --- iptables packet counters (post-test) ---
-# Non-zero counters on nat PREROUTING REDIRECT confirm interception is firing.
-# Zero counters after tests = re-injection or mark never matched.
-echo ""
-echo "=== iptables mangle table (post-test) ==="
-docker exec "$PROXY_CONTAINER" iptables -t mangle -L -v -n 2>/dev/null || true
-echo ""
-echo "=== iptables nat table (post-test) ==="
-docker exec "$PROXY_CONTAINER" iptables -t nat -L -v -n 2>/dev/null || true
-echo ""
-echo "=== iptables filter table (post-test) ==="
-docker exec "$PROXY_CONTAINER" iptables -L -v -n 2>/dev/null || true
-echo ""
-echo "=== kernel log — dropped packets ==="
-docker exec "$PROXY_CONTAINER" dmesg 2>/dev/null | grep -E "TCP-DROP|UDP-DROP" | tail -30 || echo "(no dmesg access or no matches)"
-echo "========================================"
+# --- Verbose post-test dumps ---
+if [ "$VERBOSE" -eq 1 ]; then
+    echo ""
+    echo "=== Proxy container logs ==="
+    docker logs "$PROXY_CONTAINER" 2>&1
+    echo ""
+    echo "=== iptables nat table (post-test) ==="
+    docker exec "$PROXY_CONTAINER" iptables -t nat -L -v -n 2>/dev/null || true
+    echo ""
+    echo "=== iptables filter table (post-test) ==="
+    docker exec "$PROXY_CONTAINER" iptables -L -v -n 2>/dev/null || true
+    echo "========================================"
+fi
 
 # --- Results ---
 echo ""
-echo "=============================="
 if [ $FAILURES -eq 0 ]; then
     echo -e "${GREEN}All tests passed${NC}"
     exit 0
