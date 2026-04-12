@@ -60,7 +60,7 @@ docker run -d \
 # Attach proxy to agent network with a static IP so PROXY_IP is predictable.
 # Agent containers add a default route to this IP via ip route, routing all
 # their traffic through the proxy for transparent interception.
-PROXY_IP="10.100.0.1"
+PROXY_IP="10.100.0.2"
 docker network connect --ip "$PROXY_IP" "$AGENT_NET" "$PROXY_CONTAINER"
 
 # Wait for proxy to initialize
