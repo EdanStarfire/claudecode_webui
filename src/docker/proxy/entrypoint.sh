@@ -118,7 +118,6 @@ echo "Configuring default-deny TCP OUTPUT..."
 iptables -A OUTPUT -o lo -j ACCEPT
 iptables -A OUTPUT -m owner --uid-owner 9999 -m state --state ESTABLISHED,RELATED -j ACCEPT
 iptables -A OUTPUT -p tcp -m owner --uid-owner 9999 -j ACCEPT
-iptables -A OUTPUT -p tcp -j LOG --log-prefix "TCP-DROP: " --log-level 4
 iptables -A OUTPUT -p tcp -j DROP
 
 # --- Default-deny UDP OUTPUT ---
@@ -132,7 +131,6 @@ iptables -A OUTPUT -p tcp -j DROP
 # To add future protocol proxies: insert uid ACCEPT before the DROP.
 echo "Configuring default-deny UDP OUTPUT..."
 iptables -A OUTPUT -p udp -m owner --uid-owner 9998 -j ACCEPT
-iptables -A OUTPUT -p udp -j LOG --log-prefix "UDP-DROP: " --log-level 4
 iptables -A OUTPUT -p udp -j DROP
 
 # --- Start mitmdump in transparent mode as uid 9999 ---
@@ -151,7 +149,7 @@ iptables -A OUTPUT -p udp -j DROP
 # SIGTERM/SIGINT to the child processes for clean shutdown.
 echo "Starting mitmdump (transparent mode) on :8080..."
 echo "Addon: /etc/proxy/addon.py"
-setpriv --reuid=9999 --regid=9999 --clear-groups -- \
+PYTHONUNBUFFERED=1 setpriv --reuid=9999 --regid=9999 --clear-groups -- \
     mitmdump --mode transparent --showhost -v \
     --set confdir="$CERTS_DIR" \
     --listen-port 8080 \
