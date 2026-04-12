@@ -689,14 +689,16 @@ class ClaudeWebUI:
 
         # Issue #1050: Best-effort proxy image check on startup (informational only)
         from .config_manager import load_config
+        from .logging_config import get_logger as _get_logger
+        _startup_logger = _get_logger('coordinator', category='PROXY')
         startup_config = load_config(self.config_file) if self.config_file else load_config()
         if startup_config.proxy.proxy_image:
             from .docker_utils import check_proxy_image_available
             image_ok = await check_proxy_image_available(startup_config.proxy.proxy_image)
             if image_ok:
-                logger.info(f"Default proxy image '{startup_config.proxy.proxy_image}' available.")
+                _startup_logger.info(f"Default proxy image '{startup_config.proxy.proxy_image}' available.")
             else:
-                logger.info(
+                _startup_logger.info(
                     f"Default proxy image '{startup_config.proxy.proxy_image}' not found locally. "
                     f"It will be auto-built on first proxy-enabled session start."
                 )
