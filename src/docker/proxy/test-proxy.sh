@@ -112,6 +112,34 @@ run_agent() {
         -c "echo 'nameserver 127.0.0.1' > /etc/resolv.conf; cat /etc/proxy-ca/mitmproxy-ca-cert.pem >> /etc/ssl/certs/ca-certificates.crt 2>/dev/null || true; $cmd"
 }
 
+# --- Diagnostics: test REDIRECT + uid-owner from INSIDE the proxy container ---
+# These run curl from the proxy container itself (no agent container involved)
+# to isolate whether the issue is REDIRECT/mitmproxy or --network container: sharing.
+echo ""
+info "Diag A: curl as root (uid 0) from proxy container → should be REDIRECT-ed to mitmproxy..."
+DIAG_A=$(docker exec "$PROXY_CONTAINER" \
+    curl -s --max-time 8 -o /dev/null -w "HTTP_%{http_code}" http://api.github.com/ 2>&1 || true)
+info "  Result: ${DIAG_A:-<no output>}"
+
+info "Diag B: curl as uid 9999 from proxy container → should BYPASS REDIRECT, go direct..."
+DIAG_B=$(docker exec "$PROXY_CONTAINER" \
+    setpriv --reuid=9999 --regid=9999 --clear-groups -- \
+    curl -s --max-time 8 -o /dev/null -w "HTTP_%{http_code}" http://api.github.com/ 2>&1 || true)
+info "  Result: ${DIAG_B:-<no output>}"
+
+info "Diag C: curl as uid 0 to raw IP :80 from proxy container → should be REDIRECT-ed, addon 403..."
+DIAG_C=$(docker exec "$PROXY_CONTAINER" \
+    curl -s --max-time 8 -o /dev/null -w "HTTP_%{http_code}" http://93.184.216.34/ 2>&1 || true)
+info "  Result: ${DIAG_C:-<no output>}"
+
+info "Diag D: agent container wget with verbose stderr → shows connection/TLS details..."
+DIAG_D=$(run_agent "test-diag" alpine \
+    "wget -T 8 -O /dev/null http://api.github.com/ 2>&1 | head -5" 2>&1 || true)
+info "  Result:"
+echo "$DIAG_D" | head -10
+
+echo ""
+
 # --- Probe: direct TCP to mitmproxy :8080 (no REDIRECT needed) ---
 # Verifies mitmdump is reachable at all before any iptables rules are involved.
 # An HTTP request to the proxy port directly should return a 400 (bad request /
