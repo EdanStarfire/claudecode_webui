@@ -7,7 +7,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.docker_utils import cleanup_session_tmp, get_session_tmp_dir, translate_docker_tmp_path
+from src.docker_utils import (
+    cleanup_session_tmp,
+    get_session_tmp_dir,
+    resolve_docker_cli_path,
+    translate_docker_tmp_path,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -127,3 +132,40 @@ class TestCleanupSessionTmp:
         with patch("src.docker_utils.shutil.rmtree", side_effect=OSError("disk error")):
             # Should not propagate the exception
             cleanup_session_tmp("sess-err", sessions_dir)
+
+
+# ---------------------------------------------------------------------------
+# resolve_docker_cli_path — proxy mode (issue #1049)
+# ---------------------------------------------------------------------------
+
+
+class TestResolveDockerCliPathProxy:
+    def test_proxy_mode_basic(self):
+        """Proxy env vars are set when proxy_host is provided with session_token."""
+        _, env = resolve_docker_cli_path(proxy_host="10.0.0.1", session_token="tok123")
+        assert env["CLAUDE_DOCKER_PROXY_HOST"] == "10.0.0.1"
+        assert env["CLAUDE_DOCKER_SESSION_TOKEN"] == "tok123"
+        assert "CLAUDE_DOCKER_NETWORK" not in env
+        assert "CLAUDE_DOCKER_PROXY_CA_CERT" not in env
+
+    def test_proxy_mode_all_params(self):
+        """All four proxy env vars are set when all params are provided."""
+        _, env = resolve_docker_cli_path(
+            proxy_host="10.0.0.1",
+            session_token="tok123",
+            proxy_network="my-net",
+            proxy_ca_cert="/certs/ca.pem",
+        )
+        assert env["CLAUDE_DOCKER_PROXY_HOST"] == "10.0.0.1"
+        assert env["CLAUDE_DOCKER_SESSION_TOKEN"] == "tok123"
+        assert env["CLAUDE_DOCKER_NETWORK"] == "my-net"
+        assert env["CLAUDE_DOCKER_PROXY_CA_CERT"] == "/certs/ca.pem"
+
+    def test_no_proxy_no_env_vars(self):
+        """No proxy env vars are set when proxy_host is None (regression guard)."""
+        _, env = resolve_docker_cli_path(docker_image="my-image")
+        assert "CLAUDE_DOCKER_PROXY_HOST" not in env
+        assert "CLAUDE_DOCKER_SESSION_TOKEN" not in env
+        assert "CLAUDE_DOCKER_NETWORK" not in env
+        assert "CLAUDE_DOCKER_PROXY_CA_CERT" not in env
+        assert env == {"CLAUDE_DOCKER_IMAGE": "my-image"}

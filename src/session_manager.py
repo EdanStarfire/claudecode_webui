@@ -144,6 +144,11 @@ class SessionInfo:
     docker_image: str | None = None  # Custom image name (default: claude-code:local)
     docker_extra_mounts: list[str] | None = None  # Additional volume mount specs
     docker_home_directory: str | None = None  # Home directory inside container (for custom images)
+    # Issue #1049: Proxy mode
+    docker_proxy_host: str | None = None
+    docker_session_token: str | None = None
+    docker_proxy_network: str | None = None
+    docker_proxy_ca_cert: str | None = None
 
     # Thinking and effort configuration (issue #540)
     thinking_mode: str | None = None  # "adaptive", "enabled", "disabled", or None (SDK default)
@@ -234,6 +239,10 @@ class SessionInfo:
         data.setdefault('docker_image', None)
         data.setdefault('docker_extra_mounts', None)
         data.setdefault('docker_home_directory', None)
+        data.setdefault('docker_proxy_host', None)
+        data.setdefault('docker_session_token', None)
+        data.setdefault('docker_proxy_network', None)
+        data.setdefault('docker_proxy_ca_cert', None)
         data.setdefault('thinking_mode', None)
         data.setdefault('thinking_budget_tokens', None)
         data.setdefault('effort', None)
@@ -419,6 +428,11 @@ class SessionManager:
             docker_image=config.docker_image,
             docker_extra_mounts=config.docker_extra_mounts if config.docker_extra_mounts is not None else [],
             docker_home_directory=config.docker_home_directory,
+            # Issue #1049: Proxy mode
+            docker_proxy_host=config.docker_proxy_host,
+            docker_session_token=config.docker_session_token,
+            docker_proxy_network=config.docker_proxy_network,
+            docker_proxy_ca_cert=config.docker_proxy_ca_cert,
             # Thinking and effort configuration (issue #540)
             thinking_mode=config.thinking_mode,
             thinking_budget_tokens=config.thinking_budget_tokens,
