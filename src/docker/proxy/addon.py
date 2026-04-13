@@ -60,10 +60,33 @@ class DomainFilter:
                 json.dumps({"error": "domain_blocked", "domain": host}),
                 {"Content-Type": "application/json"},
             )
+            flow.metadata["denied"] = True
             self._write_access_log(flow, allowed=False)
 
     def response(self, flow: http.HTTPFlow) -> None:
+        # Skip flows already logged as denied in request() to avoid double-logging.
+        if flow.metadata.get("denied"):
+            return
         self._write_access_log(flow, allowed=True)
+
+    def error(self, flow: http.HTTPFlow) -> None:
+        # Fires when mitmproxy cannot establish the upstream connection (e.g. raw IP
+        # on port 80/443 that is unreachable). The request() hook never fires for
+        # these flows, so this is the only place to capture them.
+        if not self._log_file or not flow.request:
+            return
+        entry = {
+            "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+            "session_id": self.session_id,
+            "host": flow.request.pretty_host,
+            "method": flow.request.method,
+            "path": flow.request.path,
+            "status": 0,
+            "bytes": 0,
+            "allowed": False,
+            "error": str(flow.error) if flow.error else "upstream_connect_failed",
+        }
+        self._log_file.write(json.dumps(entry) + "\n")
 
 
 addons = [DomainFilter()]
