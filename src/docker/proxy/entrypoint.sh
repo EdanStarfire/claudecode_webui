@@ -162,6 +162,12 @@ iptables -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 iptables -A OUTPUT -p tcp -m owner --uid-owner 9999 -m conntrack --ctstate NEW -j ACCEPT
 
 # 5. Drop all other new outbound TCP (port 22, 8443, arbitrary ports, etc.).
+# Issue #1060: NFLOG before DROP — NFLOG is per-network-namespace (unlike LOG which
+# goes to the host kernel ring buffer) so ulogd2 inside the container can read it.
+if [ -d "$LOG_DIR" ]; then
+    iptables -A OUTPUT -p tcp -m conntrack --ctstate NEW \
+        -j NFLOG --nflog-group 1 --nflog-prefix "PROXY_DROP_TCP "
+fi
 iptables -A OUTPUT -p tcp -m conntrack --ctstate NEW -j DROP
 
 # --- Default-deny UDP OUTPUT ---
@@ -175,6 +181,11 @@ iptables -A OUTPUT -p tcp -m conntrack --ctstate NEW -j DROP
 # To add future protocol proxies: insert uid ACCEPT before the DROP.
 echo "Configuring default-deny UDP OUTPUT..."
 iptables -A OUTPUT -p udp -m owner --uid-owner 9998 -j ACCEPT
+# Issue #1060: NFLOG before DROP for per-connection dropped UDP logging.
+if [ -d "$LOG_DIR" ]; then
+    iptables -A OUTPUT -p udp \
+        -j NFLOG --nflog-group 1 --nflog-prefix "PROXY_DROP_UDP "
+fi
 iptables -A OUTPUT -p udp -j DROP
 
 # --- Start mitmdump with multiple modes as uid 9999 ---
@@ -213,24 +224,25 @@ PYTHONUNBUFFERED=1 setpriv --reuid=9999 --regid=9999 --clear-groups \
     $MITM_EXTRA_ARGS &
 MITM_PID=$!
 
-# Issue #1060: Periodically dump iptables DROP counters to dropped.log.
-# iptables -j LOG cannot be read from inside a container — LOG targets write to
-# the host kernel ring buffer, not the container's /proc/kmsg. Instead, poll
-# iptables DROP rule counters every 30 seconds and append a timestamped snapshot
-# to dropped.log. This gives aggregate drop counts without per-connection detail,
-# requires no extra packages, and works within container capabilities.
-SCRAPER_PID=""
+# Issue #1060: Start ulogd2 to capture per-connection NFLOG drop events.
+# NFLOG is per-network-namespace (unlike iptables -j LOG which writes to the
+# host kernel ring buffer). ulogd2 reads from NFLOG group 1 and writes one
+# JSON object per dropped packet to dropped.log via the JSON output plugin.
 if [ -d "$LOG_DIR" ]; then
-    (
-        while true; do
-            sleep 30
-            printf '[%s] iptables OUTPUT DROP counters:\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-                >> "$LOG_DIR/dropped.log" 2>/dev/null
-            iptables -L OUTPUT -v -n --line-numbers 2>/dev/null \
-                | grep DROP >> "$LOG_DIR/dropped.log" 2>/dev/null || true
-        done
-    ) &
-    SCRAPER_PID=$!
+    cat > /tmp/ulogd.conf << EOF
+[global]
+logfile="/proc/1/fd/2"
+loglevel=3
+stack=nflog1:NFLOG,base1:BASE,ip2str1:IP2STR,json1:JSON
+
+[nflog1]
+group=1
+
+[json1]
+sync=1
+file=$LOG_DIR/dropped.log
+EOF
+    ulogd2 -d -c /tmp/ulogd.conf
 fi
 
 # Signal to claude-docker that iptables DNAT rules + mitmdump are fully up.
@@ -241,7 +253,7 @@ fi
 touch "$CERTS_DIR/.ready"
 
 # Forward signals to child processes so Docker stop works cleanly.
-trap 'kill "$MITM_PID" "$COREDNS_PID" ${SCRAPER_PID:+"$SCRAPER_PID"} 2>/dev/null; wait' TERM INT
+trap 'kill "$MITM_PID" "$COREDNS_PID" 2>/dev/null; wait' TERM INT
 
 echo "Proxy ready (coredns PID=$COREDNS_PID, mitmdump PID=$MITM_PID)"
 wait "$MITM_PID"
