@@ -221,6 +221,7 @@ PYTHONUNBUFFERED=1 setpriv --reuid=9999 --regid=9999 --clear-groups \
     -s /etc/proxy/addon.py \
     --set block_global=false \
     --set stream_large_bodies=1m \
+    --set connection_strategy=lazy \
     $MITM_EXTRA_ARGS &
 MITM_PID=$!
 
