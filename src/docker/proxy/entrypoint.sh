@@ -45,8 +45,15 @@ echo "Corefile generated with $(echo "$DOMAINS" | wc -w) domains"
 # cap_net_bind_service is set on the binary via setcap (Dockerfile), allowing
 # it to bind :53 without root.
 echo "Starting CoreDNS on :53..."
-setpriv --reuid=9998 --regid=9998 --clear-groups -- \
-    coredns -conf "$COREFILE" -dns.port 53 &
+# Issue #1060: Redirect CoreDNS stdout to dns.log when log dir is mounted.
+LOG_DIR="/var/log/proxy"
+if [ -d "$LOG_DIR" ]; then
+    setpriv --reuid=9998 --regid=9998 --clear-groups -- \
+        coredns -conf "$COREFILE" -dns.port 53 >> "$LOG_DIR/dns.log" 2>&1 &
+else
+    setpriv --reuid=9998 --regid=9998 --clear-groups -- \
+        coredns -conf "$COREFILE" -dns.port 53 &
+fi
 COREDNS_PID=$!
 
 # --- Ensure cert directory is writable by mitmproxy uid ---
@@ -155,6 +162,9 @@ iptables -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 iptables -A OUTPUT -p tcp -m owner --uid-owner 9999 -m conntrack --ctstate NEW -j ACCEPT
 
 # 5. Drop all other new outbound TCP (port 22, 8443, arbitrary ports, etc.).
+# Issue #1060: LOG before DROP so /proc/kmsg scraper can capture dropped connections.
+iptables -A OUTPUT -p tcp -m conntrack --ctstate NEW \
+    -j LOG --log-prefix "PROXY_DROP_TCP " --log-level 4
 iptables -A OUTPUT -p tcp -m conntrack --ctstate NEW -j DROP
 
 # --- Default-deny UDP OUTPUT ---
@@ -168,6 +178,9 @@ iptables -A OUTPUT -p tcp -m conntrack --ctstate NEW -j DROP
 # To add future protocol proxies: insert uid ACCEPT before the DROP.
 echo "Configuring default-deny UDP OUTPUT..."
 iptables -A OUTPUT -p udp -m owner --uid-owner 9998 -j ACCEPT
+# Issue #1060: LOG before DROP so /proc/kmsg scraper can capture dropped UDP.
+iptables -A OUTPUT -p udp \
+    -j LOG --log-prefix "PROXY_DROP_UDP " --log-level 4
 iptables -A OUTPUT -p udp -j DROP
 
 # --- Start mitmdump with multiple modes as uid 9999 ---
@@ -189,6 +202,11 @@ iptables -A OUTPUT -p udp -j DROP
 # SIGTERM/SIGINT to the child processes for clean shutdown.
 echo "Starting mitmdump (transparent mode) on :8080..."
 echo "Addon: /etc/proxy/addon.py"
+# Issue #1060: Add -w flag to write mitmproxy flow file when log dir is mounted.
+MITM_EXTRA_ARGS=""
+if [ -d "$LOG_DIR" ]; then
+    MITM_EXTRA_ARGS="-w $LOG_DIR/mitm.flows"
+fi
 PYTHONUNBUFFERED=1 setpriv --reuid=9999 --regid=9999 --clear-groups \
     --inh-caps +net_admin --ambient-caps +net_admin -- \
     mitmdump --mode transparent --showhost -v \
@@ -197,8 +215,22 @@ PYTHONUNBUFFERED=1 setpriv --reuid=9999 --regid=9999 --clear-groups \
     --ssl-insecure \
     -s /etc/proxy/addon.py \
     --set block_global=false \
-    --set stream_large_bodies=1m &
+    --set stream_large_bodies=1m \
+    $MITM_EXTRA_ARGS &
 MITM_PID=$!
+
+# Issue #1060: Stream iptables LOG entries from /proc/kmsg to dropped.log.
+# /proc/kmsg is a blocking character device — it delivers new kernel log entries
+# as they arrive. grep --line-buffered writes each match immediately without
+# polling the ring buffer (no I/O waste). Requires CAP_SYSLOG or
+# kernel.dmesg_restrict=0; if /proc/kmsg is not readable, the scraper is skipped
+# and dropped.log stays empty (best-effort).
+SCRAPER_PID=""
+if [ -d "$LOG_DIR" ] && [ -r /proc/kmsg ]; then
+    grep --line-buffered -E "PROXY_DROP_(TCP|UDP)" /proc/kmsg \
+        >> "$LOG_DIR/dropped.log" 2>/dev/null &
+    SCRAPER_PID=$!
+fi
 
 # Signal to claude-docker that iptables DNAT rules + mitmdump are fully up.
 # Polling only the CA cert file is insufficient — it appears during cert-gen,
@@ -208,7 +240,7 @@ MITM_PID=$!
 touch "$CERTS_DIR/.ready"
 
 # Forward signals to child processes so Docker stop works cleanly.
-trap 'kill "$MITM_PID" "$COREDNS_PID" 2>/dev/null; wait' TERM INT
+trap 'kill "$MITM_PID" "$COREDNS_PID" ${SCRAPER_PID:+"$SCRAPER_PID"} 2>/dev/null; wait' TERM INT
 
 echo "Proxy ready (coredns PID=$COREDNS_PID, mitmdump PID=$MITM_PID)"
 wait "$MITM_PID"

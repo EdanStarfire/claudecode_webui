@@ -185,6 +185,20 @@ if [ -n "$PROXY_IMAGE" ]; then
     PROXY_RESOLV="$PROXY_CERTS/resolv.conf"
     printf 'nameserver 127.0.0.1\n' > "$PROXY_RESOLV"
 
+    # Issue #1060: Extract session ID and create proxy log directory on host.
+    # CLAUDE_DOCKER_DATA_DIR is typically .../sessions/<uuid>/docker_claude_data;
+    # the session UUID is the basename of its parent directory.
+    PROXY_SESSION_ID=""
+    PROXY_LOG_DIR=""
+    if [ -n "${CLAUDE_DOCKER_DATA_DIR:-}" ]; then
+        PROXY_SESSION_ID=$(basename "$(dirname "$CLAUDE_DOCKER_DATA_DIR")")
+        PROXY_LOG_DIR="$CLAUDE_DOCKER_DATA_DIR/proxy"
+        mkdir -p "$PROXY_LOG_DIR"
+        # chmod 777: dir is owned by the host user but written by uid 9999 (mitmdump)
+        # and uid 9998 (CoreDNS) inside the container.
+        chmod 777 "$PROXY_LOG_DIR"
+    fi
+
     echo "[claude-docker] Proxy mode: launching $PROXY_IMAGE as $PROXY_NAME" >&2
 
     # Tear down sidecar and certs when the agent container exits.
@@ -197,6 +211,8 @@ if [ -n "$PROXY_IMAGE" ]; then
         --sysctl net.ipv4.ip_forward=1 \
         --sysctl net.ipv4.conf.lo.accept_local=1 \
         -v "$PROXY_CERTS:/var/lib/mitmproxy" \
+        ${PROXY_LOG_DIR:+-v "$PROXY_LOG_DIR:/var/log/proxy"} \
+        ${PROXY_SESSION_ID:+-e "PROXY_SESSION_ID=$PROXY_SESSION_ID"} \
         "$PROXY_IMAGE" >/dev/null
 
     # Wait up to 30s for the proxy to be fully ready.
