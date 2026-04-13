@@ -38,7 +38,9 @@ class DomainFilter:
         entry = {
             "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
             "session_id": self.session_id,
+            "scheme": flow.request.scheme,
             "host": flow.request.pretty_host,
+            "port": flow.request.port,
             "method": flow.request.method,
             "path": flow.request.path,
             "status": flow.response.status_code if flow.response else 0,
