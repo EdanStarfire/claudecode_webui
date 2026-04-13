@@ -316,7 +316,7 @@ function handleClick() {
   position: absolute;
   left: -4px;
   top: -4px;
-  font-size: 0.75rem;
+  font-size: 0.9rem;
   line-height: 1;
 }
 
