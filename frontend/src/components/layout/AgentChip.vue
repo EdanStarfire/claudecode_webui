@@ -314,17 +314,9 @@ function handleClick() {
 
 .ac-proxy-badge {
   position: absolute;
-  left: -3px;
-  top: -3px;
-  width: 15px;
-  height: 15px;
-  border-radius: 50%;
-  background: #20c997;
-  color: #fff;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 0.55rem;
+  left: -4px;
+  top: -4px;
+  font-size: 0.75rem;
   line-height: 1;
 }
 
