@@ -162,9 +162,6 @@ iptables -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 iptables -A OUTPUT -p tcp -m owner --uid-owner 9999 -m conntrack --ctstate NEW -j ACCEPT
 
 # 5. Drop all other new outbound TCP (port 22, 8443, arbitrary ports, etc.).
-# Issue #1060: LOG before DROP so /proc/kmsg scraper can capture dropped connections.
-iptables -A OUTPUT -p tcp -m conntrack --ctstate NEW \
-    -j LOG --log-prefix "PROXY_DROP_TCP " --log-level 4
 iptables -A OUTPUT -p tcp -m conntrack --ctstate NEW -j DROP
 
 # --- Default-deny UDP OUTPUT ---
@@ -178,9 +175,6 @@ iptables -A OUTPUT -p tcp -m conntrack --ctstate NEW -j DROP
 # To add future protocol proxies: insert uid ACCEPT before the DROP.
 echo "Configuring default-deny UDP OUTPUT..."
 iptables -A OUTPUT -p udp -m owner --uid-owner 9998 -j ACCEPT
-# Issue #1060: LOG before DROP so /proc/kmsg scraper can capture dropped UDP.
-iptables -A OUTPUT -p udp \
-    -j LOG --log-prefix "PROXY_DROP_UDP " --log-level 4
 iptables -A OUTPUT -p udp -j DROP
 
 # --- Start mitmdump with multiple modes as uid 9999 ---
@@ -219,16 +213,23 @@ PYTHONUNBUFFERED=1 setpriv --reuid=9999 --regid=9999 --clear-groups \
     $MITM_EXTRA_ARGS &
 MITM_PID=$!
 
-# Issue #1060: Stream iptables LOG entries from /proc/kmsg to dropped.log.
-# /proc/kmsg is a blocking character device — it delivers new kernel log entries
-# as they arrive. grep --line-buffered writes each match immediately without
-# polling the ring buffer (no I/O waste). Requires CAP_SYSLOG or
-# kernel.dmesg_restrict=0; if /proc/kmsg is not readable, the scraper is skipped
-# and dropped.log stays empty (best-effort).
+# Issue #1060: Periodically dump iptables DROP counters to dropped.log.
+# iptables -j LOG cannot be read from inside a container — LOG targets write to
+# the host kernel ring buffer, not the container's /proc/kmsg. Instead, poll
+# iptables DROP rule counters every 30 seconds and append a timestamped snapshot
+# to dropped.log. This gives aggregate drop counts without per-connection detail,
+# requires no extra packages, and works within container capabilities.
 SCRAPER_PID=""
-if [ -d "$LOG_DIR" ] && [ -r /proc/kmsg ]; then
-    grep --line-buffered -E "PROXY_DROP_(TCP|UDP)" /proc/kmsg \
-        >> "$LOG_DIR/dropped.log" 2>/dev/null &
+if [ -d "$LOG_DIR" ]; then
+    (
+        while true; do
+            sleep 30
+            printf '[%s] iptables OUTPUT DROP counters:\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+                >> "$LOG_DIR/dropped.log" 2>/dev/null
+            iptables -L OUTPUT -v -n --line-numbers 2>/dev/null \
+                | grep DROP >> "$LOG_DIR/dropped.log" 2>/dev/null || true
+        done
+    ) &
     SCRAPER_PID=$!
 fi
 
