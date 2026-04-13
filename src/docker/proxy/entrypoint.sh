@@ -233,14 +233,14 @@ if [ -d "$LOG_DIR" ]; then
 [global]
 logfile="/proc/1/fd/2"
 loglevel=3
-stack=nflog1:NFLOG,base1:BASE,ip2str1:IP2STR,logemu1:LOGEMU
+stack=nflog1:NFLOG,base1:BASE,ifi1:IFINDEX,ip2str1:IP2STR,print1:PRINTPKT,logemu1:LOGEMU
 
 [nflog1]
 group=1
 
 [logemu1]
+file="$LOG_DIR/dropped.log"
 sync=1
-file=$LOG_DIR/dropped.log
 EOF
     # Debian package installs binary as /usr/sbin/ulogd (not ulogd2)
     ulogd -d -c /tmp/ulogd.conf
