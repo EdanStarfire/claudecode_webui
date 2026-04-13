@@ -54,6 +54,9 @@ SHM_SIZE="${CLAUDE_DOCKER_SHM_SIZE:-256m}"
 # Issue #1049: Proxy mode (all gated on CLAUDE_DOCKER_PROXY_IMAGE)
 PROXY_IMAGE="${CLAUDE_DOCKER_PROXY_IMAGE:-}"
 
+# Resolve script directory unconditionally — used by both agent and proxy auto-build blocks
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 # Issue #781: Log container identity for crash correlation
 echo "[claude-docker] Container: $CONTAINER_NAME, Image: $IMAGE_NAME, PID: $$" >&2
 
@@ -63,7 +66,6 @@ echo "[claude-docker] Container: $CONTAINER_NAME, Image: $IMAGE_NAME, PID: $$" >
 if ! docker image inspect "$IMAGE_NAME" &>/dev/null; then
     if [ "$IMAGE_NAME" = "$DEFAULT_IMAGE" ]; then
         echo "Building Claude Code container image..."
-        SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
         docker build -t "$IMAGE_NAME" "$SCRIPT_DIR"
     else
         echo "Error: Docker image '$IMAGE_NAME' not found. Build or pull it first." >&2
@@ -158,6 +160,19 @@ RESOURCE_FLAGS="$RESOURCE_FLAGS --shm-size=$SHM_SIZE"
 PROXY_FLAGS=""
 if [ -n "$PROXY_IMAGE" ]; then
     PROXY_NAME="claude-proxy-$$"
+
+    # Issue #1050: Auto-build default proxy image if missing; fail fast for custom images
+    DEFAULT_PROXY_IMAGE="claude-proxy:local"
+    if ! docker image inspect "$PROXY_IMAGE" &>/dev/null; then
+        if [ "$PROXY_IMAGE" = "$DEFAULT_PROXY_IMAGE" ]; then
+            echo "[claude-docker] Building default proxy image..." >&2
+            docker build -t "$PROXY_IMAGE" "$SCRIPT_DIR/proxy"
+        else
+            echo "Error: Proxy image '$PROXY_IMAGE' not found. Build or pull it first." >&2
+            exit 1
+        fi
+    fi
+
     PROXY_CERTS=$(mktemp -d)
     # entrypoint.sh runs chown 9999:9999 on the bind-mount, changing the host-side
     # directory owner to uid 9999. Pre-set 755 so the host user retains read access

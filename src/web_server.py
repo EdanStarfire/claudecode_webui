@@ -687,6 +687,22 @@ class ClaudeWebUI:
         # Issue #500: Wire queue processor broadcast callback
         self.coordinator.queue_processor.set_broadcast_callback(self._broadcast_queue_update)
 
+        # Issue #1050: Best-effort proxy image check on startup (informational only)
+        from .config_manager import load_config
+        from .logging_config import get_logger as _get_logger
+        _startup_logger = _get_logger('coordinator', category='PROXY')
+        startup_config = load_config(self.config_file) if self.config_file else load_config()
+        if startup_config.proxy.proxy_image:
+            from .docker_utils import check_proxy_image_available
+            image_ok = await check_proxy_image_available(startup_config.proxy.proxy_image)
+            if image_ok:
+                _startup_logger.info(f"Default proxy image '{startup_config.proxy.proxy_image}' available.")
+            else:
+                _startup_logger.info(
+                    f"Default proxy image '{startup_config.proxy.proxy_image}' not found locally. "
+                    f"It will be auto-built on first proxy-enabled session start."
+                )
+
         logger.info("Claude Code WebUI initialized")
 
     def _setup_routes(self):
@@ -2697,6 +2713,12 @@ class ClaudeWebUI:
                     config.networking.allow_network_binding = net["allow_network_binding"]
                 if "acknowledged_risk" in net:
                     config.networking.acknowledged_risk = net["acknowledged_risk"]
+
+            # Merge proxy section (issue #1050)
+            if "proxy" in body:
+                proxy_data = body["proxy"]
+                if "proxy_image" in proxy_data:
+                    config.proxy.proxy_image = str(proxy_data["proxy_image"])
 
             if self.config_file:
                 save_config(config, self.config_file)

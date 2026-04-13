@@ -58,6 +58,11 @@
         <line x1="9" y1="8" x2="9" y2="13" stroke="currentColor" stroke-width="0.6"/>
       </svg>
     </div>
+
+    <!-- Proxy badge -->
+    <div v-if="session.docker_proxy_enabled" class="ac-proxy-badge" title="Network proxy active" aria-label="Network proxy active">
+      🛡️
+    </div>
   </div>
 </template>
 
@@ -146,6 +151,7 @@ const chipTooltip = computed(() => {
   parts.push(`Status: ${statusText.value}`)
   if (props.session.model) parts.push(`Model: ${props.session.model}`)
   if (props.session.docker_enabled) parts.push('Docker isolated')
+  if (props.session.docker_proxy_enabled) parts.push('Network proxy active')
   return parts.join('\n')
 })
 
@@ -304,6 +310,14 @@ function handleClick() {
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+.ac-proxy-badge {
+  position: absolute;
+  left: -4px;
+  top: -4px;
+  font-size: 0.9rem;
+  line-height: 1;
 }
 
 /* Ghost chip variant */

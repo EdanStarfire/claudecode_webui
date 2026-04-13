@@ -67,6 +67,21 @@
 
               <hr class="my-3">
 
+              <!-- Default proxy image (issue #1050) -->
+              <h6 class="mb-2">Docker Proxy</h6>
+              <div class="mb-3">
+                <label class="form-label">Default Proxy Image</label>
+                <input type="text" class="form-control form-control-sm"
+                  :value="(config.proxy || {}).proxy_image || ''"
+                  @input="onProxyImageUpdate($event.target.value)"
+                  placeholder="claude-proxy:local" />
+                <small class="form-text text-muted">
+                  Default proxy sidecar image used when sessions don't specify one.
+                </small>
+              </div>
+
+              <hr class="my-3">
+
               <h6 class="mb-2">
                 Templates
                 <span class="badge bg-secondary ms-1">{{ templateCount }}</span>
@@ -146,6 +161,13 @@ const dirty = computed(() => {
 
 function onFeaturesUpdate(features) {
   config.value = { ...config.value, features }
+}
+
+function onProxyImageUpdate(value) {
+  config.value = {
+    ...config.value,
+    proxy: { ...(config.value.proxy || {}), proxy_image: value.trim() || 'claude-proxy:local' }
+  }
 }
 
 function onNotificationsUpdate(notifications) {

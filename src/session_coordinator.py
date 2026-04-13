@@ -1024,8 +1024,12 @@ class SessionCoordinator:
                     workspace=session_info.working_directory,
                     session_data_dir=docker_data_dir,
                     docker_home_directory=session_info.docker_home_directory,
-                    # Issue #1049: Proxy mode
-                    proxy_image=session_info.docker_proxy_image,
+                    # Issue #1050: Resolve effective proxy image
+                    proxy_image=(
+                        (session_info.docker_proxy_image or self._resolve_default_proxy_image())
+                        if session_info.docker_proxy_enabled
+                        else None
+                    ),
                 )
                 coord_logger.info(
                     f"Docker mode enabled for session {session_id}: "
@@ -3400,6 +3404,12 @@ class SessionCoordinator:
             skill_creating_enabled=skill_creating_enabled,
             working_directory=working_directory,
         )
+
+    def _resolve_default_proxy_image(self) -> str:
+        """Return the app-config default proxy image name (issue #1050)."""
+        from src.config_manager import load_config as load_app_config
+        app_config = load_app_config()
+        return app_config.proxy.proxy_image
 
     def _create_message_callback(self, session_id: str) -> Callable:
         """Create message callback for a session using unified MessageProcessor"""

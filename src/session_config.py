@@ -53,8 +53,9 @@ class SessionConfig(BaseModel):
     docker_image: str | None = None
     docker_extra_mounts: list[str] | None = None
     docker_home_directory: str | None = None
-    # Issue #1049: Proxy mode
-    docker_proxy_image: str | None = None
+    # Issue #1050: Proxy lifecycle management
+    docker_proxy_enabled: bool = False        # Intent toggle: enable proxy sidecar
+    docker_proxy_image: str | None = None     # Image override (None = use app config default)
 
     # Features
     history_distillation_enabled: bool = True
