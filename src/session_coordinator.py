@@ -189,13 +189,16 @@ class SessionCoordinator:
         self._message_callback_registrar: Callable[[str], None] | None = None
 
         # Initialize Legion multi-agent system
+        from src.config_manager import load_config
         from src.legion_system import LegionSystem
         # Create a dummy storage manager for now (legion will create its own per-legion storage)
         dummy_storage = DataStorageManager(self.data_dir / "legion_temp")
+        _app_config = load_config()
         self.legion_system = LegionSystem(
             session_coordinator=self,
             data_storage_manager=dummy_storage,
-            template_manager=self.template_manager
+            template_manager=self.template_manager,
+            default_max_minions=_app_config.legion.max_concurrent_minions,
         )
 
         # Issue #500: Message queue system

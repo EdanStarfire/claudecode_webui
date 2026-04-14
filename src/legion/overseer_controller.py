@@ -69,8 +69,9 @@ class OverseerController:
         existing_sessions = await self.system.session_coordinator.session_manager.list_sessions()
         legion_minions = [s for s in existing_sessions if self._belongs_to_legion(s, legion_id)]
 
-        if len(legion_minions) >= (project.max_concurrent_minions or 20):
-            raise ValueError(f"Legion {legion_id} has reached maximum concurrent minions ({project.max_concurrent_minions or 20})")
+        default_max = self.system.default_max_minions
+        if len(legion_minions) >= (project.max_concurrent_minions or default_max):
+            raise ValueError(f"Legion {legion_id} has reached maximum concurrent minions ({project.max_concurrent_minions or default_max})")
 
         # Validate name uniqueness within legion (by slug - issue #546)
         new_slug = slugify_name(name)
@@ -175,8 +176,9 @@ class OverseerController:
             )
 
         # 4. Check minion limit
-        if len(legion_minions) >= (project.max_concurrent_minions or 20):
-            raise ValueError(f"Legion at maximum capacity ({project.max_concurrent_minions or 20} minions). Cannot spawn more.")
+        default_max = self.system.default_max_minions
+        if len(legion_minions) >= (project.max_concurrent_minions or default_max):
+            raise ValueError(f"Legion at maximum capacity ({project.max_concurrent_minions or default_max} minions). Cannot spawn more.")
 
         # 5. Generate child minion ID
         child_minion_id = str(uuid.uuid4())

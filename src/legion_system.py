@@ -52,6 +52,7 @@ class LegionSystem:
     data_storage_manager: 'DataStorageManager'
     template_manager: 'TemplateManager'
     ui_queue: Any | None = None  # EventQueue (optional, for broadcasting project updates to poll clients)
+    default_max_minions: int = 20  # Global default max concurrent minions (from app config)
 
     # Permission callback factory (injected after creation by web_server via session_coordinator)
     # Allows legion components to create permission callbacks for spawned minions
