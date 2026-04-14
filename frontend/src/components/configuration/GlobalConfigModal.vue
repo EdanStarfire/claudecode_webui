@@ -63,7 +63,12 @@
 
             <!-- Tab content -->
             <div v-if="activeTab === 'features'">
-              <FeaturesTab :config="config.features" @update:config="onFeaturesUpdate" />
+              <FeaturesTab
+                :config="config.features"
+                :legionConfig="config.legion || { max_concurrent_minions: 20 }"
+                @update:config="onFeaturesUpdate"
+                @update:legionConfig="onLegionUpdate"
+              />
 
               <hr class="my-3">
 
@@ -161,6 +166,10 @@ const dirty = computed(() => {
 
 function onFeaturesUpdate(features) {
   config.value = { ...config.value, features }
+}
+
+function onLegionUpdate(legion) {
+  config.value = { ...config.value, legion }
 }
 
 function onProxyImageUpdate(value) {

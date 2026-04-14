@@ -136,7 +136,7 @@ def validate_and_normalize_working_directory(
 class ProjectCreateRequest(BaseModel):
     name: str
     working_directory: str
-    max_concurrent_minions: int = 20  # Max concurrent minions per project
+    max_concurrent_minions: int | None = None  # Max concurrent minions per project (None = use global default)
 
     class Config:
         # Silently ignore unknown fields like is_multi_agent for backward compatibility
@@ -843,10 +843,15 @@ class ClaudeWebUI:
         @handle_exceptions("create project")
         async def create_project(request: ProjectCreateRequest):
             """Create a new project."""
+            from .config_manager import load_config
+            cfg = load_config(self.config_file) if self.config_file else load_config()
+            max_minions = request.max_concurrent_minions
+            if max_minions is None:
+                max_minions = cfg.legion.max_concurrent_minions
             project = await self.service.create_project(
                 name=request.name,
                 working_directory=request.working_directory,
-                max_concurrent_minions=request.max_concurrent_minions,
+                max_concurrent_minions=max_minions,
             )
             self._broadcast_project_updated(project)
             return {"project": project}
@@ -2721,6 +2726,15 @@ class ClaudeWebUI:
                 proxy_data = body["proxy"]
                 if "proxy_image" in proxy_data:
                     config.proxy.proxy_image = str(proxy_data["proxy_image"])
+
+            # Merge legion section (issue #1064)
+            if "legion" in body:
+                legion_data = body["legion"]
+                if "max_concurrent_minions" in legion_data:
+                    val = legion_data["max_concurrent_minions"]
+                    if not isinstance(val, int) or val < 1:
+                        raise ValueError("max_concurrent_minions must be a positive integer")
+                    config.legion.max_concurrent_minions = val
 
             if self.config_file:
                 save_config(config, self.config_file)

@@ -48,6 +48,27 @@
     <div v-if="syncError" class="alert alert-danger mt-3 py-2 small">
       {{ syncError }}
     </div>
+
+    <hr class="my-3">
+
+    <h6 class="mb-2">Legion</h6>
+    <div class="mb-3">
+      <label class="form-label" for="maxConcurrentMinions">Max Concurrent Minions</label>
+      <input
+        id="maxConcurrentMinions"
+        type="number"
+        class="form-control form-control-sm"
+        :class="{ 'is-invalid': maxMinionsError }"
+        min="1"
+        step="1"
+        :value="legionConfig?.max_concurrent_minions ?? 20"
+        @input="onMaxMinionsInput($event.target.value)"
+      >
+      <div v-if="maxMinionsError" class="invalid-feedback">{{ maxMinionsError }}</div>
+      <small class="form-text text-muted">
+        Maximum number of concurrent minions per Legion project (default: 20)
+      </small>
+    </div>
   </div>
 </template>
 
@@ -56,10 +77,26 @@ import { ref, onMounted } from 'vue'
 import { apiGet, apiPost } from '@/utils/api'
 
 const props = defineProps({
-  config: { type: Object, default: () => ({}) }
+  config: { type: Object, default: () => ({}) },
+  legionConfig: { type: Object, default: () => ({}) }
 })
 
-const emit = defineEmits(['update:config'])
+const emit = defineEmits(['update:config', 'update:legionConfig'])
+
+const maxMinionsError = ref(null)
+
+function onMaxMinionsInput(value) {
+  const parsed = parseInt(value, 10)
+  if (!Number.isInteger(parsed) || parsed < 1) {
+    maxMinionsError.value = 'Must be a positive integer'
+    return
+  }
+  maxMinionsError.value = null
+  emit('update:legionConfig', {
+    ...props.legionConfig,
+    max_concurrent_minions: parsed
+  })
+}
 
 const syncing = ref(false)
 const syncResult = ref(null)
