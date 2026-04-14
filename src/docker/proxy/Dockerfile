@@ -12,6 +12,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     jq \
     ca-certificates \
+    ulogd2 \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Install mitmproxy system-wide so uid 9999 can execute mitmdump

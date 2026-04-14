@@ -45,8 +45,15 @@ echo "Corefile generated with $(echo "$DOMAINS" | wc -w) domains"
 # cap_net_bind_service is set on the binary via setcap (Dockerfile), allowing
 # it to bind :53 without root.
 echo "Starting CoreDNS on :53..."
-setpriv --reuid=9998 --regid=9998 --clear-groups -- \
-    coredns -conf "$COREFILE" -dns.port 53 &
+# Issue #1060: Redirect CoreDNS stdout to dns.log when log dir is mounted.
+LOG_DIR="/var/log/proxy"
+if [ -d "$LOG_DIR" ]; then
+    setpriv --reuid=9998 --regid=9998 --clear-groups -- \
+        coredns -conf "$COREFILE" -dns.port 53 >> "$LOG_DIR/dns.log" 2>&1 &
+else
+    setpriv --reuid=9998 --regid=9998 --clear-groups -- \
+        coredns -conf "$COREFILE" -dns.port 53 &
+fi
 COREDNS_PID=$!
 
 # --- Ensure cert directory is writable by mitmproxy uid ---
@@ -155,6 +162,12 @@ iptables -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 iptables -A OUTPUT -p tcp -m owner --uid-owner 9999 -m conntrack --ctstate NEW -j ACCEPT
 
 # 5. Drop all other new outbound TCP (port 22, 8443, arbitrary ports, etc.).
+# Issue #1060: NFLOG before DROP — NFLOG is per-network-namespace (unlike LOG which
+# goes to the host kernel ring buffer) so ulogd2 inside the container can read it.
+if [ -d "$LOG_DIR" ]; then
+    iptables -A OUTPUT -p tcp -m conntrack --ctstate NEW \
+        -j NFLOG --nflog-group 1 --nflog-prefix "PROXY_DROP_TCP "
+fi
 iptables -A OUTPUT -p tcp -m conntrack --ctstate NEW -j DROP
 
 # --- Default-deny UDP OUTPUT ---
@@ -168,6 +181,11 @@ iptables -A OUTPUT -p tcp -m conntrack --ctstate NEW -j DROP
 # To add future protocol proxies: insert uid ACCEPT before the DROP.
 echo "Configuring default-deny UDP OUTPUT..."
 iptables -A OUTPUT -p udp -m owner --uid-owner 9998 -j ACCEPT
+# Issue #1060: NFLOG before DROP for per-connection dropped UDP logging.
+if [ -d "$LOG_DIR" ]; then
+    iptables -A OUTPUT -p udp \
+        -j NFLOG --nflog-group 1 --nflog-prefix "PROXY_DROP_UDP "
+fi
 iptables -A OUTPUT -p udp -j DROP
 
 # --- Start mitmdump with multiple modes as uid 9999 ---
@@ -189,6 +207,11 @@ iptables -A OUTPUT -p udp -j DROP
 # SIGTERM/SIGINT to the child processes for clean shutdown.
 echo "Starting mitmdump (transparent mode) on :8080..."
 echo "Addon: /etc/proxy/addon.py"
+# Issue #1060: Add -w flag to write mitmproxy flow file when log dir is mounted.
+MITM_EXTRA_ARGS=""
+if [ -d "$LOG_DIR" ]; then
+    MITM_EXTRA_ARGS="-w $LOG_DIR/mitm.flows"
+fi
 PYTHONUNBUFFERED=1 setpriv --reuid=9999 --regid=9999 --clear-groups \
     --inh-caps +net_admin --ambient-caps +net_admin -- \
     mitmdump --mode transparent --showhost -v \
@@ -197,8 +220,32 @@ PYTHONUNBUFFERED=1 setpriv --reuid=9999 --regid=9999 --clear-groups \
     --ssl-insecure \
     -s /etc/proxy/addon.py \
     --set block_global=false \
-    --set stream_large_bodies=1m &
+    --set stream_large_bodies=1m \
+    --set connection_strategy=lazy \
+    $MITM_EXTRA_ARGS &
 MITM_PID=$!
+
+# Issue #1060: Start ulogd2 to capture per-connection NFLOG drop events.
+# NFLOG is per-network-namespace (unlike iptables -j LOG which writes to the
+# host kernel ring buffer). ulogd2 reads from NFLOG group 1 and writes one
+# JSON object per dropped packet to dropped.log via the JSON output plugin.
+if [ -d "$LOG_DIR" ]; then
+    cat > /tmp/ulogd.conf << EOF
+[global]
+logfile="/proc/1/fd/2"
+loglevel=3
+stack=nflog1:NFLOG,base1:BASE,ifi1:IFINDEX,ip2str1:IP2STR,print1:PRINTPKT,logemu1:LOGEMU
+
+[nflog1]
+group=1
+
+[logemu1]
+file="$LOG_DIR/dropped.log"
+sync=1
+EOF
+    # Debian package installs binary as /usr/sbin/ulogd (not ulogd2)
+    ulogd -d -c /tmp/ulogd.conf
+fi
 
 # Signal to claude-docker that iptables DNAT rules + mitmdump are fully up.
 # Polling only the CA cert file is insufficient — it appears during cert-gen,

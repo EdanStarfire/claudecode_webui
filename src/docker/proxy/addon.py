@@ -1,15 +1,24 @@
 import json
 import logging
+import os
+import time
 from pathlib import Path
-from mitmproxy import http, ctx
+
+from mitmproxy import ctx, http
 
 ALLOWLIST_PATH = "/etc/proxy/allowlist.json"
+LOG_DIR = "/var/log/proxy"
 
 
 class DomainFilter:
     def __init__(self):
         self.allowed_domains: set[str] = set()
         self.logger = logging.getLogger("proxy.filter")
+        self.session_id = os.environ.get("PROXY_SESSION_ID", "unknown")
+        self._log_file = None
+        if Path(LOG_DIR).is_dir():
+            log_path = Path(LOG_DIR) / "access.log"
+            self._log_file = open(log_path, "a", buffering=1)  # line-buffered
 
     def load(self, loader):
         data = json.loads(Path(ALLOWLIST_PATH).read_text())
@@ -22,6 +31,23 @@ class DomainFilter:
             if host == domain or host.endswith("." + domain):
                 return True
         return False
+
+    def _write_access_log(self, flow: http.HTTPFlow, allowed: bool) -> None:
+        if not self._log_file:
+            return
+        entry = {
+            "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+            "session_id": self.session_id,
+            "scheme": flow.request.scheme,
+            "host": flow.request.pretty_host,
+            "port": flow.request.port,
+            "method": flow.request.method,
+            "path": flow.request.path,
+            "status": flow.response.status_code if flow.response else 0,
+            "bytes": len(flow.response.content) if flow.response and flow.response.content else 0,
+            "allowed": allowed,
+        }
+        self._log_file.write(json.dumps(entry) + "\n")
 
     def request(self, flow: http.HTTPFlow) -> None:
         host = flow.request.pretty_host
@@ -36,6 +62,14 @@ class DomainFilter:
                 json.dumps({"error": "domain_blocked", "domain": host}),
                 {"Content-Type": "application/json"},
             )
+            flow.metadata["denied"] = True
+            self._write_access_log(flow, allowed=False)
+
+    def response(self, flow: http.HTTPFlow) -> None:
+        # Skip flows already logged as denied in request() to avoid double-logging.
+        if flow.metadata.get("denied"):
+            return
+        self._write_access_log(flow, allowed=True)
 
 
 addons = [DomainFilter()]
