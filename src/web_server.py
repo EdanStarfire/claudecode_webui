@@ -26,7 +26,7 @@ from fastapi import (
 )
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from .application_service import ApplicationService
@@ -153,6 +153,7 @@ class PermissionPreviewRequest(BaseModel):
 class ProjectUpdateRequest(BaseModel):
     name: str | None = None
     is_expanded: bool | None = None
+    max_concurrent_minions: int | None = Field(None, ge=1)
 
 
 class ProjectReorderRequest(BaseModel):
@@ -885,6 +886,7 @@ class ClaudeWebUI:
                 project_id,
                 name=request.name,
                 is_expanded=request.is_expanded,
+                max_concurrent_minions=request.max_concurrent_minions,
             )
             if not result:
                 raise HTTPException(status_code=404, detail="Project not found")

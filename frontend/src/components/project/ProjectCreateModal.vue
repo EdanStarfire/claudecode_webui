@@ -58,6 +58,20 @@
               </div>
             </div>
 
+            <div class="mb-3">
+              <label for="maxConcurrentMinions" class="form-label">Max Concurrent Minions</label>
+              <input
+                type="number"
+                class="form-control"
+                id="maxConcurrentMinions"
+                v-model.number="formData.maxConcurrentMinions"
+                :class="{ 'is-invalid': errors.maxConcurrentMinions }"
+                min="1"
+              />
+              <div class="invalid-feedback" v-if="errors.maxConcurrentMinions">{{ errors.maxConcurrentMinions }}</div>
+              <div class="form-text">Maximum minions that can run simultaneously in this project.</div>
+            </div>
+
             <!-- Issue #313: Removed multi-agent checkbox - all projects support minions -->
             <div class="mb-3 form-check">
               <input
@@ -126,13 +140,15 @@ const formData = ref({
   name: '',
   workingDirectory: '',
   createSession: true,
-  sessionName: 'main'
+  sessionName: 'main',
+  maxConcurrentMinions: 20
 })
 
 // Validation errors
 const errors = ref({
   name: '',
-  workingDirectory: ''
+  workingDirectory: '',
+  maxConcurrentMinions: ''
 })
 
 // UI state
@@ -167,6 +183,11 @@ function validate() {
     isValid = false
   }
 
+  if (!formData.value.maxConcurrentMinions || formData.value.maxConcurrentMinions < 1) {
+    errors.value.maxConcurrentMinions = 'Max concurrent minions must be at least 1'
+    isValid = false
+  }
+
   return isValid
 }
 
@@ -183,7 +204,8 @@ async function handleSubmit() {
     // Create project (all projects support minions - issue #313)
     const project = await projectStore.createProject(
       formData.value.name,
-      formData.value.workingDirectory
+      formData.value.workingDirectory,
+      { max_concurrent_minions: formData.value.maxConcurrentMinions }
     )
 
     // Create initial session/minion if requested
@@ -223,7 +245,8 @@ function resetForm() {
     name: '',
     workingDirectory: '',
     createSession: true,
-    sessionName: 'main'
+    sessionName: 'main',
+    maxConcurrentMinions: 20
   }
   errors.value = {}
   errorMessage.value = ''
