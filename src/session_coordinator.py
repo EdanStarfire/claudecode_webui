@@ -1021,6 +1021,27 @@ class SessionCoordinator:
                 tmp_dir = get_session_tmp_dir(session_dir)
                 tmp_dir.mkdir(exist_ok=True)
                 extra_mounts.append(f"{tmp_dir}:/tmp")
+
+                # Issue #1051: Write credentials file to proxy tmpdir before sidecar launch.
+                # Written here (to session tmp_dir) so it is co-located with proxy certs and
+                # cleaned up automatically on session end.
+                proxy_credentials_file = None
+                if session_info.docker_proxy_enabled and session_info.docker_proxy_credentials:
+                    import json as _json
+                    import os as _os
+                    creds_path = tmp_dir / "credentials.json"
+                    creds_path.write_text(
+                        _json.dumps({"credentials": session_info.docker_proxy_credentials})
+                    )
+                    _os.chmod(creds_path, 0o600)
+                    proxy_credentials_file = str(creds_path)
+                    cred_names = [c.get("name", c.get("host_pattern", "?"))
+                                  for c in session_info.docker_proxy_credentials]
+                    coord_logger.info(
+                        f"Wrote proxy credentials file for session {session_id}: "
+                        f"credentials={cred_names}"
+                    )
+
                 effective_cli_path, docker_env_vars = resolve_docker_cli_path(
                     docker_image=session_info.docker_image,
                     docker_extra_mounts=extra_mounts or None,
@@ -1033,6 +1054,8 @@ class SessionCoordinator:
                         if session_info.docker_proxy_enabled
                         else None
                     ),
+                    # Issue #1051: Pass credentials file path when set
+                    proxy_credentials_file=proxy_credentials_file,
                 )
                 coord_logger.info(
                     f"Docker mode enabled for session {session_id}: "
