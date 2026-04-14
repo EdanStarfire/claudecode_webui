@@ -52,11 +52,12 @@ export const useProjectStore = defineStore('project', () => {
   /**
    * Create a new project
    */
-  async function createProject(name, workingDirectory) {
+  async function createProject(name, workingDirectory, options = {}) {
     try {
       const response = await api.post('/api/projects', {
         name,
-        working_directory: workingDirectory
+        working_directory: workingDirectory,
+        ...options
       })
 
       const project = response.project

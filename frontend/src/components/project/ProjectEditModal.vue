@@ -43,6 +43,20 @@
               </div>
             </div>
 
+            <div class="mb-3">
+              <label for="editMaxConcurrentMinions" class="form-label">Max Concurrent Minions</label>
+              <input
+                type="number"
+                class="form-control"
+                id="editMaxConcurrentMinions"
+                v-model.number="formData.maxConcurrentMinions"
+                :class="{ 'is-invalid': errors.maxConcurrentMinions }"
+                min="1"
+              />
+              <div class="invalid-feedback" v-if="errors.maxConcurrentMinions">{{ errors.maxConcurrentMinions }}</div>
+              <div class="form-text">Maximum minions that can run simultaneously in this project.</div>
+            </div>
+
             <div v-if="errorMessage" class="alert alert-danger" role="alert">
               {{ errorMessage }}
             </div>
@@ -123,10 +137,12 @@ const uiStore = useUIStore()
 // State
 const project = ref(null)
 const formData = ref({
-  name: ''
+  name: '',
+  maxConcurrentMinions: 20
 })
 const errors = ref({
-  name: ''
+  name: '',
+  maxConcurrentMinions: ''
 })
 const isSubmitting = ref(false)
 const isDeleting = ref(false)
@@ -150,6 +166,11 @@ function validate() {
     isValid = false
   }
 
+  if (!formData.value.maxConcurrentMinions || formData.value.maxConcurrentMinions < 1) {
+    errors.value.maxConcurrentMinions = 'Max concurrent minions must be at least 1'
+    isValid = false
+  }
+
   return isValid
 }
 
@@ -164,7 +185,8 @@ async function handleSubmit() {
 
   try {
     await projectStore.updateProject(project.value.project_id, {
-      name: formData.value.name
+      name: formData.value.name,
+      max_concurrent_minions: formData.value.maxConcurrentMinions
     })
 
     // Close modal
@@ -204,7 +226,8 @@ async function handleDelete() {
 // Reset form
 function resetForm() {
   formData.value = {
-    name: ''
+    name: '',
+    maxConcurrentMinions: 20
   }
   errors.value = {}
   errorMessage.value = ''
@@ -237,6 +260,7 @@ watch(
       project.value = data.project
       if (project.value) {
         formData.value.name = project.value.name
+        formData.value.maxConcurrentMinions = project.value.max_concurrent_minions ?? 20
       }
       modalInstance.show()
     }

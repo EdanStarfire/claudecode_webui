@@ -196,7 +196,8 @@ class ProjectManager:
         project_id: str,
         name: str | None = None,
         is_expanded: bool | None = None,
-        order: int | None = None
+        order: int | None = None,
+        max_concurrent_minions: int | None = None
     ) -> bool:
         """Update project metadata (name, expansion state, order only - path is immutable)"""
         async with self._get_project_lock(project_id):
@@ -213,6 +214,8 @@ class ProjectManager:
                     project.is_expanded = is_expanded
                 if order is not None:
                     project.order = order
+                if max_concurrent_minions is not None:
+                    project.max_concurrent_minions = max_concurrent_minions
 
                 project.updated_at = datetime.now(UTC)
                 await self._persist_project_state(project_id)
