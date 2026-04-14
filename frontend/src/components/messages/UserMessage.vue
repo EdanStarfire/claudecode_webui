@@ -4,11 +4,26 @@
       <span class="msg-role" :style="isComm ? { color: commColor.accent } : {}">{{ isComm ? commSenderName : 'user' }}</span>
       <span class="msg-time">{{ formattedTimestamp }}</span>
     </div>
-    <div
-      class="msg-bubble"
-      :class="isComm ? 'msg-bubble-comm' : 'msg-bubble-user'"
-      :style="isComm ? { background: commColor.bg, borderColor: commColor.border, borderRightWidth: '3px', borderRightStyle: 'solid' } : {}"
-    >
+    <div class="msg-content-row">
+      <button
+        class="copy-markdown-btn"
+        @click.stop="copyMarkdown"
+        :title="copyFeedback ? 'Copied!' : 'Copy markdown'"
+        aria-label="Copy raw markdown"
+      >
+        <svg v-if="copyFeedback" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <polyline points="20 6 9 17 4 12"></polyline>
+        </svg>
+        <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+          <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2 2v1"></path>
+        </svg>
+      </button>
+      <div
+        class="msg-bubble"
+        :class="isComm ? 'msg-bubble-comm' : 'msg-bubble-user'"
+        :style="isComm ? { background: commColor.bg, borderColor: commColor.border, borderRightWidth: '3px', borderRightStyle: 'solid' } : {}"
+      >
       <!-- Content (attachment section stripped from rendered markdown) -->
       <div class="msg-text" ref="contentRef" v-html="cleanRenderedContent"></div>
 
@@ -47,12 +62,13 @@
           </div>
         </div>
       </div>
+      </div>
     </div>
   </div>
 </template>
 
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, onUnmounted, ref } from 'vue'
 import { formatTimestamp } from '@/utils/time'
 import { getAgentColor } from '@/composables/useAgentColor'
 import { useMarkdown } from '@/composables/useMarkdown'
@@ -174,6 +190,18 @@ function openPreview(item) {
   resourceStore.openFullViewById(item.resourceId, sessionStore.currentSessionId)
 }
 
+const copyFeedback = ref(false)
+let copyTimer = null
+
+async function copyMarkdown() {
+  await navigator.clipboard.writeText(cleanContent.value)
+  copyFeedback.value = true
+  clearTimeout(copyTimer)
+  copyTimer = setTimeout(() => { copyFeedback.value = false }, 2000)
+}
+
+onUnmounted(() => clearTimeout(copyTimer))
+
 // Inline resource image click-to-open
 const contentRef = ref(null)
 const currentSessionId = computed(() => sessionStore.currentSessionId)
@@ -224,6 +252,37 @@ function truncate(text, maxLength) {
 .msg-time {
   font-size: 11px;
   color: #94a3b8;
+}
+
+/* Row wrapper for hover detection (copy button + bubble) */
+.msg-content-row {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-end;
+}
+
+.copy-markdown-btn {
+  position: absolute;
+  top: 0;
+  left: -32px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 14px;
+  opacity: 0;
+  transition: opacity 0.15s;
+  padding: 2px;
+  line-height: 1;
+  color: #64748b;
+}
+
+.msg-content-row:hover .copy-markdown-btn {
+  opacity: 0.6;
+}
+
+.copy-markdown-btn:hover {
+  opacity: 1 !important;
 }
 
 .msg-bubble {
@@ -350,6 +409,10 @@ function truncate(text, maxLength) {
 @media (max-width: 768px) {
   .msg-bubble {
     max-width: 95%;
+  }
+
+  .copy-markdown-btn {
+    opacity: 0.5;
   }
 }
 </style>
