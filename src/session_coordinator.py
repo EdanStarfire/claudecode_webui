@@ -1027,13 +1027,11 @@ class SessionCoordinator:
                 # cleaned up automatically on session end.
                 proxy_credentials_file = None
                 if session_info.docker_proxy_enabled and session_info.docker_proxy_credentials:
-                    import json as _json
-                    import os as _os
                     creds_path = tmp_dir / "credentials.json"
                     creds_path.write_text(
-                        _json.dumps({"credentials": session_info.docker_proxy_credentials})
+                        json.dumps({"credentials": session_info.docker_proxy_credentials})
                     )
-                    _os.chmod(creds_path, 0o600)
+                    os.chmod(creds_path, 0o600)
                     proxy_credentials_file = str(creds_path)
                     cred_names = [c.get("name", c.get("host_pattern", "?"))
                                   for c in session_info.docker_proxy_credentials]
