@@ -85,6 +85,7 @@ def resolve_docker_cli_path(
     proxy_image: str | None = None,
     # Issue #1051: Per-session credential injection
     proxy_credentials_file: str | None = None,
+    delivery_env_file: str | None = None,
 ) -> tuple[str, dict[str, str]]:
     """
     Resolve the cli_path and environment variables for Docker mode.
@@ -128,6 +129,9 @@ def resolve_docker_cli_path(
 
     if proxy_credentials_file:
         env_vars["CLAUDE_DOCKER_PROXY_CREDS_FILE"] = proxy_credentials_file
+
+    if delivery_env_file:
+        env_vars["CLAUDE_DOCKER_DELIVERY_ENV_FILE"] = delivery_env_file
 
     return wrapper_path, env_vars
 

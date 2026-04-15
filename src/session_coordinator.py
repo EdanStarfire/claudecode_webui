@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import re
+import secrets
 import shutil
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -1022,22 +1023,70 @@ class SessionCoordinator:
                 tmp_dir.mkdir(exist_ok=True)
                 extra_mounts.append(f"{tmp_dir}:/tmp")
 
-                # Issue #1051: Write credentials file to proxy tmpdir before sidecar launch.
-                # Written here (to session tmp_dir) so it is co-located with proxy certs and
-                # cleaned up automatically on session end.
+                # Issue #1051: Placeholder-based credential injection via proxy sidecar.
+                # Design: each credential entry defines a delivery (how placeholder reaches
+                # agent container) and injection (what the proxy watches for in outgoing
+                # request headers). The proxy only injects when it sees the placeholder —
+                # unauthenticated calls to the same host are left untouched.
                 proxy_credentials_file = None
+                delivery_env_file = None
                 if session_info.docker_proxy_enabled and session_info.docker_proxy_credentials:
+                    cred_names = []
+                    sidecar_entries = []   # written to credentials.json for the sidecar
+                    delivery_envs: dict[str, str] = {}  # env vars to set in agent container
+
+                    for raw_cred in session_info.docker_proxy_credentials:
+                        name = raw_cred.get("name", "unnamed")
+                        cred_names.append(name)
+
+                        # Generate a unique placeholder per credential per session
+                        safe_name = re.sub(r"[^A-Z0-9]", "_", name.upper())
+                        placeholder = f"PH_{safe_name}_{secrets.token_hex(4)}"
+
+                        sidecar_entries.append({
+                            "name": name,
+                            "host_pattern": raw_cred.get("host_pattern"),
+                            "placeholder": placeholder,
+                            "injection": raw_cred.get("injection", {}),
+                        })
+
+                        # Apply delivery spec: get placeholder into agent container
+                        delivery = raw_cred.get("delivery", {})
+                        delivery_type = delivery.get("type")
+
+                        if delivery_type == "env":
+                            env_var = delivery.get("var")
+                            if env_var:
+                                delivery_envs[env_var] = placeholder
+
+                        elif delivery_type == "file":
+                            file_path = delivery.get("path")
+                            content_template = delivery.get("content_template", "{placeholder}")
+                            if file_path:
+                                content = content_template.replace("{placeholder}", placeholder)
+                                # Write rendered file to tmpdir; mount into agent container RO
+                                safe_fname = re.sub(r"[^a-zA-Z0-9._-]", "_", name)
+                                host_file = tmp_dir / f"delivery_{safe_fname}"
+                                host_file.write_text(content)
+                                os.chmod(host_file, 0o600)
+                                extra_mounts.append(f"{host_file}:{file_path}:ro")
+
+                    # Write sidecar credentials.json (placeholder + injection, no plaintext secrets)
                     creds_path = tmp_dir / "credentials.json"
-                    creds_path.write_text(
-                        json.dumps({"credentials": session_info.docker_proxy_credentials})
-                    )
+                    creds_path.write_text(json.dumps({"credentials": sidecar_entries}))
                     os.chmod(creds_path, 0o600)
                     proxy_credentials_file = str(creds_path)
-                    cred_names = [c.get("name", c.get("host_pattern", "?"))
-                                  for c in session_info.docker_proxy_credentials]
+
+                    # Write delivery env file if any env deliveries configured
+                    if delivery_envs:
+                        env_file_path = tmp_dir / "delivery_envs.json"
+                        env_file_path.write_text(json.dumps(delivery_envs))
+                        os.chmod(env_file_path, 0o600)
+                        delivery_env_file = str(env_file_path)
+
                     coord_logger.info(
-                        f"Wrote proxy credentials file for session {session_id}: "
-                        f"credentials={cred_names}"
+                        f"Wrote proxy credentials for session {session_id}: "
+                        f"credentials={cred_names}, delivery_envs={list(delivery_envs)}"
                     )
 
                 effective_cli_path, docker_env_vars = resolve_docker_cli_path(
@@ -1052,8 +1101,9 @@ class SessionCoordinator:
                         if session_info.docker_proxy_enabled
                         else None
                     ),
-                    # Issue #1051: Pass credentials file path when set
+                    # Issue #1051: Pass credentials and delivery env file paths when set
                     proxy_credentials_file=proxy_credentials_file,
+                    delivery_env_file=delivery_env_file,
                 )
                 coord_logger.info(
                     f"Docker mode enabled for session {session_id}: "

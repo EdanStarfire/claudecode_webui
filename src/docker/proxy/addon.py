@@ -14,7 +14,9 @@ LOG_DIR = "/var/log/proxy"
 class DomainFilter:
     def __init__(self):
         self.allowed_domains: set[str] = set()
-        self.credentials: dict[str, dict] = {}  # host_pattern → {header, value, name}
+        # Reverse lookup: placeholder value → credential entry (name, host_pattern, header, format, real_value)
+        # Injection fires only when a request header contains a known placeholder — never on every host match.
+        self.placeholder_map: dict[str, dict] = {}
         self.logger = logging.getLogger("proxy.filter")
         self.session_id = os.environ.get("PROXY_SESSION_ID", "unknown")
         self._log_file = None
@@ -29,21 +31,30 @@ class DomainFilter:
         self._load_credentials()
 
     def _load_credentials(self) -> None:
-        """Load credentials from /etc/proxy/credentials.json (optional — no-op if absent)."""
+        """Load credentials from /etc/proxy/credentials.json (optional — no-op if absent).
+
+        Builds a reverse lookup keyed by placeholder value so injection only fires when
+        an outgoing request header actually contains the known placeholder string.
+        """
         creds_path = Path(CREDENTIALS_PATH)
         if not creds_path.exists():
             return
         try:
             data = json.loads(creds_path.read_text())
-            self.credentials = {
-                entry["host_pattern"]: {
-                    "header": entry["header"],
-                    "value": entry["value"],
-                    "name": entry["name"],
+            self.placeholder_map = {}
+            for entry in data.get("credentials", []):
+                placeholder = entry.get("placeholder")
+                injection = entry.get("injection", {})
+                if not placeholder or not injection:
+                    continue
+                self.placeholder_map[placeholder] = {
+                    "name": entry.get("name", placeholder),
+                    "host_pattern": entry.get("host_pattern"),  # optional guard
+                    "header": injection["header"],
+                    "format": injection.get("format", "{value}"),
+                    "real_value": injection["real_value"],
                 }
-                for entry in data.get("credentials", [])
-            }
-            ctx.log.info(f"Loaded {len(self.credentials)} credential entries")
+            ctx.log.info(f"Loaded {len(self.placeholder_map)} credential placeholder(s)")
         except Exception as exc:
             ctx.log.error(f"Failed to load credentials: {exc}")
 
@@ -54,28 +65,37 @@ class DomainFilter:
                 return True
         return False
 
-    def _match_credential(self, host: str) -> dict | None:
-        """Return credential entry whose host_pattern matches host, or None."""
-        for pattern, cred in self.credentials.items():
-            if host == pattern or host.endswith("." + pattern):
-                return cred
-        return None
+    def _host_matches_pattern(self, host: str, pattern: str | None) -> bool:
+        """Return True if host matches pattern (or pattern is None — no guard)."""
+        if pattern is None:
+            return True
+        return host == pattern or host.endswith("." + pattern)
 
     def _inject_credentials(self, flow: http.HTTPFlow) -> str | None:
-        """Strip any existing credential header and inject the real value.
+        """Scan request headers for known placeholder values and inject real credentials.
 
+        Injection fires ONLY when a header value contains a known placeholder string.
+        Unauthenticated calls (no matching placeholder) are untouched.
         Returns the credential name if injection occurred, None otherwise.
-        The credential value is never logged.
+        The real_value is never logged.
         """
-        cred = self._match_credential(flow.request.pretty_host)
-        if cred is None:
-            return None
-        header = cred["header"]
-        # Strip any existing header the agent may have sent (case-insensitive)
-        flow.request.headers.pop(header, None)
-        # Inject real value
-        flow.request.headers[header] = cred["value"]
-        return cred["name"]
+        host = flow.request.pretty_host
+        for placeholder, cred in self.placeholder_map.items():
+            for hdr_name, hdr_value in list(flow.request.headers.items()):
+                if placeholder not in hdr_value:
+                    continue
+                # Optional host_pattern guard: reject placeholder seen on wrong host
+                if not self._host_matches_pattern(host, cred["host_pattern"]):
+                    ctx.log.warn(
+                        f"Placeholder '{cred['name']}' seen on unexpected host '{host}' "
+                        f"(expected '{cred['host_pattern']}') — not injecting"
+                    )
+                    continue
+                # Replace the entire header value with the formatted real credential
+                injected_value = cred["format"].replace("{value}", cred["real_value"])
+                flow.request.headers[hdr_name] = injected_value
+                return cred["name"]
+        return None
 
     def _write_access_log(self, flow: http.HTTPFlow, allowed: bool, credential_used: str | None = None) -> None:
         if not self._log_file:
@@ -91,7 +111,7 @@ class DomainFilter:
             "status": flow.response.status_code if flow.response else 0,
             "bytes": len(flow.response.content) if flow.response and flow.response.content else 0,
             "allowed": allowed,
-            "credential_used": credential_used,
+            "credential_used": credential_used,  # name string or null — never the real_value
         }
         self._log_file.write(json.dumps(entry) + "\n")
 
