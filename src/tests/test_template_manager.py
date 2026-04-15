@@ -497,6 +497,163 @@ class TestImportTemplate:
         assert len(matching) == 1
 
 
+class TestImportFieldPreservation:
+    """Regression and structural tests for import_template field preservation (issue #1065)."""
+
+    @pytest.mark.asyncio
+    async def test_import_preserves_auto_memory_directory(self, manager):
+        """Regression: auto_memory_directory must survive export → import round-trip."""
+        original = await manager.create_template(
+            name="AutoMem Test",
+            config=SessionConfig(
+                permission_mode="default",
+                auto_memory_directory="/custom/memory/path",
+            ),
+        )
+
+        envelope = {"version": 1, "template": original.to_dict()}
+        await manager.delete_template(original.template_id)
+
+        imported = await manager.import_template(envelope)
+
+        assert imported.auto_memory_directory == "/custom/memory/path"
+
+    @pytest.mark.asyncio
+    async def test_import_preserves_all_session_config_fields(self, manager):
+        """Structural: every SessionConfig field shared with MinionTemplate survives round-trip."""
+        import dataclasses
+
+        from src.models.minion_template import MinionTemplate as MinionTemplateModel
+
+        template_fields = {f.name for f in dataclasses.fields(MinionTemplateModel)}
+        config_fields = set(SessionConfig.model_fields.keys())
+        shared = template_fields & config_fields
+
+        # Build a config with non-default values for all shared fields
+        config = SessionConfig(
+            permission_mode="acceptEdits",
+            system_prompt="Test system prompt",
+            override_system_prompt=True,
+            allowed_tools=["bash", "read"],
+            disallowed_tools=["write"],
+            model="claude-sonnet-4-20250514",
+            thinking_mode="enabled",
+            thinking_budget_tokens=8000,
+            effort="high",
+            additional_directories=["/extra"],
+            cli_path="/usr/local/bin/claude",
+            sandbox_enabled=True,
+            sandbox_config={"network": False},
+            docker_enabled=True,
+            docker_image="custom:latest",
+            docker_extra_mounts=["/vol:/vol"],
+            history_distillation_enabled=False,
+            auto_memory_mode="session",
+            auto_memory_directory="/custom/memory",
+            skill_creating_enabled=True,
+            mcp_server_ids=["srv-1"],
+            enable_claudeai_mcp_servers=False,
+            strict_mcp_config=True,
+        )
+
+        original = await manager.create_template(
+            name="AllFields Test",
+            config=config,
+            role="tester",
+            description="All fields template",
+        )
+
+        envelope = {"version": 1, "template": original.to_dict()}
+        await manager.delete_template(original.template_id)
+
+        imported = await manager.import_template(envelope)
+
+        # Verify every shared field was preserved
+        for field in shared:
+            original_val = getattr(original, field)
+            imported_val = getattr(imported, field)
+            assert imported_val == original_val, (
+                f"Field '{field}' not preserved: expected {original_val!r}, got {imported_val!r}"
+            )
+
+    @pytest.mark.asyncio
+    async def test_import_legacy_v1_missing_fields_defaults(self, manager):
+        """Backward compat: minimal v1 envelope missing newer fields imports with defaults."""
+        envelope = {
+            "version": 1,
+            "template": {
+                "name": "Legacy Template",
+                "permission_mode": "default",
+                "allowed_tools": [],
+                "disallowed_tools": [],
+                "capabilities": [],
+            },
+        }
+
+        imported = await manager.import_template(envelope)
+
+        assert imported.name == "Legacy Template"
+        assert imported.permission_mode == "default"
+        # Fields absent from envelope should take SessionConfig defaults
+        assert imported.auto_memory_directory is None
+        assert imported.auto_memory_mode == "claude"
+        assert imported.history_distillation_enabled is True
+        assert imported.skill_creating_enabled is False
+
+    @pytest.mark.asyncio
+    async def test_create_template_propagates_all_config_fields(self, manager):
+        """Structural: create_template() must propagate every SessionConfig field shared
+        with MinionTemplate without requiring manual enumeration."""
+        import dataclasses
+
+        from src.models.minion_template import MinionTemplate as MinionTemplateModel
+
+        template_fields = {f.name for f in dataclasses.fields(MinionTemplateModel)}
+        config_fields = set(SessionConfig.model_fields.keys())
+        # Fields directly managed by create_template() — these are intentionally excluded
+        # from the config spread; system_prompt's direct param takes precedence.
+        direct_fields = {"template_id", "name", "role", "system_prompt",
+                         "description", "capabilities", "created_at", "updated_at"}
+        shared = (template_fields & config_fields) - direct_fields
+
+        config = SessionConfig(
+            permission_mode="acceptEdits",
+            auto_memory_directory="/verify/path",
+            auto_memory_mode="session",
+            history_distillation_enabled=False,
+            skill_creating_enabled=True,
+            enable_claudeai_mcp_servers=False,
+            strict_mcp_config=True,
+        )
+
+        template = await manager.create_template(
+            name="Propagation Test",
+            config=config,
+        )
+
+        # Spot-check key fields that were previously missing
+        assert template.auto_memory_directory == "/verify/path"
+        assert template.auto_memory_mode == "session"
+        assert template.history_distillation_enabled is False
+        assert template.skill_creating_enabled is True
+        assert template.enable_claudeai_mcp_servers is False
+        assert template.strict_mcp_config is True
+
+        # Structural check: all shared fields must match config values.
+        # MinionTemplate.__post_init__ normalizes None list fields to [] — treat as equivalent.
+        config_dump = config.model_dump()
+        for field in shared:
+            if field not in config_dump:
+                continue
+            expected = config_dump[field]
+            actual = getattr(template, field)
+            if expected is None and isinstance(actual, list) and len(actual) == 0:
+                expected = []
+            assert actual == expected, (
+                f"Field '{field}' not propagated: expected {expected!r}, got {actual!r}"
+            )
+
+
 class TestSignatureParity:
     """Ensure create_template and update_template accept all MinionTemplate fields.
 

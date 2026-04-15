@@ -14,6 +14,7 @@ Default templates are shipped as source files in src/default_templates/ and
 seeded into data/templates/ on first run (or when new defaults are added).
 """
 
+import dataclasses
 import importlib.resources
 import json
 import logging
@@ -26,6 +27,14 @@ from .logging_config import get_logger
 from .models.minion_template import MinionTemplate
 from .models.permission_mode import PermissionMode
 from .session_config import SessionConfig
+
+# Fields set directly by create_template() — must not be overridden by config spread.
+# system_prompt exists on both SessionConfig and MinionTemplate; the direct param wins.
+_DIRECT_FIELDS = {"template_id", "name", "role", "system_prompt", "description",
+                  "capabilities", "created_at", "updated_at"}
+
+# MinionTemplate field names — computed once at import time for performance.
+_TEMPLATE_FIELDS = {f.name for f in dataclasses.fields(MinionTemplate)}
 
 
 class TemplateConflictError(Exception):
@@ -184,35 +193,20 @@ class TemplateManager:
                 f"Invalid permission_mode. Must be one of: {', '.join(PermissionMode._value2member_map_)}"
             )
 
+        # Extract config values for fields shared between SessionConfig and MinionTemplate,
+        # excluding fields managed directly by this method. MinionTemplate.__post_init__
+        # converts any None list fields to [] so we do not need to guard them here.
+        config_data = {k: v for k, v in config.model_dump().items()
+                       if k in _TEMPLATE_FIELDS and k not in _DIRECT_FIELDS}
+
         template = MinionTemplate(
             template_id=str(uuid.uuid4()),
             name=name.strip(),
-            permission_mode=config.permission_mode,
-            allowed_tools=config.allowed_tools if config.allowed_tools is not None else [],
-            disallowed_tools=config.disallowed_tools if config.disallowed_tools is not None else [],
             role=role,
             system_prompt=system_prompt,
             description=description,
-            model=config.model,
             capabilities=capabilities if capabilities is not None else [],
-            override_system_prompt=config.override_system_prompt,
-            sandbox_enabled=config.sandbox_enabled,
-            sandbox_config=config.sandbox_config,
-            cli_path=config.cli_path,
-            additional_directories=config.additional_directories if config.additional_directories is not None else [],
-            docker_enabled=config.docker_enabled,
-            docker_image=config.docker_image,
-            docker_extra_mounts=config.docker_extra_mounts if config.docker_extra_mounts is not None else [],
-            thinking_mode=config.thinking_mode,
-            thinking_budget_tokens=config.thinking_budget_tokens,
-            effort=config.effort,
-            history_distillation_enabled=config.history_distillation_enabled,
-            auto_memory_mode=config.auto_memory_mode,
-            auto_memory_directory=config.auto_memory_directory,
-            skill_creating_enabled=config.skill_creating_enabled,
-            mcp_server_ids=config.mcp_server_ids if config.mcp_server_ids is not None else [],
-            enable_claudeai_mcp_servers=config.enable_claudeai_mcp_servers,
-            strict_mcp_config=config.strict_mcp_config,
+            **config_data,
         )
 
         await self._save_template(template)
@@ -459,33 +453,10 @@ class TemplateManager:
         sanitized = {k: v for k, v in template_data.items()
                      if k not in ("template_id", "created_at", "updated_at")}
 
-        config = SessionConfig(
-            permission_mode=sanitized.get("permission_mode", "default"),
-            allowed_tools=sanitized.get("allowed_tools"),
-            disallowed_tools=sanitized.get("disallowed_tools"),
-            model=sanitized.get("model"),
-            override_system_prompt=sanitized.get("override_system_prompt", False),
-            sandbox_enabled=sanitized.get("sandbox_enabled", False),
-            sandbox_config=sanitized.get("sandbox_config"),
-            cli_path=sanitized.get("cli_path"),
-            additional_directories=sanitized.get("additional_directories"),
-            docker_enabled=sanitized.get("docker_enabled", False),
-            docker_image=sanitized.get("docker_image"),
-            docker_extra_mounts=sanitized.get("docker_extra_mounts"),
-            thinking_mode=sanitized.get("thinking_mode"),
-            thinking_budget_tokens=sanitized.get("thinking_budget_tokens"),
-            effort=sanitized.get("effort"),
-            history_distillation_enabled=sanitized.get(
-                "history_distillation_enabled", True
-            ),
-            auto_memory_mode=sanitized.get("auto_memory_mode", "claude"),
-            skill_creating_enabled=sanitized.get("skill_creating_enabled", False),
-            mcp_server_ids=sanitized.get("mcp_server_ids"),
-            enable_claudeai_mcp_servers=sanitized.get(
-                "enable_claudeai_mcp_servers", True
-            ),
-            strict_mcp_config=sanitized.get("strict_mcp_config", False),
-        )
+        # Pydantic v2 ignores extra keys (name, role, description, etc.) and
+        # applies field defaults for any missing keys — handles both legacy v1
+        # envelopes and future fields without requiring manual enumeration.
+        config = SessionConfig.model_validate(sanitized)
 
         template = await self.create_template(
             name=name,
@@ -554,30 +525,10 @@ class TemplateManager:
                             )
                     continue
 
-                seed_config = SessionConfig(
-                    permission_mode=data["permission_mode"],
-                    allowed_tools=data.get("allowed_tools"),
-                    disallowed_tools=data.get("disallowed_tools"),
-                    model=data.get("model"),
-                    thinking_mode=data.get("thinking_mode"),
-                    thinking_budget_tokens=data.get("thinking_budget_tokens"),
-                    effort=data.get("effort"),
-                    cli_path=data.get("cli_path"),
-                    additional_directories=data.get("additional_directories"),
-                    override_system_prompt=data.get("override_system_prompt", False),
-                    sandbox_enabled=data.get("sandbox_enabled", False),
-                    sandbox_config=data.get("sandbox_config"),
-                    docker_enabled=data.get("docker_enabled", False),
-                    docker_image=data.get("docker_image"),
-                    docker_extra_mounts=data.get("docker_extra_mounts"),
-                    docker_home_directory=data.get("docker_home_directory"),
-                    history_distillation_enabled=data.get(
-                        "history_distillation_enabled", True
-                    ),
-                    auto_memory_mode=data.get("auto_memory_mode", "claude"),
-                    skill_creating_enabled=data.get("skill_creating_enabled", False),
-                    mcp_server_ids=data.get("mcp_server_ids"),
-                )
+                # Pydantic v2 ignores extra keys (name, role, description, etc.)
+                # and defaults any missing fields — identical semantics to the
+                # previous manual .get() calls but automatically covers new fields.
+                seed_config = SessionConfig.model_validate(data)
                 await self.create_template(
                     name=data["name"],
                     config=seed_config,
