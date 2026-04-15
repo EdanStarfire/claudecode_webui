@@ -43,7 +43,7 @@ from .session_coordinator import SessionCoordinator
 from .session_manager import SessionState
 from .skill_manager import SkillManager
 from .task_utils import task_done_log_exception
-from .template_manager import TemplateConflictError
+from .template_manager import TemplateConflictError, TemplateInUseError
 from .timestamp_utils import normalize_timestamp
 
 # Keep standard logger for errors
@@ -3273,7 +3273,20 @@ class ClaudeWebUI:
         @handle_exceptions("delete template")
         async def delete_template(template_id: str):
             """Delete template"""
-            success = await self.service.delete_template(template_id)
+            try:
+                success = await self.service.delete_template(template_id)
+            except TemplateInUseError as e:
+                return JSONResponse(
+                    status_code=409,
+                    content={
+                        "error": "template_in_use",
+                        "message": str(e),
+                        "blocking_sessions": [
+                            {"session_id": sid, "name": name}
+                            for sid, name in zip(e.session_ids, e.session_names, strict=True)
+                        ],
+                    },
+                )
             if not success:
                 raise HTTPException(status_code=404, detail="Template not found")
             return {"deleted": True}

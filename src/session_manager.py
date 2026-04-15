@@ -24,11 +24,19 @@ from typing import Any
 from .logging_config import get_logger
 from .models.permission_mode import PermissionMode
 from .session_config import SessionConfig
+from .template_manager import TemplateManager
 
 # Get specialized logger for session manager actions
 session_logger = get_logger('session_manager', category='SESSION_MANAGER')
 # Keep standard logger for errors
 logger = logging.getLogger(__name__)
+
+# Naming asymmetry map: SessionInfo field name → canonical override/template field name.
+# Used by _track_overrides() to look up the correct template field and override key.
+_FIELD_NAME_MAP: dict[str, str] = {
+    "current_permission_mode": "permission_mode",
+    "initial_permission_mode": "permission_mode",
+}
 
 
 # Valid model identifiers (current API aliases)
@@ -766,8 +774,16 @@ class SessionManager:
                 logger.error(f"Failed to update session {session_id} sdk_generated_name: {e}")
                 return False
 
-    async def update_permission_mode(self, session_id: str, mode: str) -> bool:
-        """Update session permission mode"""
+    async def update_permission_mode(
+        self,
+        session_id: str,
+        mode: str,
+        template_manager: TemplateManager | None = None,
+    ) -> bool:
+        """Update session permission mode.
+
+        Pass template_manager to enable smart-diff override tracking (issue #1059).
+        """
         async with self._get_session_lock(session_id):
             try:
                 session = self._active_sessions.get(session_id)
@@ -779,6 +795,9 @@ class SessionManager:
                 if mode not in PermissionMode._value2member_map_:
                     logger.error(f"Invalid permission mode: {mode}")
                     return False
+
+                if template_manager and session.template_id:
+                    await self._track_overrides(session, "current_permission_mode", mode, template_manager)
 
                 session.current_permission_mode = mode
                 session.updated_at = datetime.now(UTC)
@@ -972,7 +991,12 @@ class SessionManager:
                 logger.error(f"Failed to update session {session_id} order: {e}")
                 return False
 
-    async def update_session(self, session_id: str, **kwargs) -> bool:
+    async def update_session(
+        self,
+        session_id: str,
+        template_manager: TemplateManager | None = None,
+        **kwargs,
+    ) -> bool:
         """
         Update session fields dynamically (Phase 5 - for hierarchy management).
 
@@ -980,6 +1004,8 @@ class SessionManager:
         - is_overseer (bool)
         - child_minion_ids (List[str])
         - Any other SessionInfo field
+
+        Pass template_manager to enable smart-diff override tracking (issue #1059).
 
         Example:
             await session_manager.update_session(
@@ -998,6 +1024,8 @@ class SessionManager:
                 # Update fields
                 for key, value in kwargs.items():
                     if hasattr(session, key):
+                        if template_manager and session.template_id:
+                            await self._track_overrides(session, key, value, template_manager)
                         setattr(session, key, value)
                     else:
                         logger.warning(f"Session field '{key}' does not exist, skipping")
@@ -1010,6 +1038,44 @@ class SessionManager:
             except Exception as e:
                 logger.error(f"Failed to update session {session_id}: {e}")
                 return False
+
+    async def _track_overrides(
+        self,
+        session: "SessionInfo",
+        field_name: str,
+        new_value: Any,
+        template_manager: TemplateManager,
+    ) -> None:
+        """Smart-diff: sync session_overrides with template for a single field change.
+
+        Called before setattr() so comparison uses the pre-mutation state for context
+        but records the incoming new_value as the override candidate.
+        """
+        if not session.template_id:
+            return  # No template linked — no tracking needed
+
+        template = await template_manager.get_template(session.template_id)
+        if template is None:
+            return  # Template deleted — no tracking possible
+
+        # Map SessionInfo field names to the canonical config field name
+        canonical = _FIELD_NAME_MAP.get(field_name, field_name)
+
+        # Field must exist on template to be trackable
+        if not hasattr(template, canonical):
+            return
+
+        template_value = getattr(template, canonical)
+
+        if session.session_overrides is None:
+            session.session_overrides = {}
+
+        if new_value == template_value:
+            # Value matches template — remove override (back in sync)
+            session.session_overrides.pop(canonical, None)
+        else:
+            # Value differs from template — record override
+            session.session_overrides[canonical] = new_value
 
     async def reorder_sessions(self, session_ids: list[str]) -> bool:
         """Reorder sessions by assigning sequential order values (within project context)"""

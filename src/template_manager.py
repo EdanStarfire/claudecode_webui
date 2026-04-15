@@ -22,6 +22,10 @@ import re
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .session_manager import SessionManager
 
 from .logging_config import get_logger
 from .models.minion_template import MinionTemplate
@@ -44,6 +48,21 @@ class TemplateConflictError(Exception):
         super().__init__(f"Template with name '{name}' already exists")
         self.existing_id = existing_id
         self.name = name
+
+
+class TemplateInUseError(Exception):
+    """Raised when attempting to delete a template that has linked non-terminated sessions."""
+
+    def __init__(self, template_id: str, session_ids: list[str], session_names: list[str]):
+        self.template_id = template_id
+        self.session_ids = session_ids
+        self.session_names = session_names
+        names_preview = ", ".join(session_names[:5])
+        if len(session_names) > 5:
+            names_preview += "..."
+        super().__init__(
+            f"Template {template_id} is in use by {len(session_ids)} session(s): {names_preview}"
+        )
 
 # Get specialized logger for template operations
 template_logger = get_logger('template_manager', category='TEMPLATE_MANAGER')
@@ -373,10 +392,35 @@ class TemplateManager:
         template_logger.info(f"Updated template: {template.name} ({template.template_id})")
         return template
 
-    async def delete_template(self, template_id: str) -> bool:
-        """Delete template (both .json and .md files)."""
+    async def delete_template(
+        self,
+        template_id: str,
+        session_manager: "SessionManager | None" = None,
+    ) -> bool:
+        """Delete template (both .json and .md files).
+
+        Raises TemplateInUseError if session_manager is provided and non-terminated
+        sessions are linked to this template (issue #1059 Phase 2).
+        """
         if template_id not in self.templates:
             return False
+
+        # Guard: block deletion when active sessions reference this template
+        if session_manager:
+            # Import here at runtime to avoid circular import
+            # (session_manager.py imports template_manager.py at module level)
+            from .session_manager import SessionState
+            all_sessions = await session_manager.list_sessions()
+            blocking = [
+                s for s in all_sessions
+                if s.template_id == template_id and s.state != SessionState.TERMINATED
+            ]
+            if blocking:
+                raise TemplateInUseError(
+                    template_id=template_id,
+                    session_ids=[s.session_id for s in blocking],
+                    session_names=[s.name or s.session_id for s in blocking],
+                )
 
         template = self.templates[template_id]
         slug = _slugify(template.name)
