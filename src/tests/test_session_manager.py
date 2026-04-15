@@ -6,9 +6,11 @@ import tempfile
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 import pytest
 
+from ..models.minion_template import MinionTemplate
 from ..session_config import SessionConfig
 from ..session_manager import SessionInfo, SessionManager, SessionState
 
@@ -466,3 +468,141 @@ class TestSessionManager:
 
         # State is persisted as 'starting' immediately after start_session()
         assert state_data["state"] == "starting"
+
+
+# --- Issue #1059 Phase 2: Override tracking tests ---
+
+
+def _make_template(template_id: str = "tmpl-001", permission_mode: str = "acceptEdits", **kwargs) -> MinionTemplate:
+    return MinionTemplate(template_id=template_id, name="Test Template", permission_mode=permission_mode, **kwargs)
+
+
+def _make_template_manager(template: MinionTemplate | None) -> AsyncMock:
+    tm = AsyncMock()
+    tm.get_template = AsyncMock(return_value=template)
+    return tm
+
+
+@pytest.mark.asyncio
+class TestOverrideTracking:
+    """Tests for SessionManager._track_overrides() and its wiring into update_session/update_permission_mode."""
+
+    async def _create_session_with_template(
+        self,
+        manager: SessionManager,
+        template_id: str = "tmpl-001",
+    ) -> str:
+        """Helper: create a session linked to a template."""
+        session_id = str(uuid.uuid4())
+        config = SessionConfig(template_id=template_id)
+        await manager.create_session(session_id, config=config)
+        # Manually set template_id since create_session doesn't store it from SessionConfig yet
+        await manager.update_session(session_id, template_id=template_id)
+        return session_id
+
+    async def test_override_add(self, temp_session_manager):
+        """Updating a field to a value different from template records an override."""
+        manager = temp_session_manager
+        template = _make_template(model="claude-sonnet-4-6")
+        tm = _make_template_manager(template)
+
+        session_id = await self._create_session_with_template(manager)
+
+        # Update model to something different from template
+        await manager.update_session(session_id, template_manager=tm, model="claude-opus-4-5")
+
+        session = await manager.get_session_info(session_id)
+        assert session.session_overrides.get("model") == "claude-opus-4-5"
+
+    async def test_override_remove(self, temp_session_manager):
+        """Updating a field to match the template value removes the override."""
+        manager = temp_session_manager
+        template = _make_template(model="claude-sonnet-4-6")
+        tm = _make_template_manager(template)
+
+        session_id = await self._create_session_with_template(manager)
+        # Seed an existing override
+        await manager.update_session(session_id, template_manager=tm, model="claude-opus-4-5")
+        session = await manager.get_session_info(session_id)
+        assert "model" in session.session_overrides
+
+        # Now update to match template value — override should disappear
+        await manager.update_session(session_id, template_manager=tm, model="claude-sonnet-4-6")
+        session = await manager.get_session_info(session_id)
+        assert "model" not in session.session_overrides
+
+    async def test_override_no_template(self, temp_session_manager):
+        """Updating a field on a session without template_id leaves session_overrides unchanged."""
+        manager = temp_session_manager
+        tm = _make_template_manager(_make_template())
+
+        session_id = str(uuid.uuid4())
+        await manager.create_session(session_id, config=SessionConfig())
+        # Ensure no template_id
+        session = await manager.get_session_info(session_id)
+        assert session.template_id is None
+
+        await manager.update_session(session_id, template_manager=tm, model="claude-opus-4-5")
+
+        session = await manager.get_session_info(session_id)
+        assert session.session_overrides == {}
+        # get_template should not be called when template_id is None
+        tm.get_template.assert_not_called()
+
+    async def test_override_permission_mode(self, temp_session_manager):
+        """update_permission_mode tracks override using canonical key 'permission_mode'."""
+        manager = temp_session_manager
+        template = _make_template(permission_mode="acceptEdits")
+        tm = _make_template_manager(template)
+
+        session_id = await self._create_session_with_template(manager)
+
+        await manager.update_permission_mode(session_id, "bypassPermissions", template_manager=tm)
+
+        session = await manager.get_session_info(session_id)
+        # Override key is canonical "permission_mode", not "current_permission_mode"
+        assert session.session_overrides.get("permission_mode") == "bypassPermissions"
+
+    async def test_override_permission_mode_matches_template_removes_override(self, temp_session_manager):
+        """Setting permission_mode to template value removes the override."""
+        manager = temp_session_manager
+        template = _make_template(permission_mode="acceptEdits")
+        tm = _make_template_manager(template)
+
+        session_id = await self._create_session_with_template(manager)
+
+        # First set a non-template mode
+        await manager.update_permission_mode(session_id, "bypassPermissions", template_manager=tm)
+        session = await manager.get_session_info(session_id)
+        assert "permission_mode" in session.session_overrides
+
+        # Then set back to template mode
+        await manager.update_permission_mode(session_id, "acceptEdits", template_manager=tm)
+        session = await manager.get_session_info(session_id)
+        assert "permission_mode" not in session.session_overrides
+
+    async def test_override_template_deleted(self, temp_session_manager):
+        """When template is deleted, _track_overrides exits silently with no change."""
+        manager = temp_session_manager
+        tm = _make_template_manager(None)  # Template not found
+
+        session_id = await self._create_session_with_template(manager)
+
+        # Should not raise; session_overrides unchanged
+        await manager.update_session(session_id, template_manager=tm, model="claude-opus-4-5")
+
+        session = await manager.get_session_info(session_id)
+        assert session.session_overrides == {}
+
+    async def test_non_config_field_not_tracked(self, temp_session_manager):
+        """Fields not on MinionTemplate (e.g. queue_paused) don't add overrides."""
+        manager = temp_session_manager
+        template = _make_template()
+        tm = _make_template_manager(template)
+
+        session_id = await self._create_session_with_template(manager)
+
+        await manager.update_session(session_id, template_manager=tm, queue_paused=True)
+
+        session = await manager.get_session_info(session_id)
+        assert "queue_paused" not in session.session_overrides

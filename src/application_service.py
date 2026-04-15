@@ -453,7 +453,10 @@ class ApplicationService:
         return template.to_dict() if template else None
 
     async def delete_template(self, template_id: str) -> bool:
-        return await self.coordinator.template_manager.delete_template(template_id)
+        return await self.coordinator.template_manager.delete_template(
+            template_id,
+            session_manager=self.coordinator.session_manager,
+        )
 
     async def import_template(self, **kwargs) -> dict:
         template = await self.coordinator.template_manager.import_template(**kwargs)

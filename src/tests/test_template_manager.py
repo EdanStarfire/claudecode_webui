@@ -9,13 +9,16 @@ Covers:
 """
 
 import tempfile
+from datetime import UTC, datetime
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 import pytest
 
 from src.models.minion_template import MinionTemplate
 from src.session_config import SessionConfig
-from src.template_manager import TemplateConflictError, TemplateManager
+from src.session_manager import SessionInfo, SessionState
+from src.template_manager import TemplateConflictError, TemplateInUseError, TemplateManager
 
 
 @pytest.fixture
@@ -755,3 +758,121 @@ class TestCreateDefaultTemplatesRetirement:
         updated = manager.templates.get(existing.template_id)
         assert updated is not None
         assert updated.system_prompt == custom_prompt
+
+
+# --- Issue #1059 Phase 2: Template deletion guard tests ---
+
+
+def _make_session_info(
+    session_id: str,
+    template_id: str | None,
+    state: SessionState = SessionState.ACTIVE,
+    name: str | None = None,
+) -> SessionInfo:
+    now = datetime.now(UTC)
+    return SessionInfo(
+        session_id=session_id,
+        state=state,
+        created_at=now,
+        updated_at=now,
+        template_id=template_id,
+        name=name,
+    )
+
+
+def _make_session_manager(sessions: list[SessionInfo]) -> AsyncMock:
+    """Return a mock SessionManager whose list_sessions() returns the given sessions."""
+    sm = AsyncMock()
+    sm.list_sessions = AsyncMock(return_value=sessions)
+    return sm
+
+
+@pytest.mark.asyncio
+class TestTemplateDeletionGuard:
+    """Tests #12-15 — deletion guard for templates with linked sessions."""
+
+    async def test_delete_template_no_linked_sessions(self, manager):
+        """Template with no linked sessions deletes successfully."""
+        config = SessionConfig(permission_mode="default")
+        template = await manager.create_template(name="Lonely Template", config=config)
+        sm = _make_session_manager([])  # No sessions
+
+        result = await manager.delete_template(template.template_id, session_manager=sm)
+
+        assert result is True
+        assert template.template_id not in manager.templates
+
+    async def test_delete_template_blocked_by_active_session(self, manager):
+        """Template with an ACTIVE session raises TemplateInUseError."""
+        config = SessionConfig(permission_mode="default")
+        template = await manager.create_template(name="Busy Template", config=config)
+        session = _make_session_info("sess-001", template.template_id, state=SessionState.ACTIVE, name="My Session")
+        sm = _make_session_manager([session])
+
+        with pytest.raises(TemplateInUseError) as exc_info:
+            await manager.delete_template(template.template_id, session_manager=sm)
+
+        err = exc_info.value
+        assert err.template_id == template.template_id
+        assert "sess-001" in err.session_ids
+        assert "My Session" in err.session_names
+        # Template must still exist after failed deletion
+        assert template.template_id in manager.templates
+
+    async def test_delete_template_terminated_sessions_dont_block(self, manager):
+        """Template with only TERMINATED sessions deletes successfully."""
+        config = SessionConfig(permission_mode="default")
+        template = await manager.create_template(name="Done Template", config=config)
+        terminated_session = _make_session_info(
+            "sess-done", template.template_id, state=SessionState.TERMINATED
+        )
+        sm = _make_session_manager([terminated_session])
+
+        result = await manager.delete_template(template.template_id, session_manager=sm)
+
+        assert result is True
+        assert template.template_id not in manager.templates
+
+    async def test_delete_template_error_lists_sessions(self, manager):
+        """TemplateInUseError contains correct session_ids and session_names."""
+        config = SessionConfig(permission_mode="default")
+        template = await manager.create_template(name="Multi Session Template", config=config)
+        sessions = [
+            _make_session_info("sess-a", template.template_id, state=SessionState.ACTIVE, name="Alpha"),
+            _make_session_info("sess-b", template.template_id, state=SessionState.PAUSED, name="Beta"),
+            # Terminated one — should not be in blocking list
+            _make_session_info("sess-c", template.template_id, state=SessionState.TERMINATED, name="Done"),
+        ]
+        sm = _make_session_manager(sessions)
+
+        with pytest.raises(TemplateInUseError) as exc_info:
+            await manager.delete_template(template.template_id, session_manager=sm)
+
+        err = exc_info.value
+        assert set(err.session_ids) == {"sess-a", "sess-b"}
+        assert set(err.session_names) == {"Alpha", "Beta"}
+
+    async def test_delete_template_no_session_manager_skips_guard(self, manager):
+        """Without session_manager, deletion proceeds without guard (backward compat)."""
+        config = SessionConfig(permission_mode="default")
+        template = await manager.create_template(name="Compat Template", config=config)
+
+        # No session_manager passed — guard not applied
+        result = await manager.delete_template(template.template_id)
+
+        assert result is True
+        assert template.template_id not in manager.templates
+
+    async def test_delete_template_other_template_sessions_dont_block(self, manager):
+        """Sessions linked to a different template don't block deletion."""
+        config = SessionConfig(permission_mode="default")
+        target = await manager.create_template(name="Target Template", config=config)
+        other = await manager.create_template(name="Other Template", config=config)
+
+        other_session = _make_session_info("sess-other", other.template_id, state=SessionState.ACTIVE)
+        sm = _make_session_manager([other_session])
+
+        result = await manager.delete_template(target.template_id, session_manager=sm)
+
+        assert result is True
+        assert target.template_id not in manager.templates

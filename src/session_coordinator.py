@@ -1111,32 +1111,23 @@ class SessionCoordinator:
                 )
 
             # Create/recreate SDK instance with session parameters (uses factory for testability — issue #559)
-            # Build SessionConfig from SessionInfo for SDK factory
-            sdk_config = SessionConfig(
-                permission_mode=session_info.current_permission_mode,
-                system_prompt=minion_system_prompt,
-                override_system_prompt=session_info.override_system_prompt,
-                allowed_tools=all_tools,
-                disallowed_tools=session_info.disallowed_tools,
-                model=session_info.model,
-                additional_directories=session_info.additional_directories,
-                sandbox_enabled=session_info.sandbox_enabled,
-                sandbox_config=session_info.sandbox_config,
-                setting_sources=session_info.setting_sources,
-                cli_path=effective_cli_path,
-                thinking_mode=session_info.thinking_mode,
-                thinking_budget_tokens=session_info.thinking_budget_tokens,
-                effort=session_info.effort,
-                auto_memory_mode=session_info.auto_memory_mode,
-                auto_memory_directory=session_info.auto_memory_directory,
-                enable_claudeai_mcp_servers=session_info.enable_claudeai_mcp_servers,
-                strict_mcp_config=session_info.strict_mcp_config,
-                bare_mode=session_info.bare_mode,
-                env_scrub_enabled=session_info.env_scrub_enabled,
-            )
+            # Issue #1059 Phase 2: Resolve effective config from template + session overrides.
+            # Config takes effect at session start/restart — changes after start are not live.
+            from src.config_resolution import resolve_effective_config
+            effective_config = await resolve_effective_config(session_info, self.template_manager)
+
+            # Override 3 fields computed earlier in this method:
+            #   system_prompt — assembled above (includes legion guide, history ref, etc.)
+            #   allowed_tools — merged MCP + session tools list built above
+            #   cli_path      — Docker-resolved path computed above
+            sdk_config = effective_config.model_copy(update={
+                "system_prompt": minion_system_prompt,
+                "allowed_tools": all_tools,
+                "cli_path": effective_cli_path,
+            })
 
             # Issue #709: Create session-specific memory directory and guidance file
-            if session_info.auto_memory_mode == "session":
+            if effective_config.auto_memory_mode == "session":
                 memory_dir = session_dir / "memory"
                 memory_dir.mkdir(exist_ok=True)
                 guidance_file = memory_dir / "agent-guidance.md"
@@ -1145,15 +1136,15 @@ class SessionCoordinator:
                     coord_logger.debug(f"Created memory/agent-guidance.md for session {session_id}")
 
             # Issue #906: Custom auto-memory directory (claude mode + directory set) — create dir
-            if session_info.auto_memory_mode == "claude" and session_info.auto_memory_directory:
-                custom_memory_dir = Path(session_info.auto_memory_directory)
+            if effective_config.auto_memory_mode == "claude" and effective_config.auto_memory_directory:
+                custom_memory_dir = Path(effective_config.auto_memory_directory)
                 custom_memory_dir.mkdir(parents=True, exist_ok=True)
                 coord_logger.debug(f"Custom auto-memory directory for session {session_id}: {custom_memory_dir}")
 
             # Issue #707: Build PreToolUse handler for internal tool access control
             permission_handler = self._build_permission_handler(
-                session_dir, session_info.history_distillation_enabled, session_info.auto_memory_mode,
-                skill_creating_enabled=session_info.skill_creating_enabled,
+                session_dir, effective_config.history_distillation_enabled, effective_config.auto_memory_mode,
+                skill_creating_enabled=effective_config.skill_creating_enabled,
                 working_directory=Path(session_info.working_directory),
             )
 
@@ -1836,7 +1827,9 @@ class SessionCoordinator:
 
             # For non-running sessions, just persist to disk — the mode will be applied at startup
             if session_info.state in STOPPED_STATES:
-                await self.session_manager.update_permission_mode(session_id, mode)
+                await self.session_manager.update_permission_mode(
+                    session_id, mode, template_manager=self.template_manager
+                )
                 coord_logger.info(f"Permission mode persisted to '{mode}' for stopped session {session_id}")
                 return True
 
@@ -1856,7 +1849,9 @@ class SessionCoordinator:
 
             if sdk_result:
                 # Update session manager's tracking of current permission mode
-                await self.session_manager.update_permission_mode(session_id, mode)
+                await self.session_manager.update_permission_mode(
+                    session_id, mode, template_manager=self.template_manager
+                )
                 coord_logger.info(f"Permission mode set to '{mode}' for session {session_id}")
             else:
                 logger.warning(f"Failed to set permission mode for session {session_id}")
@@ -3561,7 +3556,9 @@ class SessionCoordinator:
                         new_mode = parsed_message.metadata.get('permission_mode')
                         if new_mode:
                             try:
-                                await self.session_manager.update_permission_mode(session_id, new_mode)
+                                await self.session_manager.update_permission_mode(
+                                    session_id, new_mode, template_manager=self.template_manager
+                                )
                                 coord_logger.info(f"Permission mode updated to '{new_mode}' for session {session_id} via SDK status event")
                             except Exception:
                                 logger.exception(f"Failed to update permission mode from SDK status event for session {session_id}")
