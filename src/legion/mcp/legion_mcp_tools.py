@@ -1088,6 +1088,7 @@ class LegionMCPTools:
                 mcp_server_ids=mcp_server_ids,
                 enable_claudeai_mcp_servers=enable_claudeai_mcp_servers,
                 strict_mcp_config=strict_mcp_config,
+                template_id=template_applied.template_id if template_applied else None,
             )
             spawn_result = await self.system.overseer_controller.spawn_minion(
                 parent_overseer_id=parent_overseer_id,

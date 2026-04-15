@@ -176,6 +176,10 @@ class SessionInfo:
     bare_mode: bool = False  # Pass --bare to skip hooks, LSP, plugin sync, skill walks
     env_scrub_enabled: bool = False  # Issue #957: Strip credentials from subprocess envs
 
+    # Template linkage (issue #1059)
+    template_id: str | None = None
+    session_overrides: dict[str, Any] | None = None
+
     def __post_init__(self):
         if self.additional_directories is None:
             self.additional_directories = []
@@ -191,6 +195,8 @@ class SessionInfo:
             self.docker_extra_mounts = []
         if self.mcp_server_ids is None:
             self.mcp_server_ids = []
+        if self.session_overrides is None:
+            self.session_overrides = {}
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for JSON serialization"""
@@ -268,6 +274,8 @@ class SessionInfo:
         data.setdefault('strict_mcp_config', False)
         data.setdefault('bare_mode', False)
         data.setdefault('env_scrub_enabled', False)
+        data.setdefault('template_id', None)
+        data.setdefault('session_overrides', None)
         return cls(**data)
 
 
@@ -446,6 +454,7 @@ class SessionManager:
             strict_mcp_config=config.strict_mcp_config,
             bare_mode=config.bare_mode,
             env_scrub_enabled=config.env_scrub_enabled,
+            template_id=config.template_id,
         )
 
         try:

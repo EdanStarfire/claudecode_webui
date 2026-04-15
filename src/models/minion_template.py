@@ -54,6 +54,8 @@ class MinionTemplate:
     # MCP toggle configuration (issue #786)
     enable_claudeai_mcp_servers: bool = True
     strict_mcp_config: bool = False
+    # Composable profile placeholder (issue #1062)
+    profile_id: str | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
@@ -121,6 +123,8 @@ class MinionTemplate:
         # MCP toggle configuration (issue #786)
         data.setdefault('enable_claudeai_mcp_servers', True)
         data.setdefault('strict_mcp_config', False)
+        # Composable profile placeholder (issue #1062)
+        data.setdefault('profile_id', None)
         # Backward-compat renames (issue #731)
         if 'default_role' in data:
             data.setdefault('role', data.pop('default_role'))
