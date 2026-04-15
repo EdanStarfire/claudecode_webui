@@ -33,49 +33,73 @@
           <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
         </div>
         <div class="modal-body">
-          <!-- Template List View -->
+          <!-- Template List / Profile List View — tabbed -->
           <div v-if="mode === 'template-list'" class="template-list-view">
-            <div class="d-flex justify-content-between align-items-center mb-3">
-              <h6 class="mb-0">Templates</h6>
-              <div class="d-flex gap-2">
-                <button @click="openImportModal" class="btn btn-outline-secondary btn-sm">
-                  Import
-                </button>
-                <button @click="switchToCreateTemplate" class="btn btn-primary btn-sm">
-                  + Create New
-                </button>
+            <!-- Tab toggle: Templates | Profiles (issue #1062) -->
+            <ul class="nav nav-tabs mb-3">
+              <li class="nav-item">
+                <button
+                  class="nav-link"
+                  :class="{ active: templateListTab === 'templates' }"
+                  @click="templateListTab = 'templates'"
+                >Templates</button>
+              </li>
+              <li class="nav-item">
+                <button
+                  class="nav-link"
+                  :class="{ active: templateListTab === 'profiles' }"
+                  @click="templateListTab = 'profiles'"
+                >Profiles</button>
+              </li>
+            </ul>
+
+            <!-- Profiles tab -->
+            <ProfileManagerTab v-if="templateListTab === 'profiles'" />
+
+            <!-- Templates tab -->
+            <template v-if="templateListTab === 'templates'">
+              <div class="d-flex justify-content-between align-items-center mb-3">
+                <h6 class="mb-0">Templates</h6>
+                <div class="d-flex gap-2">
+                  <button @click="openImportModal" class="btn btn-outline-secondary btn-sm">
+                    Import
+                  </button>
+                  <button @click="switchToCreateTemplate" class="btn btn-primary btn-sm">
+                    + Create New
+                  </button>
+                </div>
               </div>
-            </div>
 
-            <div v-if="templates.length === 0" class="alert alert-info">
-              No templates found. Create your first template!
-            </div>
+              <div v-if="templates.length === 0" class="alert alert-info">
+                No templates found. Create your first template!
+              </div>
 
-            <div v-for="template in templates" :key="template.template_id" class="card mb-2">
-              <div class="card-body">
-                <div class="d-flex justify-content-between align-items-start">
-                  <div class="flex-grow-1">
-                    <h6 class="card-title mb-1">{{ template.name }}</h6>
-                    <p v-if="template.description" class="card-text text-muted small mb-2">{{ template.description }}</p>
-                    <div class="template-meta">
-                      <span class="badge bg-secondary me-2">{{ template.permission_mode }}</span>
-                      <span class="text-muted small">{{ template.allowed_tools?.length || 0 }} tools</span>
+              <div v-for="template in templates" :key="template.template_id" class="card mb-2">
+                <div class="card-body">
+                  <div class="d-flex justify-content-between align-items-start">
+                    <div class="flex-grow-1">
+                      <h6 class="card-title mb-1">{{ template.name }}</h6>
+                      <p v-if="template.description" class="card-text text-muted small mb-2">{{ template.description }}</p>
+                      <div class="template-meta">
+                        <span class="badge bg-secondary me-2">{{ template.permission_mode }}</span>
+                        <span class="text-muted small">{{ template.allowed_tools?.length || 0 }} tools</span>
+                      </div>
                     </div>
-                  </div>
-                  <div class="btn-group btn-group-sm ms-3">
-                    <button @click="exportTemplate(template)" class="btn btn-outline-secondary" title="Export">
-                      Export
-                    </button>
-                    <button @click="switchToEditTemplate(template)" class="btn btn-outline-primary" title="Edit">
-                      Edit
-                    </button>
-                    <button @click="deleteTemplate(template)" class="btn btn-outline-danger" title="Delete">
-                      Delete
-                    </button>
+                    <div class="btn-group btn-group-sm ms-3">
+                      <button @click="exportTemplate(template)" class="btn btn-outline-secondary" title="Export">
+                        Export
+                      </button>
+                      <button @click="switchToEditTemplate(template)" class="btn btn-outline-primary" title="Edit">
+                        Edit
+                      </button>
+                      <button @click="deleteTemplate(template)" class="btn btn-outline-danger" title="Delete">
+                        Delete
+                      </button>
+                    </div>
                   </div>
                 </div>
               </div>
-            </div>
+            </template>
           </div>
 
           <!-- Import Template Modal -->
@@ -271,7 +295,9 @@
                 :errors="errors"
                 :session="editSession"
                 :field-states="fieldStates"
+                :profile-ids="formData.profile_ids"
                 @update:form-data="updateFormData"
+                @update:profile-ids="(v) => { formData.profile_ids = v }"
                 @preview-permissions="showPermissionPreview"
                 @show-quick="showAdvanced = false"
                 @browse-additional-dir="browseAdditionalDir"
@@ -349,6 +375,7 @@ import { api, getAuthToken } from '@/utils/api'
 import QuickSettingsPanel from './QuickSettingsPanel.vue'
 import AdvancedSettingsPanel from './AdvancedSettingsPanel.vue'
 import PermissionPreviewModal from './PermissionPreviewModal.vue'
+import ProfileManagerTab from './ProfileManagerTab.vue'  // Issue #1062
 
 const router = useRouter()
 const projectStore = useProjectStore()
@@ -397,6 +424,8 @@ const templateDiff = ref(null)
 const showImportModal = ref(false)
 const importJsonText = ref('')
 const importConflict = ref(null)   // { name, existing_template_id }
+// Issue #1062: active tab in template-list view ('templates' | 'profiles')
+const templateListTab = ref('templates')
 const importError = ref('')
 const isImporting = ref(false)
 const showImportRename = ref(false)
@@ -635,6 +664,9 @@ const templateOriginalValues = ref(
 // Form data — defaults from schema + sandbox (nested, out of scope for schema)
 const formData = reactive({
   ...Object.fromEntries(Object.entries(CONFIG_FIELDS).map(([k, m]) => [k, structuredClone(m.default)])),
+  // Issue #1062: profile_ids and template_overrides for template composition
+  profile_ids: {},
+  template_overrides: {},
   sandbox: {
     autoAllowBashIfSandboxed: true,
     allowUnsandboxedCommands: false,
@@ -771,7 +803,7 @@ const modalTitle = computed(() => {
     case 'edit-session': return 'Edit Session'
     case 'create-template': return 'Create Template'
     case 'edit-template': return 'Edit Template'
-    case 'template-list': return 'Manage Templates'
+    case 'template-list': return templateListTab.value === 'profiles' ? 'Manage Profiles' : 'Manage Templates'
     case 'configure-ephemeral': return 'Configure Scheduled Session'
     case 'save-as-template': return 'Save as Template'
     case 'update-template-from-session': return 'Update Template from Session'
@@ -1541,6 +1573,9 @@ async function createTemplate() {
   const payload = {
     ...extractPayload('template'),
     sandbox_config: formData.sandbox_enabled ? buildSandboxConfig() : null,
+    // Issue #1062: include profile composition fields
+    profile_ids: Object.keys(formData.profile_ids).length > 0 ? formData.profile_ids : null,
+    template_overrides: Object.keys(formData.template_overrides).length > 0 ? formData.template_overrides : null,
   }
 
   await api.post('/api/templates', payload)
@@ -1561,6 +1596,9 @@ async function updateTemplate() {
   const payload = {
     ...extractPayload('template'),
     sandbox_config: formData.sandbox_enabled ? buildSandboxConfig() : null,
+    // Issue #1062: include profile composition fields
+    profile_ids: Object.keys(formData.profile_ids).length > 0 ? formData.profile_ids : null,
+    template_overrides: Object.keys(formData.template_overrides).length > 0 ? formData.template_overrides : null,
   }
 
   await api.put(`/api/templates/${editTemplate.value.template_id}`, payload)
@@ -1582,6 +1620,9 @@ function resetForm() {
   selectedTemplateId.value = null
   errorMessage.value = ''
   showAdvanced.value = false
+  // Issue #1062: reset profile composition fields
+  formData.profile_ids = {}
+  formData.template_overrides = {}
 }
 
 function populateFormFromSession(session) {
@@ -1592,6 +1633,9 @@ function populateFormFromSession(session) {
 function populateFormFromTemplate(template) {
   populateFormFromSource(template)
   populateSandboxFromSource(template)
+  // Issue #1062: populate profile_ids and template_overrides
+  formData.profile_ids = template.profile_ids ? { ...template.profile_ids } : {}
+  formData.template_overrides = template.template_overrides ? { ...template.template_overrides } : {}
 }
 
 function onModalShown() {

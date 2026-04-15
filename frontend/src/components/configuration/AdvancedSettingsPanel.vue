@@ -15,9 +15,27 @@
       >
         <span class="dot dot-blue"></span>
         Model Tuning
+        <span v-if="getProfileForArea('model')" class="profile-badge ms-1" title="Profile assigned">P</span>
         <span class="chevron"><i class="bi bi-chevron-down"></i></span>
       </button>
       <div v-show="cardStates.tuning" class="card-body-inner">
+        <!-- Issue #1062: Profile selector for model area (template mode only) -->
+        <div v-if="isTemplateMode" class="profile-selector mb-2">
+          <label class="form-label small mb-1">
+            Profile (model area)
+            <span class="text-muted small ms-1">— inheritable defaults</span>
+          </label>
+          <select
+            class="form-select form-select-sm"
+            :value="getProfileForArea('model')"
+            @change="setProfileForArea('model', $event.target.value || null)"
+          >
+            <option value="">(no profile)</option>
+            <option v-for="p in profilesForArea('model')" :key="p.profile_id" :value="p.profile_id">
+              {{ p.name }}
+            </option>
+          </select>
+        </div>
         <div class="mb-2">
           <label class="form-label">Model</label>
           <div class="model-btn-group">
@@ -133,15 +151,31 @@
       >
         <span class="dot dot-indigo"></span>
         Tools & Permissions
+        <span v-if="getProfileForArea('permissions')" class="profile-badge ms-1" title="Profile assigned">P</span>
         <span class="chevron"><i class="bi bi-chevron-down"></i></span>
       </button>
       <div v-show="cardStates.tools" class="card-body-inner">
+        <!-- Issue #1062: Profile selector for permissions area (template mode only) -->
+        <div v-if="isTemplateMode" class="profile-selector mb-2">
+          <label class="form-label small mb-1">Profile (permissions area)</label>
+          <select
+            class="form-select form-select-sm"
+            :value="getProfileForArea('permissions')"
+            @change="setProfileForArea('permissions', $event.target.value || null)"
+          >
+            <option value="">(no profile)</option>
+            <option v-for="p in profilesForArea('permissions')" :key="p.profile_id" :value="p.profile_id">
+              {{ p.name }}
+            </option>
+          </select>
+        </div>
         <!-- Allowed Tools -->
         <div class="mb-2">
           <label class="form-label">
             Allowed Tools
-            <span v-if="fieldStates.allowed_tools === 'autofilled'" class="field-indicator autofilled">&lt;</span>
-            <span v-if="fieldStates.allowed_tools === 'modified'" class="field-indicator modified">*</span>
+            <span v-if="fieldState('allowed_tools') === 'profile'" class="field-indicator profile" title="Value from profile">P</span>
+            <span v-if="fieldState('allowed_tools') === 'autofilled'" class="field-indicator autofilled">&lt;</span>
+            <span v-if="fieldState('allowed_tools') === 'modified'" class="field-indicator modified">*</span>
           </label>
           <div class="tag-editor" @click="focusInput('allowedToolInput')">
             <span
@@ -177,8 +211,9 @@
         <div class="mb-2">
           <label class="form-label">
             Disallowed Tools
-            <span v-if="fieldStates.disallowed_tools === 'autofilled'" class="field-indicator autofilled">&lt;</span>
-            <span v-if="fieldStates.disallowed_tools === 'modified'" class="field-indicator modified">*</span>
+            <span v-if="fieldState('disallowed_tools') === 'profile'" class="field-indicator profile" title="Value from profile">P</span>
+            <span v-if="fieldState('disallowed_tools') === 'autofilled'" class="field-indicator autofilled">&lt;</span>
+            <span v-if="fieldState('disallowed_tools') === 'modified'" class="field-indicator modified">*</span>
           </label>
           <div class="tag-editor" @click="focusInput('disallowedToolInput')">
             <span
@@ -257,9 +292,24 @@
       >
         <span class="dot dot-purple"></span>
         MCP Servers
+        <span v-if="getProfileForArea('mcp')" class="profile-badge ms-1" title="Profile assigned">P</span>
         <span class="chevron"><i class="bi bi-chevron-down"></i></span>
       </button>
       <div v-show="cardStates.mcp" class="card-body-inner">
+        <!-- Issue #1062: Profile selector for mcp area (template mode only) -->
+        <div v-if="isTemplateMode" class="profile-selector mb-2">
+          <label class="form-label small mb-1">Profile (MCP area)</label>
+          <select
+            class="form-select form-select-sm"
+            :value="getProfileForArea('mcp')"
+            @change="setProfileForArea('mcp', $event.target.value || null)"
+          >
+            <option value="">(no profile)</option>
+            <option v-for="p in profilesForArea('mcp')" :key="p.profile_id" :value="p.profile_id">
+              {{ p.name }}
+            </option>
+          </select>
+        </div>
         <McpServerPanel
           :mcp-server-ids="formData.mcp_server_ids || []"
           @update:mcp-server-ids="$emit('update:form-data', 'mcp_server_ids', $event)"
@@ -285,9 +335,24 @@
       >
         <span class="dot dot-amber"></span>
         Knowledge Management
+        <span v-if="getProfileForArea('features')" class="profile-badge ms-1" title="Profile assigned">P</span>
         <span class="chevron"><i class="bi bi-chevron-down"></i></span>
       </button>
       <div v-show="cardStates.knowledge" class="card-body-inner">
+        <!-- Issue #1062: Profile selector for features area (template mode only) -->
+        <div v-if="isTemplateMode" class="profile-selector mb-2">
+          <label class="form-label small mb-1">Profile (features area)</label>
+          <select
+            class="form-select form-select-sm"
+            :value="getProfileForArea('features')"
+            @change="setProfileForArea('features', $event.target.value || null)"
+          >
+            <option value="">(no profile)</option>
+            <option v-for="p in profilesForArea('features')" :key="p.profile_id" :value="p.profile_id">
+              {{ p.name }}
+            </option>
+          </select>
+        </div>
         <div class="form-check form-switch mb-2">
           <input
             class="form-check-input"
@@ -373,12 +438,28 @@
       >
         <span class="dot dot-teal"></span>
         System Prompt & Context
+        <span v-if="getProfileForArea('system_prompt')" class="profile-badge ms-1" title="Profile assigned">P</span>
         <span class="chevron"><i class="bi bi-chevron-down"></i></span>
       </button>
       <div v-show="cardStates.prompt" class="card-body-inner">
+        <!-- Issue #1062: Profile selector for system_prompt area (template mode only) -->
+        <div v-if="isTemplateMode" class="profile-selector mb-2">
+          <label class="form-label small mb-1">Profile (system prompt area)</label>
+          <select
+            class="form-select form-select-sm"
+            :value="getProfileForArea('system_prompt')"
+            @change="setProfileForArea('system_prompt', $event.target.value || null)"
+          >
+            <option value="">(no profile)</option>
+            <option v-for="p in profilesForArea('system_prompt')" :key="p.profile_id" :value="p.profile_id">
+              {{ p.name }}
+            </option>
+          </select>
+        </div>
         <div class="mb-2">
           <label class="form-label">
             System Prompt
+            <span v-if="fieldState('system_prompt') === 'profile'" class="field-indicator profile" title="Value from profile">P</span>
             <span v-if="fieldStates.system_prompt === 'autofilled'" class="field-indicator autofilled">&lt;</span>
             <span v-if="fieldStates.system_prompt === 'modified'" class="field-indicator modified">*</span>
           </label>
@@ -415,9 +496,24 @@
       >
         <span class="dot dot-gray"></span>
         Extra Options
+        <span v-if="getProfileForArea('isolation')" class="profile-badge ms-1" title="Profile assigned">P</span>
         <span class="chevron"><i class="bi bi-chevron-down"></i></span>
       </button>
       <div v-show="cardStates.extra" class="card-body-inner">
+        <!-- Issue #1062: Profile selector for isolation area (template mode only) -->
+        <div v-if="isTemplateMode" class="profile-selector mb-2">
+          <label class="form-label small mb-1">Profile (isolation area)</label>
+          <select
+            class="form-select form-select-sm"
+            :value="getProfileForArea('isolation')"
+            @change="setProfileForArea('isolation', $event.target.value || null)"
+          >
+            <option value="">(no profile)</option>
+            <option v-for="p in profilesForArea('isolation')" :key="p.profile_id" :value="p.profile_id">
+              {{ p.name }}
+            </option>
+          </select>
+        </div>
         <!-- CLI Path -->
         <div class="mb-2">
           <label class="form-label">CLI Path</label>
@@ -733,9 +829,11 @@ import { ref, reactive, computed, onMounted, watch, useTemplateRef } from 'vue'
 import { api } from '@/utils/api'
 import { validateTemplatePath, validateTemplatePathList } from '@/utils/templateVariables'
 import { useMcpStore } from '../../stores/mcp'
+import { useProfileStore } from '@/stores/profile'  // Issue #1062
 import McpServerPanel from './McpServerPanel.vue'
 
 const mcpStore = useMcpStore()
+const profileStore = useProfileStore()  // Issue #1062
 
 const props = defineProps({
   mode: {
@@ -761,11 +859,17 @@ const props = defineProps({
       disallowed_tools: 'normal',
       system_prompt: 'normal'
     })
+  },
+  // Issue #1062: profile_ids for template composition (area -> profile_id)
+  profileIds: {
+    type: Object,
+    default: () => ({})
   }
 })
 
 const emit = defineEmits([
   'update:form-data',
+  'update:profile-ids',
   'preview-permissions',
   'show-quick',
   'browse-additional-dir',
@@ -808,6 +912,30 @@ const capabilityInput = ref(null)
 // Common tools
 const commonTools = ['Bash', 'Read', 'Edit', 'Write', 'Glob', 'Grep', 'WebFetch']
 const commonDeniedTools = ['Bash', 'Write', 'WebFetch']
+
+// Issue #1062: Profile selector helpers
+function profilesForArea(area) {
+  return profileStore.profilesForArea(area)
+}
+
+function getProfileForArea(area) {
+  return props.profileIds?.[area] || null
+}
+
+function setProfileForArea(area, profileId) {
+  const updated = { ...(props.profileIds || {}) }
+  if (profileId) {
+    updated[area] = profileId
+  } else {
+    delete updated[area]
+  }
+  emit('update:profile-ids', updated)
+}
+
+// Field state helper including profile source
+function fieldState(field) {
+  return props.fieldStates?.[field] || 'normal'
+}
 
 // Computed
 const isSessionMode = computed(() => props.mode === 'create-session' || props.mode === 'edit-session')
@@ -855,13 +983,14 @@ const additionalDirsList = computed(() => {
   return raw.split('\n').map(d => d.trim()).filter(d => d)
 })
 
-// Docker status fetch
+// Docker status fetch + profile prefetch
 onMounted(async () => {
   try {
     dockerStatus.value = await api.get('/api/system/docker-status')
   } catch {
     dockerStatus.value = { available: false }
   }
+  profileStore.fetchProfiles()
 })
 
 // Methods
@@ -1012,5 +1141,26 @@ function handleMcpReconnect(name) {
 
 .field-indicator.modified {
   color: #cc5500;
+}
+
+.field-indicator.profile {
+  color: #0a6640;
+  font-weight: bold;
+}
+
+.profile-selector {
+  background: var(--bs-light-bg-subtle);
+  border-radius: 4px;
+  padding: 6px 8px;
+  border: 1px solid var(--bs-border-color);
+}
+
+.profile-badge {
+  font-size: 0.65rem;
+  background: #0a6640;
+  color: white;
+  border-radius: 3px;
+  padding: 0 3px;
+  vertical-align: middle;
 }
 </style>

@@ -129,6 +129,10 @@ class SessionCoordinator:
         from src.template_manager import TemplateManager
         self.template_manager = TemplateManager(self.data_dir)
 
+        # Profile manager for composable session config profiles (issue #1062)
+        from src.profile_manager import ProfileManager
+        self.profile_manager = ProfileManager(self.data_dir)
+
         # MCP config manager for global MCP server configurations (issue #676)
         from src.mcp_config_manager import McpConfigManager
         self.mcp_config_manager = McpConfigManager(self.data_dir)
@@ -311,6 +315,10 @@ class SessionCoordinator:
             # Create default templates if none exist
             await self.template_manager.create_default_templates()
             coord_logger.info("Loaded minion templates")
+
+            # Load configuration profiles from disk (issue #1062)
+            await self.profile_manager.load_profiles()
+            coord_logger.info("Loaded configuration profiles")
 
             # Load global MCP server configs (issue #676)
             await self.mcp_config_manager.load_configs()
@@ -1114,7 +1122,9 @@ class SessionCoordinator:
             # Issue #1059 Phase 2: Resolve effective config from template + session overrides.
             # Config takes effect at session start/restart — changes after start are not live.
             from src.config_resolution import resolve_effective_config
-            effective_config = await resolve_effective_config(session_info, self.template_manager)
+            effective_config = await resolve_effective_config(
+                session_info, self.template_manager, self.profile_manager
+            )
 
             # Override 3 fields computed earlier in this method:
             #   system_prompt — assembled above (includes legion guide, history ref, etc.)

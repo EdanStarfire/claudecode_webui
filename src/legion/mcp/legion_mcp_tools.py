@@ -898,15 +898,18 @@ class LegionMCPTools:
 
                 template_applied = template
 
-                # Apply template values (enforced, no overrides)
-                # Use getattr with parent fallback so templates missing the field
-                # don't silently collapse to None → "default" in the constructor
-                permission_mode = (
-                    getattr(template, 'permission_mode', None)
-                    or parent_session.current_permission_mode
-                )
-                allowed_tools = getattr(template, 'allowed_tools', None)
-                disallowed_tools = getattr(template, 'disallowed_tools', None)
+                # Issue #1062: Resolve template+profile merged config via shared helper.
+                # This handles the 3-tier base (profile → template_overrides → template flat).
+                # Session overrides are not applied at spawn time — not applicable here.
+                from src.config_resolution import resolve_template_config
+                profile_manager = getattr(self.system.coordinator, 'profile_manager', None)
+                resolved = await resolve_template_config(template, profile_manager)
+
+                # Apply resolved values (enforced, no overrides)
+                # Use resolved config with parent fallback for missing fields.
+                permission_mode = resolved.get('permission_mode') or parent_session.current_permission_mode
+                allowed_tools = resolved.get('allowed_tools')
+                disallowed_tools = resolved.get('disallowed_tools')
 
                 # Use template's role if role not provided
                 if not role and template.role:
@@ -916,11 +919,8 @@ class LegionMCPTools:
                 if template.system_prompt:
                     system_prompt = f"{template.system_prompt}\n\n{system_prompt}"
 
-                # Apply model from template if set
-                if template.model:
-                    model = template.model
-                else:
-                    model = None
+                # Apply model from resolved config if set
+                model = resolved.get('model') or None
 
                 # Apply capabilities from template (merge with any provided)
                 if template.capabilities:
@@ -930,68 +930,61 @@ class LegionMCPTools:
                             template_caps.append(cap)
                     capabilities = template_caps
 
-                # Apply override_system_prompt from template
-                override_system_prompt = template.override_system_prompt
+                # Apply override_system_prompt from resolved config
+                override_system_prompt = resolved.get('override_system_prompt', template.override_system_prompt)
 
-                # Apply sandbox_enabled from template
-                if template.sandbox_enabled:
+                # Apply sandbox_enabled from resolved config
+                if resolved.get('sandbox_enabled'):
                     sandbox_enabled = True
 
-                # Apply cli_path from template (issue #489)
+                # Apply cli_path from resolved config (issue #489)
                 # SECURITY: cli_path flows only through user-controlled templates
-                cli_path = template.cli_path
+                cli_path = resolved.get('cli_path')
 
-                # Apply Docker isolation from template (issue #496)
+                # Apply Docker isolation from resolved config (issue #496)
                 # SECURITY: Docker config flows only through user-controlled templates
-                docker_enabled = getattr(template, 'docker_enabled', False)
-                docker_image = getattr(template, 'docker_image', None)
-                docker_extra_mounts = getattr(template, 'docker_extra_mounts', None)
+                docker_enabled = resolved.get('docker_enabled', False)
+                docker_image = resolved.get('docker_image')
+                docker_extra_mounts = resolved.get('docker_extra_mounts')
 
-                # Extract additional config fields from template, falling back to parent session
+                # Extract additional config fields, falling back to parent session
                 # (issue #762: ensure all SessionConfig fields propagate through spawn path)
-                thinking_mode = getattr(template, 'thinking_mode', None) or parent_session.thinking_mode
+                thinking_mode = resolved.get('thinking_mode') or parent_session.thinking_mode
                 thinking_budget_tokens = (
-                    getattr(template, 'thinking_budget_tokens', None)
-                    or parent_session.thinking_budget_tokens
+                    resolved.get('thinking_budget_tokens') or parent_session.thinking_budget_tokens
                 )
-                effort = getattr(template, 'effort', None) or parent_session.effort
+                effort = resolved.get('effort') or parent_session.effort
                 setting_sources = (
-                    getattr(template, 'setting_sources', None) or parent_session.setting_sources
+                    resolved.get('setting_sources') or parent_session.setting_sources
                 )
                 additional_directories = (
-                    getattr(template, 'additional_directories', None)
-                    or parent_session.additional_directories
+                    resolved.get('additional_directories') or parent_session.additional_directories
                 )
-                sandbox_config = (
-                    getattr(template, 'sandbox_config', None) or parent_session.sandbox_config
-                )
+                sandbox_config = resolved.get('sandbox_config') or parent_session.sandbox_config
                 docker_home_directory = (
-                    getattr(template, 'docker_home_directory', None)
-                    or parent_session.docker_home_directory
+                    resolved.get('docker_home_directory') or parent_session.docker_home_directory
                 )
-                # Booleans: use getattr with parent fallback to avoid falsy-value bugs
-                history_distillation_enabled = getattr(
-                    template, 'history_distillation_enabled',
+                # Booleans: use resolved value with parent fallback to avoid falsy-value bugs
+                history_distillation_enabled = resolved.get(
+                    'history_distillation_enabled',
                     parent_session.history_distillation_enabled,
                 )
                 auto_memory_mode = (
-                    getattr(template, 'auto_memory_mode', None)
-                    or parent_session.auto_memory_mode
+                    resolved.get('auto_memory_mode') or parent_session.auto_memory_mode
                 )
-                skill_creating_enabled = getattr(
-                    template, 'skill_creating_enabled',
+                skill_creating_enabled = resolved.get(
+                    'skill_creating_enabled',
                     parent_session.skill_creating_enabled,
                 )
                 mcp_server_ids = (
-                    getattr(template, 'mcp_server_ids', None)
-                    or parent_session.mcp_server_ids
+                    resolved.get('mcp_server_ids') or parent_session.mcp_server_ids
                 )
-                enable_claudeai_mcp_servers = getattr(
-                    template, 'enable_claudeai_mcp_servers',
+                enable_claudeai_mcp_servers = resolved.get(
+                    'enable_claudeai_mcp_servers',
                     parent_session.enable_claudeai_mcp_servers,
                 )
-                strict_mcp_config = getattr(
-                    template, 'strict_mcp_config',
+                strict_mcp_config = resolved.get(
+                    'strict_mcp_config',
                     parent_session.strict_mcp_config,
                 )
 
