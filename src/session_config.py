@@ -56,6 +56,8 @@ class SessionConfig(BaseModel):
     # Issue #1050: Proxy lifecycle management
     docker_proxy_enabled: bool = False        # Intent toggle: enable proxy sidecar
     docker_proxy_image: str | None = None     # Image override (None = use app config default)
+    # Issue #1051: Per-session credential injection via proxy
+    docker_proxy_credentials: list[dict] | None = None  # [{"host_pattern", "header", "value", "name"}]
 
     # Features
     history_distillation_enabled: bool = True

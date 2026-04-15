@@ -27,6 +27,11 @@ set -euo pipefail
 #   CLAUDE_DOCKER_SHM_SIZE      - /dev/shm size for Chromium (default: 256m)
 #   CLAUDE_DOCKER_PROXY_IMAGE     - Proxy sidecar image (enables proxy mode when set)
 #                                   Default when set: claude-proxy:local
+#   CLAUDE_DOCKER_PROXY_CREDS_FILE - Host path to credentials.json; bind-mounted into
+#                                    sidecar at /etc/proxy/credentials.json:ro (issue #1051)
+#   CLAUDE_DOCKER_DELIVERY_ENV_FILE - Host path to JSON file mapping env var names to
+#                                     placeholder values; forwarded as -e flags to the
+#                                     agent container (issue #1051)
 #
 # Proxy mode: claude-docker launches a dedicated proxy sidecar, attaches the agent to it
 # via --network container:<sidecar>, and tears both down on exit. Transparent DNAT
@@ -205,6 +210,13 @@ if [ -n "$PROXY_IMAGE" ]; then
     # rm -rf may fail if uid 9999-owned files remain; || true prevents exit-code noise.
     trap 'docker rm -f "$PROXY_NAME" 2>/dev/null || true; rm -rf "$PROXY_CERTS" 2>/dev/null || true' EXIT
 
+    # Issue #1051: Bind-mount credentials file into sidecar if provided
+    PROXY_CREDS_FILE="${CLAUDE_DOCKER_PROXY_CREDS_FILE:-}"
+    PROXY_CREDS_FLAGS=""
+    if [ -n "$PROXY_CREDS_FILE" ] && [ -f "$PROXY_CREDS_FILE" ]; then
+        PROXY_CREDS_FLAGS="-v $PROXY_CREDS_FILE:/etc/proxy/credentials.json:ro"
+    fi
+
     docker run -d \
         --name "$PROXY_NAME" \
         --cap-add NET_ADMIN \
@@ -213,6 +225,7 @@ if [ -n "$PROXY_IMAGE" ]; then
         -v "$PROXY_CERTS:/var/lib/mitmproxy" \
         ${PROXY_LOG_DIR:+-v "$PROXY_LOG_DIR:/var/log/proxy"} \
         ${PROXY_SESSION_ID:+-e "PROXY_SESSION_ID=$PROXY_SESSION_ID"} \
+        $PROXY_CREDS_FLAGS \
         "$PROXY_IMAGE" >/dev/null
 
     # Wait up to 30s for the proxy to be fully ready.
@@ -247,6 +260,22 @@ if [ -n "$PROXY_IMAGE" ]; then
     PROXY_FLAGS="$PROXY_FLAGS -e GIT_SSL_CAINFO=/run/proxy-ca/ca.crt"
 fi
 
+# Issue #1051: Build delivery env flags — env vars carrying placeholder values for
+# credential injection. The agent container receives placeholder values (not real secrets);
+# the proxy sidecar replaces placeholders with real values on matching outgoing requests.
+DELIVERY_ENV_FLAGS=""
+DELIVERY_ENV_FILE="${CLAUDE_DOCKER_DELIVERY_ENV_FILE:-}"
+if [ -n "$DELIVERY_ENV_FILE" ] && [ -f "$DELIVERY_ENV_FILE" ]; then
+    while IFS=$'\t' read -r key value; do
+        [ -n "$key" ] && DELIVERY_ENV_FLAGS="$DELIVERY_ENV_FLAGS -e ${key}=${value}"
+    done < <(python3 -c "
+import json, sys
+d = json.load(open(sys.argv[1]))
+for k, v in d.items():
+    print(k + '\t' + v)
+" "$DELIVERY_ENV_FILE" 2>/dev/null || true)
+fi
+
 # Run the container (capture exit code for diagnostics)
 docker run \
     --rm \
@@ -264,6 +293,7 @@ docker run \
     $SSH_AGENT_FLAGS \
     $RESOURCE_FLAGS \
     $PROXY_FLAGS \
+    $DELIVERY_ENV_FLAGS \
     "$IMAGE_NAME" \
     "$@"
 EXIT_CODE=$?
