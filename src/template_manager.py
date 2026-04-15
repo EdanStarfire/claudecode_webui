@@ -171,6 +171,7 @@ class TemplateManager:
         system_prompt: str | None = None,
         description: str | None = None,
         capabilities: list[str] | None = None,
+        profile_id: str | None = None,
     ) -> MinionTemplate:
         """Create a new template.
 
@@ -206,6 +207,7 @@ class TemplateManager:
             system_prompt=system_prompt,
             description=description,
             capabilities=capabilities if capabilities is not None else [],
+            profile_id=profile_id,
             **config_data,
         )
 
@@ -263,6 +265,8 @@ class TemplateManager:
         # MCP toggle configuration (issue #786)
         enable_claudeai_mcp_servers: bool | None = None,
         strict_mcp_config: bool | None = None,
+        # Composable profile placeholder (issue #1062)
+        profile_id: str | None = None,
     ) -> MinionTemplate:
         """Update existing template."""
         template = self.templates.get(template_id)
@@ -354,6 +358,9 @@ class TemplateManager:
 
         if strict_mcp_config is not None:
             template.strict_mcp_config = strict_mcp_config
+
+        if profile_id is not None:
+            template.profile_id = profile_id
 
         template.updated_at = datetime.now(UTC)
 

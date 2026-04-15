@@ -131,6 +131,88 @@ class TestSessionInfo:
         info = SessionInfo.from_dict(data)
         assert info.bare_mode is False
 
+    # --- Issue #1059: template_id / session_overrides schema tests ---
+
+    def test_session_info_template_id_default(self):
+        """template_id defaults to None when not provided."""
+        now = datetime.now(UTC)
+        info = SessionInfo(
+            session_id="test-tmpl-default",
+            state=SessionState.CREATED,
+            created_at=now,
+            updated_at=now,
+        )
+        assert info.template_id is None
+
+    def test_session_info_session_overrides_default(self):
+        """session_overrides defaults to {} via __post_init__ when not provided."""
+        now = datetime.now(UTC)
+        info = SessionInfo(
+            session_id="test-overrides-default",
+            state=SessionState.CREATED,
+            created_at=now,
+            updated_at=now,
+        )
+        assert info.session_overrides == {}
+
+    def test_session_info_to_dict_template_fields(self):
+        """to_dict includes template_id and session_overrides."""
+        now = datetime.now(UTC)
+        info = SessionInfo(
+            session_id="test-tmpl-dict",
+            state=SessionState.CREATED,
+            created_at=now,
+            updated_at=now,
+            template_id="tmpl-1",
+            session_overrides={"model": "opus"},
+        )
+        data = info.to_dict()
+        assert data["template_id"] == "tmpl-1"
+        assert data["session_overrides"] == {"model": "opus"}
+
+    def test_session_info_from_dict_backward_compat(self):
+        """from_dict with missing template fields defaults to None / {}."""
+        now = datetime.now(UTC)
+        data = {
+            "session_id": "test-backward-compat",
+            "state": "created",
+            "created_at": now.isoformat(),
+            "updated_at": now.isoformat(),
+        }
+        info = SessionInfo.from_dict(data)
+        assert info.template_id is None
+        assert info.session_overrides == {}
+
+    def test_session_info_from_dict_with_template_fields(self):
+        """from_dict preserves explicit template_id and session_overrides."""
+        now = datetime.now(UTC)
+        data = {
+            "session_id": "test-from-dict-tmpl",
+            "state": "created",
+            "created_at": now.isoformat(),
+            "updated_at": now.isoformat(),
+            "template_id": "tmpl-42",
+            "session_overrides": {"effort": "high"},
+        }
+        info = SessionInfo.from_dict(data)
+        assert info.template_id == "tmpl-42"
+        assert info.session_overrides == {"effort": "high"}
+
+    def test_session_info_round_trip_template_fields(self):
+        """to_dict() → from_dict() round-trip preserves template_id and session_overrides."""
+        now = datetime.now(UTC)
+        info = SessionInfo(
+            session_id="test-round-trip",
+            state=SessionState.CREATED,
+            created_at=now,
+            updated_at=now,
+            template_id="tmpl-rt",
+            session_overrides={"model": "haiku", "thinking_mode": "adaptive"},
+        )
+        restored = SessionInfo.from_dict(info.to_dict())
+        assert restored.template_id == "tmpl-rt"
+        assert restored.session_overrides == {"model": "haiku", "thinking_mode": "adaptive"}
+
 
 class TestSessionManager:
     """Test SessionManager functionality."""

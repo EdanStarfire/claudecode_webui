@@ -528,6 +528,9 @@ class TestImportFieldPreservation:
         template_fields = {f.name for f in dataclasses.fields(MinionTemplateModel)}
         config_fields = set(SessionConfig.model_fields.keys())
         shared = template_fields & config_fields
+        # template_id in SessionConfig is a session→template link; in MinionTemplate it is the
+        # template's own primary key (intentionally regenerated on import).  Exclude it.
+        shared -= {"template_id"}
 
         # Build a config with non-default values for all shared fields
         config = SessionConfig(

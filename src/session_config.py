@@ -71,3 +71,6 @@ class SessionConfig(BaseModel):
     strict_mcp_config: bool = False  # Pass --strict-mcp-config to disable local .mcp.json
     bare_mode: bool = False  # Pass --bare to skip hooks, LSP, plugin sync, skill walks
     env_scrub_enabled: bool = False  # Issue #957: Strip credentials from subprocess envs
+
+    # Template linkage (issue #1059)
+    template_id: str | None = None
