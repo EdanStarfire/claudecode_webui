@@ -56,6 +56,40 @@
       ></textarea>
     </div>
 
+    <!-- Issue #1062: Profile selectors (template mode only) -->
+    <div v-if="isTemplateMode" class="mb-3">
+      <label class="form-label">Configuration Profiles</label>
+      <div class="profile-selectors">
+        <div class="mb-2">
+          <label class="form-label small text-muted mb-1">Model area</label>
+          <select
+            class="form-select form-select-sm"
+            :value="getProfileForArea('model')"
+            @change="setProfileForArea('model', $event.target.value || null)"
+          >
+            <option value="">(no profile)</option>
+            <option v-for="p in profilesForArea('model')" :key="p.profile_id" :value="p.profile_id">
+              {{ p.name }}
+            </option>
+          </select>
+        </div>
+        <div>
+          <label class="form-label small text-muted mb-1">Permissions area</label>
+          <select
+            class="form-select form-select-sm"
+            :value="getProfileForArea('permissions')"
+            @change="setProfileForArea('permissions', $event.target.value || null)"
+          >
+            <option value="">(no profile)</option>
+            <option v-for="p in profilesForArea('permissions')" :key="p.profile_id" :value="p.profile_id">
+              {{ p.name }}
+            </option>
+          </select>
+        </div>
+      </div>
+      <div class="form-text">Assign reusable defaults per area. Override in Advanced Settings.</div>
+    </div>
+
     <!-- Permission Mode (button group) -->
     <div class="mb-3">
       <label class="form-label">
@@ -196,7 +230,10 @@
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, onMounted } from 'vue'
+import { useProfileStore } from '@/stores/profile'
+
+const profileStore = useProfileStore()
 
 const props = defineProps({
   mode: {
@@ -229,11 +266,17 @@ const props = defineProps({
       role: 'normal',
       permission_mode: 'normal'
     })
+  },
+  // Issue #1062: profile_ids for template composition (area -> profile_id)
+  profileIds: {
+    type: Object,
+    default: () => ({})
   }
 })
 
 const emit = defineEmits([
   'update:form-data',
+  'update:profile-ids',
   'update:selected-template-id',
   'open-folder-browser',
   'open-template-manager',
@@ -259,6 +302,29 @@ const canUseBypassPermissions = computed(() => {
 const selectedTemplate = computed(() => {
   if (!props.selectedTemplateId) return null
   return props.templates.find(t => t.template_id === props.selectedTemplateId)
+})
+
+// Issue #1062: Profile selector helpers
+function profilesForArea(area) {
+  return profileStore.profilesForArea(area)
+}
+
+function getProfileForArea(area) {
+  return props.profileIds?.[area] || null
+}
+
+function setProfileForArea(area, profileId) {
+  const updated = { ...(props.profileIds || {}) }
+  if (profileId) {
+    updated[area] = profileId
+  } else {
+    delete updated[area]
+  }
+  emit('update:profile-ids', updated)
+}
+
+onMounted(() => {
+  profileStore.fetchProfiles()
 })
 
 function setPermissionMode(mode) {
@@ -296,5 +362,12 @@ function getStateBadgeClass(state) {
 
 .field-indicator.modified {
   color: #cc5500;
+}
+
+.profile-selectors {
+  background: var(--bs-light-bg-subtle);
+  border-radius: 4px;
+  padding: 8px;
+  border: 1px solid var(--bs-border-color);
 }
 </style>
