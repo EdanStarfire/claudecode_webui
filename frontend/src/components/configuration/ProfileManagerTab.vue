@@ -50,17 +50,6 @@
         <button type="button" class="btn-close btn-close-sm" @click="closeForm"></button>
       </div>
       <div class="card-body">
-        <!-- Name -->
-        <div class="mb-3">
-          <label class="form-label small">Name <span class="text-danger">*</span></label>
-          <input
-            v-model="form.name"
-            type="text"
-            class="form-control form-control-sm"
-            placeholder="e.g. Fast Model"
-          />
-        </div>
-
         <!-- Area (create only) -->
         <div v-if="!editingProfile" class="mb-3">
           <label class="form-label small">Area <span class="text-danger">*</span></label>
@@ -71,6 +60,17 @@
             </option>
           </select>
           <div class="form-text small">{{ form.area ? AREA_META[form.area]?.description : '' }}</div>
+        </div>
+
+        <!-- Name -->
+        <div class="mb-3">
+          <label class="form-label small">Name <span class="text-danger">*</span></label>
+          <input
+            v-model="form.name"
+            type="text"
+            class="form-control form-control-sm"
+            placeholder="e.g. Fast Model"
+          />
         </div>
 
         <!-- Config fields -->
@@ -172,7 +172,9 @@
                   <div class="model-btn-group">
                     <button type="button" class="model-btn" :class="{ active: form.config.permission_mode === 'default' }" :disabled="!included.permission_mode" @click="form.config.permission_mode = 'default'">Default</button>
                     <button type="button" class="model-btn" :class="{ active: form.config.permission_mode === 'acceptEdits' }" :disabled="!included.permission_mode" @click="form.config.permission_mode = 'acceptEdits'">Accept Edits</button>
+                    <button type="button" class="model-btn" :class="{ active: form.config.permission_mode === 'plan' }" :disabled="!included.permission_mode" @click="form.config.permission_mode = 'plan'">Plan</button>
                     <button type="button" class="model-btn" :class="{ active: form.config.permission_mode === 'dontAsk' }" :disabled="!included.permission_mode" @click="form.config.permission_mode = 'dontAsk'">Don't Ask</button>
+                    <button type="button" class="model-btn" :class="{ active: form.config.permission_mode === 'auto' }" :disabled="!included.permission_mode" @click="form.config.permission_mode = 'auto'">Auto</button>
                     <button type="button" class="model-btn" :class="{ active: form.config.permission_mode === 'bypassPermissions' }" :disabled="!included.permission_mode" @click="form.config.permission_mode = 'bypassPermissions'">Bypass</button>
                   </div>
                 </div>
