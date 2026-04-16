@@ -245,8 +245,8 @@
           </div>
         </div>
 
-        <!-- Settings Sources (session modes only) -->
-        <div v-if="isSessionMode" class="mb-2">
+        <!-- Settings Sources -->
+        <div v-if="isSessionMode || isTemplateMode" class="mb-2">
           <label class="form-label">Settings Sources</label>
           <div class="model-btn-group">
             <button
