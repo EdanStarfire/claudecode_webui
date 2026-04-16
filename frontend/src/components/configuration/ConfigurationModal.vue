@@ -373,6 +373,7 @@ import { useRouter } from 'vue-router'
 import { useProjectStore } from '@/stores/project'
 import { useSessionStore } from '@/stores/session'
 import { useUIStore } from '@/stores/ui'
+import { useProfileStore } from '@/stores/profile'
 import { api, getAuthToken } from '@/utils/api'
 import QuickSettingsPanel from './QuickSettingsPanel.vue'
 import AdvancedSettingsPanel from './AdvancedSettingsPanel.vue'
@@ -383,6 +384,7 @@ const router = useRouter()
 const projectStore = useProjectStore()
 const sessionStore = useSessionStore()
 const uiStore = useUIStore()
+const profileStore = useProfileStore()
 
 // Modal state
 const modalElement = ref(null)
@@ -996,6 +998,19 @@ function applyTemplate() {
 
   // Reset field states before applying new template
   resetFieldStates()
+
+  // Issue #1062: Apply profile configs as base layer first (lowest priority)
+  // Each profile area maps its config keys directly to formData fields
+  const profileIds = template.profile_ids || {}
+  for (const [, profileId] of Object.entries(profileIds)) {
+    const profile = profileStore.allProfiles.find(p => p.profile_id === profileId)
+    if (!profile) continue
+    for (const [key, value] of Object.entries(profile.config || {})) {
+      if (!(key in formData)) continue
+      formData[key] = value
+      if (key in fieldStates) fieldStates[key] = 'profile'
+    }
+  }
 
   // Apply schema fields from template with field-state tracking
   for (const [field, meta] of Object.entries(CONFIG_FIELDS)) {
@@ -1641,6 +1656,9 @@ function populateFormFromTemplate(template) {
 }
 
 function onModalShown() {
+  // Issue #1062: ensure profiles are loaded so applyTemplate can resolve them
+  profileStore.fetchProfiles()
+
   // Focus name input
   nextTick(() => {
     const nameInput = document.getElementById('config-name')
