@@ -352,17 +352,21 @@
               <div v-for="isoField in isolationFields" :key="isoField.key" class="field-row">
                 <div class="field-toggle">
                   <div class="form-check form-switch mb-0">
-                    <input class="form-check-input" type="checkbox" v-model="included[isoField.key]" />
+                    <input class="form-check-input" type="checkbox" v-model="included[isoField.key]"
+                      :disabled="isoField.dependsOn && !isIsoParentActive(isoField.dependsOn)" />
                   </div>
                 </div>
-                <div class="field-body" :class="{ 'field-disabled': !included[isoField.key] }">
+                <div class="field-body" :class="{ 'field-disabled': !included[isoField.key] || (isoField.dependsOn && !isIsoParentActive(isoField.dependsOn)) }">
                   <label class="form-label small mb-1">{{ isoField.key }}</label>
                   <div v-if="isoField.type === 'toggle'" class="form-check form-switch">
-                    <input class="form-check-input" type="checkbox" :id="'f-iso-' + isoField.key" v-model="form.config[isoField.key]" :disabled="!included[isoField.key]" />
+                    <input class="form-check-input" type="checkbox" :id="'f-iso-' + isoField.key" v-model="form.config[isoField.key]"
+                      :disabled="!included[isoField.key] || (isoField.dependsOn && !isIsoParentActive(isoField.dependsOn))" />
                     <label class="form-check-label small" :for="'f-iso-' + isoField.key">{{ isoField.label }}</label>
                   </div>
-                  <textarea v-else-if="isoField.type === 'textarea'" class="form-control form-control-sm font-monospace" rows="2" v-model="form.config[isoField.key]" :disabled="!included[isoField.key]" :placeholder="isoField.placeholder"></textarea>
-                  <input v-else type="text" class="form-control form-control-sm font-monospace" v-model="form.config[isoField.key]" :disabled="!included[isoField.key]" :placeholder="isoField.placeholder" />
+                  <textarea v-else-if="isoField.type === 'textarea'" class="form-control form-control-sm font-monospace" rows="2" v-model="form.config[isoField.key]"
+                    :disabled="!included[isoField.key] || (isoField.dependsOn && !isIsoParentActive(isoField.dependsOn))" :placeholder="isoField.placeholder"></textarea>
+                  <input v-else type="text" class="form-control form-control-sm font-monospace" v-model="form.config[isoField.key]"
+                    :disabled="!included[isoField.key] || (isoField.dependsOn && !isIsoParentActive(isoField.dependsOn))" :placeholder="isoField.placeholder" />
                 </div>
               </div>
             </template>
@@ -515,14 +519,14 @@ const AREA_META = {
 
 const isolationFields = [
   { key: 'cli_path', type: 'text', placeholder: '/path/to/claude-cli' },
-  { key: 'docker_enabled', type: 'toggle', label: 'Docker isolation' },
-  { key: 'docker_image', type: 'text', placeholder: 'claude-code:local' },
-  { key: 'docker_extra_mounts', type: 'textarea', placeholder: '/host/path:/container/path:ro (one per line)' },
-  { key: 'docker_home_directory', type: 'text', placeholder: '/home/claude' },
-  { key: 'docker_proxy_enabled', type: 'toggle', label: 'Network proxy sidecar' },
-  { key: 'docker_proxy_image', type: 'text', placeholder: 'claude-proxy:local' },
-  { key: 'docker_proxy_credentials', type: 'text', placeholder: 'Credential identifier' },
   { key: 'sandbox_enabled', type: 'toggle', label: 'Enable sandbox mode' },
+  { key: 'docker_enabled', type: 'toggle', label: 'Docker isolation' },
+  { key: 'docker_image', type: 'text', placeholder: 'claude-code:local', dependsOn: 'docker_enabled' },
+  { key: 'docker_extra_mounts', type: 'textarea', placeholder: '/host/path:/container/path:ro (one per line)', dependsOn: 'docker_enabled' },
+  { key: 'docker_home_directory', type: 'text', placeholder: '/home/claude', dependsOn: 'docker_enabled' },
+  { key: 'docker_proxy_enabled', type: 'toggle', label: 'Network proxy sidecar', dependsOn: 'docker_enabled' },
+  { key: 'docker_proxy_image', type: 'text', placeholder: 'claude-proxy:local', dependsOn: 'docker_proxy_enabled' },
+  { key: 'docker_proxy_credentials', type: 'text', placeholder: 'Credential identifier', dependsOn: 'docker_proxy_enabled' },
   { key: 'bare_mode', type: 'toggle', label: 'Bare mode (skips hooks, LSP, skills)' },
   { key: 'env_scrub_enabled', type: 'toggle', label: 'Scrub subprocess credentials' },
 ]
@@ -544,12 +548,18 @@ const commonDeniedTools = ['Bash', 'Write', 'WebFetch']
 
 const currentArea = computed(() => editingProfile.value?.area || form.area)
 
+const AREA_DEFAULTS = {
+  model: { model: 'sonnet' },
+  permissions: { permission_mode: 'default', setting_sources: ['user', 'project', 'local'] },
+  mcp: { enable_claudeai_mcp_servers: true, strict_mcp_config: true },
+  features: { history_distillation_enabled: true, auto_memory_mode: 'claude' },
+}
+
 watch(() => form.area, (newArea) => {
   if (!editingProfile.value) {
-    form.config = {}
+    form.config = { ...(AREA_DEFAULTS[newArea] || {}) }
     const fields = AREA_META[newArea]?.fields || []
     fields.forEach(f => { included[f] = false })
-    // Also init isolation fields
     isolationFields.forEach(f => { included[f.key] = false })
   }
 })
@@ -643,6 +653,10 @@ function toggleSettingSource(src) {
   if (idx >= 0) current.splice(idx, 1)
   else current.push(src)
   form.config.setting_sources = current
+}
+
+function isIsoParentActive(parentKey) {
+  return included[parentKey] && form.config[parentKey] === true
 }
 
 function toggleMcpServer(id, checked) {
