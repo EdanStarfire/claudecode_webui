@@ -1796,6 +1796,37 @@ watch(() => formData.sandbox.ignoreViolations.network, (newVal) => {
   }
 })
 
+// Issue #1062: when profile_ids changes (user picks a profile in template editor),
+// apply that profile's config values to formData fields immediately.
+watch(() => ({ ...formData.profile_ids }), (newIds, oldIds) => {
+  // Find newly added or changed profile assignments
+  for (const [area, profileId] of Object.entries(newIds)) {
+    if (oldIds[area] === profileId) continue  // unchanged
+    const profile = profileStore.allProfiles.find(p => p.profile_id === profileId)
+    if (!profile) continue
+    for (const [key, value] of Object.entries(profile.config || {})) {
+      if (!(key in formData)) continue
+      formData[key] = value
+      if (key in fieldStates) fieldStates[key] = 'profile'
+    }
+  }
+  // When a profile is removed from an area, reset its fields to defaults
+  for (const area of Object.keys(oldIds)) {
+    if (newIds[area]) continue  // still assigned
+    const oldProfile = profileStore.allProfiles.find(p => p.profile_id === oldIds[area])
+    if (!oldProfile) continue
+    for (const key of Object.keys(oldProfile.config || {})) {
+      if (!(key in formData)) continue
+      // Only reset if still marked as profile-sourced (not manually overridden)
+      if (fieldStates[key] === 'profile') {
+        const meta = CONFIG_FIELDS[key]
+        formData[key] = meta ? structuredClone(meta.default) : null
+        fieldStates[key] = 'normal'
+      }
+    }
+  }
+}, { deep: true })
+
 // Initialize Bootstrap modal
 onMounted(() => {
   if (modalElement.value) {
