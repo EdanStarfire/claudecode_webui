@@ -680,12 +680,21 @@ const CONFIG_FIELDS = {
 }
 
 // Derive fieldStates and templateOriginalValues from schema
-const fieldStates = reactive(
-  Object.fromEntries(Object.entries(CONFIG_FIELDS).filter(([, m]) => m.trackState).map(([k]) => [k, 'normal']))
-)
-const templateOriginalValues = ref(
-  Object.fromEntries(Object.entries(CONFIG_FIELDS).filter(([, m]) => m.trackState).map(([k]) => [k, null]))
-)
+// Sandbox sub-fields use synthetic keys (e.g. sandbox_autoAllowBash) since they live in formData.sandbox.*
+const SANDBOX_SYNTHETIC_KEYS = [
+  'sandbox_autoAllowBash', 'sandbox_allowUnsandboxed', 'sandbox_excludedCommands',
+  'sandbox_enableWeakerNested', 'sandbox_network_allowedDomains', 'sandbox_network_allowLocalBinding',
+  'sandbox_network_allowUnixSockets', 'sandbox_network_allowAllUnixSockets',
+  'sandbox_ignoreViolations_file', 'sandbox_ignoreViolations_network',
+]
+const fieldStates = reactive({
+  ...Object.fromEntries(Object.entries(CONFIG_FIELDS).filter(([, m]) => m.trackState).map(([k]) => [k, 'normal'])),
+  ...Object.fromEntries(SANDBOX_SYNTHETIC_KEYS.map(k => [k, 'normal'])),
+})
+const templateOriginalValues = ref({
+  ...Object.fromEntries(Object.entries(CONFIG_FIELDS).filter(([, m]) => m.trackState).map(([k]) => [k, null])),
+  ...Object.fromEntries(SANDBOX_SYNTHETIC_KEYS.map(k => [k, null])),
+})
 // Tracks the value each field received from a profile (for P-badge transitions)
 const profileOriginalValues = ref({})
 
@@ -763,6 +772,10 @@ function resetFieldStates() {
       templateOriginalValues.value[field] = null
     }
   }
+  for (const key of SANDBOX_SYNTHETIC_KEYS) {
+    fieldStates[key] = 'normal'
+    templateOriginalValues.value[key] = null
+  }
   profileOriginalValues.value = {}
 }
 
@@ -793,20 +806,45 @@ function setupFieldStateWatchers() {
   }
 }
 
+// Handles both array (from backend/templates) and string (from profile editor) values
+function sandboxArrToStr(v) {
+  if (Array.isArray(v)) return v.join(', ')
+  return v || ''
+}
+
 function populateSandboxFromSource(source) {
   const sc = source.sandbox_config || {}
   formData.sandbox.autoAllowBashIfSandboxed = sc.autoAllowBashIfSandboxed ?? true
   formData.sandbox.allowUnsandboxedCommands = sc.allowUnsandboxedCommands ?? false
-  formData.sandbox.excludedCommands = (sc.excludedCommands || []).join(', ')
+  formData.sandbox.excludedCommands = sandboxArrToStr(sc.excludedCommands)
   formData.sandbox.enableWeakerNestedSandbox = sc.enableWeakerNestedSandbox ?? false
   const net = sc.network || {}
-  formData.sandbox.network.allowedDomains = (net.allowedDomains || []).join(', ')
+  formData.sandbox.network.allowedDomains = sandboxArrToStr(net.allowedDomains)
   formData.sandbox.network.allowLocalBinding = net.allowLocalBinding ?? false
-  formData.sandbox.network.allowUnixSockets = (net.allowUnixSockets || []).join(', ')
+  formData.sandbox.network.allowUnixSockets = sandboxArrToStr(net.allowUnixSockets)
   formData.sandbox.network.allowAllUnixSockets = net.allowAllUnixSockets ?? false
   const iv = sc.ignoreViolations || {}
-  formData.sandbox.ignoreViolations.file = (iv.file || []).join(', ')
-  formData.sandbox.ignoreViolations.network = (iv.network || []).join(', ')
+  formData.sandbox.ignoreViolations.file = sandboxArrToStr(iv.file)
+  formData.sandbox.ignoreViolations.network = sandboxArrToStr(iv.network)
+}
+
+// Build synthetic-key → value map for a sandbox_config object (used for tracking)
+function sandboxTrackingValues(sandboxConfig) {
+  const sc = sandboxConfig || {}
+  const net = sc.network || {}
+  const iv = sc.ignoreViolations || {}
+  return {
+    sandbox_autoAllowBash: sc.autoAllowBashIfSandboxed ?? true,
+    sandbox_allowUnsandboxed: sc.allowUnsandboxedCommands ?? false,
+    sandbox_excludedCommands: sandboxArrToStr(sc.excludedCommands),
+    sandbox_enableWeakerNested: sc.enableWeakerNestedSandbox ?? false,
+    sandbox_network_allowedDomains: sandboxArrToStr(net.allowedDomains),
+    sandbox_network_allowLocalBinding: net.allowLocalBinding ?? false,
+    sandbox_network_allowUnixSockets: sandboxArrToStr(net.allowUnixSockets),
+    sandbox_network_allowAllUnixSockets: net.allowAllUnixSockets ?? false,
+    sandbox_ignoreViolations_file: sandboxArrToStr(iv.file),
+    sandbox_ignoreViolations_network: sandboxArrToStr(iv.network),
+  }
 }
 
 function resetSandboxFields() {
@@ -1048,8 +1086,13 @@ function applyTemplate() {
     if (!profile) continue
     for (const [key, value] of Object.entries(profile.config || {})) {
       if (key === 'sandbox_config') {
-        // sandbox_config is nested — populate formData.sandbox via helper
+        // sandbox_config is nested — populate formData.sandbox via helper and track all sub-fields
         populateSandboxFromSource(profile.config)
+        const sbVals = sandboxTrackingValues(value)
+        for (const [sbKey, sbVal] of Object.entries(sbVals)) {
+          profileOriginalValues.value[sbKey] = sbVal
+          fieldStates[sbKey] = 'profile'
+        }
         continue
       }
       if (!(key in formData)) continue
@@ -1092,20 +1135,13 @@ function applyTemplate() {
   // Apply sandbox config from template
   populateSandboxFromSource(template)
 
-  // Sandbox string fields with field-state tracking (array → comma-separated)
-  const sc = template.sandbox_config || {}
-  const net = sc.network || {}
-  const iv = sc.ignoreViolations || {}
-  const sandboxTracked = [
-    ['sandbox_excludedCommands', (sc.excludedCommands || []).join(', ')],
-    ['sandbox_network_allowedDomains', (net.allowedDomains || []).join(', ')],
-    ['sandbox_network_allowUnixSockets', (net.allowUnixSockets || []).join(', ')],
-    ['sandbox_ignoreViolations_file', (iv.file || []).join(', ')],
-    ['sandbox_ignoreViolations_network', (iv.network || []).join(', ')],
-  ]
-  for (const [key, value] of sandboxTracked) {
-    templateOriginalValues.value[key] = value || null
-    if (value) fieldStates[key] = 'autofilled'
+  // Track all sandbox sub-fields as template-autofilled
+  const sandboxTemplateVals = sandboxTrackingValues(template.sandbox_config)
+  for (const [key, value] of Object.entries(sandboxTemplateVals)) {
+    // Booleans are always present; only mark text fields as autofilled when non-empty
+    const isNonDefault = typeof value === 'boolean' ? template.sandbox_config != null : !!value
+    templateOriginalValues.value[key] = isNonDefault ? value : null
+    if (isNonDefault) fieldStates[key] = 'autofilled'
   }
 }
 
@@ -1818,32 +1854,33 @@ watch(
 // Setup schema-driven field-state watchers (issue #731)
 setupFieldStateWatchers()
 
-// Sandbox field-state watchers (not in schema, stays manual)
-watch(() => formData.sandbox.excludedCommands, (newVal) => {
-  if (templateOriginalValues.value.sandbox_excludedCommands !== null) {
-    fieldStates.sandbox_excludedCommands = newVal === templateOriginalValues.value.sandbox_excludedCommands ? 'autofilled' : 'modified'
-  }
-})
-watch(() => formData.sandbox.network.allowedDomains, (newVal) => {
-  if (templateOriginalValues.value.sandbox_network_allowedDomains !== null) {
-    fieldStates.sandbox_network_allowedDomains = newVal === templateOriginalValues.value.sandbox_network_allowedDomains ? 'autofilled' : 'modified'
-  }
-})
-watch(() => formData.sandbox.network.allowUnixSockets, (newVal) => {
-  if (templateOriginalValues.value.sandbox_network_allowUnixSockets !== null) {
-    fieldStates.sandbox_network_allowUnixSockets = newVal === templateOriginalValues.value.sandbox_network_allowUnixSockets ? 'autofilled' : 'modified'
-  }
-})
-watch(() => formData.sandbox.ignoreViolations.file, (newVal) => {
-  if (templateOriginalValues.value.sandbox_ignoreViolations_file !== null) {
-    fieldStates.sandbox_ignoreViolations_file = newVal === templateOriginalValues.value.sandbox_ignoreViolations_file ? 'autofilled' : 'modified'
-  }
-})
-watch(() => formData.sandbox.ignoreViolations.network, (newVal) => {
-  if (templateOriginalValues.value.sandbox_ignoreViolations_network !== null) {
-    fieldStates.sandbox_ignoreViolations_network = newVal === templateOriginalValues.value.sandbox_ignoreViolations_network ? 'autofilled' : 'modified'
-  }
-})
+// Sandbox field-state watchers — full 3-tier logic (profile → template → modified → normal)
+function makeSandboxWatcher(key, getter) {
+  watch(getter, (newVal) => {
+    const profileVal = profileOriginalValues.value[key]
+    const templateVal = templateOriginalValues.value[key]
+    const hasProfile = profileVal !== undefined
+    const hasTemplate = templateVal !== null
+    if (!hasProfile && !hasTemplate) return
+    if (hasProfile && newVal === profileVal) {
+      fieldStates[key] = 'profile'
+    } else if (hasTemplate && newVal === templateVal) {
+      fieldStates[key] = 'autofilled'
+    } else {
+      fieldStates[key] = 'modified'
+    }
+  })
+}
+makeSandboxWatcher('sandbox_autoAllowBash', () => formData.sandbox.autoAllowBashIfSandboxed)
+makeSandboxWatcher('sandbox_allowUnsandboxed', () => formData.sandbox.allowUnsandboxedCommands)
+makeSandboxWatcher('sandbox_excludedCommands', () => formData.sandbox.excludedCommands)
+makeSandboxWatcher('sandbox_enableWeakerNested', () => formData.sandbox.enableWeakerNestedSandbox)
+makeSandboxWatcher('sandbox_network_allowedDomains', () => formData.sandbox.network.allowedDomains)
+makeSandboxWatcher('sandbox_network_allowLocalBinding', () => formData.sandbox.network.allowLocalBinding)
+makeSandboxWatcher('sandbox_network_allowUnixSockets', () => formData.sandbox.network.allowUnixSockets)
+makeSandboxWatcher('sandbox_network_allowAllUnixSockets', () => formData.sandbox.network.allowAllUnixSockets)
+makeSandboxWatcher('sandbox_ignoreViolations_file', () => formData.sandbox.ignoreViolations.file)
+makeSandboxWatcher('sandbox_ignoreViolations_network', () => formData.sandbox.ignoreViolations.network)
 
 // Issue #1062: when profile_ids changes (user picks a profile in template editor),
 // apply that profile's config values to formData fields immediately.
@@ -1856,6 +1893,11 @@ watch(() => ({ ...formData.profile_ids }), (newIds, oldIds) => {
     for (const [key, value] of Object.entries(profile.config || {})) {
       if (key === 'sandbox_config') {
         populateSandboxFromSource(profile.config)
+        const sbVals = sandboxTrackingValues(value)
+        for (const [sbKey, sbVal] of Object.entries(sbVals)) {
+          profileOriginalValues.value[sbKey] = sbVal
+          fieldStates[sbKey] = 'profile'
+        }
         continue
       }
       if (!(key in formData)) continue
@@ -1874,6 +1916,11 @@ watch(() => ({ ...formData.profile_ids }), (newIds, oldIds) => {
     for (const key of Object.keys(oldProfile.config || {})) {
       if (key === 'sandbox_config') {
         resetSandboxFields()
+        // Clear profile tracking for sandbox sub-fields; revert to template state if applicable
+        for (const sbKey of SANDBOX_SYNTHETIC_KEYS) {
+          delete profileOriginalValues.value[sbKey]
+          fieldStates[sbKey] = templateOriginalValues.value[sbKey] !== null ? 'autofilled' : 'normal'
+        }
         continue
       }
       if (!(key in formData)) continue

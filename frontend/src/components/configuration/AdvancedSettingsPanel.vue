@@ -643,16 +643,31 @@
             <input class="form-check-input" type="checkbox" id="adv-sb-auto-bash"
               :checked="formData.sandbox.autoAllowBashIfSandboxed"
               @change="updateSandboxField('autoAllowBashIfSandboxed', $event.target.checked)" />
-            <label class="form-check-label" for="adv-sb-auto-bash" style="text-transform: none; letter-spacing: normal;">Auto-allow Bash when sandboxed</label>
+            <label class="form-check-label" for="adv-sb-auto-bash" style="text-transform: none; letter-spacing: normal;">
+              Auto-allow Bash when sandboxed
+              <span v-if="fieldState('sandbox_autoAllowBash') === 'profile'" class="field-indicator profile" title="Value from profile">P</span>
+              <span v-if="fieldState('sandbox_autoAllowBash') === 'autofilled'" class="field-indicator autofilled">&lt;</span>
+              <span v-if="fieldState('sandbox_autoAllowBash') === 'modified'" class="field-indicator modified">*</span>
+            </label>
           </div>
           <div class="form-check mb-1 ms-3">
             <input class="form-check-input" type="checkbox" id="adv-sb-unsandboxed"
               :checked="formData.sandbox.allowUnsandboxedCommands"
               @change="updateSandboxField('allowUnsandboxedCommands', $event.target.checked)" />
-            <label class="form-check-label" for="adv-sb-unsandboxed" style="text-transform: none; letter-spacing: normal;">Allow unsandboxed commands</label>
+            <label class="form-check-label" for="adv-sb-unsandboxed" style="text-transform: none; letter-spacing: normal;">
+              Allow unsandboxed commands
+              <span v-if="fieldState('sandbox_allowUnsandboxed') === 'profile'" class="field-indicator profile" title="Value from profile">P</span>
+              <span v-if="fieldState('sandbox_allowUnsandboxed') === 'autofilled'" class="field-indicator autofilled">&lt;</span>
+              <span v-if="fieldState('sandbox_allowUnsandboxed') === 'modified'" class="field-indicator modified">*</span>
+            </label>
           </div>
           <div class="mb-2 ms-3">
-            <label class="form-label">Excluded Commands</label>
+            <label class="form-label">
+              Excluded Commands
+              <span v-if="fieldState('sandbox_excludedCommands') === 'profile'" class="field-indicator profile" title="Value from profile">P</span>
+              <span v-if="fieldState('sandbox_excludedCommands') === 'autofilled'" class="field-indicator autofilled">&lt;</span>
+              <span v-if="fieldState('sandbox_excludedCommands') === 'modified'" class="field-indicator modified">*</span>
+            </label>
             <input type="text" class="form-control form-control-sm"
               :value="formData.sandbox.excludedCommands"
               @input="updateSandboxField('excludedCommands', $event.target.value)"
@@ -662,12 +677,22 @@
             <input class="form-check-input" type="checkbox" id="adv-sb-weaker"
               :checked="formData.sandbox.enableWeakerNestedSandbox"
               @change="updateSandboxField('enableWeakerNestedSandbox', $event.target.checked)" />
-            <label class="form-check-label" for="adv-sb-weaker" style="text-transform: none; letter-spacing: normal;">Enable weaker nested sandbox</label>
+            <label class="form-check-label" for="adv-sb-weaker" style="text-transform: none; letter-spacing: normal;">
+              Enable weaker nested sandbox
+              <span v-if="fieldState('sandbox_enableWeakerNested') === 'profile'" class="field-indicator profile" title="Value from profile">P</span>
+              <span v-if="fieldState('sandbox_enableWeakerNested') === 'autofilled'" class="field-indicator autofilled">&lt;</span>
+              <span v-if="fieldState('sandbox_enableWeakerNested') === 'modified'" class="field-indicator modified">*</span>
+            </label>
           </div>
           <!-- Network -->
           <div class="sandbox-section-label">Network</div>
           <div class="mb-1 ms-3">
-            <label class="form-label">Allowed Domains</label>
+            <label class="form-label">
+              Allowed Domains
+              <span v-if="fieldState('sandbox_network_allowedDomains') === 'profile'" class="field-indicator profile" title="Value from profile">P</span>
+              <span v-if="fieldState('sandbox_network_allowedDomains') === 'autofilled'" class="field-indicator autofilled">&lt;</span>
+              <span v-if="fieldState('sandbox_network_allowedDomains') === 'modified'" class="field-indicator modified">*</span>
+            </label>
             <input type="text" class="form-control form-control-sm"
               :value="formData.sandbox.network.allowedDomains"
               @input="updateNetworkField('allowedDomains', $event.target.value)"
@@ -677,10 +702,20 @@
             <input class="form-check-input" type="checkbox" id="adv-sb-local-binding"
               :checked="formData.sandbox.network.allowLocalBinding"
               @change="updateNetworkField('allowLocalBinding', $event.target.checked)" />
-            <label class="form-check-label" for="adv-sb-local-binding" style="text-transform: none; letter-spacing: normal;">Allow local binding</label>
+            <label class="form-check-label" for="adv-sb-local-binding" style="text-transform: none; letter-spacing: normal;">
+              Allow local binding
+              <span v-if="fieldState('sandbox_network_allowLocalBinding') === 'profile'" class="field-indicator profile" title="Value from profile">P</span>
+              <span v-if="fieldState('sandbox_network_allowLocalBinding') === 'autofilled'" class="field-indicator autofilled">&lt;</span>
+              <span v-if="fieldState('sandbox_network_allowLocalBinding') === 'modified'" class="field-indicator modified">*</span>
+            </label>
           </div>
           <div class="mb-1 ms-3">
-            <label class="form-label">Allow Unix Sockets</label>
+            <label class="form-label">
+              Allow Unix Sockets
+              <span v-if="fieldState('sandbox_network_allowUnixSockets') === 'profile'" class="field-indicator profile" title="Value from profile">P</span>
+              <span v-if="fieldState('sandbox_network_allowUnixSockets') === 'autofilled'" class="field-indicator autofilled">&lt;</span>
+              <span v-if="fieldState('sandbox_network_allowUnixSockets') === 'modified'" class="field-indicator modified">*</span>
+            </label>
             <input type="text" class="form-control form-control-sm"
               :value="formData.sandbox.network.allowUnixSockets"
               @input="updateNetworkField('allowUnixSockets', $event.target.value)"
@@ -690,19 +725,34 @@
             <input class="form-check-input" type="checkbox" id="adv-sb-all-unix"
               :checked="formData.sandbox.network.allowAllUnixSockets"
               @change="updateNetworkField('allowAllUnixSockets', $event.target.checked)" />
-            <label class="form-check-label" for="adv-sb-all-unix" style="text-transform: none; letter-spacing: normal;">Allow all Unix sockets</label>
+            <label class="form-check-label" for="adv-sb-all-unix" style="text-transform: none; letter-spacing: normal;">
+              Allow all Unix sockets
+              <span v-if="fieldState('sandbox_network_allowAllUnixSockets') === 'profile'" class="field-indicator profile" title="Value from profile">P</span>
+              <span v-if="fieldState('sandbox_network_allowAllUnixSockets') === 'autofilled'" class="field-indicator autofilled">&lt;</span>
+              <span v-if="fieldState('sandbox_network_allowAllUnixSockets') === 'modified'" class="field-indicator modified">*</span>
+            </label>
           </div>
           <!-- Violation Handling -->
           <div class="sandbox-section-label">Violation Handling</div>
           <div class="mb-1 ms-3">
-            <label class="form-label">Ignore File Violations</label>
+            <label class="form-label">
+              Ignore File Violations
+              <span v-if="fieldState('sandbox_ignoreViolations_file') === 'profile'" class="field-indicator profile" title="Value from profile">P</span>
+              <span v-if="fieldState('sandbox_ignoreViolations_file') === 'autofilled'" class="field-indicator autofilled">&lt;</span>
+              <span v-if="fieldState('sandbox_ignoreViolations_file') === 'modified'" class="field-indicator modified">*</span>
+            </label>
             <input type="text" class="form-control form-control-sm"
               :value="formData.sandbox.ignoreViolations.file"
               @input="updateViolationField('file', $event.target.value)"
               placeholder="File paths to ignore" />
           </div>
           <div class="mb-1 ms-3">
-            <label class="form-label">Ignore Network Violations</label>
+            <label class="form-label">
+              Ignore Network Violations
+              <span v-if="fieldState('sandbox_ignoreViolations_network') === 'profile'" class="field-indicator profile" title="Value from profile">P</span>
+              <span v-if="fieldState('sandbox_ignoreViolations_network') === 'autofilled'" class="field-indicator autofilled">&lt;</span>
+              <span v-if="fieldState('sandbox_ignoreViolations_network') === 'modified'" class="field-indicator modified">*</span>
+            </label>
             <input type="text" class="form-control form-control-sm"
               :value="formData.sandbox.ignoreViolations.network"
               @input="updateViolationField('network', $event.target.value)"
