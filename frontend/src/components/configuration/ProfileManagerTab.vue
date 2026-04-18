@@ -833,7 +833,7 @@ function openEdit(profile) {
   editingProfile.value = profile
   form.name = profile.name
   form.area = profile.area
-  form.config = structuredClone(profile.config)
+  form.config = JSON.parse(JSON.stringify(profile.config))
   formError.value = ''
   showForm.value = true
   // nextTick ensures initIncluded runs after any pending watchers (e.g. form.area watcher)
