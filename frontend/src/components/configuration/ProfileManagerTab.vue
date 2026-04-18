@@ -6,42 +6,44 @@
       <button class="btn btn-primary btn-sm" @click="openCreate">+ New Profile</button>
     </div>
 
-    <!-- Loading / error -->
-    <div v-if="profileStore.loading" class="text-muted small py-2">Loading profiles...</div>
-    <div v-if="profileStore.error" class="alert alert-danger py-2 small">{{ profileStore.error }}</div>
+    <template v-if="!showForm">
+      <!-- Loading / error -->
+      <div v-if="profileStore.loading" class="text-muted small py-2">Loading profiles...</div>
+      <div v-if="profileStore.error" class="alert alert-danger py-2 small">{{ profileStore.error }}</div>
 
-    <!-- Empty state -->
-    <div v-if="!profileStore.loading && profileStore.allProfiles.length === 0" class="alert alert-info py-2 small">
-      No profiles yet. Create your first profile to define reusable configuration defaults.
-    </div>
+      <!-- Empty state -->
+      <div v-if="!profileStore.loading && profileStore.allProfiles.length === 0" class="alert alert-info py-2 small">
+        No profiles yet. Create your first profile to define reusable configuration defaults.
+      </div>
 
-    <!-- Profiles grouped by area -->
-    <div v-for="(area, areaKey) in AREA_META" :key="areaKey" class="mb-3">
-      <div v-if="profileStore.profilesForArea(areaKey).length > 0">
-        <div class="area-header small fw-semibold text-muted mb-1">{{ area.label }}</div>
-        <div
-          v-for="profile in profileStore.profilesForArea(areaKey)"
-          :key="profile.profile_id"
-          class="profile-card card mb-1"
-        >
-          <div class="card-body py-2 px-3">
-            <div class="d-flex justify-content-between align-items-center">
-              <div class="flex-grow-1 me-2">
-                <span class="fw-medium small">{{ profile.name }}</span>
-                <span class="ms-2 badge bg-secondary-subtle text-secondary-emphasis">{{ areaKey }}</span>
-                <div class="text-muted small mt-1 font-monospace config-preview">
-                  {{ configPreview(profile.config) }}
+      <!-- Profiles grouped by area -->
+      <div v-for="(area, areaKey) in AREA_META" :key="areaKey" class="mb-3">
+        <div v-if="profileStore.profilesForArea(areaKey).length > 0">
+          <div class="area-header small fw-semibold text-muted mb-1">{{ area.label }}</div>
+          <div
+            v-for="profile in profileStore.profilesForArea(areaKey)"
+            :key="profile.profile_id"
+            class="profile-card card mb-1"
+          >
+            <div class="card-body py-2 px-3">
+              <div class="d-flex justify-content-between align-items-center">
+                <div class="flex-grow-1 me-2">
+                  <span class="fw-medium small">{{ profile.name }}</span>
+                  <span class="ms-2 badge bg-secondary-subtle text-secondary-emphasis">{{ areaKey }}</span>
+                  <div class="text-muted small mt-1 font-monospace config-preview">
+                    {{ configPreview(profile.config) }}
+                  </div>
                 </div>
-              </div>
-              <div class="btn-group btn-group-sm">
-                <button class="btn btn-outline-primary" @click="openEdit(profile)" title="Edit">Edit</button>
-                <button class="btn btn-outline-danger" @click="confirmDelete(profile)" title="Delete">×</button>
+                <div class="btn-group btn-group-sm">
+                  <button class="btn btn-outline-primary" @click="openEdit(profile)" title="Edit">Edit</button>
+                  <button class="btn btn-outline-danger" @click="confirmDelete(profile)" title="Delete">×</button>
+                </div>
               </div>
             </div>
           </div>
         </div>
       </div>
-    </div>
+    </template>
 
     <!-- Create / Edit Form -->
     <div v-if="showForm" class="profile-form card mt-3">
