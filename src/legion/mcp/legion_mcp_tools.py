@@ -899,7 +899,7 @@ class LegionMCPTools:
 
                 template_applied = template
 
-                profile_manager = getattr(self.system.coordinator, 'profile_manager', None)
+                profile_manager = getattr(self.system.session_coordinator, 'profile_manager', None)
                 resolved = await resolve_template_config(template, profile_manager)
 
                 # Apply resolved values (enforced, no overrides)
