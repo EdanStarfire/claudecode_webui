@@ -9,7 +9,6 @@ Issue #676: Global MCP server configuration with per-session injection.
 
 import json
 import logging
-import re
 import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
@@ -18,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from .logging_config import get_logger
+from .slug_utils import slugify as _slugify
 
 mcp_logger = get_logger('mcp_config', category='MCP_CONFIG')
 logger = logging.getLogger(__name__)
@@ -27,13 +27,6 @@ class McpServerType(str, Enum):
     STDIO = "stdio"
     SSE = "sse"
     HTTP = "http"
-
-
-def _slugify(name: str) -> str:
-    """Convert config name to a filesystem-safe slug."""
-    slug = name.strip().lower()
-    slug = re.sub(r'[^a-z0-9]+', '_', slug)
-    return slug.strip('_')
 
 
 @dataclass

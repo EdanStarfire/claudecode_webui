@@ -3,7 +3,8 @@
 import json
 from datetime import UTC, datetime
 
-from ..session_manager import SessionInfo, SessionState, slugify_name
+from ..session_manager import SessionInfo, SessionState
+from ..slug_utils import slugify_name
 
 
 class TestSlugifyName:

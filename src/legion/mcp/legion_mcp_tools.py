@@ -1228,7 +1228,7 @@ class LegionMCPTools:
                 }
 
             # Check direct children first (fast path)
-            from src.session_manager import slugify_name as _slugify
+            from src.slug_utils import slugify_name as _slugify
             target_slug = _slugify(minion_name)
             effective_parent_id = parent_overseer_id  # default: caller is the parent
 

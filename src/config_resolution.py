@@ -82,6 +82,20 @@ assert set(FIELD_TO_AREA.keys()) == CONFIG_FIELDS, (
 )
 
 
+async def _load_profile_cached(
+    profile_id: str,
+    profile_manager: "ProfileManager | None",
+    cache: dict[str, object],
+) -> object:
+    """Fetch a profile, using *cache* to avoid repeated lookups within one resolution."""
+    if profile_id not in cache:
+        if profile_manager:
+            cache[profile_id] = await profile_manager.get_profile(profile_id)
+        else:
+            cache[profile_id] = None
+    return cache[profile_id]
+
+
 async def resolve_effective_config(
     session_info: SessionInfo,
     template_manager: TemplateManager,
@@ -110,43 +124,14 @@ async def resolve_effective_config(
         # Template was deleted after session creation — fall back to flat fields
         return _config_from_session_info(session_info)
 
-    # --- 3-tier resolution (issue #1062) ---
-    # Cache profile lookups within a single resolution call (load each profile once).
-    profile_cache: dict[str, object] = {}
+    # Get base config from template + profiles (reuse resolve_template_config)
+    config_data = await resolve_template_config(template, profile_manager)
 
-    async def _get_profile(profile_id: str):
-        """Fetch profile from cache or profile_manager."""
-        if profile_id not in profile_cache:
-            if profile_manager:
-                profile_cache[profile_id] = await profile_manager.get_profile(profile_id)
-            else:
-                profile_cache[profile_id] = None
-        return profile_cache[profile_id]
-
-    config_data: dict = {}
-    template_profile_ids = template.profile_ids or {}
-    template_overrides_dict = template.template_overrides or {}
+    # Apply session_overrides (highest priority)
     session_overrides = session_info.session_overrides or {}
-
-    for field in CONFIG_FIELDS:
-        # Step 1: Base value from template flat field (backward compat)
-        if hasattr(template, field):
-            config_data[field] = getattr(template, field)
-
-        # Step 2: If template has a profile assigned for this field's area, use profile value
-        area = FIELD_TO_AREA.get(field)
-        if area and area in template_profile_ids and profile_manager:
-            profile = await _get_profile(template_profile_ids[area])
-            if profile is not None and field in profile.config:
-                config_data[field] = profile.config[field]
-
-        # Step 3: template_overrides win over profile values
-        if field in template_overrides_dict:
-            config_data[field] = template_overrides_dict[field]
-
-        # Step 4: session_overrides win over everything (highest priority)
-        if field in session_overrides:
-            config_data[field] = session_overrides[field]
+    for field_name in CONFIG_FIELDS:
+        if field_name in session_overrides:
+            config_data[field_name] = session_overrides[field_name]
 
     # Carry template_id through for downstream reference
     config_data["template_id"] = session_info.template_id
@@ -166,31 +151,24 @@ async def resolve_template_config(
     Priority (high to low): template_overrides > profile values > template flat fields
     """
     profile_cache: dict[str, object] = {}
-
-    async def _get_profile(profile_id: str):
-        if profile_id not in profile_cache:
-            if profile_manager:
-                profile_cache[profile_id] = await profile_manager.get_profile(profile_id)
-            else:
-                profile_cache[profile_id] = None
-        return profile_cache[profile_id]
-
     config_data: dict = {}
     template_profile_ids = template.profile_ids or {}
     template_overrides_dict = template.template_overrides or {}
 
-    for field in CONFIG_FIELDS:
-        if hasattr(template, field):
-            config_data[field] = getattr(template, field)
+    for field_name in CONFIG_FIELDS:
+        if hasattr(template, field_name):
+            config_data[field_name] = getattr(template, field_name)
 
-        area = FIELD_TO_AREA.get(field)
+        area = FIELD_TO_AREA.get(field_name)
         if area and area in template_profile_ids and profile_manager:
-            profile = await _get_profile(template_profile_ids[area])
-            if profile is not None and field in profile.config:
-                config_data[field] = profile.config[field]
+            profile = await _load_profile_cached(
+                template_profile_ids[area], profile_manager, profile_cache
+            )
+            if profile is not None and field_name in profile.config:
+                config_data[field_name] = profile.config[field_name]
 
-        if field in template_overrides_dict:
-            config_data[field] = template_overrides_dict[field]
+        if field_name in template_overrides_dict:
+            config_data[field_name] = template_overrides_dict[field_name]
 
     return config_data
 

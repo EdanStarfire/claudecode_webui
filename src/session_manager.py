@@ -10,7 +10,6 @@ import gc
 import json
 import logging
 import os
-import re
 import shutil
 import subprocess
 import time
@@ -24,6 +23,7 @@ from typing import Any
 from .logging_config import get_logger
 from .models.permission_mode import PermissionMode
 from .session_config import SessionConfig
+from .slug_utils import slugify_name
 from .template_manager import TemplateManager
 
 # Get specialized logger for session manager actions
@@ -49,20 +49,6 @@ VALID_MODELS = {
 
 # Default model for new sessions
 DEFAULT_MODEL = "sonnet"
-
-
-def slugify_name(name: str) -> str:
-    """Convert a display name to a slug for MCP tool compatibility.
-
-    "Database Optimizer" -> "database-optimizer"
-    "frontend-dev" -> "frontend-dev"  (already slugified, no change)
-    """
-    slug = name.lower()
-    slug = slug.replace("_", "-").replace(" ", "-")
-    slug = re.sub(r'[^a-z0-9-]', '', slug)
-    slug = re.sub(r'-+', '-', slug)
-    slug = slug.strip('-')
-    return slug
 
 
 class SessionState(Enum):

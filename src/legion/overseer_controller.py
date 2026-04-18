@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 
 from src.models.permission_mode import PermissionMode
 from src.session_config import SessionConfig
-from src.session_manager import slugify_name
+from src.slug_utils import slugify_name
 
 if TYPE_CHECKING:
     from src.legion_system import LegionSystem

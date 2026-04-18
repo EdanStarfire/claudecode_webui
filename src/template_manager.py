@@ -31,6 +31,7 @@ from .logging_config import get_logger
 from .models.minion_template import MinionTemplate
 from .models.permission_mode import PermissionMode
 from .session_config import SessionConfig
+from .slug_utils import slugify as _slugify
 
 # Fields set directly by create_template() — must not be overridden by config spread.
 # system_prompt exists on both SessionConfig and MinionTemplate; the direct param wins.
@@ -68,17 +69,6 @@ class TemplateInUseError(Exception):
 template_logger = get_logger('template_manager', category='TEMPLATE_MANAGER')
 # Keep standard logger for errors
 logger = logging.getLogger(__name__)
-
-
-def _slugify(name: str) -> str:
-    """Convert template name to a filesystem-safe slug.
-
-    "Coding Minion" -> "coding_minion"
-    "Code Expert" -> "code_expert"
-    """
-    slug = name.strip().lower()
-    slug = re.sub(r'[^a-z0-9]+', '_', slug)
-    return slug.strip('_')
 
 
 def _get_default_templates_dir() -> Path:
