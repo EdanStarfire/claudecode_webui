@@ -620,12 +620,9 @@ const AREA_META = {
   isolation: {
     label: 'Isolation',
     description: 'CLI path, sandbox, Docker, and environment settings',
-    fields: [
-      'cli_path', 'sandbox_enabled', 'sandbox_config',
-      'docker_enabled', 'docker_image', 'docker_extra_mounts',
-      'docker_home_directory', 'docker_proxy_enabled', 'docker_proxy_image',
-      'docker_proxy_credentials', 'bare_mode', 'env_scrub_enabled',
-    ],
+    // Derived from isolationFields below + sandbox_config (the nested synthetic key)
+    // — populated after isolationFields is defined to avoid forward reference
+    fields: null,
   },
   features: {
     label: 'Features',
@@ -634,9 +631,12 @@ const AREA_META = {
   },
 }
 
+// isolationFields is the single source of truth for isolation field metadata.
+// AREA_META.isolation.fields is derived from it below to keep both in sync.
 const isolationFields = [
   { key: 'cli_path', type: 'text', placeholder: '/path/to/claude-cli' },
   { key: 'sandbox_enabled', type: 'toggle', label: 'Enable sandbox mode' },
+  // sandbox_config is a synthetic nested key handled separately in the template
   { key: 'docker_enabled', type: 'toggle', label: 'Docker isolation' },
   { key: 'docker_image', type: 'text', placeholder: 'claude-code:local', dependsOn: 'docker_enabled' },
   { key: 'docker_extra_mounts', type: 'textarea', placeholder: '/host/path:/container/path:ro (one per line)', dependsOn: 'docker_enabled' },
@@ -649,6 +649,9 @@ const isolationFields = [
 ]
 
 const dockerSubFields = isolationFields.filter(f => f.dependsOn === 'docker_enabled' || f.dependsOn === 'docker_proxy_enabled')
+
+// Derive AREA_META.isolation.fields from isolationFields (single source of truth)
+AREA_META.isolation.fields = [...isolationFields.map(f => f.key), 'sandbox_config']
 
 // ---- Form state ----
 const showForm = ref(false)
@@ -679,7 +682,6 @@ watch(() => form.area, (newArea) => {
     form.config = { ...(AREA_DEFAULTS[newArea] || {}) }
     const fields = AREA_META[newArea]?.fields || []
     fields.forEach(f => { included[f] = false })
-    isolationFields.forEach(f => { included[f.key] = false })
   }
 })
 
@@ -798,9 +800,6 @@ function initIncluded(area, existingConfig = {}) {
   fields.forEach(f => {
     included[f] = hasValue(existingConfig[f])
   })
-  isolationFields.forEach(f => {
-    included[f.key] = hasValue(existingConfig[f.key])
-  })
 }
 
 function openCreate() {
@@ -899,12 +898,8 @@ async function executeDelete() {
   if (!deleteTarget.value) return
   deleteSubmitting.value = true
   try {
-    const result = await profileStore.deleteProfile(deleteTarget.value.profile_id)
-    if (result?.error === 'profile_in_use') {
-      deleteBlockers.value = result.blocking_templates?.map(t => t.name) || []
-    } else {
-      deleteTarget.value = null
-    }
+    await profileStore.deleteProfile(deleteTarget.value.profile_id)
+    deleteTarget.value = null
   } catch (err) {
     if (err.data?.error === 'profile_in_use') {
       deleteBlockers.value = err.data.blocking_templates?.map(t => t.name) || []

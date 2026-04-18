@@ -1,5 +1,5 @@
 """
-Config Resolution — Issue #1059 Phase 2 / Issue #1062 Phase 2
+Config Resolution
 
 Resolves effective SessionConfig by merging profile defaults, template overrides,
 and session-level overrides. Called at session start/restart so config changes
@@ -37,7 +37,7 @@ CONFIG_FIELDS: set[str] = {
     "bare_mode", "env_scrub_enabled",
 }
 
-# Issue #1062: 6 config areas — every field in CONFIG_FIELDS belongs to exactly one area.
+# 6 config areas — every field in CONFIG_FIELDS belongs to exactly one area.
 PROFILE_AREAS: dict[str, set[str]] = {
     "model": {
         "model", "thinking_mode", "thinking_budget_tokens", "effort",

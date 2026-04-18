@@ -1,5 +1,5 @@
 """
-ConfigProfile Data Model — Issue #1062
+ConfigProfile Data Model
 
 Defines reusable configuration profiles scoped to one of 6 settings areas.
 Profiles form the base layer in the 3-tier chain: Profile → Template → Session.

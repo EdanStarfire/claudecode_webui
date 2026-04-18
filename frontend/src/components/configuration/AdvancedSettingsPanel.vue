@@ -547,8 +547,8 @@
           <label class="form-label">
             System Prompt
             <span v-if="fieldState('system_prompt') === 'profile'" class="field-indicator profile" title="Value from profile">P</span>
-            <span v-if="fieldStates.system_prompt === 'autofilled'" class="field-indicator autofilled">&lt;</span>
-            <span v-if="fieldStates.system_prompt === 'modified'" class="field-indicator modified">*</span>
+            <span v-if="fieldState('system_prompt') === 'autofilled'" class="field-indicator autofilled">&lt;</span>
+            <span v-if="fieldState('system_prompt') === 'modified'" class="field-indicator modified">*</span>
           </label>
           <textarea
             class="form-control form-control-sm"
@@ -919,11 +919,11 @@ import { ref, reactive, computed, onMounted, watch, useTemplateRef } from 'vue'
 import { api } from '@/utils/api'
 import { validateTemplatePath, validateTemplatePathList } from '@/utils/templateVariables'
 import { useMcpStore } from '../../stores/mcp'
-import { useProfileStore } from '@/stores/profile'  // Issue #1062
+import { useProfileStore } from '@/stores/profile'
 import McpServerPanel from './McpServerPanel.vue'
 
 const mcpStore = useMcpStore()
-const profileStore = useProfileStore()  // Issue #1062
+const profileStore = useProfileStore()
 
 const props = defineProps({
   mode: {
@@ -950,7 +950,6 @@ const props = defineProps({
       system_prompt: 'normal'
     })
   },
-  // Issue #1062: profile_ids for template composition (area -> profile_id)
   profileIds: {
     type: Object,
     default: () => ({})
@@ -1002,7 +1001,6 @@ const capabilityInput = ref(null)
 const commonTools = ['Bash', 'Read', 'Edit', 'Write', 'Glob', 'Grep', 'WebFetch']
 const commonDeniedTools = ['Bash', 'Write', 'WebFetch']
 
-// Issue #1062: Profile selector helpers
 function profilesForArea(area) {
   return profileStore.profilesForArea(area)
 }

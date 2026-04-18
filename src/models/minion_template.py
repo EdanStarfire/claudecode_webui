@@ -9,7 +9,7 @@ from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from typing import Any
 
-# Issue #1062: Fields excluded from MinionTemplate identity/lifecycle that are
+# Fields excluded from MinionTemplate identity/lifecycle that are
 # also excluded from CONFIG_FIELDS. profile_ids/template_overrides are excluded
 # because they are template-composition metadata, not config values themselves.
 _EXCLUDED_FROM_CONFIG_FIELDS = {

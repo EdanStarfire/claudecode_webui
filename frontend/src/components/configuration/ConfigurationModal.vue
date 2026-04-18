@@ -378,7 +378,7 @@ import { api, getAuthToken } from '@/utils/api'
 import QuickSettingsPanel from './QuickSettingsPanel.vue'
 import AdvancedSettingsPanel from './AdvancedSettingsPanel.vue'
 import PermissionPreviewModal from './PermissionPreviewModal.vue'
-import ProfileManagerTab from './ProfileManagerTab.vue'  // Issue #1062
+import ProfileManagerTab from './ProfileManagerTab.vue'
 
 const router = useRouter()
 const projectStore = useProjectStore()
@@ -428,7 +428,7 @@ const templateDiff = ref(null)
 const showImportModal = ref(false)
 const importJsonText = ref('')
 const importConflict = ref(null)   // { name, existing_template_id }
-// Issue #1062: active tab in template-list view ('templates' | 'profiles')
+// Active tab in template-list view ('templates' | 'profiles')
 const templateListTab = ref('templates')
 const importError = ref('')
 const isImporting = ref(false)
@@ -701,7 +701,7 @@ const profileOriginalValues = ref({})
 // Form data — defaults from schema + sandbox (nested, out of scope for schema)
 const formData = reactive({
   ...Object.fromEntries(Object.entries(CONFIG_FIELDS).map(([k, m]) => [k, structuredClone(m.default)])),
-  // Issue #1062: profile_ids and template_overrides for template composition
+  // profile_ids and template_overrides for template composition
   profile_ids: {},
   template_overrides: {},
   sandbox: {
@@ -1078,11 +1078,11 @@ function applyTemplate() {
   // Reset field states before applying new template
   resetFieldStates()
 
-  // Issue #1062: Apply profile configs as base layer first (lowest priority)
+  // Apply profile configs as base layer first (lowest priority)
   // Each profile area maps its config keys directly to formData fields
   const profileIds = template.profile_ids || {}
   for (const [, profileId] of Object.entries(profileIds)) {
-    const profile = profileStore.allProfiles.find(p => p.profile_id === profileId)
+    const profile = profileStore.getProfile(profileId)
     if (!profile) continue
     for (const [key, value] of Object.entries(profile.config || {})) {
       if (key === 'sandbox_config') {
@@ -1675,7 +1675,6 @@ async function createTemplate() {
   const payload = {
     ...extractPayload('template'),
     sandbox_config: formData.sandbox_enabled ? buildSandboxConfig() : null,
-    // Issue #1062: include profile composition fields
     profile_ids: Object.keys(formData.profile_ids).length > 0 ? formData.profile_ids : null,
     template_overrides: Object.keys(formData.template_overrides).length > 0 ? formData.template_overrides : null,
   }
@@ -1698,7 +1697,6 @@ async function updateTemplate() {
   const payload = {
     ...extractPayload('template'),
     sandbox_config: formData.sandbox_enabled ? buildSandboxConfig() : null,
-    // Issue #1062: include profile composition fields
     profile_ids: Object.keys(formData.profile_ids).length > 0 ? formData.profile_ids : null,
     template_overrides: Object.keys(formData.template_overrides).length > 0 ? formData.template_overrides : null,
   }
@@ -1722,7 +1720,6 @@ function resetForm() {
   selectedTemplateId.value = null
   errorMessage.value = ''
   showAdvanced.value = false
-  // Issue #1062: reset profile composition fields
   formData.profile_ids = {}
   formData.template_overrides = {}
 }
@@ -1735,13 +1732,11 @@ function populateFormFromSession(session) {
 function populateFormFromTemplate(template) {
   populateFormFromSource(template)
   populateSandboxFromSource(template)
-  // Issue #1062: populate profile_ids and template_overrides
   formData.profile_ids = template.profile_ids ? { ...template.profile_ids } : {}
   formData.template_overrides = template.template_overrides ? { ...template.template_overrides } : {}
 }
 
 function onModalShown() {
-  // Issue #1062: ensure profiles are loaded so applyTemplate can resolve them
   profileStore.fetchProfiles()
 
   // Focus name input
@@ -1882,13 +1877,13 @@ makeSandboxWatcher('sandbox_network_allowAllUnixSockets', () => formData.sandbox
 makeSandboxWatcher('sandbox_ignoreViolations_file', () => formData.sandbox.ignoreViolations.file)
 makeSandboxWatcher('sandbox_ignoreViolations_network', () => formData.sandbox.ignoreViolations.network)
 
-// Issue #1062: when profile_ids changes (user picks a profile in template editor),
+// When profile_ids changes (user picks a profile in template editor),
 // apply that profile's config values to formData fields immediately.
 watch(() => ({ ...formData.profile_ids }), (newIds, oldIds) => {
   // Find newly added or changed profile assignments
   for (const [area, profileId] of Object.entries(newIds)) {
     if (oldIds[area] === profileId) continue  // unchanged
-    const profile = profileStore.allProfiles.find(p => p.profile_id === profileId)
+    const profile = profileStore.getProfile(profileId)
     if (!profile) continue
     for (const [key, value] of Object.entries(profile.config || {})) {
       if (key === 'sandbox_config') {
@@ -1911,7 +1906,7 @@ watch(() => ({ ...formData.profile_ids }), (newIds, oldIds) => {
   // When a profile is removed from an area, reset its fields to defaults
   for (const area of Object.keys(oldIds)) {
     if (newIds[area]) continue  // still assigned
-    const oldProfile = profileStore.allProfiles.find(p => p.profile_id === oldIds[area])
+    const oldProfile = profileStore.getProfile(oldIds[area])
     if (!oldProfile) continue
     for (const key of Object.keys(oldProfile.config || {})) {
       if (key === 'sandbox_config') {

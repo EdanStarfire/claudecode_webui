@@ -43,6 +43,7 @@ from .project_manager import ProjectInfo, ProjectManager
 from .queue_manager import QueueManager
 from .queue_processor import QueueProcessor
 from .session_config import SessionConfig
+from .config_resolution import resolve_effective_config
 from .session_manager import STOPPED_STATES, SessionManager, SessionState
 from .task_utils import task_done_log_exception
 from .timestamp_utils import get_unix_timestamp
@@ -1119,9 +1120,6 @@ class SessionCoordinator:
                 )
 
             # Create/recreate SDK instance with session parameters (uses factory for testability — issue #559)
-            # Issue #1059 Phase 2: Resolve effective config from template + session overrides.
-            # Config takes effect at session start/restart — changes after start are not live.
-            from src.config_resolution import resolve_effective_config
             effective_config = await resolve_effective_config(
                 session_info, self.template_manager, self.profile_manager
             )

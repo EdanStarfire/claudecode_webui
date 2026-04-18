@@ -26,6 +26,7 @@ except ImportError:
     tool = None
     create_sdk_mcp_server = None
 
+from src.config_resolution import resolve_template_config
 from src.docker_utils import translate_docker_tmp_path
 from src.session_config import SessionConfig
 from src.task_utils import task_done_log_exception
@@ -898,10 +899,6 @@ class LegionMCPTools:
 
                 template_applied = template
 
-                # Issue #1062: Resolve template+profile merged config via shared helper.
-                # This handles the 3-tier base (profile → template_overrides → template flat).
-                # Session overrides are not applied at spawn time — not applicable here.
-                from src.config_resolution import resolve_template_config
                 profile_manager = getattr(self.system.coordinator, 'profile_manager', None)
                 resolved = await resolve_template_config(template, profile_manager)
 

@@ -56,7 +56,7 @@
       ></textarea>
     </div>
 
-    <!-- Issue #1062: Profile selectors (template mode only) -->
+    <!-- Profile selectors (template mode only) -->
     <div v-if="isTemplateMode" class="mb-3">
       <label class="form-label">Configuration Profiles</label>
       <div class="profile-selectors">
@@ -261,7 +261,6 @@ const props = defineProps({
       permission_mode: 'normal'
     })
   },
-  // Issue #1062: profile_ids for template composition (area -> profile_id)
   profileIds: {
     type: Object,
     default: () => ({})
@@ -298,7 +297,6 @@ const selectedTemplate = computed(() => {
   return props.templates.find(t => t.template_id === props.selectedTemplateId)
 })
 
-// Issue #1062: Profile selector helpers
 function profilesForArea(area) {
   return profileStore.profilesForArea(area)
 }

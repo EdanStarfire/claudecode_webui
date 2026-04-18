@@ -41,6 +41,7 @@ from .permission_service import PermissionService
 from .session_config import SessionConfig
 from .session_coordinator import SessionCoordinator
 from .session_manager import SessionState
+from .profile_manager import ProfileInUseError
 from .skill_manager import SkillManager
 from .task_utils import task_done_log_exception
 from .template_manager import TemplateConflictError, TemplateInUseError
@@ -3395,7 +3396,6 @@ class ClaudeWebUI:
         @handle_exceptions("delete profile")
         async def delete_profile(profile_id: str):
             """Delete a profile (blocked if templates reference it)."""
-            from src.profile_manager import ProfileInUseError
             try:
                 success = await self.service.delete_profile(profile_id)
             except ProfileInUseError as e:

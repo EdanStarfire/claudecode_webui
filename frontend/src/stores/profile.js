@@ -1,5 +1,5 @@
 /**
- * Profile Store — Issue #1062
+ * Profile Store
  *
  * Manages configuration profiles (the base layer in the 3-tier
  * Profile → Template → Session inheritance chain).
@@ -32,7 +32,7 @@ export const useProfileStore = defineStore('profile', () => {
 
   /** Get profiles for a specific area */
   function profilesForArea(area) {
-    return allProfiles.value.filter(p => p.area === area)
+    return profilesByArea.value[area] ?? []
   }
 
   /** Get a single profile by ID */

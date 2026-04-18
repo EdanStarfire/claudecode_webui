@@ -515,7 +515,7 @@ class TemplateManager:
         # envelopes and future fields without requiring manual enumeration.
         config = SessionConfig.model_validate(sanitized)
 
-        # Issue #1062: carry profile_ids and template_overrides through import.
+        # Carry profile_ids and template_overrides through import.
         # Warn if profile_ids reference profiles that don't exist locally; don't block.
         imported_profile_ids = sanitized.get("profile_ids") or {}
         if imported_profile_ids:

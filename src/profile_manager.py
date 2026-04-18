@@ -1,5 +1,5 @@
 """
-Profile Manager — Issue #1062
+Profile Manager
 
 Manages configuration profiles with file-based storage in data/profiles/.
 Profiles are the base layer in the 3-tier chain: Profile → Template → Session.
