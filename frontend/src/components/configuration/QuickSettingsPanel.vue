@@ -94,12 +94,9 @@
     <div class="mb-3">
       <label class="form-label">
         Permission Mode
-        <span v-if="fieldStates.permission_mode === 'autofilled'" class="field-indicator autofilled" title="Auto-filled from template">
-          &lt;
-        </span>
-        <span v-if="fieldStates.permission_mode === 'modified'" class="field-indicator modified" title="Modified from template">
-          *
-        </span>
+        <span v-if="fieldStates.permission_mode === 'profile'" class="field-indicator profile" title="Value from profile">P</span>
+        <span v-if="fieldStates.permission_mode === 'autofilled'" class="field-indicator autofilled" title="Auto-filled from template">&lt;</span>
+        <span v-if="fieldStates.permission_mode === 'modified'" class="field-indicator modified" title="Modified from template">*</span>
       </label>
       <div class="perm-btn-group">
         <button
@@ -154,12 +151,9 @@
     <div class="mb-3">
       <label for="config-role" class="form-label">
         {{ isTemplateMode ? 'Default Role' : 'Role' }}
-        <span v-if="fieldStates.role === 'autofilled'" class="field-indicator autofilled" title="Auto-filled from template">
-          &lt;
-        </span>
-        <span v-if="fieldStates.role === 'modified'" class="field-indicator modified" title="Modified from template">
-          *
-        </span>
+        <span v-if="fieldStates.role === 'profile'" class="field-indicator profile" title="Value from profile">P</span>
+        <span v-if="fieldStates.role === 'autofilled'" class="field-indicator autofilled" title="Auto-filled from template">&lt;</span>
+        <span v-if="fieldStates.role === 'modified'" class="field-indicator modified" title="Modified from template">*</span>
       </label>
       <input
         id="config-role"
