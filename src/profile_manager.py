@@ -9,7 +9,6 @@ Storage format: data/profiles/{slug}.json
 
 import json
 import logging
-import re
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
@@ -23,6 +22,7 @@ if TYPE_CHECKING:
 from .config_resolution import PROFILE_AREAS
 from .logging_config import get_logger
 from .models.config_profile import ConfigProfile
+from .slug_utils import slugify as _slugify
 
 logger = logging.getLogger(__name__)
 profile_logger = get_logger("profile_manager", category="PROFILE_MANAGER")
@@ -41,13 +41,6 @@ class ProfileInUseError(Exception):
         super().__init__(
             f"Profile {profile_id} is referenced by {len(template_ids)} template(s): {names_preview}"
         )
-
-
-def _slugify(name: str) -> str:
-    """Convert profile name to a filesystem-safe slug."""
-    slug = name.strip().lower()
-    slug = re.sub(r"[^a-z0-9]+", "_", slug)
-    return slug.strip("_")
 
 
 class ProfileManager:

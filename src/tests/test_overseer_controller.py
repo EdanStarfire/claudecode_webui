@@ -9,7 +9,8 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from src.session_manager import SessionInfo, SessionState, slugify_name
+from src.session_manager import SessionInfo, SessionState
+from src.slug_utils import slugify_name
 
 
 def _make_session(session_id, name, project_id="legion-1", parent_id=None, children=None):
