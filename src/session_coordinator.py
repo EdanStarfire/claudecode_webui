@@ -23,6 +23,7 @@ from src.docker_utils import cleanup_session_tmp
 from src.legion.minion_system_prompts import get_legion_guide_only
 
 from .claude_sdk import ClaudeSDK
+from .config_resolution import resolve_effective_config
 from .data_storage import DataStorageManager
 from .hooks.pretooluse_handler import InternalPermissionHandler
 from .logging_config import get_logger
@@ -43,7 +44,6 @@ from .project_manager import ProjectInfo, ProjectManager
 from .queue_manager import QueueManager
 from .queue_processor import QueueProcessor
 from .session_config import SessionConfig
-from .config_resolution import resolve_effective_config
 from .session_manager import STOPPED_STATES, SessionManager, SessionState
 from .task_utils import task_done_log_exception
 from .timestamp_utils import get_unix_timestamp

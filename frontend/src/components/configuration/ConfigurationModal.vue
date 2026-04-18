@@ -1737,7 +1737,7 @@ function populateFormFromTemplate(template) {
 }
 
 function onModalShown() {
-  profileStore.fetchProfiles()
+  profileStore.fetchIfEmpty()
 
   // Focus name input
   nextTick(() => {

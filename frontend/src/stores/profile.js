@@ -14,6 +14,7 @@ export const useProfileStore = defineStore('profile', () => {
   const profiles = ref(new Map()) // profile_id -> profile object
   const loading = ref(false)
   const error = ref(null)
+  const loaded = ref(false)
 
   // ---- Computed ----
 
@@ -56,12 +57,20 @@ export const useProfileStore = defineStore('profile', () => {
       for (const profile of list) {
         profiles.value.set(profile.profile_id, profile)
       }
+      if (!area) {
+        loaded.value = true
+      }
     } catch (err) {
       error.value = err.message || 'Failed to load profiles'
       console.error('Failed to fetch profiles:', err)
     } finally {
       loading.value = false
     }
+  }
+
+  async function fetchIfEmpty() {
+    if (loaded.value && profiles.value.size > 0) return
+    await fetchProfiles()
   }
 
   async function createProfile(name, area, config) {
@@ -88,11 +97,13 @@ export const useProfileStore = defineStore('profile', () => {
     profiles,
     loading,
     error,
+    loaded,
     allProfiles,
     profilesByArea,
     profilesForArea,
     getProfile,
     fetchProfiles,
+    fetchIfEmpty,
     createProfile,
     updateProfile,
     deleteProfile,
