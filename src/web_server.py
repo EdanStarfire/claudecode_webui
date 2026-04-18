@@ -38,10 +38,10 @@ from .message_parser import MessageParser, MessageProcessor
 from .models.permission_mode import PermissionMode
 from .permission_resolver import resolve_effective_permissions
 from .permission_service import PermissionService
+from .profile_manager import ProfileInUseError
 from .session_config import SessionConfig
 from .session_coordinator import SessionCoordinator
 from .session_manager import SessionState
-from .profile_manager import ProfileInUseError
 from .skill_manager import SkillManager
 from .task_utils import task_done_log_exception
 from .template_manager import TemplateConflictError, TemplateInUseError

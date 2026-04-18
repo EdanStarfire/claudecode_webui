@@ -20,7 +20,7 @@ if TYPE_CHECKING:
 
 # PROFILE_AREAS is defined in config_resolution.py (single source of truth).
 # Import it here for validation.
-from .config_resolution import PROFILE_AREAS
+from .config_resolution import PROFILE_AREA_KEYS, PROFILE_AREAS
 from .logging_config import get_logger
 from .models.config_profile import ConfigProfile
 
@@ -98,8 +98,8 @@ class ProfileManager:
         if not name or not name.strip():
             raise ValueError("Profile name cannot be empty")
 
-        if area not in PROFILE_AREAS:
-            raise ValueError(f"Invalid area '{area}'. Must be one of: {', '.join(sorted(PROFILE_AREAS))}")
+        if area not in PROFILE_AREA_KEYS:
+            raise ValueError(f"Invalid area '{area}'. Must be one of: {', '.join(sorted(PROFILE_AREA_KEYS))}")
 
         if any(p.name == name.strip() for p in self.profiles.values()):
             raise ValueError(f"Profile with name '{name}' already exists")

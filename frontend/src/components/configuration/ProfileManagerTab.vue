@@ -591,6 +591,7 @@
 import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import { useProfileStore } from '@/stores/profile'
 import { useMcpConfigStore } from '@/stores/mcpConfig'
+import { PROFILE_AREA_LABELS } from '@/utils/profileAreas'
 
 const profileStore = useProfileStore()
 const mcpConfigStore = useMcpConfigStore()
@@ -598,34 +599,34 @@ const mcpConfigStore = useMcpConfigStore()
 // ---- Area metadata ----
 const AREA_META = {
   model: {
-    label: 'Model',
+    label: PROFILE_AREA_LABELS.model,
     description: 'Model selection, thinking mode, and effort level',
     fields: ['model', 'thinking_mode', 'thinking_budget_tokens', 'effort'],
   },
   permissions: {
-    label: 'Permissions',
+    label: PROFILE_AREA_LABELS.permissions,
     description: 'Permission mode, allowed/disallowed tools, and directories',
     fields: ['permission_mode', 'allowed_tools', 'disallowed_tools', 'additional_directories', 'setting_sources'],
   },
   system_prompt: {
-    label: 'System Prompt',
+    label: PROFILE_AREA_LABELS.system_prompt,
     description: 'System prompt content and override behavior',
     fields: ['system_prompt', 'override_system_prompt'],
   },
   mcp: {
-    label: 'MCP',
+    label: PROFILE_AREA_LABELS.mcp,
     description: 'MCP server IDs and configuration toggles',
     fields: ['mcp_server_ids', 'enable_claudeai_mcp_servers', 'strict_mcp_config'],
   },
   isolation: {
-    label: 'Isolation',
+    label: PROFILE_AREA_LABELS.isolation,
     description: 'CLI path, sandbox, Docker, and environment settings',
     // Derived from isolationFields below + sandbox_config (the nested synthetic key)
     // — populated after isolationFields is defined to avoid forward reference
     fields: null,
   },
   features: {
-    label: 'Features',
+    label: PROFILE_AREA_LABELS.features,
     description: 'History distillation, auto-memory, and skill creation',
     fields: ['history_distillation_enabled', 'auto_memory_mode', 'auto_memory_directory', 'skill_creating_enabled'],
   },
@@ -921,7 +922,7 @@ function configPreview(config) {
 }
 
 onMounted(() => {
-  profileStore.fetchProfiles()
+  profileStore.fetchIfEmpty()
   mcpConfigStore.fetchConfigs()
 })
 </script>

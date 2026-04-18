@@ -920,6 +920,7 @@ import { api } from '@/utils/api'
 import { validateTemplatePath, validateTemplatePathList } from '@/utils/templateVariables'
 import { useMcpStore } from '../../stores/mcp'
 import { useProfileStore } from '@/stores/profile'
+import { useProfileSelector } from '@/composables/useProfileSelector'
 import McpServerPanel from './McpServerPanel.vue'
 
 const mcpStore = useMcpStore()
@@ -965,6 +966,8 @@ const emit = defineEmits([
   'update:has-errors'
 ])
 
+const { profilesForArea, getProfileForArea, setProfileForArea } = useProfileSelector(props, emit)
+
 // Card collapse states (expanded by default for first 4, collapsed for 5 & 6)
 const cardStates = reactive({
   tuning: true,
@@ -1000,24 +1003,6 @@ const capabilityInput = ref(null)
 // Common tools
 const commonTools = ['Bash', 'Read', 'Edit', 'Write', 'Glob', 'Grep', 'WebFetch']
 const commonDeniedTools = ['Bash', 'Write', 'WebFetch']
-
-function profilesForArea(area) {
-  return profileStore.profilesForArea(area)
-}
-
-function getProfileForArea(area) {
-  return props.profileIds?.[area] || null
-}
-
-function setProfileForArea(area, profileId) {
-  const updated = { ...(props.profileIds || {}) }
-  if (profileId) {
-    updated[area] = profileId
-  } else {
-    delete updated[area]
-  }
-  emit('update:profile-ids', updated)
-}
 
 // Field state helper including profile source
 function fieldState(field) {
@@ -1077,7 +1062,7 @@ onMounted(async () => {
   } catch {
     dockerStatus.value = { available: false }
   }
-  profileStore.fetchProfiles()
+  profileStore.fetchIfEmpty()
 })
 
 // Methods

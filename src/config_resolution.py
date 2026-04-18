@@ -64,6 +64,9 @@ PROFILE_AREAS: dict[str, set[str]] = {
     },
 }
 
+# The 6 valid profile area keys, for validation without exposing field details.
+PROFILE_AREA_KEYS = frozenset(PROFILE_AREAS.keys())
+
 # Reverse lookup: field -> area name
 FIELD_TO_AREA: dict[str, str] = {
     field: area

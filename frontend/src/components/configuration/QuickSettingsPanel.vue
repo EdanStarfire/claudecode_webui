@@ -226,6 +226,7 @@
 <script setup>
 import { computed, onMounted } from 'vue'
 import { useProfileStore } from '@/stores/profile'
+import { useProfileSelector } from '@/composables/useProfileSelector'
 
 const profileStore = useProfileStore()
 
@@ -276,6 +277,8 @@ const emit = defineEmits([
   'show-advanced'
 ])
 
+const { profilesForArea, getProfileForArea, setProfileForArea } = useProfileSelector(props, emit)
+
 const isSessionMode = computed(() => props.mode === 'create-session' || props.mode === 'edit-session')
 const isTemplateMode = computed(() => props.mode === 'create-template' || props.mode === 'edit-template')
 const isCreateSession = computed(() => props.mode === 'create-session')
@@ -297,26 +300,8 @@ const selectedTemplate = computed(() => {
   return props.templates.find(t => t.template_id === props.selectedTemplateId)
 })
 
-function profilesForArea(area) {
-  return profileStore.profilesForArea(area)
-}
-
-function getProfileForArea(area) {
-  return props.profileIds?.[area] || null
-}
-
-function setProfileForArea(area, profileId) {
-  const updated = { ...(props.profileIds || {}) }
-  if (profileId) {
-    updated[area] = profileId
-  } else {
-    delete updated[area]
-  }
-  emit('update:profile-ids', updated)
-}
-
 onMounted(() => {
-  profileStore.fetchProfiles()
+  profileStore.fetchIfEmpty()
 })
 
 function setPermissionMode(mode) {
