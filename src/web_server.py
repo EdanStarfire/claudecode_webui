@@ -41,6 +41,7 @@ from .permission_service import PermissionService
 from .session_config import SessionConfig
 from .session_coordinator import SessionCoordinator
 from .session_manager import SessionState
+from .profile_manager import ProfileInUseError
 from .skill_manager import SkillManager
 from .task_utils import task_done_log_exception
 from .template_manager import TemplateConflictError, TemplateInUseError
@@ -278,6 +279,9 @@ class TemplateCreateRequest(SessionConfig):
     system_prompt: str | None = None
     description: str | None = None
     capabilities: list[str] | None = None
+    # Composable profiles (issue #1062)
+    profile_ids: dict[str, str] | None = None
+    template_overrides: dict | None = None
 
 
 class TemplateUpdateRequest(BaseModel):
@@ -316,6 +320,21 @@ class TemplateUpdateRequest(BaseModel):
     # MCP toggle configuration (issue #786)
     enable_claudeai_mcp_servers: bool | None = None
     strict_mcp_config: bool | None = None
+    # Composable profiles (issue #1062)
+    profile_ids: dict[str, str] | None = None
+    template_overrides: dict | None = None
+
+
+# Profile request models (issue #1062)
+class ProfileCreateRequest(BaseModel):
+    name: str
+    area: str
+    config: dict
+
+
+class ProfileUpdateRequest(BaseModel):
+    name: str | None = None
+    config: dict | None = None
 
 
 # MCP config request models (issue #676)
@@ -3230,6 +3249,8 @@ class ClaudeWebUI:
                 system_prompt=request.system_prompt,
                 description=request.description,
                 capabilities=request.capabilities,
+                profile_ids=request.profile_ids,
+                template_overrides=request.template_overrides,
             )
 
         @self.app.put("/api/templates/{template_id}")
@@ -3267,6 +3288,8 @@ class ClaudeWebUI:
                 mcp_server_ids=request.mcp_server_ids,
                 enable_claudeai_mcp_servers=request.enable_claudeai_mcp_servers,
                 strict_mcp_config=request.strict_mcp_config,
+                profile_ids=request.profile_ids,
+                template_overrides=request.template_overrides,
             )
 
         @self.app.delete("/api/templates/{template_id}")
@@ -3331,6 +3354,65 @@ class ClaudeWebUI:
                         "name": e.name,
                     },
                 ) from e
+
+        # ---- Profile CRUD endpoints (issue #1062) ----
+
+        @self.app.get("/api/profiles")
+        @handle_exceptions("list profiles")
+        async def list_profiles(area: str | None = None):
+            """List all profiles, optionally filtered by area."""
+            return await self.service.list_profiles(area=area)
+
+        @self.app.get("/api/profiles/{profile_id}")
+        @handle_exceptions("get profile")
+        async def get_profile(profile_id: str):
+            """Get a specific profile by ID."""
+            profile = await self.service.get_profile(profile_id)
+            if not profile:
+                raise HTTPException(status_code=404, detail="Profile not found")
+            return profile
+
+        @self.app.post("/api/profiles", status_code=201)
+        @handle_exceptions("create profile", value_error_status=400)
+        async def create_profile(request: ProfileCreateRequest):
+            """Create a new configuration profile."""
+            return await self.service.create_profile(
+                name=request.name,
+                area=request.area,
+                config=request.config,
+            )
+
+        @self.app.put("/api/profiles/{profile_id}")
+        @handle_exceptions("update profile", value_error_status=400)
+        async def update_profile(profile_id: str, request: ProfileUpdateRequest):
+            """Update an existing profile."""
+            return await self.service.update_profile(
+                profile_id=profile_id,
+                name=request.name,
+                config=request.config,
+            )
+
+        @self.app.delete("/api/profiles/{profile_id}")
+        @handle_exceptions("delete profile")
+        async def delete_profile(profile_id: str):
+            """Delete a profile (blocked if templates reference it)."""
+            try:
+                success = await self.service.delete_profile(profile_id)
+            except ProfileInUseError as e:
+                return JSONResponse(
+                    status_code=409,
+                    content={
+                        "error": "profile_in_use",
+                        "message": str(e),
+                        "blocking_templates": [
+                            {"template_id": tid, "name": name}
+                            for tid, name in zip(e.template_ids, e.template_names, strict=True)
+                        ],
+                    },
+                )
+            if not success:
+                raise HTTPException(status_code=404, detail="Profile not found")
+            return {"deleted": True}
 
 
 

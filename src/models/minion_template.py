@@ -9,6 +9,16 @@ from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from typing import Any
 
+# Fields excluded from MinionTemplate identity/lifecycle that are
+# also excluded from CONFIG_FIELDS. profile_ids/template_overrides are excluded
+# because they are template-composition metadata, not config values themselves.
+_EXCLUDED_FROM_CONFIG_FIELDS = {
+    "template_id", "name", "role", "description", "capabilities",
+    "profile_id",  # legacy placeholder — dropped in from_dict migration
+    "profile_ids", "template_overrides",
+    "created_at", "updated_at",
+}
+
 
 @dataclass
 class MinionTemplate:
@@ -54,8 +64,9 @@ class MinionTemplate:
     # MCP toggle configuration (issue #786)
     enable_claudeai_mcp_servers: bool = True
     strict_mcp_config: bool = False
-    # Composable profile placeholder (issue #1062)
-    profile_id: str | None = None
+    # Composable profiles (issue #1062): area -> profile_id mapping + template-level overrides
+    profile_ids: dict[str, str] | None = None   # e.g. {"model": "<uuid>", "permissions": "<uuid>"}
+    template_overrides: dict[str, Any] | None = None  # field -> value overrides above profile
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
@@ -77,6 +88,10 @@ class MinionTemplate:
             self.docker_extra_mounts = []
         if self.mcp_server_ids is None:
             self.mcp_server_ids = []
+        if self.profile_ids is None:
+            self.profile_ids = {}
+        if self.template_overrides is None:
+            self.template_overrides = {}
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
@@ -123,8 +138,11 @@ class MinionTemplate:
         # MCP toggle configuration (issue #786)
         data.setdefault('enable_claudeai_mcp_servers', True)
         data.setdefault('strict_mcp_config', False)
-        # Composable profile placeholder (issue #1062)
-        data.setdefault('profile_id', None)
+        # Composable profiles (issue #1062): migrate legacy unused placeholder field.
+        # profile_id was never used in production; drop it and introduce the new fields.
+        data.pop('profile_id', None)
+        data.setdefault('profile_ids', None)
+        data.setdefault('template_overrides', None)
         # Backward-compat renames (issue #731)
         if 'default_role' in data:
             data.setdefault('role', data.pop('default_role'))

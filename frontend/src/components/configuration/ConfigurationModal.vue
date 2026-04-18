@@ -33,49 +33,73 @@
           <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
         </div>
         <div class="modal-body">
-          <!-- Template List View -->
+          <!-- Template List / Profile List View — tabbed -->
           <div v-if="mode === 'template-list'" class="template-list-view">
-            <div class="d-flex justify-content-between align-items-center mb-3">
-              <h6 class="mb-0">Templates</h6>
-              <div class="d-flex gap-2">
-                <button @click="openImportModal" class="btn btn-outline-secondary btn-sm">
-                  Import
-                </button>
-                <button @click="switchToCreateTemplate" class="btn btn-primary btn-sm">
-                  + Create New
-                </button>
+            <!-- Tab toggle: Templates | Profiles (issue #1062) -->
+            <ul class="nav nav-tabs mb-3">
+              <li class="nav-item">
+                <button
+                  class="nav-link"
+                  :class="{ active: templateListTab === 'templates' }"
+                  @click="templateListTab = 'templates'"
+                >Templates</button>
+              </li>
+              <li class="nav-item">
+                <button
+                  class="nav-link"
+                  :class="{ active: templateListTab === 'profiles' }"
+                  @click="templateListTab = 'profiles'"
+                >Profiles</button>
+              </li>
+            </ul>
+
+            <!-- Profiles tab -->
+            <ProfileManagerTab v-if="templateListTab === 'profiles'" />
+
+            <!-- Templates tab -->
+            <template v-if="templateListTab === 'templates'">
+              <div class="d-flex justify-content-between align-items-center mb-3">
+                <h6 class="mb-0">Templates</h6>
+                <div class="d-flex gap-2">
+                  <button @click="openImportModal" class="btn btn-outline-secondary btn-sm">
+                    Import
+                  </button>
+                  <button @click="switchToCreateTemplate" class="btn btn-primary btn-sm">
+                    + Create New
+                  </button>
+                </div>
               </div>
-            </div>
 
-            <div v-if="templates.length === 0" class="alert alert-info">
-              No templates found. Create your first template!
-            </div>
+              <div v-if="templates.length === 0" class="alert alert-info">
+                No templates found. Create your first template!
+              </div>
 
-            <div v-for="template in templates" :key="template.template_id" class="card mb-2">
-              <div class="card-body">
-                <div class="d-flex justify-content-between align-items-start">
-                  <div class="flex-grow-1">
-                    <h6 class="card-title mb-1">{{ template.name }}</h6>
-                    <p v-if="template.description" class="card-text text-muted small mb-2">{{ template.description }}</p>
-                    <div class="template-meta">
-                      <span class="badge bg-secondary me-2">{{ template.permission_mode }}</span>
-                      <span class="text-muted small">{{ template.allowed_tools?.length || 0 }} tools</span>
+              <div v-for="template in templates" :key="template.template_id" class="card mb-2">
+                <div class="card-body">
+                  <div class="d-flex justify-content-between align-items-start">
+                    <div class="flex-grow-1">
+                      <h6 class="card-title mb-1">{{ template.name }}</h6>
+                      <p v-if="template.description" class="card-text text-muted small mb-2">{{ template.description }}</p>
+                      <div class="template-meta">
+                        <span class="badge bg-secondary me-2">{{ template.permission_mode }}</span>
+                        <span class="text-muted small">{{ template.allowed_tools?.length || 0 }} tools</span>
+                      </div>
                     </div>
-                  </div>
-                  <div class="btn-group btn-group-sm ms-3">
-                    <button @click="exportTemplate(template)" class="btn btn-outline-secondary" title="Export">
-                      Export
-                    </button>
-                    <button @click="switchToEditTemplate(template)" class="btn btn-outline-primary" title="Edit">
-                      Edit
-                    </button>
-                    <button @click="deleteTemplate(template)" class="btn btn-outline-danger" title="Delete">
-                      Delete
-                    </button>
+                    <div class="btn-group btn-group-sm ms-3">
+                      <button @click="exportTemplate(template)" class="btn btn-outline-secondary" title="Export">
+                        Export
+                      </button>
+                      <button @click="switchToEditTemplate(template)" class="btn btn-outline-primary" title="Edit">
+                        Edit
+                      </button>
+                      <button @click="deleteTemplate(template)" class="btn btn-outline-danger" title="Delete">
+                        Delete
+                      </button>
+                    </div>
                   </div>
                 </div>
               </div>
-            </div>
+            </template>
           </div>
 
           <!-- Import Template Modal -->
@@ -257,7 +281,9 @@
                 :selected-template-id="selectedTemplateId"
                 :session="editSession"
                 :field-states="fieldStates"
+                :profile-ids="formData.profile_ids"
                 @update:form-data="updateFormData"
+                @update:profile-ids="val => formData.profile_ids = val"
                 @update:selected-template-id="updateSelectedTemplate"
                 @open-folder-browser="openFolderBrowser"
                 @open-template-manager="switchToTemplateList"
@@ -271,7 +297,9 @@
                 :errors="errors"
                 :session="editSession"
                 :field-states="fieldStates"
+                :profile-ids="formData.profile_ids"
                 @update:form-data="updateFormData"
+                @update:profile-ids="(v) => { formData.profile_ids = v }"
                 @preview-permissions="showPermissionPreview"
                 @show-quick="showAdvanced = false"
                 @browse-additional-dir="browseAdditionalDir"
@@ -345,15 +373,18 @@ import { useRouter } from 'vue-router'
 import { useProjectStore } from '@/stores/project'
 import { useSessionStore } from '@/stores/session'
 import { useUIStore } from '@/stores/ui'
+import { useProfileStore } from '@/stores/profile'
 import { api, getAuthToken } from '@/utils/api'
 import QuickSettingsPanel from './QuickSettingsPanel.vue'
 import AdvancedSettingsPanel from './AdvancedSettingsPanel.vue'
 import PermissionPreviewModal from './PermissionPreviewModal.vue'
+import ProfileManagerTab from './ProfileManagerTab.vue'
 
 const router = useRouter()
 const projectStore = useProjectStore()
 const sessionStore = useSessionStore()
 const uiStore = useUIStore()
+const profileStore = useProfileStore()
 
 // Modal state
 const modalElement = ref(null)
@@ -397,6 +428,8 @@ const templateDiff = ref(null)
 const showImportModal = ref(false)
 const importJsonText = ref('')
 const importConflict = ref(null)   // { name, existing_template_id }
+// Active tab in template-list view ('templates' | 'profiles')
+const templateListTab = ref('templates')
 const importError = ref('')
 const isImporting = ref(false)
 const showImportRename = ref(false)
@@ -463,18 +496,21 @@ const CONFIG_FIELDS = {
     default: '',
     change: 'restart',
     contexts: ['session', 'template', 'ephemeral', 'update'],
+    trackState: true,
     toPayload: (v) => v || null,
   },
   thinking_budget_tokens: {
     default: 10240,
     change: 'restart',
     contexts: ['session', 'template', 'ephemeral', 'update'],
+    trackState: true,
     toPayload: (v, fd) => fd.thinking_mode === 'enabled' ? v : null,
   },
   effort: {
     default: '',
     change: 'restart',
     contexts: ['session', 'template', 'ephemeral', 'update'],
+    trackState: true,
     toPayload: (v) => v || null,
   },
   allowed_tools: {
@@ -505,7 +541,8 @@ const CONFIG_FIELDS = {
   setting_sources: {
     default: ['user', 'project', 'local'],
     change: 'restart',
-    contexts: ['session', 'ephemeral', 'update'],
+    contexts: ['session', 'ephemeral', 'update', 'template'],
+    trackState: true,
     compare: (form, orig) => JSON.stringify([...form].sort()) !== JSON.stringify([...(orig || ['user', 'project', 'local'])].sort()),
   },
   system_prompt: {
@@ -519,16 +556,19 @@ const CONFIG_FIELDS = {
     default: false,
     change: 'reset',
     contexts: ['session', 'template', 'ephemeral', 'update'],
+    trackState: true,
   },
   sandbox_enabled: {
     default: false,
     change: 'reset',
     contexts: ['session', 'template', 'ephemeral', 'update'],
+    trackState: true,
   },
   cli_path: {
     default: '',
     change: 'restart',
     contexts: ['session', 'template', 'ephemeral', 'update'],
+    trackState: true,
     toPayload: (v) => v.trim() || null,
     toUpdatePayload: (v) => v.trim(),
   },
@@ -536,6 +576,7 @@ const CONFIG_FIELDS = {
     default: '',
     change: 'restart',
     contexts: ['session', 'template', 'ephemeral', 'update'],
+    trackState: true,
     toPayload: (v) => v.trim() ? v.trim().split('\n').map(d => d.trim()).filter(Boolean) : null,
     toUpdatePayload: (v) => v.trim() ? v.trim().split('\n').map(d => d.trim()).filter(Boolean) : [],
     fromSource: (s) => Array.isArray(s.additional_directories) ? s.additional_directories.join('\n') : '',
@@ -545,17 +586,20 @@ const CONFIG_FIELDS = {
     default: false,
     change: null,
     contexts: ['session', 'template', 'ephemeral'],
+    trackState: true,
   },
   docker_image: {
     default: '',
     change: 'restart',
     contexts: ['session', 'template', 'ephemeral', 'update'],
+    trackState: true,
     toPayload: (v) => v.trim() || null,
   },
   docker_extra_mounts: {
     default: '',
     change: 'restart',
     contexts: ['session', 'template', 'ephemeral', 'update'],
+    trackState: true,
     toPayload: (v) => v.trim() ? v.trim().split('\n').map(m => m.trim()).filter(Boolean) : null,
     fromSource: (s) => Array.isArray(s.docker_extra_mounts) ? s.docker_extra_mounts.join('\n') : '',
     compare: compareNewlineField,
@@ -564,37 +608,44 @@ const CONFIG_FIELDS = {
     default: '',
     change: 'restart',
     contexts: ['session', 'template', 'ephemeral', 'update'],
+    trackState: true,
     toPayload: (v) => v.trim() || null,
   },
   docker_proxy_enabled: {
     default: false,
     change: 'restart',
     contexts: ['session', 'template', 'ephemeral', 'update'],
+    trackState: true,
   },
   docker_proxy_image: {
     default: '',
     change: 'restart',
     contexts: ['session', 'template', 'ephemeral', 'update'],
+    trackState: true,
     toPayload: (v) => v.trim() || null,
   },
   history_distillation_enabled: {
     default: true,
     change: 'restart',
     contexts: ['session', 'template', 'ephemeral', 'update'],
+    trackState: true,
   },
   auto_memory_mode: {
     default: 'claude',
     change: 'restart',
     contexts: ['session', 'template', 'ephemeral', 'update'],
+    trackState: true,
   },
   auto_memory_directory: {
     default: null,
     contexts: ['session', 'template', 'ephemeral', 'update'],
+    trackState: true,
   },
   skill_creating_enabled: {
     default: false,
     change: 'restart',
     contexts: ['session', 'template', 'ephemeral', 'update'],
+    trackState: true,
   },
   mcp_server_ids: {
     default: [],
@@ -606,35 +657,53 @@ const CONFIG_FIELDS = {
     default: true,
     change: 'restart',
     contexts: ['session', 'template', 'ephemeral', 'update'],
+    trackState: true,
   },
   strict_mcp_config: {
     default: false,
     change: 'restart',
     contexts: ['session', 'template', 'ephemeral', 'update'],
+    trackState: true,
   },
   bare_mode: {
     default: false,
     change: 'restart',
     contexts: ['session', 'template', 'ephemeral', 'update'],
+    trackState: true,
   },
   env_scrub_enabled: {
     default: false,
     change: 'restart',
     contexts: ['session', 'template', 'ephemeral', 'update'],
+    trackState: true,
   },
 }
 
 // Derive fieldStates and templateOriginalValues from schema
-const fieldStates = reactive(
-  Object.fromEntries(Object.entries(CONFIG_FIELDS).filter(([, m]) => m.trackState).map(([k]) => [k, 'normal']))
-)
-const templateOriginalValues = ref(
-  Object.fromEntries(Object.entries(CONFIG_FIELDS).filter(([, m]) => m.trackState).map(([k]) => [k, null]))
-)
+// Sandbox sub-fields use synthetic keys (e.g. sandbox_autoAllowBash) since they live in formData.sandbox.*
+const SANDBOX_SYNTHETIC_KEYS = [
+  'sandbox_autoAllowBash', 'sandbox_allowUnsandboxed', 'sandbox_excludedCommands',
+  'sandbox_enableWeakerNested', 'sandbox_network_allowedDomains', 'sandbox_network_allowLocalBinding',
+  'sandbox_network_allowUnixSockets', 'sandbox_network_allowAllUnixSockets',
+  'sandbox_ignoreViolations_file', 'sandbox_ignoreViolations_network',
+]
+const fieldStates = reactive({
+  ...Object.fromEntries(Object.entries(CONFIG_FIELDS).filter(([, m]) => m.trackState).map(([k]) => [k, 'normal'])),
+  ...Object.fromEntries(SANDBOX_SYNTHETIC_KEYS.map(k => [k, 'normal'])),
+})
+const templateOriginalValues = ref({
+  ...Object.fromEntries(Object.entries(CONFIG_FIELDS).filter(([, m]) => m.trackState).map(([k]) => [k, null])),
+  ...Object.fromEntries(SANDBOX_SYNTHETIC_KEYS.map(k => [k, null])),
+})
+// Tracks the value each field received from a profile (for P-badge transitions)
+const profileOriginalValues = ref({})
 
 // Form data — defaults from schema + sandbox (nested, out of scope for schema)
 const formData = reactive({
   ...Object.fromEntries(Object.entries(CONFIG_FIELDS).map(([k, m]) => [k, structuredClone(m.default)])),
+  // profile_ids and template_overrides for template composition
+  profile_ids: {},
+  template_overrides: {},
   sandbox: {
     autoAllowBashIfSandboxed: true,
     allowUnsandboxedCommands: false,
@@ -703,33 +772,79 @@ function resetFieldStates() {
       templateOriginalValues.value[field] = null
     }
   }
+  for (const key of SANDBOX_SYNTHETIC_KEYS) {
+    fieldStates[key] = 'normal'
+    templateOriginalValues.value[key] = null
+  }
+  profileOriginalValues.value = {}
+}
+
+function fieldValuesEqual(meta, a, b) {
+  if (meta.compare) return !meta.compare(a, b)
+  return a === b
 }
 
 function setupFieldStateWatchers() {
   for (const [field, meta] of Object.entries(CONFIG_FIELDS)) {
     if (!meta.trackState) continue
     watch(() => formData[field], (newVal) => {
-      if (templateOriginalValues.value[field] !== null) {
-        fieldStates[field] = newVal === templateOriginalValues.value[field] ? 'autofilled' : 'modified'
+      const profileVal = profileOriginalValues.value[field]
+      const templateVal = templateOriginalValues.value[field]
+      const hasProfile = profileVal !== undefined
+      const hasTemplate = templateVal !== null
+
+      if (!hasProfile && !hasTemplate) return
+
+      if (hasProfile && fieldValuesEqual(meta, newVal, profileVal)) {
+        fieldStates[field] = 'profile'
+      } else if (hasTemplate && fieldValuesEqual(meta, newVal, templateVal)) {
+        fieldStates[field] = 'autofilled'
+      } else {
+        fieldStates[field] = 'modified'
       }
-    })
+    }, { deep: true })
   }
+}
+
+// Handles both array (from backend/templates) and string (from profile editor) values
+function sandboxArrToStr(v) {
+  if (Array.isArray(v)) return v.join(', ')
+  return v || ''
 }
 
 function populateSandboxFromSource(source) {
   const sc = source.sandbox_config || {}
   formData.sandbox.autoAllowBashIfSandboxed = sc.autoAllowBashIfSandboxed ?? true
   formData.sandbox.allowUnsandboxedCommands = sc.allowUnsandboxedCommands ?? false
-  formData.sandbox.excludedCommands = (sc.excludedCommands || []).join(', ')
+  formData.sandbox.excludedCommands = sandboxArrToStr(sc.excludedCommands)
   formData.sandbox.enableWeakerNestedSandbox = sc.enableWeakerNestedSandbox ?? false
   const net = sc.network || {}
-  formData.sandbox.network.allowedDomains = (net.allowedDomains || []).join(', ')
+  formData.sandbox.network.allowedDomains = sandboxArrToStr(net.allowedDomains)
   formData.sandbox.network.allowLocalBinding = net.allowLocalBinding ?? false
-  formData.sandbox.network.allowUnixSockets = (net.allowUnixSockets || []).join(', ')
+  formData.sandbox.network.allowUnixSockets = sandboxArrToStr(net.allowUnixSockets)
   formData.sandbox.network.allowAllUnixSockets = net.allowAllUnixSockets ?? false
   const iv = sc.ignoreViolations || {}
-  formData.sandbox.ignoreViolations.file = (iv.file || []).join(', ')
-  formData.sandbox.ignoreViolations.network = (iv.network || []).join(', ')
+  formData.sandbox.ignoreViolations.file = sandboxArrToStr(iv.file)
+  formData.sandbox.ignoreViolations.network = sandboxArrToStr(iv.network)
+}
+
+// Build synthetic-key → value map for a sandbox_config object (used for tracking)
+function sandboxTrackingValues(sandboxConfig) {
+  const sc = sandboxConfig || {}
+  const net = sc.network || {}
+  const iv = sc.ignoreViolations || {}
+  return {
+    sandbox_autoAllowBash: sc.autoAllowBashIfSandboxed ?? true,
+    sandbox_allowUnsandboxed: sc.allowUnsandboxedCommands ?? false,
+    sandbox_excludedCommands: sandboxArrToStr(sc.excludedCommands),
+    sandbox_enableWeakerNested: sc.enableWeakerNestedSandbox ?? false,
+    sandbox_network_allowedDomains: sandboxArrToStr(net.allowedDomains),
+    sandbox_network_allowLocalBinding: net.allowLocalBinding ?? false,
+    sandbox_network_allowUnixSockets: sandboxArrToStr(net.allowUnixSockets),
+    sandbox_network_allowAllUnixSockets: net.allowAllUnixSockets ?? false,
+    sandbox_ignoreViolations_file: sandboxArrToStr(iv.file),
+    sandbox_ignoreViolations_network: sandboxArrToStr(iv.network),
+  }
 }
 
 function resetSandboxFields() {
@@ -771,7 +886,7 @@ const modalTitle = computed(() => {
     case 'edit-session': return 'Edit Session'
     case 'create-template': return 'Create Template'
     case 'edit-template': return 'Edit Template'
-    case 'template-list': return 'Manage Templates'
+    case 'template-list': return templateListTab.value === 'profiles' ? 'Manage Profiles' : 'Manage Templates'
     case 'configure-ephemeral': return 'Configure Scheduled Session'
     case 'save-as-template': return 'Save as Template'
     case 'update-template-from-session': return 'Update Template from Session'
@@ -963,6 +1078,32 @@ function applyTemplate() {
   // Reset field states before applying new template
   resetFieldStates()
 
+  // Apply profile configs as base layer first (lowest priority)
+  // Each profile area maps its config keys directly to formData fields
+  const profileIds = template.profile_ids || {}
+  for (const [, profileId] of Object.entries(profileIds)) {
+    const profile = profileStore.getProfile(profileId)
+    if (!profile) continue
+    for (const [key, value] of Object.entries(profile.config || {})) {
+      if (key === 'sandbox_config') {
+        // sandbox_config is nested — populate formData.sandbox via helper and track all sub-fields
+        populateSandboxFromSource(profile.config)
+        const sbVals = sandboxTrackingValues(value)
+        for (const [sbKey, sbVal] of Object.entries(sbVals)) {
+          profileOriginalValues.value[sbKey] = sbVal
+          fieldStates[sbKey] = 'profile'
+        }
+        continue
+      }
+      if (!(key in formData)) continue
+      formData[key] = value
+      if (key in fieldStates) {
+        fieldStates[key] = 'profile'
+        profileOriginalValues.value[key] = value
+      }
+    }
+  }
+
   // Apply schema fields from template with field-state tracking
   for (const [field, meta] of Object.entries(CONFIG_FIELDS)) {
     if (!meta.trackState) {
@@ -994,20 +1135,13 @@ function applyTemplate() {
   // Apply sandbox config from template
   populateSandboxFromSource(template)
 
-  // Sandbox string fields with field-state tracking (array → comma-separated)
-  const sc = template.sandbox_config || {}
-  const net = sc.network || {}
-  const iv = sc.ignoreViolations || {}
-  const sandboxTracked = [
-    ['sandbox_excludedCommands', (sc.excludedCommands || []).join(', ')],
-    ['sandbox_network_allowedDomains', (net.allowedDomains || []).join(', ')],
-    ['sandbox_network_allowUnixSockets', (net.allowUnixSockets || []).join(', ')],
-    ['sandbox_ignoreViolations_file', (iv.file || []).join(', ')],
-    ['sandbox_ignoreViolations_network', (iv.network || []).join(', ')],
-  ]
-  for (const [key, value] of sandboxTracked) {
-    templateOriginalValues.value[key] = value || null
-    if (value) fieldStates[key] = 'autofilled'
+  // Track all sandbox sub-fields as template-autofilled
+  const sandboxTemplateVals = sandboxTrackingValues(template.sandbox_config)
+  for (const [key, value] of Object.entries(sandboxTemplateVals)) {
+    // Booleans are always present; only mark text fields as autofilled when non-empty
+    const isNonDefault = typeof value === 'boolean' ? template.sandbox_config != null : !!value
+    templateOriginalValues.value[key] = isNonDefault ? value : null
+    if (isNonDefault) fieldStates[key] = 'autofilled'
   }
 }
 
@@ -1541,6 +1675,8 @@ async function createTemplate() {
   const payload = {
     ...extractPayload('template'),
     sandbox_config: formData.sandbox_enabled ? buildSandboxConfig() : null,
+    profile_ids: Object.keys(formData.profile_ids).length > 0 ? formData.profile_ids : null,
+    template_overrides: Object.keys(formData.template_overrides).length > 0 ? formData.template_overrides : null,
   }
 
   await api.post('/api/templates', payload)
@@ -1561,6 +1697,8 @@ async function updateTemplate() {
   const payload = {
     ...extractPayload('template'),
     sandbox_config: formData.sandbox_enabled ? buildSandboxConfig() : null,
+    profile_ids: Object.keys(formData.profile_ids).length > 0 ? formData.profile_ids : null,
+    template_overrides: Object.keys(formData.template_overrides).length > 0 ? formData.template_overrides : null,
   }
 
   await api.put(`/api/templates/${editTemplate.value.template_id}`, payload)
@@ -1582,6 +1720,8 @@ function resetForm() {
   selectedTemplateId.value = null
   errorMessage.value = ''
   showAdvanced.value = false
+  formData.profile_ids = {}
+  formData.template_overrides = {}
 }
 
 function populateFormFromSession(session) {
@@ -1592,9 +1732,13 @@ function populateFormFromSession(session) {
 function populateFormFromTemplate(template) {
   populateFormFromSource(template)
   populateSandboxFromSource(template)
+  formData.profile_ids = template.profile_ids ? { ...template.profile_ids } : {}
+  formData.template_overrides = template.template_overrides ? { ...template.template_overrides } : {}
 }
 
 function onModalShown() {
+  profileStore.fetchProfiles()
+
   // Focus name input
   nextTick(() => {
     const nameInput = document.getElementById('config-name')
@@ -1705,32 +1849,91 @@ watch(
 // Setup schema-driven field-state watchers (issue #731)
 setupFieldStateWatchers()
 
-// Sandbox field-state watchers (not in schema, stays manual)
-watch(() => formData.sandbox.excludedCommands, (newVal) => {
-  if (templateOriginalValues.value.sandbox_excludedCommands !== null) {
-    fieldStates.sandbox_excludedCommands = newVal === templateOriginalValues.value.sandbox_excludedCommands ? 'autofilled' : 'modified'
+// Sandbox field-state watchers — full 3-tier logic (profile → template → modified → normal)
+function makeSandboxWatcher(key, getter) {
+  watch(getter, (newVal) => {
+    const profileVal = profileOriginalValues.value[key]
+    const templateVal = templateOriginalValues.value[key]
+    const hasProfile = profileVal !== undefined
+    const hasTemplate = templateVal !== null
+    if (!hasProfile && !hasTemplate) return
+    if (hasProfile && newVal === profileVal) {
+      fieldStates[key] = 'profile'
+    } else if (hasTemplate && newVal === templateVal) {
+      fieldStates[key] = 'autofilled'
+    } else {
+      fieldStates[key] = 'modified'
+    }
+  })
+}
+makeSandboxWatcher('sandbox_autoAllowBash', () => formData.sandbox.autoAllowBashIfSandboxed)
+makeSandboxWatcher('sandbox_allowUnsandboxed', () => formData.sandbox.allowUnsandboxedCommands)
+makeSandboxWatcher('sandbox_excludedCommands', () => formData.sandbox.excludedCommands)
+makeSandboxWatcher('sandbox_enableWeakerNested', () => formData.sandbox.enableWeakerNestedSandbox)
+makeSandboxWatcher('sandbox_network_allowedDomains', () => formData.sandbox.network.allowedDomains)
+makeSandboxWatcher('sandbox_network_allowLocalBinding', () => formData.sandbox.network.allowLocalBinding)
+makeSandboxWatcher('sandbox_network_allowUnixSockets', () => formData.sandbox.network.allowUnixSockets)
+makeSandboxWatcher('sandbox_network_allowAllUnixSockets', () => formData.sandbox.network.allowAllUnixSockets)
+makeSandboxWatcher('sandbox_ignoreViolations_file', () => formData.sandbox.ignoreViolations.file)
+makeSandboxWatcher('sandbox_ignoreViolations_network', () => formData.sandbox.ignoreViolations.network)
+
+// When profile_ids changes (user picks a profile in template editor),
+// apply that profile's config values to formData fields immediately.
+watch(() => ({ ...formData.profile_ids }), (newIds, oldIds) => {
+  // Find newly added or changed profile assignments
+  for (const [area, profileId] of Object.entries(newIds)) {
+    if (oldIds[area] === profileId) continue  // unchanged
+    const profile = profileStore.getProfile(profileId)
+    if (!profile) continue
+    for (const [key, value] of Object.entries(profile.config || {})) {
+      if (key === 'sandbox_config') {
+        populateSandboxFromSource(profile.config)
+        const sbVals = sandboxTrackingValues(value)
+        for (const [sbKey, sbVal] of Object.entries(sbVals)) {
+          profileOriginalValues.value[sbKey] = sbVal
+          fieldStates[sbKey] = 'profile'
+        }
+        continue
+      }
+      if (!(key in formData)) continue
+      formData[key] = value
+      if (key in fieldStates) {
+        fieldStates[key] = 'profile'
+        profileOriginalValues.value[key] = value
+      }
+    }
   }
-})
-watch(() => formData.sandbox.network.allowedDomains, (newVal) => {
-  if (templateOriginalValues.value.sandbox_network_allowedDomains !== null) {
-    fieldStates.sandbox_network_allowedDomains = newVal === templateOriginalValues.value.sandbox_network_allowedDomains ? 'autofilled' : 'modified'
+  // When a profile is removed from an area, reset its fields to defaults
+  for (const area of Object.keys(oldIds)) {
+    if (newIds[area]) continue  // still assigned
+    const oldProfile = profileStore.getProfile(oldIds[area])
+    if (!oldProfile) continue
+    for (const key of Object.keys(oldProfile.config || {})) {
+      if (key === 'sandbox_config') {
+        resetSandboxFields()
+        // Clear profile tracking for sandbox sub-fields; revert to template state if applicable
+        for (const sbKey of SANDBOX_SYNTHETIC_KEYS) {
+          delete profileOriginalValues.value[sbKey]
+          fieldStates[sbKey] = templateOriginalValues.value[sbKey] !== null ? 'autofilled' : 'normal'
+        }
+        continue
+      }
+      if (!(key in formData)) continue
+      const meta = CONFIG_FIELDS[key]
+      if (key in fieldStates) {
+        // Tracked field: only reset if still marked as profile-sourced (not manually overridden)
+        if (fieldStates[key] === 'profile') {
+          formData[key] = meta ? structuredClone(meta.default) : null
+          fieldStates[key] = 'normal'
+        }
+        delete profileOriginalValues.value[key]
+      } else {
+        // Untracked field: always reset to default
+        formData[key] = meta ? structuredClone(meta.default) : null
+      }
+    }
   }
-})
-watch(() => formData.sandbox.network.allowUnixSockets, (newVal) => {
-  if (templateOriginalValues.value.sandbox_network_allowUnixSockets !== null) {
-    fieldStates.sandbox_network_allowUnixSockets = newVal === templateOriginalValues.value.sandbox_network_allowUnixSockets ? 'autofilled' : 'modified'
-  }
-})
-watch(() => formData.sandbox.ignoreViolations.file, (newVal) => {
-  if (templateOriginalValues.value.sandbox_ignoreViolations_file !== null) {
-    fieldStates.sandbox_ignoreViolations_file = newVal === templateOriginalValues.value.sandbox_ignoreViolations_file ? 'autofilled' : 'modified'
-  }
-})
-watch(() => formData.sandbox.ignoreViolations.network, (newVal) => {
-  if (templateOriginalValues.value.sandbox_ignoreViolations_network !== null) {
-    fieldStates.sandbox_ignoreViolations_network = newVal === templateOriginalValues.value.sandbox_ignoreViolations_network ? 'autofilled' : 'modified'
-  }
-})
+}, { deep: true })
 
 // Initialize Bootstrap modal
 onMounted(() => {

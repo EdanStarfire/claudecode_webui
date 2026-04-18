@@ -60,7 +60,12 @@
     <!-- Claude AI MCP Servers -->
     <div class="mcp-section">
       <div class="mcp-section-header d-flex align-items-center justify-content-between">
-        <span>Claude AI MCP Servers</span>
+        <span>
+          Claude AI MCP Servers
+          <span v-if="claudeAiState === 'profile'" class="field-indicator profile" title="Value from profile">P</span>
+          <span v-if="claudeAiState === 'autofilled'" class="field-indicator autofilled">&lt;</span>
+          <span v-if="claudeAiState === 'modified'" class="field-indicator modified">*</span>
+        </span>
         <div class="form-check form-switch mb-0">
           <input
             class="form-check-input"
@@ -90,7 +95,12 @@
     <!-- Local MCP Servers -->
     <div class="mcp-section">
       <div class="mcp-section-header d-flex align-items-center justify-content-between">
-        <span>Local MCP Servers</span>
+        <span>
+          Local MCP Servers
+          <span v-if="localState === 'profile'" class="field-indicator profile" title="Value from profile">P</span>
+          <span v-if="localState === 'autofilled'" class="field-indicator autofilled">&lt;</span>
+          <span v-if="localState === 'modified'" class="field-indicator modified">*</span>
+        </span>
         <div class="form-check form-switch mb-0">
           <input
             class="form-check-input"
@@ -151,6 +161,14 @@ const props = defineProps({
   sessionActive: {
     type: Boolean,
     default: false
+  },
+  claudeAiState: {
+    type: String,
+    default: 'normal'
+  },
+  localState: {
+    type: String,
+    default: 'normal'
   }
 })
 
@@ -287,4 +305,14 @@ function statusBadgeClass(status) {
   background-color: #fd7e14 !important;
   color: #fff;
 }
+
+.field-indicator {
+  margin-left: 0.25rem;
+  font-size: 0.75rem;
+  font-weight: bold;
+  cursor: help;
+}
+.field-indicator.autofilled { color: #856404; }
+.field-indicator.modified { color: #cc5500; }
+.field-indicator.profile { color: #0a6640; font-weight: bold; }
 </style>

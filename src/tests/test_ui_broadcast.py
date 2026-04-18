@@ -11,12 +11,8 @@ Covers:
 - Resilience when ui_queue.append() raises
 """
 
-import tempfile
 from pathlib import Path
-from unittest.mock import Mock, MagicMock
-
-import pytest
-
+from unittest.mock import MagicMock, Mock
 
 # ---------------------------------------------------------------------------
 # LegionSystem.broadcast_ui_event()

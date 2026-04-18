@@ -22,7 +22,7 @@ import re
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from .session_manager import SessionManager
@@ -35,7 +35,7 @@ from .session_config import SessionConfig
 # Fields set directly by create_template() — must not be overridden by config spread.
 # system_prompt exists on both SessionConfig and MinionTemplate; the direct param wins.
 _DIRECT_FIELDS = {"template_id", "name", "role", "system_prompt", "description",
-                  "capabilities", "created_at", "updated_at"}
+                  "capabilities", "profile_ids", "template_overrides", "created_at", "updated_at"}
 
 # MinionTemplate field names — computed once at import time for performance.
 _TEMPLATE_FIELDS = {f.name for f in dataclasses.fields(MinionTemplate)}
@@ -190,7 +190,8 @@ class TemplateManager:
         system_prompt: str | None = None,
         description: str | None = None,
         capabilities: list[str] | None = None,
-        profile_id: str | None = None,
+        profile_ids: dict[str, str] | None = None,
+        template_overrides: dict[str, Any] | None = None,
     ) -> MinionTemplate:
         """Create a new template.
 
@@ -226,7 +227,8 @@ class TemplateManager:
             system_prompt=system_prompt,
             description=description,
             capabilities=capabilities if capabilities is not None else [],
-            profile_id=profile_id,
+            profile_ids=profile_ids if profile_ids is not None else {},
+            template_overrides=template_overrides if template_overrides is not None else {},
             **config_data,
         )
 
@@ -284,8 +286,9 @@ class TemplateManager:
         # MCP toggle configuration (issue #786)
         enable_claudeai_mcp_servers: bool | None = None,
         strict_mcp_config: bool | None = None,
-        # Composable profile placeholder (issue #1062)
-        profile_id: str | None = None,
+        # Composable profiles (issue #1062)
+        profile_ids: dict[str, str] | None = None,
+        template_overrides: dict[str, Any] | None = None,
     ) -> MinionTemplate:
         """Update existing template."""
         template = self.templates.get(template_id)
@@ -378,8 +381,11 @@ class TemplateManager:
         if strict_mcp_config is not None:
             template.strict_mcp_config = strict_mcp_config
 
-        if profile_id is not None:
-            template.profile_id = profile_id
+        if profile_ids is not None:
+            template.profile_ids = profile_ids
+
+        if template_overrides is not None:
+            template.template_overrides = template_overrides
 
         template.updated_at = datetime.now(UTC)
 
@@ -509,6 +515,15 @@ class TemplateManager:
         # envelopes and future fields without requiring manual enumeration.
         config = SessionConfig.model_validate(sanitized)
 
+        # Carry profile_ids and template_overrides through import.
+        # Warn if profile_ids reference profiles that don't exist locally; don't block.
+        imported_profile_ids = sanitized.get("profile_ids") or {}
+        if imported_profile_ids:
+            template_logger.warning(
+                f"Imported template '{name}' references profile_ids: {imported_profile_ids}. "
+                "Verify these profiles exist locally; missing profiles fall back to template flat fields."
+            )
+
         template = await self.create_template(
             name=name,
             config=config,
@@ -516,6 +531,8 @@ class TemplateManager:
             system_prompt=sanitized.get("system_prompt"),
             description=sanitized.get("description"),
             capabilities=sanitized.get("capabilities"),
+            profile_ids=imported_profile_ids if imported_profile_ids else None,
+            template_overrides=sanitized.get("template_overrides"),
         )
 
         template_logger.info(

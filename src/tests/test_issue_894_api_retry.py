@@ -121,9 +121,10 @@ class TestRetryMessageIdInjection:
     @pytest.mark.asyncio
     async def test_first_api_retry_gets_new_uuid(self):
         """First api_retry in a session gets a fresh UUID assigned."""
-        from ..session_coordinator import SessionCoordinator
-        from pathlib import Path
         import tempfile
+        from pathlib import Path
+
+        from ..session_coordinator import SessionCoordinator
 
         with tempfile.TemporaryDirectory() as tmp:
             coord = SessionCoordinator(Path(tmp))
@@ -142,10 +143,11 @@ class TestRetryMessageIdInjection:
     @pytest.mark.asyncio
     async def test_second_api_retry_reuses_same_uuid(self):
         """Subsequent api_retry messages in the same session share the same UUID."""
-        from ..session_coordinator import SessionCoordinator
-        from pathlib import Path
         import tempfile
+        from pathlib import Path
         from uuid import uuid4
+
+        from ..session_coordinator import SessionCoordinator
 
         with tempfile.TemporaryDirectory() as tmp:
             coord = SessionCoordinator(Path(tmp))
@@ -164,10 +166,11 @@ class TestRetryMessageIdInjection:
     @pytest.mark.asyncio
     async def test_non_retry_message_clears_sequence(self):
         """A non-api_retry message ends the sequence and clears the UUID."""
-        from ..session_coordinator import SessionCoordinator
-        from pathlib import Path
         import tempfile
+        from pathlib import Path
         from uuid import uuid4
+
+        from ..session_coordinator import SessionCoordinator
 
         with tempfile.TemporaryDirectory() as tmp:
             coord = SessionCoordinator(Path(tmp))
@@ -185,10 +188,11 @@ class TestRetryMessageIdInjection:
     @pytest.mark.asyncio
     async def test_terminate_session_clears_retry_sequence(self):
         """terminate_session() clears the retry sequence for the session."""
-        from ..session_coordinator import SessionCoordinator
-        from pathlib import Path
         import tempfile
+        from pathlib import Path
         from uuid import uuid4
+
+        from ..session_coordinator import SessionCoordinator
 
         with tempfile.TemporaryDirectory() as tmp:
             coord = SessionCoordinator(Path(tmp))

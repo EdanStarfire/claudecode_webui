@@ -461,3 +461,38 @@ class ApplicationService:
     async def import_template(self, **kwargs) -> dict:
         template = await self.coordinator.template_manager.import_template(**kwargs)
         return template.to_dict()
+
+    # =========================================================================
+    # Profiles (issue #1062)
+    # =========================================================================
+
+    async def list_profiles(self, area: str | None = None) -> dict:
+        profiles = await self.coordinator.profile_manager.list_profiles(area=area)
+        return {"profiles": [p.to_dict() for p in profiles]}
+
+    async def get_profile(self, profile_id: str) -> dict | None:
+        profile = await self.coordinator.profile_manager.get_profile(profile_id)
+        return profile.to_dict() if profile else None
+
+    async def create_profile(self, name: str, area: str, config: dict) -> dict:
+        profile = await self.coordinator.profile_manager.create_profile(
+            name=name, area=area, config=config
+        )
+        return profile.to_dict()
+
+    async def update_profile(
+        self,
+        profile_id: str,
+        name: str | None = None,
+        config: dict | None = None,
+    ) -> dict:
+        profile = await self.coordinator.profile_manager.update_profile(
+            profile_id=profile_id, name=name, config=config
+        )
+        return profile.to_dict()
+
+    async def delete_profile(self, profile_id: str) -> bool:
+        return await self.coordinator.profile_manager.delete_profile(
+            profile_id,
+            template_manager=self.coordinator.template_manager,
+        )

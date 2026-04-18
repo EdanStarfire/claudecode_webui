@@ -16,7 +16,6 @@ import pytest
 
 from src.models.messages import PermissionRequestMessage, ToolCall, ToolDisplayInfo, ToolState
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -129,6 +128,7 @@ def test_permission_request_message_to_dict_includes_none_fields():
 def test_get_tool_call_by_id_returns_correct_call():
     """get_tool_call_by_id() returns the exact tool call for its ID."""
     import tempfile
+
     from src.session_coordinator import SessionCoordinator
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -152,6 +152,7 @@ def test_get_tool_call_by_id_returns_correct_call():
 def test_get_tool_call_by_id_returns_none_for_unknown_id():
     """get_tool_call_by_id() returns None for an unknown tool_use_id."""
     import tempfile
+
     from src.session_coordinator import SessionCoordinator
 
     with tempfile.TemporaryDirectory() as tmp:
