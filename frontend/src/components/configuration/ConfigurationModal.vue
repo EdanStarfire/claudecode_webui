@@ -496,18 +496,21 @@ const CONFIG_FIELDS = {
     default: '',
     change: 'restart',
     contexts: ['session', 'template', 'ephemeral', 'update'],
+    trackState: true,
     toPayload: (v) => v || null,
   },
   thinking_budget_tokens: {
     default: 10240,
     change: 'restart',
     contexts: ['session', 'template', 'ephemeral', 'update'],
+    trackState: true,
     toPayload: (v, fd) => fd.thinking_mode === 'enabled' ? v : null,
   },
   effort: {
     default: '',
     change: 'restart',
     contexts: ['session', 'template', 'ephemeral', 'update'],
+    trackState: true,
     toPayload: (v) => v || null,
   },
   allowed_tools: {
@@ -538,7 +541,8 @@ const CONFIG_FIELDS = {
   setting_sources: {
     default: ['user', 'project', 'local'],
     change: 'restart',
-    contexts: ['session', 'ephemeral', 'update'],
+    contexts: ['session', 'ephemeral', 'update', 'template'],
+    trackState: true,
     compare: (form, orig) => JSON.stringify([...form].sort()) !== JSON.stringify([...(orig || ['user', 'project', 'local'])].sort()),
   },
   system_prompt: {
@@ -552,16 +556,19 @@ const CONFIG_FIELDS = {
     default: false,
     change: 'reset',
     contexts: ['session', 'template', 'ephemeral', 'update'],
+    trackState: true,
   },
   sandbox_enabled: {
     default: false,
     change: 'reset',
     contexts: ['session', 'template', 'ephemeral', 'update'],
+    trackState: true,
   },
   cli_path: {
     default: '',
     change: 'restart',
     contexts: ['session', 'template', 'ephemeral', 'update'],
+    trackState: true,
     toPayload: (v) => v.trim() || null,
     toUpdatePayload: (v) => v.trim(),
   },
@@ -569,6 +576,7 @@ const CONFIG_FIELDS = {
     default: '',
     change: 'restart',
     contexts: ['session', 'template', 'ephemeral', 'update'],
+    trackState: true,
     toPayload: (v) => v.trim() ? v.trim().split('\n').map(d => d.trim()).filter(Boolean) : null,
     toUpdatePayload: (v) => v.trim() ? v.trim().split('\n').map(d => d.trim()).filter(Boolean) : [],
     fromSource: (s) => Array.isArray(s.additional_directories) ? s.additional_directories.join('\n') : '',
@@ -578,17 +586,20 @@ const CONFIG_FIELDS = {
     default: false,
     change: null,
     contexts: ['session', 'template', 'ephemeral'],
+    trackState: true,
   },
   docker_image: {
     default: '',
     change: 'restart',
     contexts: ['session', 'template', 'ephemeral', 'update'],
+    trackState: true,
     toPayload: (v) => v.trim() || null,
   },
   docker_extra_mounts: {
     default: '',
     change: 'restart',
     contexts: ['session', 'template', 'ephemeral', 'update'],
+    trackState: true,
     toPayload: (v) => v.trim() ? v.trim().split('\n').map(m => m.trim()).filter(Boolean) : null,
     fromSource: (s) => Array.isArray(s.docker_extra_mounts) ? s.docker_extra_mounts.join('\n') : '',
     compare: compareNewlineField,
@@ -597,37 +608,44 @@ const CONFIG_FIELDS = {
     default: '',
     change: 'restart',
     contexts: ['session', 'template', 'ephemeral', 'update'],
+    trackState: true,
     toPayload: (v) => v.trim() || null,
   },
   docker_proxy_enabled: {
     default: false,
     change: 'restart',
     contexts: ['session', 'template', 'ephemeral', 'update'],
+    trackState: true,
   },
   docker_proxy_image: {
     default: '',
     change: 'restart',
     contexts: ['session', 'template', 'ephemeral', 'update'],
+    trackState: true,
     toPayload: (v) => v.trim() || null,
   },
   history_distillation_enabled: {
     default: true,
     change: 'restart',
     contexts: ['session', 'template', 'ephemeral', 'update'],
+    trackState: true,
   },
   auto_memory_mode: {
     default: 'claude',
     change: 'restart',
     contexts: ['session', 'template', 'ephemeral', 'update'],
+    trackState: true,
   },
   auto_memory_directory: {
     default: null,
     contexts: ['session', 'template', 'ephemeral', 'update'],
+    trackState: true,
   },
   skill_creating_enabled: {
     default: false,
     change: 'restart',
     contexts: ['session', 'template', 'ephemeral', 'update'],
+    trackState: true,
   },
   mcp_server_ids: {
     default: [],
@@ -639,21 +657,25 @@ const CONFIG_FIELDS = {
     default: true,
     change: 'restart',
     contexts: ['session', 'template', 'ephemeral', 'update'],
+    trackState: true,
   },
   strict_mcp_config: {
     default: false,
     change: 'restart',
     contexts: ['session', 'template', 'ephemeral', 'update'],
+    trackState: true,
   },
   bare_mode: {
     default: false,
     change: 'restart',
     contexts: ['session', 'template', 'ephemeral', 'update'],
+    trackState: true,
   },
   env_scrub_enabled: {
     default: false,
     change: 'restart',
     contexts: ['session', 'template', 'ephemeral', 'update'],
+    trackState: true,
   },
 }
 
@@ -664,6 +686,8 @@ const fieldStates = reactive(
 const templateOriginalValues = ref(
   Object.fromEntries(Object.entries(CONFIG_FIELDS).filter(([, m]) => m.trackState).map(([k]) => [k, null]))
 )
+// Tracks the value each field received from a profile (for P-badge transitions)
+const profileOriginalValues = ref({})
 
 // Form data — defaults from schema + sandbox (nested, out of scope for schema)
 const formData = reactive({
@@ -739,16 +763,33 @@ function resetFieldStates() {
       templateOriginalValues.value[field] = null
     }
   }
+  profileOriginalValues.value = {}
+}
+
+function fieldValuesEqual(meta, a, b) {
+  if (meta.compare) return !meta.compare(a, b)
+  return a === b
 }
 
 function setupFieldStateWatchers() {
   for (const [field, meta] of Object.entries(CONFIG_FIELDS)) {
     if (!meta.trackState) continue
     watch(() => formData[field], (newVal) => {
-      if (templateOriginalValues.value[field] !== null) {
-        fieldStates[field] = newVal === templateOriginalValues.value[field] ? 'autofilled' : 'modified'
+      const profileVal = profileOriginalValues.value[field]
+      const templateVal = templateOriginalValues.value[field]
+      const hasProfile = profileVal !== undefined
+      const hasTemplate = templateVal !== null
+
+      if (!hasProfile && !hasTemplate) return
+
+      if (hasProfile && fieldValuesEqual(meta, newVal, profileVal)) {
+        fieldStates[field] = 'profile'
+      } else if (hasTemplate && fieldValuesEqual(meta, newVal, templateVal)) {
+        fieldStates[field] = 'autofilled'
+      } else {
+        fieldStates[field] = 'modified'
       }
-    })
+    }, { deep: true })
   }
 }
 
@@ -1006,9 +1047,17 @@ function applyTemplate() {
     const profile = profileStore.allProfiles.find(p => p.profile_id === profileId)
     if (!profile) continue
     for (const [key, value] of Object.entries(profile.config || {})) {
+      if (key === 'sandbox_config') {
+        // sandbox_config is nested — populate formData.sandbox via helper
+        populateSandboxFromSource(profile.config)
+        continue
+      }
       if (!(key in formData)) continue
       formData[key] = value
-      if (key in fieldStates) fieldStates[key] = 'profile'
+      if (key in fieldStates) {
+        fieldStates[key] = 'profile'
+        profileOriginalValues.value[key] = value
+      }
     }
   }
 
@@ -1805,9 +1854,16 @@ watch(() => ({ ...formData.profile_ids }), (newIds, oldIds) => {
     const profile = profileStore.allProfiles.find(p => p.profile_id === profileId)
     if (!profile) continue
     for (const [key, value] of Object.entries(profile.config || {})) {
+      if (key === 'sandbox_config') {
+        populateSandboxFromSource(profile.config)
+        continue
+      }
       if (!(key in formData)) continue
       formData[key] = value
-      if (key in fieldStates) fieldStates[key] = 'profile'
+      if (key in fieldStates) {
+        fieldStates[key] = 'profile'
+        profileOriginalValues.value[key] = value
+      }
     }
   }
   // When a profile is removed from an area, reset its fields to defaults
@@ -1816,12 +1872,22 @@ watch(() => ({ ...formData.profile_ids }), (newIds, oldIds) => {
     const oldProfile = profileStore.allProfiles.find(p => p.profile_id === oldIds[area])
     if (!oldProfile) continue
     for (const key of Object.keys(oldProfile.config || {})) {
+      if (key === 'sandbox_config') {
+        resetSandboxFields()
+        continue
+      }
       if (!(key in formData)) continue
-      // Only reset if still marked as profile-sourced (not manually overridden)
-      if (fieldStates[key] === 'profile') {
-        const meta = CONFIG_FIELDS[key]
+      const meta = CONFIG_FIELDS[key]
+      if (key in fieldStates) {
+        // Tracked field: only reset if still marked as profile-sourced (not manually overridden)
+        if (fieldStates[key] === 'profile') {
+          formData[key] = meta ? structuredClone(meta.default) : null
+          fieldStates[key] = 'normal'
+        }
+        delete profileOriginalValues.value[key]
+      } else {
+        // Untracked field: always reset to default
         formData[key] = meta ? structuredClone(meta.default) : null
-        fieldStates[key] = 'normal'
       }
     }
   }

@@ -3,7 +3,7 @@ import vue from '@vitejs/plugin-vue'
 import path from 'path'
 
 // Get backend configuration from environment variables
-const BACKEND_HOST = process.env.VITE_BACKEND_HOST || '0.0.0.0'
+const BACKEND_HOST = process.env.VITE_BACKEND_HOST || '172.17.0.1'
 const BACKEND_PORT = process.env.VITE_BACKEND_PORT || '8001'
 const BACKEND_URL = `http://${BACKEND_HOST}:${BACKEND_PORT}`
 

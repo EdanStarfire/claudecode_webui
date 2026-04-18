@@ -351,24 +351,137 @@
 
             <!-- ISOLATION AREA -->
             <template v-else-if="currentArea === 'isolation'">
-              <div v-for="isoField in isolationFields" :key="isoField.key" class="field-row">
-                <div class="field-toggle">
-                  <div class="form-check form-switch mb-0">
-                    <input class="form-check-input" type="checkbox" v-model="included[isoField.key]"
-                      :disabled="isoField.dependsOn && !isIsoParentActive(isoField.dependsOn)" />
+              <!-- cli_path -->
+              <div class="field-row">
+                <div class="field-toggle"><div class="form-check form-switch mb-0">
+                  <input class="form-check-input" type="checkbox" v-model="included.cli_path" />
+                </div></div>
+                <div class="field-body" :class="{ 'field-disabled': !included.cli_path }">
+                  <label class="form-label small mb-1">cli_path</label>
+                  <input type="text" class="form-control form-control-sm font-monospace" v-model="form.config.cli_path" :disabled="!included.cli_path" placeholder="/path/to/claude-cli" />
+                </div>
+              </div>
+              <!-- sandbox_enabled -->
+              <div class="field-row">
+                <div class="field-toggle"><div class="form-check form-switch mb-0">
+                  <input class="form-check-input" type="checkbox" v-model="included.sandbox_enabled" />
+                </div></div>
+                <div class="field-body" :class="{ 'field-disabled': !included.sandbox_enabled }">
+                  <label class="form-label small mb-1">sandbox_enabled</label>
+                  <div class="form-check form-switch">
+                    <input class="form-check-input" type="checkbox" id="f-iso-sb-en" v-model="form.config.sandbox_enabled" :disabled="!included.sandbox_enabled" />
+                    <label class="form-check-label small" for="f-iso-sb-en">Enable sandbox mode</label>
                   </div>
                 </div>
-                <div class="field-body" :class="{ 'field-disabled': !included[isoField.key] || (isoField.dependsOn && !isIsoParentActive(isoField.dependsOn)) }">
-                  <label class="form-label small mb-1">{{ isoField.key }}</label>
-                  <div v-if="isoField.type === 'toggle'" class="form-check form-switch">
-                    <input class="form-check-input" type="checkbox" :id="'f-iso-' + isoField.key" v-model="form.config[isoField.key]"
-                      :disabled="!included[isoField.key] || (isoField.dependsOn && !isIsoParentActive(isoField.dependsOn))" />
-                    <label class="form-check-label small" :for="'f-iso-' + isoField.key">{{ isoField.label }}</label>
+              </div>
+              <!-- sandbox_config (shown when sandbox_enabled is included and ON) -->
+              <div v-if="included.sandbox_enabled && form.config.sandbox_enabled" class="field-row iso-sub-row">
+                <div class="field-toggle"><div class="form-check form-switch mb-0">
+                  <input class="form-check-input" type="checkbox" v-model="included.sandbox_config" @change="onSandboxConfigToggle" />
+                </div></div>
+                <div class="field-body" :class="{ 'field-disabled': !included.sandbox_config }">
+                  <label class="form-label small mb-1">sandbox_config</label>
+                  <template v-if="included.sandbox_config && form.config.sandbox_config">
+                    <div class="iso-sub-section-label">Bash Permissions</div>
+                    <div class="form-check mb-1">
+                      <input class="form-check-input" type="checkbox" id="f-sc-auto-bash" v-model="form.config.sandbox_config.autoAllowBashIfSandboxed" />
+                      <label class="form-check-label small" for="f-sc-auto-bash">Auto-allow Bash when sandboxed</label>
+                    </div>
+                    <div class="form-check mb-1">
+                      <input class="form-check-input" type="checkbox" id="f-sc-unsandboxed" v-model="form.config.sandbox_config.allowUnsandboxedCommands" />
+                      <label class="form-check-label small" for="f-sc-unsandboxed">Allow unsandboxed commands</label>
+                    </div>
+                    <div class="mb-2">
+                      <label class="form-label small mb-1">Excluded Commands</label>
+                      <input type="text" class="form-control form-control-sm" v-model="form.config.sandbox_config.excludedCommands" placeholder="rm, dd, mkfs..." />
+                    </div>
+                    <div class="form-check mb-1">
+                      <input class="form-check-input" type="checkbox" id="f-sc-weaker" v-model="form.config.sandbox_config.enableWeakerNestedSandbox" />
+                      <label class="form-check-label small" for="f-sc-weaker">Enable weaker nested sandbox</label>
+                    </div>
+                    <div class="iso-sub-section-label mt-2">Network</div>
+                    <div class="mb-1">
+                      <label class="form-label small mb-1">Allowed Domains</label>
+                      <input type="text" class="form-control form-control-sm" v-model="form.config.sandbox_config.network.allowedDomains" placeholder="github.com, api.example.com" />
+                    </div>
+                    <div class="form-check mb-1">
+                      <input class="form-check-input" type="checkbox" id="f-sc-local-binding" v-model="form.config.sandbox_config.network.allowLocalBinding" />
+                      <label class="form-check-label small" for="f-sc-local-binding">Allow local binding</label>
+                    </div>
+                    <div class="mb-1">
+                      <label class="form-label small mb-1">Allow Unix Sockets</label>
+                      <input type="text" class="form-control form-control-sm" v-model="form.config.sandbox_config.network.allowUnixSockets" placeholder="/var/run/docker.sock" />
+                    </div>
+                    <div class="form-check mb-1">
+                      <input class="form-check-input" type="checkbox" id="f-sc-all-unix" v-model="form.config.sandbox_config.network.allowAllUnixSockets" />
+                      <label class="form-check-label small" for="f-sc-all-unix">Allow all Unix sockets</label>
+                    </div>
+                    <div class="iso-sub-section-label mt-2">Violation Handling</div>
+                    <div class="mb-1">
+                      <label class="form-label small mb-1">Ignore File Violations</label>
+                      <input type="text" class="form-control form-control-sm" v-model="form.config.sandbox_config.ignoreViolations.file" placeholder="File paths to ignore" />
+                    </div>
+                    <div class="mb-1">
+                      <label class="form-label small mb-1">Ignore Network Violations</label>
+                      <input type="text" class="form-control form-control-sm" v-model="form.config.sandbox_config.ignoreViolations.network" placeholder="Network patterns to ignore" />
+                    </div>
+                  </template>
+                </div>
+              </div>
+              <!-- docker_enabled -->
+              <div class="field-row">
+                <div class="field-toggle"><div class="form-check form-switch mb-0">
+                  <input class="form-check-input" type="checkbox" v-model="included.docker_enabled" />
+                </div></div>
+                <div class="field-body" :class="{ 'field-disabled': !included.docker_enabled }">
+                  <label class="form-label small mb-1">docker_enabled</label>
+                  <div class="form-check form-switch">
+                    <input class="form-check-input" type="checkbox" id="f-iso-dk-en" v-model="form.config.docker_enabled" :disabled="!included.docker_enabled" />
+                    <label class="form-check-label small" for="f-iso-dk-en">Docker isolation</label>
                   </div>
-                  <textarea v-else-if="isoField.type === 'textarea'" class="form-control form-control-sm font-monospace" rows="2" v-model="form.config[isoField.key]"
-                    :disabled="!included[isoField.key] || (isoField.dependsOn && !isIsoParentActive(isoField.dependsOn))" :placeholder="isoField.placeholder"></textarea>
-                  <input v-else type="text" class="form-control form-control-sm font-monospace" v-model="form.config[isoField.key]"
-                    :disabled="!included[isoField.key] || (isoField.dependsOn && !isIsoParentActive(isoField.dependsOn))" :placeholder="isoField.placeholder" />
+                </div>
+              </div>
+              <!-- Docker sub-fields -->
+              <template v-for="isoField in dockerSubFields" :key="isoField.key">
+                <div v-if="isIsoParentActive(isoField.dependsOn)" class="field-row iso-sub-row">
+                  <div class="field-toggle"><div class="form-check form-switch mb-0">
+                    <input class="form-check-input" type="checkbox" v-model="included[isoField.key]" />
+                  </div></div>
+                  <div class="field-body" :class="{ 'field-disabled': !included[isoField.key] }">
+                    <label class="form-label small mb-1">{{ isoField.key }}</label>
+                    <div v-if="isoField.type === 'toggle'" class="form-check form-switch">
+                      <input class="form-check-input" type="checkbox" :id="'f-iso-' + isoField.key" v-model="form.config[isoField.key]" :disabled="!included[isoField.key]" />
+                      <label class="form-check-label small" :for="'f-iso-' + isoField.key">{{ isoField.label }}</label>
+                    </div>
+                    <textarea v-else-if="isoField.type === 'textarea'" class="form-control form-control-sm font-monospace" rows="2" v-model="form.config[isoField.key]" :disabled="!included[isoField.key]" :placeholder="isoField.placeholder"></textarea>
+                    <input v-else type="text" class="form-control form-control-sm font-monospace" v-model="form.config[isoField.key]" :disabled="!included[isoField.key]" :placeholder="isoField.placeholder" />
+                  </div>
+                </div>
+              </template>
+              <!-- bare_mode -->
+              <div class="field-row">
+                <div class="field-toggle"><div class="form-check form-switch mb-0">
+                  <input class="form-check-input" type="checkbox" v-model="included.bare_mode" />
+                </div></div>
+                <div class="field-body" :class="{ 'field-disabled': !included.bare_mode }">
+                  <label class="form-label small mb-1">bare_mode</label>
+                  <div class="form-check form-switch">
+                    <input class="form-check-input" type="checkbox" id="f-iso-bare" v-model="form.config.bare_mode" :disabled="!included.bare_mode" />
+                    <label class="form-check-label small" for="f-iso-bare">Bare mode (skips hooks, LSP, skills)</label>
+                  </div>
+                </div>
+              </div>
+              <!-- env_scrub_enabled -->
+              <div class="field-row">
+                <div class="field-toggle"><div class="form-check form-switch mb-0">
+                  <input class="form-check-input" type="checkbox" v-model="included.env_scrub_enabled" />
+                </div></div>
+                <div class="field-body" :class="{ 'field-disabled': !included.env_scrub_enabled }">
+                  <label class="form-label small mb-1">env_scrub_enabled</label>
+                  <div class="form-check form-switch">
+                    <input class="form-check-input" type="checkbox" id="f-iso-scrub" v-model="form.config.env_scrub_enabled" :disabled="!included.env_scrub_enabled" />
+                    <label class="form-check-label small" for="f-iso-scrub">Scrub subprocess credentials</label>
+                  </div>
                 </div>
               </div>
             </template>
@@ -473,7 +586,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import { useProfileStore } from '@/stores/profile'
 import { useMcpConfigStore } from '@/stores/mcpConfig'
 
@@ -506,7 +619,7 @@ const AREA_META = {
     label: 'Isolation',
     description: 'CLI path, sandbox, Docker, and environment settings',
     fields: [
-      'cli_path', 'sandbox_enabled',
+      'cli_path', 'sandbox_enabled', 'sandbox_config',
       'docker_enabled', 'docker_image', 'docker_extra_mounts',
       'docker_home_directory', 'docker_proxy_enabled', 'docker_proxy_image',
       'docker_proxy_credentials', 'bare_mode', 'env_scrub_enabled',
@@ -532,6 +645,8 @@ const isolationFields = [
   { key: 'bare_mode', type: 'toggle', label: 'Bare mode (skips hooks, LSP, skills)' },
   { key: 'env_scrub_enabled', type: 'toggle', label: 'Scrub subprocess credentials' },
 ]
+
+const dockerSubFields = isolationFields.filter(f => f.dependsOn === 'docker_enabled' || f.dependsOn === 'docker_proxy_enabled')
 
 // ---- Form state ----
 const showForm = ref(false)
@@ -669,15 +784,20 @@ function toggleMcpServer(id, checked) {
 }
 
 // ---- Form open/close ----
+function hasValue(v) {
+  if (v === undefined || v === null) return false
+  if (Array.isArray(v)) return v.length > 0
+  if (typeof v === 'string') return v !== ''
+  return true // boolean, number, object
+}
+
 function initIncluded(area, existingConfig = {}) {
   const fields = AREA_META[area]?.fields || []
   fields.forEach(f => {
-    const v = existingConfig[f]
-    included[f] = v !== undefined && v !== null && v !== ''
+    included[f] = hasValue(existingConfig[f])
   })
   isolationFields.forEach(f => {
-    const v = existingConfig[f.key]
-    included[f.key] = v !== undefined && v !== null && v !== ''
+    included[f.key] = hasValue(existingConfig[f.key])
   })
 }
 
@@ -691,14 +811,34 @@ function openCreate() {
   showForm.value = true
 }
 
+function onSandboxConfigToggle(e) {
+  if (e.target.checked && !form.config.sandbox_config) {
+    form.config.sandbox_config = {
+      autoAllowBashIfSandboxed: true,
+      allowUnsandboxedCommands: false,
+      excludedCommands: '',
+      enableWeakerNestedSandbox: false,
+      network: {
+        allowedDomains: '',
+        allowLocalBinding: false,
+        allowUnixSockets: '',
+        allowAllUnixSockets: false,
+      },
+      ignoreViolations: { file: '', network: '' },
+    }
+  }
+}
+
 function openEdit(profile) {
   editingProfile.value = profile
   form.name = profile.name
   form.area = profile.area
-  form.config = { ...profile.config }
+  form.config = structuredClone(profile.config)
   formError.value = ''
-  initIncluded(profile.area, profile.config)
   showForm.value = true
+  // nextTick ensures initIncluded runs after any pending watchers (e.g. form.area watcher)
+  // have flushed, preventing them from resetting the included state we're about to set.
+  nextTick(() => initIncluded(profile.area, profile.config))
 }
 
 function closeForm() {
@@ -719,7 +859,7 @@ async function submitForm() {
     if (!included[f]) continue
     const v = form.config[f]
     if (v !== undefined && v !== null) {
-      if (typeof v === 'boolean' || (Array.isArray(v) && v.length > 0) || (typeof v === 'number') || (typeof v === 'string' && v !== '')) {
+      if (typeof v === 'boolean' || (Array.isArray(v) && v.length > 0) || (typeof v === 'number') || (typeof v === 'string' && v !== '') || (typeof v === 'object' && !Array.isArray(v))) {
         cleanConfig[f] = v
       }
     }
@@ -936,5 +1076,21 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
   gap: 4px;
+}
+
+/* Isolation sub-rows (sandbox_config, docker sub-fields) */
+.iso-sub-row {
+  background: var(--bs-secondary-bg-subtle, #f8f9fa);
+  border-left: 3px solid var(--bs-border-color);
+  margin-left: 8px;
+}
+
+.iso-sub-section-label {
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--bs-secondary);
+  margin-bottom: 4px;
 }
 </style>
