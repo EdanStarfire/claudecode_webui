@@ -245,6 +245,21 @@
                       <label class="form-check-label small" :for="'f-iso-' + isoField.key">{{ isoField.label }}</label>
                     </div>
                     <textarea v-else-if="isoField.type === 'textarea'" class="form-control form-control-sm font-monospace" rows="2" v-model="form.config[isoField.key]" :disabled="!included[isoField.key]" :placeholder="isoField.placeholder"></textarea>
+                    <MultiSelectField
+                      v-else-if="isoField.type === 'multi-select'"
+                      :value="form.config[isoField.key]"
+                      :disabled="!included[isoField.key]"
+                      :options-from="isoField.optionsFrom || null"
+                      :placeholder="isoField.placeholder || 'Select...'"
+                      @update:value="form.config[isoField.key] = $event"
+                    />
+                    <TagListField
+                      v-else-if="isoField.type === 'tag-list'"
+                      :value="form.config[isoField.key]"
+                      :disabled="!included[isoField.key]"
+                      :placeholder="isoField.placeholder || 'Add...'"
+                      @update:value="form.config[isoField.key] = $event"
+                    />
                     <input v-else type="text" class="form-control form-control-sm font-monospace" v-model="form.config[isoField.key]" :disabled="!included[isoField.key]" :placeholder="isoField.placeholder" />
                   </div>
                 </div>
@@ -334,6 +349,8 @@ import { PROFILE_AREA_LABELS } from '@/utils/profileAreas'
 import { COMMON_TOOLS, COMMON_DENIED_TOOLS } from '@/utils/toolConstants'
 import FieldSection from './fields/FieldSection.vue'
 import SandboxSubSectionWidget from './fields/SandboxSubSectionWidget.vue'
+import MultiSelectField from './fields/MultiSelectField.vue'
+import TagListField from './fields/TagListField.vue'
 import { FIELD_SCHEMAS } from './fields/fieldSchemas.js'
 
 const profileStore = useProfileStore()
@@ -382,7 +399,8 @@ const isolationFields = [
   { key: 'docker_home_directory', type: 'text', placeholder: '/home/claude', dependsOn: 'docker_enabled' },
   { key: 'docker_proxy_enabled', type: 'toggle', label: 'Network proxy sidecar', dependsOn: 'docker_enabled' },
   { key: 'docker_proxy_image', type: 'text', placeholder: 'claude-proxy:local', dependsOn: 'docker_proxy_enabled' },
-  { key: 'docker_proxy_credentials', type: 'text', placeholder: 'Credential identifier', dependsOn: 'docker_proxy_enabled' },
+  { key: 'docker_proxy_allowlist_domains', type: 'tag-list', placeholder: 'e.g., api.example.com', dependsOn: 'docker_proxy_enabled' },
+  { key: 'docker_proxy_credential_names', type: 'multi-select', optionsFrom: 'proxyCredentials', placeholder: 'Select credentials to activate...', dependsOn: 'docker_proxy_enabled' },
   { key: 'bare_mode', type: 'toggle', label: 'Bare mode (skips hooks, LSP, skills)' },
   { key: 'env_scrub_enabled', type: 'toggle', label: 'Scrub subprocess credentials' },
 ]
