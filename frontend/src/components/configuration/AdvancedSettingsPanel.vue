@@ -29,128 +29,14 @@
         </select>
       </div>
       <div v-show="cardStates.tuning" class="card-body-inner">
-        <div class="mb-2">
-          <label class="form-label">
-            Model
-            <span v-if="fieldState('model') === 'profile'" class="field-indicator profile" title="Value from profile">P</span>
-            <span v-if="fieldState('model') === 'autofilled'" class="field-indicator autofilled">&lt;</span>
-            <span v-if="fieldState('model') === 'modified'" class="field-indicator modified">*</span>
-          </label>
-          <div class="model-btn-group">
-            <button
-              type="button"
-              class="model-btn"
-              :class="{ active: formData.model === 'sonnet' }"
-              @click="$emit('update:form-data', 'model', 'sonnet')"
-            >Sonnet</button>
-            <button
-              type="button"
-              class="model-btn"
-              :class="{ active: formData.model === 'opus' }"
-              @click="$emit('update:form-data', 'model', 'opus')"
-            >Opus</button>
-            <button
-              type="button"
-              class="model-btn"
-              :class="{ active: formData.model === 'haiku' }"
-              @click="$emit('update:form-data', 'model', 'haiku')"
-            >Haiku</button>
-            <button
-              type="button"
-              class="model-btn"
-              :class="{ active: formData.model === 'opusplan' }"
-              @click="$emit('update:form-data', 'model', 'opusplan')"
-            >OpusPlan</button>
-          </div>
-        </div>
-        <div class="mb-2">
-          <label class="form-label">
-            Thinking Mode
-            <span v-if="fieldState('thinking_mode') === 'profile'" class="field-indicator profile" title="Value from profile">P</span>
-            <span v-if="fieldState('thinking_mode') === 'autofilled'" class="field-indicator autofilled">&lt;</span>
-            <span v-if="fieldState('thinking_mode') === 'modified'" class="field-indicator modified">*</span>
-          </label>
-          <div class="model-btn-group">
-            <button
-              type="button"
-              class="model-btn"
-              :class="{ active: !formData.thinking_mode }"
-              @click="$emit('update:form-data', 'thinking_mode', '')"
-            >Default</button>
-            <button
-              type="button"
-              class="model-btn"
-              :class="{ active: formData.thinking_mode === 'adaptive' }"
-              @click="$emit('update:form-data', 'thinking_mode', 'adaptive')"
-            >Adaptive</button>
-            <button
-              type="button"
-              class="model-btn"
-              :class="{ active: formData.thinking_mode === 'enabled' }"
-              @click="$emit('update:form-data', 'thinking_mode', 'enabled')"
-            >Enabled</button>
-            <button
-              type="button"
-              class="model-btn"
-              :class="{ active: formData.thinking_mode === 'disabled' }"
-              @click="$emit('update:form-data', 'thinking_mode', 'disabled')"
-            >Disabled</button>
-          </div>
-        </div>
-        <div v-if="formData.thinking_mode === 'enabled'" class="mb-2">
-          <label class="form-label">
-            Budget Tokens
-            <span v-if="fieldState('thinking_budget_tokens') === 'profile'" class="field-indicator profile" title="Value from profile">P</span>
-            <span v-if="fieldState('thinking_budget_tokens') === 'autofilled'" class="field-indicator autofilled">&lt;</span>
-            <span v-if="fieldState('thinking_budget_tokens') === 'modified'" class="field-indicator modified">*</span>
-          </label>
-          <div class="budget-slider-group">
-            <input
-              type="range"
-              class="form-range"
-              min="1024"
-              max="32768"
-              step="1024"
-              :value="formData.thinking_budget_tokens || 10240"
-              @input="$emit('update:form-data', 'thinking_budget_tokens', parseInt($event.target.value))"
-            />
-            <span class="budget-value">{{ (formData.thinking_budget_tokens || 10240).toLocaleString() }}</span>
-          </div>
-        </div>
-        <div class="mb-2">
-          <label class="form-label">
-            Effort
-            <span v-if="fieldState('effort') === 'profile'" class="field-indicator profile" title="Value from profile">P</span>
-            <span v-if="fieldState('effort') === 'autofilled'" class="field-indicator autofilled">&lt;</span>
-            <span v-if="fieldState('effort') === 'modified'" class="field-indicator modified">*</span>
-          </label>
-          <div class="model-btn-group">
-            <button
-              type="button"
-              class="model-btn"
-              :class="{ active: !formData.effort }"
-              @click="$emit('update:form-data', 'effort', '')"
-            >Default</button>
-            <button
-              type="button"
-              class="model-btn"
-              :class="{ active: formData.effort === 'low' }"
-              @click="$emit('update:form-data', 'effort', 'low')"
-            >Low</button>
-            <button
-              type="button"
-              class="model-btn"
-              :class="{ active: formData.effort === 'medium' }"
-              @click="$emit('update:form-data', 'effort', 'medium')"
-            >Med</button>
-            <button
-              type="button"
-              class="model-btn"
-              :class="{ active: formData.effort === 'high' }"
-              @click="$emit('update:form-data', 'effort', 'high')"
-            >High</button>
-          </div>
-        </div>
+        <FieldSection
+          :fields="FIELD_SCHEMAS.model"
+          :config="aspConfig"
+          :show-badges="true"
+          :show-include-toggle="false"
+          :field-states="props.fieldStates"
+          @update:config="handleFieldUpdate"
+        />
       </div>
     </div>
 
@@ -178,188 +64,21 @@
         </select>
       </div>
       <div v-show="cardStates.tools" class="card-body-inner">
-        <!-- Allowed Tools -->
-        <div class="mb-2">
-          <label class="form-label">
-            Allowed Tools
-            <span v-if="fieldState('allowed_tools') === 'profile'" class="field-indicator profile" title="Value from profile">P</span>
-            <span v-if="fieldState('allowed_tools') === 'autofilled'" class="field-indicator autofilled">&lt;</span>
-            <span v-if="fieldState('allowed_tools') === 'modified'" class="field-indicator modified">*</span>
-          </label>
-          <div class="tag-editor" @click="focusInput('allowedToolInput')">
-            <span
-              v-for="(tool, index) in toolsList"
-              :key="'a-' + index"
-              class="tag tag-allowed"
-            >
-              {{ tool }}
-              <span class="tag-remove" @click.stop="removeTool(index)">&times;</span>
-            </span>
-            <input
-              ref="allowedToolInput"
-              type="text"
-              class="tag-input"
-              placeholder="Add tool..."
-              v-model="newTool"
-              @keydown.enter.prevent="addTool"
-            />
-          </div>
-          <div class="quick-add-btns">
-            <button
-              v-for="tool in commonTools"
-              :key="tool"
-              type="button"
-              class="btn btn-sm"
-              :class="toolsList.includes(tool) ? 'btn-success' : 'btn-outline-success'"
-              @click="toggleTool(tool)"
-            >{{ toolsList.includes(tool) ? tool : '+' + tool }}</button>
-          </div>
-        </div>
-
-        <!-- Disallowed Tools -->
-        <div class="mb-2">
-          <label class="form-label">
-            Disallowed Tools
-            <span v-if="fieldState('disallowed_tools') === 'profile'" class="field-indicator profile" title="Value from profile">P</span>
-            <span v-if="fieldState('disallowed_tools') === 'autofilled'" class="field-indicator autofilled">&lt;</span>
-            <span v-if="fieldState('disallowed_tools') === 'modified'" class="field-indicator modified">*</span>
-          </label>
-          <div class="tag-editor" @click="focusInput('disallowedToolInput')">
-            <span
-              v-for="(tool, index) in deniedToolsList"
-              :key="'d-' + index"
-              class="tag tag-disallowed"
-            >
-              {{ tool }}
-              <span class="tag-remove" @click.stop="removeDeniedTool(index)">&times;</span>
-            </span>
-            <input
-              ref="disallowedToolInput"
-              type="text"
-              class="tag-input"
-              placeholder="Add tool..."
-              v-model="newDeniedTool"
-              @keydown.enter.prevent="addDeniedTool"
-            />
-          </div>
-          <div class="quick-add-btns">
-            <button
-              v-for="tool in commonDeniedTools"
-              :key="tool"
-              type="button"
-              class="btn btn-sm"
-              :class="deniedToolsList.includes(tool) ? 'btn-danger' : 'btn-outline-danger'"
-              @click="toggleDeniedTool(tool)"
-            >{{ deniedToolsList.includes(tool) ? tool : '+' + tool }}</button>
-          </div>
-        </div>
-
-        <!-- Settings Sources -->
-        <div v-if="isSessionMode || isTemplateMode" class="mb-2">
-          <label class="form-label">
-            Settings Sources
-            <span v-if="fieldState('setting_sources') === 'profile'" class="field-indicator profile" title="Value from profile">P</span>
-            <span v-if="fieldState('setting_sources') === 'autofilled'" class="field-indicator autofilled">&lt;</span>
-            <span v-if="fieldState('setting_sources') === 'modified'" class="field-indicator modified">*</span>
-          </label>
-          <div class="model-btn-group">
-            <button
-              type="button"
-              class="model-btn"
-              :class="{ active: settingSourcesArray.includes('user') }"
-              @click="toggleSettingSource('user')"
-            >User</button>
-            <button
-              type="button"
-              class="model-btn"
-              :class="{ active: settingSourcesArray.includes('project') }"
-              @click="toggleSettingSource('project')"
-            >Project</button>
-            <button
-              type="button"
-              class="model-btn"
-              :class="{ active: settingSourcesArray.includes('local') }"
-              @click="toggleSettingSource('local')"
-            >Local</button>
-          </div>
-        </div>
-
-        <!-- Additional Directories -->
-        <div class="mb-2">
-          <label class="form-label">
-            Additional Directories
-            <span v-if="fieldState('additional_directories') === 'profile'" class="field-indicator profile" title="Value from profile">P</span>
-            <span v-if="fieldState('additional_directories') === 'autofilled'" class="field-indicator autofilled">&lt;</span>
-            <span v-if="fieldState('additional_directories') === 'modified'" class="field-indicator modified">*</span>
-          </label>
-          <div v-if="additionalDirsList.length > 0">
-            <div
-              v-for="(dir, index) in additionalDirsList"
-              :key="index"
-              class="dir-list-item"
-            >
-              <span class="dir-path">{{ dir }}</span>
-              <span class="dir-remove" @click="removeDirectory(index)">&times;</span>
-            </div>
-          </div>
-          <div v-if="additionalDirsError" class="text-danger small mb-1">{{ additionalDirsError }}</div>
-          <div class="d-flex gap-2 mt-1">
-            <input
-              type="text"
-              :class="['form-control', 'form-control-sm', { 'is-invalid': additionalDirsError }]"
-              v-model="newDirectory"
-              @keydown.enter.prevent="addDirectory"
-              placeholder="Add directory path... Supports {session_id}, {session_data}, {working_dir}"
-              style="flex: 1;"
-            />
-            <button
-              type="button"
-              class="btn btn-sm btn-outline-secondary"
-              @click="$emit('browse-additional-dir')"
-              title="Browse"
-            >&#x1F4C2;</button>
-            <button
-              type="button"
-              class="btn btn-sm btn-outline-primary"
-              @click="addDirectory"
-              :disabled="!newDirectory.trim()"
-            >+</button>
-          </div>
-        </div>
-
-        <!-- Capabilities -->
-        <div class="mb-2">
-          <label class="form-label">
-            Capabilities
-            <span v-if="fieldState('capabilities') === 'profile'" class="field-indicator profile" title="Value from profile">P</span>
-            <span v-if="fieldState('capabilities') === 'autofilled'" class="field-indicator autofilled">&lt;</span>
-            <span v-if="fieldState('capabilities') === 'modified'" class="field-indicator modified">*</span>
-          </label>
-          <div class="tag-editor" @click="focusInput('capabilityInput')">
-            <span
-              v-for="(cap, index) in capabilitiesList"
-              :key="'c-' + index"
-              class="tag tag-capability"
-            >
-              {{ cap }}
-              <span class="tag-remove" @click.stop="removeCapability(index)">&times;</span>
-            </span>
-            <input
-              ref="capabilityInput"
-              type="text"
-              class="tag-input"
-              placeholder="Add capability..."
-              v-model="newCapability"
-              @keydown.enter.prevent="addCapability"
-            />
-          </div>
-        </div>
+        <FieldSection
+          :fields="permissionsFields"
+          :config="aspConfig"
+          :show-badges="true"
+          :show-include-toggle="false"
+          :field-states="props.fieldStates"
+          @update:config="handleFieldUpdate"
+          @browse="onBrowse"
+        />
 
         <!-- Permission Preview (session modes only) -->
         <button
           v-if="isSessionMode"
           type="button"
-          class="btn btn-sm btn-outline-info w-100"
+          class="btn btn-sm btn-outline-info w-100 mt-2"
           @click="$emit('preview-permissions')"
         >
           <i class="bi bi-eye me-1"></i> Preview Effective Permissions
@@ -432,90 +151,14 @@
         </select>
       </div>
       <div v-show="cardStates.knowledge" class="card-body-inner">
-        <div class="form-check form-switch mb-2">
-          <input
-            class="form-check-input"
-            type="checkbox"
-            id="adv-history-distillation"
-            :checked="formData.history_distillation_enabled"
-            @change="$emit('update:form-data', 'history_distillation_enabled', $event.target.checked)"
-          />
-          <label class="form-check-label" for="adv-history-distillation" style="text-transform: none; letter-spacing: normal;">
-            History Distillation
-            <span v-if="fieldState('history_distillation_enabled') === 'profile'" class="field-indicator profile" title="Value from profile">P</span>
-            <span v-if="fieldState('history_distillation_enabled') === 'autofilled'" class="field-indicator autofilled">&lt;</span>
-            <span v-if="fieldState('history_distillation_enabled') === 'modified'" class="field-indicator modified">*</span>
-          </label>
-          <small class="form-text text-muted d-block">
-            When enabled, session history is distilled to markdown on archive for context continuity.
-          </small>
-        </div>
-        <div class="mb-2">
-          <label class="form-label" for="adv-auto-memory-mode" style="text-transform: none; letter-spacing: normal;">
-            Auto-Memory Mode
-            <span v-if="fieldState('auto_memory_mode') === 'profile'" class="field-indicator profile" title="Value from profile">P</span>
-            <span v-if="fieldState('auto_memory_mode') === 'autofilled'" class="field-indicator autofilled">&lt;</span>
-            <span v-if="fieldState('auto_memory_mode') === 'modified'" class="field-indicator modified">*</span>
-          </label>
-          <select
-            class="form-select form-select-sm"
-            id="adv-auto-memory-mode"
-            :value="formData.auto_memory_mode"
-            @change="$emit('update:form-data', 'auto_memory_mode', $event.target.value)"
-          >
-            <option value="claude">Claude Auto-Memory</option>
-            <option value="session">Session-Specific</option>
-            <option value="disabled">Disabled</option>
-          </select>
-          <small class="form-text text-muted d-block">
-            Claude: built-in working-directory memory. Session-Specific: per-session guidance file.
-            Disabled: no auto-memory.
-          </small>
-        </div>
-        <div v-if="formData.auto_memory_mode === 'claude'" class="mb-2">
-          <label class="form-label" for="adv-auto-memory-dir" style="text-transform: none; letter-spacing: normal;">
-            Memory Directory
-            <span v-if="fieldState('auto_memory_directory') === 'profile'" class="field-indicator profile" title="Value from profile">P</span>
-            <span v-if="fieldState('auto_memory_directory') === 'autofilled'" class="field-indicator autofilled">&lt;</span>
-            <span v-if="fieldState('auto_memory_directory') === 'modified'" class="field-indicator modified">*</span>
-          </label>
-          <input
-            type="text"
-            :class="['form-control', 'form-control-sm', 'font-monospace', { 'is-invalid': autoMemoryDirError }]"
-            id="adv-auto-memory-dir"
-            :value="formData.auto_memory_directory || ''"
-            placeholder="e.g. {session_data}/memory or /absolute/path/to/memory"
-            @input="(e) => {
-              $emit('update:form-data', 'auto_memory_directory', e.target.value || null)
-              autoMemoryDirError = validateTemplatePath(e.target.value)
-            }"
-          />
-          <div v-if="autoMemoryDirError" class="invalid-feedback d-block">{{ autoMemoryDirError }}</div>
-          <small class="form-text text-muted d-block">
-            Custom directory for auto-memory storage. Leave blank to use Claude's default location.
-            Supports template variables: {session_id}, {session_data}, {working_dir}.
-          </small>
-        </div>
-        <div class="form-check form-switch mb-2">
-          <input
-            class="form-check-input"
-            type="checkbox"
-            id="adv-skill-creating"
-            :checked="formData.skill_creating_enabled"
-            @change="$emit('update:form-data', 'skill_creating_enabled', $event.target.checked)"
-          />
-          <label class="form-check-label" for="adv-skill-creating"
-            style="text-transform: none; letter-spacing: normal;">
-            Skill Creating
-            <span v-if="fieldState('skill_creating_enabled') === 'profile'" class="field-indicator profile" title="Value from profile">P</span>
-            <span v-if="fieldState('skill_creating_enabled') === 'autofilled'" class="field-indicator autofilled">&lt;</span>
-            <span v-if="fieldState('skill_creating_enabled') === 'modified'" class="field-indicator modified">*</span>
-          </label>
-          <small class="form-text text-muted d-block">
-            When enabled, the session's system prompt includes guidance on creating custom
-            local skills using /skill-maker. Requires restart to apply.
-          </small>
-        </div>
+        <FieldSection
+          :fields="featuresFieldsWithDescriptions"
+          :config="aspConfig"
+          :show-badges="true"
+          :show-include-toggle="false"
+          :field-states="props.fieldStates"
+          @update:config="handleFeaturesUpdate"
+        />
       </div>
     </div>
 
@@ -543,36 +186,14 @@
         </select>
       </div>
       <div v-show="cardStates.prompt" class="card-body-inner">
-        <div class="mb-2">
-          <label class="form-label">
-            System Prompt
-            <span v-if="fieldState('system_prompt') === 'profile'" class="field-indicator profile" title="Value from profile">P</span>
-            <span v-if="fieldState('system_prompt') === 'autofilled'" class="field-indicator autofilled">&lt;</span>
-            <span v-if="fieldState('system_prompt') === 'modified'" class="field-indicator modified">*</span>
-          </label>
-          <textarea
-            class="form-control form-control-sm"
-            :value="formData.system_prompt"
-            @input="$emit('update:form-data', 'system_prompt', $event.target.value)"
-            rows="3"
-            :placeholder="isTemplateMode ? 'Optional default system prompt' : 'Instructions and context for the session...'"
-          ></textarea>
-        </div>
-        <div class="form-check mb-2">
-          <input
-            class="form-check-input"
-            type="checkbox"
-            id="adv-override-prompt"
-            :checked="formData.override_system_prompt"
-            @change="$emit('update:form-data', 'override_system_prompt', $event.target.checked)"
-          />
-          <label class="form-check-label" for="adv-override-prompt" style="text-transform: none; letter-spacing: normal;">
-            Override System Prompt
-            <span v-if="fieldState('override_system_prompt') === 'profile'" class="field-indicator profile" title="Value from profile">P</span>
-            <span v-if="fieldState('override_system_prompt') === 'autofilled'" class="field-indicator autofilled">&lt;</span>
-            <span v-if="fieldState('override_system_prompt') === 'modified'" class="field-indicator modified">*</span>
-          </label>
-        </div>
+        <FieldSection
+          :fields="systemPromptFields"
+          :config="aspConfig"
+          :show-badges="true"
+          :show-include-toggle="false"
+          :field-states="props.fieldStates"
+          @update:config="handleFieldUpdate"
+        />
       </div>
     </div>
 
@@ -600,361 +221,59 @@
         </select>
       </div>
       <div v-show="cardStates.isolation" class="card-body-inner">
-
-        <!-- CLI Path -->
-        <div class="mb-2">
-          <label class="form-label">
-            CLI Path
-            <span v-if="fieldState('cli_path') === 'profile'" class="field-indicator profile" title="Value from profile">P</span>
-            <span v-if="fieldState('cli_path') === 'autofilled'" class="field-indicator autofilled">&lt;</span>
-            <span v-if="fieldState('cli_path') === 'modified'" class="field-indicator modified">*</span>
-          </label>
-          <input
-            type="text"
-            class="form-control form-control-sm"
-            :value="formData.cli_path"
-            @input="$emit('update:form-data', 'cli_path', $event.target.value)"
-            :disabled="formData.docker_enabled"
-            placeholder="/path/to/claude-cli"
-          />
-        </div>
-
-        <!-- Sandbox Mode -->
-        <div class="form-check form-switch mb-2">
-          <input
-            class="form-check-input"
-            type="checkbox"
-            id="adv-sandbox-enable"
-            :checked="formData.sandbox_enabled"
-            @change="$emit('update:form-data', 'sandbox_enabled', $event.target.checked)"
-          />
-          <label class="form-check-label fw-semibold" for="adv-sandbox-enable" style="text-transform: none; letter-spacing: normal;">
-            Sandbox Mode
-            <span v-if="fieldState('sandbox_enabled') === 'profile'" class="field-indicator profile" title="Value from profile">P</span>
-            <span v-if="fieldState('sandbox_enabled') === 'autofilled'" class="field-indicator autofilled">&lt;</span>
-            <span v-if="fieldState('sandbox_enabled') === 'modified'" class="field-indicator modified">*</span>
-          </label>
-        </div>
-
-        <div v-if="formData.sandbox_enabled" class="ms-3 mb-3">
-          <!-- Bash Permissions -->
-          <div class="sandbox-section-label">Bash Permissions</div>
-          <div class="form-check mb-1 ms-3">
-            <input class="form-check-input" type="checkbox" id="adv-sb-auto-bash"
-              :checked="formData.sandbox.autoAllowBashIfSandboxed"
-              @change="updateSandboxField('autoAllowBashIfSandboxed', $event.target.checked)" />
-            <label class="form-check-label" for="adv-sb-auto-bash" style="text-transform: none; letter-spacing: normal;">
-              Auto-allow Bash when sandboxed
-              <span v-if="fieldState('sandbox_autoAllowBash') === 'profile'" class="field-indicator profile" title="Value from profile">P</span>
-              <span v-if="fieldState('sandbox_autoAllowBash') === 'autofilled'" class="field-indicator autofilled">&lt;</span>
-              <span v-if="fieldState('sandbox_autoAllowBash') === 'modified'" class="field-indicator modified">*</span>
-            </label>
-          </div>
-          <div class="form-check mb-1 ms-3">
-            <input class="form-check-input" type="checkbox" id="adv-sb-unsandboxed"
-              :checked="formData.sandbox.allowUnsandboxedCommands"
-              @change="updateSandboxField('allowUnsandboxedCommands', $event.target.checked)" />
-            <label class="form-check-label" for="adv-sb-unsandboxed" style="text-transform: none; letter-spacing: normal;">
-              Allow unsandboxed commands
-              <span v-if="fieldState('sandbox_allowUnsandboxed') === 'profile'" class="field-indicator profile" title="Value from profile">P</span>
-              <span v-if="fieldState('sandbox_allowUnsandboxed') === 'autofilled'" class="field-indicator autofilled">&lt;</span>
-              <span v-if="fieldState('sandbox_allowUnsandboxed') === 'modified'" class="field-indicator modified">*</span>
-            </label>
-          </div>
-          <div class="mb-2 ms-3">
-            <label class="form-label">
-              Excluded Commands
-              <span v-if="fieldState('sandbox_excludedCommands') === 'profile'" class="field-indicator profile" title="Value from profile">P</span>
-              <span v-if="fieldState('sandbox_excludedCommands') === 'autofilled'" class="field-indicator autofilled">&lt;</span>
-              <span v-if="fieldState('sandbox_excludedCommands') === 'modified'" class="field-indicator modified">*</span>
-            </label>
-            <input type="text" class="form-control form-control-sm"
-              :value="formData.sandbox.excludedCommands"
-              @input="updateSandboxField('excludedCommands', $event.target.value)"
-              placeholder="rm, dd, mkfs..." />
-          </div>
-          <div class="form-check mb-1 ms-3">
-            <input class="form-check-input" type="checkbox" id="adv-sb-weaker"
-              :checked="formData.sandbox.enableWeakerNestedSandbox"
-              @change="updateSandboxField('enableWeakerNestedSandbox', $event.target.checked)" />
-            <label class="form-check-label" for="adv-sb-weaker" style="text-transform: none; letter-spacing: normal;">
-              Enable weaker nested sandbox
-              <span v-if="fieldState('sandbox_enableWeakerNested') === 'profile'" class="field-indicator profile" title="Value from profile">P</span>
-              <span v-if="fieldState('sandbox_enableWeakerNested') === 'autofilled'" class="field-indicator autofilled">&lt;</span>
-              <span v-if="fieldState('sandbox_enableWeakerNested') === 'modified'" class="field-indicator modified">*</span>
-            </label>
-          </div>
-          <!-- Network -->
-          <div class="sandbox-section-label">Network</div>
-          <div class="mb-1 ms-3">
-            <label class="form-label">
-              Allowed Domains
-              <span v-if="fieldState('sandbox_network_allowedDomains') === 'profile'" class="field-indicator profile" title="Value from profile">P</span>
-              <span v-if="fieldState('sandbox_network_allowedDomains') === 'autofilled'" class="field-indicator autofilled">&lt;</span>
-              <span v-if="fieldState('sandbox_network_allowedDomains') === 'modified'" class="field-indicator modified">*</span>
-            </label>
-            <input type="text" class="form-control form-control-sm"
-              :value="formData.sandbox.network.allowedDomains"
-              @input="updateNetworkField('allowedDomains', $event.target.value)"
-              placeholder="github.com, api.example.com" />
-          </div>
-          <div class="form-check mb-1 ms-3">
-            <input class="form-check-input" type="checkbox" id="adv-sb-local-binding"
-              :checked="formData.sandbox.network.allowLocalBinding"
-              @change="updateNetworkField('allowLocalBinding', $event.target.checked)" />
-            <label class="form-check-label" for="adv-sb-local-binding" style="text-transform: none; letter-spacing: normal;">
-              Allow local binding
-              <span v-if="fieldState('sandbox_network_allowLocalBinding') === 'profile'" class="field-indicator profile" title="Value from profile">P</span>
-              <span v-if="fieldState('sandbox_network_allowLocalBinding') === 'autofilled'" class="field-indicator autofilled">&lt;</span>
-              <span v-if="fieldState('sandbox_network_allowLocalBinding') === 'modified'" class="field-indicator modified">*</span>
-            </label>
-          </div>
-          <div class="mb-1 ms-3">
-            <label class="form-label">
-              Allow Unix Sockets
-              <span v-if="fieldState('sandbox_network_allowUnixSockets') === 'profile'" class="field-indicator profile" title="Value from profile">P</span>
-              <span v-if="fieldState('sandbox_network_allowUnixSockets') === 'autofilled'" class="field-indicator autofilled">&lt;</span>
-              <span v-if="fieldState('sandbox_network_allowUnixSockets') === 'modified'" class="field-indicator modified">*</span>
-            </label>
-            <input type="text" class="form-control form-control-sm"
-              :value="formData.sandbox.network.allowUnixSockets"
-              @input="updateNetworkField('allowUnixSockets', $event.target.value)"
-              placeholder="/var/run/docker.sock" />
-          </div>
-          <div class="form-check mb-1 ms-3">
-            <input class="form-check-input" type="checkbox" id="adv-sb-all-unix"
-              :checked="formData.sandbox.network.allowAllUnixSockets"
-              @change="updateNetworkField('allowAllUnixSockets', $event.target.checked)" />
-            <label class="form-check-label" for="adv-sb-all-unix" style="text-transform: none; letter-spacing: normal;">
-              Allow all Unix sockets
-              <span v-if="fieldState('sandbox_network_allowAllUnixSockets') === 'profile'" class="field-indicator profile" title="Value from profile">P</span>
-              <span v-if="fieldState('sandbox_network_allowAllUnixSockets') === 'autofilled'" class="field-indicator autofilled">&lt;</span>
-              <span v-if="fieldState('sandbox_network_allowAllUnixSockets') === 'modified'" class="field-indicator modified">*</span>
-            </label>
-          </div>
-          <!-- Violation Handling -->
-          <div class="sandbox-section-label">Violation Handling</div>
-          <div class="mb-1 ms-3">
-            <label class="form-label">
-              Ignore File Violations
-              <span v-if="fieldState('sandbox_ignoreViolations_file') === 'profile'" class="field-indicator profile" title="Value from profile">P</span>
-              <span v-if="fieldState('sandbox_ignoreViolations_file') === 'autofilled'" class="field-indicator autofilled">&lt;</span>
-              <span v-if="fieldState('sandbox_ignoreViolations_file') === 'modified'" class="field-indicator modified">*</span>
-            </label>
-            <input type="text" class="form-control form-control-sm"
-              :value="formData.sandbox.ignoreViolations.file"
-              @input="updateViolationField('file', $event.target.value)"
-              placeholder="File paths to ignore" />
-          </div>
-          <div class="mb-1 ms-3">
-            <label class="form-label">
-              Ignore Network Violations
-              <span v-if="fieldState('sandbox_ignoreViolations_network') === 'profile'" class="field-indicator profile" title="Value from profile">P</span>
-              <span v-if="fieldState('sandbox_ignoreViolations_network') === 'autofilled'" class="field-indicator autofilled">&lt;</span>
-              <span v-if="fieldState('sandbox_ignoreViolations_network') === 'modified'" class="field-indicator modified">*</span>
-            </label>
-            <input type="text" class="form-control form-control-sm"
-              :value="formData.sandbox.ignoreViolations.network"
-              @input="updateViolationField('network', $event.target.value)"
-              placeholder="Network patterns to ignore" />
-          </div>
-        </div>
-
-        <!-- Docker Isolation -->
-        <div class="form-check form-switch mb-2">
-          <input
-            class="form-check-input"
-            type="checkbox"
-            id="adv-docker-toggle"
-            :checked="formData.docker_enabled"
-            @change="handleDockerToggle($event.target.checked)"
-            :disabled="isEditSession"
-          />
-          <label class="form-check-label" for="adv-docker-toggle" style="text-transform: none; letter-spacing: normal;">
-            Docker Isolation
-            <span v-if="fieldState('docker_enabled') === 'profile'" class="field-indicator profile" title="Value from profile">P</span>
-            <span v-if="fieldState('docker_enabled') === 'autofilled'" class="field-indicator autofilled">&lt;</span>
-            <span v-if="fieldState('docker_enabled') === 'modified'" class="field-indicator modified">*</span>
-          </label>
-        </div>
-        <div v-if="formData.docker_enabled && dockerStatus && !dockerStatus.available" class="alert alert-warning py-1 mb-2">
+        <div
+          v-if="formData.docker_enabled && dockerStatus && !dockerStatus.available"
+          class="alert alert-warning py-1 mb-2"
+        >
           <small>Docker is not available on this system.</small>
         </div>
-        <div v-if="formData.docker_enabled" class="ms-3 mb-2">
-          <div class="mb-2">
-            <label class="form-label">
-              Docker Image
-              <span v-if="fieldState('docker_image') === 'profile'" class="field-indicator profile" title="Value from profile">P</span>
-              <span v-if="fieldState('docker_image') === 'autofilled'" class="field-indicator autofilled">&lt;</span>
-              <span v-if="fieldState('docker_image') === 'modified'" class="field-indicator modified">*</span>
-            </label>
-            <input type="text" class="form-control form-control-sm"
-              :value="formData.docker_image"
-              @input="$emit('update:form-data', 'docker_image', $event.target.value)"
-              placeholder="claude-code:local" />
-          </div>
-          <div class="mb-2">
-            <label class="form-label">
-              Mounts
-              <span v-if="fieldState('docker_extra_mounts') === 'profile'" class="field-indicator profile" title="Value from profile">P</span>
-              <span v-if="fieldState('docker_extra_mounts') === 'autofilled'" class="field-indicator autofilled">&lt;</span>
-              <span v-if="fieldState('docker_extra_mounts') === 'modified'" class="field-indicator modified">*</span>
-            </label>
-            <textarea
-              :class="['form-control', 'form-control-sm', { 'is-invalid': dockerMountsError }]"
-              :value="formData.docker_extra_mounts"
-              @input="(e) => {
-                $emit('update:form-data', 'docker_extra_mounts', e.target.value)
-                dockerMountsError = validateTemplatePathList(e.target.value)
-              }"
-              rows="2"
-              placeholder="{session_data}/db:/app/db:ro or /host/path:/container/path:ro (one per line)" />
-            <div v-if="dockerMountsError" class="invalid-feedback d-block">{{ dockerMountsError }}</div>
-            <small class="form-text text-muted d-block">
-              Supports template variables in host paths: {session_id}, {session_data}, {working_dir}.
-            </small>
-          </div>
-          <div class="mb-2">
-            <label class="form-label">
-              Home Directory
-              <span v-if="fieldState('docker_home_directory') === 'profile'" class="field-indicator profile" title="Value from profile">P</span>
-              <span v-if="fieldState('docker_home_directory') === 'autofilled'" class="field-indicator autofilled">&lt;</span>
-              <span v-if="fieldState('docker_home_directory') === 'modified'" class="field-indicator modified">*</span>
-            </label>
-            <input type="text" class="form-control form-control-sm"
-              :value="formData.docker_home_directory"
-              @input="$emit('update:form-data', 'docker_home_directory', $event.target.value)"
-              placeholder="/home/claude" />
-            <small class="form-text text-muted d-block">
-              Home directory inside the container (for custom images)
-            </small>
-          </div>
-          <!-- Proxy Sidecar -->
-          <div class="form-check form-switch mb-2">
-            <input
-              class="form-check-input"
-              type="checkbox"
-              id="adv-proxy-toggle"
-              :checked="formData.docker_proxy_enabled"
-              @change="$emit('update:form-data', 'docker_proxy_enabled', $event.target.checked)"
-            />
-            <label class="form-check-label" for="adv-proxy-toggle" style="text-transform: none; letter-spacing: normal;">
-              Network Proxy Sidecar
-              <span v-if="fieldState('docker_proxy_enabled') === 'profile'" class="field-indicator profile" title="Value from profile">P</span>
-              <span v-if="fieldState('docker_proxy_enabled') === 'autofilled'" class="field-indicator autofilled">&lt;</span>
-              <span v-if="fieldState('docker_proxy_enabled') === 'modified'" class="field-indicator modified">*</span>
-            </label>
-            <small class="form-text text-muted d-block">
-              Intercepts outbound traffic via a dedicated proxy sidecar. Requires <code>claude-proxy:local</code> image.
-            </small>
-          </div>
-          <div v-if="formData.docker_proxy_enabled" class="ms-3 mb-2">
-            <label class="form-label">
-              Proxy Image
-              <span v-if="fieldState('docker_proxy_image') === 'profile'" class="field-indicator profile" title="Value from profile">P</span>
-              <span v-if="fieldState('docker_proxy_image') === 'autofilled'" class="field-indicator autofilled">&lt;</span>
-              <span v-if="fieldState('docker_proxy_image') === 'modified'" class="field-indicator modified">*</span>
-            </label>
-            <input type="text" class="form-control form-control-sm"
-              :value="formData.docker_proxy_image"
-              @input="$emit('update:form-data', 'docker_proxy_image', $event.target.value || null)"
-              placeholder="claude-proxy:local (default)" />
-            <small class="form-text text-muted d-block">
-              Leave blank to use the server default.
-            </small>
-          </div>
-          <small v-if="isEditSession" class="form-text text-warning d-block mt-1">
-            Changes take effect after restarting the session.
-          </small>
+        <div v-if="formData.docker_enabled && isEditSession" class="form-text text-warning d-block mb-2">
+          Changes take effect after restarting the session.
         </div>
 
-        <!-- Bare Mode -->
-        <div class="form-check form-switch mb-2">
-          <input
-            class="form-check-input"
-            type="checkbox"
-            id="bare-mode"
-            :checked="formData.bare_mode"
-            @change="$emit('update:form-data', 'bare_mode', $event.target.checked)"
-          />
-          <label class="form-check-label" for="bare-mode">
-            Bare mode
-            <span v-if="fieldState('bare_mode') === 'profile'" class="field-indicator profile" title="Value from profile">P</span>
-            <span v-if="fieldState('bare_mode') === 'autofilled'" class="field-indicator autofilled">&lt;</span>
-            <span v-if="fieldState('bare_mode') === 'modified'" class="field-indicator modified">*</span>
-          </label>
-          <div class="form-text text-warning-emphasis">
-            Skips hooks, LSP, plugin sync, and skill directory walks.
-            Requires <code>ANTHROPIC_API_KEY</code> (OAuth/keychain auth disabled).
-          </div>
-        </div>
-
-        <!-- Scrub Subprocess Credentials -->
-        <div class="form-check form-switch mb-2">
-          <input
-            class="form-check-input"
-            type="checkbox"
-            id="env-scrub-toggle"
-            :checked="formData.env_scrub_enabled"
-            @change="$emit('update:form-data', 'env_scrub_enabled', $event.target.checked)"
-          />
-          <label class="form-check-label" for="env-scrub-toggle">
-            Scrub subprocess credentials
-            <span v-if="fieldState('env_scrub_enabled') === 'profile'" class="field-indicator profile" title="Value from profile">P</span>
-            <span v-if="fieldState('env_scrub_enabled') === 'autofilled'" class="field-indicator autofilled">&lt;</span>
-            <span v-if="fieldState('env_scrub_enabled') === 'modified'" class="field-indicator modified">*</span>
-          </label>
-          <div class="form-text text-warning-emphasis">
-            Strips Anthropic API keys and cloud provider credentials from subprocess
-            environments. Recommended for untrusted code execution.
-          </div>
-        </div>
+        <!-- docker_proxy_enabled description -->
+        <FieldSection
+          :fields="isolationFields"
+          :config="aspConfig"
+          :show-badges="true"
+          :show-include-toggle="false"
+          :field-states="props.fieldStates"
+          @update:config="handleIsolationUpdate"
+        />
       </div>
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted, watch, useTemplateRef } from 'vue'
+import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { api } from '@/utils/api'
 import { validateTemplatePath, validateTemplatePathList } from '@/utils/templateVariables'
 import { useMcpStore } from '../../stores/mcp'
 import { useProfileStore } from '@/stores/profile'
 import { useProfileSelector } from '@/composables/useProfileSelector'
+import { COMMON_TOOLS, COMMON_DENIED_TOOLS } from '@/utils/toolConstants'
 import McpServerPanel from './McpServerPanel.vue'
+import FieldSection from './fields/FieldSection.vue'
+import { FIELD_SCHEMAS } from './fields/fieldSchemas.js'
 
 const mcpStore = useMcpStore()
 const profileStore = useProfileStore()
 
 const props = defineProps({
-  mode: {
-    type: String,
-    required: true
-  },
-  formData: {
-    type: Object,
-    required: true
-  },
-  errors: {
-    type: Object,
-    required: true
-  },
-  session: {
-    type: Object,
-    default: null
-  },
+  mode: { type: String, required: true },
+  formData: { type: Object, required: true },
+  errors: { type: Object, required: true },
+  session: { type: Object, default: null },
   fieldStates: {
     type: Object,
     default: () => ({
       allowed_tools: 'normal',
       disallowed_tools: 'normal',
-      system_prompt: 'normal'
-    })
+      system_prompt: 'normal',
+    }),
   },
-  profileIds: {
-    type: Object,
-    default: () => ({})
-  }
+  profileIds: { type: Object, default: () => ({}) },
 })
 
 const emit = defineEmits([
@@ -963,12 +282,12 @@ const emit = defineEmits([
   'preview-permissions',
   'show-quick',
   'browse-additional-dir',
-  'update:has-errors'
+  'update:has-errors',
 ])
 
 const { profilesForArea, getProfileForArea, setProfileForArea } = useProfileSelector(props, emit)
 
-// Card collapse states (expanded by default for first 4, collapsed for 5 & 6)
+// Card collapse states
 const cardStates = reactive({
   tuning: true,
   tools: true,
@@ -978,38 +297,18 @@ const cardStates = reactive({
   isolation: false,
 })
 
-// Local state
-const newTool = ref('')
-const newDeniedTool = ref('')
-const newCapability = ref('')
-const newDirectory = ref('')
 const dockerStatus = ref(null)
 
-// Issue #917: Template variable validation errors
+// Template variable validation errors
 const autoMemoryDirError = ref(null)
 const dockerMountsError = ref(null)
-const additionalDirsError = ref(null)
 
 const hasTemplateErrors = computed(() =>
-  !!(autoMemoryDirError.value || dockerMountsError.value || additionalDirsError.value)
+  !!(autoMemoryDirError.value || dockerMountsError.value)
 )
 watch(hasTemplateErrors, (val) => emit('update:has-errors', val), { immediate: true })
 
-// Template refs for focusing
-const allowedToolInput = ref(null)
-const disallowedToolInput = ref(null)
-const capabilityInput = ref(null)
-
-// Common tools
-const commonTools = ['Bash', 'Read', 'Edit', 'Write', 'Glob', 'Grep', 'WebFetch']
-const commonDeniedTools = ['Bash', 'Write', 'WebFetch']
-
-// Field state helper including profile source
-function fieldState(field) {
-  return props.fieldStates?.[field] || 'normal'
-}
-
-// Computed
+// Computed mode helpers
 const isSessionMode = computed(() => props.mode === 'create-session' || props.mode === 'edit-session')
 const isTemplateMode = computed(() => props.mode === 'create-template' || props.mode === 'edit-template')
 const isEditSession = computed(() => props.mode === 'edit-session')
@@ -1026,135 +325,169 @@ const mcpServers = computed(() => {
 
 // Fetch MCP status when session becomes active
 watch([sessionId, isSessionActive], ([id, active]) => {
-  if (id && active) {
-    mcpStore.fetchMcpStatus(id)
-  }
+  if (id && active) mcpStore.fetchMcpStatus(id)
 }, { immediate: true })
 
-const settingSourcesArray = computed(() => {
-  return props.formData.setting_sources || ['user', 'project', 'local']
+// Flat "profile dict shape" config object consumed by FieldSection.
+// Maps formData fields to the canonical shape expected by field schemas.
+const aspConfig = computed(() => ({
+  ...props.formData,
+  // Flatten sandbox nested object as sandbox_config for SandboxSubSectionWidget
+  sandbox_config: props.formData.sandbox || {},
+}))
+
+// Field state helper
+function fieldState(field) {
+  return props.fieldStates?.[field] || 'normal'
+}
+
+// Permissions card: inject quickAddItems at runtime from toolConstants
+const permissionsFields = computed(() => {
+  return FIELD_SCHEMAS.permissions.map((f) => {
+    if (f.key === 'allowed_tools') return { ...f, quickAddItems: COMMON_TOOLS }
+    if (f.key === 'disallowed_tools') return { ...f, quickAddItems: COMMON_DENIED_TOOLS }
+    // setting_sources: only shown in session/template modes
+    if (f.key === 'setting_sources' && !isSessionMode.value && !isTemplateMode.value) return null
+    return f
+  }).filter(Boolean)
 })
 
-const toolsList = computed(() => {
-  if (!props.formData.allowed_tools || !props.formData.allowed_tools.trim()) return []
-  return props.formData.allowed_tools.split(',').map(t => t.trim()).filter(t => t.length > 0)
+// Features card: inject full descriptions
+const featuresFieldsWithDescriptions = computed(() => {
+  return FIELD_SCHEMAS.features.map((f) => {
+    if (f.key === 'auto_memory_mode') {
+      return {
+        ...f,
+        description: 'Claude: built-in working-directory memory. Session-Specific: per-session guidance file. Disabled: no auto-memory.',
+      }
+    }
+    if (f.key === 'auto_memory_directory') {
+      return {
+        ...f,
+        description: 'Custom directory for auto-memory storage. Leave blank to use Claude\'s default location. Supports template variables: {session_id}, {session_data}, {working_dir}.',
+      }
+    }
+    if (f.key === 'skill_creating_enabled') {
+      return {
+        ...f,
+        description: 'When enabled, the session\'s system prompt includes guidance on creating custom local skills using /skill-maker. Requires restart to apply.',
+      }
+    }
+    if (f.key === 'history_distillation_enabled') {
+      return {
+        ...f,
+        description: 'When enabled, session history is distilled to markdown on archive for context continuity.',
+      }
+    }
+    return f
+  })
 })
 
-const deniedToolsList = computed(() => {
-  if (!props.formData.disallowed_tools || !props.formData.disallowed_tools.trim()) return []
-  return props.formData.disallowed_tools.split(',').map(t => t.trim()).filter(t => t.length > 0)
+// System prompt card: inject placeholder
+const systemPromptFields = computed(() => {
+  return FIELD_SCHEMAS.system_prompt.map((f) => {
+    if (f.key === 'system_prompt') {
+      return {
+        ...f,
+        placeholder: isTemplateMode.value
+          ? 'Optional default system prompt'
+          : 'Instructions and context for the session...',
+      }
+    }
+    return f
+  })
 })
 
-const capabilitiesList = computed(() => {
-  if (!props.formData.capabilities || !props.formData.capabilities.trim()) return []
-  return props.formData.capabilities.split(',').map(c => c.trim()).filter(c => c.length > 0)
+// Isolation card: inject docker_proxy description, docker-disabled CLI path
+const isolationFields = computed(() => {
+  return FIELD_SCHEMAS.isolation.map((f) => {
+    if (f.key === 'docker_enabled') {
+      return {
+        ...f,
+        // Docker toggle disabled when editing active session
+        ...(isEditSession.value ? { disabledWhen: () => true } : {}),
+      }
+    }
+    if (f.key === 'docker_proxy_enabled') {
+      return {
+        ...f,
+        description: 'Intercepts outbound traffic via a dedicated proxy sidecar. Requires <code>claude-proxy:local</code> image.',
+      }
+    }
+    if (f.key === 'docker_proxy_image') {
+      return {
+        ...f,
+        description: 'Leave blank to use the server default.',
+      }
+    }
+    if (f.key === 'docker_home_directory') {
+      return {
+        ...f,
+        description: 'Home directory inside the container (for custom images)',
+      }
+    }
+    if (f.key === 'docker_extra_mounts') {
+      return {
+        ...f,
+        placeholder: '{session_data}/db:/app/db:ro or /host/path:/container/path:ro (one per line)',
+        description: 'Supports template variables in host paths: {session_id}, {session_data}, {working_dir}.',
+      }
+    }
+    if (f.key === 'bare_mode') {
+      return {
+        ...f,
+        description: 'Skips hooks, LSP, plugin sync, and skill directory walks. Requires ANTHROPIC_API_KEY (OAuth/keychain auth disabled).',
+      }
+    }
+    if (f.key === 'env_scrub_enabled') {
+      return {
+        ...f,
+        description: 'Strips Anthropic API keys and cloud provider credentials from subprocess environments. Recommended for untrusted code execution.',
+      }
+    }
+    return f
+  })
 })
 
-const additionalDirsList = computed(() => {
-  const raw = props.formData.additional_directories || ''
-  return raw.split('\n').map(d => d.trim()).filter(d => d)
-})
+// Generic field update — pass through to parent
+function handleFieldUpdate(key, value) {
+  emit('update:form-data', key, value)
+}
 
-// Docker status fetch + profile prefetch
-onMounted(async () => {
-  try {
-    dockerStatus.value = await api.get('/api/system/docker-status')
-  } catch {
-    dockerStatus.value = { available: false }
+// Features update — validate auto_memory_directory
+function handleFeaturesUpdate(key, value) {
+  if (key === 'auto_memory_directory') {
+    autoMemoryDirError.value = validateTemplatePath(value || '')
   }
-  profileStore.fetchIfEmpty()
-})
-
-// Methods
-function focusInput(refName) {
-  if (refName === 'allowedToolInput' && allowedToolInput.value) allowedToolInput.value.focus()
-  else if (refName === 'disallowedToolInput' && disallowedToolInput.value) disallowedToolInput.value.focus()
-  else if (refName === 'capabilityInput' && capabilityInput.value) capabilityInput.value.focus()
+  emit('update:form-data', key, value)
 }
 
-function addTool() {
-  const tool = newTool.value.trim()
-  if (!tool || toolsList.value.includes(tool)) { newTool.value = ''; return }
-  emit('update:form-data', 'allowed_tools', [...toolsList.value, tool].join(', '))
-  newTool.value = ''
-}
-
-function removeTool(index) {
-  const list = [...toolsList.value]
-  list.splice(index, 1)
-  emit('update:form-data', 'allowed_tools', list.join(', '))
-}
-
-function toggleTool(tool) {
-  if (toolsList.value.includes(tool)) {
-    removeTool(toolsList.value.indexOf(tool))
-  } else {
-    emit('update:form-data', 'allowed_tools', [...toolsList.value, tool].join(', '))
+// Isolation update — handle docker toggle side-effects, sandbox shape, docker_extra_mounts validation
+function handleIsolationUpdate(key, value) {
+  if (key === 'docker_enabled' && value) {
+    emit('update:form-data', 'cli_path', '')
   }
-}
-
-function addDeniedTool() {
-  const tool = newDeniedTool.value.trim()
-  if (!tool || deniedToolsList.value.includes(tool)) { newDeniedTool.value = ''; return }
-  emit('update:form-data', 'disallowed_tools', [...deniedToolsList.value, tool].join(', '))
-  newDeniedTool.value = ''
-}
-
-function removeDeniedTool(index) {
-  const list = [...deniedToolsList.value]
-  list.splice(index, 1)
-  emit('update:form-data', 'disallowed_tools', list.join(', '))
-}
-
-function toggleDeniedTool(tool) {
-  if (deniedToolsList.value.includes(tool)) {
-    removeDeniedTool(deniedToolsList.value.indexOf(tool))
-  } else {
-    emit('update:form-data', 'disallowed_tools', [...deniedToolsList.value, tool].join(', '))
+  if (key === 'docker_extra_mounts') {
+    dockerMountsError.value = validateTemplatePathList(value || '')
   }
-}
-
-function addCapability() {
-  const cap = newCapability.value.trim().toLowerCase()
-  if (!cap || capabilitiesList.value.includes(cap)) { newCapability.value = ''; return }
-  emit('update:form-data', 'capabilities', [...capabilitiesList.value, cap].join(', '))
-  newCapability.value = ''
-}
-
-function removeCapability(index) {
-  const list = [...capabilitiesList.value]
-  list.splice(index, 1)
-  emit('update:form-data', 'capabilities', list.join(', '))
-}
-
-function toggleSettingSource(source) {
-  const current = [...settingSourcesArray.value]
-  const index = current.indexOf(source)
-  if (index >= 0) current.splice(index, 1)
-  else current.push(source)
-  emit('update:form-data', 'setting_sources', current)
-}
-
-function addDirectory() {
-  const dir = newDirectory.value.trim()
-  if (!dir) return
-  // Issue #917: validate template variables before adding
-  const err = validateTemplatePath(dir)
-  if (err) {
-    additionalDirsError.value = err
+  if (key === 'sandbox_config') {
+    // Write back to formData.sandbox (ASP uses formData.sandbox.*)
+    // We mutate the nested object directly since formData.sandbox is reactive
+    Object.assign(props.formData.sandbox, value)
     return
   }
-  additionalDirsError.value = null
-  const current = additionalDirsList.value
-  if (!current.includes(dir)) {
-    current.push(dir)
-    emit('update:form-data', 'additional_directories', current.join('\n'))
-  }
-  newDirectory.value = ''
+  emit('update:form-data', key, value)
 }
 
+// Browse directory
+function onBrowse() {
+  emit('browse-additional-dir')
+}
+
+// Expose addDirectoryPath for parent to call when directory is browsed
 function addDirectoryPath(dir) {
-  const current = additionalDirsList.value
+  const raw = props.formData.additional_directories || ''
+  const current = raw.split('\n').map(d => d.trim()).filter(Boolean)
   if (!current.includes(dir)) {
     current.push(dir)
     emit('update:form-data', 'additional_directories', current.join('\n'))
@@ -1163,30 +496,14 @@ function addDirectoryPath(dir) {
 
 defineExpose({ addDirectoryPath })
 
-function removeDirectory(index) {
-  const current = [...additionalDirsList.value]
-  current.splice(index, 1)
-  emit('update:form-data', 'additional_directories', current.join('\n'))
-}
-
-function handleDockerToggle(checked) {
-  emit('update:form-data', 'docker_enabled', checked)
-  if (checked) {
-    emit('update:form-data', 'cli_path', '')
+onMounted(async () => {
+  try {
+    dockerStatus.value = await api.get('/api/system/docker-status')
+  } catch {
+    dockerStatus.value = { available: false }
   }
-}
-
-function updateSandboxField(field, value) {
-  props.formData.sandbox[field] = value
-}
-
-function updateNetworkField(field, value) {
-  props.formData.sandbox.network[field] = value
-}
-
-function updateViolationField(field, value) {
-  props.formData.sandbox.ignoreViolations[field] = value
-}
+  profileStore.fetchIfEmpty()
+})
 
 function handleMcpToggle(name, enabled) {
   if (sessionId.value) mcpStore.toggleServer(sessionId.value, name, enabled)
@@ -1207,17 +524,7 @@ function handleMcpReconnect(name) {
   letter-spacing: normal;
 }
 
-.field-indicator.autofilled {
-  color: #856404;
-}
-
-.field-indicator.modified {
-  color: #cc5500;
-}
-
-.field-indicator.profile {
-  color: #0a6640;
-  font-weight: bold;
-}
-
+.field-indicator.autofilled { color: #856404; }
+.field-indicator.modified { color: #cc5500; }
+.field-indicator.profile { color: #0a6640; font-weight: bold; }
 </style>
