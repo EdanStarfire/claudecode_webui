@@ -247,6 +247,14 @@ if [ -n "$PROXY_IMAGE" ]; then
     fi
     echo "[claude-docker] Proxy ready (${PROXY_WAIT}s), CA cert: $PROXY_CA" >&2
 
+    # Verify the proxy container is still running after .ready was detected.
+    # Catches the race where mitmdump crashes between .ready and agent startup.
+    if ! docker inspect --format='{{.State.Running}}' "$PROXY_NAME" 2>/dev/null | grep -q true; then
+        echo "Error: Proxy container $PROXY_NAME exited after signalling ready. Logs:" >&2
+        docker logs "$PROXY_NAME" >&2 2>&1 || true
+        exit 1
+    fi
+
     # Join proxy network namespace — transparent DNAT + CoreDNS filtering.
     PROXY_FLAGS="$PROXY_FLAGS --network container:$PROXY_NAME"
     PROXY_FLAGS="$PROXY_FLAGS -v ${PROXY_RESOLV}:/etc/resolv.conf:ro"
