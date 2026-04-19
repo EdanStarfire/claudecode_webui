@@ -651,12 +651,18 @@ const CONFIG_FIELDS = {
     change: 'restart',
     contexts: ['session', 'template', 'ephemeral', 'update'],
     trackState: true,
+    fromSource: (s) => Array.isArray(s.docker_proxy_credential_names) ? s.docker_proxy_credential_names : (s.docker_proxy_credential_names ? [s.docker_proxy_credential_names] : []),
+    toPayload: (v) => Array.isArray(v) && v.length ? v : null,
+    compare: (form, orig) => JSON.stringify(form || []) !== JSON.stringify(orig || []),
   },
   docker_proxy_allowlist_domains: {
     default: [],
     change: 'restart',
     contexts: ['session', 'template', 'ephemeral', 'update'],
     trackState: true,
+    fromSource: (s) => Array.isArray(s.docker_proxy_allowlist_domains) ? s.docker_proxy_allowlist_domains : (s.docker_proxy_allowlist_domains ? [s.docker_proxy_allowlist_domains] : []),
+    toPayload: (v) => Array.isArray(v) && v.length ? v : null,
+    compare: (form, orig) => JSON.stringify(form || []) !== JSON.stringify(orig || []),
   },
   history_distillation_enabled: {
     default: true,
