@@ -1598,6 +1598,7 @@ async function createSession() {
 
   const payload = {
     ...extractPayload('session'),
+    template_id: selectedTemplateId.value || null,
     sandbox_config: formData.sandbox_enabled ? buildSandboxConfig() : null,
   }
 
