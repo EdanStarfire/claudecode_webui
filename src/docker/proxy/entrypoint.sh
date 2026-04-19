@@ -252,6 +252,16 @@ fi
 # before iptables setup and mitmdump startup. The .ready marker is written here,
 # after all three are complete, so the host-side poll starts the agent at the
 # right time.
+# Verify mitmdump survived startup before signalling ready.
+# A short sleep gives it time to parse the addon, read credentials, and bind :8080.
+# If it crashes during that window (bad addon, unreadable files, port conflict),
+# kill -0 will fail and we exit with a diagnostic message.
+sleep 2
+if ! kill -0 "$MITM_PID" 2>/dev/null; then
+    echo "ERROR: mitmdump (PID $MITM_PID) exited during startup." >&2
+    wait "$MITM_PID" 2>/dev/null
+    exit 1
+fi
 touch "$CERTS_DIR/.ready"
 
 # Forward signals to child processes so Docker stop works cleanly.

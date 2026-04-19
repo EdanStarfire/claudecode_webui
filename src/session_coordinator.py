@@ -1086,9 +1086,12 @@ class SessionCoordinator:
                                 extra_mounts.append(f"{host_file}:{file_path}:ro")
 
                     # Write sidecar credentials.json (placeholder + injection, no plaintext secrets)
+                    # Use 0o644 (world-readable) so mitmdump running as uid 9999 inside the
+                    # sidecar container can read this bind-mounted file. The file contains only
+                    # placeholder strings and injection metadata — no actual secret content.
                     creds_path = tmp_dir / "credentials.json"
                     creds_path.write_text(json.dumps({"credentials": sidecar_entries}))
-                    os.chmod(creds_path, 0o600)
+                    os.chmod(creds_path, 0o644)
                     proxy_credentials_file = str(creds_path)
 
                     # Write delivery env file if any env deliveries configured

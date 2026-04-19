@@ -910,3 +910,87 @@ class TestIssue820TmpMount:
             success = await coordinator.terminate_session(session_id)
 
         assert success is True
+
+
+class TestIssue1088CredFilePermissions:
+    """Regression tests for issue #1088 — proxy sidecar credentials.json must be world-readable."""
+
+    @pytest.mark.asyncio
+    async def test_issue_1088_creds_path_is_world_readable(self, temp_coordinator):
+        """credentials.json must use 0o644 so mitmdump (uid 9999) can read it.
+
+        Delivery files (host_file) with actual secret content must still use 0o600.
+        """
+        import stat
+        import uuid
+
+        coordinator = temp_coordinator
+
+        project = await coordinator.project_manager.create_project(
+            name="Test Project",
+            working_directory="/test/project",
+        )
+
+        session_id = str(uuid.uuid4())
+        await coordinator.create_session(
+            session_id=session_id,
+            project_id=project.project_id,
+            config=SessionConfig(
+                docker_enabled=True,
+                docker_image="claude-code:local",
+                docker_proxy_enabled=True,
+                docker_proxy_credentials=[
+                    {
+                        "name": "github_token",
+                        "host_pattern": "api.github.com",
+                        "delivery": {"type": "file", "path": "/run/secrets/gh_token",
+                                     "content_template": "{placeholder}"},
+                        "injection": {"header": "Authorization", "format": "Bearer {value}",
+                                      "real_value": "ghp_real"},
+                    }
+                ],
+            ),
+        )
+
+        # Locate the session tmp dir that will hold credentials.json
+        session_dir = coordinator.session_manager.sessions_dir / session_id
+        tmp_dir = session_dir / "tmp"
+
+        written_files: list = []
+
+        def fake_resolve(docker_image, docker_extra_mounts, workspace,
+                         session_data_dir, docker_home_directory,
+                         proxy_credentials_file=None, delivery_env_file=None, **kwargs):
+            # Capture all files written into tmp_dir at call time
+            if tmp_dir.exists():
+                written_files.extend(list(tmp_dir.iterdir()))
+            return "/usr/bin/docker", {}
+
+        mock_sdk = AsyncMock()
+        mock_sdk.start.return_value = True
+        mock_sdk.is_running.return_value = False
+        coordinator.set_sdk_factory(Mock(return_value=mock_sdk))
+
+        with patch("src.docker_utils.resolve_docker_cli_path", fake_resolve):
+            with patch("src.skill_manager.NEW_GLOBAL_SKILLS_DIR") as mock_skills_dir:
+                mock_skills_dir.exists.return_value = False
+                await coordinator.start_session(session_id)
+
+        # Find credentials.json and delivery files
+        creds_file = tmp_dir / "credentials.json"
+        assert creds_file.exists(), "credentials.json must be written to session tmp dir"
+
+        creds_mode = stat.S_IMODE(creds_file.stat().st_mode)
+        assert creds_mode == 0o644, (
+            f"credentials.json must be 0o644 (world-readable for sidecar uid 9999), "
+            f"got {oct(creds_mode)}"
+        )
+
+        # Delivery files (contain placeholder — same-uid access only) must remain 0o600
+        delivery_files = [f for f in tmp_dir.iterdir() if f.name.startswith("delivery_")]
+        assert delivery_files, "At least one delivery file must be written for file delivery type"
+        for delivery_file in delivery_files:
+            delivery_mode = stat.S_IMODE(delivery_file.stat().st_mode)
+            assert delivery_mode == 0o600, (
+                f"{delivery_file.name} must remain 0o600, got {oct(delivery_mode)}"
+            )
