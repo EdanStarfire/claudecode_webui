@@ -139,6 +139,27 @@ const isDisabled = computed(() => {
 </script>
 
 <style scoped>
+.field-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+}
+
+.field-toggle {
+  flex-shrink: 0;
+  padding-top: 0.15rem;
+}
+
+.field-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.field-body.field-disabled {
+  opacity: 0.45;
+  pointer-events: none;
+}
+
 .field-indicator {
   margin-left: 0.25rem;
   font-size: 0.75rem;
