@@ -86,6 +86,8 @@ def resolve_docker_cli_path(
     # Issue #1051: Per-session credential injection
     proxy_credentials_file: str | None = None,
     delivery_env_file: str | None = None,
+    # Issue #1053: Dynamic allowlist override
+    proxy_allowlist_file: str | None = None,
 ) -> tuple[str, dict[str, str]]:
     """
     Resolve the cli_path and environment variables for Docker mode.
@@ -132,6 +134,9 @@ def resolve_docker_cli_path(
 
     if delivery_env_file:
         env_vars["CLAUDE_DOCKER_DELIVERY_ENV_FILE"] = delivery_env_file
+
+    if proxy_allowlist_file:
+        env_vars["CLAUDE_DOCKER_PROXY_ALLOWLIST_FILE"] = proxy_allowlist_file
 
     return wrapper_path, env_vars
 

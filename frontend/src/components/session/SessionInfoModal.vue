@@ -59,6 +59,45 @@
               <div>{{ displayData.permissionMode || 'default' }}</div>
             </div>
 
+            <!-- Proxy Status (only when proxy enabled) -->
+            <div v-if="currentProxyStatus" class="mb-3">
+              <h6 class="text-muted">Proxy Status</h6>
+              <div class="mb-1">
+                <small class="text-muted">Sidecar: </small>
+                <span :class="currentProxyStatus.sidecar_running ? 'text-success' : 'text-secondary'">
+                  {{ currentProxyStatus.sidecar_running ? 'Running' : 'Stopped' }}
+                </span>
+              </div>
+              <div v-if="currentProxyStatus.effective_domains?.length" class="mb-1">
+                <small class="text-muted">Allowed Domains ({{ currentProxyStatus.effective_domains.length }}):</small>
+                <div class="d-flex flex-wrap gap-1 mt-1">
+                  <span
+                    v-for="d in currentProxyStatus.effective_domains"
+                    :key="d"
+                    class="badge bg-success-subtle text-success-emphasis"
+                  >{{ d }}</span>
+                </div>
+              </div>
+              <div v-if="currentProxyStatus.active_credentials?.length" class="mb-1">
+                <small class="text-muted">Active Credentials:</small>
+                <div class="d-flex flex-wrap gap-1 mt-1">
+                  <span
+                    v-for="c in currentProxyStatus.active_credentials"
+                    :key="c"
+                    class="badge bg-info-subtle text-info-emphasis"
+                  >{{ c }}</span>
+                </div>
+              </div>
+              <div v-if="currentBlockedLog.length" class="mb-1">
+                <small class="text-muted">Recent Blocked Connections:</small>
+                <div class="small mt-1" style="max-height: 150px; overflow-y: auto;">
+                  <div v-for="(entry, i) in currentBlockedLog" :key="i" class="text-danger-emphasis">
+                    {{ entry.ts }} — {{ entry.host }}{{ entry.path }} ({{ entry.method }})
+                  </div>
+                </div>
+              </div>
+            </div>
+
             <!-- Memory Directory (when custom directory is configured) -->
             <div v-if="displayData.auto_memory_directory" class="mb-3">
               <h6 class="text-muted">Memory Directory</h6>
@@ -184,6 +223,7 @@ import { useSessionStore } from '@/stores/session'
 import { useUIStore } from '@/stores/ui'
 import { useMcpStore } from '@/stores/mcp'
 import { useMcpConfigStore } from '@/stores/mcpConfig'
+import { useProxyStore } from '@/stores/proxy'
 import { api } from '@/utils/api'
 import McpServerDetail from './McpServerDetail.vue'
 
@@ -191,6 +231,7 @@ const sessionStore = useSessionStore()
 const uiStore = useUIStore()
 const mcpStore = useMcpStore()
 const mcpConfigStore = useMcpConfigStore()
+const proxyStore = useProxyStore()
 
 // State
 const sessionId = ref(null)
@@ -229,6 +270,18 @@ const displayData = computed(() => {
 })
 
 const sdkSessionInfo = computed(() => sessionData.value?.sdk_session_info || null)
+
+// Proxy status — only shown when proxy is enabled for this session
+const currentProxyStatus = computed(() => {
+  if (!sessionId.value) return null
+  const status = proxyStore.proxyStatus(sessionId.value)
+  return status?.proxy_enabled ? status : null
+})
+
+const currentBlockedLog = computed(() => {
+  if (!sessionId.value) return []
+  return proxyStore.blockedLog(sessionId.value)
+})
 
 // Filter out mcp__* tools from pre-authorized list (shown in MCP section instead)
 const nonMcpTools = computed(() => {
@@ -345,6 +398,11 @@ watch(
         }
         if (mcpConfigStore.configList().length === 0) {
           mcpConfigStore.fetchConfigs()
+        }
+        // Fetch proxy status and blocked log if proxy is enabled
+        if (session?.docker_proxy_enabled) {
+          proxyStore.fetchProxyStatus(data.sessionId)
+          proxyStore.fetchBlockedLog(data.sessionId)
         }
       }
       modalInstance.show()

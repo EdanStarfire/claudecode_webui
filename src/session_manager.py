@@ -141,8 +141,9 @@ class SessionInfo:
     # Issue #1050: Proxy lifecycle management
     docker_proxy_enabled: bool = False   # Intent toggle: enable proxy sidecar
     docker_proxy_image: str | None = None  # Image override (None = use app config default)
-    # Issue #1051: Per-session credential injection via proxy
-    docker_proxy_credentials: list[dict] | None = None  # [{"host_pattern", "header", "value", "name"}]
+    # Issue #1053: Named credentials from vault + extra allowed domains
+    docker_proxy_credential_names: list[str] | None = None  # Names referencing vault credentials
+    docker_proxy_allowlist_domains: list[str] | None = None  # Extra domains to allow through proxy
 
     # Thinking and effort configuration (issue #540)
     thinking_mode: str | None = None  # "adaptive", "enabled", "disabled", or None (SDK default)
@@ -241,7 +242,16 @@ class SessionInfo:
         data.setdefault('docker_home_directory', None)
         data.setdefault('docker_proxy_enabled', False)
         data.setdefault('docker_proxy_image', None)
-        data.setdefault('docker_proxy_credentials', None)
+        # Issue #1053: migrate docker_proxy_credentials (inline dicts) → docker_proxy_credential_names
+        if 'docker_proxy_credentials' in data:
+            import logging as _logging
+            _logging.getLogger(__name__).warning(
+                "Session state.json contains deprecated 'docker_proxy_credentials' field — "
+                "ignoring (re-enter credentials via the Proxy vault UI)."
+            )
+            data.pop('docker_proxy_credentials')
+        data.setdefault('docker_proxy_credential_names', None)
+        data.setdefault('docker_proxy_allowlist_domains', None)
         data.setdefault('thinking_mode', None)
         data.setdefault('thinking_budget_tokens', None)
         data.setdefault('effort', None)
@@ -432,8 +442,9 @@ class SessionManager:
             # Issue #1050: Proxy lifecycle management
             docker_proxy_enabled=config.docker_proxy_enabled,
             docker_proxy_image=config.docker_proxy_image,
-            # Issue #1051: Per-session credential injection via proxy
-            docker_proxy_credentials=config.docker_proxy_credentials,
+            # Issue #1053: Named credentials + allowlist domains
+            docker_proxy_credential_names=config.docker_proxy_credential_names,
+            docker_proxy_allowlist_domains=config.docker_proxy_allowlist_domains,
             # Thinking and effort configuration (issue #540)
             thinking_mode=config.thinking_mode,
             thinking_budget_tokens=config.thinking_budget_tokens,

@@ -99,6 +99,23 @@
         @update:value="$emit('update:value', $event)"
       />
 
+      <TagListField
+        v-else-if="field.widget === 'tag-list'"
+        :value="value"
+        :disabled="isDisabled"
+        :placeholder="field.placeholder || 'Add...'"
+        @update:value="$emit('update:value', $event)"
+      />
+
+      <MultiSelectField
+        v-else-if="field.widget === 'multi-select'"
+        :value="value"
+        :disabled="isDisabled"
+        :options-from="field.optionsFrom || null"
+        :placeholder="field.placeholder || 'Select...'"
+        @update:value="$emit('update:value', $event)"
+      />
+
       <small v-if="field.description" class="form-text text-muted d-block">
         {{ field.description }}
       </small>
@@ -116,6 +133,8 @@ import TextareaWidget from './TextareaWidget.vue'
 import RangeSliderWidget from './RangeSliderWidget.vue'
 import DirListWidget from './DirListWidget.vue'
 import SandboxSubSectionWidget from './SandboxSubSectionWidget.vue'
+import TagListField from './TagListField.vue'
+import MultiSelectField from './MultiSelectField.vue'
 
 const props = defineProps({
   field: { type: Object, required: true },

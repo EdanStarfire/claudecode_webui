@@ -500,3 +500,98 @@ class ApplicationService:
             profile_id,
             template_manager=self.coordinator.template_manager,
         )
+
+    # =========================================================================
+    # Proxy Credential Vault (issue #1053)
+    # =========================================================================
+
+    async def list_credentials(self) -> dict:
+        credentials = await self.coordinator.credential_vault.list_credentials()
+        return {"credentials": credentials}
+
+    async def create_credential(
+        self,
+        name: str,
+        host_pattern: str,
+        header_name: str,
+        value_format: str,
+        real_value: str,
+        delivery: dict,
+    ) -> dict:
+        return await self.coordinator.credential_vault.create_credential(
+            name=name,
+            host_pattern=host_pattern,
+            header_name=header_name,
+            value_format=value_format,
+            real_value=real_value,
+            delivery=delivery,
+        )
+
+    async def delete_credential(self, name: str) -> bool:
+        return await self.coordinator.credential_vault.delete_credential(name)
+
+    async def get_proxy_status(self, session_id: str) -> dict:
+        """Return effective allowlist + active credential names + proxy state for a session."""
+        session = await self.coordinator.session_manager.get_session_info(session_id)
+        if session is None:
+            return {"proxy_enabled": False, "effective_domains": [], "active_credentials": [], "sidecar_running": False}
+
+        proxy_enabled = getattr(session, "docker_proxy_enabled", False)
+        if not proxy_enabled:
+            return {"proxy_enabled": False, "effective_domains": [], "active_credentials": [], "sidecar_running": False}
+
+        # Build effective domains: static defaults + session config
+        effective_domains: list[str] = []
+        import json as _json
+        from pathlib import Path as _Path
+        static_allowlist_path = _Path("src/docker/proxy/allowlist.json")
+        if static_allowlist_path.exists():
+            try:
+                static = _json.loads(static_allowlist_path.read_text())
+                effective_domains.extend(static.get("domains", []))
+            except Exception:
+                pass
+        extra_domains = getattr(session, "docker_proxy_allowlist_domains", None) or []
+        all_domains = sorted(set(effective_domains + extra_domains))
+
+        active_credentials = getattr(session, "docker_proxy_credential_names", None) or []
+
+        return {
+            "proxy_enabled": True,
+            "effective_domains": all_domains,
+            "active_credentials": active_credentials,
+            "sidecar_running": False,  # Sidecar runtime state not tracked server-side
+        }
+
+    async def get_proxy_blocked_log(self, session_id: str, limit: int = 50) -> dict:
+        """Return recent blocked connections from the sidecar access log."""
+        import json as _json
+
+        session = await self.coordinator.session_manager.get_session_info(session_id)
+        if session is None:
+            return {"entries": []}
+
+        # Access log is written to data/sessions/{id}/docker_claude_data/proxy/access.log
+        session_dir = self.coordinator.data_dir / "sessions" / session_id
+        log_path = session_dir / "docker_claude_data" / "proxy" / "access.log"
+        if not log_path.exists():
+            return {"entries": []}
+
+        blocked = []
+        try:
+            lines = log_path.read_text().splitlines()
+            for line in reversed(lines):
+                if not line.strip():
+                    continue
+                try:
+                    entry = _json.loads(line)
+                    if not entry.get("allowed", True):
+                        blocked.append(entry)
+                        if len(blocked) >= limit:
+                            break
+                except Exception:
+                    continue
+        except Exception:
+            pass
+
+        return {"entries": blocked}

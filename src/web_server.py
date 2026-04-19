@@ -375,6 +375,15 @@ class McpConfigImportRequest(BaseModel):
     dry_run: bool = True
 
 
+# Proxy credential request models (issue #1053)
+class CredentialCreateRequest(BaseModel):
+    name: str
+    host_pattern: str
+    header_name: str = "Authorization"
+    value_format: str = "Bearer {value}"
+    real_value: str
+    delivery: dict
+
 
 def _validate_additional_directories(dirs: list[str] | None, working_directory: str | None) -> list[str]:
     """Validate additional directories: absolute paths, no duplicates, not same as working_dir."""
@@ -3414,8 +3423,47 @@ class ClaudeWebUI:
                 raise HTTPException(status_code=404, detail="Profile not found")
             return {"deleted": True}
 
+        # ==================== PROXY ENDPOINTS (issue #1053) ====================
 
+        @self.app.get("/api/proxy/credentials")
+        @handle_exceptions("list proxy credentials")
+        async def list_proxy_credentials():
+            """List all proxy credentials (metadata only, no values)."""
+            return await self.service.list_credentials()
 
+        @self.app.post("/api/proxy/credentials", status_code=201)
+        @handle_exceptions("create proxy credential", value_error_status=400)
+        async def create_proxy_credential(request: CredentialCreateRequest):
+            """Create a named proxy credential. Returns metadata only (value not in response)."""
+            return await self.service.create_credential(
+                name=request.name,
+                host_pattern=request.host_pattern,
+                header_name=request.header_name,
+                value_format=request.value_format,
+                real_value=request.real_value,
+                delivery=request.delivery,
+            )
+
+        @self.app.delete("/api/proxy/credentials/{name}")
+        @handle_exceptions("delete proxy credential")
+        async def delete_proxy_credential(name: str):
+            """Delete a proxy credential by name."""
+            deleted = await self.service.delete_credential(name)
+            if not deleted:
+                raise HTTPException(status_code=404, detail="Credential not found")
+            return {"deleted": True}
+
+        @self.app.get("/api/sessions/{session_id}/proxy/status")
+        @handle_exceptions("get proxy status")
+        async def get_proxy_status(session_id: str):
+            """Return effective allowlist + active credential names + proxy state for a session."""
+            return await self.service.get_proxy_status(session_id)
+
+        @self.app.get("/api/sessions/{session_id}/proxy/blocked")
+        @handle_exceptions("get proxy blocked log")
+        async def get_proxy_blocked_log(session_id: str, limit: int = 50):
+            """Return recent blocked connections from the sidecar access log."""
+            return await self.service.get_proxy_blocked_log(session_id, limit=limit)
 
     def _create_message_callback(self, session_id: str):
         """Create message callback for poll queue broadcasting using unified MessageProcessor"""

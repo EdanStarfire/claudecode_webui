@@ -844,7 +844,7 @@ class TestIssue819DockerHistoryMount:
 
         captured_mounts = []
 
-        def fake_resolve(docker_image, docker_extra_mounts, workspace, session_data_dir, docker_home_directory):
+        def fake_resolve(docker_image, docker_extra_mounts, workspace, session_data_dir, docker_home_directory, **kwargs):
             captured_mounts.extend(docker_extra_mounts or [])
             return "/usr/bin/docker", {}
 
@@ -920,11 +920,24 @@ class TestIssue1088CredFilePermissions:
         """credentials.json must use 0o644 so mitmdump (uid 9999) can read it.
 
         Delivery files (host_file) with actual secret content must still use 0o600.
+        Uses the vault-based approach (issue #1053): register credential in vault first,
+        then reference by name in docker_proxy_credential_names.
         """
         import stat
         import uuid
 
         coordinator = temp_coordinator
+
+        # Register credential in the vault (issue #1053)
+        await coordinator.credential_vault.create_credential(
+            name="github_token",
+            host_pattern="api.github.com",
+            header_name="Authorization",
+            value_format="Bearer {value}",
+            real_value="ghp_real",
+            delivery={"type": "file", "path": "/run/secrets/gh_token",
+                      "content_template": "{placeholder}"},
+        )
 
         project = await coordinator.project_manager.create_project(
             name="Test Project",
@@ -939,16 +952,7 @@ class TestIssue1088CredFilePermissions:
                 docker_enabled=True,
                 docker_image="claude-code:local",
                 docker_proxy_enabled=True,
-                docker_proxy_credentials=[
-                    {
-                        "name": "github_token",
-                        "host_pattern": "api.github.com",
-                        "delivery": {"type": "file", "path": "/run/secrets/gh_token",
-                                     "content_template": "{placeholder}"},
-                        "injection": {"header": "Authorization", "format": "Bearer {value}",
-                                      "real_value": "ghp_real"},
-                    }
-                ],
+                docker_proxy_credential_names=["github_token"],
             ),
         )
 
