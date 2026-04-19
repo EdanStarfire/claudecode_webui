@@ -81,6 +81,21 @@ assert set(FIELD_TO_AREA.keys()) == CONFIG_FIELDS, (
     f"Extra in areas: {set(FIELD_TO_AREA.keys()) - CONFIG_FIELDS}"
 )
 
+# Fields that SessionConfig expects as list[str] but profiles may store as
+# comma-separated strings (because TagInputWidget emits comma-separated values).
+_LIST_FIELDS: frozenset[str] = frozenset({
+    "allowed_tools", "disallowed_tools", "additional_directories",
+    "setting_sources", "mcp_server_ids", "docker_extra_mounts",
+})
+
+
+def _coerce_list(value: object) -> object:
+    """Convert a comma-separated string to a list for fields that require list[str]."""
+    if isinstance(value, str):
+        items = [s.strip() for s in value.split(",") if s.strip()]
+        return items if items else None
+    return value
+
 
 async def _load_profile_cached(
     profile_id: str,
@@ -165,7 +180,8 @@ async def resolve_template_config(
                 template_profile_ids[area], profile_manager, profile_cache
             )
             if profile is not None and field_name in profile.config:
-                config_data[field_name] = profile.config[field_name]
+                raw = profile.config[field_name]
+                config_data[field_name] = _coerce_list(raw) if field_name in _LIST_FIELDS else raw
 
         if field_name in template_overrides_dict:
             config_data[field_name] = template_overrides_dict[field_name]
