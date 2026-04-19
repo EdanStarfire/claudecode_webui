@@ -456,6 +456,17 @@ const compareCommaSeparated = (form, orig) => {
   return formList !== origList
 }
 
+function isDefaultValue(value, meta) {
+  if (meta.compare) {
+    // compare(a, b) returns true when a !== b (i.e., they differ)
+    return !meta.compare(value, meta.default)
+  }
+  if (Array.isArray(meta.default)) {
+    return Array.isArray(value) && JSON.stringify(value) === JSON.stringify(meta.default)
+  }
+  return value === meta.default
+}
+
 // --- CONFIG_FIELDS schema (issue #731) ---
 // Each field: { default, change, contexts, trackState?, toPayload?, toUpdatePayload?, fromSource?, compare? }
 const CONFIG_FIELDS = {
@@ -1145,12 +1156,14 @@ function applyTemplate() {
     } else {
       value = template[field] ?? null
     }
-    if (value !== null && value !== '' && value !== meta.default) {
+    if (value !== null && value !== '' && !isDefaultValue(value, meta)) {
       formData[field] = value
       templateOriginalValues.value[field] = value
       fieldStates[field] = 'autofilled'
     } else {
-      formData[field] = meta.default
+      if (fieldStates[field] !== 'profile') {
+        formData[field] = meta.default
+      }
       templateOriginalValues.value[field] = null
     }
   }
