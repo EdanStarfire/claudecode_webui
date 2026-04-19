@@ -64,13 +64,13 @@ function addDomain() {
     newDomain.value = ''
     return
   }
-  emit('update:value', [...domainList.value, domain].join(', '))
+  emit('update:value', [...domainList.value, domain])
   newDomain.value = ''
 }
 
 function removeDomain(index) {
   const list = [...domainList.value]
   list.splice(index, 1)
-  emit('update:value', list.join(', '))
+  emit('update:value', list)
 }
 </script>

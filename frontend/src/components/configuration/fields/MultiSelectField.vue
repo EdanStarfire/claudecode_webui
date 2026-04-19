@@ -73,11 +73,11 @@ const availableToAdd = computed(() => {
 
 function addSelected() {
   if (!pendingAdd.value) return
-  emit('update:value', [...selectedList.value, pendingAdd.value].join(', '))
+  emit('update:value', [...selectedList.value, pendingAdd.value])
   pendingAdd.value = ''
 }
 
 function removeItem(item) {
-  emit('update:value', selectedList.value.filter(s => s !== item).join(', '))
+  emit('update:value', selectedList.value.filter(s => s !== item))
 }
 </script>
