@@ -177,6 +177,23 @@ export const FIELD_SCHEMAS = {
       showWhen: (config) => !!config.docker_enabled && !!config.docker_proxy_enabled,
     },
     {
+      key: 'docker_proxy_allowlist_domains',
+      label: 'Extra Allowed Domains',
+      widget: 'tag-list',
+      showWhen: (config) => !!config.docker_enabled && !!config.docker_proxy_enabled,
+      placeholder: 'e.g., api.example.com',
+      description: 'Additional domains allowed through the proxy (added to global defaults).',
+    },
+    {
+      key: 'docker_proxy_credential_names',
+      label: 'Proxy Credentials',
+      widget: 'multi-select',
+      showWhen: (config) => !!config.docker_enabled && !!config.docker_proxy_enabled,
+      optionsFrom: 'proxyCredentials',
+      placeholder: 'Select credentials to activate...',
+      description: 'Named credentials to inject into proxy sidecar for this session.',
+    },
+    {
       key: 'bare_mode',
       label: 'Bare mode',
       widget: 'toggle',

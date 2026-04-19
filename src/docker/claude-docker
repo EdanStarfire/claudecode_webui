@@ -217,6 +217,13 @@ if [ -n "$PROXY_IMAGE" ]; then
         PROXY_CREDS_FLAGS="-v $PROXY_CREDS_FILE:/etc/proxy/credentials.json:ro"
     fi
 
+    # Issue #1053: Bind-mount dynamic allowlist into sidecar (overrides baked-in /etc/proxy/allowlist.json)
+    PROXY_ALLOWLIST_FILE="${CLAUDE_DOCKER_PROXY_ALLOWLIST_FILE:-}"
+    PROXY_ALLOWLIST_FLAGS=""
+    if [ -n "$PROXY_ALLOWLIST_FILE" ] && [ -f "$PROXY_ALLOWLIST_FILE" ]; then
+        PROXY_ALLOWLIST_FLAGS="-v $PROXY_ALLOWLIST_FILE:/etc/proxy/allowlist.json:ro"
+    fi
+
     docker run -d \
         --name "$PROXY_NAME" \
         --cap-add NET_ADMIN \
@@ -226,6 +233,7 @@ if [ -n "$PROXY_IMAGE" ]; then
         ${PROXY_LOG_DIR:+-v "$PROXY_LOG_DIR:/var/log/proxy"} \
         ${PROXY_SESSION_ID:+-e "PROXY_SESSION_ID=$PROXY_SESSION_ID"} \
         $PROXY_CREDS_FLAGS \
+        $PROXY_ALLOWLIST_FLAGS \
         "$PROXY_IMAGE" >/dev/null
 
     # Wait up to 30s for the proxy to be fully ready.

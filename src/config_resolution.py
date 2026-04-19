@@ -30,7 +30,7 @@ CONFIG_FIELDS: set[str] = {
     "sandbox_enabled", "sandbox_config",
     "docker_enabled", "docker_image", "docker_extra_mounts",
     "docker_home_directory", "docker_proxy_enabled", "docker_proxy_image",
-    "docker_proxy_credentials",
+    "docker_proxy_credential_names", "docker_proxy_allowlist_domains",
     "history_distillation_enabled", "auto_memory_mode", "auto_memory_directory",
     "skill_creating_enabled",
     "mcp_server_ids", "enable_claudeai_mcp_servers", "strict_mcp_config",
@@ -56,7 +56,8 @@ PROFILE_AREAS: dict[str, set[str]] = {
         "cli_path", "sandbox_enabled", "sandbox_config",
         "docker_enabled", "docker_image", "docker_extra_mounts",
         "docker_home_directory", "docker_proxy_enabled", "docker_proxy_image",
-        "docker_proxy_credentials", "bare_mode", "env_scrub_enabled",
+        "docker_proxy_credential_names", "docker_proxy_allowlist_domains",
+        "bare_mode", "env_scrub_enabled",
     },
     "features": {
         "history_distillation_enabled", "auto_memory_mode", "auto_memory_directory",
@@ -86,6 +87,13 @@ assert set(FIELD_TO_AREA.keys()) == CONFIG_FIELDS, (
 _LIST_FIELDS: frozenset[str] = frozenset({
     "allowed_tools", "disallowed_tools", "additional_directories",
     "setting_sources", "mcp_server_ids", "docker_extra_mounts",
+    "docker_proxy_credential_names", "docker_proxy_allowlist_domains",
+})
+
+# Fields that use additive (union) merge across tiers instead of last-wins.
+# All tiers contribute their values; duplicates are removed and result is sorted.
+ADDITIVE_LIST_FIELDS: frozenset[str] = frozenset({
+    "docker_proxy_allowlist_domains",
 })
 
 
@@ -142,11 +150,46 @@ async def resolve_effective_config(
     # Get base config from template + profiles (reuse resolve_template_config)
     config_data = await resolve_template_config(template, profile_manager)
 
-    # Apply session_overrides (highest priority)
+    # Apply session_overrides (highest priority, last-wins for most fields)
     session_overrides = session_info.session_overrides or {}
     for field_name in CONFIG_FIELDS:
         if field_name in session_overrides:
             config_data[field_name] = session_overrides[field_name]
+
+    # Additive merge for ADDITIVE_LIST_FIELDS: union all tiers instead of last-wins.
+    # Must happen after standard resolution so all sources are consulted.
+    if ADDITIVE_LIST_FIELDS:
+        profile_cache: dict[str, object] = {}
+        template_profile_ids = template.profile_ids or {}
+        template_overrides_dict = template.template_overrides or {}
+        for field in ADDITIVE_LIST_FIELDS:
+            merged: set[str] = set()
+            # Tier 1: template flat field
+            flat_val = getattr(template, field, None)
+            if flat_val:
+                merged.update(flat_val if isinstance(flat_val, list) else [flat_val])
+            # Tier 2: profile value for the field's area
+            area = FIELD_TO_AREA.get(field)
+            if area and area in template_profile_ids and profile_manager:
+                profile = await _load_profile_cached(
+                    template_profile_ids[area], profile_manager, profile_cache
+                )
+                if profile is not None and field in profile.config:
+                    raw = profile.config[field]
+                    coerced = _coerce_list(raw)
+                    if coerced:
+                        merged.update(coerced if isinstance(coerced, list) else [coerced])
+            # Tier 3: template overrides
+            if field in template_overrides_dict:
+                val = template_overrides_dict[field]
+                if val:
+                    merged.update(val if isinstance(val, list) else [val])
+            # Tier 4: session overrides
+            if field in session_overrides:
+                val = session_overrides[field]
+                if val:
+                    merged.update(val if isinstance(val, list) else [val])
+            config_data[field] = sorted(merged) if merged else None
 
     # Carry template_id through for downstream reference
     config_data["template_id"] = session_info.template_id
@@ -209,7 +252,8 @@ def _config_from_session_info(session_info: SessionInfo) -> SessionConfig:
         docker_home_directory=session_info.docker_home_directory,
         docker_proxy_enabled=session_info.docker_proxy_enabled,
         docker_proxy_image=session_info.docker_proxy_image,
-        docker_proxy_credentials=session_info.docker_proxy_credentials,
+        docker_proxy_credential_names=getattr(session_info, "docker_proxy_credential_names", None),
+        docker_proxy_allowlist_domains=getattr(session_info, "docker_proxy_allowlist_domains", None),
         thinking_mode=session_info.thinking_mode,
         thinking_budget_tokens=session_info.thinking_budget_tokens,
         effort=session_info.effort,

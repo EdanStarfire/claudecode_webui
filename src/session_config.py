@@ -56,8 +56,9 @@ class SessionConfig(BaseModel):
     # Issue #1050: Proxy lifecycle management
     docker_proxy_enabled: bool = False        # Intent toggle: enable proxy sidecar
     docker_proxy_image: str | None = None     # Image override (None = use app config default)
-    # Issue #1051: Per-session credential injection via proxy
-    docker_proxy_credentials: list[dict] | None = None  # [{"host_pattern", "header", "value", "name"}]
+    # Issue #1053: Named credentials from vault + extra allowed domains
+    docker_proxy_credential_names: list[str] | None = None  # Names referencing vault credentials
+    docker_proxy_allowlist_domains: list[str] | None = None  # Extra domains to allow through proxy
 
     # Features
     history_distillation_enabled: bool = True

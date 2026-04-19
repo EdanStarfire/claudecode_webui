@@ -25,6 +25,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from ..config_resolution import (
+    ADDITIVE_LIST_FIELDS,
     CONFIG_FIELDS,
     FIELD_TO_AREA,
     PROFILE_AREAS,
@@ -590,3 +591,70 @@ class TestResolveTemplateConfig:
         )
         result = await resolve_template_config(template, pm)
         assert result["model"] == "claude-haiku-4-5"  # template_overrides wins
+
+
+@pytest.mark.asyncio
+class TestAdditiveAllowlistMerge:
+    """Test #15 — ADDITIVE_LIST_FIELDS union merge for docker_proxy_allowlist_domains (issue #1053)."""
+
+    def test_additive_list_fields_contains_allowlist_domain(self):
+        """docker_proxy_allowlist_domains must be in ADDITIVE_LIST_FIELDS."""
+        assert "docker_proxy_allowlist_domains" in ADDITIVE_LIST_FIELDS
+
+    async def test_additive_merge_allowlist_domains_unions_all_tiers(self):
+        """Domains from profile + template_overrides + session_overrides are unioned, not last-wins."""
+        profile = _make_profile(
+            area="isolation",
+            config={"docker_proxy_allowlist_domains": "profile.com"},
+        )
+        pm = _make_profile_manager([profile])
+        template = _make_template(
+            template_overrides={"docker_proxy_allowlist_domains": ["override.com"]},
+            profile_ids={"isolation": profile.profile_id},
+        )
+        session = _make_session(
+            template_id="tmpl-001",
+            session_overrides={"docker_proxy_allowlist_domains": ["session.com"]},
+        )
+        tm = _make_template_manager(template)
+
+        config = await resolve_effective_config(session, tm, pm)
+
+        assert config.docker_proxy_allowlist_domains is not None
+        domains = set(config.docker_proxy_allowlist_domains)
+        assert "profile.com" in domains
+        assert "override.com" in domains
+        assert "session.com" in domains
+
+    async def test_empty_allowlist_no_crash(self):
+        """None/empty at all tiers produces None (no crash)."""
+        template = _make_template()
+        session = _make_session(template_id="tmpl-001")
+        tm = _make_template_manager(template)
+
+        config = await resolve_effective_config(session, tm)
+        assert config.docker_proxy_allowlist_domains is None
+
+    async def test_allowlist_deduplication(self):
+        """Duplicate domains across tiers produce a unique sorted set."""
+        profile = _make_profile(
+            area="isolation",
+            config={"docker_proxy_allowlist_domains": "dup.com, unique.com"},
+        )
+        pm = _make_profile_manager([profile])
+        template = _make_template(
+            template_overrides={"docker_proxy_allowlist_domains": ["dup.com", "other.com"]},
+            profile_ids={"isolation": profile.profile_id},
+        )
+        session = _make_session(template_id="tmpl-001")
+        tm = _make_template_manager(template)
+
+        config = await resolve_effective_config(session, tm, pm)
+
+        domains = config.docker_proxy_allowlist_domains
+        assert domains is not None
+        # No duplicates
+        assert len(domains) == len(set(domains))
+        assert "dup.com" in domains
+        assert "unique.com" in domains
+        assert "other.com" in domains

@@ -35,7 +35,7 @@
         <div class="modal-body">
           <!-- Template List / Profile List View — tabbed -->
           <div v-if="mode === 'template-list'" class="template-list-view">
-            <!-- Tab toggle: Templates | Profiles (issue #1062) -->
+            <!-- Tab toggle: Templates | Profiles | Proxy (issue #1062, #1053) -->
             <ul class="nav nav-tabs mb-3">
               <li class="nav-item">
                 <button
@@ -51,10 +51,20 @@
                   @click="templateListTab = 'profiles'"
                 >Profiles</button>
               </li>
+              <li class="nav-item">
+                <button
+                  class="nav-link"
+                  :class="{ active: templateListTab === 'proxy' }"
+                  @click="templateListTab = 'proxy'"
+                >Proxy</button>
+              </li>
             </ul>
 
             <!-- Profiles tab -->
             <ProfileManagerTab v-if="templateListTab === 'profiles'" />
+
+            <!-- Proxy tab (issue #1053) -->
+            <ProxyConfigTab v-else-if="templateListTab === 'proxy'" />
 
             <!-- Templates tab -->
             <template v-if="templateListTab === 'templates'">
@@ -379,6 +389,7 @@ import QuickSettingsPanel from './QuickSettingsPanel.vue'
 import AdvancedSettingsPanel from './AdvancedSettingsPanel.vue'
 import PermissionPreviewModal from './PermissionPreviewModal.vue'
 import ProfileManagerTab from './ProfileManagerTab.vue'
+import ProxyConfigTab from './ProxyConfigTab.vue'
 
 const router = useRouter()
 const projectStore = useProjectStore()
