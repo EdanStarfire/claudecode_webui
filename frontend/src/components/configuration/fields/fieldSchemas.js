@@ -1,0 +1,225 @@
+export const FIELD_SCHEMAS = {
+  model: [
+    {
+      key: 'model',
+      label: 'Model',
+      widget: 'button-group',
+      options: [
+        { value: 'sonnet', label: 'Sonnet' },
+        { value: 'opus', label: 'Opus' },
+        { value: 'haiku', label: 'Haiku' },
+        { value: 'opusplan', label: 'OpusPlan' },
+      ],
+    },
+    {
+      key: 'thinking_mode',
+      label: 'Thinking Mode',
+      widget: 'button-group',
+      options: [
+        { value: '', label: 'Default' },
+        { value: 'adaptive', label: 'Adaptive' },
+        { value: 'enabled', label: 'Enabled' },
+        { value: 'disabled', label: 'Disabled' },
+      ],
+    },
+    {
+      key: 'thinking_budget_tokens',
+      label: 'Budget Tokens',
+      widget: 'range-slider',
+      min: 1024,
+      max: 32768,
+      step: 1024,
+      defaultValue: 10240,
+      showWhen: (config) => config.thinking_mode === 'enabled',
+    },
+    {
+      key: 'effort',
+      label: 'Effort',
+      widget: 'button-group',
+      options: [
+        { value: '', label: 'Default' },
+        { value: 'low', label: 'Low' },
+        { value: 'medium', label: 'Med' },
+        { value: 'high', label: 'High' },
+      ],
+    },
+  ],
+
+  permissions: [
+    {
+      key: 'permission_mode',
+      label: 'Permission Mode',
+      widget: 'button-group',
+      options: [
+        { value: 'default', label: 'Default' },
+        { value: 'acceptEdits', label: 'Accept Edits' },
+        { value: 'plan', label: 'Plan' },
+        { value: 'dontAsk', label: "Don't Ask" },
+        { value: 'auto', label: 'Auto' },
+        { value: 'bypassPermissions', label: 'Bypass' },
+      ],
+      profileOnly: true,
+    },
+    {
+      key: 'allowed_tools',
+      label: 'Allowed Tools',
+      widget: 'tag-input',
+      variant: 'allowed',
+      placeholder: 'Add tool...',
+    },
+    {
+      key: 'disallowed_tools',
+      label: 'Disallowed Tools',
+      widget: 'tag-input',
+      variant: 'disallowed',
+      placeholder: 'Add tool...',
+    },
+    {
+      key: 'setting_sources',
+      label: 'Settings Sources',
+      widget: 'button-group',
+      multiple: true,
+      options: [
+        { value: 'user', label: 'User' },
+        { value: 'project', label: 'Project' },
+        { value: 'local', label: 'Local' },
+      ],
+    },
+    {
+      key: 'additional_directories',
+      label: 'Additional Directories',
+      widget: 'dir-list',
+      placeholder: 'Add directory path... Supports {session_id}, {session_data}, {working_dir}',
+      showBrowse: true,
+    },
+    {
+      key: 'capabilities',
+      label: 'Capabilities',
+      widget: 'tag-input',
+      variant: 'capability',
+      placeholder: 'Add capability...',
+      advancedOnly: true,
+    },
+  ],
+
+  system_prompt: [
+    {
+      key: 'system_prompt',
+      label: 'System Prompt',
+      widget: 'textarea',
+      rows: 3,
+    },
+    {
+      key: 'override_system_prompt',
+      label: 'Override System Prompt',
+      widget: 'toggle',
+    },
+  ],
+
+  mcp: [
+    {
+      key: 'mcp_servers',
+      label: 'MCP Servers',
+      widget: 'mcp-panel',
+    },
+  ],
+
+  isolation: [
+    {
+      key: 'cli_path',
+      label: 'CLI Path',
+      widget: 'text-input',
+      placeholder: '/path/to/claude-cli',
+      disabledWhen: (config) => !!config.docker_enabled,
+    },
+    { key: 'sandbox_enabled', label: 'Sandbox Mode', widget: 'toggle' },
+    {
+      key: 'sandbox_config',
+      label: 'Sandbox Configuration',
+      widget: 'sandbox-sub-section',
+      nested: true,
+      showWhen: (config) => !!config.sandbox_enabled,
+    },
+    { key: 'docker_enabled', label: 'Docker Isolation', widget: 'toggle' },
+    {
+      key: 'docker_image',
+      label: 'Docker Image',
+      widget: 'text-input',
+      placeholder: 'claude-code:local',
+      showWhen: (config) => !!config.docker_enabled,
+    },
+    {
+      key: 'docker_extra_mounts',
+      label: 'Mounts',
+      widget: 'textarea',
+      rows: 2,
+      placeholder: '/host/path:/container/path:ro',
+      showWhen: (config) => !!config.docker_enabled,
+    },
+    {
+      key: 'docker_home_directory',
+      label: 'Home Directory',
+      widget: 'text-input',
+      placeholder: '/home/claude',
+      showWhen: (config) => !!config.docker_enabled,
+    },
+    {
+      key: 'docker_proxy_enabled',
+      label: 'Network Proxy Sidecar',
+      widget: 'toggle',
+      showWhen: (config) => !!config.docker_enabled,
+    },
+    {
+      key: 'docker_proxy_image',
+      label: 'Proxy Image',
+      widget: 'text-input',
+      placeholder: 'claude-proxy:local',
+      showWhen: (config) => !!config.docker_enabled && !!config.docker_proxy_enabled,
+    },
+    {
+      key: 'bare_mode',
+      label: 'Bare mode',
+      widget: 'toggle',
+      description: 'Skips hooks, LSP, plugin sync, and skill directory walks.',
+    },
+    {
+      key: 'env_scrub_enabled',
+      label: 'Scrub subprocess credentials',
+      widget: 'toggle',
+      description: 'Strips API keys and cloud credentials from subprocess environments.',
+    },
+  ],
+
+  features: [
+    {
+      key: 'history_distillation_enabled',
+      label: 'History Distillation',
+      widget: 'toggle',
+      description: 'Distills session history to markdown on archive.',
+    },
+    {
+      key: 'auto_memory_mode',
+      label: 'Auto-Memory Mode',
+      widget: 'button-group',
+      options: [
+        { value: 'claude', label: 'Claude' },
+        { value: 'session', label: 'Session' },
+        { value: 'disabled', label: 'Disabled' },
+      ],
+    },
+    {
+      key: 'auto_memory_directory',
+      label: 'Memory Directory',
+      widget: 'text-input',
+      monospace: true,
+      placeholder: '{session_data}/memory',
+      showWhen: (config) => config.auto_memory_mode === 'claude',
+    },
+    {
+      key: 'skill_creating_enabled',
+      label: 'Skill Creating',
+      widget: 'toggle',
+      description: 'Includes skill-maker guidance in session system prompt.',
+    },
+  ],
+}

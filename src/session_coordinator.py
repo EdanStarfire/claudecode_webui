@@ -544,6 +544,11 @@ class SessionCoordinator:
                 can_spawn_minions=can_spawn_minions,
             )
 
+            # If template-linked, diff creation-time config against template defaults
+            # and store non-matching fields as initial session_overrides (#1079).
+            if config.template_id:
+                await self._init_session_overrides(session_id, config)
+
             # Add session to project
             await self.project_manager.add_session_to_project(project_id, session_id)
 
@@ -4228,3 +4233,43 @@ class SessionCoordinator:
 
         except Exception:
             logger.exception("Error during session coordinator cleanup")
+
+    async def _init_session_overrides(self, session_id: str, config: "SessionConfig") -> None:
+        """Compute and store initial session_overrides for a template-linked session.
+
+        Called at create time so that fields the user customised in the Create Session
+        dialog (before hitting Create) survive restarts instead of being overwritten
+        by the template defaults at resolve_effective_config time (#1079).
+        """
+        if not config.template_id:
+            return
+        try:
+            from src.config_resolution import CONFIG_FIELDS, resolve_template_config
+
+            template = await self.template_manager.get_template(config.template_id)
+            if template is None:
+                return
+
+            template_values = await resolve_template_config(template, self.profile_manager)
+
+            overrides: dict = {}
+            for field_name in CONFIG_FIELDS:
+                if not hasattr(config, field_name):
+                    continue
+                config_value = getattr(config, field_name)
+                template_value = template_values.get(field_name)
+                if config_value != template_value:
+                    overrides[field_name] = config_value
+
+            if overrides:
+                # Write directly — no template_manager so _track_overrides is skipped
+                # (we ARE the source of truth here, not a field mutation to track).
+                await self.session_manager.update_session(
+                    session_id,
+                    session_overrides=overrides,
+                )
+                coord_logger.debug(
+                    f"Session {session_id} initial overrides computed: {list(overrides.keys())}"
+                )
+        except Exception:
+            logger.exception(f"Failed to compute initial session_overrides for {session_id}")
