@@ -9,6 +9,9 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
+# Fields that must be lists (may be stored as comma-separated strings by older UI)
+_LIST_CONFIG_KEYS = {"docker_proxy_allowlist_domains", "docker_proxy_credential_names"}
+
 
 @dataclass
 class ConfigProfile:
@@ -41,11 +44,17 @@ class ConfigProfile:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "ConfigProfile":
         """Create from dictionary loaded from JSON."""
+        config = data.get("config", {})
+        # Normalize list fields that may have been saved as comma-separated strings
+        for key in _LIST_CONFIG_KEYS:
+            if key in config and isinstance(config[key], str):
+                val = config[key]
+                config[key] = [s.strip() for s in val.split(",") if s.strip()] if val.strip() else None
         return cls(
             profile_id=data["profile_id"],
             name=data["name"],
             area=data["area"],
-            config=data.get("config", {}),
+            config=config,
             created_at=datetime.fromisoformat(data["created_at"]),
             updated_at=datetime.fromisoformat(data["updated_at"]),
         )
