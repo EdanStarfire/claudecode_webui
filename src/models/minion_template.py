@@ -47,6 +47,11 @@ class MinionTemplate:
     docker_enabled: bool = False
     docker_image: str | None = None
     docker_extra_mounts: list[str] | None = None
+    # Issue #1053: Named credentials + extra allowed domains for proxy mode
+    docker_proxy_enabled: bool = False
+    docker_proxy_image: str | None = None
+    docker_proxy_credential_names: list[str] | None = None
+    docker_proxy_allowlist_domains: list[str] | None = None
     # Thinking and effort configuration (issue #580)
     thinking_mode: str | None = None
     thinking_budget_tokens: int | None = None
@@ -86,6 +91,10 @@ class MinionTemplate:
             self.additional_directories = []
         if self.docker_extra_mounts is None:
             self.docker_extra_mounts = []
+        if self.docker_proxy_credential_names is None:
+            self.docker_proxy_credential_names = []
+        if self.docker_proxy_allowlist_domains is None:
+            self.docker_proxy_allowlist_domains = []
         if self.mcp_server_ids is None:
             self.mcp_server_ids = []
         if self.profile_ids is None:
@@ -115,6 +124,10 @@ class MinionTemplate:
         data.setdefault('docker_enabled', False)
         data.setdefault('docker_image', None)
         data.setdefault('docker_extra_mounts', None)
+        data.setdefault('docker_proxy_enabled', False)
+        data.setdefault('docker_proxy_image', None)
+        data.setdefault('docker_proxy_credential_names', None)
+        data.setdefault('docker_proxy_allowlist_domains', None)
         data.setdefault('thinking_mode', None)
         data.setdefault('thinking_budget_tokens', None)
         data.setdefault('effort', None)
