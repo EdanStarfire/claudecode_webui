@@ -635,6 +635,18 @@ const CONFIG_FIELDS = {
     trackState: true,
     toPayload: (v) => v.trim() || null,
   },
+  docker_proxy_credential_names: {
+    default: [],
+    change: 'restart',
+    contexts: ['session', 'template', 'ephemeral', 'update'],
+    trackState: true,
+  },
+  docker_proxy_allowlist_domains: {
+    default: [],
+    change: 'restart',
+    contexts: ['session', 'template', 'ephemeral', 'update'],
+    trackState: true,
+  },
   history_distillation_enabled: {
     default: true,
     change: 'restart',
@@ -1347,6 +1359,8 @@ function buildTemplateFromSession() {
     docker_home_directory: session.docker_home_directory || null,
     docker_proxy_enabled: session.docker_proxy_enabled ?? false,
     docker_proxy_image: session.docker_proxy_image || null,
+    docker_proxy_credential_names: parseList(session.docker_proxy_credential_names),
+    docker_proxy_allowlist_domains: parseList(session.docker_proxy_allowlist_domains),
     thinking_mode: session.thinking_mode || null,
     thinking_budget_tokens: session.thinking_budget_tokens || null,
     effort: session.effort || null,
@@ -1452,6 +1466,8 @@ function computeTemplateDiff() {
     { field: 'disallowed_tools', label: 'Disallowed Tools' },
     { field: 'additional_directories', label: 'Additional Directories' },
     { field: 'docker_extra_mounts', label: 'Docker Mounts' },
+    { field: 'docker_proxy_credential_names', label: 'Proxy Credentials' },
+    { field: 'docker_proxy_allowlist_domains', label: 'Extra Allowed Domains' },
   ]
 
   for (const { field, label } of scalarFields) {
