@@ -41,6 +41,9 @@
 
       <!-- Schedules Tab (Issue #495) -->
       <SchedulePanel v-show="activeTab === 'schedules'" role="tabpanel" aria-label="Schedules panel" />
+
+      <!-- Proxy Tab (Issue #1102) -->
+      <ProxyPanel v-if="proxyEnabled" v-show="activeTab === 'proxy'" role="tabpanel" aria-label="Proxy panel" />
     </div>
 
     <!-- Resize Handle -->
@@ -53,7 +56,7 @@
 </template>
 
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useUIStore } from '@/stores/ui'
 import { useTaskStore } from '@/stores/task'
 import { useResourceStore } from '@/stores/resource'
@@ -66,7 +69,9 @@ import ResourceFullView from '../common/ResourceFullView.vue'
 import DiffPanel from '../tasks/DiffPanel.vue'
 import DiffFullView from '../common/DiffFullView.vue'
 import SchedulePanel from '../schedules/SchedulePanel.vue'
+import ProxyPanel from '../tasks/ProxyPanel.vue'
 import { useScheduleStore } from '@/stores/schedule'
+import { useProxyStore } from '@/stores/proxy'
 
 const uiStore = useUIStore()
 const taskStore = useTaskStore()
@@ -74,6 +79,7 @@ const resourceStore = useResourceStore()
 const diffStore = useDiffStore()
 const sessionStore = useSessionStore()
 const scheduleStore = useScheduleStore()
+const proxyStore = useProxyStore()
 
 const activeTab = computed(() => uiStore.rightSidebarActiveTab)
 
@@ -97,13 +103,29 @@ const schedulesHasError = computed(() => {
   return scheduleStore.getSchedules(projectId).some(s => s.monitor_error)
 })
 
+const proxyEnabled = computed(() => sessionStore.currentSession?.docker_proxy_enabled === true)
+const proxyBadge = computed(() => proxyStore.currentTotalCount)
+
 // Tab definitions
-const tabs = computed(() => [
-  { id: 'diff', label: 'Diff', badge: diffFileCount.value },
-  { id: 'tasks', label: 'Tasks', badge: taskStats.value.total > 0 ? taskStats.value.total : 0 },
-  { id: 'resources', label: 'Resources', badge: resourceCount.value },
-  { id: 'schedules', label: 'Sched', badge: schedulesCount.value, badgeError: schedulesHasError.value }
-])
+const tabs = computed(() => {
+  const list = [
+    { id: 'diff', label: 'Diff', badge: diffFileCount.value },
+    { id: 'tasks', label: 'Tasks', badge: taskStats.value.total > 0 ? taskStats.value.total : 0 },
+    { id: 'resources', label: 'Resources', badge: resourceCount.value },
+    { id: 'schedules', label: 'Sched', badge: schedulesCount.value, badgeError: schedulesHasError.value }
+  ]
+  if (proxyEnabled.value) {
+    list.push({ id: 'proxy', label: 'Proxy', badge: proxyBadge.value })
+  }
+  return list
+})
+
+// Fall back to 'diff' if Proxy tab disappears (session switch)
+watch(proxyEnabled, (enabled) => {
+  if (!enabled && activeTab.value === 'proxy') {
+    uiStore.setRightSidebarTab('diff')
+  }
+})
 
 const isOverlay = computed(() => uiStore.windowWidth < 768)
 

@@ -1682,6 +1682,22 @@ class ClaudeWebUI:
                 }
             )
 
+        # ==================== PROXY LOG ENDPOINTS (Issue #1102) ====================
+
+        @self.app.get("/api/sessions/{session_id}/proxy-logs")
+        @handle_exceptions("get proxy logs")
+        async def get_proxy_logs(
+            session_id: str,
+            log_type: str = "http",
+            limit: int = 200,
+        ):
+            """Get proxy log entries for a session (HTTP access log or DNS query log)"""
+            if log_type not in ("http", "dns"):
+                raise HTTPException(status_code=400, detail="log_type must be 'http' or 'dns'")
+            if not await self.service.get_session_exists(session_id):
+                raise HTTPException(status_code=404, detail="Session not found")
+            return await self.coordinator.get_proxy_logs(session_id, log_type=log_type, limit=limit)
+
         # ==================== PERMISSION MODE ENDPOINT ====================
 
         @self.app.post("/api/sessions/{session_id}/permission-mode")
