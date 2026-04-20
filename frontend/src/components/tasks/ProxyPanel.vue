@@ -30,7 +30,7 @@
         No HTTP requests logged yet
       </div>
       <div
-        v-for="entry in proxyStore.currentHttpLogs"
+        v-for="entry in [...proxyStore.currentHttpLogs].reverse()"
         :key="`${entry.ts}-${entry.host}-${entry.path}`"
         class="proxy-entry http-entry"
       >
@@ -44,7 +44,6 @@
         >{{ entry.status }}</span>
         <span class="entry-host">{{ entry.host }}</span>
         <span class="entry-path" :title="entry.path">{{ entry.path }}</span>
-        <span class="entry-time">{{ formatTime(entry.ts) }}</span>
       </div>
     </div>
 
@@ -104,12 +103,6 @@ watch([isVisible, sessionId], ([visible, sid]) => {
 onUnmounted(() => {
   proxyStore.stopPolling()
 })
-
-function formatTime(ts) {
-  if (!ts) return ''
-  const d = new Date(ts * 1000)
-  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
-}
 
 function httpStatusClass(status) {
   if (!status) return ''
@@ -221,12 +214,6 @@ function httpStatusClass(status) {
   white-space: nowrap;
   color: #64748b;
   min-width: 0;
-}
-
-.entry-time {
-  flex-shrink: 0;
-  color: #94a3b8;
-  font-size: 11px;
 }
 
 .entry-query-type {
