@@ -1147,6 +1147,18 @@ class SessionCoordinator:
                             f"credentials={cred_names}, delivery_envs={list(delivery_envs)}"
                         )
 
+                # Issue #1089: Deduplicate mounts by container destination path (first-seen wins).
+                # Format: "host_path:container_path[:options]" — extract the second colon-delimited field.
+                _seen_container_paths: set[str] = set()
+                _deduped_mounts: list[str] = []
+                for _mount in extra_mounts:
+                    _parts = _mount.split(":", 2)
+                    _container_path = _parts[1] if len(_parts) >= 2 else _mount
+                    if _container_path not in _seen_container_paths:
+                        _seen_container_paths.add(_container_path)
+                        _deduped_mounts.append(_mount)
+                extra_mounts = _deduped_mounts
+
                 effective_cli_path, docker_env_vars = resolve_docker_cli_path(
                     docker_image=session_info.docker_image,
                     docker_extra_mounts=extra_mounts or None,
