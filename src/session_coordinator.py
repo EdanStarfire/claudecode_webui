@@ -106,6 +106,26 @@ def _apply_resource_filters(
     return result
 
 
+def _tail_read_lines(path: "Path", limit: int) -> list[str]:
+    """Read the last `limit` lines from a file efficiently using a deque."""
+    from collections import deque
+
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            return list(deque(f, maxlen=limit))
+    except OSError:
+        return []
+
+
+def _count_file_lines(path: "Path") -> int:
+    """Count total lines in a file efficiently."""
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            return sum(1 for _ in f)
+    except OSError:
+        return 0
+
+
 class SessionCoordinator:
     """
     Coordinates Claude Code sessions with integrated storage and SDK management.
@@ -714,6 +734,76 @@ class SessionCoordinator:
             return await storage_manager.get_resource_file(resource_id)
 
         return None
+
+    async def get_proxy_logs(self, session_id: str, log_type: str = "http", limit: int = 200) -> dict:
+        """
+        Get proxy log entries for a session.
+
+        Issue #1102: Reads access.log (HTTP) or dns.log (DNS) from the proxy sidecar
+        data directory and returns the last `limit` parsed entries.
+
+        Args:
+            session_id: Session ID
+            log_type: "http" or "dns"
+            limit: Maximum number of entries to return (tail-read)
+
+        Returns:
+            dict with entries, total_lines, and log_type
+        """
+        session_dir = self.data_dir / "sessions" / session_id
+        if log_type == "http":
+            log_path = session_dir / "docker_claude_data" / "proxy" / "access.log"
+        else:
+            log_path = session_dir / "docker_claude_data" / "proxy" / "dns.log"
+
+        if not log_path.exists():
+            return {"entries": [], "total_lines": 0, "log_type": log_type}
+
+        # Tail-read: read last `limit` lines efficiently
+        lines = _tail_read_lines(log_path, limit)
+        total_lines = _count_file_lines(log_path)
+
+        entries = []
+        if log_type == "http":
+            for line in lines:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    raw = json.loads(line)
+                    entries.append({
+                        "ts": raw.get("ts"),
+                        "host": raw.get("host"),
+                        "method": raw.get("method"),
+                        "path": raw.get("path"),
+                        "status": raw.get("status"),
+                        "allowed": raw.get("allowed"),
+                        "credential_used": raw.get("credential_used"),
+                        "scheme": raw.get("scheme"),
+                        "port": raw.get("port"),
+                        "bytes": raw.get("bytes"),
+                    })
+                except (json.JSONDecodeError, ValueError):
+                    self.logger.warning(f"Skipping malformed HTTP proxy log line in session {session_id}")
+        else:
+            # CoreDNS log format:
+            # [INFO] 10.0.0.2:54312 - 12345 "A IN api.github.com. udp 128 false 4096" NOERROR qr,rd,ra 73 0.023s
+            dns_pattern = re.compile(
+                r'\[INFO\].*?"(\w+) IN (\S+?)\. \w+ \d+ \w+ \d+"\s+(\w+)'
+            )
+            for line in lines:
+                line = line.strip()
+                if not line:
+                    continue
+                m = dns_pattern.search(line)
+                if m:
+                    entries.append({
+                        "query_type": m.group(1),
+                        "hostname": m.group(2),
+                        "result": m.group(3),
+                    })
+
+        return {"entries": entries, "total_lines": total_lines, "log_type": log_type}
 
     async def remove_session_resource(self, session_id: str, resource_id: str) -> bool:
         """
