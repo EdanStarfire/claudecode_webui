@@ -243,6 +243,8 @@ class ApplicationService:
         headers: dict | None = None,
         enabled: bool = True,
         oauth_enabled: bool = False,
+        oauth_client_id: str | None = None,
+        oauth_callback_port: int | None = None,
     ) -> dict:
         config = await self.coordinator.mcp_config_manager.create_config(
             name=name,
@@ -254,6 +256,8 @@ class ApplicationService:
             headers=headers or {},
             enabled=enabled,
             oauth_enabled=oauth_enabled,
+            oauth_client_id=oauth_client_id,
+            oauth_callback_port=oauth_callback_port,
         )
         return config.to_dict()
 
@@ -317,6 +321,9 @@ class ApplicationService:
 
             if not dry_run:
                 try:
+                    oauth_data = server_data.get("oauth") or {}
+                    oauth_client_id = oauth_data.get("clientId")
+                    oauth_callback_port = oauth_data.get("callbackPort")
                     if action == "create":
                         config = await manager.create_config(
                             name=name,
@@ -327,6 +334,8 @@ class ApplicationService:
                             url=server_data.get("url"),
                             headers=server_data.get("headers") or {},
                             enabled=server_data.get("enabled", True),
+                            oauth_client_id=oauth_client_id,
+                            oauth_callback_port=oauth_callback_port,
                         )
                     else:
                         config = await manager.update_config(
@@ -339,6 +348,8 @@ class ApplicationService:
                             url=server_data.get("url"),
                             headers=server_data.get("headers") or {},
                             enabled=server_data.get("enabled", True),
+                            oauth_client_id=oauth_client_id,
+                            oauth_callback_port=oauth_callback_port,
                         )
                     entry["result"] = config.to_dict()
                     imported.append(config.to_dict())

@@ -207,6 +207,34 @@
             />
           </div>
         </div>
+
+        <!-- Pre-registered OAuth App (HTTP/SSE only) -->
+        <div class="mb-2 border rounded p-2 bg-light">
+          <div class="fw-medium mb-1">Pre-registered OAuth App <span class="text-muted fw-normal">(optional)</span></div>
+          <p class="text-muted small mb-1" style="padding-left: 0;">
+            For MCP servers that require a pre-registered OAuth application (e.g. Slack MCP).
+          </p>
+          <div class="mb-1">
+            <label class="form-label mb-0">Client ID</label>
+            <input
+              type="text"
+              class="form-control form-control-sm"
+              v-model="form.oauth_client_id"
+              placeholder="e.g., 1601185624273.8899143856786"
+            />
+          </div>
+          <div>
+            <label class="form-label mb-0">Callback Port</label>
+            <input
+              type="number"
+              class="form-control form-control-sm"
+              v-model.number="form.oauth_callback_port"
+              placeholder="e.g., 3118"
+              min="1"
+              max="65535"
+            />
+          </div>
+        </div>
       </template>
 
       <div class="form-check mb-2">
@@ -323,6 +351,8 @@ const form = reactive({
   enabled: true,
   oauth_enabled: false,
   oauth_scope: '',
+  oauth_client_id: '',
+  oauth_callback_port: null,
 })
 
 const rawArgs = ref('')
@@ -412,6 +442,8 @@ function resetForm() {
   form.enabled = true
   form.oauth_enabled = false
   form.oauth_scope = ''
+  form.oauth_client_id = ''
+  form.oauth_callback_port = null
   editingId.value = null
   formError.value = null
   newEnvKey.value = ''
@@ -438,6 +470,8 @@ function editConfig(config) {
   form.enabled = config.enabled
   form.oauth_enabled = config.oauth_enabled || false
   form.oauth_scope = config.oauth_scope || ''
+  form.oauth_client_id = config.oauth_client_id || ''
+  form.oauth_callback_port = config.oauth_callback_port || null
   formError.value = null
   showForm.value = true
 }
@@ -490,6 +524,12 @@ async function saveForm() {
       data.oauth_enabled = form.oauth_enabled
       if (form.oauth_enabled && form.oauth_scope.trim()) {
         data.oauth_scope = form.oauth_scope.trim()
+      }
+      if (form.oauth_client_id.trim()) {
+        data.oauth_client_id = form.oauth_client_id.trim()
+      }
+      if (form.oauth_callback_port) {
+        data.oauth_callback_port = parseInt(form.oauth_callback_port, 10)
       }
     }
 

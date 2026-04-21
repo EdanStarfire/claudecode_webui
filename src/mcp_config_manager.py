@@ -47,6 +47,9 @@ class McpServerConfig:
     enabled: bool = True
     # OAuth 2.1 support (issue #813)
     oauth_enabled: bool = False
+    # CLI-managed OAuth (issue #1109)
+    oauth_client_id: str | None = None
+    oauth_callback_port: int | None = None
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
@@ -65,6 +68,8 @@ class McpServerConfig:
         data.setdefault('headers', {})
         data.setdefault('enabled', True)
         data.setdefault('oauth_enabled', False)
+        data.setdefault('oauth_client_id', None)
+        data.setdefault('oauth_callback_port', None)
         if 'type' in data and isinstance(data['type'], str):
             data['type'] = McpServerType(data['type'])
         if isinstance(data.get('created_at'), str):
@@ -97,6 +102,13 @@ class McpServerConfig:
             }
             if self.headers:
                 config["headers"] = self.headers
+            if self.oauth_client_id or self.oauth_callback_port:
+                oauth: dict[str, Any] = {}
+                if self.oauth_client_id:
+                    oauth["clientId"] = self.oauth_client_id
+                if self.oauth_callback_port:
+                    oauth["callbackPort"] = self.oauth_callback_port
+                config["oauth"] = oauth
             return config
         elif self.type == McpServerType.HTTP:
             config = {
@@ -105,6 +117,13 @@ class McpServerConfig:
             }
             if self.headers:
                 config["headers"] = self.headers
+            if self.oauth_client_id or self.oauth_callback_port:
+                oauth = {}
+                if self.oauth_client_id:
+                    oauth["clientId"] = self.oauth_client_id
+                if self.oauth_callback_port:
+                    oauth["callbackPort"] = self.oauth_callback_port
+                config["oauth"] = oauth
             return config
         else:
             raise ValueError(f"Unknown MCP server type: {self.type}")
@@ -151,6 +170,8 @@ class McpConfigManager:
         headers: dict[str, str] | None = None,
         enabled: bool = True,
         oauth_enabled: bool = False,
+        oauth_client_id: str | None = None,
+        oauth_callback_port: int | None = None,
     ) -> McpServerConfig:
         """Create a new MCP server configuration."""
         if not name or not name.strip():
@@ -184,6 +205,8 @@ class McpConfigManager:
             headers=headers or {},
             enabled=enabled,
             oauth_enabled=oauth_enabled,
+            oauth_client_id=oauth_client_id,
+            oauth_callback_port=oauth_callback_port,
         )
 
         await self._save_config(config)
@@ -211,6 +234,8 @@ class McpConfigManager:
         headers: dict[str, str] | None = None,
         enabled: bool | None = None,
         oauth_enabled: bool | None = None,
+        oauth_client_id: str | None = None,
+        oauth_callback_port: int | None = None,
     ) -> McpServerConfig:
         """Update existing MCP server configuration."""
         config = self.configs.get(config_id)
@@ -246,6 +271,10 @@ class McpConfigManager:
             config.enabled = enabled
         if oauth_enabled is not None:
             config.oauth_enabled = oauth_enabled
+        if oauth_client_id is not None:
+            config.oauth_client_id = oauth_client_id
+        if oauth_callback_port is not None:
+            config.oauth_callback_port = oauth_callback_port
 
         config.updated_at = datetime.now(UTC)
 

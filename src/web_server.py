@@ -348,6 +348,8 @@ class McpConfigCreateRequest(BaseModel):
     headers: dict[str, str] | None = None
     enabled: bool = True
     oauth_enabled: bool = False
+    oauth_client_id: str | None = None
+    oauth_callback_port: int | None = None
 
 
 class McpConfigUpdateRequest(BaseModel):
@@ -360,6 +362,8 @@ class McpConfigUpdateRequest(BaseModel):
     headers: dict[str, str] | None = None
     enabled: bool | None = None
     oauth_enabled: bool | None = None
+    oauth_client_id: str | None = None
+    oauth_callback_port: int | None = None
 
 
 class McpOAuthInitiateRequest(BaseModel):
@@ -3072,6 +3076,8 @@ class ClaudeWebUI:
                 headers=request.headers,
                 enabled=request.enabled,
                 oauth_enabled=request.oauth_enabled,
+                oauth_client_id=request.oauth_client_id,
+                oauth_callback_port=request.oauth_callback_port,
             )
 
         @self.app.post("/api/mcp-configs/export")
@@ -3092,6 +3098,13 @@ class ClaudeWebUI:
                     entry["url"] = c.url
                     if c.headers:
                         entry["headers"] = c.headers
+                    if c.oauth_client_id or c.oauth_callback_port:
+                        oauth: dict = {}
+                        if c.oauth_client_id:
+                            oauth["clientId"] = c.oauth_client_id
+                        if c.oauth_callback_port:
+                            oauth["callbackPort"] = c.oauth_callback_port
+                        entry["oauth"] = oauth
                 portable[c.name] = entry
             return portable
 
@@ -3127,6 +3140,8 @@ class ClaudeWebUI:
                 headers=request.headers,
                 enabled=request.enabled,
                 oauth_enabled=request.oauth_enabled,
+                oauth_client_id=request.oauth_client_id,
+                oauth_callback_port=request.oauth_callback_port,
             )
 
         @self.app.delete("/api/mcp-configs/{config_id}")
