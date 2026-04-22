@@ -282,6 +282,64 @@ class TestUpdateTemplate:
         assert updated.docker_enabled is True
         assert updated.cli_path == "/opt/claude"
 
+    @pytest.mark.asyncio
+    async def test_issue_1116_update_docker_proxy_fields(self, manager):
+        """Regression #1116: docker proxy fields must persist via update_template()."""
+        template = await manager.create_template(
+            name="Proxy Test",
+            config=SessionConfig(permission_mode="default"),
+        )
+
+        updated = await manager.update_template(
+            template.template_id,
+            docker_proxy_enabled=True,
+            docker_proxy_image="proxy:latest",
+            docker_proxy_credential_names=["cred-a", "cred-b"],
+            docker_proxy_allowlist_domains=["example.com", "api.example.com"],
+            docker_home_directory="/home/agent",
+        )
+
+        assert updated.docker_proxy_enabled is True
+        assert updated.docker_proxy_image == "proxy:latest"
+        assert updated.docker_proxy_credential_names == ["cred-a", "cred-b"]
+        assert updated.docker_proxy_allowlist_domains == ["example.com", "api.example.com"]
+        assert updated.docker_home_directory == "/home/agent"
+
+        # Verify persistence to disk
+        manager2 = TemplateManager(manager.templates_dir.parent)
+        await manager2.load_templates()
+        reloaded = await manager2.get_template(template.template_id)
+        assert reloaded.docker_proxy_allowlist_domains == ["example.com", "api.example.com"]
+        assert reloaded.docker_proxy_credential_names == ["cred-a", "cred-b"]
+        assert reloaded.docker_proxy_enabled is True
+
+    @pytest.mark.asyncio
+    async def test_issue_1116_update_runtime_flag_fields(self, manager):
+        """Regression #1116: setting_sources, bare_mode, env_scrub_enabled must persist."""
+        template = await manager.create_template(
+            name="Runtime Flags Test",
+            config=SessionConfig(permission_mode="default"),
+        )
+
+        updated = await manager.update_template(
+            template.template_id,
+            setting_sources=["user", "project"],
+            bare_mode=True,
+            env_scrub_enabled=True,
+        )
+
+        assert updated.setting_sources == ["user", "project"]
+        assert updated.bare_mode is True
+        assert updated.env_scrub_enabled is True
+
+        # Verify persistence to disk
+        manager2 = TemplateManager(manager.templates_dir.parent)
+        await manager2.load_templates()
+        reloaded = await manager2.get_template(template.template_id)
+        assert reloaded.setting_sources == ["user", "project"]
+        assert reloaded.bare_mode is True
+        assert reloaded.env_scrub_enabled is True
+
 
 # --- Signature parity test ---
 

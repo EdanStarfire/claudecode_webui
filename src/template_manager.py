@@ -264,6 +264,12 @@ class TemplateManager:
         docker_enabled: bool | None = None,
         docker_image: str | None = None,
         docker_extra_mounts: list[str] | None = None,
+        # Docker proxy configuration (issue #1116)
+        docker_home_directory: str | None = None,
+        docker_proxy_enabled: bool | None = None,
+        docker_proxy_image: str | None = None,
+        docker_proxy_credential_names: list[str] | None = None,
+        docker_proxy_allowlist_domains: list[str] | None = None,
         # Thinking and effort configuration (issue #580)
         thinking_mode: str | None = None,
         thinking_budget_tokens: int | None = None,
@@ -276,6 +282,10 @@ class TemplateManager:
         # MCP toggle configuration (issue #786)
         enable_claudeai_mcp_servers: bool | None = None,
         strict_mcp_config: bool | None = None,
+        # Runtime feature flags (issue #1116)
+        setting_sources: list[str] | None = None,
+        bare_mode: bool | None = None,
+        env_scrub_enabled: bool | None = None,
         # Composable profiles (issue #1062)
         profile_ids: dict[str, str] | None = None,
         template_overrides: dict[str, Any] | None = None,
@@ -342,6 +352,18 @@ class TemplateManager:
         if docker_extra_mounts is not None:
             template.docker_extra_mounts = docker_extra_mounts
 
+        # Docker proxy configuration (issue #1116)
+        if docker_home_directory is not None:
+            template.docker_home_directory = docker_home_directory
+        if docker_proxy_enabled is not None:
+            template.docker_proxy_enabled = docker_proxy_enabled
+        if docker_proxy_image is not None:
+            template.docker_proxy_image = docker_proxy_image
+        if docker_proxy_credential_names is not None:
+            template.docker_proxy_credential_names = docker_proxy_credential_names
+        if docker_proxy_allowlist_domains is not None:
+            template.docker_proxy_allowlist_domains = docker_proxy_allowlist_domains
+
         # Thinking and effort configuration (issue #580)
         if thinking_mode is not None:
             template.thinking_mode = thinking_mode
@@ -370,6 +392,14 @@ class TemplateManager:
 
         if strict_mcp_config is not None:
             template.strict_mcp_config = strict_mcp_config
+
+        # Runtime feature flags (issue #1116)
+        if setting_sources is not None:
+            template.setting_sources = setting_sources
+        if bare_mode is not None:
+            template.bare_mode = bare_mode
+        if env_scrub_enabled is not None:
+            template.env_scrub_enabled = env_scrub_enabled
 
         if profile_ids is not None:
             template.profile_ids = profile_ids

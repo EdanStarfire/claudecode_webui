@@ -47,6 +47,7 @@ class MinionTemplate:
     docker_enabled: bool = False
     docker_image: str | None = None
     docker_extra_mounts: list[str] | None = None
+    docker_home_directory: str | None = None
     # Issue #1053: Named credentials + extra allowed domains for proxy mode
     docker_proxy_enabled: bool = False
     docker_proxy_image: str | None = None
@@ -69,6 +70,10 @@ class MinionTemplate:
     # MCP toggle configuration (issue #786)
     enable_claudeai_mcp_servers: bool = True
     strict_mcp_config: bool = False
+    # Runtime feature flags (issue #1116)
+    setting_sources: list[str] | None = None
+    bare_mode: bool = False
+    env_scrub_enabled: bool = False
     # Composable profiles (issue #1062): area -> profile_id mapping + template-level overrides
     profile_ids: dict[str, str] | None = None   # e.g. {"model": "<uuid>", "permissions": "<uuid>"}
     template_overrides: dict[str, Any] | None = None  # field -> value overrides above profile
@@ -124,6 +129,7 @@ class MinionTemplate:
         data.setdefault('docker_enabled', False)
         data.setdefault('docker_image', None)
         data.setdefault('docker_extra_mounts', None)
+        data.setdefault('docker_home_directory', None)
         data.setdefault('docker_proxy_enabled', False)
         data.setdefault('docker_proxy_image', None)
         data.setdefault('docker_proxy_credential_names', None)
@@ -151,6 +157,10 @@ class MinionTemplate:
         # MCP toggle configuration (issue #786)
         data.setdefault('enable_claudeai_mcp_servers', True)
         data.setdefault('strict_mcp_config', False)
+        # Runtime feature flags (issue #1116)
+        data.setdefault('setting_sources', None)
+        data.setdefault('bare_mode', False)
+        data.setdefault('env_scrub_enabled', False)
         # Composable profiles (issue #1062): migrate legacy unused placeholder field.
         # profile_id was never used in production; drop it and introduce the new fields.
         data.pop('profile_id', None)
