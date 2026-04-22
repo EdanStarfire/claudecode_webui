@@ -303,6 +303,12 @@ class TemplateUpdateRequest(BaseModel):
     docker_enabled: bool | None = None
     docker_image: str | None = None
     docker_extra_mounts: list[str] | None = None
+    # Docker proxy configuration (issue #1116)
+    docker_home_directory: str | None = None
+    docker_proxy_enabled: bool | None = None
+    docker_proxy_image: str | None = None
+    docker_proxy_credential_names: list[str] | None = None
+    docker_proxy_allowlist_domains: list[str] | None = None
     # Thinking and effort configuration (issue #580)
     thinking_mode: str | None = None
     thinking_budget_tokens: int | None = None
@@ -320,6 +326,10 @@ class TemplateUpdateRequest(BaseModel):
     # MCP toggle configuration (issue #786)
     enable_claudeai_mcp_servers: bool | None = None
     strict_mcp_config: bool | None = None
+    # Runtime feature flags (issue #1116)
+    setting_sources: list[str] | None = None
+    bare_mode: bool | None = None
+    env_scrub_enabled: bool | None = None
     # Composable profiles (issue #1062)
     profile_ids: dict[str, str] | None = None
     template_overrides: dict | None = None
@@ -3317,6 +3327,12 @@ class ClaudeWebUI:
                 docker_enabled=request.docker_enabled,
                 docker_image=request.docker_image,
                 docker_extra_mounts=request.docker_extra_mounts,
+                # Docker proxy configuration (issue #1116)
+                docker_home_directory=request.docker_home_directory,
+                docker_proxy_enabled=request.docker_proxy_enabled,
+                docker_proxy_image=request.docker_proxy_image,
+                docker_proxy_credential_names=request.docker_proxy_credential_names,
+                docker_proxy_allowlist_domains=request.docker_proxy_allowlist_domains,
                 # Thinking and effort configuration (issue #580)
                 thinking_mode=request.thinking_mode,
                 thinking_budget_tokens=request.thinking_budget_tokens,
@@ -3328,6 +3344,10 @@ class ClaudeWebUI:
                 mcp_server_ids=request.mcp_server_ids,
                 enable_claudeai_mcp_servers=request.enable_claudeai_mcp_servers,
                 strict_mcp_config=request.strict_mcp_config,
+                # Runtime feature flags (issue #1116)
+                setting_sources=request.setting_sources,
+                bare_mode=request.bare_mode,
+                env_scrub_enabled=request.env_scrub_enabled,
                 profile_ids=request.profile_ids,
                 template_overrides=request.template_overrides,
             )
