@@ -9,33 +9,16 @@ apply on the next restart (not live to running sessions).
   session_overrides > template_overrides > profile values > template flat fields > defaults
 """
 
+from __future__ import annotations
+
 from typing import TYPE_CHECKING
 
-from .session_config import SessionConfig
-from .session_manager import SessionInfo
+from .session_config import CONFIG_FIELDS, SessionConfig
 from .template_manager import TemplateManager
 
 if TYPE_CHECKING:
     from .profile_manager import ProfileManager
-
-# Fields that exist on both MinionTemplate and SessionConfig (the mergeable set).
-# Excludes identity fields (template_id, name, role, description, capabilities,
-# profile_ids, template_overrides), lifecycle fields (created_at, updated_at),
-# and session-only fields (working_directory).
-CONFIG_FIELDS: set[str] = {
-    "permission_mode", "system_prompt", "override_system_prompt",
-    "allowed_tools", "disallowed_tools", "model",
-    "thinking_mode", "thinking_budget_tokens", "effort",
-    "additional_directories", "cli_path", "setting_sources",
-    "sandbox_enabled", "sandbox_config",
-    "docker_enabled", "docker_image", "docker_extra_mounts",
-    "docker_home_directory", "docker_proxy_enabled", "docker_proxy_image",
-    "docker_proxy_credential_names", "docker_proxy_allowlist_domains",
-    "history_distillation_enabled", "auto_memory_mode", "auto_memory_directory",
-    "skill_creating_enabled",
-    "mcp_server_ids", "enable_claudeai_mcp_servers", "strict_mcp_config",
-    "bare_mode", "env_scrub_enabled",
-}
+    from .session_manager import SessionInfo
 
 # 6 config areas — every field in CONFIG_FIELDS belongs to exactly one area.
 PROFILE_AREAS: dict[str, set[str]] = {
@@ -107,7 +90,7 @@ def _coerce_list(value: object) -> object:
 
 async def _load_profile_cached(
     profile_id: str,
-    profile_manager: "ProfileManager | None",
+    profile_manager: ProfileManager | None,
     cache: dict[str, object],
 ) -> object:
     """Fetch a profile, using *cache* to avoid repeated lookups within one resolution."""
@@ -122,7 +105,7 @@ async def _load_profile_cached(
 async def resolve_effective_config(
     session_info: SessionInfo,
     template_manager: TemplateManager,
-    profile_manager: "ProfileManager | None" = None,
+    profile_manager: ProfileManager | None = None,
 ) -> SessionConfig:
     """Build effective SessionConfig from profile + template overrides + session overrides.
 
@@ -199,7 +182,7 @@ async def resolve_effective_config(
 
 async def resolve_template_config(
     template,
-    profile_manager: "ProfileManager | None" = None,
+    profile_manager: ProfileManager | None = None,
 ) -> dict:
     """Resolve template + profile values without session overrides.
 

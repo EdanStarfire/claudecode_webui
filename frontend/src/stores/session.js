@@ -29,6 +29,11 @@ export const useSessionStore = defineStore('session', () => {
   // Session init data (for info modal)
   const initData = ref(new Map())
 
+  // Issue #1059: Effective config and template metadata per session
+  // Populated by fetchSessionDetails(); null means not yet fetched or legacy session.
+  const effectiveConfigBySession = ref(new Map())   // sessionId → effective_config dict | null
+  const templateBySession = ref(new Map())          // sessionId → { template_id, name, profile_ids } | null
+
   // Deleting sessions tracking
   const deletingSessions = ref(new Set())
 
@@ -128,6 +133,30 @@ export const useSessionStore = defineStore('session', () => {
     } catch (error) {
       console.error('Failed to fetch sessions:', error)
       throw error
+    }
+  }
+
+  /**
+   * Issue #1059: Fetch full session details including effective_config and template.
+   * Populates effectiveConfigBySession and templateBySession for template-linked sessions.
+   */
+  async function fetchSessionDetails(sessionId) {
+    try {
+      const data = await api.get(`/api/sessions/${sessionId}`)
+      if (data.session) {
+        const existing = sessions.value.get(sessionId)
+        if (existing) {
+          Object.assign(existing, data.session)
+        } else {
+          sessions.value.set(sessionId, data.session)
+        }
+      }
+      effectiveConfigBySession.value.set(sessionId, data.effective_config || null)
+      templateBySession.value.set(sessionId, data.template || null)
+      return data
+    } catch (error) {
+      console.error(`Failed to fetch session details for ${sessionId}:`, error)
+      return null
     }
   }
 
@@ -660,6 +689,8 @@ export const useSessionStore = defineStore('session', () => {
     pendingScrollRestoreSessionId,
     sessionResets,
     archiveChanges,
+    effectiveConfigBySession,
+    templateBySession,
 
     // Computed
     currentSession,
@@ -670,6 +701,7 @@ export const useSessionStore = defineStore('session', () => {
 
     // Actions
     fetchSessions,
+    fetchSessionDetails,
     syncSessionStates,
     createSession,
     selectSession,

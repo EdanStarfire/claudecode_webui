@@ -22,7 +22,7 @@ from typing import Any
 
 from .logging_config import get_logger
 from .models.permission_mode import PermissionMode
-from .session_config import SessionConfig
+from .session_config import CONFIG_FIELDS, SessionConfig
 from .slug_utils import slugify_name
 from .template_manager import TemplateManager
 
@@ -403,20 +403,52 @@ class SessionManager:
         if order is None:
             order = 0
 
+        # Issue #1059: Template-linked sessions store only template_id + session_overrides.
+        # CONFIG_FIELDS are resolved at read-time via resolve_effective_config().
+        skip_flat = bool(config.template_id)
+        # CONFIG_FIELDS that map to non-None/bool SessionInfo fields need explicit defaults.
+        flat_config_kwargs: dict = {} if skip_flat else {
+            "additional_directories": config.additional_directories if config.additional_directories is not None else [],
+            "system_prompt": config.system_prompt,
+            "override_system_prompt": config.override_system_prompt,
+            "allowed_tools": config.allowed_tools if config.allowed_tools is not None else [],
+            "disallowed_tools": config.disallowed_tools if config.disallowed_tools is not None else [],
+            "model": config.model,
+            "sandbox_enabled": config.sandbox_enabled,
+            "sandbox_config": config.sandbox_config,
+            "setting_sources": config.setting_sources,
+            "cli_path": config.cli_path,
+            "docker_enabled": config.docker_enabled,
+            "docker_image": config.docker_image,
+            "docker_extra_mounts": config.docker_extra_mounts if config.docker_extra_mounts is not None else [],
+            "docker_home_directory": config.docker_home_directory,
+            "docker_proxy_enabled": config.docker_proxy_enabled,
+            "docker_proxy_image": config.docker_proxy_image,
+            "docker_proxy_credential_names": config.docker_proxy_credential_names,
+            "docker_proxy_allowlist_domains": config.docker_proxy_allowlist_domains,
+            "thinking_mode": config.thinking_mode,
+            "thinking_budget_tokens": config.thinking_budget_tokens,
+            "effort": config.effort,
+            "history_distillation_enabled": config.history_distillation_enabled,
+            "auto_memory_mode": config.auto_memory_mode,
+            "auto_memory_directory": config.auto_memory_directory,
+            "skill_creating_enabled": config.skill_creating_enabled,
+            "mcp_server_ids": config.mcp_server_ids if config.mcp_server_ids is not None else [],
+            "enable_claudeai_mcp_servers": config.enable_claudeai_mcp_servers,
+            "strict_mcp_config": config.strict_mcp_config,
+            "bare_mode": config.bare_mode,
+            "env_scrub_enabled": config.env_scrub_enabled,
+        }
+
         session_info = SessionInfo(
             session_id=session_id,
             state=SessionState.CREATED,
             created_at=now,
             updated_at=now,
             working_directory=config.working_directory,
-            additional_directories=config.additional_directories if config.additional_directories is not None else [],
+            # Session-state fields — always set regardless of template linkage:
             current_permission_mode=config.permission_mode,
             initial_permission_mode=config.permission_mode,
-            system_prompt=config.system_prompt,
-            override_system_prompt=config.override_system_prompt,
-            allowed_tools=config.allowed_tools if config.allowed_tools is not None else [],
-            disallowed_tools=config.disallowed_tools if config.disallowed_tools is not None else [],
-            model=config.model,
             name=name,
             slug=slugify_name(name) if name else None,
             order=order,
@@ -427,39 +459,10 @@ class SessionManager:
             parent_overseer_id=parent_overseer_id,
             overseer_level=overseer_level,
             can_spawn_minions=can_spawn_minions,
-            # Sandbox mode (issue #319)
-            sandbox_enabled=config.sandbox_enabled,
-            sandbox_config=config.sandbox_config,
-            # Settings sources (issue #36)
-            setting_sources=config.setting_sources,
-            # CLI path override (issue #489)
-            cli_path=config.cli_path,
-            # Docker session isolation (issue #496)
-            docker_enabled=config.docker_enabled,
-            docker_image=config.docker_image,
-            docker_extra_mounts=config.docker_extra_mounts if config.docker_extra_mounts is not None else [],
-            docker_home_directory=config.docker_home_directory,
-            # Issue #1050: Proxy lifecycle management
-            docker_proxy_enabled=config.docker_proxy_enabled,
-            docker_proxy_image=config.docker_proxy_image,
-            # Issue #1053: Named credentials + allowlist domains
-            docker_proxy_credential_names=config.docker_proxy_credential_names,
-            docker_proxy_allowlist_domains=config.docker_proxy_allowlist_domains,
-            # Thinking and effort configuration (issue #540)
-            thinking_mode=config.thinking_mode,
-            thinking_budget_tokens=config.thinking_budget_tokens,
-            effort=config.effort,
-            history_distillation_enabled=config.history_distillation_enabled,
-            auto_memory_mode=config.auto_memory_mode,
-            auto_memory_directory=config.auto_memory_directory,
-            skill_creating_enabled=config.skill_creating_enabled,
-            # MCP server configuration (issue #676)
-            mcp_server_ids=config.mcp_server_ids if config.mcp_server_ids is not None else [],
-            enable_claudeai_mcp_servers=config.enable_claudeai_mcp_servers,
-            strict_mcp_config=config.strict_mcp_config,
-            bare_mode=config.bare_mode,
-            env_scrub_enabled=config.env_scrub_enabled,
+            # Template linkage (issue #1059)
             template_id=config.template_id,
+            # CONFIG_FIELDS — only populated for non-template-linked sessions:
+            **flat_config_kwargs,
         )
 
         try:
@@ -1023,6 +1026,13 @@ class SessionManager:
                     if hasattr(session, key):
                         if template_manager and session.template_id:
                             await self._track_overrides(session, key, value, template_manager)
+                        # Issue #1059: For template-linked sessions, suppress flat writes for
+                        # CONFIG_FIELDS. The _track_overrides() call above already wrote to
+                        # session_overrides; the flat field stays at its default so that
+                        # resolve_effective_config() remains the single source of truth.
+                        canonical = _FIELD_NAME_MAP.get(key, key)
+                        if session.template_id and canonical in CONFIG_FIELDS:
+                            continue
                         setattr(session, key, value)
                     else:
                         logger.warning(f"Session field '{key}' does not exist, skipping")

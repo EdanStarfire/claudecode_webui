@@ -948,22 +948,32 @@ class SessionCoordinator:
             await storage_manager.initialize()
             self._storage_managers[session_id] = storage_manager
 
-            # Issue #917: Resolve template variables in path-typed fields.
-            # Mutates session_info in-place (ephemeral — not persisted to disk).
+            # Issue #1059: Resolve effective config EARLY — before any CONFIG_FIELD read.
+            # For template-linked sessions, session_info CONFIG_FIELDS are at dataclass defaults;
+            # all real values come from resolve_effective_config().
+            effective_config = await resolve_effective_config(
+                session_info, self.template_manager, self.profile_manager
+            )
+
+            # Issue #917: Resolve template variables in path-typed CONFIG_FIELDS.
+            # Apply to effective_config (single source of truth for CONFIG_FIELDS).
             from src.template_variables import build_variables, resolve_path, resolve_path_list
             _tv = build_variables(session_id, session_dir, session_info.working_directory)
-            if session_info.auto_memory_directory:
-                session_info.auto_memory_directory = resolve_path(
-                    session_info.auto_memory_directory, _tv
+            _ec_path_updates: dict[str, Any] = {}
+            if effective_config.auto_memory_directory:
+                _ec_path_updates["auto_memory_directory"] = resolve_path(
+                    effective_config.auto_memory_directory, _tv
                 )
-            if session_info.additional_directories:
-                session_info.additional_directories = resolve_path_list(
-                    session_info.additional_directories, _tv
+            if effective_config.additional_directories:
+                _ec_path_updates["additional_directories"] = resolve_path_list(
+                    effective_config.additional_directories, _tv
                 )
-            if session_info.docker_extra_mounts:
-                session_info.docker_extra_mounts = resolve_path_list(
-                    session_info.docker_extra_mounts, _tv
+            if effective_config.docker_extra_mounts:
+                _ec_path_updates["docker_extra_mounts"] = resolve_path_list(
+                    effective_config.docker_extra_mounts, _tv
                 )
+            if _ec_path_updates:
+                effective_config = effective_config.model_copy(update=_ec_path_updates)
 
             # Check if we have a valid Claude Code session ID to resume
             resume_sdk_session = None
@@ -998,9 +1008,9 @@ class SessionCoordinator:
                     coord_logger.info(f"Attaching Resource MCP tools to session {session_id}")
 
             # Issue #676: Attach user-selected global MCP server configs
-            if session_info.mcp_server_ids:
+            if effective_config.mcp_server_ids:
                 selected_configs = self.mcp_config_manager.get_configs_by_ids(
-                    session_info.mcp_server_ids
+                    effective_config.mcp_server_ids
                 )
                 for mcp_cfg in selected_configs:
                     mcp_servers[mcp_cfg.slug] = await self._get_mcp_sdk_config(mcp_cfg)
@@ -1013,8 +1023,8 @@ class SessionCoordinator:
                 "[MCP launch] session=%s servers=%s", session_id, list(mcp_servers.keys())
             )
 
-            # Merge MCP tools with session's stored allowed_tools
-            all_tools = session_info.allowed_tools if session_info.allowed_tools else []
+            # Merge MCP tools with effective allowed_tools
+            all_tools = effective_config.allowed_tools if effective_config.allowed_tools else []
             all_tools = list(set(all_tools + mcp_tools_list))  # Deduplicate
 
             # Issue #349: All sessions are minions - always prepend legion guide
@@ -1022,7 +1032,7 @@ class SessionCoordinator:
 
             # Issue #691: Append session history reference so agents can check past context
             # Issue #710: Skip history reference when knowledge management is disabled
-            if session_info.history_distillation_enabled:
+            if effective_config.history_distillation_enabled:
                 history_dir = session_dir / "history"
                 history_note = (
                     f"\n\n## Session History\n"
@@ -1037,7 +1047,7 @@ class SessionCoordinator:
                 history_note = ""
 
             # Issue #709: Agent guidance file reference (session-specific memory mode)
-            if session_info.auto_memory_mode == "session":
+            if effective_config.auto_memory_mode == "session":
                 guidance_file = session_dir / "memory" / "agent-guidance.md"
                 guidance_note = (
                     f"\n\n## Agent Guidance\n"
@@ -1051,7 +1061,7 @@ class SessionCoordinator:
                 guidance_note = ""
 
             # Issue #749: Skill creating context
-            if session_info.skill_creating_enabled:
+            if effective_config.skill_creating_enabled:
                 skill_creating_note = (
                     "\n\n## Skill Creation\n"
                     "You can create custom skills to automate repetitive workflows. "
@@ -1065,8 +1075,8 @@ class SessionCoordinator:
             else:
                 skill_creating_note = ""
 
-            if session_info.system_prompt:
-                minion_system_prompt = f"{legion_guide}{history_note}{guidance_note}{skill_creating_note}\n\n---\n\n{session_info.system_prompt}"
+            if effective_config.system_prompt:
+                minion_system_prompt = f"{legion_guide}{history_note}{guidance_note}{skill_creating_note}\n\n---\n\n{effective_config.system_prompt}"
             else:
                 minion_system_prompt = f"{legion_guide}{history_note}{guidance_note}{skill_creating_note}"
             coord_logger.info(f"Built minion system prompt for start (guide + context): {len(minion_system_prompt)} chars")
@@ -1082,22 +1092,22 @@ class SessionCoordinator:
                 minion_system_prompt = escaped_prompt
 
             # Issue #496: Auto-resolve cli_path when Docker mode is enabled
-            effective_cli_path = session_info.cli_path
+            effective_cli_path = effective_config.cli_path
             docker_env_vars = {}
-            if session_info.docker_enabled and not session_info.cli_path:
+            if effective_config.docker_enabled and not effective_config.cli_path:
                 from src.docker_utils import get_session_tmp_dir, resolve_docker_cli_path
                 # Persistent data dir for Claude session transcripts (enables --resume).
                 # Nested inside session_dir so Claude CLI internals and WebUI session data
                 # are created, backed up, and cleaned up together.
                 docker_data_dir = str(session_dir / "docker_claude_data")
                 # Issue #759: Mount session memory dir into Docker container (RW, at host path)
-                extra_mounts = list(session_info.docker_extra_mounts or [])
-                if session_info.auto_memory_mode == "session":
+                extra_mounts = list(effective_config.docker_extra_mounts or [])
+                if effective_config.auto_memory_mode == "session":
                     memory_dir = session_dir / "memory"
                     memory_dir.mkdir(exist_ok=True)
                     extra_mounts.append(f"{memory_dir}:{memory_dir}")
-                elif session_info.auto_memory_mode == "claude" and session_info.auto_memory_directory:
-                    native_mem = Path(session_info.auto_memory_directory)
+                elif effective_config.auto_memory_mode == "claude" and effective_config.auto_memory_directory:
+                    native_mem = Path(effective_config.auto_memory_directory)
                     native_mem.mkdir(parents=True, exist_ok=True)
                     extra_mounts.append(f"{native_mem}:{native_mem}")
                 # Issue #773: Mount session data dirs into Docker (read-only)
@@ -1115,7 +1125,7 @@ class SessionCoordinator:
                 # Mount the real skills dir (not the symlink dir) to avoid broken
                 # symlinks inside the container.
                 from src.skill_manager import NEW_GLOBAL_SKILLS_DIR
-                docker_home = session_info.docker_home_directory or "/home/claude"
+                docker_home = effective_config.docker_home_directory or "/home/claude"
                 if NEW_GLOBAL_SKILLS_DIR.exists():
                     extra_mounts.append(
                         f"{NEW_GLOBAL_SKILLS_DIR}:{docker_home}/.claude/skills:ro"
@@ -1141,7 +1151,7 @@ class SessionCoordinator:
                 delivery_env_file = None
                 proxy_allowlist_file = None
 
-                if session_info.docker_proxy_enabled:
+                if effective_config.docker_proxy_enabled:
                     # Build dynamic allowlist: static defaults + config domains
                     effective_domains: set[str] = set()
                     static_allowlist_path = Path("src/docker/proxy/allowlist.json")
@@ -1151,8 +1161,8 @@ class SessionCoordinator:
                             effective_domains.update(static.get("domains", []))
                         except Exception:
                             coord_logger.warning("Failed to read static proxy allowlist")
-                    if session_info.docker_proxy_allowlist_domains:
-                        effective_domains.update(session_info.docker_proxy_allowlist_domains)
+                    if effective_config.docker_proxy_allowlist_domains:
+                        effective_domains.update(effective_config.docker_proxy_allowlist_domains)
                     if effective_domains:
                         allowlist_path = tmp_dir / "allowlist.json"
                         allowlist_path.write_text(json.dumps({"domains": sorted(effective_domains)}))
@@ -1164,9 +1174,9 @@ class SessionCoordinator:
 
                     # Resolve credential names to full objects from vault
                     resolved_creds = []
-                    if session_info.docker_proxy_credential_names:
+                    if effective_config.docker_proxy_credential_names:
                         resolved_creds = await self.credential_vault.resolve_credentials(
-                            session_info.docker_proxy_credential_names
+                            effective_config.docker_proxy_credential_names
                         )
 
                     if resolved_creds:
@@ -1250,15 +1260,15 @@ class SessionCoordinator:
                 extra_mounts = _deduped_mounts
 
                 effective_cli_path, docker_env_vars = resolve_docker_cli_path(
-                    docker_image=session_info.docker_image,
+                    docker_image=effective_config.docker_image,
                     docker_extra_mounts=extra_mounts or None,
                     workspace=session_info.working_directory,
                     session_data_dir=docker_data_dir,
-                    docker_home_directory=session_info.docker_home_directory,
+                    docker_home_directory=effective_config.docker_home_directory,
                     # Issue #1050: Resolve effective proxy image
                     proxy_image=(
-                        (session_info.docker_proxy_image or self._resolve_default_proxy_image())
-                        if session_info.docker_proxy_enabled
+                        (effective_config.docker_proxy_image or self._resolve_default_proxy_image())
+                        if effective_config.docker_proxy_enabled
                         else None
                     ),
                     # Issue #1053: Pass credentials, delivery env file, and allowlist paths
@@ -1272,9 +1282,7 @@ class SessionCoordinator:
                 )
 
             # Create/recreate SDK instance with session parameters (uses factory for testability — issue #559)
-            effective_config = await resolve_effective_config(
-                session_info, self.template_manager, self.profile_manager
-            )
+            # (effective_config already resolved early in this method — issue #1059)
 
             # Override 3 fields computed earlier in this method:
             #   system_prompt — assembled above (includes legion guide, history ref, etc.)
@@ -1374,8 +1382,8 @@ class SessionCoordinator:
             #     logger.info(f"NOT calling _send_client_launched_message for session {session_id} because sdk_was_created = False")
 
             # Issue #976: Ensure app-level background refresh tasks for OAuth-enabled servers
-            if session_info.mcp_server_ids:
-                selected_configs = self.mcp_config_manager.get_configs_by_ids(session_info.mcp_server_ids)
+            if effective_config.mcp_server_ids:
+                selected_configs = self.mcp_config_manager.get_configs_by_ids(effective_config.mcp_server_ids)
                 for mcp_cfg in selected_configs:
                     if mcp_cfg.oauth_enabled:
                         self.oauth_refresh_manager.ensure_refresh(mcp_cfg.id)
@@ -2269,8 +2277,12 @@ class SessionCoordinator:
             # Fire-and-forget distillation of session history into markdown
             # Use the archived copy of messages.jsonl, not the live file — the live
             # file gets truncated by clear_messages() right after this method returns.
-            # Skip distillation when knowledge management is disabled
-            if session_info.history_distillation_enabled:
+            # Skip distillation when knowledge management is disabled.
+            # Issue #1059: Use resolve_effective_config to support template-linked sessions.
+            _eff_for_archive = await resolve_effective_config(
+                session_info, self.template_manager, self.profile_manager
+            )
+            if _eff_for_archive.history_distillation_enabled:
                 archived_messages = archive_dir / "messages.jsonl"
                 if archived_messages.exists():
                     from src.history_distiller import distill_session_history
@@ -2338,11 +2350,32 @@ class SessionCoordinator:
                 except Exception:
                     logger.warning(f"SDK get_session_info failed for {session_id}")
 
+            # Issue #1059: Enrich with effective_config and template for template-linked sessions.
+            effective_config_dict = None
+            template_meta = None
+            if session_info.template_id:
+                try:
+                    eff = await resolve_effective_config(
+                        session_info, self.template_manager, self.profile_manager
+                    )
+                    effective_config_dict = eff.model_dump()
+                    tmpl = await self.template_manager.get_template(session_info.template_id)
+                    if tmpl:
+                        template_meta = {
+                            "template_id": tmpl.template_id,
+                            "name": tmpl.name,
+                            "profile_ids": tmpl.profile_ids or {},
+                        }
+                except Exception:
+                    logger.warning(f"Failed to build effective_config for session {session_id}")
+
             return {
                 "session": session_info.to_dict(),
                 "sdk": sdk_info,
                 "storage": storage_info,
                 "sdk_session_info": sdk_session_info,
+                "effective_config": effective_config_dict,
+                "template": template_meta,
             }
 
         except Exception:
