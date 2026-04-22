@@ -4437,6 +4437,8 @@ class SessionCoordinator:
                 if not hasattr(config, field_name):
                     continue
                 config_value = getattr(config, field_name)
+                if config_value is None:
+                    continue  # None = not set by user; never freeze as an override
                 template_value = template_values.get(field_name)
                 if config_value != template_value:
                     overrides[field_name] = config_value
