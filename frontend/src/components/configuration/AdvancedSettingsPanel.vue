@@ -5,6 +5,30 @@
       <i class="bi bi-arrow-left"></i> Back to Quick Settings
     </button>
 
+    <!-- Issue #1059: Read-only profile assignments (edit-session + template-linked only) -->
+    <div
+      v-if="isEditSession && template && templateProfileAssignments.length"
+      class="card mb-3 border-secondary"
+    >
+      <div class="card-header py-2 text-secondary" style="font-size: 0.8rem;">
+        <i class="bi bi-layout-text-sidebar-reverse me-1"></i>
+        Inherited from template
+        <small class="ms-1 fw-normal">(edit the template to change these)</small>
+      </div>
+      <ul class="list-group list-group-flush">
+        <li
+          v-for="a in templateProfileAssignments"
+          :key="a.area"
+          class="list-group-item py-1 px-3 d-flex justify-content-between align-items-center"
+          style="font-size: 0.8rem;"
+        >
+          <span class="text-secondary">{{ a.label }}</span>
+          <span v-if="a.profileName" class="badge bg-light text-dark border">{{ a.profileName }}</span>
+          <span v-else class="text-muted fst-italic">(template default)</span>
+        </li>
+      </ul>
+    </div>
+
     <!-- Card 1: Model Tuning (Blue) -->
     <div class="priority-card priority-blue">
       <div class="card-header-row">
@@ -260,11 +284,23 @@ import { FIELD_SCHEMAS } from './fields/fieldSchemas.js'
 const mcpStore = useMcpStore()
 const profileStore = useProfileStore()
 
+// Issue #1059: Profile area display labels (mirrors backend PROFILE_AREAS keys)
+const PROFILE_AREA_LABELS = {
+  model: 'Model',
+  permissions: 'Permissions',
+  system_prompt: 'System Prompt',
+  mcp: 'MCP Servers',
+  isolation: 'Isolation',
+  features: 'Features',
+}
+
 const props = defineProps({
   mode: { type: String, required: true },
   formData: { type: Object, required: true },
   errors: { type: Object, required: true },
   session: { type: Object, default: null },
+  // Issue #1059: Template metadata for template-linked sessions (read-only display)
+  template: { type: Object, default: null },
   fieldStates: {
     type: Object,
     default: () => ({
@@ -312,6 +348,22 @@ watch(hasTemplateErrors, (val) => emit('update:has-errors', val), { immediate: t
 const isSessionMode = computed(() => props.mode === 'create-session' || props.mode === 'edit-session')
 const isTemplateMode = computed(() => props.mode === 'create-template' || props.mode === 'edit-template')
 const isEditSession = computed(() => props.mode === 'edit-session')
+
+// Issue #1059: Resolve template profile assignments for read-only display
+const templateProfileAssignments = computed(() => {
+  if (!props.template?.profile_ids) return []
+  const profileIds = props.template.profile_ids
+  return Object.entries(PROFILE_AREA_LABELS).map(([area, label]) => {
+    const profileId = profileIds[area] || null
+    const profile = profileId ? profileStore.getProfile(profileId) : null
+    return {
+      area,
+      label,
+      profileId,
+      profileName: profile?.name || null,
+    }
+  })
+})
 
 const isSessionActive = computed(() => {
   return props.session?.state === 'active' || props.session?.state === 'starting'

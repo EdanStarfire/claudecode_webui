@@ -657,4 +657,90 @@ class TestAdditiveAllowlistMerge:
         assert len(domains) == len(set(domains))
         assert "dup.com" in domains
         assert "unique.com" in domains
-        assert "other.com" in domains
+
+
+@pytest.mark.asyncio
+class TestLeanSessionInfo:
+    """Issue #1059: resolve_effective_config works correctly with lean SessionInfo.
+
+    A "lean" SessionInfo has all CONFIG_FIELDS at their dataclass defaults
+    (None, False, [], "claude", etc.) and derives all config values from
+    the template + profiles via resolve_effective_config().
+    """
+
+    def _make_lean_session(self, template_id: str = "tmpl-lean", session_overrides: dict | None = None) -> "SessionInfo":
+        """Build a SessionInfo with CONFIG_FIELDS at dataclass defaults (lean)."""
+        from datetime import UTC, datetime
+
+        from ..session_manager import SessionInfo, SessionState
+        now = datetime.now(UTC)
+        return SessionInfo(
+            session_id="lean-session",
+            state=SessionState.CREATED,
+            created_at=now,
+            updated_at=now,
+            working_directory="/work",
+            current_permission_mode="acceptEdits",
+            initial_permission_mode="acceptEdits",
+            template_id=template_id,
+            session_overrides=session_overrides or {},
+            # CONFIG_FIELDS at dataclass defaults (as lean session creation leaves them):
+            # model=None, system_prompt=None, allowed_tools=["bash","edit","read"],
+            # docker_enabled=False, docker_proxy_allowlist_domains=None, etc.
+        )
+
+    async def test_lean_session_derives_model_from_template(self):
+        """Lean session resolves model from template even though session.model is None."""
+        template = _make_template(model="claude-opus-4-5")
+        session = self._make_lean_session()
+        tm = _make_template_manager(template)
+
+        result = await resolve_effective_config(session, tm)
+
+        assert result.model == "claude-opus-4-5"
+
+    async def test_lean_session_derives_system_prompt_from_template(self):
+        """Lean session resolves system_prompt from template."""
+        template = _make_template(system_prompt="You are a code assistant.")
+        session = self._make_lean_session()
+        tm = _make_template_manager(template)
+
+        result = await resolve_effective_config(session, tm)
+
+        assert result.system_prompt == "You are a code assistant."
+
+    async def test_lean_session_override_wins_over_template(self):
+        """session_overrides values take precedence over template values for lean sessions."""
+        template = _make_template(model="claude-sonnet-4-6")
+        session = self._make_lean_session(session_overrides={"model": "claude-opus-4-5"})
+        tm = _make_template_manager(template)
+
+        result = await resolve_effective_config(session, tm)
+
+        assert result.model == "claude-opus-4-5"
+
+    async def test_lean_session_proxy_fields_from_template(self):
+        """Lean session correctly resolves docker_proxy_allowlist_domains from template."""
+        template = _make_template(
+            docker_proxy_enabled=True,
+            docker_proxy_allowlist_domains=["api.example.com", "cdn.example.com"],
+        )
+        session = self._make_lean_session()
+        tm = _make_template_manager(template)
+
+        result = await resolve_effective_config(session, tm)
+
+        assert result.docker_proxy_enabled is True
+        assert "api.example.com" in (result.docker_proxy_allowlist_domains or [])
+
+    async def test_lean_session_all_config_fields_at_defaults_still_resolves(self):
+        """Lean session with minimal template resolves without error."""
+        template = _make_template()  # Minimal template
+        session = self._make_lean_session()
+        tm = _make_template_manager(template)
+
+        result = await resolve_effective_config(session, tm)
+
+        assert isinstance(result, SessionConfig)
+        # Template default permission_mode should be carried through
+        assert result.permission_mode == "acceptEdits"

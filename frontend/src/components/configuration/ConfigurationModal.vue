@@ -30,6 +30,15 @@
             </button>
             {{ modalTitle }}
           </h5>
+          <!-- Issue #1059: Template name badge for template-linked sessions -->
+          <div
+            v-if="mode === 'edit-session' && editSession?.template_id && editTemplate?.name"
+            class="ms-2 me-auto"
+          >
+            <span class="badge bg-secondary text-white" style="font-size: 0.75rem; font-weight: normal;">
+              Template: {{ editTemplate.name }}
+            </span>
+          </div>
           <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
         </div>
         <div class="modal-body">
@@ -306,6 +315,7 @@
                 :form-data="formData"
                 :errors="errors"
                 :session="editSession"
+                :template="editTemplate"
                 :field-states="fieldStates"
                 :profile-ids="formData.profile_ids"
                 @update:form-data="updateFormData"
@@ -1771,9 +1781,12 @@ function resetForm() {
   formData.template_overrides = {}
 }
 
-function populateFormFromSession(session) {
-  populateFormFromSource(session)
-  populateSandboxFromSource(session)
+function populateFormFromSession(session, effectiveConfig = null) {
+  // Issue #1059: For template-linked sessions, prefer effectiveConfig values (resolved from
+  // template + profiles + session_overrides) over stale flat fields on session.
+  const source = effectiveConfig || session
+  populateFormFromSource(source)
+  populateSandboxFromSource(source)
 }
 
 function populateFormFromTemplate(template) {
@@ -1838,7 +1851,11 @@ watch(
 
       // Populate form based on mode
       if (mode.value === 'edit-session' && editSession.value) {
-        populateFormFromSession(editSession.value)
+        // Issue #1059: Fetch fresh details to get effective_config and template metadata.
+        const details = await sessionStore.fetchSessionDetails(editSession.value.session_id)
+        const effectiveConfig = details?.effective_config || null
+        editTemplate.value = details?.template || null
+        populateFormFromSession(editSession.value, effectiveConfig)
       } else if (mode.value === 'edit-template' && editTemplate.value) {
         populateFormFromTemplate(editTemplate.value)
       } else if (mode.value === 'configure-ephemeral') {
@@ -1872,7 +1889,11 @@ watch(
 
       resetForm()
       if (editSession.value) {
-        populateFormFromSession(editSession.value)
+        // Issue #1059: Fetch effective_config and template for template-linked sessions.
+        const details = await sessionStore.fetchSessionDetails(editSession.value.session_id)
+        const effectiveConfig = details?.effective_config || null
+        editTemplate.value = details?.template || null
+        populateFormFromSession(editSession.value, effectiveConfig)
       }
       modalInstance.show()
     }

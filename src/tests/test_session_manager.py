@@ -606,3 +606,122 @@ class TestOverrideTracking:
 
         session = await manager.get_session_info(session_id)
         assert "queue_paused" not in session.session_overrides
+
+
+# --- Issue #1059: Lean session creation tests ---
+
+
+@pytest.mark.asyncio
+class TestLeanSessionCreation:
+    """Tests for issue #1059 — template-linked sessions skip flat CONFIG_FIELDS."""
+
+    @pytest.fixture
+    def config_with_template(self):
+        return SessionConfig(
+            working_directory="/test/project",
+            permission_mode="acceptEdits",
+            system_prompt="Should not be stored flat",
+            allowed_tools=["bash", "edit"],
+            model="claude-opus-4-5",
+            template_id="tmpl-test-001",
+        )
+
+    @pytest.fixture
+    def config_without_template(self):
+        return SessionConfig(
+            working_directory="/test/project",
+            permission_mode="acceptEdits",
+            system_prompt="Stored flat for legacy sessions",
+            allowed_tools=["bash", "edit"],
+            model="claude-opus-4-5",
+        )
+
+    async def test_lean_session_skips_config_fields(
+        self, temp_session_manager, config_with_template
+    ):
+        """Template-linked sessions must not store CONFIG_FIELDS flat on SessionInfo."""
+
+        manager = temp_session_manager
+        session_id = str(uuid.uuid4())
+        await manager.create_session(session_id, config=config_with_template)
+        session = await manager.get_session_info(session_id)
+
+        assert session.template_id == "tmpl-test-001"
+        # Core CONFIG_FIELDS must be at dataclass defaults, not copied from config
+        assert session.model is None
+        assert session.system_prompt is None
+        assert session.allowed_tools == ["bash", "edit", "read"]  # __post_init__ default
+        assert session.docker_enabled is False
+        assert session.docker_proxy_allowlist_domains is None
+        assert session.docker_proxy_credential_names is None
+        assert session.mcp_server_ids == []  # __post_init__ default
+
+    async def test_lean_session_keeps_session_state_fields(
+        self, temp_session_manager, config_with_template
+    ):
+        """Template-linked sessions must still set session-state fields from config."""
+        manager = temp_session_manager
+        session_id = str(uuid.uuid4())
+        await manager.create_session(session_id, config=config_with_template)
+        session = await manager.get_session_info(session_id)
+
+        # Runtime-state fields are always set from config, even for template-linked sessions
+        assert session.current_permission_mode == "acceptEdits"
+        assert session.initial_permission_mode == "acceptEdits"
+        assert session.working_directory == "/test/project"
+        assert session.template_id == "tmpl-test-001"
+
+    async def test_legacy_session_populates_flat_fields(
+        self, temp_session_manager, config_without_template
+    ):
+        """Non-template sessions must still populate flat CONFIG_FIELDS (legacy path)."""
+        manager = temp_session_manager
+        session_id = str(uuid.uuid4())
+        await manager.create_session(session_id, config=config_without_template)
+        session = await manager.get_session_info(session_id)
+
+        assert session.template_id is None
+        assert session.model == "claude-opus-4-5"
+        assert session.system_prompt == "Stored flat for legacy sessions"
+        assert session.allowed_tools == ["bash", "edit"]
+
+    async def test_update_session_suppresses_config_fields_for_template_session(
+        self, temp_session_manager
+    ):
+        """update_session() must NOT write CONFIG_FIELDS flat for template-linked sessions."""
+        manager = temp_session_manager
+        config = SessionConfig(template_id="tmpl-x")
+        session_id = str(uuid.uuid4())
+        await manager.create_session(session_id, config=config)
+
+        template = _make_template(model="claude-sonnet-4-6")
+        tm = _make_template_manager(template)
+
+        # Update model — for template session, flat field stays at default
+        await manager.update_session(session_id, template_manager=tm, model="claude-opus-4-5")
+
+        session = await manager.get_session_info(session_id)
+        # Flat field must NOT be written
+        assert session.model is None
+        # Override must be recorded
+        assert session.session_overrides.get("model") == "claude-opus-4-5"
+
+    async def test_update_session_writes_flat_fields_for_legacy_session(
+        self, temp_session_manager
+    ):
+        """update_session() still writes flat CONFIG_FIELDS for non-template sessions."""
+        manager = temp_session_manager
+        config = SessionConfig()  # No template_id
+        session_id = str(uuid.uuid4())
+        await manager.create_session(session_id, config=config)
+
+        template = _make_template(model="claude-sonnet-4-6")
+        tm = _make_template_manager(template)
+
+        # Update model — for legacy session, flat field IS written
+        await manager.update_session(session_id, template_manager=tm, model="claude-opus-4-5")
+
+        session = await manager.get_session_info(session_id)
+        assert session.model == "claude-opus-4-5"
+        # No override tracking for legacy sessions
+        assert session.session_overrides == {}
