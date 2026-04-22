@@ -998,3 +998,133 @@ class TestIssue1088CredFilePermissions:
             assert delivery_mode == 0o600, (
                 f"{delivery_file.name} must remain 0o600, got {oct(delivery_mode)}"
             )
+
+
+@pytest.mark.asyncio
+class TestIssue1115InitSessionOverrides:
+    """Regression tests for issue #1115 — _init_session_overrides must not freeze None values."""
+
+    async def _make_coordinator_with_template(self, temp_dir, template_values: dict):
+        """Build a coordinator whose template_manager resolves to template_values."""
+        from unittest.mock import AsyncMock
+
+        from ..models.minion_template import MinionTemplate
+
+        coordinator = SessionCoordinator(Path(temp_dir))
+        await coordinator.initialize()
+
+        template = MinionTemplate(
+            template_id="tmpl-test",
+            name="Test Template",
+            **{k: v for k, v in template_values.items() if v is not None},
+        )
+
+        mock_tm = AsyncMock()
+        mock_tm.get_template = AsyncMock(return_value=template)
+        coordinator.template_manager = mock_tm
+
+        mock_pm = AsyncMock()
+        mock_pm.get_profile = AsyncMock(return_value=None)
+        coordinator.profile_manager = mock_pm
+
+        return coordinator
+
+    async def test_issue_1115_none_values_not_frozen(self):
+        """None fields in SessionConfig must not be stored in session_overrides."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            coordinator = await self._make_coordinator_with_template(
+                temp_dir,
+                {"model": "claude-opus-4-5", "permission_mode": "acceptEdits"},
+            )
+
+            project = await coordinator.project_manager.create_project(
+                name="Test Project", working_directory="/tmp/test"
+            )
+            import uuid
+            session_id = str(uuid.uuid4())
+            # SessionConfig with all-None fields (user set nothing explicitly)
+            config = SessionConfig(template_id="tmpl-test")
+            # env_scrub_enabled, setting_sources, bare_mode, disallowed_tools etc. are None by default
+
+            await coordinator.create_session(
+                session_id=session_id,
+                project_id=project.project_id,
+                config=config,
+            )
+
+            session_info = await coordinator.session_manager.get_session_info(session_id)
+            overrides = session_info.session_overrides or {}
+
+            # Fields that default to None in SessionConfig must not be frozen as overrides
+            for field in ("disallowed_tools", "allowed_tools", "additional_directories",
+                          "docker_extra_mounts", "setting_sources", "model",
+                          "thinking_mode", "docker_image"):
+                assert field not in overrides, (
+                    f"Field '{field}' with None value was incorrectly frozen in session_overrides"
+                )
+
+            await coordinator.cleanup()
+
+    async def test_issue_1115_explicit_value_still_overrides(self):
+        """An explicit non-None value that differs from the template must be stored."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            coordinator = await self._make_coordinator_with_template(
+                temp_dir,
+                {"model": "claude-haiku-4-5", "permission_mode": "acceptEdits"},
+            )
+
+            project = await coordinator.project_manager.create_project(
+                name="Test Project", working_directory="/tmp/test"
+            )
+            import uuid
+            session_id = str(uuid.uuid4())
+            config = SessionConfig(template_id="tmpl-test", model="claude-opus-4-5")
+
+            await coordinator.create_session(
+                session_id=session_id,
+                project_id=project.project_id,
+                config=config,
+            )
+
+            session_info = await coordinator.session_manager.get_session_info(session_id)
+            overrides = session_info.session_overrides or {}
+
+            assert overrides.get("model") == "claude-opus-4-5", (
+                "Explicit model value differing from template must be stored as override"
+            )
+
+            await coordinator.cleanup()
+
+    async def test_issue_1115_empty_list_stored_as_override(self):
+        """An explicit empty list [] (user cleared the list) must be stored as an override."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            coordinator = await self._make_coordinator_with_template(
+                temp_dir,
+                {"allowed_tools": ["bash"], "permission_mode": "acceptEdits"},
+            )
+
+            project = await coordinator.project_manager.create_project(
+                name="Test Project", working_directory="/tmp/test"
+            )
+            import uuid
+            session_id = str(uuid.uuid4())
+            # allowed_tools=[] — explicit clear, not None
+            config = SessionConfig(template_id="tmpl-test", allowed_tools=[])
+
+            await coordinator.create_session(
+                session_id=session_id,
+                project_id=project.project_id,
+                config=config,
+            )
+
+            session_info = await coordinator.session_manager.get_session_info(session_id)
+            overrides = session_info.session_overrides or {}
+
+            assert "allowed_tools" in overrides, (
+                "Explicit empty list must be stored as override (user intent: remove all)"
+            )
+            assert overrides["allowed_tools"] == [], (
+                "Empty list override must be stored as [] not None"
+            )
+
+            await coordinator.cleanup()
