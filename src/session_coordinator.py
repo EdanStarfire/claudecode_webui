@@ -239,6 +239,8 @@ class SessionCoordinator:
         # Callback for broadcasting resource_registered events will be set by web_server
         from src.mcp.resource_mcp_tools import ResourceMCPTools
         self._resource_broadcast_callback: Callable[[str, dict], None] | None = None
+        # Callback for broadcasting queue_update events (enqueued) will be set by web_server
+        self._enqueue_broadcast_callback: Callable[[str, str, dict], Any] | None = None
         self.resource_mcp_tools = ResourceMCPTools(
             session_coordinator=self,
             broadcast_callback=self._broadcast_resource_registered
@@ -454,7 +456,16 @@ class SessionCoordinator:
         if not queue_paused:
             self.queue_processor.ensure_running(session_id)
 
-        return item.to_dict()
+        item_dict = item.to_dict()
+        if self._enqueue_broadcast_callback:
+            try:
+                if asyncio.iscoroutinefunction(self._enqueue_broadcast_callback):
+                    await self._enqueue_broadcast_callback(session_id, "enqueued", item_dict)
+                else:
+                    self._enqueue_broadcast_callback(session_id, "enqueued", item_dict)
+            except Exception:
+                logger.exception(f"Failed to broadcast queue enqueued for {session_id}")
+        return item_dict
 
     async def cancel_queue_item(self, session_id: str, queue_id: str) -> dict | None:
         """Cancel a pending queue item. Returns the item dict or None."""
@@ -883,6 +894,11 @@ class SessionCoordinator:
     def set_image_broadcast_callback(self, callback: Callable[[str, dict], None]) -> None:
         """Deprecated: Use set_resource_broadcast_callback instead."""
         self.set_resource_broadcast_callback(callback)
+
+    def set_enqueue_broadcast_callback(self, callback: Callable[[str, str, dict], Any]) -> None:
+        """Set the callback for broadcasting queue_update (enqueued) events."""
+        self._enqueue_broadcast_callback = callback
+        coord_logger.info("Enqueue broadcast callback registered in SessionCoordinator")
 
     async def _broadcast_resource_registered(self, session_id: str, resource_metadata: dict) -> None:
         """
