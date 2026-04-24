@@ -384,6 +384,33 @@ class LegionMCPTools:
             args["_from_minion_id"] = session_id
             return await self._handle_restart_session(args)
 
+        # ── Deferred task delivery (Issue #1114) ──
+
+        @tool(
+            "queue_task",
+            "Enqueue a prompt for deferred delivery to another session. Unlike send_comm "
+            "(which delivers immediately), the item is held until the target session is idle, "
+            "then delivered automatically — including auto-starting a terminated session.\n\n"
+            "Use this for handoffs where you do not want to interrupt in-progress work.\n\n"
+            "Parameters:\n"
+            "- session_id (required): Target session to receive the prompt.\n"
+            "- content (required): Prompt text to deliver.\n"
+            "- reset_session (optional, default false): If true, the session is reset "
+            "before the prompt is delivered.\n\n"
+            "Returns queue_id and position for your own bookkeeping.\n\n"
+            "Note: queue_task is not hierarchy-scoped — you may queue into any session "
+            "whose ID you know, not just your own children.",
+            {
+                "session_id": str,
+                "content": str,
+                "reset_session": bool,
+            }
+        )
+        async def queue_task_tool(args: dict[str, Any]) -> dict[str, Any]:
+            """Enqueue a prompt for deferred delivery to a session."""
+            args["_from_minion_id"] = session_id
+            return await self._handle_queue_task(args)
+
         # Create and return MCP server with all tools
         return create_sdk_mcp_server(
             name="legion",
@@ -404,6 +431,7 @@ class LegionMCPTools:
                 resume_schedule_tool,
                 cancel_schedule_tool,
                 restart_session_tool,
+                queue_task_tool,
             ]
         )
 
@@ -2438,3 +2466,51 @@ class LegionMCPTools:
             })
         finally:
             self._pending_restarts.discard(session_id)
+
+    # ── Deferred Task Delivery Handler (Issue #1114) ──
+
+    async def _handle_queue_task(self, args: dict[str, Any]) -> dict[str, Any]:
+        """Handle queue_task tool call — enqueue a prompt for deferred delivery."""
+        session_id = args.get("session_id", "").strip()
+        content = args.get("content", "").strip()
+        reset_session = bool(args.get("reset_session", False))
+
+        if not session_id:
+            return {
+                "content": [{"type": "text", "text": "Error: session_id is required"}],
+                "is_error": True,
+            }
+        if not content:
+            return {
+                "content": [{"type": "text", "text": "Error: content is required"}],
+                "is_error": True,
+            }
+
+        try:
+            item = await self.system.session_coordinator.enqueue_message(
+                session_id=session_id,
+                content=content,
+                reset_session=reset_session,
+            )
+            queue_id = item["queue_id"]
+            position = item["position"]
+            return {
+                "content": [{
+                    "type": "text",
+                    "text": f"Task queued for session {session_id} (queue_id={queue_id}, position={position})",
+                }],
+                "queue_id": queue_id,
+                "position": position,
+                "is_error": False,
+            }
+        except ValueError as e:
+            return {
+                "content": [{"type": "text", "text": f"Error: {e}"}],
+                "is_error": True,
+            }
+        except Exception as e:
+            logger.exception(f"Unexpected error in queue_task for session {session_id}: {e}")
+            return {
+                "content": [{"type": "text", "text": f"Unexpected error queuing task: {e}"}],
+                "is_error": True,
+            }

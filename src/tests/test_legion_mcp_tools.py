@@ -57,6 +57,7 @@ def test_tool_handler_methods_exist(mcp_tools):
         '_handle_search_capability',
         '_handle_list_minions',
         '_handle_get_minion_info',
+        '_handle_queue_task',
     ]
 
     for method_name in handler_methods:
@@ -469,3 +470,120 @@ async def test_issue_824_non_tmp_path_not_translated(tmp_path):
     )
     # The result should be an error (file doesn't exist)
     assert result.get("is_error") is True
+
+
+# ── queue_task handler tests (Issue #1114) ──
+
+
+def _make_queue_task_tools(enqueue_side_effect=None, enqueue_return=None):
+    """Build LegionMCPTools with a mocked session_coordinator.enqueue_message."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from src.legion.mcp.legion_mcp_tools import LegionMCPTools
+
+    coordinator = MagicMock()
+    if enqueue_side_effect is not None:
+        coordinator.enqueue_message = AsyncMock(side_effect=enqueue_side_effect)
+    else:
+        coordinator.enqueue_message = AsyncMock(return_value=enqueue_return or {
+            "queue_id": "q1",
+            "position": 0,
+            "content": "hello",
+            "status": "pending",
+        })
+
+    mock_system = MagicMock()
+    mock_system.session_coordinator = coordinator
+    return LegionMCPTools(mock_system), coordinator
+
+
+@pytest.mark.asyncio
+async def test_issue_1114_queue_task_handler_enqueues():
+    """Issue #1114: happy path — enqueues and returns queue_id + position."""
+    tools, coordinator = _make_queue_task_tools(enqueue_return={
+        "queue_id": "q1",
+        "position": 0,
+        "content": "hello",
+        "status": "pending",
+    })
+
+    result = await tools._handle_queue_task({
+        "session_id": "sess-abc",
+        "content": "do the thing",
+        "reset_session": False,
+    })
+
+    assert result.get("is_error") is False
+    assert result["queue_id"] == "q1"
+    assert result["position"] == 0
+    assert "q1" in result["content"][0]["text"]
+    coordinator.enqueue_message.assert_awaited_once_with(
+        session_id="sess-abc",
+        content="do the thing",
+        reset_session=False,
+    )
+
+
+@pytest.mark.asyncio
+async def test_issue_1114_queue_task_handler_missing_session_id():
+    """Issue #1114: empty session_id returns is_error=True, nothing enqueued."""
+    tools, coordinator = _make_queue_task_tools()
+
+    result = await tools._handle_queue_task({"session_id": "", "content": "hello"})
+
+    assert result.get("is_error") is True
+    assert "session_id" in result["content"][0]["text"].lower()
+    coordinator.enqueue_message.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_issue_1114_queue_task_handler_missing_content():
+    """Issue #1114: empty content returns is_error=True, nothing enqueued."""
+    tools, coordinator = _make_queue_task_tools()
+
+    result = await tools._handle_queue_task({"session_id": "sess-abc", "content": ""})
+
+    assert result.get("is_error") is True
+    assert "content" in result["content"][0]["text"].lower()
+    coordinator.enqueue_message.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_issue_1114_queue_task_handler_unknown_session():
+    """Issue #1114: ValueError from enqueue_message surfaces as is_error=True."""
+    tools, coordinator = _make_queue_task_tools(
+        enqueue_side_effect=ValueError("Session foo not found")
+    )
+
+    result = await tools._handle_queue_task({
+        "session_id": "foo",
+        "content": "do work",
+    })
+
+    assert result.get("is_error") is True
+    assert "Session foo not found" in result["content"][0]["text"]
+    coordinator.enqueue_message.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_issue_1114_queue_task_handler_passes_reset_session():
+    """Issue #1114: reset_session=True is forwarded to enqueue_message."""
+    tools, coordinator = _make_queue_task_tools(enqueue_return={
+        "queue_id": "q2",
+        "position": 1,
+        "content": "reset and do",
+        "status": "pending",
+    })
+
+    result = await tools._handle_queue_task({
+        "session_id": "sess-xyz",
+        "content": "reset and do",
+        "reset_session": True,
+    })
+
+    assert result.get("is_error") is False
+    coordinator.enqueue_message.assert_awaited_once_with(
+        session_id="sess-xyz",
+        content="reset and do",
+        reset_session=True,
+    )

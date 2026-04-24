@@ -729,6 +729,9 @@ class ClaudeWebUI:
 
         # Issue #500: Wire queue processor broadcast callback
         self.coordinator.queue_processor.set_broadcast_callback(self._broadcast_queue_update)
+        # Issue #1114: Wire enqueue broadcast callback so MCP queue_task (and other internal
+        # callers of enqueue_message) emit real-time queue_update events to the WebUI.
+        self.coordinator.set_enqueue_broadcast_callback(self._broadcast_queue_update)
 
         # Issue #1050: Best-effort proxy image check on startup (informational only)
         from .config_manager import load_config
@@ -2231,9 +2234,6 @@ class ClaudeWebUI:
                 reset_session=data.get("reset_session"),
                 metadata=data.get("metadata"),
             )
-
-            # Append queue update to session poll queue
-            await self._broadcast_queue_update(session_id, "enqueued", item)
 
             return {
                 "queue_id": item["queue_id"],
