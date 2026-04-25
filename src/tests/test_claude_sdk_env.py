@@ -63,7 +63,7 @@ class TestResolveEnvVars:
         assert env["CLAUDE_CODE_DISABLE_CRON"] == "1"
         assert env["CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY"] == "1"
         assert env["CLAUDE_CODE_ENABLE_TELEMETRY"] == "0"
-        assert env["CLAUDE_CODE_SUBPROCESS_ENV_SCRUB"] == "1"
+        assert "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB" not in env
         assert env["CLAUDE_AGENT_SDK_SKIP_VERSION_CHECK"] == "1"
 
     def test_auto_memory_claude_mode_removes_disable_var(self):

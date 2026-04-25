@@ -288,7 +288,10 @@ async def test_update_session_delegates_to_session_manager(service, mock_coordin
     result = await service.update_session("s1", name="new name", model="sonnet")
 
     mock_coordinator.session_manager.update_session.assert_called_once_with(
-        "s1", name="new name", model="sonnet"
+        "s1",
+        template_manager=mock_coordinator.template_manager,
+        name="new name",
+        model="sonnet",
     )
     assert result is True
 
