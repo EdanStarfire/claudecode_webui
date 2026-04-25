@@ -17,6 +17,9 @@ dist-ssr/
 *.sln
 *.sw?
 
+# Test coverage
+coverage/
+
 # Environment variables (keep .env.example)
 .env
 .env.local

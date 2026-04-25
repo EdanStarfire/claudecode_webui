@@ -230,16 +230,6 @@ const toolResults = computed(() => {
   return props.message.metadata?.tool_results || []
 })
 
-const copyFeedback = ref(false)
-let copyTimer = null
-
-async function copyMarkdown() {
-  await navigator.clipboard.writeText(cleanContent.value)
-  copyFeedback.value = true
-  clearTimeout(copyTimer)
-  copyTimer = setTimeout(() => { copyFeedback.value = false }, 2000)
-}
-
 function truncate(text, maxLength) {
   if (!text) return ''
   if (text.length <= maxLength) return text
