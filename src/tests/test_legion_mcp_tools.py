@@ -324,6 +324,7 @@ def _make_send_comm_system(session_id: str, docker_enabled: bool, data_dir):
     session_coordinator = MagicMock()
     session_coordinator.session_manager = session_manager
     session_coordinator.data_dir = Path(data_dir)
+    session_coordinator.register_uploaded_resource = AsyncMock(return_value=None)
 
     mock_system = MagicMock()
     mock_system.session_coordinator = session_coordinator
