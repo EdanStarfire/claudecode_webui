@@ -1330,6 +1330,7 @@ class SessionCoordinator:
                 session_dir, effective_config.history_distillation_enabled, effective_config.auto_memory_mode,
                 skill_creating_enabled=effective_config.skill_creating_enabled,
                 working_directory=Path(session_info.working_directory),
+                is_legion=("legion" in mcp_servers),
             )
 
             sdk = self._sdk_factory(
@@ -3671,6 +3672,7 @@ class SessionCoordinator:
         auto_memory_mode: str = "claude",
         skill_creating_enabled: bool = False,
         working_directory: Path | None = None,
+        is_legion: bool = False,
     ) -> InternalPermissionHandler:
         """Build internal permission handler with consistent path configuration (issue #707)."""
         memory_dir = session_dir / "memory" if auto_memory_mode == "session" else None
@@ -3681,6 +3683,7 @@ class SessionCoordinator:
             memory_dir=memory_dir,
             skill_creating_enabled=skill_creating_enabled,
             working_directory=working_directory,
+            is_legion=is_legion,
         )
 
     def _resolve_default_proxy_image(self) -> str:

@@ -1184,6 +1184,16 @@ class ClaudeSDK:
         perm_logger.info(f"Context suggestions: {getattr(context, 'suggestions', [])}")
         perm_logger.info("=======================================")
 
+        # Issue #1133: Block SendMessage and background Agent in Legion sessions
+        # Must run before evaluate_suggestions — the CLI may emit allow-suggestions
+        # for these tools that would otherwise let the call through.
+        if self.permission_handler:
+            result = self.permission_handler.evaluate_tool_block(tool_name, input_params)
+            if result is not None:
+                decision, reason = result
+                perm_logger.info(f"Auto-denied via tool block: {reason}")
+                return PermissionResultDeny(message=reason)
+
         # Check CLI suggestions against internal rules (issue #707)
         if self.permission_handler and hasattr(context, "suggestions") and context.suggestions:
             result = self.permission_handler.evaluate_suggestions(

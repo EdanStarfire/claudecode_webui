@@ -22,6 +22,17 @@ PermissionDecision = Literal["allow", "deny"]
 
 _RESOLVE_CACHE: dict[str, str] = {}
 
+# Issue #1133: Reason strings for Legion tool blocks.
+# Tool names are hardcoded constants — if the SDK renames them, update here.
+_SENDMESSAGE_REDIRECT_REASON = (
+    "SendMessage is not available in Legion sessions. "
+    "Use mcp__legion__send_comm to route communications to other minions."
+)
+_BACKGROUND_AGENT_REDIRECT_REASON = (
+    "Agent with run_in_background=true is not available in Legion sessions. "
+    "Use mcp__legion__spawn_minion to create observable child agents."
+)
+
 # Dangerous Bash command patterns that must never be silently auto-approved.
 # The CLI may misclassify destructive Bash commands (e.g., `rm -rf ~/.claude/skills/`)
 # as benign file reads, causing them to match internal allow rules. This deny list
@@ -129,8 +140,10 @@ class InternalPermissionHandler:
         memory_dir: Path | None = None,
         skill_creating_enabled: bool = False,
         working_directory: Path | None = None,
+        is_legion: bool = False,
     ):
         self._skill_creating_enabled = skill_creating_enabled
+        self._is_legion = is_legion
         self._rules = self._build_rules(
             session_data_dir, plans_dir, knowledge_mgmt_enabled, memory_dir,
             skill_creating_enabled, working_directory,
@@ -328,6 +341,27 @@ class InternalPermissionHandler:
             )
             return (rule.decision, rule.reason)
 
+        return None
+
+    def evaluate_tool_block(
+        self,
+        tool_name: str,
+        tool_input: dict[str, Any] | None,
+    ) -> tuple[PermissionDecision, str] | None:
+        """Block specific tools unconditionally in Legion sessions (issue #1133).
+
+        Returns (decision, reason) if the tool is blocked, None otherwise.
+        Only active when is_legion=True — non-Legion sessions are unaffected.
+
+        Checks run_in_background with `is True` (not truthiness) to avoid blocking
+        foreground Agent calls that pass False, 0, or a truthy string.
+        """
+        if not self._is_legion:
+            return None
+        if tool_name == "SendMessage":
+            return ("deny", _SENDMESSAGE_REDIRECT_REASON)
+        if tool_name == "Agent" and tool_input and tool_input.get("run_in_background") is True:
+            return ("deny", _BACKGROUND_AGENT_REDIRECT_REASON)
         return None
 
     def evaluate_suggestions(

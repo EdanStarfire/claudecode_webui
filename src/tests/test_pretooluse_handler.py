@@ -568,3 +568,80 @@ class TestBashDenyPatternGuard:
             tool_input={"command": f"chmod -R 777 {memory_dir}"},
         )
         assert result is None
+
+
+# ---------------------------------------------------------------------------
+# Issue #1133: TestToolBlock — evaluate_tool_block matrix
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def handler_legion(tmp_dirs):
+    """Handler configured for a Legion session (is_legion=True)."""
+    return InternalPermissionHandler(
+        session_data_dir=tmp_dirs["session_dir"],
+        plans_dir=tmp_dirs["plans_dir"],
+        knowledge_mgmt_enabled=False,
+        is_legion=True,
+    )
+
+
+@pytest.fixture
+def handler_non_legion(tmp_dirs):
+    """Handler configured for a non-Legion session (is_legion=False)."""
+    return InternalPermissionHandler(
+        session_data_dir=tmp_dirs["session_dir"],
+        plans_dir=tmp_dirs["plans_dir"],
+        knowledge_mgmt_enabled=False,
+        is_legion=False,
+    )
+
+
+class TestToolBlock:
+    """Tests for evaluate_tool_block — the Legion-scoped tool deny list (issue #1133)."""
+
+    def test_sendmessage_denied_in_legion(self, handler_legion):
+        """SendMessage is denied in Legion sessions and reason mentions send_comm."""
+        result = handler_legion.evaluate_tool_block("SendMessage", {})
+        assert result is not None
+        decision, reason = result
+        assert decision == "deny"
+        assert "mcp__legion__send_comm" in reason
+
+    def test_sendmessage_not_blocked_outside_legion(self, handler_non_legion):
+        """SendMessage passes through (returns None) in non-Legion sessions."""
+        result = handler_non_legion.evaluate_tool_block("SendMessage", {})
+        assert result is None
+
+    def test_agent_background_true_denied_in_legion(self, handler_legion):
+        """Agent with run_in_background=True is denied in Legion sessions."""
+        result = handler_legion.evaluate_tool_block("Agent", {"run_in_background": True})
+        assert result is not None
+        decision, reason = result
+        assert decision == "deny"
+        assert "mcp__legion__spawn_minion" in reason
+
+    def test_agent_background_false_not_blocked(self, handler_legion):
+        """Agent with run_in_background=False is NOT blocked (foreground call)."""
+        result = handler_legion.evaluate_tool_block("Agent", {"run_in_background": False})
+        assert result is None
+
+    def test_agent_background_absent_not_blocked(self, handler_legion):
+        """Agent with no run_in_background key is NOT blocked (foreground call)."""
+        result = handler_legion.evaluate_tool_block("Agent", {"prompt": "do something"})
+        assert result is None
+
+    def test_agent_background_truthy_string_not_blocked(self, handler_legion):
+        """Agent with run_in_background='true' (string) is NOT blocked — strict is True check."""
+        result = handler_legion.evaluate_tool_block("Agent", {"run_in_background": "true"})
+        assert result is None
+
+    def test_agent_not_blocked_outside_legion_even_with_background(self, handler_non_legion):
+        """Background Agent in non-Legion session returns None (passes to normal flow)."""
+        result = handler_non_legion.evaluate_tool_block("Agent", {"run_in_background": True})
+        assert result is None
+
+    def test_other_tools_pass_through(self, handler_legion):
+        """Read, Write, Bash with arbitrary inputs return None in Legion session."""
+        assert handler_legion.evaluate_tool_block("Read", {"file_path": "/some/file"}) is None
+        assert handler_legion.evaluate_tool_block("Write", {"file_path": "/out", "content": "x"}) is None
+        assert handler_legion.evaluate_tool_block("Bash", {"command": "ls"}) is None
