@@ -39,6 +39,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     jq \
     gnupg \
     build-essential \
+    bubblewrap \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # ---------- Layer 2: Node.js 22 LTS via nodesource (rarely changes) ----------

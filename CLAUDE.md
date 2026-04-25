@@ -171,7 +171,7 @@ All flags default to ON (suppression enabled) except `dont_inherit_env` (off —
 | `disable_cron`                | `CLAUDE_CODE_DISABLE_CRON`               | true    | Disable CLI's bundled cron (≠ our scheduler) |
 | `disable_feedback_survey`     | `CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY`    | true    | Suppress survey prompts                      |
 | `disable_telemetry`           | `CLAUDE_CODE_ENABLE_TELEMETRY=0`         | true    | Explicitly opt out of telemetry              |
-| `subprocess_env_scrub`        | `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB`       | true    | Strip credentials from spawned subprocesses  |
+| `subprocess_env_scrub`        | `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB`       | false   | Strip credentials from spawned subprocesses (off by default — enabling this causes CLI to force permission_mode=default unless allowedTools declared explicitly) |
 | `skip_version_check`          | `CLAUDE_AGENT_SDK_SKIP_VERSION_CHECK`    | true    | Skip CLI version check (latency)             |
 | `dont_inherit_env`            | `CLAUDE_CODE_DONT_INHERIT_ENV`           | false   | Block env inheritance (breaks Docker/proxy)  |
 

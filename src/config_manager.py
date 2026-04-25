@@ -55,7 +55,7 @@ class BackgroundCallsConfig:
     disable_cron: bool = True
     disable_feedback_survey: bool = True
     disable_telemetry: bool = True
-    subprocess_env_scrub: bool = True
+    subprocess_env_scrub: bool = False
     skip_version_check: bool = True
     dont_inherit_env: bool = False  # leaving off — breaks Docker/proxy flows
 
@@ -96,7 +96,7 @@ class AppConfig:
             disable_cron=bg_data.get("disable_cron", True),
             disable_feedback_survey=bg_data.get("disable_feedback_survey", True),
             disable_telemetry=bg_data.get("disable_telemetry", True),
-            subprocess_env_scrub=bg_data.get("subprocess_env_scrub", True),
+            subprocess_env_scrub=bg_data.get("subprocess_env_scrub", False),
             skip_version_check=bg_data.get("skip_version_check", True),
             dont_inherit_env=bg_data.get("dont_inherit_env", False),
         )

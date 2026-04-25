@@ -158,7 +158,7 @@ class TestBackgroundCallsConfig:
         assert cfg.disable_cron is True
         assert cfg.disable_feedback_survey is True
         assert cfg.disable_telemetry is True
-        assert cfg.subprocess_env_scrub is True
+        assert cfg.subprocess_env_scrub is False
         assert cfg.skip_version_check is True
         assert cfg.dont_inherit_env is False
 
@@ -169,7 +169,7 @@ class TestBackgroundCallsConfig:
         bg = data["background_calls"]
         assert bg["disable_auto_memory"] is True
         assert bg["disable_claudeai_mcp_servers"] is True
-        assert bg["subprocess_env_scrub"] is True
+        assert bg["subprocess_env_scrub"] is False
         assert bg["dont_inherit_env"] is False
 
     def test_background_calls_round_trip_serialization(self):
