@@ -9,6 +9,20 @@
       :class="isComm ? 'msg-bubble-comm' : 'msg-bubble-user'"
       :style="isComm ? { background: commColor.bg, borderColor: commColor.border, borderRightWidth: '3px', borderRightStyle: 'solid' } : {}"
     >
+      <button
+        class="copy-markdown-btn"
+        @click.stop="copyMarkdown"
+        :title="copyFeedback ? 'Copied!' : 'Copy markdown'"
+        aria-label="Copy raw markdown"
+      >
+        <svg v-if="copyFeedback" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <polyline points="20 6 9 17 4 12"></polyline>
+        </svg>
+        <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+          <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+        </svg>
+      </button>
       <!-- Content (attachment section stripped from rendered markdown) -->
       <div class="msg-content-row">
         <div class="msg-text" ref="contentRef" v-html="cleanRenderedContent"></div>
@@ -216,6 +230,16 @@ const toolResults = computed(() => {
   return props.message.metadata?.tool_results || []
 })
 
+const copyFeedback = ref(false)
+let copyTimer = null
+
+async function copyMarkdown() {
+  await navigator.clipboard.writeText(cleanContent.value)
+  copyFeedback.value = true
+  clearTimeout(copyTimer)
+  copyTimer = setTimeout(() => { copyFeedback.value = false }, 2000)
+}
+
 function truncate(text, maxLength) {
   if (!text) return ''
   if (text.length <= maxLength) return text
@@ -374,30 +398,38 @@ function truncate(text, maxLength) {
   border: 1px solid rgba(34, 197, 94, 0.15);
 }
 
-.msg-content-row {
+/* Copy markdown button */
+.msg-bubble {
   position: relative;
 }
 
 .copy-markdown-btn {
   position: absolute;
-  top: 0;
-  right: -8px;
-  background: none;
-  border: none;
-  cursor: pointer;
-  font-size: 14px;
+  left: -8px;
+  top: 6px;
   opacity: 0;
-  transition: opacity 0.15s;
-  padding: 2px;
-  line-height: 1;
-}
-
-.msg-content-row:hover .copy-markdown-btn {
-  opacity: 0.6;
+  transition: opacity 0.15s ease;
+  background: var(--bs-body-bg, #fff);
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  padding: 3px 5px;
+  cursor: pointer;
+  color: #64748b;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10;
+  transform: translateX(-100%);
 }
 
 .copy-markdown-btn:hover {
-  opacity: 1 !important;
+  background: #f1f5f9;
+  color: #334155;
+  border-color: #cbd5e1;
+}
+
+.msg-bubble:hover .copy-markdown-btn {
+  opacity: 1;
 }
 
 /* Mobile */
