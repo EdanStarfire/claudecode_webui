@@ -56,6 +56,21 @@ except ImportError:
     TaskNotificationMessage = None
     TextBlock = None
 
+# Issue #1126: Mapping from BackgroundCallsConfig fields to SDK env vars.
+# Each entry: config_attr -> (env_var_name, value_when_true)
+_BACKGROUND_CALL_ENV_MAP: dict[str, tuple[str, str]] = {
+    "disable_auto_memory":          ("CLAUDE_CODE_DISABLE_AUTO_MEMORY",            "1"),
+    "disable_claudeai_mcp_servers": ("ENABLE_CLAUDEAI_MCP_SERVERS",                "false"),
+    "disable_background_tasks":     ("CLAUDE_CODE_DISABLE_BACKGROUND_TASKS",       "1"),
+    "disable_nonessential_traffic": ("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",   "1"),
+    "disable_cron":                 ("CLAUDE_CODE_DISABLE_CRON",                   "1"),
+    "disable_feedback_survey":      ("CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY",        "1"),
+    "disable_telemetry":            ("CLAUDE_CODE_ENABLE_TELEMETRY",               "0"),
+    "subprocess_env_scrub":         ("CLAUDE_CODE_SUBPROCESS_ENV_SCRUB",           "1"),
+    "skip_version_check":           ("CLAUDE_AGENT_SDK_SKIP_VERSION_CHECK",        "1"),
+    "dont_inherit_env":             ("CLAUDE_CODE_DONT_INHERIT_ENV",               "1"),
+}
+
 # Get specialized loggers for SDK debugging
 sdk_logger = get_logger('sdk_debug', category='SDK')
 perm_logger = get_logger('sdk_debug', category='PERMISSIONS')
@@ -946,26 +961,7 @@ class ClaudeSDK:
         # (e.g., Chrome DevTools screenshots/snapshots). SDK default is 1MB which is too small.
         options_kwargs["max_buffer_size"] = 10 * 1024 * 1024
 
-        # Enable native Tasks system (Claude Code 2.1+)
-        env_vars = {"CLAUDE_CODE_ENABLE_TASKS": "true"}
-        # Issue #411: Enable Agent Teams when experimental flag is set
-        if self.experimental:
-            env_vars["CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"] = "1"
-            sdk_logger.info(f"Experimental Agent Teams enabled for session {self.session_id}")
-        # Issue #709: Disable Claude auto-memory for session and disabled modes
-        # Issue #906: "native" mode uses SDK built-in auto-memory with custom directory — do NOT disable
-        if self.auto_memory_mode in ("session", "disabled"):
-            env_vars["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "1"
-        # Issue #676: Disable Claude AI MCP servers when toggled off
-        if not self.enable_claudeai_mcp_servers:
-            env_vars["ENABLE_CLAUDEAI_MCP_SERVERS"] = "false"
-        # Issue #957: Scrub subprocess credentials
-        if self.env_scrub_enabled:
-            env_vars["CLAUDE_CODE_SUBPROCESS_ENV_SCRUB"] = "1"
-        # Issue #496: Merge extra env vars (e.g., Docker wrapper config like CLAUDE_DOCKER_*)
-        if self.extra_env:
-            env_vars.update(self.extra_env)
-        options_kwargs["env"] = env_vars
+        options_kwargs["env"] = self._resolve_env_vars()
 
         # Add stderr handler to capture SDK CLI errors (issue #517)
         def stderr_handler(output: str) -> None:
@@ -991,6 +987,50 @@ class ClaudeSDK:
         sdk_logger.debug(f"stderr callback included: {'stderr' in options_kwargs}")
         sdk_logger.debug(f"ClaudeAgentOptions: {options_kwargs}")
         return ClaudeAgentOptions(**options_kwargs)
+
+    def _resolve_env_vars(self) -> dict[str, str]:
+        """Build the env dict for ClaudeAgentOptions.
+
+        Merge order (highest priority wins):
+          global BackgroundCallsConfig → per-session opt-back-in → extra_env
+        """
+        # Always-on
+        env_vars: dict[str, str] = {"CLAUDE_CODE_ENABLE_TASKS": "true"}
+
+        # Issue #411: Enable Agent Teams when experimental flag is set
+        if self.experimental:
+            env_vars["CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"] = "1"
+            sdk_logger.info(f"Experimental Agent Teams enabled for session {self.session_id}")
+
+        # Issue #1126: Apply global background-call suppression as the floor
+        from .config_manager import load_config
+        bg_cfg = load_config().background_calls
+        for attr, (var, value) in _BACKGROUND_CALL_ENV_MAP.items():
+            if getattr(bg_cfg, attr):
+                env_vars[var] = value
+
+        # Per-session opt-back-in: remove suppression keys when session expresses preference
+        # Issues #709, #906: auto-memory
+        if self.auto_memory_mode == "claude":
+            env_vars.pop("CLAUDE_CODE_DISABLE_AUTO_MEMORY", None)
+        elif self.auto_memory_mode in ("session", "disabled"):
+            env_vars["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "1"
+
+        # Issue #676: Claude AI MCP servers
+        if self.enable_claudeai_mcp_servers:
+            env_vars.pop("ENABLE_CLAUDEAI_MCP_SERVERS", None)
+        else:
+            env_vars["ENABLE_CLAUDEAI_MCP_SERVERS"] = "false"
+
+        # Issue #957: subprocess env scrub — only additive (no session-level opt-out)
+        if self.env_scrub_enabled:
+            env_vars["CLAUDE_CODE_SUBPROCESS_ENV_SCRUB"] = "1"
+
+        # Issue #496: Merge extra env vars (highest priority; e.g., CLAUDE_DOCKER_*)
+        if self.extra_env:
+            env_vars.update(self.extra_env)
+
+        return env_vars
 
     async def _process_sdk_message(self, sdk_message: Any):
         """Process a single message from the SDK stream."""

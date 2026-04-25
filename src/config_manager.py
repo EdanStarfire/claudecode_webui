@@ -41,11 +41,32 @@ class LegionConfig:
 
 
 @dataclass
+class BackgroundCallsConfig:
+    """Suppression flags for ambient/background SDK calls.
+
+    Defaults match a self-hosted/fleet deployment posture: minimize
+    incidental API traffic. Per-session config can opt back in.
+    """
+
+    disable_auto_memory: bool = True
+    disable_claudeai_mcp_servers: bool = True
+    disable_background_tasks: bool = True
+    disable_nonessential_traffic: bool = True
+    disable_cron: bool = True
+    disable_feedback_survey: bool = True
+    disable_telemetry: bool = True
+    subprocess_env_scrub: bool = True
+    skip_version_check: bool = True
+    dont_inherit_env: bool = False  # leaving off — breaks Docker/proxy flows
+
+
+@dataclass
 class AppConfig:
     networking: NetworkingConfig = field(default_factory=NetworkingConfig)
     features: FeaturesConfig = field(default_factory=FeaturesConfig)
     proxy: ProxyConfig = field(default_factory=ProxyConfig)
     legion: LegionConfig = field(default_factory=LegionConfig)
+    background_calls: BackgroundCallsConfig = field(default_factory=BackgroundCallsConfig)
 
     @classmethod
     def from_dict(cls, data: dict) -> "AppConfig":
@@ -66,7 +87,26 @@ class AppConfig:
         legion = LegionConfig(
             max_concurrent_minions=legion_data.get("max_concurrent_minions", 20),
         )
-        return cls(networking=networking, features=features, proxy=proxy, legion=legion)
+        bg_data = data.get("background_calls", {})
+        background_calls = BackgroundCallsConfig(
+            disable_auto_memory=bg_data.get("disable_auto_memory", True),
+            disable_claudeai_mcp_servers=bg_data.get("disable_claudeai_mcp_servers", True),
+            disable_background_tasks=bg_data.get("disable_background_tasks", True),
+            disable_nonessential_traffic=bg_data.get("disable_nonessential_traffic", True),
+            disable_cron=bg_data.get("disable_cron", True),
+            disable_feedback_survey=bg_data.get("disable_feedback_survey", True),
+            disable_telemetry=bg_data.get("disable_telemetry", True),
+            subprocess_env_scrub=bg_data.get("subprocess_env_scrub", True),
+            skip_version_check=bg_data.get("skip_version_check", True),
+            dont_inherit_env=bg_data.get("dont_inherit_env", False),
+        )
+        return cls(
+            networking=networking,
+            features=features,
+            proxy=proxy,
+            legion=legion,
+            background_calls=background_calls,
+        )
 
     def to_dict(self) -> dict:
         return {
@@ -86,6 +126,24 @@ class AppConfig:
             },
             "legion": {
                 "max_concurrent_minions": self.legion.max_concurrent_minions,
+            },
+            "background_calls": {
+                "_comment": (
+                    "Suppress ambient/background SDK API calls. All flags default ON"
+                    " (suppression enabled) except dont_inherit_env (breaks Docker/proxy)."
+                    " Per-session config can opt back in via auto_memory_mode, enable_claudeai_mcp_servers,"
+                    " or extra_env."
+                ),
+                "disable_auto_memory": self.background_calls.disable_auto_memory,
+                "disable_claudeai_mcp_servers": self.background_calls.disable_claudeai_mcp_servers,
+                "disable_background_tasks": self.background_calls.disable_background_tasks,
+                "disable_nonessential_traffic": self.background_calls.disable_nonessential_traffic,
+                "disable_cron": self.background_calls.disable_cron,
+                "disable_feedback_survey": self.background_calls.disable_feedback_survey,
+                "disable_telemetry": self.background_calls.disable_telemetry,
+                "subprocess_env_scrub": self.background_calls.subprocess_env_scrub,
+                "skip_version_check": self.background_calls.skip_version_check,
+                "dont_inherit_env": self.background_calls.dont_inherit_env,
             },
         }
 
