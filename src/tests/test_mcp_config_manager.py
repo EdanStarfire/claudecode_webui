@@ -4,7 +4,6 @@ Covers to_sdk_config() oauth pass-through and from_dict() backward compat
 for the oauth_client_id / oauth_callback_port fields added in #1109.
 """
 
-import pytest
 from src.mcp_config_manager import McpServerConfig, McpServerType
 
 

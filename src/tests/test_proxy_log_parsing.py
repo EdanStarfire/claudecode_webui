@@ -5,13 +5,10 @@ and the tail-read helper with line limits.
 """
 
 import json
-import tempfile
-from pathlib import Path
 
 import pytest
 
 from ..session_coordinator import _count_file_lines, _tail_read_lines
-
 
 # ==================== _tail_read_lines ====================
 
@@ -75,7 +72,7 @@ class TestHttpLogParsing:
     @pytest.fixture
     async def coordinator(self, tmp_path):
         """Create a minimal SessionCoordinator pointed at tmp_path."""
-        from unittest.mock import AsyncMock, MagicMock
+        from unittest.mock import MagicMock
 
         from ..session_coordinator import SessionCoordinator
 
