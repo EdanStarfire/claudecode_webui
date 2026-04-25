@@ -152,6 +152,52 @@ Enable this for multi-agent (Legion) workflows or any session where isolated con
 Built-in memory is fine for single-agent, single-session use where no archival,
 multi-agent isolation, or cross-reset persistence is needed.
 
+# Environment Configuration - Background Call Suppression
+
+The Claude Agent SDK and Claude Code CLI honor a number of environment variables that suppress
+ambient/background API calls. Claude WebUI applies these at session-launch time based on the
+`background_calls` section of `~/.config/cc_webui/config.json`.
+
+## Defaults (fleet-mode)
+
+All flags default to ON (suppression enabled) except `dont_inherit_env` (off — breaks Docker/proxy flows).
+
+| Config Field                  | Env Var                                  | Default | Effect                                       |
+|-------------------------------|------------------------------------------|---------|----------------------------------------------|
+| `disable_auto_memory`         | `CLAUDE_CODE_DISABLE_AUTO_MEMORY`        | true    | Suppress working-directory auto-memory       |
+| `disable_claudeai_mcp_servers`| `ENABLE_CLAUDEAI_MCP_SERVERS=false`      | true    | Disable built-in Claude AI MCP polling       |
+| `disable_background_tasks`    | `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS`   | true    | Suppress CLI background ambient operations   |
+| `disable_nonessential_traffic`| `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` | true  | Block ambient telemetry/metrics              |
+| `disable_cron`                | `CLAUDE_CODE_DISABLE_CRON`               | true    | Disable CLI's bundled cron (≠ our scheduler) |
+| `disable_feedback_survey`     | `CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY`    | true    | Suppress survey prompts                      |
+| `disable_telemetry`           | `CLAUDE_CODE_ENABLE_TELEMETRY=0`         | true    | Explicitly opt out of telemetry              |
+| `subprocess_env_scrub`        | `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB`       | true    | Strip credentials from spawned subprocesses  |
+| `skip_version_check`          | `CLAUDE_AGENT_SDK_SKIP_VERSION_CHECK`    | true    | Skip CLI version check (latency)             |
+| `dont_inherit_env`            | `CLAUDE_CODE_DONT_INHERIT_ENV`           | false   | Block env inheritance (breaks Docker/proxy)  |
+
+## Per-Session Override
+
+Session config and templates retain their existing override fields:
+- `auto_memory_mode = "claude"` → re-enables auto-memory for that session
+- `enable_claudeai_mcp_servers = True` → re-enables Claude AI MCP for that session
+- `env_scrub_enabled = True` → forces scrubbing (additive with global default)
+
+For other suppression flags, per-session `extra_env` has the highest priority
+and can set or unset any env var.
+
+## Verifying Configuration
+
+The injected env dict is logged at debug level by `claude_sdk.py` when `--debug-sdk` is enabled.
+Inspect `data/logs/sdk_debug.log` for the `ClaudeAgentOptions: ...` line to see the final env
+dict for each session.
+
+## Auditing Future SDK Versions
+
+When upgrading `claude-agent-sdk`, check for new env vars by:
+1. Grepping the installed package for `os.environ`, `os.getenv`, `CLAUDE_*`, `ANTHROPIC_*`.
+2. Checking the bundled CLI binary for new `CLAUDE_CODE_DISABLE_*` flags.
+3. Updating `_BACKGROUND_CALL_ENV_MAP` in `src/claude_sdk.py` and `BackgroundCallsConfig` in `src/config_manager.py`.
+
 # Frontend Architecture - Vue 3 + Pinia + Vite (PRODUCTION)
 
 ## Current Status

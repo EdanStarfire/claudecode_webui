@@ -6,6 +6,7 @@ import pytest
 
 from src.config_manager import (
     AppConfig,
+    BackgroundCallsConfig,
     NetworkingConfig,
     check_network_binding,
     ensure_config_file,
@@ -145,3 +146,55 @@ class TestAppConfig:
         assert NetworkingConfig(True, False).network_binding_allowed is False
         assert NetworkingConfig(False, True).network_binding_allowed is False
         assert NetworkingConfig(False, False).network_binding_allowed is False
+
+
+class TestBackgroundCallsConfig:
+    def test_defaults_all_suppression_on_except_dont_inherit_env(self):
+        cfg = BackgroundCallsConfig()
+        assert cfg.disable_auto_memory is True
+        assert cfg.disable_claudeai_mcp_servers is True
+        assert cfg.disable_background_tasks is True
+        assert cfg.disable_nonessential_traffic is True
+        assert cfg.disable_cron is True
+        assert cfg.disable_feedback_survey is True
+        assert cfg.disable_telemetry is True
+        assert cfg.subprocess_env_scrub is True
+        assert cfg.skip_version_check is True
+        assert cfg.dont_inherit_env is False
+
+    def test_background_calls_defaults_present_in_new_config_file(self, tmp_path):
+        config_file = tmp_path / "config.json"
+        ensure_config_file(config_file)
+        data = json.loads(config_file.read_text())
+        bg = data["background_calls"]
+        assert bg["disable_auto_memory"] is True
+        assert bg["disable_claudeai_mcp_servers"] is True
+        assert bg["subprocess_env_scrub"] is True
+        assert bg["dont_inherit_env"] is False
+
+    def test_background_calls_round_trip_serialization(self):
+        original = AppConfig(
+            background_calls=BackgroundCallsConfig(
+                disable_auto_memory=False,
+                dont_inherit_env=True,
+            )
+        )
+        restored = AppConfig.from_dict(original.to_dict())
+        assert restored.background_calls.disable_auto_memory is False
+        assert restored.background_calls.dont_inherit_env is True
+        assert restored.background_calls.disable_telemetry is True
+
+    def test_background_calls_missing_section_uses_defaults(self, tmp_path):
+        config_file = tmp_path / "config.json"
+        config_file.write_text(json.dumps({"networking": {}}))
+        config = load_config(config_file)
+        assert config.background_calls.disable_auto_memory is True
+        assert config.background_calls.dont_inherit_env is False
+
+    def test_background_calls_partial_section_fills_missing_fields(self, tmp_path):
+        config_file = tmp_path / "config.json"
+        config_file.write_text(json.dumps({"background_calls": {"disable_auto_memory": False}}))
+        config = load_config(config_file)
+        assert config.background_calls.disable_auto_memory is False
+        assert config.background_calls.disable_telemetry is True
+        assert config.background_calls.dont_inherit_env is False
