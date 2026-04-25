@@ -11,8 +11,8 @@ impossible to ship undetected.
 """
 
 
+from src.routers._models import TemplateUpdateRequest
 from src.session_config import SessionConfig
-from src.web_server import TemplateUpdateRequest
 
 # Fields that are intentionally NOT editable via TemplateUpdateRequest.
 # Each exclusion must be justified:
