@@ -67,6 +67,13 @@
                   @click="templateListTab = 'proxy'"
                 >Proxy</button>
               </li>
+              <li class="nav-item">
+                <button
+                  class="nav-link"
+                  :class="{ active: templateListTab === 'secrets' }"
+                  @click="templateListTab = 'secrets'"
+                >Secrets</button>
+              </li>
             </ul>
 
             <!-- Profiles tab -->
@@ -74,6 +81,9 @@
 
             <!-- Proxy tab (issue #1053) -->
             <ProxyConfigTab v-else-if="templateListTab === 'proxy'" />
+
+            <!-- Secrets tab (issue #827) -->
+            <SecretsTab v-else-if="templateListTab === 'secrets'" />
 
             <!-- Templates tab -->
             <template v-if="templateListTab === 'templates'">
@@ -401,6 +411,7 @@ import AdvancedSettingsPanel from './AdvancedSettingsPanel.vue'
 import PermissionPreviewModal from './PermissionPreviewModal.vue'
 import ProfileManagerTab from './ProfileManagerTab.vue'
 import ProxyConfigTab from './ProxyConfigTab.vue'
+import SecretsTab from './SecretsTab.vue'
 
 const router = useRouter()
 const projectStore = useProjectStore()
@@ -657,12 +668,12 @@ const CONFIG_FIELDS = {
     trackState: true,
     toPayload: (v) => v.trim() || null,
   },
-  docker_proxy_credential_names: {
+  assigned_secrets: {
     default: [],
     change: 'restart',
     contexts: ['session', 'template', 'ephemeral', 'update'],
     trackState: true,
-    fromSource: (s) => { const v = s.docker_proxy_credential_names; if (!v) return []; if (Array.isArray(v)) return v.filter(Boolean); return v.split(',').map(s => s.trim()).filter(Boolean) },
+    fromSource: (s) => { const v = s.assigned_secrets ?? s.docker_proxy_credential_names; if (!v) return []; if (Array.isArray(v)) return v.filter(Boolean); return v.split(',').map(s => s.trim()).filter(Boolean) },
     toPayload: (v) => { const arr = Array.isArray(v) ? v.filter(Boolean) : (v ? String(v).split(',').map(s => s.trim()).filter(Boolean) : []); return arr.length ? arr : null },
     compare: (form, orig) => JSON.stringify(form || []) !== JSON.stringify(orig || []),
   },
@@ -937,7 +948,7 @@ const modalTitle = computed(() => {
     case 'edit-session': return 'Edit Session'
     case 'create-template': return 'Create Template'
     case 'edit-template': return 'Edit Template'
-    case 'template-list': return templateListTab.value === 'profiles' ? 'Manage Profiles' : 'Manage Templates'
+    case 'template-list': return templateListTab.value === 'profiles' ? 'Manage Profiles' : templateListTab.value === 'secrets' ? 'Manage Secrets' : 'Manage Templates'
     case 'configure-ephemeral': return 'Configure Scheduled Session'
     case 'save-as-template': return 'Save as Template'
     case 'update-template-from-session': return 'Update Template from Session'
@@ -1389,7 +1400,7 @@ function buildTemplateFromSession() {
     docker_home_directory: session.docker_home_directory || null,
     docker_proxy_enabled: session.docker_proxy_enabled ?? false,
     docker_proxy_image: session.docker_proxy_image || null,
-    docker_proxy_credential_names: parseList(session.docker_proxy_credential_names),
+    assigned_secrets: parseList(session.assigned_secrets ?? session.docker_proxy_credential_names),
     docker_proxy_allowlist_domains: parseList(session.docker_proxy_allowlist_domains),
     thinking_mode: session.thinking_mode || null,
     thinking_budget_tokens: session.thinking_budget_tokens || null,
@@ -1496,7 +1507,7 @@ function computeTemplateDiff() {
     { field: 'disallowed_tools', label: 'Disallowed Tools' },
     { field: 'additional_directories', label: 'Additional Directories' },
     { field: 'docker_extra_mounts', label: 'Docker Mounts' },
-    { field: 'docker_proxy_credential_names', label: 'Proxy Credentials' },
+    { field: 'assigned_secrets', label: 'Assigned Secrets' },
     { field: 'docker_proxy_allowlist_domains', label: 'Extra Allowed Domains' },
   ]
 

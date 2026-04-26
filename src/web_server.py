@@ -37,6 +37,9 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
     EXEMPT_PATHS = {'/', '/health', '/api/auth/check', '/oauth/callback'}
     EXEMPT_PREFIXES = ('/assets/',)
+    # Issue #827: The per-session secrets resolve endpoint uses its own Bearer token auth,
+    # not the global operator token. Exempt it from global AuthMiddleware.
+    EXEMPT_SUFFIXES = ('/secrets/resolve',)
 
     def __init__(self, app, auth_token: str):
         super().__init__(app)
@@ -50,6 +53,9 @@ class AuthMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
         for prefix in self.EXEMPT_PREFIXES:
             if path.startswith(prefix):
+                return await call_next(request)
+        for suffix in self.EXEMPT_SUFFIXES:
+            if path.endswith(suffix):
                 return await call_next(request)
 
         # Extract token from Authorization header or query param

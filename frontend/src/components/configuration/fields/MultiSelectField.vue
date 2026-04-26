@@ -27,7 +27,7 @@
         v-model="pendingAdd"
         @change="addSelected"
       >
-        <option value="">{{ availableToAdd.length ? placeholder : 'No credentials available' }}</option>
+        <option value="">{{ availableToAdd.length ? placeholder : 'No options available' }}</option>
         <option v-for="opt in availableToAdd" :key="opt" :value="opt">{{ opt }}</option>
       </select>
     </div>
@@ -37,6 +37,7 @@
 <script setup>
 import { ref, computed } from 'vue'
 import { useProxyStore } from '@/stores/proxy'
+import { useSecretsStore } from '@/stores/secrets'
 
 const props = defineProps({
   value: { type: [String, Array], default: '' },
@@ -51,10 +52,14 @@ const pendingAdd = ref('')
 
 // Resolve options source
 const proxyStore = useProxyStore()
+const secretsStore = useSecretsStore()
 
 const allOptions = computed(() => {
   if (props.optionsFrom === 'proxyCredentials') {
     return proxyStore.credentials.map(c => c.name)
+  }
+  if (props.optionsFrom === 'secrets') {
+    return secretsStore.secrets.map(s => s.name)
   }
   return []
 })

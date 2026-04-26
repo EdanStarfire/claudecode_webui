@@ -1,140 +1,206 @@
 """
-Tests for CredentialVault — Issue #1053: domain allowlist and credential management.
+Tests for SecretsVault (issue #827) — host-level secrets via keyring.
 
-Covers:
-1. create_credential returns metadata without value
-2. list_credentials excludes secret values
-3. delete_credential removes both metadata and secret files
-4. resolve_credentials returns full objects (with values) for sidecar assembly
-5. create_credential raises ValueError on duplicate name
-6. Secret file permissions are 0o600
+Replaces issue #1053 CredentialVault tests (plaintext .secret files).
+Keyring calls are mocked so tests run in headless CI without OS keyring.
 """
 
-import os
-import stat
+from datetime import UTC, datetime
+from unittest.mock import patch
 
 import pytest
 
-from ..credential_vault import CredentialVault
+from ..credential_vault import SecretsVault
+from ..models.secret_record import SecretRecord, SecretType
 
 
 @pytest.fixture
 def vault(tmp_path):
-    """Return a CredentialVault backed by a temp directory."""
-    return CredentialVault(tmp_path)
+    """SecretsVault backed by a temp directory with mocked keyring."""
+    with (
+        patch("src.credential_vault.set_secret_value") as _set,
+        patch("src.credential_vault.get_secret_value") as _get,
+        patch("src.credential_vault.delete_secret_value") as _del,
+    ):
+        _get.return_value = "super_secret_123"
+        yield SecretsVault(tmp_path), _set, _get, _del
 
 
-def _sample_cred(**overrides):
-    """Return minimal credential kwargs."""
-    base = {
-        "name": "test_token",
-        "host_pattern": "api.example.com",
-        "header_name": "Authorization",
-        "value_format": "Bearer {value}",
-        "real_value": "super_secret_123",
-        "delivery": {"type": "env", "var": "TEST_TOKEN"},
-    }
-    base.update(overrides)
-    return base
+def _sample_record(name="test_token") -> SecretRecord:
+    now = datetime.now(UTC)
+    return SecretRecord(
+        name=name,
+        type=SecretType.API_KEY,
+        target_hosts=["api.example.com"],
+        created_at=now,
+        updated_at=now,
+    )
 
 
 @pytest.mark.asyncio
-async def test_issue_1053_create_credential_returns_metadata_without_value(vault):
-    """POST /api/proxy/credentials response must never contain real_value."""
-    result = await vault.create_credential(**_sample_cred())
+async def test_issue_827_create_secret_returns_metadata_without_value(vault):
+    """create_secret response must never contain the secret value."""
+    sv, _set, _get, _del = vault
+    result = await sv.create_secret(_sample_record(), "super_secret_123")
+    assert "value" not in result
     assert "real_value" not in result
     assert result["name"] == "test_token"
-    assert result["host_pattern"] == "api.example.com"
-    assert result["header_name"] == "Authorization"
+    assert result["type"] == "api_key"
     assert "created_at" in result
-    assert "updated_at" in result
+    _set.assert_called_once_with("test_token", "super_secret_123")
 
 
 @pytest.mark.asyncio
-async def test_issue_1053_list_credentials_excludes_values(vault):
-    """GET /api/proxy/credentials response list must never contain real_value."""
-    await vault.create_credential(**_sample_cred())
-    await vault.create_credential(**_sample_cred(name="another", host_pattern="other.com"))
+async def test_issue_827_list_secrets_excludes_values(vault):
+    """list_secrets must never contain secret values."""
+    sv, _set, _get, _del = vault
+    await sv.create_secret(_sample_record("tok1"), "val1")
+    await sv.create_secret(_sample_record("tok2"), "val2")
 
-    creds = await vault.list_credentials()
-    assert len(creds) == 2
-    for cred in creds:
-        assert "real_value" not in cred
+    secrets = await sv.list_secrets()
+    assert len(secrets) == 2
+    for s in secrets:
+        assert "value" not in s
+        assert "real_value" not in s
 
 
 @pytest.mark.asyncio
-async def test_issue_1053_delete_credential_removes_both_files(vault):
-    """delete_credential must remove both .json metadata and .secret value files."""
-    from ..slug_utils import slugify
-    await vault.create_credential(**_sample_cred())
+async def test_issue_827_delete_secret_removes_metadata_and_calls_keyring(vault):
+    """delete_secret removes the metadata JSON and calls delete_secret_value."""
+    sv, _set, _get, _del = vault
+    await sv.create_secret(_sample_record(), "secret_val")
 
-    slug = slugify("test_token")
-    assert (vault._creds_dir / f"{slug}.json").exists()
-    assert (vault._creds_dir / f"{slug}.secret").exists()
+    meta_path = sv._creds_dir / "test_token.json"
+    assert meta_path.exists()
 
-    deleted = await vault.delete_credential("test_token")
+    deleted = await sv.delete_secret("test_token")
 
     assert deleted is True
-    assert not (vault._creds_dir / f"{slug}.json").exists()
-    assert not (vault._creds_dir / f"{slug}.secret").exists()
+    assert not meta_path.exists()
+    _del.assert_called_once_with("test_token")
 
 
 @pytest.mark.asyncio
-async def test_issue_1053_delete_nonexistent_returns_false(vault):
-    """delete_credential returns False when credential does not exist."""
-    result = await vault.delete_credential("does_not_exist")
+async def test_issue_827_delete_nonexistent_returns_false(vault):
+    sv, _, _, _ = vault
+    result = await sv.delete_secret("does_not_exist")
     assert result is False
 
 
 @pytest.mark.asyncio
-async def test_issue_1053_resolve_credentials_returns_full_objects(vault):
-    """resolve_credentials (internal) must return objects with real_value for sidecar assembly."""
-    await vault.create_credential(**_sample_cred())
-    resolved = await vault.resolve_credentials(["test_token"])
+async def test_issue_827_resolve_secrets_returns_values(vault):
+    """resolve_secrets_for_assignment returns dicts with 'value' key."""
+    sv, _set, _get, _del = vault
+    _get.return_value = "super_secret_123"
+    await sv.create_secret(_sample_record(), "super_secret_123")
+
+    resolved = await sv.resolve_secrets_for_assignment(["test_token"])
     assert len(resolved) == 1
-    assert resolved[0]["real_value"] == "super_secret_123"
+    assert resolved[0]["value"] == "super_secret_123"
     assert resolved[0]["name"] == "test_token"
 
 
 @pytest.mark.asyncio
-async def test_issue_1053_create_duplicate_name_fails(vault):
-    """create_credential must raise ValueError when name already exists."""
-    await vault.create_credential(**_sample_cred())
+async def test_issue_827_resolve_unknown_name_skipped(vault):
+    """resolve_secrets_for_assignment skips names not found in vault."""
+    sv, _set, _get, _del = vault
+    await sv.create_secret(_sample_record(), "super_secret_123")
+
+    resolved = await sv.resolve_secrets_for_assignment(["test_token", "nonexistent"])
+    assert len(resolved) == 1
+    assert resolved[0]["name"] == "test_token"
+
+
+@pytest.mark.asyncio
+async def test_issue_827_create_duplicate_name_fails(vault):
+    """create_secret raises ValueError when name already exists."""
+    sv, _set, _get, _del = vault
+    await sv.create_secret(_sample_record(), "first_value")
     with pytest.raises(ValueError, match="already exists"):
-        await vault.create_credential(**_sample_cred())
+        await sv.create_secret(_sample_record(), "second_value")
 
 
 @pytest.mark.asyncio
-async def test_issue_1053_file_permissions_secret(vault):
-    """Secret file must have 0o600 permissions."""
-    await vault.create_credential(**_sample_cred())
-    from ..slug_utils import slugify
-    slug = slugify("test_token")
-    secret_path = vault._creds_dir / f"{slug}.secret"
-    # 0o600 → '-rw-------'
-    assert oct(stat.S_IMODE(os.stat(secret_path).st_mode)) == "0o600"
+async def test_issue_827_metadata_file_permissions(vault):
+    """Metadata JSON file must be written with 0o600 permissions."""
+    import os
+    import stat
+
+    sv, _set, _get, _del = vault
+    await sv.create_secret(_sample_record(), "secret_val")
+    meta_path = sv._creds_dir / "test_token.json"
+    assert oct(stat.S_IMODE(os.stat(meta_path).st_mode)) == "0o600"
 
 
 @pytest.mark.asyncio
-async def test_issue_1053_resolve_unknown_name_skipped(vault):
-    """resolve_credentials skips names not found in vault and logs a warning."""
-    await vault.create_credential(**_sample_cred())
-    # Mix of valid and invalid names
-    resolved = await vault.resolve_credentials(["test_token", "nonexistent"])
-    assert len(resolved) == 1
-    assert resolved[0]["name"] == "test_token"
+async def test_issue_827_update_secret_replaces_value(vault):
+    """update_secret calls set_secret_value when a new value is provided."""
+    sv, _set, _get, _del = vault
+    await sv.create_secret(_sample_record(), "original_value")
+
+    now = datetime.now(UTC)
+    updated_record = SecretRecord(
+        name="test_token",
+        type=SecretType.BEARER,
+        target_hosts=["api.example.com", "new.example.com"],
+        created_at=now,
+        updated_at=now,
+    )
+    result = await sv.update_secret("test_token", updated_record, value="new_value")
+
+    assert result is not None
+    assert result["type"] == "bearer"
+    # set_secret_value called once for create, once for update
+    assert _set.call_count == 2
+    assert _set.call_args_list[-1][0] == ("test_token", "new_value")
 
 
 @pytest.mark.asyncio
-async def test_issue_1053_get_credential_value_internal(vault):
-    """get_credential_value must return the raw secret for internal use."""
-    await vault.create_credential(**_sample_cred())
-    value = await vault.get_credential_value("test_token")
-    assert value == "super_secret_123"
+async def test_issue_827_update_secret_no_value_skips_keyring(vault):
+    """update_secret with value=None must not call set_secret_value again."""
+    sv, _set, _get, _del = vault
+    await sv.create_secret(_sample_record(), "original_value")
+
+    now = datetime.now(UTC)
+    updated_record = SecretRecord(
+        name="test_token",
+        type=SecretType.GENERIC,
+        target_hosts=["api.example.com"],
+        created_at=now,
+        updated_at=now,
+    )
+    await sv.update_secret("test_token", updated_record, value=None)
+    # Only the initial create should have called set_secret_value
+    assert _set.call_count == 1
 
 
 @pytest.mark.asyncio
-async def test_issue_1053_get_credential_value_unknown_returns_none(vault):
-    """get_credential_value returns None for unknown names."""
-    value = await vault.get_credential_value("no_such_cred")
-    assert value is None
+async def test_issue_827_legacy_resolve_credentials_shim(vault):
+    """resolve_credentials (compat shim) returns legacy-format dicts."""
+    sv, _set, _get, _del = vault
+    now = datetime.now(UTC)
+    record = SecretRecord(
+        name="test_token",
+        type=SecretType.BEARER,
+        target_hosts=["api.example.com"],
+        inject_env="API_TOKEN",
+        created_at=now,
+        updated_at=now,
+    )
+    _get.return_value = "my_secret_value"
+    await sv.create_secret(record, "my_secret_value")
+
+    legacy = await sv.resolve_credentials(["test_token"])
+    assert len(legacy) == 1
+    entry = legacy[0]
+    assert entry["name"] == "test_token"
+    assert "real_value" in entry
+    assert entry["real_value"] == "my_secret_value"
+    assert "delivery" in entry
+
+
+@pytest.mark.asyncio
+async def test_issue_827_credential_vault_alias():
+    """CredentialVault alias must point to SecretsVault."""
+    from ..credential_vault import CredentialVault
+    assert CredentialVault is SecretsVault

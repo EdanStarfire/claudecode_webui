@@ -181,7 +181,7 @@ class TemplateUpdateRequest(BaseModel):
     docker_home_directory: str | None = None
     docker_proxy_enabled: bool | None = None
     docker_proxy_image: str | None = None
-    docker_proxy_credential_names: list[str] | None = None
+    assigned_secrets: list[str] | None = None
     docker_proxy_allowlist_domains: list[str] | None = None
     # Thinking and effort configuration (issue #580)
     thinking_mode: str | None = None
@@ -263,7 +263,7 @@ class McpConfigImportRequest(BaseModel):
     dry_run: bool = True
 
 
-# Proxy credential request models (issue #1053)
+# Proxy credential request models (issue #1053) — kept for backward compat during transition
 class CredentialCreateRequest(BaseModel):
     name: str
     host_pattern: str
@@ -271,6 +271,28 @@ class CredentialCreateRequest(BaseModel):
     value_format: str = "Bearer {value}"
     real_value: str
     delivery: dict
+
+
+# Secrets request models (issue #827)
+class SecretCreateRequest(BaseModel):
+    """Request to create a new secret (full schema + value)."""
+    name: str
+    type: str = "generic"
+    target_hosts: list[str]
+    value: str  # Write-only: stored in keyring, never returned
+    inject_env: str | None = None
+    inject_file: dict | None = None  # InjectFileSpec shape
+    scrub: dict | None = None  # ScrubSpec shape
+
+
+class SecretUpdateRequest(BaseModel):
+    """Request to update secret metadata and/or value (all fields optional)."""
+    type: str | None = None
+    target_hosts: list[str] | None = None
+    value: str | None = None  # Write-only: if provided, replaces existing value
+    inject_env: str | None = None
+    inject_file: dict | None = None
+    scrub: dict | None = None
 
 
 class PermissionResponseRequest(BaseModel):

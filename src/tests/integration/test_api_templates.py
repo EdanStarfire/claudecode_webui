@@ -32,7 +32,7 @@ async def test_issue_1116_put_template_persists_docker_proxy_allowlist_domains(
         f"/api/templates/{template_id}",
         json={
             "docker_proxy_allowlist_domains": ["example.com", "api.example.com"],
-            "docker_proxy_credential_names": ["vault-cred-1"],
+            "assigned_secrets": ["vault-cred-1"],
             "docker_proxy_enabled": True,
             "docker_proxy_image": "proxy:v2",
             "docker_home_directory": "/home/agent",
@@ -46,7 +46,7 @@ async def test_issue_1116_put_template_persists_docker_proxy_allowlist_domains(
     t = get_resp.json()
 
     assert t["docker_proxy_allowlist_domains"] == ["example.com", "api.example.com"]
-    assert t["docker_proxy_credential_names"] == ["vault-cred-1"]
+    assert t["assigned_secrets"] == ["vault-cred-1"]
     assert t["docker_proxy_enabled"] is True
     assert t["docker_proxy_image"] == "proxy:v2"
     assert t["docker_home_directory"] == "/home/agent"

@@ -653,7 +653,7 @@ class TestLeanSessionCreation:
         assert session.allowed_tools == ["bash", "edit", "read"]  # __post_init__ default
         assert session.docker_enabled is False
         assert session.docker_proxy_allowlist_domains is None
-        assert session.docker_proxy_credential_names is None
+        assert session.assigned_secrets is None
         assert session.mcp_server_ids == []  # __post_init__ default
 
     async def test_lean_session_keeps_session_state_fields(

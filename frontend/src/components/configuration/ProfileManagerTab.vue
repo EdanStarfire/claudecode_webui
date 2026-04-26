@@ -400,7 +400,7 @@ const isolationFields = [
   { key: 'docker_proxy_enabled', type: 'toggle', label: 'Network proxy sidecar', dependsOn: 'docker_enabled' },
   { key: 'docker_proxy_image', type: 'text', placeholder: 'claude-proxy:local', dependsOn: 'docker_proxy_enabled' },
   { key: 'docker_proxy_allowlist_domains', type: 'tag-list', placeholder: 'e.g., api.example.com', dependsOn: 'docker_proxy_enabled' },
-  { key: 'docker_proxy_credential_names', type: 'multi-select', optionsFrom: 'proxyCredentials', placeholder: 'Select credentials to activate...', dependsOn: 'docker_proxy_enabled' },
+  { key: 'assigned_secrets', type: 'multi-select', optionsFrom: 'secrets', placeholder: 'Select secrets to assign...', dependsOn: 'docker_proxy_enabled' },
   { key: 'bare_mode', type: 'toggle', label: 'Bare mode (skips hooks, LSP, skills)' },
   { key: 'env_scrub_enabled', type: 'toggle', label: 'Scrub subprocess credentials' },
 ]

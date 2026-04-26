@@ -1,43 +1,17 @@
-"""Proxy credential and session proxy endpoints: /api/proxy/*, /api/sessions/{id}/proxy/*"""
+"""Proxy session status endpoints: /api/sessions/{id}/proxy/*
 
-from fastapi import APIRouter, HTTPException
+Credential CRUD has moved to /api/secrets/* (see secrets.py — issue #827).
+This router retains the per-session proxy status and blocked-log endpoints,
+which describe proxy sidecar state rather than credential management.
+"""
+
+from fastapi import APIRouter
 
 from ..exception_handlers import handle_exceptions
-from ._models import CredentialCreateRequest
 
 
 def build_router(webui) -> APIRouter:
     router = APIRouter()
-
-    # ==================== PROXY ENDPOINTS (issue #1053) ====================
-
-    @router.get("/api/proxy/credentials")
-    @handle_exceptions("list proxy credentials")
-    async def list_proxy_credentials():
-        """List all proxy credentials (metadata only, no values)."""
-        return await webui.service.list_credentials()
-
-    @router.post("/api/proxy/credentials", status_code=201)
-    @handle_exceptions("create proxy credential", value_error_status=400)
-    async def create_proxy_credential(request: CredentialCreateRequest):
-        """Create a named proxy credential. Returns metadata only (value not in response)."""
-        return await webui.service.create_credential(
-            name=request.name,
-            host_pattern=request.host_pattern,
-            header_name=request.header_name,
-            value_format=request.value_format,
-            real_value=request.real_value,
-            delivery=request.delivery,
-        )
-
-    @router.delete("/api/proxy/credentials/{name}")
-    @handle_exceptions("delete proxy credential")
-    async def delete_proxy_credential(name: str):
-        """Delete a proxy credential by name."""
-        deleted = await webui.service.delete_credential(name)
-        if not deleted:
-            raise HTTPException(status_code=404, detail="Credential not found")
-        return {"deleted": True}
 
     @router.get("/api/sessions/{session_id}/proxy/status")
     @handle_exceptions("get proxy status")

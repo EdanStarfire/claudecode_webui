@@ -56,8 +56,8 @@ class SessionConfig(BaseModel):
     # Issue #1050: Proxy lifecycle management
     docker_proxy_enabled: bool = False        # Intent toggle: enable proxy sidecar
     docker_proxy_image: str | None = None     # Image override (None = use app config default)
-    # Issue #1053: Named credentials from vault + extra allowed domains
-    docker_proxy_credential_names: list[str] | None = None  # Names referencing vault credentials
+    # Issue #827: Assigned secrets from vault + extra allowed domains
+    assigned_secrets: list[str] | None = None  # Secret names from vault to inject at session start
     docker_proxy_allowlist_domains: list[str] | None = None  # Extra domains to allow through proxy
 
     # Features
@@ -89,7 +89,7 @@ CONFIG_FIELDS: set[str] = {
     "sandbox_enabled", "sandbox_config",
     "docker_enabled", "docker_image", "docker_extra_mounts",
     "docker_home_directory", "docker_proxy_enabled", "docker_proxy_image",
-    "docker_proxy_credential_names", "docker_proxy_allowlist_domains",
+    "assigned_secrets", "docker_proxy_allowlist_domains",
     "history_distillation_enabled", "auto_memory_mode", "auto_memory_directory",
     "skill_creating_enabled",
     "mcp_server_ids", "enable_claudeai_mcp_servers", "strict_mcp_config",

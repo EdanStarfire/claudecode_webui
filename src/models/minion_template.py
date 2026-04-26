@@ -48,10 +48,10 @@ class MinionTemplate:
     docker_image: str | None = None
     docker_extra_mounts: list[str] | None = None
     docker_home_directory: str | None = None
-    # Issue #1053: Named credentials + extra allowed domains for proxy mode
+    # Issue #827: Assigned secrets + extra allowed domains for proxy mode
     docker_proxy_enabled: bool = False
     docker_proxy_image: str | None = None
-    docker_proxy_credential_names: list[str] | None = None
+    assigned_secrets: list[str] | None = None
     docker_proxy_allowlist_domains: list[str] | None = None
     # Thinking and effort configuration (issue #580)
     thinking_mode: str | None = None
@@ -98,8 +98,8 @@ class MinionTemplate:
             self.additional_directories = []
         if self.docker_extra_mounts is None:
             self.docker_extra_mounts = []
-        if self.docker_proxy_credential_names is None:
-            self.docker_proxy_credential_names = []
+        if self.assigned_secrets is None:
+            self.assigned_secrets = []
         if self.docker_proxy_allowlist_domains is None:
             self.docker_proxy_allowlist_domains = []
         if self.mcp_server_ids is None:
@@ -134,7 +134,17 @@ class MinionTemplate:
         data.setdefault('docker_home_directory', None)
         data.setdefault('docker_proxy_enabled', False)
         data.setdefault('docker_proxy_image', None)
-        data.setdefault('docker_proxy_credential_names', None)
+        # Issue #827: rename docker_proxy_credential_names → assigned_secrets (log warning, no migration)
+        if 'docker_proxy_credential_names' in data and 'assigned_secrets' not in data:
+            import logging as _logging
+            _logging.getLogger(__name__).warning(
+                "Template contains deprecated 'docker_proxy_credential_names' field — "
+                "field renamed to 'assigned_secrets'. Re-assign secrets via the Secrets UI."
+            )
+            data.pop('docker_proxy_credential_names')
+        else:
+            data.pop('docker_proxy_credential_names', None)
+        data.setdefault('assigned_secrets', None)
         data.setdefault('docker_proxy_allowlist_domains', None)
         data.setdefault('thinking_mode', None)
         data.setdefault('thinking_budget_tokens', None)
