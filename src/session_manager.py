@@ -175,6 +175,9 @@ class SessionInfo:
     template_id: str | None = None
     session_overrides: dict[str, Any] | None = None
 
+    # Watchdog activity tracking (issue #1130) — in-memory only on hot path
+    last_activity_at: datetime | None = None
+
     def __post_init__(self):
         if self.additional_directories is None:
             self.additional_directories = []
@@ -202,6 +205,9 @@ class SessionInfo:
         # Convert latest_message_time if present (issue #291)
         if self.latest_message_time:
             data['latest_message_time'] = self.latest_message_time.isoformat()
+        # Convert last_activity_at if present (issue #1130)
+        if self.last_activity_at:
+            data['last_activity_at'] = self.last_activity_at.isoformat()
         return data
 
     @classmethod
@@ -280,6 +286,10 @@ class SessionInfo:
         data.setdefault('env_scrub_enabled', False)
         data.setdefault('template_id', None)
         data.setdefault('session_overrides', None)
+        # Watchdog activity tracking (issue #1130)
+        data.setdefault('last_activity_at', None)
+        if data.get('last_activity_at'):
+            data['last_activity_at'] = datetime.fromisoformat(data['last_activity_at'])
         return cls(**data)
 
 
@@ -905,6 +915,15 @@ class SessionManager:
             except Exception as e:
                 logger.error(f"Failed to update latest message for session {session_id}: {e}")
                 return False
+
+    def record_activity(self, session_id: str) -> None:
+        """Update last_activity_at in memory for watchdog tracking (issue #1130).
+
+        Hot-path safe: in-memory only, no disk write.
+        """
+        session = self._active_sessions.get(session_id)
+        if session:
+            session.last_activity_at = datetime.now(UTC)
 
     async def delete_session(self, session_id: str) -> bool:
         """Delete a session and all its data"""

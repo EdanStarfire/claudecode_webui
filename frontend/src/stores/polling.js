@@ -432,6 +432,13 @@ export const usePollingStore = defineStore('polling', () => {
         break
       }
 
+      case 'session_watchdog_alert': {
+        const uiStore = useUIStore()
+        uiStore.pushAlert(payload)
+        notify('session_error', { sessionName: payload.session_name || 'Session' })
+        break
+      }
+
       default:
         console.warn('Unknown UI poll message type:', payload.type)
     }

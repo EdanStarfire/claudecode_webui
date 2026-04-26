@@ -34,6 +34,9 @@
     <!-- Auth Prompt (issue #728) -->
     <AuthPrompt v-if="showAuthPrompt" @authenticated="onAuthenticated" />
 
+    <!-- Watchdog alert banners (issue #1130) -->
+    <AlertBanner />
+
     <!-- Global Modals -->
     <FolderBrowserModal />
     <ProjectCreateModal />
@@ -68,6 +71,7 @@ import RestartModal from './components/layout/RestartModal.vue'
 import GlobalConfigModal from './components/configuration/GlobalConfigModal.vue'
 import AuthPrompt from './components/common/AuthPrompt.vue'
 import MermaidFullView from './components/common/MermaidFullView.vue'
+import AlertBanner from './components/common/AlertBanner.vue'
 import { useUIStore } from './stores/ui'
 import { usePollingStore } from './stores/polling'
 import { useSessionStore } from './stores/session'

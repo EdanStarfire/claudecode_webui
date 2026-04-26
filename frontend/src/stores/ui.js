@@ -91,6 +91,9 @@ export const useUIStore = defineStore('ui', () => {
   // Issue #899: Rate limit state (global, not per-session); null = no data yet
   const rateLimits = ref(null)
 
+  // Issue #1130: Watchdog alert queue (session_watchdog_alert events from UI poll)
+  const watchdogAlerts = ref([])
+
   // ========== ACTIONS ==========
 
   function toggleRightSidebar() {
@@ -129,6 +132,16 @@ export const useUIStore = defineStore('ui', () => {
   // Issue #899: Update global rate limit state from UI poll event
   function setRateLimits(data) {
     rateLimits.value = data
+  }
+
+  // Issue #1130: Watchdog alert management
+  function pushAlert(payload) {
+    const id = `${payload.session_id}-${payload.watchdog}-${Date.now()}`
+    watchdogAlerts.value = [...watchdogAlerts.value, { ...payload, id }]
+  }
+
+  function dismissAlert(id) {
+    watchdogAlerts.value = watchdogAlerts.value.filter(a => a.id !== id)
   }
 
   function setQueuePanelHeight(height, containerHeight = 600) {
@@ -248,6 +261,7 @@ export const useUIStore = defineStore('ui', () => {
     queuePanelHeight,
     ttsReadAloudEnabled,
     rateLimits,
+    watchdogAlerts,
 
     // Actions
     toggleRightSidebar,
@@ -271,6 +285,8 @@ export const useUIStore = defineStore('ui', () => {
     hideLoading,
     showRestartModal,
     handleResize,
-    setRateLimits
+    setRateLimits,
+    pushAlert,
+    dismissAlert,
   }
 })

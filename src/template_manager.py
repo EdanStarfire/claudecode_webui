@@ -182,6 +182,7 @@ class TemplateManager:
         capabilities: list[str] | None = None,
         profile_ids: dict[str, str] | None = None,
         template_overrides: dict[str, Any] | None = None,
+        watchdog: dict[str, Any] | None = None,
     ) -> MinionTemplate:
         """Create a new template.
 
@@ -219,6 +220,7 @@ class TemplateManager:
             capabilities=capabilities if capabilities is not None else [],
             profile_ids=profile_ids if profile_ids is not None else {},
             template_overrides=template_overrides if template_overrides is not None else {},
+            watchdog=watchdog,
             **config_data,
         )
 
@@ -289,6 +291,7 @@ class TemplateManager:
         # Composable profiles (issue #1062)
         profile_ids: dict[str, str] | None = None,
         template_overrides: dict[str, Any] | None = None,
+        watchdog: dict[str, Any] | None = None,
     ) -> MinionTemplate:
         """Update existing template."""
         template = self.templates.get(template_id)
@@ -406,6 +409,9 @@ class TemplateManager:
 
         if template_overrides is not None:
             template.template_overrides = template_overrides
+
+        if watchdog is not None:
+            template.watchdog = watchdog
 
         template.updated_at = datetime.now(UTC)
 
