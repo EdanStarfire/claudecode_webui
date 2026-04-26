@@ -1,5 +1,5 @@
 <template>
-  <div class="permission-prompt">
+  <div class="permission-prompt" data-testid="permission-prompt">
     <!-- Permission Prompt (active) -->
     <div v-if="effectiveStatus === 'permission_required' && !isOrphaned" class="permission-section">
       <!-- AskUserQuestion UI -->
@@ -129,6 +129,7 @@
             :class="hasSuggestions ? 'btn-approve-outline' : 'btn-approve'"
             @click="handlePermissionDecision('allow', false)"
             :disabled="isSubmittingPermission"
+            data-testid="permission-allow-button"
           >
             {{ hasSuggestions ? 'Approve Only' : 'Approve' }}
           </button>
@@ -136,6 +137,7 @@
             class="btn-timeline btn-deny"
             @click="handlePermissionDecision('deny', false)"
             :disabled="isSubmittingPermission"
+            data-testid="permission-deny-button"
           >
             Deny
           </button>

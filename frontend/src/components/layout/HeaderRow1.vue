@@ -2,7 +2,7 @@
   <div class="header-row1">
     <h1 class="header-title">Claude Code WebUI</h1>
     <div class="header-right">
-      <div class="header-indicator" :class="uiConnected ? 'connected' : 'disconnected'">
+      <div class="header-indicator" :class="uiConnected ? 'connected' : 'disconnected'" data-testid="connection-indicator">
         <span class="indicator-dot"></span>
         {{ uiConnected ? 'Connected' : 'Disconnected' }}
       </div>

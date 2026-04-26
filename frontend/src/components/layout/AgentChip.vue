@@ -9,6 +9,7 @@
     }"
     role="button"
     :aria-label="`Select agent ${displayName}`"
+    :data-testid="`session-chip-${props.session.session_id}`"
     @click="handleClick"
     @contextmenu.prevent="handleManage"
     @touchstart="onTouchStart"

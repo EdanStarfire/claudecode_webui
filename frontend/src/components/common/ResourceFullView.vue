@@ -4,6 +4,7 @@
       <div
         v-if="isOpen"
         class="resource-full-view-overlay"
+        data-testid="resource-fullview"
         @click="handleOverlayClick"
         @keydown="handleKeydown"
         tabindex="0"

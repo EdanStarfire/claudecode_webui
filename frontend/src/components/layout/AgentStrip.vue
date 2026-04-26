@@ -28,7 +28,7 @@
       />
     </template>
 
-    <button class="strip-add-btn" @click.stop="showCreateSessionModal" title="Add agent" aria-label="Add new agent">
+    <button class="strip-add-btn" @click.stop="showCreateSessionModal" title="Add agent" aria-label="Add new agent" data-testid="add-session-button">
       +
     </button>
     <!-- Archive/recovery button -->

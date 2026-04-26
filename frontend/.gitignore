@@ -20,6 +20,11 @@ dist-ssr/
 # Test coverage
 coverage/
 
+# Playwright e2e
+test-results/
+playwright-report/
+playwright/.cache/
+
 # Environment variables (keep .env.example)
 .env
 .env.local

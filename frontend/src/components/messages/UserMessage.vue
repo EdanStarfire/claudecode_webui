@@ -1,5 +1,5 @@
 <template>
-  <div class="msg-wrapper msg-user">
+  <div class="msg-wrapper msg-user" data-testid="user-message">
     <div class="msg-meta">
       <span class="msg-role" :style="isComm ? { color: commColor.accent } : {}">{{ isComm ? commSenderName : 'user' }}</span>
       <span class="msg-time">{{ formattedTimestamp }}</span>

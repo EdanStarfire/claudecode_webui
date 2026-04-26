@@ -39,6 +39,7 @@
         @input="$emit('update:form-data', 'name', $event.target.value)"
         :placeholder="mode === 'configure-ephemeral' ? '[Scheduled]' : (isTemplateMode ? 'e.g., Code Expert' : 'main')"
         :required="mode !== 'configure-ephemeral'"
+        data-testid="session-name-input"
       />
       <div class="invalid-feedback" v-if="errors.name">{{ errors.name }}</div>
     </div>

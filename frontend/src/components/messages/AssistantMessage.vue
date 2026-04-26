@@ -1,7 +1,7 @@
 <template>
   <!-- Issue #195: Hide assistant bubble entirely when nothing to render
        (e.g. content-less messages whose only tools were Task calls moved to SubagentTimeline) -->
-  <div v-if="hasAnythingToShow" class="msg-wrapper msg-assistant">
+  <div v-if="hasAnythingToShow" class="msg-wrapper msg-assistant" data-testid="assistant-message">
     <div class="msg-meta">
       <span class="msg-role">assistant</span>
       <span class="msg-time">{{ formattedTimestamp }}</span>

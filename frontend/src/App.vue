@@ -1,5 +1,5 @@
 <template>
-  <div class="app-shell">
+  <div class="app-shell" data-testid="app-root">
     <!-- Row 1: Dark app chrome bar -->
     <HeaderRow1 />
 

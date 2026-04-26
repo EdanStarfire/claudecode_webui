@@ -5,6 +5,7 @@
     :title="tooltip"
     role="button"
     :aria-label="tooltip"
+    data-testid="timeline-node"
     @click.stop="$emit('click')"
     @mouseenter="showTooltip = true"
     @mouseleave="showTooltip = false"
