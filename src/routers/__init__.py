@@ -8,6 +8,7 @@ register_all() wires every router into the FastAPI app.
 from fastapi import FastAPI
 
 from . import (
+    analytics,
     archives,
     audit,
     config,
@@ -37,6 +38,7 @@ from . import (
 
 def register_all(app: FastAPI, webui) -> None:
     """Register all domain routers with the FastAPI app."""
+    app.include_router(analytics.build_router(webui))
     app.include_router(audit.build_router(webui))
     app.include_router(poll.build_router(webui))
     app.include_router(permissions.build_router(webui))

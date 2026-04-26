@@ -3,6 +3,7 @@ import NoSessionSelected from '../components/session/NoSessionSelected.vue'
 import SessionView from '../components/session/SessionView.vue'
 import ProjectOverview from '../components/project/ProjectOverview.vue'
 import AuditView from '../components/audit/AuditView.vue'
+import AnalyticsView from '../components/analytics/AnalyticsView.vue'
 
 const routes = [
   {
@@ -14,6 +15,11 @@ const routes = [
     path: '/audit',
     name: 'audit',
     component: AuditView
+  },
+  {
+    path: '/analytics',
+    name: 'analytics',
+    component: AnalyticsView
   },
   {
     path: '/project/:projectId',

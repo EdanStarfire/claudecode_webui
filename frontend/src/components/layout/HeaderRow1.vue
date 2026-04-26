@@ -18,6 +18,9 @@
           <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
         </svg>
       </button>
+      <router-link to="/analytics" class="header-btn analytics-nav-btn" title="Analytics" aria-label="Analytics dashboard">
+        ◈
+      </router-link>
       <router-link to="/audit" class="header-btn audit-nav-btn" title="Audit" aria-label="Audit timeline">
         ⎗
       </router-link>
@@ -144,11 +147,13 @@ const uiConnected = computed(() => wsStore.uiConnected)
   color: #93c5fd;
 }
 
+.analytics-nav-btn,
 .audit-nav-btn {
   text-decoration: none;
   font-size: 14px;
 }
 
+.analytics-nav-btn.router-link-active,
 .audit-nav-btn.router-link-active {
   border-color: #6366f1;
   color: #a5b4fc;
