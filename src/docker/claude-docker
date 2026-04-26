@@ -153,14 +153,16 @@ if [ -z "$PROXY_IMAGE" ] && [ -n "${SSH_AUTH_SOCK:-}" ] && [ -S "$SSH_AUTH_SOCK"
     SSH_AGENT_FLAGS="-v $SSH_AUTH_SOCK:/ssh-agent -e SSH_AUTH_SOCK=/ssh-agent"
 fi
 
-# Issue #1052: Mount SSH key dir and configure GIT_SSH_COMMAND when set.
-# CLAUDE_DOCKER_SSH_DIR is populated by prepare_session_ssh() in docker_utils.py
-# when an ssh_key secret is assigned to the session.
+# Issue #1052: Two-dir SSH isolation.
+# CLAUDE_DOCKER_SSH_SHARED_DIR contains the ssh-agent socket, SSH config, and
+# known_hosts — mounted into the AGENT container only (read-only). The private
+# key lives in CLAUDE_DOCKER_SSH_KEY_DIR, which is mounted into the PROXY SIDECAR
+# only (handled below in the proxy launch block).
 SSH_DIR_FLAGS=""
-if [ -n "${CLAUDE_DOCKER_SSH_DIR:-}" ] && [ -d "${CLAUDE_DOCKER_SSH_DIR:-}" ]; then
-    SSH_DIR_FLAGS="-v ${CLAUDE_DOCKER_SSH_DIR}:/run/ssh:ro"
+if [ -n "${CLAUDE_DOCKER_SSH_SHARED_DIR:-}" ] && [ -d "${CLAUDE_DOCKER_SSH_SHARED_DIR:-}" ]; then
+    SSH_DIR_FLAGS="-v ${CLAUDE_DOCKER_SSH_SHARED_DIR}:/run/ssh:ro"
+    SSH_DIR_FLAGS="$SSH_DIR_FLAGS -e SSH_AUTH_SOCK=/run/ssh/agent.sock"
     SSH_DIR_FLAGS="$SSH_DIR_FLAGS -e GIT_SSH_COMMAND=/run/ssh/ssh-wrapper"
-    SSH_DIR_FLAGS="$SSH_DIR_FLAGS -e SSH_CONFIG_PATH=/run/ssh/config"
 fi
 
 # Issue #781: Build resource limit flags
@@ -216,13 +218,26 @@ if [ -n "$PROXY_IMAGE" ]; then
 
     # Tear down sidecar and certs when the agent container exits.
     # rm -rf may fail if uid 9999-owned files remain; || true prevents exit-code noise.
-    trap 'docker rm -f "$PROXY_NAME" 2>/dev/null || true; rm -rf "$PROXY_CERTS" 2>/dev/null || true' EXIT
+    # Issue #1052: Also reap both SSH tmpdirs (key_dir + shared_dir).
+    trap 'docker rm -f "$PROXY_NAME" 2>/dev/null || true; rm -rf "$PROXY_CERTS" "${CLAUDE_DOCKER_SSH_KEY_DIR:-}" "${CLAUDE_DOCKER_SSH_SHARED_DIR:-}" 2>/dev/null || true' EXIT
 
     # Issue #1053: Bind-mount dynamic allowlist into sidecar (overrides baked-in /etc/proxy/allowlist.json)
     PROXY_ALLOWLIST_FILE="${CLAUDE_DOCKER_PROXY_ALLOWLIST_FILE:-}"
     PROXY_ALLOWLIST_FLAGS=""
     if [ -n "$PROXY_ALLOWLIST_FILE" ] && [ -f "$PROXY_ALLOWLIST_FILE" ]; then
         PROXY_ALLOWLIST_FLAGS="-v $PROXY_ALLOWLIST_FILE:/etc/proxy/allowlist.json:ro"
+    fi
+
+    # Issue #1052: Mount SSH key dir into proxy only (private key never enters agent).
+    # Proxy entrypoint ssh-adds the key, wipes the file, then creates the socket
+    # in the shared dir that both containers access at /run/ssh.
+    SSH_PROXY_MOUNTS=""
+    if [ -n "${CLAUDE_DOCKER_SSH_KEY_DIR:-}" ] && [ -d "${CLAUDE_DOCKER_SSH_KEY_DIR:-}" ]; then
+        SSH_PROXY_MOUNTS="$SSH_PROXY_MOUNTS -v ${CLAUDE_DOCKER_SSH_KEY_DIR}:/run/ssh-private:ro"
+    fi
+    if [ -n "${CLAUDE_DOCKER_SSH_SHARED_DIR:-}" ]; then
+        mkdir -p "${CLAUDE_DOCKER_SSH_SHARED_DIR}"
+        SSH_PROXY_MOUNTS="$SSH_PROXY_MOUNTS -v ${CLAUDE_DOCKER_SSH_SHARED_DIR}:/run/ssh"
     fi
 
     docker run -d \
@@ -233,6 +248,7 @@ if [ -n "$PROXY_IMAGE" ]; then
         -v "$PROXY_CERTS:/var/lib/mitmproxy" \
         ${PROXY_LOG_DIR:+-v "$PROXY_LOG_DIR:/var/log/proxy"} \
         $PROXY_ALLOWLIST_FLAGS \
+        $SSH_PROXY_MOUNTS \
         "$PROXY_IMAGE" >/dev/null
 
     # Wait up to 30s for the proxy to be fully ready.

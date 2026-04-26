@@ -197,7 +197,7 @@
                   <div class="col-12">
                     <label class="form-label small mb-1">Key Type</label>
                     <div class="d-flex align-items-center gap-2">
-                      <span class="font-monospace small">{{ sshKeyMeta.key_type || '���' }}</span>
+                      <span class="font-monospace small">{{ sshKeyMeta.key_type || '—' }}</span>
                     </div>
                   </div>
                   <div class="col-12">

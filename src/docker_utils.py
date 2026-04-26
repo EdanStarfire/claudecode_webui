@@ -145,9 +145,11 @@ def resolve_docker_cli_path(
     return wrapper_path, env_vars
 
 
+# SSH config mounted into the shared dir (agent container at /run/ssh).
+# No IdentityFile — the ssh-agent socket inside the proxy sidecar provides
+# the identity; the agent container never holds the raw private key bytes.
 _SSH_CONFIG_TEMPLATE = """\
 Host *
-    IdentityFile /run/ssh/id_ed25519
     IdentitiesOnly yes
     StrictHostKeyChecking accept-new
     UserKnownHostsFile /run/ssh/known_hosts
@@ -160,23 +162,27 @@ exec ssh -F /run/ssh/config "$@"
 """
 
 
-def prepare_session_ssh(resolved_secrets: list[dict], ssh_dir: Path) -> bool:
-    """Prepare SSH key injection files for a proxy-mode Docker session.
+def prepare_session_ssh(
+    resolved_secrets: list[dict],
+    key_dir: Path,
+    shared_dir: Path,
+) -> bool:
+    """Prepare SSH key injection for a proxy-mode Docker session.
 
-    Filters `resolved_secrets` (full records including 'value') for ssh_key type,
-    enforces a maximum of one SSH key per session, then writes:
-      - id_ed25519     (private key, mode 0o600)
-      - config         (SSH client config routing through SOCKS5 at 127.0.0.1:1080)
-      - known_hosts    (empty; populated at runtime via StrictHostKeyChecking accept-new)
-      - ssh-wrapper    (executable shim setting -F /run/ssh/config for GIT_SSH_COMMAND)
+    Implements two-dir isolation so the private key bytes never enter the agent
+    container:
 
-    The caller must add `{ssh_dir}:/run/ssh:ro` to docker extra_mounts.
-    GIT_SSH_COMMAND should be set to `/run/ssh/ssh-wrapper` in the container.
+      key_dir   — contains the raw private key file (``id``, mode 0o600).
+                  Mounted into the PROXY SIDECAR ONLY at /run/ssh-private:ro.
+                  The proxy entrypoint ssh-adds the key, then wipes this file.
 
-    Returns True if an SSH key was prepared, False if no ssh_key secrets are assigned.
-    Raises ValueError if more than one ssh_key secret is assigned.
+      shared_dir — contains config, known_hosts, and ssh-wrapper.
+                  Mounted into BOTH containers at /run/ssh (read-write on proxy
+                  so ssh-agent can create the socket; read-only on agent).
+
+    Returns True if an SSH key was prepared, False if no ssh_key secrets are
+    assigned.  Raises ValueError if more than one ssh_key secret is assigned.
     """
-    from .secret_types.ssh_key import SshKeyHandler
 
     ssh_secrets = [s for s in resolved_secrets if s.get("type") == "ssh_key"]
     if not ssh_secrets:
@@ -193,29 +199,32 @@ def prepare_session_ssh(resolved_secrets: list[dict], ssh_dir: Path) -> bool:
         logger.warning(f"ssh_key secret '{secret.get('name')}' has empty value — skipping SSH setup")
         return False
 
-    ssh_dir.mkdir(parents=True, exist_ok=True)
+    # key_dir: private key only — proxy-sidecar mount at /run/ssh-private:ro
+    key_dir.mkdir(parents=True, exist_ok=True)
+    key_path = key_dir / "id"
+    content = key_value if key_value.endswith("\n") else key_value + "\n"
+    key_path.write_text(content)
+    os.chmod(key_path, 0o600)
 
-    # Private key
-    SshKeyHandler.materialize(key_value, ssh_dir, name="ed25519")
+    # shared_dir: socket + config + known_hosts — both containers at /run/ssh
+    shared_dir.mkdir(parents=True, exist_ok=True)
 
-    # SSH client config
-    config_path = ssh_dir / "config"
+    config_path = shared_dir / "config"
     config_path.write_text(_SSH_CONFIG_TEMPLATE)
     os.chmod(config_path, 0o644)
 
-    # Empty known_hosts (populated at first connection via StrictHostKeyChecking accept-new)
-    known_hosts = ssh_dir / "known_hosts"
+    known_hosts = shared_dir / "known_hosts"
     known_hosts.touch()
     os.chmod(known_hosts, 0o644)
 
-    # Wrapper script so GIT_SSH_COMMAND can point to a no-space path
-    wrapper = ssh_dir / "ssh-wrapper"
+    wrapper = shared_dir / "ssh-wrapper"
     wrapper.write_text(_SSH_WRAPPER_SCRIPT)
     os.chmod(wrapper, 0o755)
 
     logger.info(
-        f"SSH key prepared in {ssh_dir} for secret '{secret.get('name')}' "
-        f"(type={secret.get('key_type', 'unknown')})"
+        f"SSH key prepared for secret '{secret.get('name')}' "
+        f"(type={secret.get('key_type', 'unknown')}): "
+        f"key_dir={key_dir}, shared_dir={shared_dir}"
     )
     return True
 

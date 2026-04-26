@@ -84,11 +84,8 @@ class SecretsVault:
 
         # Issue #1052: For ssh_key type, validate the PEM and persist derived public-key metadata.
         if record.type == SecretType.SSH_KEY:
-            from .secret_types.ssh_key import SshKeyHandler, SshKeyValidationError  # noqa: PLC0415
-            try:
-                validation = SshKeyHandler.validate(value)
-            except SshKeyValidationError:
-                raise
+            from .secret_types.ssh_key import SshKeyHandler
+            validation = SshKeyHandler.validate(value)  # raises SshKeyValidationError on failure
             record.public_key_openssh = validation.public_key_openssh
             record.fingerprint_sha256 = validation.fingerprint_sha256
             record.key_type = validation.key_type
@@ -123,14 +120,8 @@ class SecretsVault:
         if value is not None:
             # Issue #1052: Re-validate ssh_key and refresh derived metadata when value changes.
             if record.type == SecretType.SSH_KEY:
-                from .secret_types.ssh_key import (  # noqa: PLC0415
-                    SshKeyHandler,
-                    SshKeyValidationError,
-                )
-                try:
-                    validation = SshKeyHandler.validate(value)
-                except SshKeyValidationError:
-                    raise
+                from .secret_types.ssh_key import SshKeyHandler
+                validation = SshKeyHandler.validate(value)  # raises SshKeyValidationError on failure
                 record.public_key_openssh = validation.public_key_openssh
                 record.fingerprint_sha256 = validation.fingerprint_sha256
                 record.key_type = validation.key_type

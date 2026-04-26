@@ -1210,6 +1210,9 @@ class SessionCoordinator:
                 # and passed to the agent container via env vars / mounted files.
                 proxy_allowlist_file = None
                 delivery_envs: dict[str, str] = {}  # env var name → placeholder string
+                _ssh_key_prepared = False  # Issue #1052: two-dir SSH isolation flag
+                _ssh_key_dir: Path | None = None
+                _ssh_shared_dir: Path | None = None
 
                 if effective_config.docker_proxy_enabled:
                     # Build dynamic allowlist: static defaults + config domains
@@ -1271,13 +1274,21 @@ class SessionCoordinator:
                             f"{session_id}: names={list(new_placeholders.values())}"
                         )
 
-                        # Issue #1052: SSH key injection — write key/config into ssh_dir,
-                        # bind-mount at /run/ssh:ro, expose GIT_SSH_COMMAND wrapper.
-                        from src.docker_utils import prepare_session_ssh
-                        ssh_dir = tmp_dir / "ssh"
+                        # Issue #1052: SSH key isolation via two-dir design.
+                        # key_dir  → proxy-only mount at /run/ssh-private:ro (key bytes
+                        #            never reach the agent; proxy wipes the file after ssh-add).
+                        # shared_dir → both containers at /run/ssh (socket created by proxy
+                        #              ssh-agent; agent uses socket, not key file).
+                        from src.docker_utils import prepare_session_ssh  # noqa: PLC0415
+                        _ssh_key_dir = tmp_dir / "ssh-key"
+                        _ssh_shared_dir = tmp_dir / "ssh-shared"
                         try:
-                            if prepare_session_ssh(resolved_metas, ssh_dir):
-                                extra_mounts.append(f"{ssh_dir}:/run/ssh:ro")
+                            if prepare_session_ssh(resolved_metas, _ssh_key_dir, _ssh_shared_dir):
+                                _ssh_key_prepared = True
+                                # Shared dir into agent at /run/ssh:ro (socket + config)
+                                extra_mounts.append(f"{_ssh_shared_dir}:/run/ssh:ro")
+                                # Agent accesses the ssh-agent socket for signing
+                                delivery_envs["SSH_AUTH_SOCK"] = "/run/ssh/agent.sock"
                                 delivery_envs["GIT_SSH_COMMAND"] = "/run/ssh/ssh-wrapper"
                         except ValueError as ssh_err:
                             coord_logger.error(
@@ -1327,6 +1338,12 @@ class SessionCoordinator:
                     delivery_envs=delivery_envs or None,
                     proxy_allowlist_file=proxy_allowlist_file,
                 )
+                # Issue #1052: Tell claude-docker where the two SSH tmpdirs live.
+                # key_dir  → proxy-only mount at /run/ssh-private:ro
+                # shared_dir → both containers at /run/ssh (rw on proxy, ro on agent)
+                if _ssh_key_prepared:
+                    docker_env_vars["CLAUDE_DOCKER_SSH_KEY_DIR"] = str(_ssh_key_dir)
+                    docker_env_vars["CLAUDE_DOCKER_SSH_SHARED_DIR"] = str(_ssh_shared_dir)
                 coord_logger.info(
                     f"Docker mode enabled for session {session_id}: "
                     f"cli_path={effective_cli_path}, env={docker_env_vars}"
