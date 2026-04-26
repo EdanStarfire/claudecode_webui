@@ -33,6 +33,9 @@
       <!-- Diff Tab -->
       <DiffPanel v-show="activeTab === 'diff'" role="tabpanel" aria-label="Diff panel" />
 
+      <!-- Edits Tab -->
+      <EditHistoryPanel v-show="activeTab === 'edits'" role="tabpanel" aria-label="Edit history panel" />
+
       <!-- Tasks Tab -->
       <TaskListPanel v-show="activeTab === 'tasks'" role="tabpanel" aria-label="Tasks panel" />
 
@@ -62,12 +65,14 @@ import { useTaskStore } from '@/stores/task'
 import { useResourceStore } from '@/stores/resource'
 import { useDiffStore } from '@/stores/diff'
 import { useSessionStore } from '@/stores/session'
+import { useEditHistoryStore } from '@/stores/editHistory'
 import AgentOverview from './AgentOverview.vue'
 import TaskListPanel from '../tasks/TaskListPanel.vue'
 import ResourceGallery from '../tasks/ResourceGallery.vue'
 import ResourceFullView from '../common/ResourceFullView.vue'
 import DiffPanel from '../tasks/DiffPanel.vue'
 import DiffFullView from '../common/DiffFullView.vue'
+import EditHistoryPanel from '../tasks/EditHistoryPanel.vue'
 import SchedulePanel from '../schedules/SchedulePanel.vue'
 import ProxyPanel from '../tasks/ProxyPanel.vue'
 import { useScheduleStore } from '@/stores/schedule'
@@ -78,6 +83,7 @@ const taskStore = useTaskStore()
 const resourceStore = useResourceStore()
 const diffStore = useDiffStore()
 const sessionStore = useSessionStore()
+const editHistoryStore = useEditHistoryStore()
 const scheduleStore = useScheduleStore()
 const proxyStore = useProxyStore()
 
@@ -105,11 +111,15 @@ const schedulesHasError = computed(() => {
 
 const proxyEnabled = computed(() => sessionStore.currentSession?.docker_proxy_enabled === true)
 const proxyBadge = computed(() => proxyStore.currentTotalCount)
+const editHistoryCount = computed(() =>
+  editHistoryStore.entryCount(sessionStore.currentSessionId)
+)
 
 // Tab definitions
 const tabs = computed(() => {
   const list = [
     { id: 'diff', label: 'Diff', badge: diffFileCount.value },
+    { id: 'edits', label: 'Edits', badge: editHistoryCount.value },
     { id: 'tasks', label: 'Tasks', badge: taskStats.value.total > 0 ? taskStats.value.total : 0 },
     { id: 'resources', label: 'Resources', badge: resourceCount.value },
     { id: 'schedules', label: 'Sched', badge: schedulesCount.value, badgeError: schedulesHasError.value }

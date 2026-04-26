@@ -60,7 +60,7 @@
 
 <script setup>
 import { computed, toRef } from 'vue'
-import { createPatch } from 'diff'
+import { buildEditDiff } from '@/utils/diffRender'
 import { useToolResult } from '@/composables/useToolResult'
 import ToolSuccessMessage from './ToolSuccessMessage.vue'
 
@@ -88,47 +88,10 @@ const replaceAll = computed(() => {
   return props.toolCall.input?.replace_all || false
 })
 
-// Use the diff library to create a proper unified diff
-const diffLines = computed(() => {
-  const patch = createPatch(
-    filePath.value,
-    oldString.value,
-    newString.value,
-    '',
-    '',
-    { context: 3 }
-  )
-
-  // Parse the patch into lines
-  const lines = patch.split('\n')
-  const result = []
-
-  // Skip header lines (first 4 lines are patch header)
-  for (let i = 4; i < lines.length; i++) {
-    const line = lines[i]
-    if (!line) continue // Skip empty lines at end
-
-    if (line.startsWith('-')) {
-      result.push({ type: 'removed', content: line.substring(1) })
-    } else if (line.startsWith('+')) {
-      result.push({ type: 'added', content: line.substring(1) })
-    } else if (line.startsWith(' ')) {
-      result.push({ type: 'context', content: line.substring(1) })
-    } else if (line.startsWith('@@')) {
-      result.push({ type: 'hunk', content: line })
-    }
-  }
-
-  return result
-})
-
-const removedCount = computed(() => {
-  return diffLines.value.filter(line => line.type === 'removed').length
-})
-
-const addedCount = computed(() => {
-  return diffLines.value.filter(line => line.type === 'added').length
-})
+const diffResult = computed(() => buildEditDiff(filePath.value, oldString.value, newString.value))
+const diffLines = computed(() => diffResult.value.lines)
+const removedCount = computed(() => diffResult.value.removed)
+const addedCount = computed(() => diffResult.value.added)
 
 // Result (composable replaces duplicated hasResult/isError/resultContent)
 const { hasResult, isError, resultContent } = useToolResult(toRef(props, 'toolCall'))
