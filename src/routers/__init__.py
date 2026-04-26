@@ -12,6 +12,7 @@ from . import (
     config,
     core,
     diff,
+    edit_history,
     files,
     filesystem,
     fleet,
@@ -53,6 +54,7 @@ def register_all(app: FastAPI, webui) -> None:
     app.include_router(schedules.build_router(webui))
     app.include_router(system.build_router(webui))
     app.include_router(diff.build_router(webui))
+    app.include_router(edit_history.build_router(webui))
     app.include_router(files.build_router(webui))
     app.include_router(projects.build_router(webui))
     app.include_router(session_runtime.build_router(webui))

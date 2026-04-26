@@ -198,6 +198,13 @@ class ApplicationService:
             return {"exists": False}
         return {"exists": True, "working_directory": session.working_directory}
 
+    async def get_session_messages_path(self, session_id: str) -> str | None:
+        """Return absolute path to messages.jsonl for a session, or None if not found."""
+        session = await self.coordinator.session_manager.get_session_info(session_id)
+        if not session:
+            return None
+        return str(self.coordinator.data_dir / "sessions" / session_id / "messages.jsonl")
+
     # =========================================================================
     # Legion
     # =========================================================================
