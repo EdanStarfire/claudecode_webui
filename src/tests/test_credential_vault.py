@@ -174,29 +174,12 @@ async def test_issue_827_update_secret_no_value_skips_keyring(vault):
     assert _set.call_count == 1
 
 
-@pytest.mark.asyncio
-async def test_issue_827_legacy_resolve_credentials_shim(vault):
-    """resolve_credentials (compat shim) returns legacy-format dicts."""
-    sv, _set, _get, _del = vault
-    now = datetime.now(UTC)
-    record = SecretRecord(
-        name="test_token",
-        type=SecretType.BEARER,
-        target_hosts=["api.example.com"],
-        inject_env="API_TOKEN",
-        created_at=now,
-        updated_at=now,
+def test_issue_1134_resolve_credentials_shim_removed():
+    """Issue #1134: resolve_credentials() legacy shim is removed from SecretsVault."""
+    from ..credential_vault import SecretsVault
+    assert not hasattr(SecretsVault, "resolve_credentials"), (
+        "resolve_credentials() shim must be removed in #1134"
     )
-    _get.return_value = "my_secret_value"
-    await sv.create_secret(record, "my_secret_value")
-
-    legacy = await sv.resolve_credentials(["test_token"])
-    assert len(legacy) == 1
-    entry = legacy[0]
-    assert entry["name"] == "test_token"
-    assert "real_value" in entry
-    assert entry["real_value"] == "my_secret_value"
-    assert "delivery" in entry
 
 
 @pytest.mark.asyncio

@@ -158,7 +158,8 @@ async def test_issue_827_delete_secret(api_integration_env, mock_keyring):
     )
 
     resp = await client.delete("/api/secrets/delete-me")
-    assert resp.status_code == 204, resp.text
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["deleted"] is True
     assert "delete-me" not in mock_keyring
 
     # Verify it no longer appears in list
@@ -191,4 +192,4 @@ async def test_issue_827_create_duplicate_returns_409(api_integration_env, mock_
 
     payload["value"] = "val2"
     r2 = await client.post("/api/secrets", json=payload)
-    assert r2.status_code == 409
+    assert r2.status_code == 400

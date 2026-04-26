@@ -4,6 +4,7 @@ FastAPI web server for Claude Code WebUI with HTTP long-polling support.
 
 import asyncio
 import logging
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -40,6 +41,9 @@ class AuthMiddleware(BaseHTTPMiddleware):
     # Issue #827: The per-session secrets resolve endpoint uses its own Bearer token auth,
     # not the global operator token. Exempt it from global AuthMiddleware.
     EXEMPT_SUFFIXES = ('/secrets/resolve',)
+    # Issue #1134: Session-scoped proxy write-back endpoints (per-session Bearer token auth).
+    # Matches /api/sessions/{uuid}/secrets/{name} (PATCH) and /api/sessions/{uuid}/events (POST).
+    _PROXY_WRITE_BACK_PATTERN = re.compile(r'^/api/sessions/[^/]+/(secrets/[^/]+|events)$')
 
     def __init__(self, app, auth_token: str):
         super().__init__(app)
@@ -57,6 +61,8 @@ class AuthMiddleware(BaseHTTPMiddleware):
         for suffix in self.EXEMPT_SUFFIXES:
             if path.endswith(suffix):
                 return await call_next(request)
+        if self._PROXY_WRITE_BACK_PATTERN.match(path):
+            return await call_next(request)
 
         # Extract token from Authorization header or query param
         token = None

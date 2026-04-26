@@ -37,6 +37,13 @@
             <td class="font-monospace small">{{ secret.name }}</td>
             <td>
               <span class="badge" :class="typeBadgeClass(secret.type)">{{ secret.type }}</span>
+              <!-- Expiry indicator for oauth2 -->
+              <span
+                v-if="secret.type === 'oauth2' && expiryLabel(secret)"
+                class="badge ms-1"
+                :class="expiryBadgeClass(secret)"
+                :title="expiryTitle(secret)"
+              >{{ expiryLabel(secret) }}</span>
             </td>
             <td class="small">
               <span v-if="secret.target_hosts?.length">
@@ -48,6 +55,17 @@
             <td class="small font-monospace">{{ secret.inject_env || '—' }}</td>
             <td class="text-end">
               <div class="btn-group btn-group-sm">
+                <!-- Manual refresh for oauth2 -->
+                <button
+                  v-if="secret.type === 'oauth2'"
+                  class="btn btn-outline-info"
+                  :disabled="refreshingName === secret.name"
+                  @click="triggerRefresh(secret.name)"
+                  title="Manually refresh OAuth2 access token now"
+                >
+                  <span v-if="refreshingName === secret.name" class="spinner-border spinner-border-sm" role="status"></span>
+                  <span v-else>↻</span>
+                </button>
                 <button
                   class="btn btn-outline-secondary"
                   @click="editSecret(secret)"
@@ -119,10 +137,25 @@
             <div class="form-text" style="font-size: 0.7rem">Comma-separated hostnames or wildcard patterns</div>
           </div>
 
-          <!-- Secret Value -->
-          <div class="col-12">
+          <!-- basic_auth: username -->
+          <template v-if="form.type === 'basic_auth'">
+            <div class="col-6">
+              <label class="form-label small mb-1">Username <span class="text-danger">*</span></label>
+              <input
+                v-model="form.username"
+                type="text"
+                class="form-control form-control-sm"
+                placeholder="user@example.com"
+                autocomplete="off"
+              />
+              <div class="form-text" style="font-size: 0.7rem">Stored as plaintext metadata (not in keyring)</div>
+            </div>
+          </template>
+
+          <!-- Secret Value (password for basic_auth) -->
+          <div :class="form.type === 'basic_auth' ? 'col-6' : 'col-12'">
             <label class="form-label small mb-1">
-              Secret Value
+              {{ form.type === 'basic_auth' ? 'Password' : 'Secret Value' }}
               <span v-if="!editingName" class="text-danger">*</span>
               <span v-else class="text-muted">(leave blank to keep existing)</span>
             </label>
@@ -134,6 +167,165 @@
               autocomplete="new-password"
             />
           </div>
+
+          <!-- api_key: injection spec -->
+          <template v-if="form.type === 'api_key'">
+            <div class="col-12">
+              <div class="border rounded p-2 bg-light">
+                <div class="small fw-semibold mb-2 text-secondary">Injection Config</div>
+                <div class="row g-2">
+                  <div class="col-4">
+                    <label class="form-label small mb-1">Location</label>
+                    <select v-model="form.injection_location" class="form-select form-select-sm">
+                      <option value="header">header</option>
+                      <option value="query_param">query_param</option>
+                    </select>
+                  </div>
+                  <template v-if="form.injection_location === 'header'">
+                    <div class="col-4">
+                      <label class="form-label small mb-1">Header Name</label>
+                      <input
+                        v-model="form.injection_header_name"
+                        type="text"
+                        class="form-control form-control-sm font-monospace"
+                        placeholder="Authorization"
+                      />
+                    </div>
+                    <div class="col-4">
+                      <label class="form-label small mb-1">Prefix</label>
+                      <input
+                        v-model="form.injection_prefix"
+                        type="text"
+                        class="form-control form-control-sm font-monospace"
+                        placeholder="Bearer"
+                      />
+                      <div class="form-text" style="font-size: 0.7rem">Leave blank for no prefix</div>
+                    </div>
+                  </template>
+                  <template v-if="form.injection_location === 'query_param'">
+                    <div class="col-8">
+                      <label class="form-label small mb-1">Query Param Name <span class="text-danger">*</span></label>
+                      <input
+                        v-model="form.injection_param_name"
+                        type="text"
+                        class="form-control form-control-sm font-monospace"
+                        placeholder="api_key"
+                      />
+                    </div>
+                  </template>
+                </div>
+              </div>
+            </div>
+          </template>
+
+          <!-- oauth2: refresh + scrub blocks -->
+          <template v-if="form.type === 'oauth2'">
+            <div class="col-12">
+              <div class="border rounded p-2 bg-light mb-2">
+                <div class="small fw-semibold mb-2 text-secondary">OAuth2 Refresh</div>
+                <div class="row g-2">
+                  <div class="col-12">
+                    <label class="form-label small mb-1">Token URL <span class="text-danger">*</span></label>
+                    <input
+                      v-model="form.refresh_token_url"
+                      type="text"
+                      class="form-control form-control-sm font-monospace"
+                      placeholder="https://github.com/login/oauth/access_token"
+                    />
+                  </div>
+                  <div class="col-6">
+                    <label class="form-label small mb-1">Client ID <span class="text-danger">*</span></label>
+                    <input
+                      v-model="form.refresh_client_id"
+                      type="text"
+                      class="form-control form-control-sm font-monospace"
+                      placeholder="Iv1.abc123"
+                    />
+                  </div>
+                  <div class="col-6">
+                    <label class="form-label small mb-1">Refresh Token Secret <span class="text-danger">*</span></label>
+                    <select v-model="form.refresh_token_secret_name" class="form-select form-select-sm font-monospace">
+                      <option value="">— select secret —</option>
+                      <option v-for="s in otherSecrets" :key="s.name" :value="s.name">{{ s.name }}</option>
+                    </select>
+                    <div class="form-text" style="font-size: 0.7rem">Name of the sibling refresh_token secret</div>
+                  </div>
+                  <div class="col-6">
+                    <label class="form-label small mb-1">Client Secret (optional)</label>
+                    <select v-model="form.refresh_client_secret_secret_name" class="form-select form-select-sm font-monospace">
+                      <option value="">— none —</option>
+                      <option v-for="s in otherSecrets" :key="s.name" :value="s.name">{{ s.name }}</option>
+                    </select>
+                  </div>
+                  <div class="col-3">
+                    <label class="form-label small mb-1">Buffer (s)</label>
+                    <input
+                      v-model.number="form.refresh_buffer_seconds"
+                      type="number"
+                      class="form-control form-control-sm"
+                      placeholder="60"
+                      min="0"
+                    />
+                  </div>
+                  <div class="col-3">
+                    <label class="form-label small mb-1">Expires At</label>
+                    <input
+                      v-model="form.refresh_expires_at"
+                      type="datetime-local"
+                      class="form-control form-control-sm"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div class="border rounded p-2 bg-light">
+                <div class="small fw-semibold mb-2 text-secondary">Response Capture (scrub)</div>
+                <div class="row g-2">
+                  <div class="col-12">
+                    <label class="form-label small mb-1">URL Path Pattern</label>
+                    <input
+                      v-model="form.scrub_url_path"
+                      type="text"
+                      class="form-control form-control-sm font-monospace"
+                      placeholder="/login/oauth/access_token"
+                    />
+                    <div class="form-text" style="font-size: 0.7rem">Substring match on request path to trigger capture</div>
+                  </div>
+                  <div class="col-6">
+                    <label class="form-label small mb-1">JSONPath Matcher</label>
+                    <input
+                      v-model="form.scrub_matcher_jsonpath"
+                      type="text"
+                      class="form-control form-control-sm font-monospace"
+                      placeholder="$.access_token"
+                    />
+                  </div>
+                  <div class="col-6">
+                    <label class="form-label small mb-1">Regex Matcher</label>
+                    <input
+                      v-model="form.scrub_matcher_regex"
+                      type="text"
+                      class="form-control form-control-sm font-monospace"
+                      placeholder="access_token=([^&]+)"
+                    />
+                  </div>
+                  <div class="col-12">
+                    <div class="form-check form-check-sm">
+                      <input
+                        v-model="form.scrub_update_on_change"
+                        class="form-check-input"
+                        type="checkbox"
+                        id="scrubUpdateOnChange"
+                      />
+                      <label class="form-check-label small" for="scrubUpdateOnChange">
+                        Auto-update keyring when captured value changes
+                      </label>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </template>
 
           <!-- Inject Env -->
           <div class="col-6">
@@ -220,6 +412,7 @@ const showForm = ref(false)
 const editingName = ref(null)
 const saving = ref(false)
 const formError = ref(null)
+const refreshingName = ref(null)
 
 const defaultForm = () => ({
   name: '',
@@ -231,6 +424,25 @@ const defaultForm = () => ({
   inject_file_format: 'raw',
   inject_file_permissions: '0600',
   inject_file_key_path: '',
+  // basic_auth
+  username: '',
+  // api_key injection spec
+  injection_location: 'header',
+  injection_header_name: 'Authorization',
+  injection_prefix: 'Bearer',
+  injection_param_name: '',
+  // oauth2 refresh spec
+  refresh_token_url: '',
+  refresh_client_id: '',
+  refresh_token_secret_name: '',
+  refresh_client_secret_secret_name: '',
+  refresh_buffer_seconds: 60,
+  refresh_expires_at: '',
+  // scrub spec (oauth2)
+  scrub_url_path: '',
+  scrub_matcher_jsonpath: '',
+  scrub_matcher_regex: '',
+  scrub_update_on_change: true,
 })
 
 const form = reactive(defaultForm())
@@ -238,8 +450,18 @@ const form = reactive(defaultForm())
 const canSave = computed(() => {
   if (!form.name || !form.target_hosts_raw) return false
   if (!editingName.value && !form.value) return false
+  if (form.type === 'basic_auth' && !form.username) return false
+  if (form.type === 'api_key' && form.injection_location === 'query_param' && !form.injection_param_name) return false
+  if (form.type === 'oauth2') {
+    if (!form.refresh_token_url || !form.refresh_client_id || !form.refresh_token_secret_name) return false
+  }
   return true
 })
+
+/** Other secrets available for sibling-secret dropdowns. */
+const otherSecrets = computed(() =>
+  secretsStore.secrets.filter(s => s.name !== editingName.value)
+)
 
 function toggleForm() {
   if (showForm.value && !editingName.value) {
@@ -256,11 +478,34 @@ function editSecret(secret) {
   form.type = secret.type || 'generic'
   form.target_hosts_raw = (secret.target_hosts || []).join(', ')
   form.inject_env = secret.inject_env || ''
+  form.username = secret.username || ''
   if (secret.inject_file) {
     form.inject_file_path = secret.inject_file.path || ''
     form.inject_file_format = secret.inject_file.format || 'raw'
     form.inject_file_permissions = secret.inject_file.permissions || '0600'
     form.inject_file_key_path = secret.inject_file.key_path || ''
+  }
+  if (secret.injection) {
+    form.injection_location = secret.injection.location || 'header'
+    form.injection_header_name = secret.injection.header_name || 'Authorization'
+    form.injection_prefix = secret.injection.prefix !== undefined ? secret.injection.prefix : 'Bearer'
+    form.injection_param_name = secret.injection.param_name || ''
+  }
+  if (secret.refresh) {
+    form.refresh_token_url = secret.refresh.token_url || ''
+    form.refresh_client_id = secret.refresh.client_id || ''
+    form.refresh_token_secret_name = secret.refresh.refresh_token_secret_name || ''
+    form.refresh_client_secret_secret_name = secret.refresh.client_secret_secret_name || ''
+    form.refresh_buffer_seconds = secret.refresh.buffer_seconds ?? 60
+    form.refresh_expires_at = secret.refresh.expires_at
+      ? new Date(secret.refresh.expires_at).toISOString().slice(0, 16)
+      : ''
+  }
+  if (secret.scrub) {
+    form.scrub_url_path = secret.scrub.url_path || ''
+    form.scrub_matcher_jsonpath = secret.scrub.matcher_jsonpath || ''
+    form.scrub_matcher_regex = secret.scrub.matcher_regex || ''
+    form.scrub_update_on_change = secret.scrub.update_on_change !== false
   }
   formError.value = null
   showForm.value = true
@@ -294,6 +539,33 @@ function buildPayload() {
       key_path: form.inject_file_key_path || null,
     }
   }
+  if (form.type === 'basic_auth' && form.username) {
+    payload.username = form.username
+  }
+  if (form.type === 'api_key') {
+    payload.injection = {
+      location: form.injection_location,
+      header_name: form.injection_header_name || 'Authorization',
+      prefix: form.injection_prefix,
+      param_name: form.injection_param_name || null,
+    }
+  }
+  if (form.type === 'oauth2') {
+    payload.refresh = {
+      token_url: form.refresh_token_url,
+      client_id: form.refresh_client_id,
+      refresh_token_secret_name: form.refresh_token_secret_name,
+      client_secret_secret_name: form.refresh_client_secret_secret_name || null,
+      buffer_seconds: form.refresh_buffer_seconds,
+      expires_at: form.refresh_expires_at ? new Date(form.refresh_expires_at).toISOString() : null,
+    }
+    payload.scrub = {
+      url_path: form.scrub_url_path || null,
+      matcher_jsonpath: form.scrub_matcher_jsonpath || null,
+      matcher_regex: form.scrub_matcher_regex || null,
+      update_on_change: form.scrub_update_on_change,
+    }
+  }
   return payload
 }
 
@@ -324,6 +596,18 @@ async function confirmDelete(name) {
   }
 }
 
+async function triggerRefresh(name) {
+  refreshingName.value = name
+  try {
+    await secretsStore.refreshSecret(name)
+  } catch (e) {
+    console.error('Failed to refresh secret:', e)
+    alert(`Refresh failed: ${e.message || e}`)
+  } finally {
+    refreshingName.value = null
+  }
+}
+
 function typeBadgeClass(type) {
   const map = {
     api_key: 'bg-primary',
@@ -334,6 +618,37 @@ function typeBadgeClass(type) {
     ssh: 'bg-dark',
   }
   return map[type] || 'bg-secondary'
+}
+
+function expiryLabel(secret) {
+  const expiresAt = secret.refresh?.expires_at
+  if (!expiresAt) return null
+  const exp = new Date(expiresAt)
+  const now = new Date()
+  const diffMs = exp - now
+  if (diffMs < 0) return 'expired'
+  const diffMin = Math.floor(diffMs / 60000)
+  if (diffMin < 60) return `${diffMin}m`
+  const diffH = Math.floor(diffMs / 3600000)
+  if (diffH < 48) return `${diffH}h`
+  return `${Math.floor(diffH / 24)}d`
+}
+
+function expiryBadgeClass(secret) {
+  const expiresAt = secret.refresh?.expires_at
+  if (!expiresAt) return 'bg-secondary'
+  const exp = new Date(expiresAt)
+  const diffMs = exp - new Date()
+  if (diffMs < 0) return 'bg-danger'
+  if (diffMs < 300000) return 'bg-danger'     // < 5 min
+  if (diffMs < 3600000) return 'bg-warning text-dark'  // < 1 hr
+  return 'bg-success'
+}
+
+function expiryTitle(secret) {
+  const expiresAt = secret.refresh?.expires_at
+  if (!expiresAt) return ''
+  return `Expires: ${new Date(expiresAt).toLocaleString()}`
 }
 
 onMounted(() => {

@@ -12,16 +12,14 @@ Tests:
 2.  SessionConfig assigned_secrets default to None
 3.  SessionInfo backward compat (missing assigned_secrets defaults to None)
 4.  SessionConfig → SessionInfo propagation via SessionManager.create_session()
-5.  docker_utils with proxy_credentials_file sets CLAUDE_DOCKER_PROXY_CREDS_FILE
-6.  docker_utils with proxy_credentials_file=None omits env var
-7.  docker_utils with delivery_env_file sets CLAUDE_DOCKER_DELIVERY_ENV_FILE
-8.  docker_utils with delivery_env_file=None omits env var
+5.  docker_utils with delivery_envs dict sets CLAUDE_DOCKER_DELIVERY_ENVS as JSON string
+6.  docker_utils with delivery_envs=None omits CLAUDE_DOCKER_DELIVERY_ENVS
 9.  addon.py: no placeholder in headers → headers unchanged (no injection)
 10. addon.py: correct placeholder in Authorization header → replaced with real value
 11. addon.py: different value in header (not placeholder) → headers unchanged
-12. addon.py: placeholder on wrong host (optional guard) → not injected
+12. addon.py: placeholder injected for any allowed host (no per-credential host guard)
 13. addon.py: access log records credential name, never real_value
-14. addon.py: graceful no-op when credentials.json is absent
+14. addon.py: graceful no-op when session token files are absent
 """
 
 import json
@@ -130,33 +128,21 @@ async def test_session_config_assigned_secrets_propagation(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# 5-8. docker_utils env var logic
+# 5-6. docker_utils env var logic (issue #1134: inline delivery_envs replaces file)
 # ---------------------------------------------------------------------------
 
-def test_resolve_docker_cli_path_credentials_file_set(tmp_path):
-    """proxy_credentials_file sets CLAUDE_DOCKER_PROXY_CREDS_FILE."""
-    creds_file = str(tmp_path / "credentials.json")
-    _, env = resolve_docker_cli_path(proxy_credentials_file=creds_file)
-    assert env.get("CLAUDE_DOCKER_PROXY_CREDS_FILE") == creds_file
+def test_resolve_docker_cli_path_delivery_envs_dict_set():
+    """delivery_envs dict serialises to CLAUDE_DOCKER_DELIVERY_ENVS as JSON string."""
+    envs = {"GH_TOKEN": "CC_SECRET_github_token_abcd1234", "NPM_TOKEN": "CC_SECRET_npm_token_ef567890"}
+    _, env = resolve_docker_cli_path(delivery_envs=envs)
+    assert "CLAUDE_DOCKER_DELIVERY_ENVS" in env
+    assert json.loads(env["CLAUDE_DOCKER_DELIVERY_ENVS"]) == envs
 
 
-def test_resolve_docker_cli_path_credentials_file_none():
-    """proxy_credentials_file=None omits CLAUDE_DOCKER_PROXY_CREDS_FILE."""
-    _, env = resolve_docker_cli_path(proxy_credentials_file=None)
-    assert "CLAUDE_DOCKER_PROXY_CREDS_FILE" not in env
-
-
-def test_resolve_docker_cli_path_delivery_env_file_set(tmp_path):
-    """delivery_env_file sets CLAUDE_DOCKER_DELIVERY_ENV_FILE."""
-    env_file = str(tmp_path / "delivery_envs.json")
-    _, env = resolve_docker_cli_path(delivery_env_file=env_file)
-    assert env.get("CLAUDE_DOCKER_DELIVERY_ENV_FILE") == env_file
-
-
-def test_resolve_docker_cli_path_delivery_env_file_none():
-    """delivery_env_file=None omits CLAUDE_DOCKER_DELIVERY_ENV_FILE."""
-    _, env = resolve_docker_cli_path(delivery_env_file=None)
-    assert "CLAUDE_DOCKER_DELIVERY_ENV_FILE" not in env
+def test_resolve_docker_cli_path_delivery_envs_none_omitted():
+    """delivery_envs=None omits CLAUDE_DOCKER_DELIVERY_ENVS."""
+    _, env = resolve_docker_cli_path(delivery_envs=None)
+    assert "CLAUDE_DOCKER_DELIVERY_ENVS" not in env
 
 
 # ---------------------------------------------------------------------------
@@ -208,27 +194,32 @@ def _ensure_mitmproxy_stubs():
         del sys.modules["src.docker.proxy.addon"]
 
 
-def _make_filter_with_placeholder_map(entries: list[dict]):
-    """Build a DomainFilter with a pre-populated placeholder_map.
+def _make_addon_with_records(entries: list[dict]):
+    """Build a ProxyAddon with pre-populated _records dict.
 
-    Each entry: {placeholder, name, host_pattern, header, format, real_value}.
+    Each entry: {placeholder, name, type, real_value, host_pattern (optional)}.
+    Issue #1134: secrets are fetched via REST at load() — this helper pre-populates
+    _records directly to avoid a live REST call in unit tests.
     """
+    import asyncio as _asyncio
+
     _ensure_mitmproxy_stubs()
     from src.docker.proxy import addon as addon_mod
 
-    f = addon_mod.DomainFilter.__new__(addon_mod.DomainFilter)
+    f = addon_mod.ProxyAddon.__new__(addon_mod.ProxyAddon)
     f.allowed_domains = {"api.github.com", "api.anthropic.com"}
-    f.placeholder_map = {
+    f._records = {
         entry["placeholder"]: {
             "name": entry["name"],
-            "host_pattern": entry.get("host_pattern"),
-            "header": entry["header"],
-            "format": entry.get("format", "{value}"),
-            "real_value": entry["real_value"],
+            "type": entry.get("type", "bearer"),
+            "value": entry["real_value"],
+            "target_hosts": [entry["host_pattern"]] if entry.get("host_pattern") else [],
         }
         for entry in entries
     }
-    f.session_id = "test-session"
+    f._refresh_locks = {ph: _asyncio.Lock() for ph in f._records}
+    f._session_id = "test-session"
+    f._session_token = "test-token"
     f._log_file = None
     f.logger = MagicMock()
     return f
@@ -248,12 +239,11 @@ def _flow(host: str, headers: dict | None = None):
 
 def test_addon_no_placeholder_leaves_headers_unchanged():
     """Unauthenticated request to api.github.com — no injection."""
-    f = _make_filter_with_placeholder_map([{
-        "placeholder": "PH_GITHUB_TOKEN_abcd1234",
+    f = _make_addon_with_records([{
+        "placeholder": "CC_SECRET_github_token_abcd1234",
         "name": "github_token",
         "host_pattern": "api.github.com",
-        "header": "Authorization",
-        "format": "Bearer {value}",
+        "type": "bearer",
         "real_value": "ghp_real_token",
     }])
     flow = _flow("api.github.com")  # no Authorization header at all
@@ -264,12 +254,11 @@ def test_addon_no_placeholder_leaves_headers_unchanged():
 
 def test_addon_no_placeholder_with_headers_unchanged():
     """Request with some non-placeholder Authorization header → unchanged."""
-    f = _make_filter_with_placeholder_map([{
-        "placeholder": "PH_GITHUB_TOKEN_abcd1234",
+    f = _make_addon_with_records([{
+        "placeholder": "CC_SECRET_github_token_abcd1234",
         "name": "github_token",
         "host_pattern": "api.github.com",
-        "header": "Authorization",
-        "format": "Bearer {value}",
+        "type": "bearer",
         "real_value": "ghp_real_token",
     }])
     flow = _flow("api.github.com", {"Authorization": "Bearer some_other_value"})
@@ -283,32 +272,30 @@ def test_addon_no_placeholder_with_headers_unchanged():
 # ---------------------------------------------------------------------------
 
 def test_addon_placeholder_in_header_injects_real_value():
-    """Agent sends placeholder → proxy replaces with formatted real credential."""
-    f = _make_filter_with_placeholder_map([{
-        "placeholder": "PH_GITHUB_TOKEN_abcd1234",
+    """Agent sends placeholder in header → proxy replaces entire header with real credential."""
+    f = _make_addon_with_records([{
+        "placeholder": "CC_SECRET_github_token_abcd1234",
         "name": "github_token",
         "host_pattern": "api.github.com",
-        "header": "Authorization",
-        "format": "Bearer {value}",
+        "type": "bearer",
         "real_value": "ghp_real_token",
     }])
-    flow = _flow("api.github.com", {"Authorization": "Bearer PH_GITHUB_TOKEN_abcd1234"})
+    flow = _flow("api.github.com", {"Authorization": "Bearer CC_SECRET_github_token_abcd1234"})
     name = f._inject_credentials(flow)
     assert name == "github_token"
     assert flow.request.headers["Authorization"] == "Bearer ghp_real_token"
 
 
 def test_addon_placeholder_without_format_prefix():
-    """Placeholder as bare header value (format='{value}') → replaced with raw real_value."""
-    f = _make_filter_with_placeholder_map([{
-        "placeholder": "PH_ANT_abcd1234",
+    """Placeholder as bare header value (generic type) → replaced with raw real_value."""
+    f = _make_addon_with_records([{
+        "placeholder": "CC_SECRET_anthropic_key_abcd1234",
         "name": "anthropic_key",
         "host_pattern": "api.anthropic.com",
-        "header": "x-api-key",
-        "format": "{value}",
+        "type": "generic",
         "real_value": "sk-ant-real",
     }])
-    flow = _flow("api.anthropic.com", {"x-api-key": "PH_ANT_abcd1234"})
+    flow = _flow("api.anthropic.com", {"x-api-key": "CC_SECRET_anthropic_key_abcd1234"})
     name = f._inject_credentials(flow)
     assert name == "anthropic_key"
     assert flow.request.headers["x-api-key"] == "sk-ant-real"
@@ -319,13 +306,12 @@ def test_addon_placeholder_without_format_prefix():
 # ---------------------------------------------------------------------------
 
 def test_addon_wrong_value_leaves_headers_unchanged():
-    """Request with a valid-looking but non-placeholder Bearer token → unchanged."""
-    f = _make_filter_with_placeholder_map([{
-        "placeholder": "PH_GITHUB_TOKEN_abcd1234",
+    """Request with a valid-looking but non-placeholder Bearer token ��� unchanged."""
+    f = _make_addon_with_records([{
+        "placeholder": "CC_SECRET_github_token_abcd1234",
         "name": "github_token",
         "host_pattern": "api.github.com",
-        "header": "Authorization",
-        "format": "Bearer {value}",
+        "type": "bearer",
         "real_value": "ghp_real_token",
     }])
     flow = _flow("api.github.com", {"Authorization": "Bearer ghp_totally_different"})
@@ -335,26 +321,27 @@ def test_addon_wrong_value_leaves_headers_unchanged():
 
 
 # ---------------------------------------------------------------------------
-# 12. Placeholder on wrong host → not injected (optional guard)
+# 12. No per-credential host guard — allowlist is the gate
 # ---------------------------------------------------------------------------
 
-def test_addon_placeholder_on_wrong_host_not_injected():
-    """Placeholder seen on an unexpected host → guard rejects injection."""
-    f = _make_filter_with_placeholder_map([{
-        "placeholder": "PH_GITHUB_TOKEN_abcd1234",
+def test_addon_placeholder_injected_for_any_allowed_host():
+    """Issue #1134: per-credential host_pattern guard removed; allowlist is the security gate.
+
+    _inject_credentials injects the placeholder for any request regardless of target_hosts
+    on the record. The allowlist check in request() is the host security boundary.
+    """
+    f = _make_addon_with_records([{
+        "placeholder": "CC_SECRET_github_token_abcd1234",
         "name": "github_token",
         "host_pattern": "api.github.com",
-        "header": "Authorization",
-        "format": "Bearer {value}",
+        "type": "bearer",
         "real_value": "ghp_real_token",
     }])
-    # Add evil.com to allowed domains so the request isn't blocked first
-    f.allowed_domains.add("evil.com")
-    flow = _flow("evil.com", {"Authorization": "Bearer PH_GITHUB_TOKEN_abcd1234"})
+    f.allowed_domains.add("other.allowed.com")
+    flow = _flow("other.allowed.com", {"Authorization": "Bearer CC_SECRET_github_token_abcd1234"})
     name = f._inject_credentials(flow)
-    assert name is None
-    # Header should remain as-is (the placeholder is NOT replaced on the wrong host)
-    assert flow.request.headers["Authorization"] == "Bearer PH_GITHUB_TOKEN_abcd1234"
+    assert name == "github_token"
+    assert flow.request.headers["Authorization"] == "Bearer ghp_real_token"
 
 
 # ---------------------------------------------------------------------------
@@ -366,10 +353,10 @@ def test_addon_access_log_credential_name_not_value(tmp_path):
     _ensure_mitmproxy_stubs()
     from src.docker.proxy import addon as addon_mod
 
-    f = addon_mod.DomainFilter.__new__(addon_mod.DomainFilter)
-    f.session_id = "log-test"
+    f = addon_mod.ProxyAddon.__new__(addon_mod.ProxyAddon)
+    f._session_id = "log-test"
     f.allowed_domains = set()
-    f.placeholder_map = {}
+    f._records = {}
     f.logger = MagicMock()
 
     log_file = tmp_path / "access.log"
@@ -392,25 +379,27 @@ def test_addon_access_log_credential_name_not_value(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# 14. Graceful no-op when credentials.json absent
+# 14. Graceful no-op when session token files absent
 # ---------------------------------------------------------------------------
 
-def test_addon_load_credentials_no_file():
-    """_load_credentials is a no-op and leaves placeholder_map empty when file absent."""
+@pytest.mark.asyncio
+async def test_addon_load_no_session_files_leaves_records_empty():
+    """Issue #1134: load() is a no-op and leaves _records empty when session files absent."""
     _ensure_mitmproxy_stubs()
     from src.docker.proxy import addon as addon_mod
 
-    f = addon_mod.DomainFilter.__new__(addon_mod.DomainFilter)
+    f = addon_mod.ProxyAddon.__new__(addon_mod.ProxyAddon)
     f.allowed_domains = set()
-    f.placeholder_map = {}
-    f.session_id = "no-file-test"
+    f._records = {}
+    f._session_id = ""
+    f._session_token = ""
     f._log_file = None
     f.logger = MagicMock()
 
     with patch("src.docker.proxy.addon.Path") as mock_path_cls:
         mock_path = MagicMock()
-        mock_path.exists.return_value = False
+        mock_path.read_text.side_effect = FileNotFoundError("no file")
         mock_path_cls.return_value = mock_path
-        f._load_credentials()
+        await f.load(None)
 
-    assert f.placeholder_map == {}
+    assert f._records == {}

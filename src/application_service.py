@@ -530,12 +530,17 @@ class ApplicationService:
         inject_env: str | None = None,
         inject_file: dict | None = None,
         scrub: dict | None = None,
+        username: str | None = None,
+        injection: dict | None = None,
+        refresh: dict | None = None,
     ) -> dict:
         """Create a new secret. Returns metadata only (value not in response)."""
         from datetime import UTC, datetime
 
         from .models.secret_record import (
             InjectFileSpec,
+            InjectionSpec,
+            RefreshSpec,
             ScrubSpec,
             SecretRecord,
             SecretType,
@@ -544,6 +549,8 @@ class ApplicationService:
         now = datetime.now(UTC)
         inj_file = InjectFileSpec.from_dict(inject_file) if inject_file else None
         scrub_spec = ScrubSpec.from_dict(scrub) if scrub else None
+        injection_spec = InjectionSpec.from_dict(injection) if injection else None
+        refresh_spec = RefreshSpec.from_dict(refresh) if refresh else None
         record = SecretRecord(
             name=name,
             type=SecretType(secret_type),
@@ -551,6 +558,9 @@ class ApplicationService:
             inject_env=inject_env,
             inject_file=inj_file,
             scrub=scrub_spec,
+            username=username,
+            injection=injection_spec,
+            refresh=refresh_spec,
             created_at=now,
             updated_at=now,
         )
@@ -565,12 +575,17 @@ class ApplicationService:
         inject_env: str | None = None,
         inject_file: dict | None = None,
         scrub: dict | None = None,
+        username: str | None = None,
+        injection: dict | None = None,
+        refresh: dict | None = None,
     ) -> dict | None:
         """Update secret metadata and/or value. Returns updated metadata or None if not found."""
         from datetime import UTC, datetime
 
         from .models.secret_record import (
             InjectFileSpec,
+            InjectionSpec,
+            RefreshSpec,
             ScrubSpec,
             SecretRecord,
             SecretType,
@@ -593,6 +608,18 @@ class ApplicationService:
         elif existing.get("scrub"):
             scrub_spec = ScrubSpec.from_dict(existing["scrub"])
 
+        injection_spec = None
+        if injection is not None:
+            injection_spec = InjectionSpec.from_dict(injection)
+        elif existing.get("injection"):
+            injection_spec = InjectionSpec.from_dict(existing["injection"])
+
+        refresh_spec = None
+        if refresh is not None:
+            refresh_spec = RefreshSpec.from_dict(refresh)
+        elif existing.get("refresh"):
+            refresh_spec = RefreshSpec.from_dict(existing["refresh"])
+
         record = SecretRecord(
             name=name,
             type=SecretType(secret_type or existing.get("type", "generic")),
@@ -600,6 +627,9 @@ class ApplicationService:
             inject_env=inject_env if inject_env is not None else existing.get("inject_env"),
             inject_file=inj_file,
             scrub=scrub_spec,
+            username=username if username is not None else existing.get("username"),
+            injection=injection_spec,
+            refresh=refresh_spec,
             created_at=datetime.fromisoformat(existing["created_at"]),
             updated_at=now,
         )
@@ -609,15 +639,110 @@ class ApplicationService:
         """Delete a secret by name."""
         return await self.coordinator.credential_vault.delete_secret(name)
 
+    async def refresh_secret(self, name: str) -> dict | None:
+        """Manually trigger an OAuth2 token refresh for an oauth2-typed secret.
+
+        Fetches the current refresh_token and client_secret sibling values from the
+        keyring, POSTs to token_url, writes the new access_token (and rotated
+        refresh_token if present) back to the keyring, and updates expires_at.
+        Returns updated metadata, or None if the secret does not exist / is not oauth2.
+        Raises RuntimeError on refresh failure.
+        """
+        from .models.secret_record import SecretType
+        from .secret_types.oauth2 import OAuth2Handler
+        from .secrets_keyring import get_secret_value, set_secret_value
+
+        meta = await self.coordinator.credential_vault.get_secret(name)
+        if meta is None or meta.get("type") != SecretType.OAUTH2.value:
+            return None
+
+        record = dict(meta)
+        record["value"] = get_secret_value(name) or ""
+
+        async def _get_sibling(sibling_name: str) -> str:
+            return get_secret_value(sibling_name) or ""
+
+        handler = OAuth2Handler()
+        updates = await handler.refresh(record, _get_sibling)
+
+        new_value = updates.get("value")
+        if new_value:
+            set_secret_value(name, new_value)
+
+        new_refresh_token = updates.get("refresh", {}).get("_new_refresh_token")
+        new_refresh_name = (record.get("refresh") or {}).get("refresh_token_secret_name")
+        if new_refresh_token and new_refresh_name:
+            set_secret_value(new_refresh_name, new_refresh_token)
+
+        refresh_updates = updates.get("refresh") or {}
+        refresh_updates.pop("_new_refresh_token", None)
+
+        return await self.update_secret(
+            name=name,
+            refresh=refresh_updates or None,
+            value=None,
+        )
+
     async def resolve_secrets_for_session(self, session_id: str) -> dict:
-        """Return resolved secrets (including values) for a session's assigned_secrets list."""
+        """Return resolved secrets (including values) for a session's assigned_secrets list.
+
+        Issue #1134: attaches placeholder from session.secret_placeholders; also
+        walks transitive references (refresh_token_secret_name, client_secret_secret_name)
+        so the proxy has everything it needs for OAuth2 refresh without extra requests.
+        """
         session = await self.coordinator.session_manager.get_session_info(session_id)
         if session is None:
             return {"secrets": []}
 
         assigned = getattr(session, "assigned_secrets", None) or []
-        secrets = await self.coordinator.credential_vault.resolve_secrets_for_assignment(assigned)
+
+        # Collect transitive names (sibling refresh-token and client-secret records).
+        all_names: list[str] = list(assigned)
+        for secret in await self.coordinator.credential_vault.list_secrets():
+            if secret.get("name") in assigned:
+                refresh = secret.get("refresh") or {}
+                for key in ("refresh_token_secret_name", "client_secret_secret_name"):
+                    sibling = refresh.get(key)
+                    if sibling and sibling not in all_names:
+                        all_names.append(sibling)
+
+        secrets = await self.coordinator.credential_vault.resolve_secrets_for_assignment(all_names)
+
+        # Attach placeholder from session map (may be empty for sessions started before #1134).
+        placeholder_map = getattr(session, "secret_placeholders", None) or {}
+        reverse_map = {v: k for k, v in placeholder_map.items()}
+        for s in secrets:
+            name = s.get("name", "")
+            s["placeholder"] = reverse_map.get(name)
+
         return {"secrets": secrets}
+
+    async def update_secret_for_session(
+        self, session_id: str, secret_name: str, **kwargs
+    ) -> dict | None:
+        """Update a secret, scoped to names in session.assigned_secrets (+ transitive siblings).
+
+        Used by the proxy sidecar to write back refreshed token values.
+        Returns None if session not found; raises PermissionError if name is out-of-scope.
+        """
+        session = await self.coordinator.session_manager.get_session_info(session_id)
+        if session is None:
+            return None
+        assigned = getattr(session, "assigned_secrets", None) or []
+        allowed: set[str] = set(assigned)
+        # Also allow transitive sibling records referenced by assigned refresh specs.
+        for secret in await self.coordinator.credential_vault.list_secrets():
+            if secret.get("name") in assigned:
+                refresh = secret.get("refresh") or {}
+                for key in ("refresh_token_secret_name", "client_secret_secret_name"):
+                    sibling = refresh.get(key)
+                    if sibling:
+                        allowed.add(sibling)
+        if secret_name not in allowed:
+            raise PermissionError(
+                f"Secret '{secret_name}' is not in session {session_id}'s assigned_secrets"
+            )
+        return await self.update_secret(name=secret_name, **kwargs)
 
     async def get_proxy_status(self, session_id: str) -> dict:
         """Return effective allowlist + active credential names + proxy state for a session."""

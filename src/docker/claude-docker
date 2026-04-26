@@ -27,11 +27,8 @@ set -euo pipefail
 #   CLAUDE_DOCKER_SHM_SIZE      - /dev/shm size for Chromium (default: 256m)
 #   CLAUDE_DOCKER_PROXY_IMAGE     - Proxy sidecar image (enables proxy mode when set)
 #                                   Default when set: claude-proxy:local
-#   CLAUDE_DOCKER_PROXY_CREDS_FILE - Host path to credentials.json; bind-mounted into
-#                                    sidecar at /etc/proxy/credentials.json:ro (issue #1051)
-#   CLAUDE_DOCKER_DELIVERY_ENV_FILE - Host path to JSON file mapping env var names to
-#                                     placeholder values; forwarded as -e flags to the
-#                                     agent container (issue #1051)
+#   CLAUDE_DOCKER_DELIVERY_ENVS   - JSON string mapping env var names to placeholder values;
+#                                   forwarded as -e flags to the agent container (issue #1134)
 #
 # Proxy mode: claude-docker launches a dedicated proxy sidecar, attaches the agent to it
 # via --network container:<sidecar>, and tears both down on exit. Transparent DNAT
@@ -190,13 +187,10 @@ if [ -n "$PROXY_IMAGE" ]; then
     PROXY_RESOLV="$PROXY_CERTS/resolv.conf"
     printf 'nameserver 127.0.0.1\n' > "$PROXY_RESOLV"
 
-    # Issue #1060: Extract session ID and create proxy log directory on host.
-    # CLAUDE_DOCKER_DATA_DIR is typically .../sessions/<uuid>/docker_claude_data;
-    # the session UUID is the basename of its parent directory.
-    PROXY_SESSION_ID=""
+    # Issue #1060: Create proxy log directory on host for access log.
+    # CLAUDE_DOCKER_DATA_DIR is typically .../sessions/<uuid>/docker_claude_data.
     PROXY_LOG_DIR=""
     if [ -n "${CLAUDE_DOCKER_DATA_DIR:-}" ]; then
-        PROXY_SESSION_ID=$(basename "$(dirname "$CLAUDE_DOCKER_DATA_DIR")")
         PROXY_LOG_DIR="$CLAUDE_DOCKER_DATA_DIR/proxy"
         mkdir -p "$PROXY_LOG_DIR"
         # chmod 777: dir is owned by the host user but written by uid 9999 (mitmdump)
@@ -209,13 +203,6 @@ if [ -n "$PROXY_IMAGE" ]; then
     # Tear down sidecar and certs when the agent container exits.
     # rm -rf may fail if uid 9999-owned files remain; || true prevents exit-code noise.
     trap 'docker rm -f "$PROXY_NAME" 2>/dev/null || true; rm -rf "$PROXY_CERTS" 2>/dev/null || true' EXIT
-
-    # Issue #1051: Bind-mount credentials file into sidecar if provided
-    PROXY_CREDS_FILE="${CLAUDE_DOCKER_PROXY_CREDS_FILE:-}"
-    PROXY_CREDS_FLAGS=""
-    if [ -n "$PROXY_CREDS_FILE" ] && [ -f "$PROXY_CREDS_FILE" ]; then
-        PROXY_CREDS_FLAGS="-v $PROXY_CREDS_FILE:/etc/proxy/credentials.json:ro"
-    fi
 
     # Issue #1053: Bind-mount dynamic allowlist into sidecar (overrides baked-in /etc/proxy/allowlist.json)
     PROXY_ALLOWLIST_FILE="${CLAUDE_DOCKER_PROXY_ALLOWLIST_FILE:-}"
@@ -231,8 +218,6 @@ if [ -n "$PROXY_IMAGE" ]; then
         --sysctl net.ipv4.conf.lo.accept_local=1 \
         -v "$PROXY_CERTS:/var/lib/mitmproxy" \
         ${PROXY_LOG_DIR:+-v "$PROXY_LOG_DIR:/var/log/proxy"} \
-        ${PROXY_SESSION_ID:+-e "PROXY_SESSION_ID=$PROXY_SESSION_ID"} \
-        $PROXY_CREDS_FLAGS \
         $PROXY_ALLOWLIST_FLAGS \
         "$PROXY_IMAGE" >/dev/null
 
@@ -276,20 +261,20 @@ if [ -n "$PROXY_IMAGE" ]; then
     PROXY_FLAGS="$PROXY_FLAGS -e GIT_SSL_CAINFO=/run/proxy-ca/ca.crt"
 fi
 
-# Issue #1051: Build delivery env flags — env vars carrying placeholder values for
+# Issue #1134: Build delivery env flags — env vars carrying placeholder values for
 # credential injection. The agent container receives placeholder values (not real secrets);
 # the proxy sidecar replaces placeholders with real values on matching outgoing requests.
+# Delivery envs are passed inline via CLAUDE_DOCKER_DELIVERY_ENVS (JSON string).
 DELIVERY_ENV_FLAGS=""
-DELIVERY_ENV_FILE="${CLAUDE_DOCKER_DELIVERY_ENV_FILE:-}"
-if [ -n "$DELIVERY_ENV_FILE" ] && [ -f "$DELIVERY_ENV_FILE" ]; then
+if [ -n "${CLAUDE_DOCKER_DELIVERY_ENVS:-}" ]; then
     while IFS=$'\t' read -r key value; do
         [ -n "$key" ] && DELIVERY_ENV_FLAGS="$DELIVERY_ENV_FLAGS -e ${key}=${value}"
     done < <(python3 -c "
 import json, sys
-d = json.load(open(sys.argv[1]))
+d = json.loads(sys.argv[1])
 for k, v in d.items():
     print(k + '\t' + v)
-" "$DELIVERY_ENV_FILE" 2>/dev/null || true)
+" "$CLAUDE_DOCKER_DELIVERY_ENVS" 2>/dev/null || true)
 fi
 
 # Run the container (capture exit code for diagnostics)

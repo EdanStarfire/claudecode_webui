@@ -83,9 +83,8 @@ def resolve_docker_cli_path(
     docker_home_directory: str | None = None,
     # Issue #1049: Proxy mode
     proxy_image: str | None = None,
-    # Issue #1051: Per-session credential injection
-    proxy_credentials_file: str | None = None,
-    delivery_env_file: str | None = None,
+    # Issue #1134: delivery env vars passed inline (replaces file-based approach)
+    delivery_envs: dict[str, str] | None = None,
     # Issue #1053: Dynamic allowlist override
     proxy_allowlist_file: str | None = None,
 ) -> tuple[str, dict[str, str]]:
@@ -104,10 +103,15 @@ def resolve_docker_cli_path(
         proxy_image: Proxy sidecar image name (enables proxy mode when set).
                      claude-docker launches a dedicated sidecar per session and wires
                      the agent into its network namespace automatically.
+        delivery_envs: Dict of env_var_name → placeholder string. Passed inline to
+                       claude-docker via CLAUDE_DOCKER_DELIVERY_ENVS (JSON). The wrapper
+                       forwards these as -e flags to the agent container.
 
     Returns:
         Tuple of (cli_path_string, env_vars_dict)
     """
+    import json as _json
+
     wrapper_path = str(get_wrapper_script_path())
     env_vars = {}
 
@@ -129,11 +133,8 @@ def resolve_docker_cli_path(
     if proxy_image:
         env_vars["CLAUDE_DOCKER_PROXY_IMAGE"] = proxy_image
 
-    if proxy_credentials_file:
-        env_vars["CLAUDE_DOCKER_PROXY_CREDS_FILE"] = proxy_credentials_file
-
-    if delivery_env_file:
-        env_vars["CLAUDE_DOCKER_DELIVERY_ENV_FILE"] = delivery_env_file
+    if delivery_envs:
+        env_vars["CLAUDE_DOCKER_DELIVERY_ENVS"] = _json.dumps(delivery_envs)
 
     if proxy_allowlist_file:
         env_vars["CLAUDE_DOCKER_PROXY_ALLOWLIST_FILE"] = proxy_allowlist_file
