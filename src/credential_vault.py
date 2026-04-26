@@ -16,7 +16,7 @@ import logging
 import os
 from pathlib import Path
 
-from .models.secret_record import SecretRecord, validate_secret_name
+from .models.secret_record import SecretRecord, SecretType, validate_secret_name
 from .secrets_keyring import delete_secret_value, get_secret_value, set_secret_value
 
 logger = logging.getLogger(__name__)
@@ -82,6 +82,17 @@ class SecretsVault:
         if meta_path.exists():
             raise ValueError(f"Secret '{record.name}' already exists")
 
+        # Issue #1052: For ssh_key type, validate the PEM and persist derived public-key metadata.
+        if record.type == SecretType.SSH_KEY:
+            from .secret_types.ssh_key import SshKeyHandler, SshKeyValidationError  # noqa: PLC0415
+            try:
+                validation = SshKeyHandler.validate(value)
+            except SshKeyValidationError:
+                raise
+            record.public_key_openssh = validation.public_key_openssh
+            record.fingerprint_sha256 = validation.fingerprint_sha256
+            record.key_type = validation.key_type
+
         # Store value in keyring first; if that fails, don't create the metadata
         set_secret_value(record.name, value)
 
@@ -110,6 +121,19 @@ class SecretsVault:
         record.validate()
 
         if value is not None:
+            # Issue #1052: Re-validate ssh_key and refresh derived metadata when value changes.
+            if record.type == SecretType.SSH_KEY:
+                from .secret_types.ssh_key import (  # noqa: PLC0415
+                    SshKeyHandler,
+                    SshKeyValidationError,
+                )
+                try:
+                    validation = SshKeyHandler.validate(value)
+                except SshKeyValidationError:
+                    raise
+                record.public_key_openssh = validation.public_key_openssh
+                record.fingerprint_sha256 = validation.fingerprint_sha256
+                record.key_type = validation.key_type
             set_secret_value(name, value)
 
         metadata = record.to_dict()

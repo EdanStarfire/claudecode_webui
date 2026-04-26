@@ -7,6 +7,7 @@ The JSON metadata file never contains the value.
 
 Issue #827: Host-level secrets storage via keyring.
 Issue #1134: Typed secrets — proxy injection, scrubbing, OAuth refresh.
+Issue #1052: ssh_key type — tmpfs key delivery, SOCKS5 tunnel.
 """
 
 from __future__ import annotations
@@ -24,7 +25,8 @@ class SecretType(str, Enum):
     BASIC_AUTH = "basic_auth"
     OAUTH2 = "oauth2"
     GENERIC = "generic"
-    SSH = "ssh"
+    SSH = "ssh"        # legacy placeholder type (issue #1052: use ssh_key instead)
+    SSH_KEY = "ssh_key"
 
 
 class InjectFileFormat(str, Enum):
@@ -214,6 +216,10 @@ class SecretRecord:
     username: str | None = None        # basic_auth only: plaintext username metadata
     injection: InjectionSpec | None = None   # api_key only
     refresh: RefreshSpec | None = None       # oauth2 only
+    # Issue #1052: SSH key derived metadata (set by vault after key validation, never user-supplied)
+    public_key_openssh: str | None = None    # ssh_key only: OpenSSH public key string
+    fingerprint_sha256: str | None = None    # ssh_key only: SHA256 fingerprint (SHA256:...)
+    key_type: str | None = None              # ssh_key only: key algorithm (ssh-ed25519, etc.)
 
     def validate(self) -> None:
         """Raise ValueError if any field fails validation."""
@@ -237,6 +243,12 @@ class SecretRecord:
             raise ValueError("scrub is required for oauth2 type (needed to capture refreshed token values)")
         if self.username is not None and self.type != SecretType.BASIC_AUTH:
             raise ValueError("username may only be set when type == basic_auth")
+        if self.public_key_openssh is not None and self.type != SecretType.SSH_KEY:
+            raise ValueError("public_key_openssh may only be set when type == ssh_key")
+        if self.fingerprint_sha256 is not None and self.type != SecretType.SSH_KEY:
+            raise ValueError("fingerprint_sha256 may only be set when type == ssh_key")
+        if self.key_type is not None and self.type != SecretType.SSH_KEY:
+            raise ValueError("key_type may only be set when type == ssh_key")
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -249,6 +261,9 @@ class SecretRecord:
             "username": self.username,
             "injection": self.injection.to_dict() if self.injection else None,
             "refresh": self.refresh.to_dict() if self.refresh else None,
+            "public_key_openssh": self.public_key_openssh,
+            "fingerprint_sha256": self.fingerprint_sha256,
+            "key_type": self.key_type,
             "created_at": self.created_at.isoformat(),
             "updated_at": self.updated_at.isoformat(),
         }
@@ -277,6 +292,9 @@ class SecretRecord:
             username=data.get("username"),
             injection=injection,
             refresh=refresh,
+            public_key_openssh=data.get("public_key_openssh"),
+            fingerprint_sha256=data.get("fingerprint_sha256"),
+            key_type=data.get("key_type"),
             created_at=datetime.fromisoformat(data["created_at"]),
             updated_at=datetime.fromisoformat(data["updated_at"]),
         )

@@ -29,6 +29,8 @@ set -euo pipefail
 #                                   Default when set: claude-proxy:local
 #   CLAUDE_DOCKER_DELIVERY_ENVS   - JSON string mapping env var names to placeholder values;
 #                                   forwarded as -e flags to the agent container (issue #1134)
+#   CLAUDE_DOCKER_SSH_DIR         - Host dir with SSH key/config for SOCKS5-tunnelled SSH
+#                                   (issue #1052); mounted at /run/ssh:ro, sets GIT_SSH_COMMAND
 #
 # Proxy mode: claude-docker launches a dedicated proxy sidecar, attaches the agent to it
 # via --network container:<sidecar>, and tears both down on exit. Transparent DNAT
@@ -143,10 +145,22 @@ for arg in "$@"; do
     PREV_ARG="$arg"
 done
 
-# Issue #794: Auto-forward SSH agent if available (enables git SSH operations inside container)
+# Issue #794: Auto-forward SSH agent if available (enables git SSH operations inside container).
+# Issue #1052: When proxy mode is active, suppress host SSH agent — the deploy key in
+# /run/ssh/ is the only credential the agent should use; the host agent must not leak in.
 SSH_AGENT_FLAGS=""
-if [ -n "${SSH_AUTH_SOCK:-}" ] && [ -S "$SSH_AUTH_SOCK" ]; then
+if [ -z "$PROXY_IMAGE" ] && [ -n "${SSH_AUTH_SOCK:-}" ] && [ -S "$SSH_AUTH_SOCK" ]; then
     SSH_AGENT_FLAGS="-v $SSH_AUTH_SOCK:/ssh-agent -e SSH_AUTH_SOCK=/ssh-agent"
+fi
+
+# Issue #1052: Mount SSH key dir and configure GIT_SSH_COMMAND when set.
+# CLAUDE_DOCKER_SSH_DIR is populated by prepare_session_ssh() in docker_utils.py
+# when an ssh_key secret is assigned to the session.
+SSH_DIR_FLAGS=""
+if [ -n "${CLAUDE_DOCKER_SSH_DIR:-}" ] && [ -d "${CLAUDE_DOCKER_SSH_DIR:-}" ]; then
+    SSH_DIR_FLAGS="-v ${CLAUDE_DOCKER_SSH_DIR}:/run/ssh:ro"
+    SSH_DIR_FLAGS="$SSH_DIR_FLAGS -e GIT_SSH_COMMAND=/run/ssh/ssh-wrapper"
+    SSH_DIR_FLAGS="$SSH_DIR_FLAGS -e SSH_CONFIG_PATH=/run/ssh/config"
 fi
 
 # Issue #781: Build resource limit flags
@@ -292,6 +306,7 @@ docker run \
     $EXTRA_MOUNT_FLAGS \
     $FILE_MOUNT_FLAGS \
     $SSH_AGENT_FLAGS \
+    $SSH_DIR_FLAGS \
     $RESOURCE_FLAGS \
     $PROXY_FLAGS \
     $DELIVERY_ENV_FLAGS \

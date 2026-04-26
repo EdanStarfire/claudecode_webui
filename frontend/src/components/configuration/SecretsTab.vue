@@ -52,7 +52,12 @@
               </span>
               <span v-else class="text-muted">—</span>
             </td>
-            <td class="small font-monospace">{{ secret.inject_env || '—' }}</td>
+            <td class="small font-monospace">
+              <span v-if="secret.type === 'ssh_key' && secret.fingerprint_sha256">
+                <span class="text-muted" style="font-size: 0.7rem;">{{ secret.fingerprint_sha256 }}</span>
+              </span>
+              <span v-else>{{ secret.inject_env || '—' }}</span>
+            </td>
             <td class="text-end">
               <div class="btn-group btn-group-sm">
                 <!-- Manual refresh for oauth2 -->
@@ -121,13 +126,17 @@
               <option value="basic_auth">basic_auth</option>
               <option value="oauth2">oauth2</option>
               <option value="generic">generic</option>
-              <option value="ssh">ssh</option>
+              <option value="ssh_key">ssh_key</option>
             </select>
           </div>
 
           <!-- Target Hosts -->
           <div class="col-12">
-            <label class="form-label small mb-1">Target Hosts <span class="text-danger">*</span></label>
+            <label class="form-label small mb-1">
+              Target Hosts
+              <span v-if="form.type !== 'ssh_key'" class="text-danger">*</span>
+              <span v-else class="text-muted">(optional for ssh_key)</span>
+            </label>
             <input
               v-model="form.target_hosts_raw"
               type="text"
@@ -152,14 +161,25 @@
             </div>
           </template>
 
-          <!-- Secret Value (password for basic_auth) -->
+          <!-- Secret Value / Private Key -->
           <div :class="form.type === 'basic_auth' ? 'col-6' : 'col-12'">
             <label class="form-label small mb-1">
-              {{ form.type === 'basic_auth' ? 'Password' : 'Secret Value' }}
+              {{ form.type === 'basic_auth' ? 'Password' : form.type === 'ssh_key' ? 'Private Key (PEM)' : 'Secret Value' }}
               <span v-if="!editingName" class="text-danger">*</span>
               <span v-else class="text-muted">(leave blank to keep existing)</span>
             </label>
+            <!-- ssh_key: multiline textarea for pasting OpenSSH PEM private key -->
+            <textarea
+              v-if="form.type === 'ssh_key'"
+              v-model="form.value"
+              class="form-control form-control-sm font-monospace"
+              rows="6"
+              :placeholder="editingName ? 'Leave blank to keep current key' : '-----BEGIN OPENSSH PRIVATE KEY-----\n...'"
+              autocomplete="off"
+              spellcheck="false"
+            ></textarea>
             <input
+              v-else
               v-model="form.value"
               type="password"
               class="form-control form-control-sm"
@@ -167,6 +187,48 @@
               autocomplete="new-password"
             />
           </div>
+
+          <!-- ssh_key: derived public key display (shown when editing a stored key) -->
+          <template v-if="form.type === 'ssh_key' && editingName">
+            <div class="col-12" v-if="sshKeyMeta">
+              <div class="border rounded p-2 bg-light">
+                <div class="small fw-semibold mb-2 text-secondary">Derived Key Info</div>
+                <div class="row g-2">
+                  <div class="col-12">
+                    <label class="form-label small mb-1">Key Type</label>
+                    <div class="d-flex align-items-center gap-2">
+                      <span class="font-monospace small">{{ sshKeyMeta.key_type || '���' }}</span>
+                    </div>
+                  </div>
+                  <div class="col-12">
+                    <label class="form-label small mb-1">Fingerprint (SHA256)</label>
+                    <div class="d-flex align-items-center gap-2">
+                      <code class="small flex-grow-1">{{ sshKeyMeta.fingerprint_sha256 || '—' }}</code>
+                      <button
+                        v-if="sshKeyMeta.fingerprint_sha256"
+                        class="btn btn-outline-secondary btn-sm"
+                        @click="copyToClipboard(sshKeyMeta.fingerprint_sha256)"
+                        title="Copy fingerprint"
+                      >Copy</button>
+                    </div>
+                  </div>
+                  <div class="col-12">
+                    <label class="form-label small mb-1">Public Key</label>
+                    <div class="d-flex align-items-start gap-2">
+                      <code class="small flex-grow-1" style="word-break: break-all;">{{ sshKeyMeta.public_key_openssh || '—' }}</code>
+                      <button
+                        v-if="sshKeyMeta.public_key_openssh"
+                        class="btn btn-outline-secondary btn-sm flex-shrink-0"
+                        @click="copyToClipboard(sshKeyMeta.public_key_openssh)"
+                        title="Copy public key for GitHub deploy key"
+                      >Copy</button>
+                    </div>
+                    <div class="form-text" style="font-size: 0.7rem">Paste into GitHub → Repository → Settings → Deploy keys</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </template>
 
           <!-- api_key: injection spec -->
           <template v-if="form.type === 'api_key'">
@@ -408,6 +470,20 @@ import { useSecretsStore } from '@/stores/secrets'
 
 const secretsStore = useSecretsStore()
 
+/** Clipboard helper with graceful fallback. */
+async function copyToClipboard(text) {
+  try {
+    await navigator.clipboard.writeText(text)
+  } catch {
+    const el = document.createElement('textarea')
+    el.value = text
+    document.body.appendChild(el)
+    el.select()
+    document.execCommand('copy')
+    document.body.removeChild(el)
+  }
+}
+
 const showForm = ref(false)
 const editingName = ref(null)
 const saving = ref(false)
@@ -448,7 +524,9 @@ const defaultForm = () => ({
 const form = reactive(defaultForm())
 
 const canSave = computed(() => {
-  if (!form.name || !form.target_hosts_raw) return false
+  if (!form.name) return false
+  // target_hosts required for all types except ssh_key (SSH routing is via SOCKS5 allowlist)
+  if (form.type !== 'ssh_key' && !form.target_hosts_raw) return false
   if (!editingName.value && !form.value) return false
   if (form.type === 'basic_auth' && !form.username) return false
   if (form.type === 'api_key' && form.injection_location === 'query_param' && !form.injection_param_name) return false
@@ -462,6 +540,16 @@ const canSave = computed(() => {
 const otherSecrets = computed(() =>
   secretsStore.secrets.filter(s => s.name !== editingName.value)
 )
+
+/** Derived public-key metadata for the secret currently being edited (ssh_key only). */
+const sshKeyMeta = computed(() => {
+  if (!editingName.value) return null
+  const secret = secretsStore.secrets.find(s => s.name === editingName.value)
+  if (!secret || secret.type !== 'ssh_key') return null
+  const { public_key_openssh, fingerprint_sha256, key_type } = secret
+  if (!public_key_openssh && !fingerprint_sha256) return null
+  return { public_key_openssh, fingerprint_sha256, key_type }
+})
 
 function toggleForm() {
   if (showForm.value && !editingName.value) {
@@ -616,6 +704,7 @@ function typeBadgeClass(type) {
     oauth2: 'bg-info text-dark',
     generic: 'bg-secondary',
     ssh: 'bg-dark',
+    ssh_key: 'bg-dark',
   }
   return map[type] || 'bg-secondary'
 }

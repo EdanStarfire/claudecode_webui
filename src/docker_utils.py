@@ -3,10 +3,13 @@ Docker utilities for Claude Code WebUI (issue #496).
 
 Provides Docker availability checking and wrapper script path resolution
 for Docker session isolation.
+
+Issue #1052: prepare_session_ssh() — SSH key tmpfs delivery for proxy-mode sessions.
 """
 
 import asyncio
 import logging
+import os
 import shutil
 from pathlib import Path
 
@@ -140,6 +143,81 @@ def resolve_docker_cli_path(
         env_vars["CLAUDE_DOCKER_PROXY_ALLOWLIST_FILE"] = proxy_allowlist_file
 
     return wrapper_path, env_vars
+
+
+_SSH_CONFIG_TEMPLATE = """\
+Host *
+    IdentityFile /run/ssh/id_ed25519
+    IdentitiesOnly yes
+    StrictHostKeyChecking accept-new
+    UserKnownHostsFile /run/ssh/known_hosts
+    ProxyCommand ncat --proxy 127.0.0.1:1080 --proxy-type socks5 %h %p
+"""
+
+_SSH_WRAPPER_SCRIPT = """\
+#!/bin/sh
+exec ssh -F /run/ssh/config "$@"
+"""
+
+
+def prepare_session_ssh(resolved_secrets: list[dict], ssh_dir: Path) -> bool:
+    """Prepare SSH key injection files for a proxy-mode Docker session.
+
+    Filters `resolved_secrets` (full records including 'value') for ssh_key type,
+    enforces a maximum of one SSH key per session, then writes:
+      - id_ed25519     (private key, mode 0o600)
+      - config         (SSH client config routing through SOCKS5 at 127.0.0.1:1080)
+      - known_hosts    (empty; populated at runtime via StrictHostKeyChecking accept-new)
+      - ssh-wrapper    (executable shim setting -F /run/ssh/config for GIT_SSH_COMMAND)
+
+    The caller must add `{ssh_dir}:/run/ssh:ro` to docker extra_mounts.
+    GIT_SSH_COMMAND should be set to `/run/ssh/ssh-wrapper` in the container.
+
+    Returns True if an SSH key was prepared, False if no ssh_key secrets are assigned.
+    Raises ValueError if more than one ssh_key secret is assigned.
+    """
+    from .secret_types.ssh_key import SshKeyHandler
+
+    ssh_secrets = [s for s in resolved_secrets if s.get("type") == "ssh_key"]
+    if not ssh_secrets:
+        return False
+    if len(ssh_secrets) > 1:
+        names = [s.get("name", "?") for s in ssh_secrets]
+        raise ValueError(
+            f"At most one ssh_key secret may be assigned per session; got: {names}"
+        )
+
+    secret = ssh_secrets[0]
+    key_value = secret.get("value", "")
+    if not key_value:
+        logger.warning(f"ssh_key secret '{secret.get('name')}' has empty value — skipping SSH setup")
+        return False
+
+    ssh_dir.mkdir(parents=True, exist_ok=True)
+
+    # Private key
+    SshKeyHandler.materialize(key_value, ssh_dir, name="ed25519")
+
+    # SSH client config
+    config_path = ssh_dir / "config"
+    config_path.write_text(_SSH_CONFIG_TEMPLATE)
+    os.chmod(config_path, 0o644)
+
+    # Empty known_hosts (populated at first connection via StrictHostKeyChecking accept-new)
+    known_hosts = ssh_dir / "known_hosts"
+    known_hosts.touch()
+    os.chmod(known_hosts, 0o644)
+
+    # Wrapper script so GIT_SSH_COMMAND can point to a no-space path
+    wrapper = ssh_dir / "ssh-wrapper"
+    wrapper.write_text(_SSH_WRAPPER_SCRIPT)
+    os.chmod(wrapper, 0o755)
+
+    logger.info(
+        f"SSH key prepared in {ssh_dir} for secret '{secret.get('name')}' "
+        f"(type={secret.get('key_type', 'unknown')})"
+    )
+    return True
 
 
 async def check_proxy_image_available(image_name: str) -> bool:

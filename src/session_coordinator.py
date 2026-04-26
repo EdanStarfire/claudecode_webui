@@ -1271,6 +1271,20 @@ class SessionCoordinator:
                             f"{session_id}: names={list(new_placeholders.values())}"
                         )
 
+                        # Issue #1052: SSH key injection — write key/config into ssh_dir,
+                        # bind-mount at /run/ssh:ro, expose GIT_SSH_COMMAND wrapper.
+                        from src.docker_utils import prepare_session_ssh
+                        ssh_dir = tmp_dir / "ssh"
+                        try:
+                            if prepare_session_ssh(resolved_metas, ssh_dir):
+                                extra_mounts.append(f"{ssh_dir}:/run/ssh:ro")
+                                delivery_envs["GIT_SSH_COMMAND"] = "/run/ssh/ssh-wrapper"
+                        except ValueError as ssh_err:
+                            coord_logger.error(
+                                f"SSH key setup failed for session {session_id}: {ssh_err}"
+                            )
+                            raise
+
                     # Issue #827 / #1134: Write per-session token + session_id files for proxy.
                     # Proxy calls GET /api/sessions/{id}/secrets/resolve with this Bearer token.
                     session_token = getattr(session_info, "secret_fetch_token", None)
