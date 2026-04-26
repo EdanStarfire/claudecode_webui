@@ -19,6 +19,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from .analytics.audit_writer import AuditWriter
 from .analytics.database import AnalyticsDB
+from .analytics_store import AnalyticsStore
 from .application_service import ApplicationService
 from .event_queue import EventQueue
 from .message_parser import MessageParser, MessageProcessor
@@ -174,6 +175,8 @@ class ClaudeWebUI:
         _analytics_db_path = (data_dir or Path("data")) / "analytics.db"
         self._analytics_db = AnalyticsDB(_analytics_db_path)
         self._audit_writer = AuditWriter(self._analytics_db)
+        # Issue #1125: Per-session token usage store (shares AnalyticsDB connection)
+        self.analytics_store = AnalyticsStore(self._analytics_db)
         # Expose for router access
         self.analytics_db = self._analytics_db
         self.audit_writer = self._audit_writer
@@ -433,6 +436,19 @@ class ClaudeWebUI:
         except Exception:
             logger.exception("Error appending queue_update")
 
+    async def _broadcast_usage_update(self, session_id: str, usage: dict):
+        """Append usage_updated event to session poll queue (issue #1125)."""
+        try:
+            if session_id in self.session_queues:
+                self.session_queues[session_id].append({
+                    "type": "usage_updated",
+                    "session_id": session_id,
+                    "usage": usage,
+                    "timestamp": datetime.now(UTC).isoformat(),
+                })
+        except Exception:
+            logger.exception("Error appending usage_updated")
+
     def _cleanup_pending_permissions_for_session(self, session_id: str):
         """Clean up pending permissions for a specific session by auto-denying them"""
         self.permission_service.cleanup_pending_for_session(session_id)
@@ -468,6 +484,9 @@ class ClaudeWebUI:
         # callers of enqueue_message) emit real-time queue_update events to the WebUI.
         self.coordinator.set_enqueue_broadcast_callback(self._broadcast_queue_update)
 
+        # Issue #1125: Wire analytics usage broadcast callback
+        self.coordinator._usage_broadcast_callback = self._broadcast_usage_update
+
         # Issue #1050: Best-effort proxy image check on startup (informational only)
         from .config_manager import load_config
         from .logging_config import get_logger as _get_logger
@@ -491,6 +510,7 @@ class ClaudeWebUI:
         try:
             await self._analytics_db.initialize()
             self.coordinator.set_audit_writer(self._audit_writer)
+            self.coordinator.set_analytics_store(self.analytics_store)
             self.coordinator.session_manager.add_state_change_callback(
                 self._audit_writer.on_session_state_change
             )

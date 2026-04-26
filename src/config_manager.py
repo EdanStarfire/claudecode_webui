@@ -8,11 +8,139 @@ Config file location: ~/.config/cc_webui/config.json
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 CONFIG_DIR = Path.home() / ".config" / "cc_webui"
 CONFIG_FILE = CONFIG_DIR / "config.json"
 
 LOCALHOST_ADDRESSES = {"127.0.0.1", "localhost", "::1"}
+
+# ---------------------------------------------------------------------------
+# Pricing configuration
+# ---------------------------------------------------------------------------
+
+# Canonical model IDs for built-in defaults
+_SONNET_4_6 = "claude-sonnet-4-6"
+_OPUS_4_7 = "claude-opus-4-7"
+_HAIKU_4_5 = "claude-haiku-4-5"
+
+# Short-name aliases → canonical model ID
+_MODEL_ALIASES: dict[str, str] = {
+    "sonnet": _SONNET_4_6,
+    "sonnet-4-6": _SONNET_4_6,
+    "opus": _OPUS_4_7,
+    "opus-4-7": _OPUS_4_7,
+    "opusplan": _OPUS_4_7,
+    "haiku": _HAIKU_4_5,
+    "haiku-4-5": _HAIKU_4_5,
+}
+
+
+def normalize_model_id(model: str | None) -> str | None:
+    """Resolve a model alias or partial name to its canonical form."""
+    if model is None:
+        return None
+    key = model.lower().strip()
+    return _MODEL_ALIASES.get(key, model)
+
+
+def _default_rates() -> "dict[str, ModelRates]":
+    """Return built-in pricing defaults (USD per 1 M tokens, as of 2026-04)."""
+    return {
+        _SONNET_4_6: ModelRates(input=3.0, output=15.0, cache_write=3.75, cache_read=0.30),
+        _OPUS_4_7: ModelRates(input=15.0, output=75.0, cache_write=18.75, cache_read=1.50),
+        _HAIKU_4_5: ModelRates(input=0.80, output=4.0, cache_write=1.0, cache_read=0.08),
+    }
+
+
+@dataclass
+class ModelRates:
+    """USD per 1 M tokens for a single model."""
+
+    input: float = 0.0
+    output: float = 0.0
+    cache_write: float = 0.0
+    cache_read: float = 0.0
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "ModelRates":
+        return cls(
+            input=float(data.get("input", 0.0)),
+            output=float(data.get("output", 0.0)),
+            cache_write=float(data.get("cache_write", 0.0)),
+            cache_read=float(data.get("cache_read", 0.0)),
+        )
+
+    def to_dict(self) -> dict:
+        return {
+            "input": self.input,
+            "output": self.output,
+            "cache_write": self.cache_write,
+            "cache_read": self.cache_read,
+        }
+
+
+@dataclass
+class PricingConfig:
+    """Per-model pricing table and default model fallback."""
+
+    rates: dict[str, ModelRates] = field(default_factory=_default_rates)
+    default_model: str = _SONNET_4_6
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "PricingConfig":
+        raw_rates = data.get("rates", {})
+        rates = {
+            model_id: ModelRates.from_dict(r)
+            for model_id, r in raw_rates.items()
+            if isinstance(r, dict)
+        }
+        # Merge with defaults so unknown models in config don't lose built-in entries
+        merged = _default_rates()
+        merged.update(rates)
+        return cls(
+            rates=merged,
+            default_model=data.get("default_model", _SONNET_4_6),
+        )
+
+    def to_dict(self) -> dict:
+        return {
+            "_comment": (
+                "Pricing rates in USD per 1 M tokens. "
+                "Edit to override without restarting the server. "
+                "Cost is recomputed at query time from the current file."
+            ),
+            "default_model": self.default_model,
+            "rates": {model_id: r.to_dict() for model_id, r in self.rates.items()},
+        }
+
+    def get_rates(self, model: str | None) -> tuple[ModelRates | None, bool]:
+        """Return (ModelRates, rates_known).
+
+        Tries the given model, then its normalized form, then the default_model.
+        Returns (None, False) when no match exists at all.
+        """
+        if model:
+            if model in self.rates:
+                return self.rates[model], True
+            canonical = normalize_model_id(model)
+            if canonical and canonical in self.rates:
+                return self.rates[canonical], True
+        # Try default
+        if self.default_model in self.rates:
+            return self.rates[self.default_model], False
+        return None, False
+
+
+def compute_cost(rates: ModelRates, counts: dict[str, Any]) -> float:
+    """Compute estimated cost in USD given ModelRates and token counts dict."""
+    m = 1_000_000.0
+    return (
+        rates.input * int(counts.get("input_tokens") or 0) / m
+        + rates.output * int(counts.get("output_tokens") or 0) / m
+        + rates.cache_write * int(counts.get("cache_write_tokens") or 0) / m
+        + rates.cache_read * int(counts.get("cache_read_tokens") or 0) / m
+    )
 
 
 @dataclass
@@ -98,6 +226,7 @@ class AppConfig:
     background_calls: BackgroundCallsConfig = field(default_factory=BackgroundCallsConfig)
     watchdog: WatchdogConfig = field(default_factory=WatchdogConfig)
     secrets: SecretsConfig = field(default_factory=SecretsConfig)
+    pricing: PricingConfig = field(default_factory=PricingConfig)
 
     @classmethod
     def from_dict(cls, data: dict) -> "AppConfig":
@@ -154,6 +283,8 @@ class AppConfig:
             backend_override=secrets_data.get("backend_override", None),
             keyring_service_name=secrets_data.get("keyring_service_name", "cc_webui"),
         )
+        pricing_data = data.get("pricing", {})
+        pricing = PricingConfig.from_dict(pricing_data) if pricing_data else PricingConfig()
         return cls(
             networking=networking,
             features=features,
@@ -162,6 +293,7 @@ class AppConfig:
             background_calls=background_calls,
             watchdog=watchdog,
             secrets=secrets,
+            pricing=pricing,
         )
 
     def to_dict(self) -> dict:
@@ -219,6 +351,7 @@ class AppConfig:
                 "backend_override": self.secrets.backend_override,
                 "keyring_service_name": self.secrets.keyring_service_name,
             },
+            "pricing": self.pricing.to_dict(),
         }
 
 

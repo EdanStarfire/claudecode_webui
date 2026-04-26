@@ -48,6 +48,33 @@ CREATE INDEX IF NOT EXISTS idx_audit_project_ts
     ON audit_events(project_id, timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_audit_session_turn
     ON audit_events(session_id, turn_id);
+
+CREATE TABLE IF NOT EXISTS turn_usage (
+  id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id          TEXT    NOT NULL,
+  turn_seq            INTEGER NOT NULL,
+  model               TEXT,
+  input_tokens        INTEGER NOT NULL DEFAULT 0,
+  output_tokens       INTEGER NOT NULL DEFAULT 0,
+  cache_write_tokens  INTEGER NOT NULL DEFAULT 0,
+  cache_read_tokens   INTEGER NOT NULL DEFAULT 0,
+  sdk_total_cost_usd  REAL,
+  ts                  REAL    NOT NULL,
+  UNIQUE(session_id, turn_seq)
+);
+CREATE INDEX IF NOT EXISTS idx_turn_session ON turn_usage(session_id);
+
+CREATE TABLE IF NOT EXISTS session_usage (
+  session_id          TEXT PRIMARY KEY,
+  model               TEXT,
+  turn_count          INTEGER NOT NULL DEFAULT 0,
+  input_tokens        INTEGER NOT NULL DEFAULT 0,
+  output_tokens       INTEGER NOT NULL DEFAULT 0,
+  cache_write_tokens  INTEGER NOT NULL DEFAULT 0,
+  cache_read_tokens   INTEGER NOT NULL DEFAULT 0,
+  sdk_total_cost_usd  REAL,
+  last_updated        REAL    NOT NULL
+);
 """
 
 
