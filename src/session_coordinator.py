@@ -284,7 +284,7 @@ class SessionCoordinator:
         # Per-session turn sequence counters (rehydrated lazily from DB on first use)
         self._turn_seq_by_session: dict[str, int] = {}
         # Callback for broadcasting usage_updated events (injected by web_server)
-        self._usage_broadcast_callback: "Callable[[str, dict], None] | None" = None
+        self._usage_broadcast_callback: Callable[[str, dict], None] | None = None
 
         # Issue #404: Resource MCP tools for displaying resources in task panel
         # Callback for broadcasting resource_registered events will be set by web_server
