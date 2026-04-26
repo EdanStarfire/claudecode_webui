@@ -550,8 +550,8 @@ class TestProfileAreasStructure:
                 seen[field] = area
 
     def test_all_areas_non_empty(self):
-        """All 6 profile areas are non-empty."""
-        assert len(PROFILE_AREAS) == 6
+        """All 7 profile areas are non-empty (issue #827 added 'secrets' area)."""
+        assert len(PROFILE_AREAS) == 7
         for area, fields in PROFILE_AREAS.items():
             assert len(fields) > 0, f"Area '{area}' has no fields"
 

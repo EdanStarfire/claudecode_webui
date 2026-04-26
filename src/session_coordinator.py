@@ -958,6 +958,12 @@ class SessionCoordinator:
                 await self.session_manager._persist_session_state(session_id)
                 logger.info(f"Set default role for session {session_id}: {session_info.role}")
 
+            # Issue #827: Generate per-session secrets fetch token if not present.
+            # Used by proxy sidecar to call GET /api/sessions/{id}/secrets/resolve.
+            if not session_info.secret_fetch_token:
+                session_info.secret_fetch_token = secrets.token_urlsafe(32)
+                await self.session_manager._persist_session_state(session_id)
+
             # Create storage manager
             session_dir = await self.session_manager.get_session_directory(session_id)
             storage_manager = DataStorageManager(session_dir)
@@ -1188,11 +1194,11 @@ class SessionCoordinator:
                             f"{len(effective_domains)} domains"
                         )
 
-                    # Resolve credential names to full objects from vault
+                    # Resolve assigned secret names to full objects from vault
                     resolved_creds = []
-                    if effective_config.docker_proxy_credential_names:
+                    if effective_config.assigned_secrets:
                         resolved_creds = await self.credential_vault.resolve_credentials(
-                            effective_config.docker_proxy_credential_names
+                            effective_config.assigned_secrets
                         )
 
                     if resolved_creds:
@@ -1262,6 +1268,15 @@ class SessionCoordinator:
                             f"Wrote proxy credentials for session {session_id}: "
                             f"credentials={cred_names}, delivery_envs={list(delivery_envs)}"
                         )
+
+                    # Issue #827: Write per-session token file for proxy sidecar.
+                    # The sidecar uses this to call GET /api/sessions/{id}/secrets/resolve.
+                    session_token = getattr(session_info, "secret_fetch_token", None)
+                    if session_token:
+                        token_path = tmp_dir / "session_token"
+                        token_path.write_text(session_token)
+                        os.chmod(token_path, 0o600)
+                        extra_mounts.append(f"{token_path}:/etc/proxy/session_token:ro")
 
                 # Issue #1089: Deduplicate mounts by container destination path (first-seen wins).
                 # Format: "host_path:container_path[:options]" — extract the second colon-delimited field.

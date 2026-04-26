@@ -1,30 +1,37 @@
 """
-Credential Vault — secure CRUD for named proxy credentials.
+Secrets Vault — secure CRUD for named secrets.
 
-Stores credential metadata and secret values as separate files:
-  data/credentials/{slug}.json    — metadata (mode 0o600), never contains the secret
-  data/credentials/{slug}.secret  — secret value (mode 0o600)
+Stores secret metadata as JSON files:
+  data/credentials/{name}.json    — metadata (mode 0o600), never contains the value
 
-Issue #1053: Domain allowlist and credential management UI for proxy mode.
+Secret values are stored in the OS keyring (or CryptFileKeyring fallback)
+under service="cc_webui", username=name. Old plaintext .secret files are
+orphaned (no migration); operators may delete them manually.
+
+Issue #827: Host-level secrets storage via keyring (replaces issue #1053 plaintext storage).
 """
 
 import json
 import logging
 import os
-from datetime import UTC, datetime
 from pathlib import Path
 
-from .slug_utils import slugify
+from .models.secret_record import SecretRecord, validate_secret_name
+from .secrets_keyring import delete_secret_value, get_secret_value, set_secret_value
 
 logger = logging.getLogger(__name__)
 
 
-class CredentialVault:
-    """Secure CRUD for named proxy credentials.
+# Backward-compat alias: the old class was CredentialVault
+CredentialVault = None  # set at end of module
 
-    Credential values are stored in separate .secret files and never returned
-    via list_credentials() or create_credential() — only the internal
-    resolve_credentials() method reads them (for sidecar assembly at session start).
+
+class SecretsVault:
+    """Secure CRUD for named secrets using OS keyring for value storage.
+
+    Secret values are stored in the keyring and never written to disk.
+    Metadata JSON files contain all fields except the value.
+    The old plaintext .secret files are ignored by this class.
     """
 
     def __init__(self, data_dir: Path) -> None:
@@ -35,117 +42,162 @@ class CredentialVault:
     # Public API (safe — no secrets in return values)
     # -------------------------------------------------------------------------
 
-    async def list_credentials(self) -> list[dict]:
-        """Return metadata for all credentials. Never includes secret values."""
+    async def list_secrets(self) -> list[dict]:
+        """Return metadata for all secrets. Never includes secret values."""
         results = []
         for meta_path in sorted(self._creds_dir.glob("*.json")):
             try:
                 data = json.loads(meta_path.read_text())
-                results.append(self._strip_secret(data))
+                # Skip files that look like old-format credentials (no 'type' field)
+                # They will be picked up once re-created via the new API.
+                if "name" not in data:
+                    continue
+                results.append(self._strip_value(data))
             except Exception:
-                logger.exception(f"Failed to read credential metadata from {meta_path}")
+                logger.exception(f"Failed to read secret metadata from {meta_path}")
         return results
 
-    async def create_credential(
-        self,
-        name: str,
-        host_pattern: str,
-        header_name: str,
-        value_format: str,
-        real_value: str,
-        delivery: dict,
-    ) -> dict:
-        """Create a new credential. Returns metadata only (no value).
+    async def get_secret(self, name: str) -> dict | None:
+        """Return metadata for a single secret. Returns None if not found."""
+        meta_path = self._creds_dir / f"{name}.json"
+        if not meta_path.exists():
+            return None
+        try:
+            data = json.loads(meta_path.read_text())
+            return self._strip_value(data)
+        except Exception:
+            logger.exception(f"Failed to read secret metadata for '{name}'")
+            return None
+
+    async def create_secret(self, record: SecretRecord, value: str) -> dict:
+        """Create a new secret. Returns metadata only (no value).
 
         Raises:
-            ValueError: If a credential with this name already exists.
+            ValueError: If a secret with this name already exists, or validation fails.
         """
-        slug = slugify(name)
-        meta_path = self._creds_dir / f"{slug}.json"
-        secret_path = self._creds_dir / f"{slug}.secret"
+        validate_secret_name(record.name)
+        record.validate()
 
+        meta_path = self._creds_dir / f"{record.name}.json"
         if meta_path.exists():
-            raise ValueError(f"Credential '{name}' already exists (slug: {slug})")
+            raise ValueError(f"Secret '{record.name}' already exists")
 
-        now = datetime.now(UTC).isoformat()
-        metadata = {
-            "name": name,
-            "host_pattern": host_pattern,
-            "header_name": header_name,
-            "value_format": value_format,
-            "delivery": delivery,
-            "created_at": now,
-            "updated_at": now,
-        }
+        # Store value in keyring first; if that fails, don't create the metadata
+        set_secret_value(record.name, value)
 
-        # Write secret first so that if anything fails, there's no orphaned metadata
-        secret_path.write_text(real_value)
-        os.chmod(secret_path, 0o600)
-
+        metadata = record.to_dict()
         meta_path.write_text(json.dumps(metadata, indent=2))
         os.chmod(meta_path, 0o600)
 
-        logger.info(f"Created credential '{name}' (slug={slug})")
-        return self._strip_secret(metadata)
+        logger.info(f"Created secret '{record.name}' (type={record.type})")
+        return self._strip_value(metadata)
 
-    async def delete_credential(self, name: str) -> bool:
-        """Delete both metadata and secret files. Returns True if deleted, False if not found."""
-        slug = slugify(name)
-        meta_path = self._creds_dir / f"{slug}.json"
-        secret_path = self._creds_dir / f"{slug}.secret"
+    async def update_secret(
+        self,
+        name: str,
+        record: SecretRecord,
+        value: str | None = None,
+    ) -> dict | None:
+        """Update secret metadata and optionally the value.
 
+        Returns updated metadata, or None if secret not found.
+        Raises ValueError on validation failure.
+        """
+        meta_path = self._creds_dir / f"{name}.json"
+        if not meta_path.exists():
+            return None
+
+        record.validate()
+
+        if value is not None:
+            set_secret_value(name, value)
+
+        metadata = record.to_dict()
+        meta_path.write_text(json.dumps(metadata, indent=2))
+        os.chmod(meta_path, 0o600)
+
+        logger.info(f"Updated secret '{name}'")
+        return self._strip_value(metadata)
+
+    async def delete_secret(self, name: str) -> bool:
+        """Delete secret metadata and keyring entry. Returns True if deleted, False if not found."""
+        meta_path = self._creds_dir / f"{name}.json"
         if not meta_path.exists():
             return False
 
         meta_path.unlink(missing_ok=True)
-        secret_path.unlink(missing_ok=True)
-        logger.info(f"Deleted credential '{name}' (slug={slug})")
+        delete_secret_value(name)
+        logger.info(f"Deleted secret '{name}'")
         return True
 
     # -------------------------------------------------------------------------
-    # Internal API (reads secrets — never expose via HTTP)
+    # Internal API (reads values — never expose via HTTP)
     # -------------------------------------------------------------------------
 
-    async def get_credential_value(self, name: str) -> str | None:
-        """Read the secret value for a named credential. Internal use only."""
-        slug = slugify(name)
-        secret_path = self._creds_dir / f"{slug}.secret"
-        if not secret_path.exists():
-            return None
-        return secret_path.read_text()
+    async def resolve_secrets_for_assignment(self, names: list[str]) -> list[dict]:
+        """Resolve a list of secret names to full objects including values.
 
-    async def resolve_credentials(self, names: list[str]) -> list[dict]:
-        """Resolve a list of credential names to full objects (including values).
-
-        Used internally during sidecar assembly at session start.
-        Returns full credential dicts with 'real_value' field populated.
+        Used internally to build sidecar credential bundles at session start.
+        Returned dicts include a 'value' key with the plaintext secret.
         Unknown names are logged and skipped.
         """
         results = []
         for name in names:
-            slug = slugify(name)
-            meta_path = self._creds_dir / f"{slug}.json"
+            meta_path = self._creds_dir / f"{name}.json"
             if not meta_path.exists():
-                logger.warning(f"Credential '{name}' not found in vault (slug={slug}), skipping")
+                logger.warning(f"Secret '{name}' not found in vault, skipping")
                 continue
             try:
                 metadata = json.loads(meta_path.read_text())
-                real_value = await self.get_credential_value(name)
-                if real_value is None:
-                    logger.warning(f"Secret file missing for credential '{name}', skipping")
+                value = get_secret_value(name)
+                if value is None:
+                    logger.warning(f"Keyring value missing for secret '{name}', skipping")
                     continue
                 full = dict(metadata)
-                full["real_value"] = real_value
+                full["value"] = value
                 results.append(full)
             except Exception:
-                logger.exception(f"Failed to resolve credential '{name}'")
+                logger.exception(f"Failed to resolve secret '{name}'")
         return results
+
+    # -------------------------------------------------------------------------
+    # Legacy compatibility shim (issue #827 keeps sidecar reading credentials.json)
+    # The sidecar still reads the old schema; this method projects the new schema
+    # fields back into the legacy format. Removed in #1134.
+    # -------------------------------------------------------------------------
+
+    async def resolve_credentials(self, names: list[str]) -> list[dict]:
+        """Legacy-format resolver for sidecar assembly (backwards compat shim).
+
+        Returns dicts with the old schema fields (host_pattern, header_name,
+        value_format, real_value) that session_coordinator.py uses to build
+        credentials.json for the proxy sidecar. Removed in #1134.
+        """
+        resolved = await self.resolve_secrets_for_assignment(names)
+        legacy = []
+        for secret in resolved:
+            legacy_entry = {
+                "name": secret.get("name", ""),
+                "host_pattern": (secret.get("target_hosts") or ["*"])[0],
+                "header_name": "Authorization",
+                "value_format": "Bearer {value}",
+                "real_value": secret.get("value", ""),
+                "delivery": {"type": "env"},
+            }
+            if secret.get("inject_env"):
+                legacy_entry["delivery"] = {"type": "env", "var": secret["inject_env"]}
+            legacy.append(legacy_entry)
+        return legacy
 
     # -------------------------------------------------------------------------
     # Helpers
     # -------------------------------------------------------------------------
 
     @staticmethod
-    def _strip_secret(data: dict) -> dict:
-        """Return a copy of data with 'real_value' removed (defensive)."""
-        return {k: v for k, v in data.items() if k != "real_value"}
+    def _strip_value(data: dict) -> dict:
+        """Return a copy of data with value fields removed (defensive)."""
+        return {k: v for k, v in data.items() if k not in ("value", "real_value")}
+
+
+# Backward-compat alias: old code imported CredentialVault
+CredentialVault = SecretsVault

@@ -76,7 +76,7 @@ def build_router(webui) -> APIRouter:
             docker_home_directory=request.docker_home_directory,
             docker_proxy_enabled=request.docker_proxy_enabled,
             docker_proxy_image=request.docker_proxy_image,
-            docker_proxy_credential_names=request.docker_proxy_credential_names,
+            assigned_secrets=request.assigned_secrets,
             docker_proxy_allowlist_domains=request.docker_proxy_allowlist_domains,
             # Thinking and effort configuration (issue #580)
             thinking_mode=request.thinking_mode,

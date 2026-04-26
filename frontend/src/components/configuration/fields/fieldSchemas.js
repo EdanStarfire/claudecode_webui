@@ -185,13 +185,13 @@ export const FIELD_SCHEMAS = {
       description: 'Additional domains allowed through the proxy (added to global defaults).',
     },
     {
-      key: 'docker_proxy_credential_names',
-      label: 'Proxy Credentials',
+      key: 'assigned_secrets',
+      label: 'Assigned Secrets',
       widget: 'multi-select',
       showWhen: (config) => !!config.docker_enabled && !!config.docker_proxy_enabled,
-      optionsFrom: 'proxyCredentials',
-      placeholder: 'Select credentials to activate...',
-      description: 'Named credentials to inject into proxy sidecar for this session.',
+      optionsFrom: 'secrets',
+      placeholder: 'Select secrets to assign...',
+      description: 'Named secrets assigned to this session for proxy injection.',
     },
     {
       key: 'bare_mode',

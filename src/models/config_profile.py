@@ -10,7 +10,7 @@ from datetime import datetime
 from typing import Any
 
 # Fields that must be lists (may be stored as comma-separated strings by older UI)
-_LIST_CONFIG_KEYS = {"docker_proxy_allowlist_domains", "docker_proxy_credential_names"}
+_LIST_CONFIG_KEYS = {"docker_proxy_allowlist_domains", "assigned_secrets"}
 
 
 @dataclass

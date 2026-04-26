@@ -1,17 +1,16 @@
 """
-Unit tests for issue #1051 / #1053 — per-session credential injection via proxy.
+Unit tests for issue #1051 / #1053 / #827 — per-session credential injection via proxy.
 
 Architecture: vault-based placeholder injection.
-- Credentials are stored in CredentialVault by name (issue #1053).
-- Each credential defines a delivery (how placeholder reaches agent container)
-  and injection (what proxy watches for in outgoing request headers).
+- Secrets are stored in SecretsVault by name (issue #827).
+- Each secret defines assigned_secrets names that are resolved at session start.
 - The proxy replaces placeholder values in headers with real credentials.
 - Unauthenticated calls (no placeholder in headers) are untouched.
 
 Tests:
-1.  SessionConfig credential_names field round-trip (issue #1053)
-2.  SessionConfig credential_names default to None
-3.  SessionInfo backward compat (missing docker_proxy_credential_names defaults to None)
+1.  SessionConfig assigned_secrets field round-trip (issue #827)
+2.  SessionConfig assigned_secrets default to None
+3.  SessionInfo backward compat (missing assigned_secrets defaults to None)
 4.  SessionConfig → SessionInfo propagation via SessionManager.create_session()
 5.  docker_utils with proxy_credentials_file sets CLAUDE_DOCKER_PROXY_CREDS_FILE
 6.  docker_utils with proxy_credentials_file=None omits env var
@@ -64,32 +63,32 @@ def _make_cred_entry(
 # 1. SessionConfig credential_names field round-trip (issue #1053)
 # ---------------------------------------------------------------------------
 
-def test_session_config_credentials_round_trip():
-    """docker_proxy_credential_names survives Pydantic validation and serialisation."""
-    config = SessionConfig(docker_proxy_credential_names=["github_token", "npm_token"])
-    assert config.docker_proxy_credential_names == ["github_token", "npm_token"]
+def test_session_config_assigned_secrets_round_trip():
+    """assigned_secrets survives Pydantic validation and serialisation."""
+    config = SessionConfig(assigned_secrets=["github_token", "npm_token"])
+    assert config.assigned_secrets == ["github_token", "npm_token"]
 
     data = config.model_dump()
     restored = SessionConfig(**data)
-    assert restored.docker_proxy_credential_names == ["github_token", "npm_token"]
+    assert restored.assigned_secrets == ["github_token", "npm_token"]
 
 
 # ---------------------------------------------------------------------------
-# 2. SessionConfig credentials default to None
+# 2. SessionConfig assigned_secrets default to None
 # ---------------------------------------------------------------------------
 
-def test_session_config_credentials_default_none():
-    """docker_proxy_credential_names defaults to None when not supplied."""
+def test_session_config_assigned_secrets_default_none():
+    """assigned_secrets defaults to None when not supplied."""
     config = SessionConfig()
-    assert config.docker_proxy_credential_names is None
+    assert config.assigned_secrets is None
 
 
 # ---------------------------------------------------------------------------
-# 3. SessionInfo backward compat — old docker_proxy_credentials field silently dropped
+# 3. SessionInfo backward compat — old docker_proxy_credential_names field silently dropped
 # ---------------------------------------------------------------------------
 
-def test_session_info_backward_compat_no_credentials():
-    """SessionInfo.from_dict without docker_proxy_credential_names defaults to None."""
+def test_session_info_backward_compat_no_assigned_secrets():
+    """SessionInfo.from_dict without assigned_secrets defaults to None."""
     from datetime import UTC, datetime
 
     from src.session_manager import SessionInfo, SessionState
@@ -99,10 +98,10 @@ def test_session_info_backward_compat_no_credentials():
         "state": SessionState.CREATED.value,
         "created_at": datetime.now(UTC).isoformat(),
         "updated_at": datetime.now(UTC).isoformat(),
-        # docker_proxy_credential_names intentionally absent
+        # assigned_secrets intentionally absent
     }
     info = SessionInfo.from_dict(data)
-    assert info.docker_proxy_credential_names is None
+    assert info.assigned_secrets is None
 
 
 # ---------------------------------------------------------------------------
@@ -110,24 +109,24 @@ def test_session_info_backward_compat_no_credentials():
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_session_config_credentials_propagation(tmp_path):
-    """docker_proxy_credential_names propagates from SessionConfig to SessionInfo."""
+async def test_session_config_assigned_secrets_propagation(tmp_path):
+    """assigned_secrets propagates from SessionConfig to SessionInfo."""
     from src.session_manager import SessionInfo, SessionManager
 
     sm = SessionManager(data_dir=tmp_path)
     await sm.initialize()
 
-    config = SessionConfig(docker_proxy_credential_names=["github_token"])
+    config = SessionConfig(assigned_secrets=["github_token"])
     await sm.create_session("creds-session-1", config)
 
     info = await sm.get_session_info("creds-session-1")
-    assert info.docker_proxy_credential_names == ["github_token"]
+    assert info.assigned_secrets == ["github_token"]
 
     d = info.to_dict()
-    assert d["docker_proxy_credential_names"] == ["github_token"]
+    assert d["assigned_secrets"] == ["github_token"]
 
     restored = SessionInfo.from_dict(d)
-    assert restored.docker_proxy_credential_names == ["github_token"]
+    assert restored.assigned_secrets == ["github_token"]
 
 
 # ---------------------------------------------------------------------------

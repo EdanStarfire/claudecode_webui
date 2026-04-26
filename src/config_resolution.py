@@ -39,8 +39,11 @@ PROFILE_AREAS: dict[str, set[str]] = {
         "cli_path", "sandbox_enabled", "sandbox_config",
         "docker_enabled", "docker_image", "docker_extra_mounts",
         "docker_home_directory", "docker_proxy_enabled", "docker_proxy_image",
-        "docker_proxy_credential_names", "docker_proxy_allowlist_domains",
+        "docker_proxy_allowlist_domains",
         "bare_mode", "env_scrub_enabled",
+    },
+    "secrets": {
+        "assigned_secrets",
     },
     "features": {
         "history_distillation_enabled", "auto_memory_mode", "auto_memory_directory",
@@ -70,13 +73,14 @@ assert set(FIELD_TO_AREA.keys()) == CONFIG_FIELDS, (
 _LIST_FIELDS: frozenset[str] = frozenset({
     "allowed_tools", "disallowed_tools", "additional_directories",
     "setting_sources", "mcp_server_ids", "docker_extra_mounts",
-    "docker_proxy_credential_names", "docker_proxy_allowlist_domains",
+    "assigned_secrets", "docker_proxy_allowlist_domains",
 })
 
 # Fields that use additive (union) merge across tiers instead of last-wins.
 # All tiers contribute their values; duplicates are removed and result is sorted.
 ADDITIVE_LIST_FIELDS: frozenset[str] = frozenset({
     "docker_proxy_allowlist_domains",
+    "assigned_secrets",
 })
 
 
@@ -235,7 +239,7 @@ def _config_from_session_info(session_info: SessionInfo) -> SessionConfig:
         docker_home_directory=session_info.docker_home_directory,
         docker_proxy_enabled=session_info.docker_proxy_enabled,
         docker_proxy_image=session_info.docker_proxy_image,
-        docker_proxy_credential_names=getattr(session_info, "docker_proxy_credential_names", None),
+        assigned_secrets=getattr(session_info, "assigned_secrets", None),
         docker_proxy_allowlist_domains=getattr(session_info, "docker_proxy_allowlist_domains", None),
         thinking_mode=session_info.thinking_mode,
         thinking_budget_tokens=session_info.thinking_budget_tokens,

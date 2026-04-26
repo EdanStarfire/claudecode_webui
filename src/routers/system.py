@@ -18,6 +18,13 @@ logger = logging.getLogger(__name__)
 def build_router(webui) -> APIRouter:
     router = APIRouter()
 
+    @router.get("/api/system/secrets-backend-status")
+    @handle_exceptions("get secrets backend status")
+    async def get_secrets_backend_status():
+        """Return active keyring backend name and any warning message (issue #827)."""
+        from src.secrets_keyring import get_backend_status
+        return get_backend_status()
+
     @router.get("/api/system/docker-status")
     @handle_exceptions("check docker status")
     async def get_docker_status():

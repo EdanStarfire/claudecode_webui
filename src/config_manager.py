@@ -83,6 +83,13 @@ class WatchdogConfig:
 
 
 @dataclass
+class SecretsConfig:
+    """Configuration for the secrets keyring backend (issue #827)."""
+    backend_override: str | None = None  # Force a specific backend (e.g., "CryptFileKeyring")
+    keyring_service_name: str = "cc_webui"  # Service name used in keyring calls
+
+
+@dataclass
 class AppConfig:
     networking: NetworkingConfig = field(default_factory=NetworkingConfig)
     features: FeaturesConfig = field(default_factory=FeaturesConfig)
@@ -90,6 +97,7 @@ class AppConfig:
     legion: LegionConfig = field(default_factory=LegionConfig)
     background_calls: BackgroundCallsConfig = field(default_factory=BackgroundCallsConfig)
     watchdog: WatchdogConfig = field(default_factory=WatchdogConfig)
+    secrets: SecretsConfig = field(default_factory=SecretsConfig)
 
     @classmethod
     def from_dict(cls, data: dict) -> "AppConfig":
@@ -141,6 +149,11 @@ class AppConfig:
             idle=idle,
             error_rate=error_rate,
         )
+        secrets_data = data.get("secrets", {})
+        secrets = SecretsConfig(
+            backend_override=secrets_data.get("backend_override", None),
+            keyring_service_name=secrets_data.get("keyring_service_name", "cc_webui"),
+        )
         return cls(
             networking=networking,
             features=features,
@@ -148,6 +161,7 @@ class AppConfig:
             legion=legion,
             background_calls=background_calls,
             watchdog=watchdog,
+            secrets=secrets,
         )
 
     def to_dict(self) -> dict:
@@ -200,6 +214,10 @@ class AppConfig:
                     "min_calls": self.watchdog.error_rate.min_calls,
                     "threshold": self.watchdog.error_rate.threshold,
                 },
+            },
+            "secrets": {
+                "backend_override": self.secrets.backend_override,
+                "keyring_service_name": self.secrets.keyring_service_name,
             },
         }
 

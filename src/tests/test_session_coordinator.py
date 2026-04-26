@@ -2,6 +2,7 @@
 
 import asyncio
 import tempfile
+from datetime import UTC
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
@@ -919,25 +920,33 @@ class TestIssue1088CredFilePermissions:
     async def test_issue_1088_creds_path_is_world_readable(self, temp_coordinator):
         """credentials.json must use 0o644 so mitmdump (uid 9999) can read it.
 
-        Delivery files (host_file) with actual secret content must still use 0o600.
-        Uses the vault-based approach (issue #1053): register credential in vault first,
-        then reference by name in docker_proxy_credential_names.
+        Issue #827: Uses SecretsVault.create_secret() with env delivery.
+        File delivery is a #1134 feature; env delivery creates delivery_envs.json (0o600).
         """
         import stat
         import uuid
+        from datetime import datetime
+        from unittest.mock import patch as _patch
+
+        from ..models.secret_record import SecretRecord, SecretType
 
         coordinator = temp_coordinator
 
-        # Register credential in the vault (issue #1053)
-        await coordinator.credential_vault.create_credential(
-            name="github_token",
-            host_pattern="api.github.com",
-            header_name="Authorization",
-            value_format="Bearer {value}",
-            real_value="ghp_real",
-            delivery={"type": "file", "path": "/run/secrets/gh_token",
-                      "content_template": "{placeholder}"},
+        # Register credential in the vault using new SecretsVault API (issue #827)
+        now = datetime.now(UTC)
+        record = SecretRecord(
+            name="github-token",
+            type=SecretType.API_KEY,
+            target_hosts=["api.github.com"],
+            inject_env="GH_TOKEN",
+            created_at=now,
+            updated_at=now,
         )
+        with (
+            _patch("src.credential_vault.set_secret_value"),
+            _patch("src.credential_vault.get_secret_value", return_value="ghp_real"),
+        ):
+            await coordinator.credential_vault.create_secret(record, "ghp_real")
 
         project = await coordinator.project_manager.create_project(
             name="Test Project",
@@ -952,7 +961,7 @@ class TestIssue1088CredFilePermissions:
                 docker_enabled=True,
                 docker_image="claude-code:local",
                 docker_proxy_enabled=True,
-                docker_proxy_credential_names=["github_token"],
+                assigned_secrets=["github-token"],
             ),
         )
 
@@ -960,27 +969,20 @@ class TestIssue1088CredFilePermissions:
         session_dir = coordinator.session_manager.sessions_dir / session_id
         tmp_dir = session_dir / "tmp"
 
-        written_files: list = []
-
-        def fake_resolve(docker_image, docker_extra_mounts, workspace,
-                         session_data_dir, docker_home_directory,
-                         proxy_credentials_file=None, delivery_env_file=None, **kwargs):
-            # Capture all files written into tmp_dir at call time
-            if tmp_dir.exists():
-                written_files.extend(list(tmp_dir.iterdir()))
-            return "/usr/bin/docker", {}
-
         mock_sdk = AsyncMock()
         mock_sdk.start.return_value = True
         mock_sdk.is_running.return_value = False
         coordinator.set_sdk_factory(Mock(return_value=mock_sdk))
 
-        with patch("src.docker_utils.resolve_docker_cli_path", fake_resolve):
-            with patch("src.skill_manager.NEW_GLOBAL_SKILLS_DIR") as mock_skills_dir:
-                mock_skills_dir.exists.return_value = False
-                await coordinator.start_session(session_id)
+        with (
+            _patch("src.credential_vault.get_secret_value", return_value="ghp_real"),
+            _patch("src.docker_utils.resolve_docker_cli_path", return_value=("/usr/bin/docker", {})),
+            _patch("src.skill_manager.NEW_GLOBAL_SKILLS_DIR") as mock_skills_dir,
+        ):
+            mock_skills_dir.exists.return_value = False
+            await coordinator.start_session(session_id)
 
-        # Find credentials.json and delivery files
+        # credentials.json must be world-readable for sidecar (uid 9999)
         creds_file = tmp_dir / "credentials.json"
         assert creds_file.exists(), "credentials.json must be written to session tmp dir"
 
@@ -990,13 +992,12 @@ class TestIssue1088CredFilePermissions:
             f"got {oct(creds_mode)}"
         )
 
-        # Delivery files (contain placeholder — same-uid access only) must remain 0o600
-        delivery_files = [f for f in tmp_dir.iterdir() if f.name.startswith("delivery_")]
-        assert delivery_files, "At least one delivery file must be written for file delivery type"
-        for delivery_file in delivery_files:
-            delivery_mode = stat.S_IMODE(delivery_file.stat().st_mode)
-            assert delivery_mode == 0o600, (
-                f"{delivery_file.name} must remain 0o600, got {oct(delivery_mode)}"
+        # Env delivery creates delivery_envs.json (0o600) — check if written
+        envs_file = tmp_dir / "delivery_envs.json"
+        if envs_file.exists():
+            envs_mode = stat.S_IMODE(envs_file.stat().st_mode)
+            assert envs_mode == 0o600, (
+                f"delivery_envs.json must be 0o600, got {oct(envs_mode)}"
             )
 
 

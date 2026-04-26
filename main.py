@@ -15,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from src.config_manager import check_network_binding, ensure_config_file, load_config
 from src.logging_config import configure_logging
+from src.secrets_keyring import configure_keyring
 from src.web_server import create_app, shutdown_event, startup_event
 
 
@@ -103,6 +104,9 @@ Debug Flags:
     )
 
     args = parser.parse_args()
+
+    # Configure keyring backend early (before ApplicationService init)
+    configure_keyring()
 
     # Ensure config file exists (creates with safe defaults on first run)
     config_file = ensure_config_file()

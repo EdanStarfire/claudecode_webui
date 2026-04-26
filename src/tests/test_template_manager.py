@@ -294,14 +294,14 @@ class TestUpdateTemplate:
             template.template_id,
             docker_proxy_enabled=True,
             docker_proxy_image="proxy:latest",
-            docker_proxy_credential_names=["cred-a", "cred-b"],
+            assigned_secrets=["cred-a", "cred-b"],
             docker_proxy_allowlist_domains=["example.com", "api.example.com"],
             docker_home_directory="/home/agent",
         )
 
         assert updated.docker_proxy_enabled is True
         assert updated.docker_proxy_image == "proxy:latest"
-        assert updated.docker_proxy_credential_names == ["cred-a", "cred-b"]
+        assert updated.assigned_secrets == ["cred-a", "cred-b"]
         assert updated.docker_proxy_allowlist_domains == ["example.com", "api.example.com"]
         assert updated.docker_home_directory == "/home/agent"
 
@@ -310,7 +310,7 @@ class TestUpdateTemplate:
         await manager2.load_templates()
         reloaded = await manager2.get_template(template.template_id)
         assert reloaded.docker_proxy_allowlist_domains == ["example.com", "api.example.com"]
-        assert reloaded.docker_proxy_credential_names == ["cred-a", "cred-b"]
+        assert reloaded.assigned_secrets == ["cred-a", "cred-b"]
         assert reloaded.docker_proxy_enabled is True
 
     @pytest.mark.asyncio

@@ -141,8 +141,8 @@ class SessionInfo:
     # Issue #1050: Proxy lifecycle management
     docker_proxy_enabled: bool = False   # Intent toggle: enable proxy sidecar
     docker_proxy_image: str | None = None  # Image override (None = use app config default)
-    # Issue #1053: Named credentials from vault + extra allowed domains
-    docker_proxy_credential_names: list[str] | None = None  # Names referencing vault credentials
+    # Issue #827: Assigned secrets from vault + extra allowed domains
+    assigned_secrets: list[str] | None = None  # Secret names from vault to inject at session start
     docker_proxy_allowlist_domains: list[str] | None = None  # Extra domains to allow through proxy
 
     # Thinking and effort configuration (issue #540)
@@ -177,6 +177,10 @@ class SessionInfo:
 
     # Watchdog activity tracking (issue #1130) — in-memory only on hot path
     last_activity_at: datetime | None = None
+
+    # Per-session token for secrets resolve endpoint (issue #827)
+    # Generated at start_session(), cleared at terminate_session()
+    secret_fetch_token: str | None = None
 
     def __post_init__(self):
         if self.additional_directories is None:
@@ -248,15 +252,25 @@ class SessionInfo:
         data.setdefault('docker_home_directory', None)
         data.setdefault('docker_proxy_enabled', False)
         data.setdefault('docker_proxy_image', None)
-        # Issue #1053: migrate docker_proxy_credentials (inline dicts) → docker_proxy_credential_names
+        # Issue #1053: migrate docker_proxy_credentials (inline dicts) → removed
         if 'docker_proxy_credentials' in data:
             import logging as _logging
             _logging.getLogger(__name__).warning(
                 "Session state.json contains deprecated 'docker_proxy_credentials' field — "
-                "ignoring (re-enter credentials via the Proxy vault UI)."
+                "ignoring (re-enter secrets via the Secrets UI)."
             )
             data.pop('docker_proxy_credentials')
-        data.setdefault('docker_proxy_credential_names', None)
+        # Issue #827: rename docker_proxy_credential_names → assigned_secrets (log warning, no migration)
+        if 'docker_proxy_credential_names' in data and 'assigned_secrets' not in data:
+            import logging as _logging
+            _logging.getLogger(__name__).warning(
+                "Session state.json contains deprecated 'docker_proxy_credential_names' field — "
+                "field renamed to 'assigned_secrets'. Re-assign secrets via the Secrets UI."
+            )
+            data.pop('docker_proxy_credential_names')
+        else:
+            data.pop('docker_proxy_credential_names', None)
+        data.setdefault('assigned_secrets', None)
         data.setdefault('docker_proxy_allowlist_domains', None)
         data.setdefault('thinking_mode', None)
         data.setdefault('thinking_budget_tokens', None)
@@ -290,6 +304,8 @@ class SessionInfo:
         data.setdefault('last_activity_at', None)
         if data.get('last_activity_at'):
             data['last_activity_at'] = datetime.fromisoformat(data['last_activity_at'])
+        # Per-session secrets token (issue #827)
+        data.setdefault('secret_fetch_token', None)
         return cls(**data)
 
 
@@ -434,7 +450,7 @@ class SessionManager:
             "docker_home_directory": config.docker_home_directory,
             "docker_proxy_enabled": config.docker_proxy_enabled,
             "docker_proxy_image": config.docker_proxy_image,
-            "docker_proxy_credential_names": config.docker_proxy_credential_names,
+            "assigned_secrets": config.assigned_secrets,
             "docker_proxy_allowlist_domains": config.docker_proxy_allowlist_domains,
             "thinking_mode": config.thinking_mode,
             "thinking_budget_tokens": config.thinking_budget_tokens,
@@ -578,6 +594,10 @@ class SessionManager:
                     return True
 
                 await self._update_session_state(session_id, SessionState.TERMINATING)
+
+                # Issue #827: Clear per-session secrets token on termination.
+                if hasattr(session, "secret_fetch_token") and session.secret_fetch_token:
+                    session.secret_fetch_token = None
 
                 # Perform cleanup tasks
                 await asyncio.sleep(0.1)  # Placeholder for cleanup logic

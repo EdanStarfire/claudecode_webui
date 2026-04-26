@@ -270,7 +270,7 @@ class TemplateManager:
         docker_home_directory: str | None = None,
         docker_proxy_enabled: bool | None = None,
         docker_proxy_image: str | None = None,
-        docker_proxy_credential_names: list[str] | None = None,
+        assigned_secrets: list[str] | None = None,
         docker_proxy_allowlist_domains: list[str] | None = None,
         # Thinking and effort configuration (issue #580)
         thinking_mode: str | None = None,
@@ -362,8 +362,8 @@ class TemplateManager:
             template.docker_proxy_enabled = docker_proxy_enabled
         if docker_proxy_image is not None:
             template.docker_proxy_image = docker_proxy_image
-        if docker_proxy_credential_names is not None:
-            template.docker_proxy_credential_names = docker_proxy_credential_names
+        if assigned_secrets is not None:
+            template.assigned_secrets = assigned_secrets
         if docker_proxy_allowlist_domains is not None:
             template.docker_proxy_allowlist_domains = docker_proxy_allowlist_domains
 

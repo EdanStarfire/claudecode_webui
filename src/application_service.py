@@ -513,33 +513,111 @@ class ApplicationService:
         )
 
     # =========================================================================
-    # Proxy Credential Vault (issue #1053)
+    # Secrets Vault (issue #827 — replaces issue #1053 CredentialVault)
     # =========================================================================
 
-    async def list_credentials(self) -> dict:
-        credentials = await self.coordinator.credential_vault.list_credentials()
-        return {"credentials": credentials}
+    async def list_secrets(self) -> dict:
+        """List all secret metadata. Never includes secret values."""
+        secrets = await self.coordinator.credential_vault.list_secrets()
+        return {"secrets": secrets}
 
-    async def create_credential(
+    async def create_secret(
         self,
         name: str,
-        host_pattern: str,
-        header_name: str,
-        value_format: str,
-        real_value: str,
-        delivery: dict,
+        secret_type: str,
+        target_hosts: list[str],
+        value: str,
+        inject_env: str | None = None,
+        inject_file: dict | None = None,
+        scrub: dict | None = None,
     ) -> dict:
-        return await self.coordinator.credential_vault.create_credential(
-            name=name,
-            host_pattern=host_pattern,
-            header_name=header_name,
-            value_format=value_format,
-            real_value=real_value,
-            delivery=delivery,
+        """Create a new secret. Returns metadata only (value not in response)."""
+        from datetime import UTC, datetime
+
+        from .models.secret_record import (
+            InjectFileSpec,
+            ScrubSpec,
+            SecretRecord,
+            SecretType,
         )
 
-    async def delete_credential(self, name: str) -> bool:
-        return await self.coordinator.credential_vault.delete_credential(name)
+        now = datetime.now(UTC)
+        inj_file = InjectFileSpec.from_dict(inject_file) if inject_file else None
+        scrub_spec = ScrubSpec.from_dict(scrub) if scrub else None
+        record = SecretRecord(
+            name=name,
+            type=SecretType(secret_type),
+            target_hosts=target_hosts,
+            inject_env=inject_env,
+            inject_file=inj_file,
+            scrub=scrub_spec,
+            created_at=now,
+            updated_at=now,
+        )
+        return await self.coordinator.credential_vault.create_secret(record, value)
+
+    async def update_secret(
+        self,
+        name: str,
+        secret_type: str | None = None,
+        target_hosts: list[str] | None = None,
+        value: str | None = None,
+        inject_env: str | None = None,
+        inject_file: dict | None = None,
+        scrub: dict | None = None,
+    ) -> dict | None:
+        """Update secret metadata and/or value. Returns updated metadata or None if not found."""
+        from datetime import UTC, datetime
+
+        from .models.secret_record import (
+            InjectFileSpec,
+            ScrubSpec,
+            SecretRecord,
+            SecretType,
+        )
+
+        existing = await self.coordinator.credential_vault.get_secret(name)
+        if existing is None:
+            return None
+
+        now = datetime.now(UTC)
+        inj_file = None
+        if inject_file is not None:
+            inj_file = InjectFileSpec.from_dict(inject_file)
+        elif existing.get("inject_file"):
+            inj_file = InjectFileSpec.from_dict(existing["inject_file"])
+
+        scrub_spec = None
+        if scrub is not None:
+            scrub_spec = ScrubSpec.from_dict(scrub)
+        elif existing.get("scrub"):
+            scrub_spec = ScrubSpec.from_dict(existing["scrub"])
+
+        record = SecretRecord(
+            name=name,
+            type=SecretType(secret_type or existing.get("type", "generic")),
+            target_hosts=target_hosts if target_hosts is not None else existing.get("target_hosts", []),
+            inject_env=inject_env if inject_env is not None else existing.get("inject_env"),
+            inject_file=inj_file,
+            scrub=scrub_spec,
+            created_at=datetime.fromisoformat(existing["created_at"]),
+            updated_at=now,
+        )
+        return await self.coordinator.credential_vault.update_secret(name, record, value)
+
+    async def delete_secret(self, name: str) -> bool:
+        """Delete a secret by name."""
+        return await self.coordinator.credential_vault.delete_secret(name)
+
+    async def resolve_secrets_for_session(self, session_id: str) -> dict:
+        """Return resolved secrets (including values) for a session's assigned_secrets list."""
+        session = await self.coordinator.session_manager.get_session_info(session_id)
+        if session is None:
+            return {"secrets": []}
+
+        assigned = getattr(session, "assigned_secrets", None) or []
+        secrets = await self.coordinator.credential_vault.resolve_secrets_for_assignment(assigned)
+        return {"secrets": secrets}
 
     async def get_proxy_status(self, session_id: str) -> dict:
         """Return effective allowlist + active credential names + proxy state for a session."""
@@ -565,12 +643,12 @@ class ApplicationService:
         extra_domains = getattr(session, "docker_proxy_allowlist_domains", None) or []
         all_domains = sorted(set(effective_domains + extra_domains))
 
-        active_credentials = getattr(session, "docker_proxy_credential_names", None) or []
+        active_secrets = getattr(session, "assigned_secrets", None) or []
 
         return {
             "proxy_enabled": True,
             "effective_domains": all_domains,
-            "active_credentials": active_credentials,
+            "active_credentials": active_secrets,
             "sidecar_running": False,  # Sidecar runtime state not tracked server-side
         }
 
