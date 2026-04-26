@@ -70,6 +70,9 @@ class SessionWatchdogService:
         self._running = False
         self._task: asyncio.Task | None = None
 
+        # Audit hooks: async callables(alert_dict) invoked after each alert fires
+        self.on_alert: list = []
+
         # Per-session alert episode state
         self._alert_states: dict[str, WatchdogAlertState] = {}
 
@@ -295,3 +298,9 @@ class SessionWatchdogService:
             )
         except Exception:
             logger.exception(f"Failed to push watchdog alert for session {session.session_id}")
+
+        for cb in self.on_alert:
+            try:
+                await cb(event)
+            except Exception:
+                logger.exception("on_alert callback error (non-fatal)")

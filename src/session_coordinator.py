@@ -229,6 +229,9 @@ class SessionCoordinator:
         # Tracks tool lifecycle state and computes display metadata for frontend
         self._display_projections: dict[str, DisplayProjection] = {}
 
+        # Audit writer (set after construction via set_audit_writer; optional)
+        self._audit_writer = None
+
         # SDK factory for dependency injection (enables MockClaudeSDK for testing)
         self._sdk_factory = self._default_sdk_factory
 
@@ -298,6 +301,23 @@ class SessionCoordinator:
     def set_sdk_factory(self, factory):
         """Set custom SDK factory for testing (e.g., MockClaudeSDK)."""
         self._sdk_factory = factory
+
+    def set_audit_writer(self, writer) -> None:
+        """Wire an AuditWriter into all existing and future storage managers."""
+        self._audit_writer = writer
+        for session_id, manager in list(self._storage_managers.items()):
+            self._apply_audit_writer(manager, session_id)
+
+    def _apply_audit_writer(self, storage_manager, session_id: str) -> None:
+        """Configure audit callbacks on a newly created DataStorageManager."""
+        if self._audit_writer is None:
+            return
+        session = self.session_manager._active_sessions.get(session_id)
+        project_id = session.project_id if session else None
+        storage_manager._session_id = session_id
+        storage_manager._project_id = project_id
+        if self._audit_writer.on_message_append not in storage_manager.on_append:
+            storage_manager.on_append.append(self._audit_writer.on_message_append)
 
     async def _get_mcp_sdk_config(self, mcp_cfg) -> dict:
         """Return SDK config for an MCP server, injecting OAuth Bearer token when applicable.
@@ -433,6 +453,7 @@ class SessionCoordinator:
                     storage_manager = DataStorageManager(session_dir)
                     await storage_manager.initialize()
                     self._storage_managers[session_id] = storage_manager
+                    self._apply_audit_writer(storage_manager, session_id)
                     # logger.info(f"Initialized storage manager for session {session_id}")
 
         except Exception:
@@ -633,6 +654,7 @@ class SessionCoordinator:
             storage_manager = DataStorageManager(session_dir)
             await storage_manager.initialize()
             self._storage_managers[session_id] = storage_manager
+            self._apply_audit_writer(storage_manager, session_id)
 
             # Initialize callback lists
             self._message_callbacks[session_id] = []

@@ -35,6 +35,10 @@ class DataStorageManager:
         # Resource storage paths (issue #404 expansion - supports all file types)
         self.resources_dir = self.session_dir / "resources"
         self.resources_metadata_file = self.resources_dir / "resources.jsonl"
+        # Audit hooks: callables(session_id, project_id, message_data) invoked after append
+        self.on_append: list = []
+        self._session_id: str | None = None
+        self._project_id: str | None = None
 
     async def initialize(self):
         """Initialize storage directory and files"""
@@ -72,8 +76,14 @@ class DataStorageManager:
                 json.dump(message_data, f, ensure_ascii=False)
                 f.write('\n')
 
-
             storage_logger.debug(f"Appended message to {self.session_dir.name}")
+
+            # Invoke audit hooks (non-fatal)
+            for cb in self.on_append:
+                try:
+                    await cb(self._session_id, self._project_id, message_data)
+                except Exception:
+                    logger.exception("on_append callback error (non-fatal)")
         except Exception:
             logger.exception("Failed to append message")
             raise

@@ -2,12 +2,18 @@ import { createRouter, createWebHashHistory } from 'vue-router'
 import NoSessionSelected from '../components/session/NoSessionSelected.vue'
 import SessionView from '../components/session/SessionView.vue'
 import ProjectOverview from '../components/project/ProjectOverview.vue'
+import AuditView from '../components/audit/AuditView.vue'
 
 const routes = [
   {
     path: '/',
     name: 'home',
     component: NoSessionSelected
+  },
+  {
+    path: '/audit',
+    name: 'audit',
+    component: AuditView
   },
   {
     path: '/project/:projectId',

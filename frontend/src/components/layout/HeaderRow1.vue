@@ -18,6 +18,9 @@
           <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
         </svg>
       </button>
+      <router-link to="/audit" class="header-btn audit-nav-btn" title="Audit" aria-label="Audit timeline">
+        ⎗
+      </router-link>
       <button class="header-btn" @click="uiStore.showRestartModal()" title="Restart server" aria-label="Restart server">
         ↻
       </button>
@@ -42,6 +45,7 @@
 import { computed } from 'vue'
 import { useUIStore } from '@/stores/ui'
 import { usePollingStore } from '@/stores/polling'
+import { RouterLink } from 'vue-router'
 
 const uiStore = useUIStore()
 const wsStore = usePollingStore()
@@ -138,6 +142,16 @@ const uiConnected = computed(() => wsStore.uiConnected)
 .panel-toggle-btn.panel-open {
   border-color: #3b82f6;
   color: #93c5fd;
+}
+
+.audit-nav-btn {
+  text-decoration: none;
+  font-size: 14px;
+}
+
+.audit-nav-btn.router-link-active {
+  border-color: #6366f1;
+  color: #a5b4fc;
 }
 
 @keyframes pulse-error {

@@ -222,3 +222,6 @@ worktrees/
 
 # Proxy CA certificates (private key must not be committed)
 src/docker/proxy/certs/
+
+# Frontend build artifacts
+frontend/dist/
