@@ -19,6 +19,7 @@
     "@popperjs/core": "^2.11.8",
     "@vueuse/core": "^10.9.0",
     "bootstrap": "^5.3.3",
+    "chart.js": "^4.5.1",
     "cronstrue": "^3.12.0",
     "diff": "^8.0.3",
     "diff2html": "^3.4.52",
@@ -27,6 +28,7 @@
     "mermaid": "^11.13.0",
     "pinia": "^2.1.7",
     "vue": "^3.4.21",
+    "vue-chartjs": "^5.3.3",
     "vue-router": "^4.3.0"
   },
   "devDependencies": {
