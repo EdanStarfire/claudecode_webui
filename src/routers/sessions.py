@@ -93,6 +93,42 @@ def build_router(webui) -> APIRouter:
 
         return info
 
+    @router.get("/api/sessions/{session_id}/usage")
+    @handle_exceptions("get session usage")
+    async def get_session_usage(session_id: str):
+        """Return aggregated token usage and estimated cost for a session (issue #1125)."""
+        from ..config_manager import PricingConfig, compute_cost, load_config
+        aggregate = await webui.coordinator.analytics_store.get_session_usage(session_id)
+        if aggregate is None:
+            raise HTTPException(status_code=404, detail="No usage data for this session")
+
+        config = load_config(webui.config_file) if webui.config_file else load_config()
+        pricing = config.pricing if config.pricing else PricingConfig()
+
+        model = aggregate.get("model")
+        rates, rates_known = pricing.get_rates(model)
+
+        result: dict = {
+            "session_id": session_id,
+            "model": model,
+            "turn_count": aggregate.get("turn_count", 0),
+            "input_tokens": aggregate.get("input_tokens", 0),
+            "output_tokens": aggregate.get("output_tokens", 0),
+            "cache_write_tokens": aggregate.get("cache_write_tokens", 0),
+            "cache_read_tokens": aggregate.get("cache_read_tokens", 0),
+            "sdk_reported_cost_usd": aggregate.get("sdk_total_cost_usd"),
+            "rates_known": rates_known,
+        }
+
+        if rates is not None:
+            result["estimated_cost_usd"] = compute_cost(rates, aggregate)
+            result["rates_used"] = rates.to_dict()
+        else:
+            result["estimated_cost_usd"] = None
+            result["rates_used"] = None
+
+        return result
+
     @router.get("/api/sessions/{session_id}/descendants")
     @handle_exceptions("get session descendants")
     async def get_session_descendants(session_id: str, limit: int = 50, offset: int = 0):

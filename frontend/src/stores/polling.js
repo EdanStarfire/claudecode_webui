@@ -512,6 +512,13 @@ export const usePollingStore = defineStore('polling', () => {
         break
       }
 
+      case 'usage_updated': {
+        import('./usage').then(({ useUsageStore }) => {
+          useUsageStore().handleUsageUpdated(payload)
+        })
+        break
+      }
+
       case 'context_update': {
         const { input_tokens, context_window, context_pct } = payload
         sessionStore.patchSession(sessionId, {

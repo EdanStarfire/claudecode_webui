@@ -54,6 +54,27 @@ def build_router(webui) -> APIRouter:
                     raise ValueError("max_concurrent_minions must be a positive integer")
                 config.legion.max_concurrent_minions = val
 
+        # Merge pricing section (issue #1125)
+        if "pricing" in body:
+            from ..config_manager import ModelRates
+            pricing_body = body["pricing"]
+            if "default_model" in pricing_body:
+                config.pricing.default_model = str(pricing_body["default_model"])
+            if "rates" in pricing_body:
+                raw_rates = pricing_body["rates"]
+                if not isinstance(raw_rates, dict):
+                    raise ValueError("pricing.rates must be an object")
+                for model_id, rate_data in raw_rates.items():
+                    if not isinstance(rate_data, dict):
+                        raise ValueError(f"pricing.rates.{model_id} must be an object")
+                    for key in ("input", "output", "cache_write", "cache_read"):
+                        val = rate_data.get(key)
+                        if val is not None and (not isinstance(val, (int, float)) or float(val) < 0):
+                            raise ValueError(
+                                f"pricing.rates.{model_id}.{key} must be a non-negative number"
+                            )
+                    config.pricing.rates[model_id] = ModelRates.from_dict(rate_data)
+
         if webui.config_file:
             save_config(config, webui.config_file)
         else:

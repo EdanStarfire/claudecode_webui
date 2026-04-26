@@ -456,6 +456,10 @@ export const useSessionStore = defineStore('session', () => {
         return
       }
 
+      // Issue #1125: Load existing usage data for cost badge
+      const usageStore = await import('./usage')
+      usageStore.useUsageStore().loadUsage(sessionId)
+
       // CRITICAL: Await polling connection to prevent race conditions
       const wsStore = await import('./polling')
       await wsStore.usePollingStore().connectSession(sessionId)

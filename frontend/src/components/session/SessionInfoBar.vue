@@ -7,11 +7,13 @@
         {{ session.error_message }}
       </div>
     </div>
+    <SessionCostBadge :session-id="session.session_id" />
   </div>
 </template>
 
 <script setup>
 import { computed } from 'vue'
+import SessionCostBadge from './SessionCostBadge.vue'
 
 const props = defineProps({
   session: {

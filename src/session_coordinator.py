@@ -279,6 +279,13 @@ class SessionCoordinator:
         self.queue_manager = QueueManager()
         self.queue_processor = QueueProcessor(self)
 
+        # Issue #1125: Per-session token usage analytics (injected by web_server via set_analytics_store)
+        self.analytics_store = None
+        # Per-session turn sequence counters (rehydrated lazily from DB on first use)
+        self._turn_seq_by_session: dict[str, int] = {}
+        # Callback for broadcasting usage_updated events (injected by web_server)
+        self._usage_broadcast_callback: Callable[[str, dict], None] | None = None
+
         # Issue #404: Resource MCP tools for displaying resources in task panel
         # Callback for broadcasting resource_registered events will be set by web_server
         from src.mcp.resource_mcp_tools import ResourceMCPTools
@@ -301,6 +308,10 @@ class SessionCoordinator:
     def set_sdk_factory(self, factory):
         """Set custom SDK factory for testing (e.g., MockClaudeSDK)."""
         self._sdk_factory = factory
+
+    def set_analytics_store(self, store) -> None:
+        """Inject the AnalyticsStore instance (issue #1125)."""
+        self.analytics_store = store
 
     def set_audit_writer(self, writer) -> None:
         """Wire an AuditWriter into all existing and future storage managers."""
@@ -1892,6 +1903,13 @@ class SessionCoordinator:
 
             if success:
                 coord_logger.info(f"Session {session_id} deleted")
+                # Issue #1125: Remove analytics rows for deleted session
+                if self.analytics_store:
+                    try:
+                        await self.analytics_store.delete_session(session_id)
+                        self._turn_seq_by_session.pop(session_id, None)
+                    except Exception:
+                        logger.exception("Failed to delete analytics for session %s", session_id)
                 # Notify about session deletion (using a special state change)
                 await self._notify_state_change(session_id, "deleted")
                 # Add this session to the deleted list
@@ -3904,6 +3922,33 @@ class SessionCoordinator:
                         await self.session_manager.update_processing_state(session_id, False)
                     except Exception:
                         logger.exception(f"Failed to reset processing state for session {session_id}")
+
+                    # Issue #1125: Record turn usage in analytics DB and broadcast update
+                    if self.analytics_store:
+                        try:
+                            meta = parsed_message.metadata or {}
+                            usage = meta.get("usage") or {}
+                            sdk_cost = meta.get("total_cost_usd")
+                            # Resolve model from session info
+                            _sinfo = await self.session_manager.get_session_info(session_id)
+                            _model = _sinfo.model if _sinfo else None
+                            # Lazily initialise turn_seq from DB on first use after restart
+                            if session_id not in self._turn_seq_by_session:
+                                db_count = await self.analytics_store.get_turn_count(session_id)
+                                self._turn_seq_by_session[session_id] = db_count
+                            self._turn_seq_by_session[session_id] += 1
+                            turn_seq = self._turn_seq_by_session[session_id]
+                            await self.analytics_store.record_turn(
+                                session_id, turn_seq, _model, usage, sdk_cost
+                            )
+                            aggregate = await self.analytics_store.get_session_usage(session_id)
+                            if aggregate and self._usage_broadcast_callback:
+                                try:
+                                    await self._usage_broadcast_callback(session_id, aggregate)
+                                except Exception:
+                                    logger.exception("Failed to broadcast usage_updated for %s", session_id)
+                        except Exception:
+                            logger.exception("Failed to record analytics for session %s", session_id)
 
                     # Issue #904: Poll for SDK-generated session title after each turn
                     task = asyncio.create_task(self._check_sdk_generated_name(session_id))

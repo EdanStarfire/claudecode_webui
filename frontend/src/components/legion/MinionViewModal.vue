@@ -11,7 +11,10 @@
       <div class="modal-content">
         <div class="modal-header">
           <h5 class="modal-title" id="minionViewModalLabel">Minion Details</h5>
-          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+          <div class="d-flex align-items-center gap-2">
+            <SessionCostBadge v-if="session" :session-id="session.session_id" />
+            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+          </div>
         </div>
         <div class="modal-body">
           <div v-if="!session" class="text-center text-muted py-4">
@@ -140,6 +143,7 @@
 <script setup>
 import { ref, onMounted, onUnmounted, watch } from 'vue'
 import { useUIStore } from '@/stores/ui'
+import SessionCostBadge from '@/components/session/SessionCostBadge.vue'
 
 const uiStore = useUIStore()
 
