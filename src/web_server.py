@@ -17,6 +17,8 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.base import BaseHTTPMiddleware
 
+from .analytics.audit_writer import AuditWriter
+from .analytics.database import AnalyticsDB
 from .application_service import ApplicationService
 from .event_queue import EventQueue
 from .message_parser import MessageParser, MessageProcessor
@@ -168,6 +170,16 @@ class ClaudeWebUI:
         )
         self.coordinator._watchdog = self._watchdog
 
+        # Issue #1127: Audit subsystem — analytics DB + AuditWriter
+        _analytics_db_path = (data_dir or Path("data")) / "analytics.db"
+        self._analytics_db = AnalyticsDB(_analytics_db_path)
+        self._audit_writer = AuditWriter(self._analytics_db)
+        # Expose for router access
+        self.analytics_db = self._analytics_db
+        self.audit_writer = self._audit_writer
+        # EventQueue to wake long-poll on new audit events
+        self.audit_queue = EventQueue()
+
         # Initialize MessageProcessor for unified WebSocket message formatting
         self._message_parser = MessageParser()
         self._message_processor = MessageProcessor(self._message_parser)
@@ -284,6 +296,14 @@ class ClaudeWebUI:
             task.add_done_callback(task_done_log_exception)
 
         return registrar
+
+    async def _on_watchdog_alert_audit(self, alert: dict) -> None:
+        """Forward watchdog alerts to AuditWriter and wake audit long-poll."""
+        try:
+            await self._audit_writer.on_watchdog_alert(alert)
+            self.audit_queue.append({"type": "audit_event", "data": alert})
+        except Exception:
+            logger.exception("_on_watchdog_alert_audit error (non-fatal)")
 
     async def _broadcast_comm_notification_to_ui(self, comm):
         """Issue #699: Push comm notification event to UI poll queue for audio alerts."""
@@ -466,6 +486,22 @@ class ClaudeWebUI:
 
         # Issue #1130: Start session watchdog service
         await self._watchdog.start()
+
+        # Issue #1127: Initialize audit subsystem
+        try:
+            await self._analytics_db.initialize()
+            self.coordinator.set_audit_writer(self._audit_writer)
+            self.coordinator.session_manager.add_state_change_callback(
+                self._audit_writer.on_session_state_change
+            )
+            self._watchdog.on_alert.append(self._on_watchdog_alert_audit)
+            self.coordinator.legion_system.comm_router.audit_writer = self._audit_writer
+            self._audit_writer.start()
+            logger.info("Audit subsystem initialized")
+        except Exception:
+            logger.exception("Audit subsystem failed to initialize — audit will be unavailable")
+            self._audit_writer = AuditWriter(None)
+            self.audit_writer = self._audit_writer
 
         logger.info("Claude Code WebUI initialized")
 

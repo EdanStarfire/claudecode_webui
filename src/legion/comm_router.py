@@ -45,6 +45,7 @@ class CommRouter:
         self.system = system
         self._comm_broadcast_callback = None  # Callback for broadcasting new comms via WebSocket
         self._ui_notification_callback = None  # Callback for UI notification events (Issue #699)
+        self.audit_writer = None  # Optional AuditWriter for comm audit capture (#1127)
 
     async def get_visible_minions(self, caller_id: str) -> list[str]:
         """
@@ -595,6 +596,28 @@ class CommRouter:
                     await self._ui_notification_callback(comm)
                 except Exception as e:
                     legion_logger.error(f"Failed to send UI notification for comm {comm.comm_id}: {e}")
+
+        # Issue #1127: Emit comm to audit writer
+        if self.audit_writer is not None:
+            try:
+                session_id = comm.from_minion_id or comm.to_minion_id or "user"
+                comm_dict = {
+                    "comm_id": comm.comm_id,
+                    "comm_type": comm.comm_type.value if hasattr(comm.comm_type, "value") else str(comm.comm_type),
+                    "from_minion_id": comm.from_minion_id,
+                    "to_minion_id": comm.to_minion_id,
+                    "summary": comm.summary,
+                    "content": (comm.content or "")[:80] if comm.content else None,
+                    "timestamp": comm.timestamp if hasattr(comm, "timestamp") else None,
+                }
+                await self.audit_writer.on_comm(
+                    session_id=session_id,
+                    project_id=legion_id,
+                    legion_id=legion_id,
+                    comm_data=comm_dict,
+                )
+            except Exception as e:
+                legion_logger.error(f"Failed to emit comm to audit writer: {e}")
 
     async def _append_to_comm_log(
         self,

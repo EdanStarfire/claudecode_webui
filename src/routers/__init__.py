@@ -9,6 +9,7 @@ from fastapi import FastAPI
 
 from . import (
     archives,
+    audit,
     config,
     core,
     diff,
@@ -36,6 +37,7 @@ from . import (
 
 def register_all(app: FastAPI, webui) -> None:
     """Register all domain routers with the FastAPI app."""
+    app.include_router(audit.build_router(webui))
     app.include_router(poll.build_router(webui))
     app.include_router(permissions.build_router(webui))
     app.include_router(filesystem.build_router(webui))
