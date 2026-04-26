@@ -61,12 +61,35 @@ class BackgroundCallsConfig:
 
 
 @dataclass
+class IdleWatchdogConfig:
+    enabled: bool = False
+    timeout_seconds: int = 300
+
+
+@dataclass
+class ErrorRateWatchdogConfig:
+    enabled: bool = False
+    min_calls: int = 10
+    threshold: float = 0.6
+
+
+@dataclass
+class WatchdogConfig:
+    """Watchdog service configuration. All defaults OFF — templates opt in."""
+    enabled: bool = False
+    poll_interval_seconds: int = 60
+    idle: IdleWatchdogConfig = field(default_factory=IdleWatchdogConfig)
+    error_rate: ErrorRateWatchdogConfig = field(default_factory=ErrorRateWatchdogConfig)
+
+
+@dataclass
 class AppConfig:
     networking: NetworkingConfig = field(default_factory=NetworkingConfig)
     features: FeaturesConfig = field(default_factory=FeaturesConfig)
     proxy: ProxyConfig = field(default_factory=ProxyConfig)
     legion: LegionConfig = field(default_factory=LegionConfig)
     background_calls: BackgroundCallsConfig = field(default_factory=BackgroundCallsConfig)
+    watchdog: WatchdogConfig = field(default_factory=WatchdogConfig)
 
     @classmethod
     def from_dict(cls, data: dict) -> "AppConfig":
@@ -100,12 +123,31 @@ class AppConfig:
             skip_version_check=bg_data.get("skip_version_check", True),
             dont_inherit_env=bg_data.get("dont_inherit_env", False),
         )
+        watchdog_data = data.get("watchdog", {})
+        idle_data = watchdog_data.get("idle", {})
+        idle = IdleWatchdogConfig(
+            enabled=idle_data.get("enabled", False),
+            timeout_seconds=idle_data.get("timeout_seconds", 300),
+        )
+        error_rate_data = watchdog_data.get("error_rate", {})
+        error_rate = ErrorRateWatchdogConfig(
+            enabled=error_rate_data.get("enabled", False),
+            min_calls=error_rate_data.get("min_calls", 10),
+            threshold=error_rate_data.get("threshold", 0.6),
+        )
+        watchdog = WatchdogConfig(
+            enabled=watchdog_data.get("enabled", False),
+            poll_interval_seconds=watchdog_data.get("poll_interval_seconds", 60),
+            idle=idle,
+            error_rate=error_rate,
+        )
         return cls(
             networking=networking,
             features=features,
             proxy=proxy,
             legion=legion,
             background_calls=background_calls,
+            watchdog=watchdog,
         )
 
     def to_dict(self) -> dict:
@@ -144,6 +186,20 @@ class AppConfig:
                 "subprocess_env_scrub": self.background_calls.subprocess_env_scrub,
                 "skip_version_check": self.background_calls.skip_version_check,
                 "dont_inherit_env": self.background_calls.dont_inherit_env,
+            },
+            "watchdog": {
+                "_comment": "Session watchdog service. All defaults OFF — templates opt in.",
+                "enabled": self.watchdog.enabled,
+                "poll_interval_seconds": self.watchdog.poll_interval_seconds,
+                "idle": {
+                    "enabled": self.watchdog.idle.enabled,
+                    "timeout_seconds": self.watchdog.idle.timeout_seconds,
+                },
+                "error_rate": {
+                    "enabled": self.watchdog.error_rate.enabled,
+                    "min_calls": self.watchdog.error_rate.min_calls,
+                    "threshold": self.watchdog.error_rate.threshold,
+                },
             },
         }
 

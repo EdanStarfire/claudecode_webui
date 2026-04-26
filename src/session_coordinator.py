@@ -1919,6 +1919,9 @@ class SessionCoordinator:
                 logger.error(f"No SDK found for session {session_id}")
                 return False
 
+            # Issue #1130: Track activity for idle watchdog
+            self.session_manager.record_activity(session_id)
+
             # Mark session as processing before sending message
             await self.session_manager.update_processing_state(session_id, True)
 
@@ -2119,6 +2122,10 @@ class SessionCoordinator:
                 # Ensure session state is TERMINATED before starting
                 await self.session_manager.update_session_state(session_id, SessionState.TERMINATED)
 
+            # Issue #1130: Clear watchdog state so next episode starts fresh
+            if hasattr(self, '_watchdog') and self._watchdog is not None:
+                self._watchdog.reset_session(session_id)
+
             # Start session again (will automatically resume using claude_code_session_id)
             success = await self.start_session(session_id, permission_callback)
 
@@ -2159,6 +2166,10 @@ class SessionCoordinator:
             # Skip when called from the processor itself to avoid self-cancellation
             if not _from_queue_processor:
                 self.queue_processor.stop(session_id)
+
+            # Issue #1130: Clear watchdog state so next episode starts fresh
+            if hasattr(self, '_watchdog') and self._watchdog is not None:
+                self._watchdog.reset_session(session_id)
 
             # Get current SDK and disconnect
             sdk = self._active_sdks.get(session_id)
@@ -3410,6 +3421,10 @@ class SessionCoordinator:
             # Remove from active (denied tools are terminal)
             self._remove_active_tool_call(session_id, tool_use_id)
 
+            # Issue #1131: Record DENIED outcome for error-rate watchdog
+            if hasattr(self, '_watchdog') and self._watchdog is not None:
+                self._watchdog.record_tool_outcome(session_id, tool_use_id, "denied")
+
         coord_logger.debug(
             f"Updated ToolCall {tool_use_id} permission_granted={granted} in session {session_id}"
         )
@@ -3502,6 +3517,11 @@ class SessionCoordinator:
 
         # Issue #494: Store COMPLETED or FAILED ToolCallUpdate
         self._schedule_tool_call_update_storage(session_id, tool_call, triggering_message)
+
+        # Issue #1131: Record terminal tool outcome for error-rate watchdog
+        if hasattr(self, '_watchdog') and self._watchdog is not None:
+            outcome = "failed" if is_error else "completed"
+            self._watchdog.record_tool_outcome(session_id, tool_use_id, outcome)
 
         return tool_call
 
@@ -3696,6 +3716,9 @@ class SessionCoordinator:
         """Create message callback for a session using unified MessageProcessor"""
         async def callback(message_data: dict[str, Any]):
             try:
+                # Issue #1130: Track activity for idle watchdog
+                self.session_manager.record_activity(session_id)
+
                 # Process message using unified MessageProcessor
                 parsed_message = self.message_processor.process_message(message_data, source="sdk")
 

@@ -77,6 +77,8 @@ class MinionTemplate:
     # Composable profiles (issue #1062): area -> profile_id mapping + template-level overrides
     profile_ids: dict[str, str] | None = None   # e.g. {"model": "<uuid>", "permissions": "<uuid>"}
     template_overrides: dict[str, Any] | None = None  # field -> value overrides above profile
+    # Watchdog configuration (issue #1130) — overrides global AppConfig defaults when set
+    watchdog: dict[str, Any] | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
@@ -166,6 +168,7 @@ class MinionTemplate:
         data.pop('profile_id', None)
         data.setdefault('profile_ids', None)
         data.setdefault('template_overrides', None)
+        data.setdefault('watchdog', None)
         # Backward-compat renames (issue #731)
         if 'default_role' in data:
             data.setdefault('role', data.pop('default_role'))

@@ -144,6 +144,18 @@ class ClaudeWebUI:
         # Inject ui_queue into LegionSystem so legion components can append events directly
         self.coordinator.legion_system.ui_queue = self.ui_queue
 
+        # Issue #1130/#1131: Session watchdog service (created here, started in initialize())
+        from .config_manager import load_config as _load_cfg
+        from .session_watchdog import SessionWatchdogService
+        _cfg = _load_cfg(config_file) if config_file else _load_cfg()
+        self._watchdog = SessionWatchdogService(
+            session_manager=self.coordinator.session_manager,
+            template_manager=self.coordinator.template_manager,
+            app_config=_cfg,
+            ui_queue=self.ui_queue,
+        )
+        self.coordinator._watchdog = self._watchdog
+
         # Initialize MessageProcessor for unified WebSocket message formatting
         self._message_parser = MessageParser()
         self._message_processor = MessageProcessor(self._message_parser)
@@ -440,6 +452,9 @@ class ClaudeWebUI:
                     f"It will be auto-built on first proxy-enabled session start."
                 )
 
+        # Issue #1130: Start session watchdog service
+        await self._watchdog.start()
+
         logger.info("Claude Code WebUI initialized")
 
     def _setup_routes(self):
@@ -681,6 +696,9 @@ class ClaudeWebUI:
 
     async def cleanup(self):
         """Cleanup resources"""
+        # Issue #1130: Stop session watchdog service
+        if hasattr(self, '_watchdog') and self._watchdog is not None:
+            await self._watchdog.stop()
         await self.coordinator.cleanup()
         logger.info("WebUI cleanup completed")
 
