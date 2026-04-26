@@ -126,6 +126,47 @@ def _count_file_lines(path: "Path") -> int:
         return 0
 
 
+def _render_inject_file(placeholder: str, fmt: str, key_path: str | None) -> str:
+    """Render placeholder into an inject_file's content.
+
+    Issue #1134: builds a formatted file containing only the placeholder string
+    so the agent never sees the real credential value.
+    """
+    if fmt == "raw" or not key_path:
+        return placeholder
+
+    keys = key_path.split(".")
+
+    if fmt == "json":
+        import json as _json
+        obj: dict = {}
+        cur = obj
+        for key in keys[:-1]:
+            cur[key] = {}
+            cur = cur[key]
+        cur[keys[-1]] = placeholder
+        return _json.dumps(obj, indent=2)
+
+    if fmt == "yaml":
+        # Minimal YAML without external dependencies.
+        lines = []
+        indent = 0
+        for key in keys[:-1]:
+            lines.append("  " * indent + f"{key}:")
+            indent += 1
+        lines.append("  " * indent + f"{keys[-1]}: {placeholder}")
+        return "\n".join(lines) + "\n"
+
+    if fmt == "toml":
+        section = ".".join(keys[:-1])
+        last = keys[-1]
+        if section:
+            return f'[{section}]\n{last} = "{placeholder}"\n'
+        return f'{last} = "{placeholder}"\n'
+
+    return placeholder
+
+
 class SessionCoordinator:
     """
     Coordinates Claude Code sessions with integrated storage and SDK management.
@@ -1163,15 +1204,12 @@ class SessionCoordinator:
                 tmp_dir.mkdir(exist_ok=True)
                 extra_mounts.append(f"{tmp_dir}:/tmp")
 
-                # Issue #1053: Placeholder-based credential injection via proxy sidecar.
-                # Credentials are resolved by name from the vault (no inline secrets in session state).
-                # Design: each credential entry defines a delivery (how placeholder reaches
-                # agent container) and injection (what the proxy watches for in outgoing
-                # request headers). The proxy only injects when it sees the placeholder —
-                # unauthenticated calls to the same host are left untouched.
-                proxy_credentials_file = None
-                delivery_env_file = None
+                # Issue #1134: Typed-secret placeholder injection.
+                # The proxy fetches secrets via REST (GET /api/sessions/{id}/secrets/resolve)
+                # using the per-session Bearer token. Placeholders are stored on SessionInfo
+                # and passed to the agent container via env vars / mounted files.
                 proxy_allowlist_file = None
+                delivery_envs: dict[str, str] = {}  # env var name → placeholder string
 
                 if effective_config.docker_proxy_enabled:
                     # Build dynamic allowlist: static defaults + config domains
@@ -1194,89 +1232,58 @@ class SessionCoordinator:
                             f"{len(effective_domains)} domains"
                         )
 
-                    # Resolve assigned secret names to full objects from vault
-                    resolved_creds = []
+                    # Issue #1134: Generate CC_SECRET_* placeholders for assigned secrets.
+                    # Resolve full metadata (no values needed here — proxy fetches them).
                     if effective_config.assigned_secrets:
-                        resolved_creds = await self.credential_vault.resolve_credentials(
+                        resolved_metas = await self.credential_vault.resolve_secrets_for_assignment(
                             effective_config.assigned_secrets
                         )
+                        new_placeholders: dict[str, str] = {}
+                        for secret in resolved_metas:
+                            name = secret.get("name", "unnamed")
+                            placeholder = f"CC_SECRET_{name}_{secrets.token_hex(4)}"
+                            new_placeholders[placeholder] = name
 
-                    if resolved_creds:
-                        cred_names = []
-                        sidecar_entries = []   # written to credentials.json for the sidecar
-                        delivery_envs: dict[str, str] = {}  # env vars to set in agent container
+                            # inject_env: deliver placeholder via environment variable
+                            inject_env = secret.get("inject_env")
+                            if inject_env:
+                                delivery_envs[inject_env] = placeholder
 
-                        for cred in resolved_creds:
-                            name = cred.get("name", "unnamed")
-                            cred_names.append(name)
-                            real_value = cred.get("real_value", "")
-
-                            # Generate a unique placeholder per credential per session
-                            safe_name = re.sub(r"[^A-Z0-9]", "_", name.upper())
-                            placeholder = f"PH_{safe_name}_{secrets.token_hex(4)}"
-
-                            # Build injection config from vault schema
-                            header_name = cred.get("header_name", "Authorization")
-                            value_format = cred.get("value_format", "Bearer {value}")
-                            sidecar_entries.append({
-                                "name": name,
-                                "host_pattern": cred.get("host_pattern"),
-                                "placeholder": placeholder,
-                                "injection": {
-                                    "header": header_name,
-                                    "format": value_format,
-                                    "real_value": real_value,
-                                },
-                            })
-
-                            # Apply delivery spec: get placeholder into agent container
-                            delivery = cred.get("delivery", {})
-                            delivery_type = delivery.get("type")
-
-                            if delivery_type == "env":
-                                env_var = delivery.get("var")
-                                if env_var:
-                                    delivery_envs[env_var] = placeholder
-
-                            elif delivery_type == "file":
-                                file_path = delivery.get("path")
-                                content_template = delivery.get("content_template", "{placeholder}")
+                            # inject_file: render placeholder into a mounted file
+                            inject_file = secret.get("inject_file")
+                            if inject_file:
+                                file_path = inject_file.get("path")
                                 if file_path:
-                                    content = content_template.replace("{placeholder}", placeholder)
-                                    # Write rendered file to tmpdir; mount into agent container RO
+                                    fmt = inject_file.get("format", "raw")
+                                    key_path = inject_file.get("key_path")
+                                    perms_str = inject_file.get("permissions", "0600")
+                                    content = _render_inject_file(placeholder, fmt, key_path)
                                     safe_fname = re.sub(r"[^a-zA-Z0-9._-]", "_", name)
                                     host_file = tmp_dir / f"delivery_{safe_fname}"
                                     host_file.write_text(content)
-                                    os.chmod(host_file, 0o600)
+                                    os.chmod(host_file, int(perms_str, 8))
                                     extra_mounts.append(f"{host_file}:{file_path}:ro")
 
-                        # Write sidecar credentials.json (placeholder + injection, no plaintext secrets
-                        # visible in the proxy log). Use 0o644 so mitmdump (uid 9999) can read it.
-                        creds_path = tmp_dir / "credentials.json"
-                        creds_path.write_text(json.dumps({"credentials": sidecar_entries}))
-                        os.chmod(creds_path, 0o644)
-                        proxy_credentials_file = str(creds_path)
-
-                        # Write delivery env file if any env deliveries configured
-                        if delivery_envs:
-                            env_file_path = tmp_dir / "delivery_envs.json"
-                            env_file_path.write_text(json.dumps(delivery_envs))
-                            os.chmod(env_file_path, 0o600)
-                            delivery_env_file = str(env_file_path)
-
+                        session_info.secret_placeholders = new_placeholders
+                        await self.session_manager._persist_session_state(session_id)
                         coord_logger.info(
-                            f"Wrote proxy credentials for session {session_id}: "
-                            f"credentials={cred_names}, delivery_envs={list(delivery_envs)}"
+                            f"Generated {len(new_placeholders)} placeholder(s) for session "
+                            f"{session_id}: names={list(new_placeholders.values())}"
                         )
 
-                    # Issue #827: Write per-session token file for proxy sidecar.
-                    # The sidecar uses this to call GET /api/sessions/{id}/secrets/resolve.
+                    # Issue #827 / #1134: Write per-session token + session_id files for proxy.
+                    # Proxy calls GET /api/sessions/{id}/secrets/resolve with this Bearer token.
                     session_token = getattr(session_info, "secret_fetch_token", None)
                     if session_token:
                         token_path = tmp_dir / "session_token"
                         token_path.write_text(session_token)
                         os.chmod(token_path, 0o600)
                         extra_mounts.append(f"{token_path}:/etc/proxy/session_token:ro")
+
+                        session_id_path = tmp_dir / "session_id"
+                        session_id_path.write_text(session_id)
+                        os.chmod(session_id_path, 0o600)
+                        extra_mounts.append(f"{session_id_path}:/etc/proxy/session_id:ro")
 
                 # Issue #1089: Deduplicate mounts by container destination path (first-seen wins).
                 # Format: "host_path:container_path[:options]" — extract the second colon-delimited field.
@@ -1302,9 +1309,8 @@ class SessionCoordinator:
                         if effective_config.docker_proxy_enabled
                         else None
                     ),
-                    # Issue #1053: Pass credentials, delivery env file, and allowlist paths
-                    proxy_credentials_file=proxy_credentials_file,
-                    delivery_env_file=delivery_env_file,
+                    # Issue #1134: pass delivery env vars inline (no file); keep allowlist path
+                    delivery_envs=delivery_envs or None,
                     proxy_allowlist_file=proxy_allowlist_file,
                 )
                 coord_logger.info(

@@ -914,16 +914,20 @@ class TestIssue820TmpMount:
 
 
 class TestIssue1088CredFilePermissions:
-    """Regression tests for issue #1088 — proxy sidecar credentials.json must be world-readable."""
+    """Regression tests for issue #1088 (updated for #1134 inline delivery).
+
+    Issue #1134 removes file-based credentials.json / delivery_envs.json entirely.
+    Secrets are now delivered as CLAUDE_DOCKER_DELIVERY_ENVS (inline JSON) and the
+    placeholder→name map is persisted in session_info.secret_placeholders.
+    """
 
     @pytest.mark.asyncio
     async def test_issue_1088_creds_path_is_world_readable(self, temp_coordinator):
-        """credentials.json must use 0o644 so mitmdump (uid 9999) can read it.
+        """Issue #1134: credentials.json and delivery_envs.json must NOT be written.
 
-        Issue #827: Uses SecretsVault.create_secret() with env delivery.
-        File delivery is a #1134 feature; env delivery creates delivery_envs.json (0o600).
+        Instead, session_info.secret_placeholders must contain an entry mapping
+        the generated CC_SECRET_* placeholder to the secret name 'github-token'.
         """
-        import stat
         import uuid
         from datetime import datetime
         from unittest.mock import patch as _patch
@@ -965,7 +969,7 @@ class TestIssue1088CredFilePermissions:
             ),
         )
 
-        # Locate the session tmp dir that will hold credentials.json
+        # Locate the session tmp dir
         session_dir = coordinator.session_manager.sessions_dir / session_id
         tmp_dir = session_dir / "tmp"
 
@@ -982,23 +986,20 @@ class TestIssue1088CredFilePermissions:
             mock_skills_dir.exists.return_value = False
             await coordinator.start_session(session_id)
 
-        # credentials.json must be world-readable for sidecar (uid 9999)
-        creds_file = tmp_dir / "credentials.json"
-        assert creds_file.exists(), "credentials.json must be written to session tmp dir"
-
-        creds_mode = stat.S_IMODE(creds_file.stat().st_mode)
-        assert creds_mode == 0o644, (
-            f"credentials.json must be 0o644 (world-readable for sidecar uid 9999), "
-            f"got {oct(creds_mode)}"
+        # Issue #1134: file-based delivery is removed — these files must NOT exist
+        assert not (tmp_dir / "credentials.json").exists(), (
+            "credentials.json must NOT be written (removed in #1134)"
+        )
+        assert not (tmp_dir / "delivery_envs.json").exists(), (
+            "delivery_envs.json must NOT be written (removed in #1134)"
         )
 
-        # Env delivery creates delivery_envs.json (0o600) — check if written
-        envs_file = tmp_dir / "delivery_envs.json"
-        if envs_file.exists():
-            envs_mode = stat.S_IMODE(envs_file.stat().st_mode)
-            assert envs_mode == 0o600, (
-                f"delivery_envs.json must be 0o600, got {oct(envs_mode)}"
-            )
+        # Instead, secret_placeholders must map the CC_SECRET_* placeholder to the name
+        info = await coordinator.session_manager.get_session_info(session_id)
+        assert info.secret_placeholders, "secret_placeholders must be populated at session start"
+        assert "github-token" in info.secret_placeholders.values(), (
+            "secret_placeholders must contain 'github-token' as a value"
+        )
 
 
 @pytest.mark.asyncio

@@ -161,35 +161,6 @@ class SecretsVault:
         return results
 
     # -------------------------------------------------------------------------
-    # Legacy compatibility shim (issue #827 keeps sidecar reading credentials.json)
-    # The sidecar still reads the old schema; this method projects the new schema
-    # fields back into the legacy format. Removed in #1134.
-    # -------------------------------------------------------------------------
-
-    async def resolve_credentials(self, names: list[str]) -> list[dict]:
-        """Legacy-format resolver for sidecar assembly (backwards compat shim).
-
-        Returns dicts with the old schema fields (host_pattern, header_name,
-        value_format, real_value) that session_coordinator.py uses to build
-        credentials.json for the proxy sidecar. Removed in #1134.
-        """
-        resolved = await self.resolve_secrets_for_assignment(names)
-        legacy = []
-        for secret in resolved:
-            legacy_entry = {
-                "name": secret.get("name", ""),
-                "host_pattern": (secret.get("target_hosts") or ["*"])[0],
-                "header_name": "Authorization",
-                "value_format": "Bearer {value}",
-                "real_value": secret.get("value", ""),
-                "delivery": {"type": "env"},
-            }
-            if secret.get("inject_env"):
-                legacy_entry["delivery"] = {"type": "env", "var": secret["inject_env"]}
-            legacy.append(legacy_entry)
-        return legacy
-
-    # -------------------------------------------------------------------------
     # Helpers
     # -------------------------------------------------------------------------
 

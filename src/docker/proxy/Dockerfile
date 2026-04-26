@@ -15,10 +15,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ulogd2 \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Install mitmproxy system-wide so uid 9999 can execute mitmdump
+# Install mitmproxy + httpx system-wide so uid 9999 can execute mitmdump
+# httpx is required by addon.py for REST-fetch secret resolution (issue #1134)
 ENV PIPX_HOME=/opt/pipx
 ENV PIPX_BIN_DIR=/usr/local/bin
-RUN pipx install mitmproxy
+RUN pipx install mitmproxy && pipx inject mitmproxy httpx
 
 # Dedicated non-root user for mitmdump; UID 9999 used in iptables owner match
 # to exclude mitmdump's upstream connections from TPROXY re-interception loop.

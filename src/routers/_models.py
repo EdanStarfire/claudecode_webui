@@ -273,7 +273,7 @@ class CredentialCreateRequest(BaseModel):
     delivery: dict
 
 
-# Secrets request models (issue #827)
+# Secrets request models (issue #827, extended by #1134)
 class SecretCreateRequest(BaseModel):
     """Request to create a new secret (full schema + value)."""
     name: str
@@ -283,6 +283,10 @@ class SecretCreateRequest(BaseModel):
     inject_env: str | None = None
     inject_file: dict | None = None  # InjectFileSpec shape
     scrub: dict | None = None  # ScrubSpec shape
+    # Issue #1134: typed-secret fields
+    username: str | None = None      # basic_auth only: plaintext username metadata
+    injection: dict | None = None    # api_key only: InjectionSpec shape
+    refresh: dict | None = None      # oauth2 only: RefreshSpec shape
 
 
 class SecretUpdateRequest(BaseModel):
@@ -293,6 +297,10 @@ class SecretUpdateRequest(BaseModel):
     inject_env: str | None = None
     inject_file: dict | None = None
     scrub: dict | None = None
+    # Issue #1134: typed-secret fields
+    username: str | None = None
+    injection: dict | None = None
+    refresh: dict | None = None
 
 
 class PermissionResponseRequest(BaseModel):

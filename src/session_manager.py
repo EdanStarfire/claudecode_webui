@@ -182,7 +182,14 @@ class SessionInfo:
     # Generated at start_session(), cleared at terminate_session()
     secret_fetch_token: str | None = None
 
+    # Issue #1134: placeholder→secret_name map, populated at start_session().
+    # Keys are placeholder strings (e.g. "CC_SECRET_github-token_a1b2c3d4"),
+    # values are vault secret names.  None means not yet populated.
+    secret_placeholders: dict[str, str] | None = None
+
     def __post_init__(self):
+        if self.secret_placeholders is None:
+            self.secret_placeholders = {}
         if self.additional_directories is None:
             self.additional_directories = []
         if self.allowed_tools is None:
@@ -306,6 +313,8 @@ class SessionInfo:
             data['last_activity_at'] = datetime.fromisoformat(data['last_activity_at'])
         # Per-session secrets token (issue #827)
         data.setdefault('secret_fetch_token', None)
+        # Issue #1134: placeholder map (None → empty dict in __post_init__)
+        data.setdefault('secret_placeholders', None)
         return cls(**data)
 
 

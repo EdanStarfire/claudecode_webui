@@ -60,6 +60,12 @@ export const useSecretsStore = defineStore('secrets', () => {
     }
   }
 
+  async function refreshSecret(name) {
+    const result = await api.post(`/api/secrets/${encodeURIComponent(name)}/refresh`, {})
+    await fetchSecrets()
+    return result
+  }
+
   return {
     secrets,
     activeBackend,
@@ -71,5 +77,6 @@ export const useSecretsStore = defineStore('secrets', () => {
     updateSecret,
     deleteSecret,
     fetchBackendStatus,
+    refreshSecret,
   }
 })

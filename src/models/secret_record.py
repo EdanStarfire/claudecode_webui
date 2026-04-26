@@ -6,6 +6,7 @@ OS keyring (or CryptFileKeyring fallback) under service="cc_webui", username=nam
 The JSON metadata file never contains the value.
 
 Issue #827: Host-level secrets storage via keyring.
+Issue #1134: Typed secrets — proxy injection, scrubbing, OAuth refresh.
 """
 
 from __future__ import annotations
@@ -34,8 +35,69 @@ class InjectFileFormat(str, Enum):
 
 
 @dataclass
+class InjectionSpec:
+    """Configurable wire-side injection for api_key type."""
+    location: str = "header"           # "header" | "query_param"
+    header_name: str = "Authorization"
+    prefix: str = "Bearer"             # prefix before value; may be empty string
+    param_name: str | None = None      # required when location == "query_param"
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "location": self.location,
+            "header_name": self.header_name,
+            "prefix": self.prefix,
+            "param_name": self.param_name,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> InjectionSpec:
+        return cls(
+            location=data.get("location", "header"),
+            header_name=data.get("header_name", "Authorization"),
+            prefix=data.get("prefix", "Bearer"),
+            param_name=data.get("param_name"),
+        )
+
+
+@dataclass
+class RefreshSpec:
+    """OAuth2 refresh metadata for oauth2 access-token records."""
+    token_url: str
+    client_id: str
+    refresh_token_secret_name: str             # ref to sibling record holding the refresh token
+    client_secret_secret_name: str | None = None
+    expires_at: datetime | None = None         # mutable; updated by proxy after each refresh
+    buffer_seconds: int = 60                   # refresh this many seconds before expiry
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "token_url": self.token_url,
+            "client_id": self.client_id,
+            "refresh_token_secret_name": self.refresh_token_secret_name,
+            "client_secret_secret_name": self.client_secret_secret_name,
+            "expires_at": self.expires_at.isoformat() if self.expires_at else None,
+            "buffer_seconds": self.buffer_seconds,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> RefreshSpec:
+        expires_at = None
+        if data.get("expires_at"):
+            expires_at = datetime.fromisoformat(data["expires_at"])
+        return cls(
+            token_url=data["token_url"],
+            client_id=data["client_id"],
+            refresh_token_secret_name=data["refresh_token_secret_name"],
+            client_secret_secret_name=data.get("client_secret_secret_name"),
+            expires_at=expires_at,
+            buffer_seconds=data.get("buffer_seconds", 60),
+        )
+
+
+@dataclass
 class InjectFileSpec:
-    """Specification for file-based secret injection (shape only — behavior is #1134)."""
+    """Specification for file-based secret injection."""
     path: str                          # Absolute path inside container
     format: InjectFileFormat           # yaml | json | toml | raw
     permissions: str = "0600"         # Octal permissions string
@@ -148,6 +210,10 @@ class SecretRecord:
     inject_env: str | None = None
     inject_file: InjectFileSpec | None = None
     scrub: ScrubSpec | None = None
+    # Issue #1134: Typed-secret fields
+    username: str | None = None        # basic_auth only: plaintext username metadata
+    injection: InjectionSpec | None = None   # api_key only
+    refresh: RefreshSpec | None = None       # oauth2 only
 
     def validate(self) -> None:
         """Raise ValueError if any field fails validation."""
@@ -159,6 +225,18 @@ class SecretRecord:
             validate_inject_file(self.inject_file)
         if self.scrub:
             validate_scrub(self.scrub)
+        # Type-specific field constraints
+        if self.injection is not None and self.type != SecretType.API_KEY:
+            raise ValueError("injection may only be set when type == api_key")
+        if self.injection is not None and self.injection.location == "query_param":
+            if not self.injection.param_name:
+                raise ValueError("injection.param_name is required when location == query_param")
+        if self.refresh is not None and self.type != SecretType.OAUTH2:
+            raise ValueError("refresh may only be set when type == oauth2")
+        if self.type == SecretType.OAUTH2 and self.scrub is None:
+            raise ValueError("scrub is required for oauth2 type (needed to capture refreshed token values)")
+        if self.username is not None and self.type != SecretType.BASIC_AUTH:
+            raise ValueError("username may only be set when type == basic_auth")
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -168,6 +246,9 @@ class SecretRecord:
             "inject_env": self.inject_env,
             "inject_file": self.inject_file.to_dict() if self.inject_file else None,
             "scrub": self.scrub.to_dict() if self.scrub else None,
+            "username": self.username,
+            "injection": self.injection.to_dict() if self.injection else None,
+            "refresh": self.refresh.to_dict() if self.refresh else None,
             "created_at": self.created_at.isoformat(),
             "updated_at": self.updated_at.isoformat(),
         }
@@ -180,6 +261,12 @@ class SecretRecord:
         scrub = None
         if data.get("scrub"):
             scrub = ScrubSpec.from_dict(data["scrub"])
+        injection = None
+        if data.get("injection"):
+            injection = InjectionSpec.from_dict(data["injection"])
+        refresh = None
+        if data.get("refresh"):
+            refresh = RefreshSpec.from_dict(data["refresh"])
         return cls(
             name=data["name"],
             type=SecretType(data.get("type", "generic")),
@@ -187,6 +274,9 @@ class SecretRecord:
             inject_env=data.get("inject_env"),
             inject_file=inject_file,
             scrub=scrub,
+            username=data.get("username"),
+            injection=injection,
+            refresh=refresh,
             created_at=datetime.fromisoformat(data["created_at"]),
             updated_at=datetime.fromisoformat(data["updated_at"]),
         )

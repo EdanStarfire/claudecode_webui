@@ -8,6 +8,8 @@ so the proxy sidecar can fetch its assigned secrets without knowing the global
 operator token.
 """
 
+from datetime import UTC, datetime
+
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from ..exception_handlers import handle_exceptions
@@ -66,6 +68,9 @@ def build_router(webui) -> APIRouter:
             inject_env=request.inject_env,
             inject_file=request.inject_file,
             scrub=request.scrub,
+            username=request.username,
+            injection=request.injection,
+            refresh=request.refresh,
         )
 
     @router.patch("/api/secrets/{name}")
@@ -80,6 +85,9 @@ def build_router(webui) -> APIRouter:
             inject_env=request.inject_env,
             inject_file=request.inject_file,
             scrub=request.scrub,
+            username=request.username,
+            injection=request.injection,
+            refresh=request.refresh,
         )
         if result is None:
             raise HTTPException(status_code=404, detail="Secret not found")
@@ -94,6 +102,21 @@ def build_router(webui) -> APIRouter:
             raise HTTPException(status_code=404, detail="Secret not found")
         return {"deleted": True}
 
+    @router.post("/api/secrets/{name}/refresh")
+    @handle_exceptions("refresh secret")
+    async def refresh_secret(name: str):
+        """Manually trigger an OAuth2 token refresh for an oauth2 secret.
+
+        Calls the token_url with the stored refresh_token; writes the new
+        access_token (and rotated refresh_token if any) back to the keyring.
+        Returns 404 if the secret does not exist or is not oauth2 type.
+        Returns 502 if the token endpoint returns an error.
+        """
+        result = await webui.service.refresh_secret(name)
+        if result is None:
+            raise HTTPException(status_code=404, detail="Secret not found or not oauth2 type")
+        return result
+
     # ==================== RESOLVE ENDPOINT (per-session Bearer token) ====================
 
     @router.get("/api/sessions/{session_id}/secrets/resolve")
@@ -107,8 +130,68 @@ def build_router(webui) -> APIRouter:
         NOT the global operator token). The global AuthMiddleware is bypassed for
         this path via the EXEMPT_PREFIXES configuration.
 
-        Returns the union of assigned_secrets from session + template + profile chain.
+        Returns assigned_secrets PLUS transitive sibling records needed for OAuth2 refresh.
+        Each record includes a `placeholder` field from session.secret_placeholders.
         """
         return await webui.service.resolve_secrets_for_session(session_id)
+
+    # ==================== SESSION-SCOPED PATCH (proxy write-back) ====================
+
+    @router.patch("/api/sessions/{session_id}/secrets/{name}")
+    @handle_exceptions("update session secret", value_error_status=400)
+    async def update_session_secret(
+        name: str,
+        request: SecretUpdateRequest,
+        session_id: str = Depends(session_token_auth),
+    ):
+        """Update a secret value via per-session Bearer token (proxy write-back).
+
+        Scoped to secrets in session.assigned_secrets plus transitive sibling records.
+        Used by the proxy sidecar to persist refreshed OAuth2 token values.
+        """
+        try:
+            result = await webui.service.update_secret_for_session(
+                session_id=session_id,
+                secret_name=name,
+                secret_type=request.type,
+                target_hosts=request.target_hosts,
+                value=request.value,
+                inject_env=request.inject_env,
+                inject_file=request.inject_file,
+                scrub=request.scrub,
+                username=request.username,
+                injection=request.injection,
+                refresh=request.refresh,
+            )
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        if result is None:
+            raise HTTPException(status_code=404, detail="Session or secret not found")
+        return result
+
+    # ==================== SESSION EVENT EMIT (proxy → UI) ====================
+
+    @router.post("/api/sessions/{session_id}/events", status_code=202)
+    @handle_exceptions("emit session event")
+    async def emit_session_event(
+        request: Request,
+        session_id: str = Depends(session_token_auth),
+    ):
+        """Emit an event to the session's event queue from the proxy sidecar.
+
+        Authentication: Authorization: Bearer {session_token} (per-session token).
+        Used by the proxy to surface secret_refresh_failed and similar events
+        as session-log entries visible in the WebUI.
+        """
+        body = await request.json()
+        event_type = body.get("type", "proxy_event")
+        event_data = body.get("data", {})
+        if session_id in webui.session_queues:
+            webui.session_queues[session_id].append({
+                "type": event_type,
+                "data": event_data,
+                "timestamp": datetime.now(UTC).isoformat(),
+            })
+        return {"queued": True}
 
     return router
