@@ -1,5 +1,5 @@
 <template>
-  <div class="connection-indicators">
+  <div class="connection-indicators" data-testid="connection-indicator">
     <!-- UI WebSocket Indicator -->
     <div
       class="indicator"

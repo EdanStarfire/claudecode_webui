@@ -87,6 +87,7 @@
         @input="autoResizeTextarea"
         @keydown="handleKeyPress"
         @paste="handlePaste"
+        data-testid="message-textarea"
       ></textarea>
 
       <!-- Stop button: processing AND no input -->
@@ -116,6 +117,7 @@
         class="btn btn-primary"
         :disabled="!hasContent || !isConnected || isStarting || isUploading || isPaused"
         @click="sendMessage"
+        data-testid="send-button"
       >
         {{ isUploading ? 'Uploading...' : 'Send' }}
       </button>

@@ -1,5 +1,5 @@
 <template>
-  <div class="resource-gallery-panel">
+  <div class="resource-gallery-panel" data-testid="resource-gallery">
     <!-- Controls bar: search + type filter + sort + view toggle -->
     <div class="gallery-controls">
       <!-- Search -->
@@ -71,6 +71,7 @@
           :key="resource.resource_id"
           class="resource-item"
           :class="{ 'is-image': isImage(resource) }"
+          data-testid="resource-item"
         >
           <!-- Remove button (Issue #423) -->
           <button

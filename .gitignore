@@ -209,6 +209,7 @@ data/
 tmp*/
 test_data/
 test_data_*/
+data-e2e/
 
 # Claude settings
 .claude/settings.local.json

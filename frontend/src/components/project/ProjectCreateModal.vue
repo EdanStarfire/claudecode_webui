@@ -25,6 +25,7 @@
                 :class="{ 'is-invalid': errors.name }"
                 placeholder="My Project"
                 required
+                data-testid="project-name-input"
               />
               <div class="invalid-feedback" v-if="errors.name">{{ errors.name }}</div>
             </div>
@@ -113,6 +114,7 @@
             class="btn btn-primary"
             @click="handleSubmit"
             :disabled="isSubmitting"
+            data-testid="project-create-submit"
           >
             <span v-if="isSubmitting" class="spinner-border spinner-border-sm me-2"></span>
             {{ isSubmitting ? 'Creating...' : 'Create Project' }}

@@ -368,6 +368,7 @@
             class="btn btn-primary"
             :disabled="isSubmitting || !isFormValid"
             @click="handleSubmit"
+            data-testid="session-create-submit"
           >
             <span v-if="isSubmitting" class="spinner-border spinner-border-sm me-2"></span>
             {{ submitButtonText }}

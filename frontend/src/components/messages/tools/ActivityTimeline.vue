@@ -1,5 +1,5 @@
 <template>
-  <div class="activity-timeline" :class="{ 'timeline-mobile': uiStore.isMobile }" v-if="sortedTools.length > 0">
+  <div class="activity-timeline" :class="{ 'timeline-mobile': uiStore.isMobile }" v-if="sortedTools.length > 0" data-testid="activity-timeline">
     <!-- Timeline Row (nodes + segments) -->
     <div class="timeline-row">
       <!-- Timeline items (nodes + segments) -->

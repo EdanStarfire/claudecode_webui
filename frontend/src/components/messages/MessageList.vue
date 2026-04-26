@@ -1,6 +1,6 @@
 <template>
   <div class="messages-area-wrapper flex-grow-1">
-    <div class="messages-area overflow-auto" :class="{ 'theme-red': uiStore.isRedBackground }" ref="messagesArea" role="log" aria-live="polite" aria-label="Conversation messages" @scroll="onScroll">
+    <div class="messages-area overflow-auto" :class="{ 'theme-red': uiStore.isRedBackground }" ref="messagesArea" role="log" aria-live="polite" aria-label="Conversation messages" @scroll="onScroll" data-testid="message-list">
       <div v-if="displayableItems.length === 0" class="text-muted text-center py-5">
         No messages yet. Start a conversation!
       </div>
