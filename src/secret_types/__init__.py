@@ -14,6 +14,7 @@ from .basic_auth import BasicAuthHandler
 from .bearer import BearerHandler
 from .generic import GenericHandler
 from .oauth2 import OAuth2Handler
+from .ssh_key import SshKeyHandler
 
 _HANDLERS: dict[str, SecretTypeHandler] = {
     "generic": GenericHandler(),
@@ -21,7 +22,8 @@ _HANDLERS: dict[str, SecretTypeHandler] = {
     "bearer": BearerHandler(),
     "basic_auth": BasicAuthHandler(),
     "oauth2": OAuth2Handler(),
-    "ssh": GenericHandler(),  # SSH keys injected as-is (generic placeholder substitution)
+    "ssh": GenericHandler(),      # legacy type — kept for backward compat with old records
+    "ssh_key": SshKeyHandler(),   # issue #1052: SSH key via tmpfs bind-mount + SOCKS5 tunnel
 }
 
 
@@ -43,5 +45,6 @@ __all__ = [
     "BearerHandler",
     "BasicAuthHandler",
     "OAuth2Handler",
+    "SshKeyHandler",
     "get_handler",
 ]

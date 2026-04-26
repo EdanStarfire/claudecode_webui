@@ -13,6 +13,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     jq \
     ca-certificates \
     ulogd2 \
+    openssh-client \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Install mitmproxy + httpx system-wide so uid 9999 can execute mitmdump
@@ -52,6 +53,8 @@ VOLUME /var/lib/mitmproxy
 
 # mitmdump: transparent HTTP/HTTPS interception
 EXPOSE 8080
+# mitmdump: SOCKS5 listener for non-HTTP TCP (SSH via ncat ProxyCommand)
+EXPOSE 1080
 # CoreDNS
 EXPOSE 53/udp 53/tcp
 

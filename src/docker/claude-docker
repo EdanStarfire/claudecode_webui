@@ -29,6 +29,8 @@ set -euo pipefail
 #                                   Default when set: claude-proxy:local
 #   CLAUDE_DOCKER_DELIVERY_ENVS   - JSON string mapping env var names to placeholder values;
 #                                   forwarded as -e flags to the agent container (issue #1134)
+#   CLAUDE_DOCKER_SSH_DIR         - Host dir with SSH key/config for SOCKS5-tunnelled SSH
+#                                   (issue #1052); mounted at /run/ssh:ro, sets GIT_SSH_COMMAND
 #
 # Proxy mode: claude-docker launches a dedicated proxy sidecar, attaches the agent to it
 # via --network container:<sidecar>, and tears both down on exit. Transparent DNAT
@@ -143,10 +145,24 @@ for arg in "$@"; do
     PREV_ARG="$arg"
 done
 
-# Issue #794: Auto-forward SSH agent if available (enables git SSH operations inside container)
+# Issue #794: Auto-forward SSH agent if available (enables git SSH operations inside container).
+# Issue #1052: When proxy mode is active, suppress host SSH agent — the deploy key in
+# /run/ssh/ is the only credential the agent should use; the host agent must not leak in.
 SSH_AGENT_FLAGS=""
-if [ -n "${SSH_AUTH_SOCK:-}" ] && [ -S "$SSH_AUTH_SOCK" ]; then
+if [ -z "$PROXY_IMAGE" ] && [ -n "${SSH_AUTH_SOCK:-}" ] && [ -S "$SSH_AUTH_SOCK" ]; then
     SSH_AGENT_FLAGS="-v $SSH_AUTH_SOCK:/ssh-agent -e SSH_AUTH_SOCK=/ssh-agent"
+fi
+
+# Issue #1052: Two-dir SSH isolation.
+# CLAUDE_DOCKER_SSH_SHARED_DIR contains the ssh-agent socket, SSH config, and
+# known_hosts — mounted into the AGENT container only (read-only). The private
+# key lives in CLAUDE_DOCKER_SSH_KEY_DIR, which is mounted into the PROXY SIDECAR
+# only (handled below in the proxy launch block).
+SSH_DIR_FLAGS=""
+if [ -n "${CLAUDE_DOCKER_SSH_SHARED_DIR:-}" ] && [ -d "${CLAUDE_DOCKER_SSH_SHARED_DIR:-}" ]; then
+    SSH_DIR_FLAGS="-v ${CLAUDE_DOCKER_SSH_SHARED_DIR}:/run/ssh:ro"
+    SSH_DIR_FLAGS="$SSH_DIR_FLAGS -e SSH_AUTH_SOCK=/run/ssh/agent.sock"
+    SSH_DIR_FLAGS="$SSH_DIR_FLAGS -e GIT_SSH_COMMAND=/run/ssh/ssh-wrapper"
 fi
 
 # Issue #781: Build resource limit flags
@@ -202,13 +218,26 @@ if [ -n "$PROXY_IMAGE" ]; then
 
     # Tear down sidecar and certs when the agent container exits.
     # rm -rf may fail if uid 9999-owned files remain; || true prevents exit-code noise.
-    trap 'docker rm -f "$PROXY_NAME" 2>/dev/null || true; rm -rf "$PROXY_CERTS" 2>/dev/null || true' EXIT
+    # Issue #1052: Also reap both SSH tmpdirs (key_dir + shared_dir).
+    trap 'docker rm -f "$PROXY_NAME" 2>/dev/null || true; rm -rf "$PROXY_CERTS" "${CLAUDE_DOCKER_SSH_KEY_DIR:-}" "${CLAUDE_DOCKER_SSH_SHARED_DIR:-}" 2>/dev/null || true' EXIT
 
     # Issue #1053: Bind-mount dynamic allowlist into sidecar (overrides baked-in /etc/proxy/allowlist.json)
     PROXY_ALLOWLIST_FILE="${CLAUDE_DOCKER_PROXY_ALLOWLIST_FILE:-}"
     PROXY_ALLOWLIST_FLAGS=""
     if [ -n "$PROXY_ALLOWLIST_FILE" ] && [ -f "$PROXY_ALLOWLIST_FILE" ]; then
         PROXY_ALLOWLIST_FLAGS="-v $PROXY_ALLOWLIST_FILE:/etc/proxy/allowlist.json:ro"
+    fi
+
+    # Issue #1052: Mount SSH key dir into proxy only (private key never enters agent).
+    # Proxy entrypoint ssh-adds the key, wipes the file, then creates the socket
+    # in the shared dir that both containers access at /run/ssh.
+    SSH_PROXY_MOUNTS=""
+    if [ -n "${CLAUDE_DOCKER_SSH_KEY_DIR:-}" ] && [ -d "${CLAUDE_DOCKER_SSH_KEY_DIR:-}" ]; then
+        SSH_PROXY_MOUNTS="$SSH_PROXY_MOUNTS -v ${CLAUDE_DOCKER_SSH_KEY_DIR}:/run/ssh-private:ro"
+    fi
+    if [ -n "${CLAUDE_DOCKER_SSH_SHARED_DIR:-}" ]; then
+        mkdir -p "${CLAUDE_DOCKER_SSH_SHARED_DIR}"
+        SSH_PROXY_MOUNTS="$SSH_PROXY_MOUNTS -v ${CLAUDE_DOCKER_SSH_SHARED_DIR}:/run/ssh"
     fi
 
     docker run -d \
@@ -219,6 +248,7 @@ if [ -n "$PROXY_IMAGE" ]; then
         -v "$PROXY_CERTS:/var/lib/mitmproxy" \
         ${PROXY_LOG_DIR:+-v "$PROXY_LOG_DIR:/var/log/proxy"} \
         $PROXY_ALLOWLIST_FLAGS \
+        $SSH_PROXY_MOUNTS \
         "$PROXY_IMAGE" >/dev/null
 
     # Wait up to 30s for the proxy to be fully ready.
@@ -292,6 +322,7 @@ docker run \
     $EXTRA_MOUNT_FLAGS \
     $FILE_MOUNT_FLAGS \
     $SSH_AGENT_FLAGS \
+    $SSH_DIR_FLAGS \
     $RESOURCE_FLAGS \
     $PROXY_FLAGS \
     $DELIVERY_ENV_FLAGS \

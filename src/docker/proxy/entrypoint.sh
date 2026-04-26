@@ -146,7 +146,13 @@ iptables -t nat -A OUTPUT -p tcp --dport 443 \
 echo "Configuring default-deny TCP OUTPUT..."
 
 # 1. Allow all loopback traffic (inter-process comms).
+#    This also covers the SOCKS5 listener on 127.0.0.1:1080 — agent processes
+#    connect there via loopback, so the -o lo rule already permits that traffic.
+#    The rule below is a defensive belt-and-suspenders ACCEPT for 1080 in case
+#    a future rule reorder places a DROP before the lo rule.
 iptables -A OUTPUT -o lo -j ACCEPT
+iptables -A OUTPUT -p tcp -d 127.0.0.1 --dport 1080 \
+    -m conntrack --ctstate NEW -j ACCEPT
 
 # 2. Allow DNAT'd agent HTTP/HTTPS traffic to reach mitmproxy at $CONTAINER_IP:8080.
 #    After nat OUTPUT DNAT, ip_route_me_harder() routes these via eth0 (not lo)
@@ -205,16 +211,20 @@ iptables -A OUTPUT -p udp -j DROP
 #
 # PID 1 (this shell) remains as the container's init process and forwards
 # SIGTERM/SIGINT to the child processes for clean shutdown.
-echo "Starting mitmdump (transparent mode) on :8080..."
+echo "Starting mitmdump (transparent + SOCKS5) on :8080 / 127.0.0.1:1080..."
 echo "Addon: /etc/proxy/addon.py"
 # Issue #1060: Add -w flag to write mitmproxy flow file when log dir is mounted.
 MITM_EXTRA_ARGS=""
 if [ -d "$LOG_DIR" ]; then
     MITM_EXTRA_ARGS="-w $LOG_DIR/mitm.flows"
 fi
+# Issue #1052: --mode socks5@127.0.0.1:1080 adds a SOCKS5 listener alongside
+# the existing transparent HTTP/HTTPS listener. SSH uses SOCKS5; HTTP/HTTPS
+# continues through transparent DNAT. The addon.py tcp_start hook enforces the
+# allowlist for SOCKS5 connections (IP literals rejected; hostnames checked).
 PYTHONUNBUFFERED=1 setpriv --reuid=9999 --regid=9999 --clear-groups \
     --inh-caps +net_admin --ambient-caps +net_admin -- \
-    mitmdump --mode transparent --showhost -v \
+    mitmdump --mode transparent --mode "socks5@127.0.0.1:1080" --showhost -v \
     --listen-port 8080 \
     --set confdir="$CERTS_DIR" \
     --ssl-insecure \
@@ -262,6 +272,52 @@ if ! kill -0 "$MITM_PID" 2>/dev/null; then
     wait "$MITM_PID" 2>/dev/null
     exit 1
 fi
+
+# --- Optional: start session-scoped ssh-agent when a private key is mounted ---
+# Issue #1052: When CLAUDE_DOCKER_SSH_KEY_DIR is mounted into the proxy at
+# /run/ssh-private (read-only), the proxy runs ssh-agent and ssh-adds the key,
+# then wipes the key file. The agent container gets only the socket — never the
+# key bytes. The socket and SSH config live in the shared /run/ssh mount.
+SSH_PRIVATE_KEY="/run/ssh-private/id"
+SSH_SHARED_DIR="/run/ssh"
+if [ -f "$SSH_PRIVATE_KEY" ]; then
+    echo "SSH key found at $SSH_PRIVATE_KEY — starting session-scoped ssh-agent"
+    mkdir -p "$SSH_SHARED_DIR"
+
+    # Start ssh-agent as uid 1000 (matches claude user in agent container) so
+    # the agent container's claude user can connect to the socket.
+    SSH_AGENT_SOCK="$SSH_SHARED_DIR/agent.sock"
+    eval "$(setpriv --reuid=1000 --regid=1000 --clear-groups -- \
+        ssh-agent -a "$SSH_AGENT_SOCK" -s 2>/dev/null)"
+    SSH_AGENT_PID=$!
+    echo "ssh-agent started (pid=$SSH_AGENT_PID, sock=$SSH_AGENT_SOCK)"
+
+    # Load the private key into the agent
+    SSH_AUTH_SOCK="$SSH_AGENT_SOCK" setpriv --reuid=1000 --regid=1000 --clear-groups -- \
+        ssh-add "$SSH_PRIVATE_KEY" 2>/dev/null
+
+    # Verify at least one identity was loaded
+    IDENTITY_COUNT=$(SSH_AUTH_SOCK="$SSH_AGENT_SOCK" setpriv --reuid=1000 --regid=1000 --clear-groups -- \
+        ssh-add -l 2>/dev/null | wc -l || echo 0)
+    if [ "$IDENTITY_COUNT" -lt 1 ]; then
+        echo "ERROR: ssh-add succeeded but no identities in agent" >&2
+        exit 1
+    fi
+    echo "ssh-agent loaded $IDENTITY_COUNT identity/identities"
+
+    # Wipe private key from disk immediately after loading into agent memory.
+    # The file lives on a host tmpdir; shred is best-effort (tmpfs has no disk sectors).
+    if command -v shred >/dev/null 2>&1; then
+        shred -u "$SSH_PRIVATE_KEY" 2>/dev/null || rm -f "$SSH_PRIVATE_KEY"
+    else
+        rm -f "$SSH_PRIVATE_KEY"
+    fi
+    echo "Private key file wiped from $SSH_PRIVATE_KEY"
+
+    # Ensure the socket is accessible by the agent container's claude user (uid 1000).
+    chmod 0666 "$SSH_AGENT_SOCK" 2>/dev/null || true
+fi
+
 touch "$CERTS_DIR/.ready"
 
 # Forward signals to child processes so Docker stop works cleanly.

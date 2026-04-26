@@ -3,10 +3,13 @@ Docker utilities for Claude Code WebUI (issue #496).
 
 Provides Docker availability checking and wrapper script path resolution
 for Docker session isolation.
+
+Issue #1052: prepare_session_ssh() — SSH key tmpfs delivery for proxy-mode sessions.
 """
 
 import asyncio
 import logging
+import os
 import shutil
 from pathlib import Path
 
@@ -140,6 +143,90 @@ def resolve_docker_cli_path(
         env_vars["CLAUDE_DOCKER_PROXY_ALLOWLIST_FILE"] = proxy_allowlist_file
 
     return wrapper_path, env_vars
+
+
+# SSH config mounted into the shared dir (agent container at /run/ssh).
+# No IdentityFile — the ssh-agent socket inside the proxy sidecar provides
+# the identity; the agent container never holds the raw private key bytes.
+_SSH_CONFIG_TEMPLATE = """\
+Host *
+    IdentitiesOnly yes
+    StrictHostKeyChecking accept-new
+    UserKnownHostsFile /run/ssh/known_hosts
+    ProxyCommand ncat --proxy 127.0.0.1:1080 --proxy-type socks5 %h %p
+"""
+
+_SSH_WRAPPER_SCRIPT = """\
+#!/bin/sh
+exec ssh -F /run/ssh/config "$@"
+"""
+
+
+def prepare_session_ssh(
+    resolved_secrets: list[dict],
+    key_dir: Path,
+    shared_dir: Path,
+) -> bool:
+    """Prepare SSH key injection for a proxy-mode Docker session.
+
+    Implements two-dir isolation so the private key bytes never enter the agent
+    container:
+
+      key_dir   — contains the raw private key file (``id``, mode 0o600).
+                  Mounted into the PROXY SIDECAR ONLY at /run/ssh-private:ro.
+                  The proxy entrypoint ssh-adds the key, then wipes this file.
+
+      shared_dir — contains config, known_hosts, and ssh-wrapper.
+                  Mounted into BOTH containers at /run/ssh (read-write on proxy
+                  so ssh-agent can create the socket; read-only on agent).
+
+    Returns True if an SSH key was prepared, False if no ssh_key secrets are
+    assigned.  Raises ValueError if more than one ssh_key secret is assigned.
+    """
+
+    ssh_secrets = [s for s in resolved_secrets if s.get("type") == "ssh_key"]
+    if not ssh_secrets:
+        return False
+    if len(ssh_secrets) > 1:
+        names = [s.get("name", "?") for s in ssh_secrets]
+        raise ValueError(
+            f"At most one ssh_key secret may be assigned per session; got: {names}"
+        )
+
+    secret = ssh_secrets[0]
+    key_value = secret.get("value", "")
+    if not key_value:
+        logger.warning(f"ssh_key secret '{secret.get('name')}' has empty value — skipping SSH setup")
+        return False
+
+    # key_dir: private key only — proxy-sidecar mount at /run/ssh-private:ro
+    key_dir.mkdir(parents=True, exist_ok=True)
+    key_path = key_dir / "id"
+    content = key_value if key_value.endswith("\n") else key_value + "\n"
+    key_path.write_text(content)
+    os.chmod(key_path, 0o600)
+
+    # shared_dir: socket + config + known_hosts — both containers at /run/ssh
+    shared_dir.mkdir(parents=True, exist_ok=True)
+
+    config_path = shared_dir / "config"
+    config_path.write_text(_SSH_CONFIG_TEMPLATE)
+    os.chmod(config_path, 0o644)
+
+    known_hosts = shared_dir / "known_hosts"
+    known_hosts.touch()
+    os.chmod(known_hosts, 0o644)
+
+    wrapper = shared_dir / "ssh-wrapper"
+    wrapper.write_text(_SSH_WRAPPER_SCRIPT)
+    os.chmod(wrapper, 0o755)
+
+    logger.info(
+        f"SSH key prepared for secret '{secret.get('name')}' "
+        f"(type={secret.get('key_type', 'unknown')}): "
+        f"key_dir={key_dir}, shared_dir={shared_dir}"
+    )
+    return True
 
 
 async def check_proxy_image_available(image_name: str) -> bool:

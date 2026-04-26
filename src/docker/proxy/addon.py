@@ -16,6 +16,7 @@ inside the Docker image — it cannot import from the host src/ tree).
 
 import asyncio
 import base64
+import ipaddress
 import json
 import logging
 import os
@@ -25,7 +26,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import httpx
-from mitmproxy import ctx, http
+from mitmproxy import ctx, http, tcp
 
 # ---------------------------------------------------------------------------
 # Configuration constants
@@ -36,6 +37,7 @@ SESSION_TOKEN_PATH = "/etc/proxy/session_token"
 SESSION_ID_PATH = "/etc/proxy/session_id"
 LOG_DIR = "/var/log/proxy"
 WEBUI_BASE_URL = os.environ.get("WEBUI_BASE_URL", "http://host.docker.internal:8000")
+SOCKS5_LOG_FILENAME = "socks5.log"
 
 _BINARY_CONTENT_TYPES = frozenset({
     "image/", "audio/", "video/",
@@ -321,9 +323,12 @@ class ProxyAddon:
         self.allowed_domains: set[str] = set()
         self.logger = logging.getLogger("proxy.addon")
         self._log_file = None
+        self._socks5_log_file = None
         if Path(LOG_DIR).is_dir():
             log_path = Path(LOG_DIR) / "access.log"
             self._log_file = open(log_path, "a", buffering=1)  # line-buffered  # noqa: SIM115
+            socks5_path = Path(LOG_DIR) / SOCKS5_LOG_FILENAME
+            self._socks5_log_file = open(socks5_path, "a", buffering=1)  # noqa: SIM115
 
     async def load(self, loader) -> None:
         """Read session credentials and fetch secrets from WebUI resolve endpoint."""
@@ -423,6 +428,53 @@ class ProxyAddon:
             allowed=True,
             credential_used=flow.metadata.get("credential_used"),
         )
+
+    def tcp_start(self, flow: tcp.TCPFlow) -> None:
+        """SOCKS5 allowlist enforcement for non-HTTP TCP connections (issue #1052).
+
+        Called by mitmproxy after the SOCKS5 CONNECT handshake, before connecting
+        to the upstream server. Enforces the same allowlist as HTTP/HTTPS:
+          - IP-literal destinations are always rejected (fail-closed).
+          - Hostname destinations must match the in-memory allowed_domains set.
+        All decisions are logged to socks5.log.
+        """
+        try:
+            addr = flow.server_conn.address
+        except AttributeError:
+            # Destination metadata unavailable — fail-closed.
+            ctx.log.warn("[proxy:socks5] Missing server_conn.address — killing flow")
+            self._write_socks5_log(host="unknown", port=0, allowed=False, reason="no_address")
+            flow.kill()
+            return
+
+        if not addr:
+            ctx.log.warn("[proxy:socks5] Empty server address — killing flow")
+            self._write_socks5_log(host="unknown", port=0, allowed=False, reason="empty_address")
+            flow.kill()
+            return
+
+        host = addr[0] if isinstance(addr, (tuple, list)) else str(addr)
+        port = addr[1] if isinstance(addr, (tuple, list)) and len(addr) > 1 else 0
+
+        # Reject IP literals unconditionally — SOCKS5 should only be used for
+        # named hosts (SSH via git/ssh, not raw IP connections).
+        try:
+            ipaddress.ip_address(host)
+            ctx.log.warn(f"[proxy:socks5] DENY IP literal {host}:{port}")
+            self._write_socks5_log(host=host, port=port, allowed=False, reason="ip_literal")
+            flow.kill()
+            return
+        except ValueError:
+            pass  # not an IP — continue to hostname check
+
+        if not self._is_allowed(host):
+            ctx.log.warn(f"[proxy:socks5] DENY {host}:{port} (not in allowlist)")
+            self._write_socks5_log(host=host, port=port, allowed=False, reason="not_allowlisted")
+            flow.kill()
+            return
+
+        ctx.log.info(f"[proxy:socks5] ALLOW {host}:{port}")
+        self._write_socks5_log(host=host, port=port, allowed=True, reason="ok")
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -526,6 +578,27 @@ class ProxyAddon:
             "credential_used": credential_used,
         }
         self._log_file.write(json.dumps(entry) + "\n")
+
+    def _write_socks5_log(
+        self,
+        host: str,
+        port: int,
+        allowed: bool,
+        reason: str,
+    ) -> None:
+        entry = {
+            "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+            "session_id": self._session_id,
+            "host": host,
+            "port": port,
+            "allowed": allowed,
+            "reason": reason,
+        }
+        if self._socks5_log_file:
+            self._socks5_log_file.write(json.dumps(entry) + "\n")
+        else:
+            # Log to access log if socks5 log not available
+            ctx.log.info(f"[proxy:socks5] {json.dumps(entry)}")
 
 
 # Backward-compat alias kept for legacy test imports
