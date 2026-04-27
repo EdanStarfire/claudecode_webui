@@ -550,8 +550,8 @@ class TestProfileAreasStructure:
                 seen[field] = area
 
     def test_all_areas_non_empty(self):
-        """All 7 profile areas are non-empty (issue #827 added 'secrets' area)."""
-        assert len(PROFILE_AREAS) == 7
+        """All 6 profile areas are non-empty."""
+        assert len(PROFILE_AREAS) == 6
         for area, fields in PROFILE_AREAS.items():
             assert len(fields) > 0, f"Area '{area}' has no fields"
 
@@ -744,3 +744,34 @@ class TestLeanSessionInfo:
         assert isinstance(result, SessionConfig)
         # Template default permission_mode should be carried through
         assert result.permission_mode == "acceptEdits"
+
+
+class TestIssue1170AssignedSecretsInIsolation:
+    """Regression tests for issue #1170 — assigned_secrets belongs to isolation area."""
+
+    def test_issue_1170_secrets_area_removed(self):
+        """The 'secrets' area must not exist in PROFILE_AREAS (issue #1170)."""
+        assert "secrets" not in PROFILE_AREAS
+
+    def test_issue_1170_assigned_secrets_in_isolation_area(self):
+        """assigned_secrets must now be in the 'isolation' area (issue #1170)."""
+        assert FIELD_TO_AREA.get("assigned_secrets") == "isolation"
+        assert "assigned_secrets" in PROFILE_AREAS["isolation"]
+
+    @pytest.mark.asyncio
+    async def test_issue_1170_isolation_profile_with_assigned_secrets_resolves(self):
+        """Creating a profile with area='isolation' and assigned_secrets must not fail."""
+        profile = _make_profile(
+            area="isolation",
+            config={"assigned_secrets": ["my-secret"]},
+        )
+        pm = _make_profile_manager([profile])
+        template = _make_template(
+            profile_ids={"isolation": profile.profile_id},
+        )
+        session = _make_session(template_id="tmpl-001")
+        tm = _make_template_manager(template)
+
+        result = await resolve_effective_config(session, tm, pm)
+
+        assert result.assigned_secrets == ["my-secret"]

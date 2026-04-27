@@ -41,8 +41,6 @@ PROFILE_AREAS: dict[str, set[str]] = {
         "docker_home_directory", "docker_proxy_enabled", "docker_proxy_image",
         "docker_proxy_allowlist_domains",
         "bare_mode", "env_scrub_enabled",
-    },
-    "secrets": {
         "assigned_secrets",
     },
     "features": {
@@ -51,7 +49,7 @@ PROFILE_AREAS: dict[str, set[str]] = {
     },
 }
 
-# The 6 valid profile area keys, for validation without exposing field details.
+# The valid profile area keys, for validation without exposing field details.
 PROFILE_AREA_KEYS = frozenset(PROFILE_AREAS.keys())
 
 # Reverse lookup: field -> area name
