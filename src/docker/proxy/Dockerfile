@@ -1,6 +1,9 @@
 FROM debian:bookworm-slim
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    rm -f /etc/apt/apt.conf.d/docker-clean && \
+    apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     python3-pip \
     pipx \
@@ -13,8 +16,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     jq \
     ca-certificates \
     ulogd2 \
-    openssh-client \
-    && apt-get clean && rm -rf /var/lib/apt/lists/*
+    openssh-client
 
 # Install mitmproxy + httpx system-wide so uid 9999 can execute mitmdump
 # httpx is required by addon.py for REST-fetch secret resolution (issue #1134)

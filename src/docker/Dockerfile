@@ -2,15 +2,17 @@ FROM debian:bookworm-slim
 
 # Install only what's needed: curl for downloading, git for claude operations,
 # ca-certificates for HTTPS, and basic tools claude might want to use
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    rm -f /etc/apt/apt.conf.d/docker-clean && \
+    apt-get update && apt-get install -y --no-install-recommends \
     curl \
     ca-certificates \
     git \
     jq \
     bubblewrap \
     openssh-client \
-    ncat \
-    && apt-get clean && rm -rf /var/lib/apt/lists/*
+    ncat
 
 # Create non-root user
 RUN useradd -m -s /bin/bash claude
