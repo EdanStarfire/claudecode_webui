@@ -382,8 +382,7 @@ def test_addon_access_log_credential_name_not_value(tmp_path):
 # 14. Graceful no-op when session token files absent
 # ---------------------------------------------------------------------------
 
-@pytest.mark.asyncio
-async def test_addon_load_no_session_files_leaves_records_empty():
+def test_addon_load_no_session_files_leaves_records_empty():
     """Issue #1134: load() is a no-op and leaves _records empty when session files absent."""
     _ensure_mitmproxy_stubs()
     from src.docker.proxy import addon as addon_mod
@@ -400,6 +399,6 @@ async def test_addon_load_no_session_files_leaves_records_empty():
         mock_path = MagicMock()
         mock_path.read_text.side_effect = FileNotFoundError("no file")
         mock_path_cls.return_value = mock_path
-        await f.load(None)
+        f.load(None)
 
     assert f._records == {}
