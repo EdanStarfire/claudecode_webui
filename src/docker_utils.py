@@ -90,6 +90,8 @@ def resolve_docker_cli_path(
     delivery_envs: dict[str, str] | None = None,
     # Issue #1053: Dynamic allowlist override
     proxy_allowlist_file: str | None = None,
+    # Issue #1179: Proxy-sidecar-only mounts (session_token, session_id, etc.)
+    docker_proxy_extra_mounts: list[str] | None = None,
 ) -> tuple[str, dict[str, str]]:
     """
     Resolve the cli_path and environment variables for Docker mode.
@@ -109,6 +111,8 @@ def resolve_docker_cli_path(
         delivery_envs: Dict of env_var_name → placeholder string. Passed inline to
                        claude-docker via CLAUDE_DOCKER_DELIVERY_ENVS (JSON). The wrapper
                        forwards these as -e flags to the agent container.
+        docker_proxy_extra_mounts: Additional volume mount specs applied exclusively to the
+                                   proxy sidecar container (never the agent container).
 
     Returns:
         Tuple of (cli_path_string, env_vars_dict)
@@ -141,6 +145,9 @@ def resolve_docker_cli_path(
 
     if proxy_allowlist_file:
         env_vars["CLAUDE_DOCKER_PROXY_ALLOWLIST_FILE"] = proxy_allowlist_file
+
+    if docker_proxy_extra_mounts:
+        env_vars["CLAUDE_DOCKER_PROXY_EXTRA_MOUNTS"] = ",".join(docker_proxy_extra_mounts)
 
     return wrapper_path, env_vars
 

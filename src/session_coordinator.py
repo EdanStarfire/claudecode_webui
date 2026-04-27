@@ -1201,6 +1201,9 @@ class SessionCoordinator:
                 docker_data_dir = str(session_dir / "docker_claude_data")
                 # Issue #759: Mount session memory dir into Docker container (RW, at host path)
                 extra_mounts = list(effective_config.docker_extra_mounts or [])
+                # Issue #1179: Proxy-sidecar-only mounts (session_token, session_id).
+                # Agent mounts go in extra_mounts; proxy mounts go here.
+                proxy_extra_mounts: list[str] = []
                 if effective_config.auto_memory_mode == "session":
                     memory_dir = session_dir / "memory"
                     memory_dir.mkdir(exist_ok=True)
@@ -1334,17 +1337,18 @@ class SessionCoordinator:
 
                     # Issue #827 / #1134: Write per-session token + session_id files for proxy.
                     # Proxy calls GET /api/sessions/{id}/secrets/resolve with this Bearer token.
+                    # Issue #1179: These mounts target /etc/proxy/ — proxy sidecar only, not agent.
                     session_token = getattr(session_info, "secret_fetch_token", None)
                     if session_token:
                         token_path = tmp_dir / "session_token"
                         token_path.write_text(session_token)
                         os.chmod(token_path, 0o600)
-                        extra_mounts.append(f"{token_path}:/etc/proxy/session_token:ro")
+                        proxy_extra_mounts.append(f"{token_path}:/etc/proxy/session_token:ro")
 
                         session_id_path = tmp_dir / "session_id"
                         session_id_path.write_text(session_id)
                         os.chmod(session_id_path, 0o600)
-                        extra_mounts.append(f"{session_id_path}:/etc/proxy/session_id:ro")
+                        proxy_extra_mounts.append(f"{session_id_path}:/etc/proxy/session_id:ro")
 
                 # Issue #1089: Deduplicate mounts by container destination path (first-seen wins).
                 # Format: "host_path:container_path[:options]" — extract the second colon-delimited field.
@@ -1357,6 +1361,17 @@ class SessionCoordinator:
                         _seen_container_paths.add(_container_path)
                         _deduped_mounts.append(_mount)
                 extra_mounts = _deduped_mounts
+
+                # Issue #1179: Deduplicate proxy_extra_mounts independently (same strategy).
+                _seen_proxy_paths: set[str] = set()
+                _deduped_proxy_mounts: list[str] = []
+                for _mount in proxy_extra_mounts:
+                    _parts = _mount.split(":", 2)
+                    _container_path = _parts[1] if len(_parts) >= 2 else _mount
+                    if _container_path not in _seen_proxy_paths:
+                        _seen_proxy_paths.add(_container_path)
+                        _deduped_proxy_mounts.append(_mount)
+                proxy_extra_mounts = _deduped_proxy_mounts
 
                 effective_cli_path, docker_env_vars = resolve_docker_cli_path(
                     docker_image=effective_config.docker_image,
@@ -1373,6 +1388,8 @@ class SessionCoordinator:
                     # Issue #1134: pass delivery env vars inline (no file); keep allowlist path
                     delivery_envs=delivery_envs or None,
                     proxy_allowlist_file=proxy_allowlist_file,
+                    # Issue #1179: Proxy-sidecar-only mounts
+                    docker_proxy_extra_mounts=proxy_extra_mounts or None,
                 )
                 # Issue #1052: Tell claude-docker where the two SSH tmpdirs live.
                 # key_dir  → proxy-only mount at /run/ssh-private:ro
