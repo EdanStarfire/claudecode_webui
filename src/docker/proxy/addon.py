@@ -330,8 +330,8 @@ class ProxyAddon:
             socks5_path = Path(LOG_DIR) / SOCKS5_LOG_FILENAME
             self._socks5_log_file = open(socks5_path, "a", buffering=1)  # noqa: SIM115
 
-    async def load(self, loader) -> None:
-        """Read session credentials and fetch secrets from WebUI resolve endpoint."""
+    def load(self, loader) -> None:
+        """Read session config files. Secret fetch happens in running()."""
         try:
             self._session_token = Path(SESSION_TOKEN_PATH).read_text().strip()
             self._session_id = Path(SESSION_ID_PATH).read_text().strip()
@@ -343,6 +343,10 @@ class ProxyAddon:
         self.allowed_domains = set(data.get("domains", []))
         ctx.log.info(f"[proxy] Loaded {len(self.allowed_domains)} allowed domains")
 
+    async def running(self) -> None:
+        """Fetch secrets after proxy is fully started (async-capable hook)."""
+        if not self._session_id:
+            return  # load() didn't complete successfully
         try:
             self._records = await self._fetch_resolve()
             self._refresh_locks = {ph: asyncio.Lock() for ph in self._records}
