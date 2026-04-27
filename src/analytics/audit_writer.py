@@ -278,13 +278,18 @@ class AuditWriter:
             comm_type = comm_data.get("comm_type", "")
             from_id = comm_data.get("from_minion_id") or "user"
             to_id = comm_data.get("to_minion_id") or "user"
+            from_name = comm_data.get("from_minion_name") or from_id
+            to_name = comm_data.get("to_minion_name") or to_id
             summary_text = comm_data.get("summary") or comm_data.get("content", "")[:80]
-            summary = _truncate(f"[{comm_type}] {from_id} → {to_id}: {summary_text}")
+            summary = _truncate(f"[{comm_type}] {from_name} → {to_name}: {summary_text}")
             extra = {
                 "comm_id": comm_data.get("comm_id"),
                 "comm_type": comm_type,
                 "from": from_id,
+                "from_name": from_name,
                 "to": to_id,
+                "to_name": to_name,
+                "comm_summary": summary_text,
             }
             self._enqueue_with_ts(
                 timestamp, None, session_id, project_id, legion_id, None,

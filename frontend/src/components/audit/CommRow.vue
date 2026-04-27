@@ -7,7 +7,7 @@
         <span class="text-truncate small">{{ fromTo }}</span>
         <span class="text-muted ms-auto small flex-shrink-0">{{ formatTime(event.timestamp) }}</span>
       </div>
-      <div v-if="event.summary" class="text-truncate small text-muted">{{ event.summary }}</div>
+      <div v-if="extra.comm_summary" class="text-truncate small text-muted">{{ extra.comm_summary }}</div>
     </div>
   </div>
 </template>
@@ -22,8 +22,8 @@ const props = defineProps({
 const extra = computed(() => props.event.extra || {})
 const commType = computed(() => extra.value.comm_type || 'comm')
 const fromTo = computed(() => {
-  const from = extra.value.from || 'user'
-  const to = extra.value.to || 'user'
+  const from = extra.value.from_name || extra.value.from || 'user'
+  const to = extra.value.to_name || extra.value.to || 'user'
   return `${from} → ${to}`
 })
 
