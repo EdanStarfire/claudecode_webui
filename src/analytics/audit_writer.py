@@ -92,7 +92,7 @@ class AuditWriter:
     # Hook: session state changes (from SessionManager)
     # ------------------------------------------------------------------
 
-    async def on_session_state_change(self, session_id: str, new_state: Any, is_processing: bool = False) -> None:
+    async def on_session_state_change(self, session_id: str, new_state: Any, is_processing: bool = False, project_id: str | None = None) -> None:
         """Called by SessionManager when a session changes state."""
         if self._db is None:
             return
@@ -108,7 +108,7 @@ class AuditWriter:
                 self._session_state_cache.pop(session_id, None)
             self._enqueue(
                 session_id=session_id,
-                project_id=None,
+                project_id=project_id,
                 legion_id=None,
                 turn_id=None,
                 event_type="lifecycle",

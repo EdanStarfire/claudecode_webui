@@ -113,3 +113,33 @@ def test_parse_sparkline():
 
 def test_parse_sparkline_empty():
     assert _parse_sparkline("") == []
+
+
+# ------------------------------------------------------------------
+# Issue #1163: event_types filter must apply to standalones in query_turns
+# ------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_issue_1163_event_types_filter_applied_to_standalones(db):
+    """query_turns with event_types filter excludes non-matching standalone events."""
+    ts = time.time()
+    # Insert a lifecycle standalone (no turn_id)
+    await _insert(db, event_type="lifecycle", turn_id=None, tool_name=None, ts=ts - 3)
+    # Insert a comm standalone (no turn_id)
+    await _insert(db, event_type="comm", turn_id=None, tool_name=None, ts=ts - 2)
+    qs = AuditQueryService(db)
+    # Filter to only "comm" events
+    result = await qs.query_turns(since=ts - 60, event_types=["comm"])
+    assert len(result["standalones"]) == 1
+    assert result["standalones"][0]["event_type"] == "comm"
+
+
+@pytest.mark.asyncio
+async def test_issue_1163_no_event_types_filter_returns_all_standalones(db):
+    """query_turns without event_types returns all standalone events."""
+    ts = time.time()
+    await _insert(db, event_type="lifecycle", turn_id=None, tool_name=None, ts=ts - 3)
+    await _insert(db, event_type="comm", turn_id=None, tool_name=None, ts=ts - 2)
+    qs = AuditQueryService(db)
+    result = await qs.query_turns(since=ts - 60)
+    assert len(result["standalones"]) == 2
