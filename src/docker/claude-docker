@@ -240,6 +240,19 @@ if [ -n "$PROXY_IMAGE" ]; then
         SSH_PROXY_MOUNTS="$SSH_PROXY_MOUNTS -v ${CLAUDE_DOCKER_SSH_SHARED_DIR}:/run/ssh"
     fi
 
+    # Issue #1179: Proxy-only mounts (e.g., session_token, session_id) — kept
+    # separate from CLAUDE_DOCKER_EXTRA_MOUNTS (agent-only).
+    PROXY_EXTRA_MOUNT_FLAGS=""
+    if [ -n "${CLAUDE_DOCKER_PROXY_EXTRA_MOUNTS:-}" ]; then
+        IFS=',' read -ra PROXY_MOUNTS <<< "$CLAUDE_DOCKER_PROXY_EXTRA_MOUNTS"
+        for mount in "${PROXY_MOUNTS[@]}"; do
+            mount="$(echo "$mount" | xargs)"
+            if [ -n "$mount" ]; then
+                PROXY_EXTRA_MOUNT_FLAGS="$PROXY_EXTRA_MOUNT_FLAGS -v $mount"
+            fi
+        done
+    fi
+
     docker run -d \
         --name "$PROXY_NAME" \
         --cap-add NET_ADMIN \
@@ -249,6 +262,7 @@ if [ -n "$PROXY_IMAGE" ]; then
         ${PROXY_LOG_DIR:+-v "$PROXY_LOG_DIR:/var/log/proxy"} \
         $PROXY_ALLOWLIST_FLAGS \
         $SSH_PROXY_MOUNTS \
+        $PROXY_EXTRA_MOUNT_FLAGS \
         "$PROXY_IMAGE" >/dev/null
 
     # Wait up to 30s for the proxy to be fully ready.
