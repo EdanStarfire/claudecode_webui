@@ -61,6 +61,8 @@ class AuditWriter:
         self._batch: list[tuple] = []
         self._flush_task: asyncio.Task | None = None
         self._running = False
+        # (state_name, is_processing) per session — skip identical consecutive events
+        self._session_state_cache: dict[str, tuple[str, bool]] = {}
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -90,15 +92,20 @@ class AuditWriter:
     # Hook: session state changes (from SessionManager)
     # ------------------------------------------------------------------
 
-    async def on_session_state_change(self, session_id: str, new_state: Any) -> None:
+    async def on_session_state_change(self, session_id: str, new_state: Any, is_processing: bool = False) -> None:
         """Called by SessionManager when a session changes state."""
         if self._db is None:
             return
         try:
             state_name = new_state.value if hasattr(new_state, "value") else str(new_state)
+            current = (state_name, is_processing)
+            if self._session_state_cache.get(session_id) == current:
+                return  # Nothing changed — skip duplicate
+            self._session_state_cache[session_id] = current
             # Close any open turn when session terminates
             if state_name in ("terminated", "error"):
                 self._tracker.on_result(session_id)
+                self._session_state_cache.pop(session_id, None)
             self._enqueue(
                 session_id=session_id,
                 project_id=None,
@@ -109,7 +116,7 @@ class AuditWriter:
                 status=state_name,
                 summary=_truncate(f"Session state → {state_name}"),
                 message_id=None,
-                extra={"state": state_name},
+                extra={"state": state_name, "is_processing": is_processing},
             )
         except Exception:
             logger.exception("AuditWriter.on_session_state_change error (non-fatal)")
@@ -139,6 +146,7 @@ class AuditWriter:
         msg: dict[str, Any],
     ) -> None:
         msg_type = msg.get("type", "")
+        stored_type = msg.get("_type", "")
         timestamp = msg.get("timestamp") or time.time()
         source_ts = msg.get("source_ts")
         message_id = msg.get("message_id")
@@ -151,8 +159,50 @@ class AuditWriter:
 
         turn_id = self._tracker.current_turn_id(session_id)
 
+        # ToolCallUpdate: authoritative source for tool lifecycle events (#1160)
+        if stored_type == "ToolCallUpdate":
+            data = msg.get("data", {})
+            tool_name = data.get("name")
+            tool_use_id = data.get("tool_use_id")
+            tc_status = data.get("status", "pending")
+            tool_input = data.get("input") or {}
+
+            if tc_status == "pending":
+                summary = _make_tool_summary(tool_name, tool_input)
+                extra = {"tool_name": tool_name, "tool_use_id": tool_use_id}
+                self._enqueue_with_ts(
+                    timestamp, source_ts, session_id, project_id, None, turn_id,
+                    "tool_call", tool_name, "started", summary, message_id, extra,
+                )
+            elif tc_status == "awaiting_permission":
+                summary = _truncate(f"Permission requested: {tool_name}")
+                extra = {"tool_name": tool_name, "tool_use_id": tool_use_id}
+                self._enqueue_with_ts(
+                    timestamp, source_ts, session_id, project_id, None, turn_id,
+                    "permission", tool_name, "requested", summary, message_id, extra,
+                )
+            elif tc_status == "denied":
+                summary = _truncate(f"Permission denied: {tool_name}")
+                extra = {"tool_name": tool_name, "tool_use_id": tool_use_id}
+                self._enqueue_with_ts(
+                    timestamp, source_ts, session_id, project_id, None, turn_id,
+                    "permission", tool_name, "denied", summary, message_id, extra,
+                )
+            elif tc_status in ("completed", "failed", "interrupted"):
+                is_error = tc_status != "completed"
+                audit_status = {"completed": "ok", "failed": "error", "interrupted": "interrupted"}[tc_status]
+                summary = _make_tool_result_summary(tool_name, {}, is_error)
+                extra = {"tool_name": tool_name, "tool_use_id": tool_use_id}
+                self._enqueue_with_ts(
+                    timestamp, source_ts, session_id, project_id, None, turn_id,
+                    "tool_call", tool_name, audit_status, summary, message_id, extra,
+                )
+            # running state: skip — covered by started/permission events
+            return
+
         # Map message type to event_type + summary
         if msg_type in ("tool_use",):
+            # Legacy type kept for backward compatibility with old JSONL files
             metadata = msg.get("metadata", {})
             tool_name = metadata.get("tool_name") or msg.get("tool_name")
             tool_input = metadata.get("tool_input") or {}
@@ -165,6 +215,7 @@ class AuditWriter:
             )
 
         elif msg_type in ("tool_result", "tool_error"):
+            # Legacy type kept for backward compatibility with old JSONL files
             metadata = msg.get("metadata", {})
             tool_name = metadata.get("tool_name") or msg.get("tool_name")
             is_error = msg_type == "tool_error" or metadata.get("is_error", False)

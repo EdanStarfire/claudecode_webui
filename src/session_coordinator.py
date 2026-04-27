@@ -4306,7 +4306,7 @@ class SessionCoordinator:
         except Exception:
             logger.exception(f"Error notifying state change for {session_id}")
 
-    async def _on_session_manager_state_change(self, session_id: str, new_state: SessionState):
+    async def _on_session_manager_state_change(self, session_id: str, new_state: SessionState, is_processing: bool = False):
         """Handle state changes from session manager"""
         # logger.info(f"Received state change from session manager: {session_id} -> {new_state.value}")
         await self._notify_state_change(session_id, new_state)
