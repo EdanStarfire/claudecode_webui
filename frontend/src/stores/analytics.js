@@ -129,6 +129,7 @@ export const useAnalyticsStore = defineStore('analytics', () => {
     filters.value.preset = preset
     filters.value.since = null
     filters.value.until = null
+    refresh()
   }
 
   function setCustomRange(since, until) {
