@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import time
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -47,7 +47,7 @@ async def app_and_db(tmp_path):
     await db.initialize()
 
     sm = MagicMock()
-    sm.get_session.return_value = None  # all sessions appear as "(deleted)" by default
+    sm.get_session_info = AsyncMock(return_value=None)  # all sessions appear as "(deleted)" by default
 
     webui = MagicMock()
     webui.analytics_db = db
@@ -217,7 +217,7 @@ async def test_minion_enrichment(app_and_db):
     minion_info.is_minion = True
     minion_info.parent_overseer_id = "overseer-1"
 
-    sm.get_session.return_value = minion_info
+    sm.get_session_info = AsyncMock(return_value=minion_info)
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
@@ -239,7 +239,7 @@ async def test_deleted_session_shows_as_deleted(app_and_db):
     app, db, sm = app_and_db
     await _seed_turn(db, "old-sess", 1, input_tokens=100, ts=_BASE_TS)
 
-    sm.get_session.return_value = None  # session not in memory
+    sm.get_session_info = AsyncMock(return_value=None)  # session not in memory
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
@@ -275,10 +275,10 @@ async def test_top_session_matches_max_cost(app_and_db):
     expensive_info.is_minion = False
     expensive_info.parent_overseer_id = None
 
-    def _get_session(sid):
+    async def _get_session_info(sid):
         return expensive_info if sid == "expensive" else cheap_info
 
-    sm.get_session.side_effect = _get_session
+    sm.get_session_info = AsyncMock(side_effect=_get_session_info)
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:

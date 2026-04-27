@@ -40,7 +40,7 @@ def build_router(webui) -> APIRouter:
             content={"detail": "Analytics subsystem not available"},
         )
 
-    def _enrich_session_rows(rows: list[dict], webui) -> None:
+    async def _enrich_session_rows(rows: list[dict], webui) -> None:
         """Fill session_name, is_minion, parent_session_id from SessionManager."""
         try:
             sm = webui.coordinator.session_manager
@@ -48,7 +48,7 @@ def build_router(webui) -> APIRouter:
             return
         for row in rows:
             sid = row["session_id"]
-            info = sm.get_session(sid)
+            info = await sm.get_session_info(sid)
             if info is None:
                 row["session_name"] = "(deleted)"
             else:
@@ -88,7 +88,7 @@ def build_router(webui) -> APIRouter:
             rows = await aggregate_by_session(
                 db, pricing, effective_since, effective_until, sid_list, model_list
             )
-            _enrich_session_rows(rows, webui)
+            await _enrich_session_rows(rows, webui)
             totals = compute_session_totals(rows)
             return {
                 "group_by": "session",

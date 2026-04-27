@@ -668,6 +668,10 @@ export const useSessionStore = defineStore('session', () => {
     return await api.get(`/api/sessions/${sessionId}/history-archives-status`)
   }
 
+  function clearSessionSelection() {
+    currentSessionId.value = null
+  }
+
   // ========== GHOST AGENT ACTIONS ==========
 
   function addGhostAgent(agentId, agentData) {
@@ -724,6 +728,7 @@ export const useSessionStore = defineStore('session', () => {
     removeGhostAgent,
     registerScrollPositionGetter,
     clearScrollRestorePending,
-    recordSessionReset
+    recordSessionReset,
+    clearSessionSelection
   }
 })

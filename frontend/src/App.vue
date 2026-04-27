@@ -26,7 +26,7 @@
       <!-- Right Panel: On desktop, v-show controls in-flow visibility;
            on mobile/tablet, overlay CSS handles transform-based slide -->
       <RightSidebar
-        v-show="rightPanelVisible || isTabletOrMobile"
+        v-show="!isFullWidthRoute && (rightPanelVisible || isTabletOrMobile)"
         :class="{ 'panel-overlay': isTabletOrMobile, 'panel-visible': rightPanelVisible }"
       />
     </div>
@@ -54,7 +54,7 @@
 
 <script setup>
 import { computed, onMounted, onUnmounted, watch, provide, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRouter, useRoute } from 'vue-router'
 import HeaderRow1 from './components/layout/HeaderRow1.vue'
 import ProjectPillBar from './components/layout/ProjectPillBar.vue'
 import AgentStrip from './components/layout/AgentStrip.vue'
@@ -86,6 +86,7 @@ const sessionStore = useSessionStore()
 const projectStore = useProjectStore()
 const taskStore = useTaskStore()
 const router = useRouter()
+const route = useRoute()
 
 // Provide function for adding resource to attachments
 const pendingResourceAttachment = ref(null)
@@ -100,6 +101,17 @@ provide('pendingResourceAttachment', pendingResourceAttachment)
 // Computed properties from UI store
 const rightPanelVisible = computed(() => uiStore.rightPanelVisible)
 const isTabletOrMobile = computed(() => uiStore.windowWidth < 768)
+
+// Full-width routes suppress the right sidebar (#1154)
+const isFullWidthRoute = computed(() => ['analytics', 'audit'].includes(route.name))
+
+// Clear project/session selection when navigating to analytics (#1155)
+watch(() => route.name, (routeName) => {
+  if (routeName === 'analytics') {
+    projectStore.clearProjectSelection()
+    sessionStore.clearSessionSelection()
+  }
+})
 
 // Auto-show right panel when tasks first appear (suppressed during session switch, #521)
 watch(() => taskStore.currentHasTasks, (hasTasks, hadTasks) => {
