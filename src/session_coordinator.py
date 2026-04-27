@@ -1043,6 +1043,9 @@ class SessionCoordinator:
             storage_manager = DataStorageManager(session_dir)
             await storage_manager.initialize()
             self._storage_managers[session_id] = storage_manager
+            # Issue #1172: re-apply audit hook each time start_session creates a new storage
+            # manager, since the previous manager (from create_session or last start) is replaced.
+            self._apply_audit_writer(storage_manager, session_id)
 
             # Issue #1059: Resolve effective config EARLY — before any CONFIG_FIELD read.
             # For template-linked sessions, session_info CONFIG_FIELDS are at dataclass defaults;
