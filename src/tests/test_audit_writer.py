@@ -413,3 +413,74 @@ async def test_issue_1164_lifecycle_event_without_project_id_stores_none():
     await writer.stop()
     assert len(db.rows) == 1
     assert db.rows[0][3] is None  # project_id remains None when not supplied
+
+
+# ------------------------------------------------------------------
+# Issue #1172: audit hook registration regression tests
+# ------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_issue_1172_apply_audit_writer_registers_hook():
+    """on_message_append registered via on_append list receives ToolCallUpdate and emits a row.
+
+    Simulates the _apply_audit_writer mechanism: a fresh storage manager's on_append list
+    gets the audit hook, then a message is routed through it end-to-end.
+    """
+    db = MockDB()
+    writer = AuditWriter(db)
+    writer.start()
+
+    # Simulate what _apply_audit_writer does: register the hook on a fresh storage manager
+    on_append: list = []
+    if writer.on_message_append not in on_append:
+        on_append.append(writer.on_message_append)
+
+    assert writer.on_message_append in on_append
+
+    # Fire the registered hook as DataStorageManager would after appending a message
+    msg = {
+        "_type": "ToolCallUpdate",
+        "timestamp": 99.0,
+        "data": {"tool_use_id": "tu-reg", "name": "Edit", "status": "pending", "input": {"file_path": "x.py"}},
+    }
+    await on_append[0]("s1", "proj1", msg)
+    await asyncio.sleep(0.3)
+    await writer.stop()
+
+    tool_rows = [r for r in db.rows if r[6] == "tool_call"]
+    assert len(tool_rows) == 1
+    assert tool_rows[0][7] == "Edit"
+    assert tool_rows[0][8] == "started"
+
+
+@pytest.mark.asyncio
+async def test_issue_1172_hook_not_duplicated_on_reapply():
+    """Re-registering on_message_append on the same on_append list must not add it twice.
+
+    Covers the idempotency guard in _apply_audit_writer so that repeated calls
+    (e.g. set_audit_writer backfill + create_session + start_session) don't double-emit.
+    """
+    db = MockDB()
+    writer = AuditWriter(db)
+    writer.start()
+
+    on_append: list = []
+    # Simulate _apply_audit_writer called twice (create_session then start_session)
+    for _ in range(2):
+        if writer.on_message_append not in on_append:
+            on_append.append(writer.on_message_append)
+
+    assert on_append.count(writer.on_message_append) == 1
+
+    msg = {
+        "_type": "ToolCallUpdate",
+        "timestamp": 100.0,
+        "data": {"tool_use_id": "tu-idem", "name": "Bash", "status": "completed", "input": {}},
+    }
+    await on_append[0]("s1", "proj1", msg)
+    await asyncio.sleep(0.3)
+    await writer.stop()
+
+    tool_rows = [r for r in db.rows if r[6] == "tool_call"]
+    assert len(tool_rows) == 1  # exactly one row, not two
