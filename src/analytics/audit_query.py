@@ -135,6 +135,15 @@ class AuditQueryService:
 
         where = "WHERE " + " AND ".join(conditions)
 
+        # Build standalone-specific WHERE (adds event_types filter if provided)
+        standalone_conditions = list(conditions)
+        standalone_params: list[Any] = list(params)
+        if event_types:
+            placeholders = ",".join("?" for _ in event_types)
+            standalone_conditions.append(f"event_type IN ({placeholders})")
+            standalone_params.extend(event_types)
+        standalone_where = "WHERE " + " AND ".join(standalone_conditions)
+
         # Query turn-level aggregates
         turn_sql = (
             f"SELECT session_id, turn_id, project_id, "
@@ -156,11 +165,11 @@ class AuditQueryService:
         standalone_sql = (
             f"SELECT id, timestamp, source_ts, session_id, project_id, legion_id, "
             f"event_type, tool_name, status, summary, message_id, extra_json "
-            f"FROM audit_events {where} AND turn_id IS NULL "
+            f"FROM audit_events {standalone_where} AND turn_id IS NULL "
             f"ORDER BY timestamp DESC "
             f"LIMIT 100"
         )
-        standalone_rows = await self._db.execute_read(standalone_sql, params)
+        standalone_rows = await self._db.execute_read(standalone_sql, standalone_params)
 
         turns = [self._build_turn(r) for r in turn_rows]
         standalones = [self._enrich_row(r) for r in standalone_rows]

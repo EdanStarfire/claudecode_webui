@@ -380,3 +380,36 @@ async def test_issue_1162_on_comm_stores_comm_summary():
     summary = row[9]
     assert "→" in summary
     assert "please review the PR" in summary
+
+
+# ------------------------------------------------------------------
+# Issue #1164: lifecycle events must store project_id
+# ------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_issue_1164_lifecycle_event_stores_project_id():
+    """on_session_state_change with project_id stores it in the row."""
+    db = MockDB()
+    writer = AuditWriter(db)
+    writer.start()
+    state = type("S", (), {"value": "active"})()
+    await writer.on_session_state_change("s1", state, is_processing=False, project_id="proj-123")
+    await asyncio.sleep(0.3)
+    await writer.stop()
+    assert len(db.rows) == 1
+    row = db.rows[0]
+    assert row[3] == "proj-123"  # project_id column index 3
+
+
+@pytest.mark.asyncio
+async def test_issue_1164_lifecycle_event_without_project_id_stores_none():
+    """on_session_state_change without project_id stores None (no regression)."""
+    db = MockDB()
+    writer = AuditWriter(db)
+    writer.start()
+    state = type("S", (), {"value": "active"})()
+    await writer.on_session_state_change("s1", state)
+    await asyncio.sleep(0.3)
+    await writer.stop()
+    assert len(db.rows) == 1
+    assert db.rows[0][3] is None  # project_id remains None when not supplied
