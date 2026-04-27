@@ -1175,8 +1175,10 @@ class SessionManager:
 
     async def _notify_state_change_callbacks(self, session_id: str, new_state: SessionState):
         """Notify registered callbacks about state changes"""
+        session = self._active_sessions.get(session_id)
+        is_processing = session.is_processing if session else False
         for callback in self._state_change_callbacks:
             try:
-                await callback(session_id, new_state)
+                await callback(session_id, new_state, is_processing)
             except Exception as e:
                 logger.error(f"Error in state change callback: {e}")
