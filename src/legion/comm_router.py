@@ -544,12 +544,15 @@ class CommRouter:
         """
         # Get legion_id from source or destination
         legion_id = None
+        from_minion_name = None
+        to_minion_name = None
 
         if comm.from_minion_id:
             # Get minion info to find legion_id (project_id)
             minion = await self.system.legion_coordinator.get_minion_info(comm.from_minion_id)
             if minion:
                 legion_id = minion.project_id  # project_id IS the legion_id
+                from_minion_name = minion.name
                 # Persist to source minion's log
                 await self._append_to_comm_log(
                     legion_id,
@@ -562,6 +565,7 @@ class CommRouter:
             minion = await self.system.legion_coordinator.get_minion_info(comm.to_minion_id)
             if minion:
                 legion_id = minion.project_id  # project_id IS the legion_id
+                to_minion_name = minion.name
                 # Persist to destination minion's log
                 await self._append_to_comm_log(
                     legion_id,
@@ -575,6 +579,8 @@ class CommRouter:
                 minion = await self.system.legion_coordinator.get_minion_info(comm.to_minion_id)
                 if minion:
                     legion_id = minion.project_id
+                    if not to_minion_name:
+                        to_minion_name = minion.name
 
         # ALWAYS persist to main legion timeline (this was missing!)
         if legion_id:
@@ -606,6 +612,8 @@ class CommRouter:
                     "comm_type": comm.comm_type.value if hasattr(comm.comm_type, "value") else str(comm.comm_type),
                     "from_minion_id": comm.from_minion_id,
                     "to_minion_id": comm.to_minion_id,
+                    "from_minion_name": from_minion_name,
+                    "to_minion_name": to_minion_name,
                     "summary": comm.summary,
                     "content": (comm.content or "")[:80] if comm.content else None,
                     "timestamp": comm.timestamp if hasattr(comm, "timestamp") else None,

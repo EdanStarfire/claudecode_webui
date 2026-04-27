@@ -308,3 +308,75 @@ async def test_tool_call_update_running_emits_no_row():
     await asyncio.sleep(0.3)
     await writer.stop()
     assert len(db.rows) == 0
+
+
+# ------------------------------------------------------------------
+# Issue #1161: on_comm uses minion names instead of session IDs
+# ------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_issue_1161_on_comm_uses_minion_names():
+    """When from_minion_name/to_minion_name are in comm_data, extra uses names and summary uses names not IDs."""
+    import json
+    db = MockDB()
+    writer = AuditWriter(db)
+    writer.start()
+    comm = {
+        "comm_id": "c2",
+        "comm_type": "REPORT",
+        "from_minion_id": "uuid-aaa",
+        "to_minion_id": "uuid-bbb",
+        "from_minion_name": "Overseer",
+        "to_minion_name": "IssueManager",
+        "summary": "task done",
+        "timestamp": 200.0,
+    }
+    await writer.on_comm("uuid-aaa", "proj1", "legion1", comm)
+    await asyncio.sleep(0.3)
+    await writer.stop()
+    assert len(db.rows) == 1
+    row = db.rows[0]
+    extra = json.loads(row[11])
+    assert extra["from_name"] == "Overseer"
+    assert extra["to_name"] == "IssueManager"
+    # summary field should contain names, not raw UUIDs
+    summary = row[9]
+    assert "Overseer" in summary
+    assert "IssueManager" in summary
+    assert "uuid-aaa" not in summary
+    assert "uuid-bbb" not in summary
+
+
+# ------------------------------------------------------------------
+# Issue #1162: on_comm stores comm_summary without routing prefix
+# ------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_issue_1162_on_comm_stores_comm_summary():
+    """extra['comm_summary'] contains just the comm text; summary field has the formatted routing string."""
+    import json
+    db = MockDB()
+    writer = AuditWriter(db)
+    writer.start()
+    comm = {
+        "comm_id": "c3",
+        "comm_type": "TASK",
+        "from_minion_id": "uuid-ccc",
+        "to_minion_id": "uuid-ddd",
+        "from_minion_name": "Builder",
+        "to_minion_name": "Reviewer",
+        "summary": "please review the PR",
+        "timestamp": 300.0,
+    }
+    await writer.on_comm("uuid-ccc", "proj1", "legion1", comm)
+    await asyncio.sleep(0.3)
+    await writer.stop()
+    assert len(db.rows) == 1
+    row = db.rows[0]
+    extra = json.loads(row[11])
+    # comm_summary is just the actual text, no routing prefix
+    assert extra["comm_summary"] == "please review the PR"
+    # summary field has the formatted string with routing
+    summary = row[9]
+    assert "→" in summary
+    assert "please review the PR" in summary
