@@ -57,18 +57,19 @@ onMounted(() => {
   flex-direction: column;
   height: 100%;
   overflow: hidden;
-  background: #0f172a;
+  background: var(--bs-body-bg);
+  color-scheme: light;
 }
 .analytics-header {
-  background: #1e293b;
-  border-bottom: 1px solid #334155;
+  background: var(--bs-tertiary-bg);
+  border-bottom: 1px solid var(--bs-border-color);
   padding: 12px 16px;
   flex-shrink: 0;
 }
 .analytics-title {
   font-size: 16px;
   font-weight: 600;
-  color: #f1f5f9;
+  color: var(--bs-body-color);
   margin: 0;
 }
 .analytics-body {
