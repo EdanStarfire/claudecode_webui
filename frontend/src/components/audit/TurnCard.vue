@@ -95,7 +95,7 @@ function sparklineClass(s) {
 <style scoped>
 .turn-card { cursor: default; }
 .turn-card .card-header { cursor: pointer; }
-.turn-status-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+.turn-status-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; }
 .sparkline { background: rgba(0,0,0,0.05); }
 .sparkline-dot { width: 8px; height: 8px; border-radius: 2px; display: inline-block; }
 .chevron { font-size: 0.7rem; color: var(--bs-secondary); }
