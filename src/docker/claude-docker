@@ -256,6 +256,7 @@ if [ -n "$PROXY_IMAGE" ]; then
     docker run -d \
         --name "$PROXY_NAME" \
         --cap-add NET_ADMIN \
+        --add-host=host.docker.internal:host-gateway \
         --sysctl net.ipv4.ip_forward=1 \
         --sysctl net.ipv4.conf.lo.accept_local=1 \
         -v "$PROXY_CERTS:/var/lib/mitmproxy" \
