@@ -14,6 +14,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+
 def _install_mitmproxy_stubs():
     """Install minimal mitmproxy stubs (non-spec MagicMock-safe HTTPFlow)."""
     mitmproxy = types.ModuleType("mitmproxy")
