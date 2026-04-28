@@ -308,6 +308,13 @@ class ClaudeWebUI:
         except Exception:
             logger.exception("_on_watchdog_alert_audit error (non-fatal)")
 
+    async def _wake_audit_queue(self) -> None:
+        """Signal audit long-poll that new rows are available after a flush."""
+        try:
+            self.audit_queue.append({"type": "audit_event_flush"})
+        except Exception:
+            logger.exception("_wake_audit_queue error (non-fatal)")
+
     async def _broadcast_comm_notification_to_ui(self, comm):
         """Issue #699: Push comm notification event to UI poll queue for audio alerts."""
         try:
@@ -517,6 +524,7 @@ class ClaudeWebUI:
             self._watchdog.on_alert.append(self._on_watchdog_alert_audit)
             self.coordinator.legion_system.comm_router.audit_writer = self._audit_writer
             self._audit_writer.start()
+            self._audit_writer.on_flush = self._wake_audit_queue
             logger.info("Audit subsystem initialized")
         except Exception:
             logger.exception("Audit subsystem failed to initialize — audit will be unavailable")

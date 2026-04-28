@@ -484,3 +484,64 @@ async def test_issue_1172_hook_not_duplicated_on_reapply():
 
     tool_rows = [r for r in db.rows if r[6] == "tool_call"]
     assert len(tool_rows) == 1  # exactly one row, not two
+
+
+# ------------------------------------------------------------------
+# Issue #1183: on_flush callback tests
+# ------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_on_flush_invoked_once_per_flush():
+    """on_flush is called exactly once after each flush that writes rows."""
+    from unittest.mock import AsyncMock
+    db = MockDB()
+    writer = AuditWriter(db)
+    flush_mock = AsyncMock()
+    writer.on_flush = flush_mock
+    writer.start()
+    await writer.on_session_state_change("s1", type("S", (), {"value": "active"})())
+    await asyncio.sleep(0.3)
+    await writer.stop()
+    assert flush_mock.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_on_flush_exception_swallowed():
+    """Exception raised by on_flush does not propagate and subsequent flush still works."""
+    db = MockDB()
+    writer = AuditWriter(db)
+
+    call_count = 0
+
+    async def flaky_flush():
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise RuntimeError("flush callback failure")
+
+    writer.on_flush = flaky_flush
+    writer.start()
+    # First event → flush → exception swallowed
+    await writer.on_session_state_change("s1", type("S", (), {"value": "active"})())
+    await asyncio.sleep(0.3)
+    # Second event with different state → flush → callback runs without error
+    await writer.on_session_state_change("s1", type("S", (), {"value": "terminated"})())
+    await asyncio.sleep(0.3)
+    await writer.stop()
+    assert call_count == 2
+    assert len(db.rows) >= 1
+
+
+@pytest.mark.asyncio
+async def test_no_flush_no_callback():
+    """on_flush is not called when the batch is empty (idle flush loop tick)."""
+    from unittest.mock import AsyncMock
+    db = MockDB()
+    writer = AuditWriter(db)
+    flush_mock = AsyncMock()
+    writer.on_flush = flush_mock
+    writer.start()
+    # Let the flush loop tick several times with nothing enqueued
+    await asyncio.sleep(0.5)
+    await writer.stop()
+    flush_mock.assert_not_called()

@@ -105,10 +105,10 @@ def build_router(webui) -> APIRouter:
         et_list = [e.strip() for e in event_types.split(",")] if event_types else None
 
         effective_timeout = min(float(timeout), 25.0)
-        # Use audit_queue for wakeup; then query DB for matching events since cursor
         audit_queue = getattr(webui, "audit_queue", None)
-        if audit_queue is not None:
-            await audit_queue.wait_for_events(0, timeout=effective_timeout)
+        # Snapshot cursor before first query so any flush in the gap advances
+        # current_cursor past the snapshot and wait_for_events returns immediately.
+        audit_cursor = audit_queue.current_cursor if audit_queue is not None else 0
 
         effective_since = since if since is not None else (time.time() - 3600)
         result = await qs.query_events(
@@ -118,6 +118,16 @@ def build_router(webui) -> APIRouter:
             cursor=cursor if cursor > 0 else None,
             limit=100,
         )
-        return result
+        if result["events"]:
+            return result
+        if audit_queue is not None:
+            await audit_queue.wait_for_events(audit_cursor, timeout=effective_timeout)
+        return await qs.query_events(
+            since=effective_since,
+            session_ids=sid_list,
+            event_types=et_list,
+            cursor=cursor if cursor > 0 else None,
+            limit=100,
+        )
 
     return router
