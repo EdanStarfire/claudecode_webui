@@ -15,6 +15,7 @@ import asyncio
 import json
 import logging
 import time
+from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
 from .turn_tracker import TurnTracker
@@ -63,6 +64,7 @@ class AuditWriter:
         self._running = False
         # (state_name, is_processing) per session — skip identical consecutive events
         self._session_state_cache: dict[str, tuple[str, bool]] = {}
+        self.on_flush: Callable[[], Awaitable[None]] | None = None
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -402,6 +404,11 @@ class AuditWriter:
             await self._db.execute_write_many(sql, rows)
         except Exception:
             logger.exception("AuditWriter flush failed (rows dropped: %d)", len(rows))
+        if self.on_flush is not None and rows:
+            try:
+                await self.on_flush()
+            except Exception:
+                logger.exception("AuditWriter on_flush callback error (non-fatal)")
 
     # ------------------------------------------------------------------
     # Expose last insert timestamp for long-poll notifications
