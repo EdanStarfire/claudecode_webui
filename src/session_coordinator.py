@@ -1342,12 +1342,12 @@ class SessionCoordinator:
                     if session_token:
                         token_path = tmp_dir / "session_token"
                         token_path.write_text(session_token)
-                        os.chmod(token_path, 0o600)
+                        os.chmod(token_path, 0o644)
                         proxy_extra_mounts.append(f"{token_path}:/etc/proxy/session_token:ro")
 
                         session_id_path = tmp_dir / "session_id"
                         session_id_path.write_text(session_id)
-                        os.chmod(session_id_path, 0o600)
+                        os.chmod(session_id_path, 0o644)
                         proxy_extra_mounts.append(f"{session_id_path}:/etc/proxy/session_id:ro")
 
                 # Issue #1089: Deduplicate mounts by container destination path (first-seen wins).

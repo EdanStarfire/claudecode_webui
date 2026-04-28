@@ -10,6 +10,7 @@ Tests:
 6. docker_utils env var logic
 """
 
+import os
 from unittest.mock import patch
 
 import pytest
@@ -291,6 +292,77 @@ async def test_session_coordinator_routes_token_to_proxy_only(tmp_path):
     assert not any("/etc/proxy/session_id" in m for m in agent_mounts), (
         f"session_id leaked into agent mounts: {agent_mounts}"
     )
+
+
+@pytest.mark.asyncio
+async def test_issue_1181_proxy_token_files_world_readable(tmp_path):
+    """
+    Issue #1181: session_token and session_id files must be 0o644 so mitmdump
+    inside the proxy container (running as a different UID) can read them.
+    """
+    import stat
+    from unittest.mock import AsyncMock, MagicMock
+
+    from src.session_coordinator import SessionCoordinator
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    coordinator = SessionCoordinator(data_dir=tmp_path)
+    await coordinator.initialize()
+
+    project = await coordinator.project_manager.create_project(
+        name="Chmod Test",
+        working_directory=str(workspace),
+    )
+
+    config = SessionConfig(
+        docker_enabled=True,
+        docker_proxy_enabled=True,
+    )
+    session_id = await coordinator.create_session(
+        session_id="test-1181-chmod",
+        project_id=project.project_id,
+        config=config,
+    )
+
+    captured: dict = {}
+
+    def fake_resolve(**kwargs):
+        captured.update(kwargs)
+        return ("/mock/cli", {})
+
+    mock_sdk = MagicMock()
+    mock_sdk.is_running.return_value = False
+    mock_sdk.start = AsyncMock(return_value=True)
+    mock_sdk.auto_approval_callback = None
+
+    coordinator._sdk_factory = lambda **kwargs: mock_sdk
+
+    with patch("src.docker_utils.resolve_docker_cli_path", side_effect=fake_resolve):
+        await coordinator.start_session(session_id)
+
+    proxy_mounts: list[str] = captured.get("docker_proxy_extra_mounts") or []
+
+    token_host_path = None
+    session_id_host_path = None
+    for mount in proxy_mounts:
+        parts = mount.split(":")
+        host_path = parts[0]
+        container_path = parts[1] if len(parts) >= 2 else ""
+        if container_path == "/etc/proxy/session_token":
+            token_host_path = host_path
+        elif container_path == "/etc/proxy/session_id":
+            session_id_host_path = host_path
+
+    assert token_host_path is not None, f"session_token mount not found in: {proxy_mounts}"
+    assert session_id_host_path is not None, f"session_id mount not found in: {proxy_mounts}"
+
+    token_mode = stat.S_IMODE(os.stat(token_host_path).st_mode)
+    session_id_mode = stat.S_IMODE(os.stat(session_id_host_path).st_mode)
+
+    assert token_mode == 0o644, f"session_token file mode is {oct(token_mode)}, expected 0o644"
+    assert session_id_mode == 0o644, f"session_id file mode is {oct(session_id_mode)}, expected 0o644"
 
 
 def test_proxy_extra_mounts_dedup():
