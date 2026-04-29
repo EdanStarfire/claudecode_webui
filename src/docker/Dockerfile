@@ -12,7 +12,8 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     jq \
     bubblewrap \
     openssh-client \
-    ncat
+    ncat \
+    netcat-openbsd
 
 # Create non-root user
 RUN useradd -m -s /bin/bash claude
