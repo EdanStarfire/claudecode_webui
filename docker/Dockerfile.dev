@@ -42,7 +42,8 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     jq \
     gnupg \
     build-essential \
-    bubblewrap
+    bubblewrap \
+    netcat-openbsd
 
 # ---------- Layer 2: Node.js 22 LTS via nodesource (rarely changes) ----------
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
