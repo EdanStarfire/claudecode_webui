@@ -1324,11 +1324,6 @@ class SessionCoordinator:
                         try:
                             if prepare_session_ssh(resolved_metas, _ssh_key_dir, _ssh_shared_dir):
                                 _ssh_key_prepared = True
-                                # Shared dir into agent at /run/ssh:ro (socket + config)
-                                extra_mounts.append(f"{_ssh_shared_dir}:/run/ssh:ro")
-                                # Agent accesses the ssh-agent socket for signing
-                                delivery_envs["SSH_AUTH_SOCK"] = "/run/ssh/agent.sock"
-                                delivery_envs["GIT_SSH_COMMAND"] = "/run/ssh/ssh-wrapper"
                         except ValueError as ssh_err:
                             coord_logger.error(
                                 f"SSH key setup failed for session {session_id}: {ssh_err}"
