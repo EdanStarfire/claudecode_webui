@@ -160,7 +160,7 @@ fi
 # only (handled below in the proxy launch block).
 SSH_DIR_FLAGS=""
 if [ -n "${CLAUDE_DOCKER_SSH_SHARED_DIR:-}" ] && [ -d "${CLAUDE_DOCKER_SSH_SHARED_DIR:-}" ]; then
-    SSH_DIR_FLAGS="-v ${CLAUDE_DOCKER_SSH_SHARED_DIR}:/run/ssh:ro"
+    SSH_DIR_FLAGS="-v ${CLAUDE_DOCKER_SSH_SHARED_DIR}:/run/ssh"
     SSH_DIR_FLAGS="$SSH_DIR_FLAGS -e SSH_AUTH_SOCK=/run/ssh/agent.sock"
     SSH_DIR_FLAGS="$SSH_DIR_FLAGS -e GIT_SSH_COMMAND=/run/ssh/ssh-wrapper"
 fi

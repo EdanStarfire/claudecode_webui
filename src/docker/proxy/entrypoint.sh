@@ -316,6 +316,24 @@ if [ -f "$SSH_PRIVATE_KEY" ]; then
 
     # Ensure the socket is accessible by the agent container's claude user (uid 1000).
     chmod 0666 "$SSH_AGENT_SOCK" 2>/dev/null || true
+
+    # Create ssh-wrapper to route SSH via SOCKS5 and use a writable known_hosts
+    SSH_WRAPPER="$SSH_SHARED_DIR/ssh-wrapper"
+    cat > "$SSH_WRAPPER" <<'WRAPPER'
+#!/bin/sh
+exec ssh \
+  -o "ProxyCommand=nc -X 5 -x 127.0.0.1:1080 %h %p" \
+  -o "UserKnownHostsFile=/run/ssh/known_hosts" \
+  -o "StrictHostKeyChecking=accept-new" \
+  "$@"
+WRAPPER
+    chmod 0755 "$SSH_WRAPPER"
+    chown 1000:1000 "$SSH_WRAPPER"
+
+    # Create writable known_hosts owned by claude user (uid 1000)
+    touch "$SSH_SHARED_DIR/known_hosts"
+    chown 1000:1000 "$SSH_SHARED_DIR/known_hosts"
+    chmod 0644 "$SSH_SHARED_DIR/known_hosts"
 fi
 
 touch "$CERTS_DIR/.ready"
