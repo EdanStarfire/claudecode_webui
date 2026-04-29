@@ -32,6 +32,12 @@
         <span v-if="retryBadge" class="pill-badge pill-badge-retry">{{ retryBadge }}</span>
       </template>
 
+      <!-- Session Failed -->
+      <template v-else-if="isSessionFailed">
+        <span class="pill-icon">&#x26A0;&#xFE0F;</span>
+        <span class="pill-text">{{ props.message.content }}</span>
+      </template>
+
       <!-- Default system messages -->
       <template v-else>
         <span v-if="isStderr" class="pill-icon">&#x26A0;&#xFE0F;</span>
@@ -47,10 +53,18 @@
 
       <span class="pill-sep">&middot;</span>
       <span class="pill-time">{{ formattedTimestamp }}</span>
-      <span v-if="isHook" class="pill-chevron" :class="{ 'chevron-open': expanded }">&#x25B6;</span>
+      <span v-if="isHook || (isSessionFailed && sessionFailedDetails)" class="pill-chevron" :class="{ 'chevron-open': expanded }">&#x25B6;</span>
     </div>
     <div v-if="isHook && expanded" class="hook-detail">
       <pre class="hook-json">{{ hookJson }}</pre>
+    </div>
+    <div v-if="isSessionFailed && sessionFailedDetails" class="session-failed-toggle">
+      <button class="details-toggle-btn" @click.stop="toggleExpand">
+        {{ expanded ? 'Hide details' : 'Show details' }}
+      </button>
+    </div>
+    <div v-if="isSessionFailed && expanded && sessionFailedDetails" class="session-failed-detail">
+      <pre class="error-detail-pre">{{ sessionFailedDetails }}</pre>
     </div>
     <div v-if="resultErrors.length" class="result-errors">
       <div v-for="(err, i) in resultErrors" :key="i" class="result-error-item">
@@ -139,9 +153,10 @@ const retryBadge = computed(() => {
 const pillClass = computed(() => ({
   'pill-compaction': isCompactionStatus.value,
   'pill-stderr': isStderr.value,
+  'pill-session-failed': isSessionFailed.value,
   'pill-hook': isHook.value && !isHookError.value,
   'pill-hook-error': isHookError.value,
-  'pill-expandable': isHook.value,
+  'pill-expandable': isHook.value || (isSessionFailed.value && !!sessionFailedDetails.value),
   'pill-retry': isApiRetry.value,
   'pill-task-started': subtype.value === 'task_started',
   'pill-task-progress': subtype.value === 'task_progress',
@@ -156,11 +171,14 @@ const isCompactionStatus = computed(() => {
          props.message.metadata?.init_data?.status === 'compacting'
 })
 
-// Check if this is an error-class message (stderr or session failure)
-const isStderr = computed(() => {
-  const st = subtype.value
-  return st === 'stderr' || st === 'session_failed'
-})
+// Check if this is a plain stderr message
+const isStderr = computed(() => subtype.value === 'stderr')
+
+// Check if this is a session_failed message
+const isSessionFailed = computed(() => subtype.value === 'session_failed')
+
+// Full error detail for session_failed expand section
+const sessionFailedDetails = computed(() => props.message.metadata?.error_details || null)
 
 // Check if this is a hook message (hook_started or hook_response)
 const isHook = computed(() => {
@@ -207,7 +225,7 @@ const resultErrors = computed(() => {
 })
 
 function toggleExpand() {
-  if (isHook.value) {
+  if (isHook.value || isSessionFailed.value) {
     expanded.value = !expanded.value
   }
 }
@@ -433,6 +451,58 @@ function toggleExpand() {
   background: #1e293b;
   color: #e2e8f0;
   border: 1px solid #334155;
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  overflow-x: auto;
+  white-space: pre;
+  margin: 0;
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.pill-session-failed {
+  background: #fef2f2;
+  border-color: #fecaca;
+}
+
+.pill-session-failed .pill-text {
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  color: #991b1b;
+  white-space: normal;
+  word-break: break-word;
+}
+
+.session-failed-toggle {
+  margin-top: 4px;
+}
+
+.details-toggle-btn {
+  background: none;
+  border: none;
+  color: #991b1b;
+  font-size: 11px;
+  cursor: pointer;
+  padding: 0;
+  text-decoration: underline;
+}
+
+.details-toggle-btn:hover {
+  color: #7f1d1d;
+}
+
+.session-failed-detail {
+  margin-top: 4px;
+  max-width: 80%;
+  width: 100%;
+}
+
+.error-detail-pre {
+  background: #1e293b;
+  color: #fca5a5;
+  border: 1px solid #7f1d1d;
   border-radius: 8px;
   padding: 10px 14px;
   font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;

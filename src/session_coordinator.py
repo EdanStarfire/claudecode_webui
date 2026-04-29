@@ -4157,20 +4157,19 @@ class SessionCoordinator:
                                                raw_error: str | None = None):
         """Send a system message indicating the session failed to start"""
         try:
-            # Issue #517: Build a clean error message for the user
-            # When stderr output is embedded in the raw error, extract it and show
-            # just the stderr (the actual useful info) instead of the noisy chain
-            content = self._format_failure_content(error_message, raw_error)
+            short_reason = self._format_failure_content(error_message, raw_error)
+            raw_dump = raw_error or error_message
 
             # Create system message for session failure
             message_data = {
                 "type": "system",
                 "subtype": "session_failed",
-                "content": content,
+                "is_error": True,
+                "content": short_reason,
+                "error_details": raw_dump,
                 "session_id": session_id,
                 "timestamp": get_unix_timestamp(),
                 "sdk_message_type": "SystemMessage",
-                "error_details": error_message
             }
 
             # Process and store message using unified MessageProcessor
@@ -4210,39 +4209,39 @@ class SessionCoordinator:
             logger.exception(f"Failed to send interrupt message for {session_id}")
 
     def _format_failure_content(self, friendly_error: str, raw_error: str | None) -> str:
-        """Format failure message content, extracting stderr when available.
+        """Extract a short, meaningful headline from raw stderr for the session_failed pill.
 
-        Issue #517: When the raw error contains 'Stderr output:', extract just
-        the stderr portion as the meaningful detail. This avoids showing the
-        noisy chain of 'Command failed ... Check stderr output for details ...'.
+        Full stderr is stored in error_details; this returns only the summary line.
         """
-        if not raw_error or raw_error == friendly_error:
-            return f"Session failed: {friendly_error}"
+        if not raw_error:
+            return f"Session failed: {friendly_error}" if friendly_error else "Session process exited with error"
 
-        # Extract stderr content if embedded in the raw error
-        stderr_marker = "Stderr output:\n"
-        stderr_idx = raw_error.find(stderr_marker)
-        if stderr_idx >= 0:
-            stderr_content = raw_error[stderr_idx + len(stderr_marker):].strip()
-            if stderr_content:
-                return f"Session failed: {stderr_content}"
-
-        # No stderr marker — check if raw_error adds useful info beyond the friendly message
-        # Strip the noisy SDK wrapper phrases
-        noise_phrases = [
-            "Command failed with exit code",
-            "Error output: Check stderr output for details",
-            "(exit code:",
+        # Pattern-match well-known error conditions for a clean label
+        known_patterns = [
+            (r"permission denied", "Permission denied"),
+            (r"name or service not known|name resolution fail|no such host", "DNS name resolution failed"),
+            (r"connection refused", "Connection refused"),
+            (r"no such file or directory", "File or directory not found"),
+            (r"address already in use", "Port already in use"),
+            (r"host\.docker\.internal", "Proxy startup failed: host.docker.internal"),
         ]
-        cleaned = raw_error
-        for phrase in noise_phrases:
-            cleaned = cleaned.replace(phrase, "")
-        cleaned = " ".join(cleaned.split()).strip()
+        for pattern, label in known_patterns:
+            if re.search(pattern, raw_error, re.IGNORECASE):
+                return f"Session failed: {label}"
 
-        if cleaned and cleaned != friendly_error:
-            return f"Session failed: {cleaned}"
+        # Extract from 'Stderr output:\n' marker if present, otherwise use full raw_error
+        stderr_marker = "Stderr output:\n"
+        idx = raw_error.find(stderr_marker)
+        stderr_content = raw_error[idx + len(stderr_marker):].strip() if idx >= 0 else raw_error.strip()
 
-        return f"Session failed: {friendly_error}"
+        # Use last non-empty line as the most specific signal
+        lines = [line.strip() for line in stderr_content.splitlines() if line.strip()]
+        if lines:
+            last_line = lines[-1]
+            if last_line and last_line != friendly_error:
+                return f"Session failed: {last_line[:120]}"
+
+        return f"Session failed: {friendly_error}" if friendly_error else "Session process exited with error"
 
     def _extract_claude_cli_error(self, error_message: str) -> str:
         """Extract and format user-friendly error messages from Claude CLI output"""
