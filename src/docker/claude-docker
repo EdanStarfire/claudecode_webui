@@ -233,7 +233,7 @@ if [ -n "$PROXY_IMAGE" ]; then
     # in the shared dir that both containers access at /run/ssh.
     SSH_PROXY_MOUNTS=""
     if [ -n "${CLAUDE_DOCKER_SSH_KEY_DIR:-}" ] && [ -d "${CLAUDE_DOCKER_SSH_KEY_DIR:-}" ]; then
-        SSH_PROXY_MOUNTS="$SSH_PROXY_MOUNTS -v ${CLAUDE_DOCKER_SSH_KEY_DIR}:/run/ssh-private:ro"
+        SSH_PROXY_MOUNTS="$SSH_PROXY_MOUNTS -v ${CLAUDE_DOCKER_SSH_KEY_DIR}:/run/ssh-private"
     fi
     if [ -n "${CLAUDE_DOCKER_SSH_SHARED_DIR:-}" ]; then
         mkdir -p "${CLAUDE_DOCKER_SSH_SHARED_DIR}"
