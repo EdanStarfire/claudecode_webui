@@ -3,16 +3,16 @@ Tests for prepare_session_ssh() in src/docker_utils.py (issue #1052).
 
 Two-dir isolation architecture:
   key_dir    — private key only; mounted into proxy sidecar at /run/ssh-private:ro
-  shared_dir — socket + config + known_hosts + wrapper; mounted into both containers at /run/ssh
+  shared_dir — socket + config + known_hosts; mounted into both containers at /run/ssh
 
 Tests cover:
-- prepare_session_ssh() writes private key to key_dir and config/known_hosts/wrapper to shared_dir
+- prepare_session_ssh() writes private key to key_dir and config/known_hosts to shared_dir
+- No ssh-wrapper file is created (issue #1208: replaced by ssh_config Include)
 - Private key is NOT present in shared_dir
 - Raises ValueError when multiple ssh_key secrets are assigned
 - SSH config has NO IdentityFile line; has expected ProxyCommand + IdentitiesOnly
 - Returns False (no files written) when no ssh_key secrets present
-- Key file has mode 0o600; config/known_hosts have mode 0o644; wrapper is 0o755
-- Env vars SSH_AUTH_SOCK and GIT_SSH_COMMAND are implied by config content
+- Key file has mode 0o600; config/known_hosts have mode 0o644
 """
 
 import os
@@ -76,10 +76,11 @@ class TestPrepareSessionSsh:
         prepare_session_ssh([secret], tmp_path / "key", tmp_path / "shared")
         assert (tmp_path / "shared" / "known_hosts").exists()
 
-    def test_creates_wrapper_in_shared_dir(self, tmp_path):
+    def test_no_wrapper_in_shared_dir(self, tmp_path):
+        """Issue #1208: ssh-wrapper replaced by global ssh_config Include — not written."""
         secret = _make_secret()
         prepare_session_ssh([secret], tmp_path / "key", tmp_path / "shared")
-        assert (tmp_path / "shared" / "ssh-wrapper").exists()
+        assert not (tmp_path / "shared" / "ssh-wrapper").exists()
 
     def test_private_key_not_in_shared_dir(self, tmp_path):
         """The agent container must never see raw key bytes."""
@@ -102,14 +103,6 @@ class TestPrepareSessionSsh:
         perms = stat.S_IMODE(os.stat(key_path).st_mode)
         assert perms == 0o600, f"Expected 0o600, got {oct(perms)}"
 
-    def test_wrapper_script_executable(self, tmp_path):
-        secret = _make_secret()
-        shared_dir = tmp_path / "shared"
-        prepare_session_ssh([secret], tmp_path / "key", shared_dir)
-        wrapper = shared_dir / "ssh-wrapper"
-        perms = stat.S_IMODE(os.stat(wrapper).st_mode)
-        assert perms & 0o111, f"ssh-wrapper not executable: {oct(perms)}"
-
     def test_ssh_config_has_no_identity_file(self, tmp_path):
         """No IdentityFile — ssh-agent socket provides identity."""
         secret = _make_secret()
@@ -126,8 +119,7 @@ class TestPrepareSessionSsh:
         prepare_session_ssh([secret], tmp_path / "key", shared_dir)
         config_text = (shared_dir / "config").read_text()
         assert "ProxyCommand" in config_text
-        assert "ncat" in config_text
-        assert "socks5" in config_text
+        assert "nc -X 5 -x" in config_text
         assert "127.0.0.1:1080" in config_text
 
     def test_ssh_config_identities_only(self, tmp_path):
@@ -136,13 +128,6 @@ class TestPrepareSessionSsh:
         prepare_session_ssh([secret], tmp_path / "key", shared_dir)
         config_text = (shared_dir / "config").read_text()
         assert "IdentitiesOnly yes" in config_text
-
-    def test_ssh_wrapper_references_config(self, tmp_path):
-        secret = _make_secret()
-        shared_dir = tmp_path / "shared"
-        prepare_session_ssh([secret], tmp_path / "key", shared_dir)
-        wrapper_text = (shared_dir / "ssh-wrapper").read_text()
-        assert "ssh -F /run/ssh/config" in wrapper_text
 
     def test_raises_on_multiple_ssh_keys(self, tmp_path):
         secrets = [_make_secret("key1"), _make_secret("key2")]

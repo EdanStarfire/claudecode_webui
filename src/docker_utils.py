@@ -160,12 +160,7 @@ Host *
     IdentitiesOnly yes
     StrictHostKeyChecking accept-new
     UserKnownHostsFile /run/ssh/known_hosts
-    ProxyCommand ncat --proxy 127.0.0.1:1080 --proxy-type socks5 %h %p
-"""
-
-_SSH_WRAPPER_SCRIPT = """\
-#!/bin/sh
-exec ssh -F /run/ssh/config "$@"
+    ProxyCommand nc -X 5 -x 127.0.0.1:1080 %h %p
 """
 
 
@@ -183,7 +178,7 @@ def prepare_session_ssh(
                   Mounted into the PROXY SIDECAR ONLY at /run/ssh-private:ro.
                   The proxy entrypoint ssh-adds the key, then wipes this file.
 
-      shared_dir — contains config, known_hosts, and ssh-wrapper.
+      shared_dir — contains config, known_hosts, and agent socket.
                   Mounted into BOTH containers at /run/ssh (read-write on proxy
                   so ssh-agent can create the socket; read-only on agent).
 
@@ -223,10 +218,6 @@ def prepare_session_ssh(
     known_hosts = shared_dir / "known_hosts"
     known_hosts.touch()
     os.chmod(known_hosts, 0o644)
-
-    wrapper = shared_dir / "ssh-wrapper"
-    wrapper.write_text(_SSH_WRAPPER_SCRIPT)
-    os.chmod(wrapper, 0o755)
 
     logger.info(
         f"SSH key prepared for secret '{secret.get('name')}' "
