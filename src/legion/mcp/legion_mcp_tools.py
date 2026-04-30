@@ -941,8 +941,9 @@ class LegionMCPTools:
                     role = template.role
 
                 # Prepend template's system_prompt if exists
-                if template.system_prompt:
-                    system_prompt = f"{template.system_prompt}\n\n{system_prompt}"
+                _tpl_sp = template.config.get("system_prompt")
+                if _tpl_sp:
+                    system_prompt = f"{_tpl_sp}\n\n{system_prompt}"
 
                 # Apply model from resolved config if set
                 model = resolved.get('model') or None
@@ -956,7 +957,9 @@ class LegionMCPTools:
                     capabilities = template_caps
 
                 # Apply override_system_prompt from resolved config
-                override_system_prompt = resolved.get('override_system_prompt', template.override_system_prompt)
+                override_system_prompt = resolved.get(
+                    'override_system_prompt', template.config.get('override_system_prompt', False)
+                )
 
                 # Apply sandbox_enabled from resolved config
                 if resolved.get('sandbox_enabled'):
@@ -974,43 +977,38 @@ class LegionMCPTools:
 
                 # Extract additional config fields, falling back to parent session
                 # (issue #762: ensure all SessionConfig fields propagate through spawn path)
-                thinking_mode = resolved.get('thinking_mode') or parent_session.thinking_mode
+                _pc = parent_session.config
+                thinking_mode = resolved.get('thinking_mode') or _pc.get('thinking_mode')
                 thinking_budget_tokens = (
-                    resolved.get('thinking_budget_tokens') or parent_session.thinking_budget_tokens
+                    resolved.get('thinking_budget_tokens') or _pc.get('thinking_budget_tokens')
                 )
-                effort = resolved.get('effort') or parent_session.effort
-                setting_sources = (
-                    resolved.get('setting_sources') or parent_session.setting_sources
-                )
+                effort = resolved.get('effort') or _pc.get('effort')
+                setting_sources = resolved.get('setting_sources') or _pc.get('setting_sources')
                 additional_directories = (
-                    resolved.get('additional_directories') or parent_session.additional_directories
+                    resolved.get('additional_directories') or _pc.get('additional_directories')
                 )
-                sandbox_config = resolved.get('sandbox_config') or parent_session.sandbox_config
+                sandbox_config = resolved.get('sandbox_config') or _pc.get('sandbox_config')
                 docker_home_directory = (
-                    resolved.get('docker_home_directory') or parent_session.docker_home_directory
+                    resolved.get('docker_home_directory') or _pc.get('docker_home_directory')
                 )
                 # Booleans: use resolved value with parent fallback to avoid falsy-value bugs
                 history_distillation_enabled = resolved.get(
                     'history_distillation_enabled',
-                    parent_session.history_distillation_enabled,
+                    _pc.get('history_distillation_enabled'),
                 )
-                auto_memory_mode = (
-                    resolved.get('auto_memory_mode') or parent_session.auto_memory_mode
-                )
+                auto_memory_mode = resolved.get('auto_memory_mode') or _pc.get('auto_memory_mode')
                 skill_creating_enabled = resolved.get(
                     'skill_creating_enabled',
-                    parent_session.skill_creating_enabled,
+                    _pc.get('skill_creating_enabled'),
                 )
-                mcp_server_ids = (
-                    resolved.get('mcp_server_ids') or parent_session.mcp_server_ids
-                )
+                mcp_server_ids = resolved.get('mcp_server_ids') or _pc.get('mcp_server_ids')
                 enable_claudeai_mcp_servers = resolved.get(
                     'enable_claudeai_mcp_servers',
-                    parent_session.enable_claudeai_mcp_servers,
+                    _pc.get('enable_claudeai_mcp_servers'),
                 )
                 strict_mcp_config = resolved.get(
                     'strict_mcp_config',
-                    parent_session.strict_mcp_config,
+                    _pc.get('strict_mcp_config'),
                 )
 
             except Exception as e:
@@ -1029,23 +1027,24 @@ class LegionMCPTools:
             model = None
             override_system_prompt = False
             cli_path = None
-            docker_enabled = parent_session.docker_enabled
-            docker_image = parent_session.docker_image
-            docker_extra_mounts = parent_session.docker_extra_mounts
+            _pc = parent_session.config
+            docker_enabled = _pc.get('docker_enabled', False)
+            docker_image = _pc.get('docker_image')
+            docker_extra_mounts = _pc.get('docker_extra_mounts')
             # Inherit operational config from parent (issue #762)
-            thinking_mode = parent_session.thinking_mode
-            thinking_budget_tokens = parent_session.thinking_budget_tokens
-            effort = parent_session.effort
-            setting_sources = parent_session.setting_sources
-            additional_directories = parent_session.additional_directories or []
-            sandbox_config = parent_session.sandbox_config
-            docker_home_directory = parent_session.docker_home_directory
-            history_distillation_enabled = parent_session.history_distillation_enabled
-            auto_memory_mode = parent_session.auto_memory_mode
-            skill_creating_enabled = parent_session.skill_creating_enabled
-            mcp_server_ids = parent_session.mcp_server_ids
-            enable_claudeai_mcp_servers = parent_session.enable_claudeai_mcp_servers
-            strict_mcp_config = parent_session.strict_mcp_config
+            thinking_mode = _pc.get('thinking_mode')
+            thinking_budget_tokens = _pc.get('thinking_budget_tokens')
+            effort = _pc.get('effort')
+            setting_sources = _pc.get('setting_sources')
+            additional_directories = _pc.get('additional_directories') or []
+            sandbox_config = _pc.get('sandbox_config')
+            docker_home_directory = _pc.get('docker_home_directory')
+            history_distillation_enabled = _pc.get('history_distillation_enabled')
+            auto_memory_mode = _pc.get('auto_memory_mode')
+            skill_creating_enabled = _pc.get('skill_creating_enabled')
+            mcp_server_ids = _pc.get('mcp_server_ids')
+            enable_claudeai_mcp_servers = _pc.get('enable_claudeai_mcp_servers')
+            strict_mcp_config = _pc.get('strict_mcp_config')
 
         # Validate role is set (from parameter or template)
         if not role:
@@ -1125,10 +1124,11 @@ class LegionMCPTools:
             # Build success message with permission info
             perm_info = ""
             if template_applied:
-                tools_str = ", ".join(template_applied.allowed_tools) if template_applied.allowed_tools else "all"
+                _tpl_tools = template_applied.config.get("allowed_tools") or []
+                tools_str = ", ".join(_tpl_tools) if _tpl_tools else "all"
                 perm_info = (
                     f"\n**Permissions** (from template '{template_applied.name}'):\n"
-                    f"  - Permission Mode: {template_applied.permission_mode}\n"
+                    f"  - Permission Mode: {template_applied.config.get('permission_mode', 'default')}\n"
                     f"  - Allowed Tools: {tools_str}"
                 )
             else:

@@ -45,7 +45,6 @@ def build_router(webui) -> APIRouter:
             description=request.description,
             capabilities=request.capabilities,
             profile_ids=request.profile_ids,
-            template_overrides=request.template_overrides,
         )
 
     @router.put("/api/templates/{template_id}")
@@ -94,7 +93,6 @@ def build_router(webui) -> APIRouter:
             bare_mode=request.bare_mode,
             env_scrub_enabled=request.env_scrub_enabled,
             profile_ids=request.profile_ids,
-            template_overrides=request.template_overrides,
         )
 
     @router.delete("/api/templates/{template_id}")

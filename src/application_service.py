@@ -701,11 +701,11 @@ class ApplicationService:
         if session is None:
             return {"secrets": []}
 
-        assigned = list(getattr(session, "assigned_secrets", None) or [])
+        assigned = list(session.config.get("assigned_secrets") or [])
         # Issue #1219: also include secrets from secret_placeholders — these capture
         # template/profile-derived assigned_secrets that were never written back to
         # session.assigned_secrets.
-        for name in (getattr(session, "secret_placeholders", None) or {}).values():
+        for name in (session.secret_placeholders or {}).values():
             if name not in assigned:
                 assigned.append(name)
 
@@ -722,7 +722,7 @@ class ApplicationService:
         secrets = await self.coordinator.credential_vault.resolve_secrets_for_assignment(all_names)
 
         # Attach placeholder from session map (may be empty for sessions started before #1134).
-        placeholder_map = getattr(session, "secret_placeholders", None) or {}
+        placeholder_map = session.secret_placeholders or {}
         reverse_map = {v: k for k, v in placeholder_map.items()}
         for s in secrets:
             name = s.get("name", "")
@@ -741,7 +741,7 @@ class ApplicationService:
         session = await self.coordinator.session_manager.get_session_info(session_id)
         if session is None:
             return None
-        assigned = getattr(session, "assigned_secrets", None) or []
+        assigned = session.config.get("assigned_secrets") or []
         allowed: set[str] = set(assigned)
         # Also allow transitive sibling records referenced by assigned refresh specs.
         for secret in await self.coordinator.credential_vault.list_secrets():
@@ -763,7 +763,7 @@ class ApplicationService:
         if session is None:
             return {"proxy_enabled": False, "effective_domains": [], "active_credentials": [], "sidecar_running": False}
 
-        proxy_enabled = getattr(session, "docker_proxy_enabled", False)
+        proxy_enabled = session.config.get("docker_proxy_enabled", False)
         if not proxy_enabled:
             return {"proxy_enabled": False, "effective_domains": [], "active_credentials": [], "sidecar_running": False}
 
@@ -778,10 +778,10 @@ class ApplicationService:
                 effective_domains.extend(static.get("domains", []))
             except Exception:
                 pass
-        extra_domains = getattr(session, "docker_proxy_allowlist_domains", None) or []
+        extra_domains = session.config.get("docker_proxy_allowlist_domains") or []
         all_domains = sorted(set(effective_domains + extra_domains))
 
-        active_secrets = getattr(session, "assigned_secrets", None) or []
+        active_secrets = session.config.get("assigned_secrets") or []
 
         return {
             "proxy_enabled": True,

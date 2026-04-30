@@ -4,7 +4,7 @@ Pydantic request models for all API endpoints.
 Moved from src/web_server.py to centralize model definitions.
 """
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from ..mcp_config_manager import McpServerType
 from ..session_config import SessionConfig
@@ -156,6 +156,17 @@ class TemplateCreateRequest(SessionConfig):
     # Composable profiles (issue #1062)
     profile_ids: dict[str, str] | None = None
     template_overrides: dict | None = None
+    session_overrides: dict | None = None
+
+    @field_validator("template_overrides", "session_overrides", mode="before")
+    @classmethod
+    def _reject_legacy_overrides(cls, v, info):
+        if v is not None:
+            raise ValueError(
+                f"'{info.field_name}' is no longer accepted (issue #1230); "
+                "set config fields directly in the request body"
+            )
+        return v
 
 
 class TemplateUpdateRequest(BaseModel):
@@ -207,6 +218,17 @@ class TemplateUpdateRequest(BaseModel):
     # Composable profiles (issue #1062)
     profile_ids: dict[str, str] | None = None
     template_overrides: dict | None = None
+    session_overrides: dict | None = None
+
+    @field_validator("template_overrides", "session_overrides", mode="before")
+    @classmethod
+    def _reject_legacy_overrides(cls, v, info):
+        if v is not None:
+            raise ValueError(
+                f"'{info.field_name}' is no longer accepted (issue #1230); "
+                "set config fields directly in the request body"
+            )
+        return v
 
 
 # Profile request models (issue #1062)
