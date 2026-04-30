@@ -155,9 +155,9 @@ def resolve_docker_cli_path(
 # SSH config mounted into the shared dir (agent container at /run/ssh).
 # No IdentityFile — the ssh-agent socket inside the proxy sidecar provides
 # the identity; the agent container never holds the raw private key bytes.
+# IdentitiesOnly is intentionally absent so SSH_AUTH_SOCK (agent socket) is consulted.
 _SSH_CONFIG_TEMPLATE = """\
 Host *
-    IdentitiesOnly yes
     StrictHostKeyChecking accept-new
     UserKnownHostsFile /run/ssh/known_hosts
     ProxyCommand nc -X 5 -x 127.0.0.1:1080 %h %p
