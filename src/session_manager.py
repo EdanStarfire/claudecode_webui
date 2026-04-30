@@ -340,6 +340,9 @@ class SessionManager:
     async def _load_existing_sessions(self):
         """Load existing session state from filesystem"""
         try:
+            from .storage_utils import backup_legacy_sessions_once, write_alphabetized_json
+            backup_legacy_sessions_once(self.sessions_dir)
+
             for session_dir in self.sessions_dir.iterdir():
                 if session_dir.is_dir():
                     state_file = session_dir / "state.json"
@@ -351,7 +354,6 @@ class SessionManager:
                             # Issue #1230: promote flat CONFIG_FIELDS → config dict
                             data, _changed = _migrate_session_to_config_dict(data)
                             if _changed:
-                                from .storage_utils import write_alphabetized_json
                                 write_alphabetized_json(state_file, data)
 
                             session_info = SessionInfo.from_dict(data)

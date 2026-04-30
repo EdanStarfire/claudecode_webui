@@ -142,6 +142,9 @@ class TemplateManager:
         self.templates.clear()
         loaded_count = 0
 
+        from .storage_utils import backup_legacy_dir_once, write_alphabetized_json
+        backup_legacy_dir_once(self.templates_dir)
+
         for template_file in self.templates_dir.glob("*.json"):
             try:
                 with open(template_file) as f:
@@ -150,7 +153,6 @@ class TemplateManager:
                 # Phase 3 migration: promote flat CONFIG_FIELDS → config dict
                 data, _changed = _migrate_template_to_config_dict(data)
                 if _changed:
-                    from .storage_utils import write_alphabetized_json
                     write_alphabetized_json(template_file, data)
 
                 # Load companion .md file as config["system_prompt"]
