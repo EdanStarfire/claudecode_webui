@@ -17,7 +17,7 @@ Tests:
 9.  addon.py: no placeholder in headers → headers unchanged (no injection)
 10. addon.py: correct placeholder in Authorization header → replaced with real value
 11. addon.py: different value in header (not placeholder) → headers unchanged
-12. addon.py: placeholder injected for any allowed host (no per-credential host guard)
+12. addon.py: _inject_credentials() shim injects for any host (no host guard in shim; request() enforces target_hosts per #1216)
 13. addon.py: access log records credential name, never real_value
 14. addon.py: graceful no-op when session token files are absent
 """
@@ -325,10 +325,12 @@ def test_addon_wrong_value_leaves_headers_unchanged():
 # ---------------------------------------------------------------------------
 
 def test_addon_placeholder_injected_for_any_allowed_host():
-    """Issue #1134: per-credential host_pattern guard removed; allowlist is the security gate.
+    """_inject_credentials() shim has no host guard — it's a unit-test dispatch helper only.
 
-    _inject_credentials injects the placeholder for any request regardless of target_hosts
-    on the record. The allowlist check in request() is the host security boundary.
+    This exercises the typed inject-handler dispatch shim (_inject_credentials), not
+    request(). The shim does not enforce target_hosts; that scoping was added to
+    request() in issue #1216. The allowlist check in request() remains the outer
+    host security boundary.
     """
     f = _make_addon_with_records([{
         "placeholder": "CC_SECRET_github_token_abcd1234",
