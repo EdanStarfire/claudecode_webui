@@ -79,7 +79,7 @@ class TestCreateSession:
 
         resp = await client.get(f"/api/sessions/{sid}")
         session = resp.json()["session"]
-        assert session["auto_memory_mode"] == "session", (
+        assert session["config"].get("auto_memory_mode") == "session", (
             "auto_memory_mode='session' must be preserved through create_session"
         )
 
@@ -190,7 +190,7 @@ class TestPatchSession:
         assert resp.status_code == 200
 
         resp = await client.get(f"/api/sessions/{sid}")
-        assert resp.json()["session"]["model"] == "opus"
+        assert resp.json()["session"]["config"].get("model") == "opus"
 
     async def test_patch_role(self, api_integration_env):
         create_project = api_integration_env["create_test_project"]
@@ -258,6 +258,24 @@ class TestPatchSession:
         resp = await client.patch(f"/api/sessions/{sid}", json={})
         assert resp.status_code == 200
         assert resp.json()["message"] == "No fields to update"
+
+    async def test_patch_session_overrides_rejected(self, api_integration_env):
+        """PATCH /api/sessions/{id} with session_overrides must be rejected (issue #1230)."""
+        create_project = api_integration_env["create_test_project"]
+        create_session = api_integration_env["create_test_session"]
+        client = api_integration_env["client"]
+
+        project = await create_project("Overrides Rejection")
+        session = await create_session(project["project_id"], "Subject")
+        sid = session["session_id"]
+
+        resp = await client.patch(
+            f"/api/sessions/{sid}",
+            json={"session_overrides": {"model": "claude-opus-4-7"}},
+        )
+        assert resp.status_code == 422, (
+            f"Expected 422 for session_overrides, got {resp.status_code}: {resp.text}"
+        )
 
 
 class TestDeleteSession:

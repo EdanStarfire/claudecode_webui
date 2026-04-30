@@ -89,6 +89,18 @@ class SessionUpdateRequest(BaseModel):
     enable_claudeai_mcp_servers: bool | None = None
     strict_mcp_config: bool | None = None
     bare_mode: bool | None = None
+    # Issue #1230: reject legacy field that was removed
+    session_overrides: dict | None = None
+
+    @field_validator("session_overrides", mode="before")
+    @classmethod
+    def _reject_session_overrides(cls, v):
+        if v is not None:
+            raise ValueError(
+                "'session_overrides' is no longer accepted (issue #1230); "
+                "set config fields directly in the request body"
+            )
+        return v
 
 
 class SessionReorderRequest(BaseModel):

@@ -1545,8 +1545,8 @@ class SessionCoordinator:
         try:
             # Issue #976: Release per-server OAuth refresh ref counts for this session
             _term_info = await self.session_manager.get_session_info(session_id)
-            if _term_info and _term_info.mcp_server_ids:
-                _term_configs = self.mcp_config_manager.get_configs_by_ids(_term_info.mcp_server_ids)
+            if _term_info and _term_info.config.get("mcp_server_ids"):
+                _term_configs = self.mcp_config_manager.get_configs_by_ids(_term_info.config.get("mcp_server_ids"))
                 for _cfg in _term_configs:
                     if _cfg.oauth_enabled:
                         self.oauth_refresh_manager.release_refresh(_cfg.id)
@@ -2263,8 +2263,8 @@ class SessionCoordinator:
 
             # Issue #976: Release per-server OAuth refresh ref counts for this session
             _reset_info = await self.session_manager.get_session_info(session_id)
-            if _reset_info and _reset_info.mcp_server_ids:
-                _reset_configs = self.mcp_config_manager.get_configs_by_ids(_reset_info.mcp_server_ids)
+            if _reset_info and _reset_info.config.get("mcp_server_ids"):
+                _reset_configs = self.mcp_config_manager.get_configs_by_ids(_reset_info.config.get("mcp_server_ids"))
                 for _cfg in _reset_configs:
                     if _cfg.oauth_enabled:
                         self.oauth_refresh_manager.release_refresh(_cfg.id)

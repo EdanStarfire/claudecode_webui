@@ -99,7 +99,7 @@ def test_session_info_backward_compat_no_assigned_secrets():
         # assigned_secrets intentionally absent
     }
     info = SessionInfo.from_dict(data)
-    assert info.assigned_secrets is None
+    assert info.config.get("assigned_secrets") is None
 
 
 # ---------------------------------------------------------------------------
@@ -118,13 +118,13 @@ async def test_session_config_assigned_secrets_propagation(tmp_path):
     await sm.create_session("creds-session-1", config)
 
     info = await sm.get_session_info("creds-session-1")
-    assert info.assigned_secrets == ["github_token"]
+    assert info.config.get("assigned_secrets") == ["github_token"]
 
     d = info.to_dict()
-    assert d["assigned_secrets"] == ["github_token"]
+    assert d["config"]["assigned_secrets"] == ["github_token"]
 
     restored = SessionInfo.from_dict(d)
-    assert restored.assigned_secrets == ["github_token"]
+    assert restored.config.get("assigned_secrets") == ["github_token"]
 
 
 # ---------------------------------------------------------------------------
@@ -150,44 +150,45 @@ def test_resolve_docker_cli_path_delivery_envs_none_omitted():
 # ---------------------------------------------------------------------------
 
 def _ensure_mitmproxy_stubs():
-    """Install minimal mitmproxy stubs if the real package is absent."""
-    if "mitmproxy" not in sys.modules:
-        mitmproxy_pkg = types.ModuleType("mitmproxy")
-        mitmproxy_http = types.ModuleType("mitmproxy.http")
-        mitmproxy_ctx = types.ModuleType("mitmproxy.ctx")
+    """Install minimal mitmproxy stubs, overriding any real (possibly broken) installation."""
+    mitmproxy_pkg = types.ModuleType("mitmproxy")
+    mitmproxy_http = types.ModuleType("mitmproxy.http")
+    mitmproxy_ctx = types.ModuleType("mitmproxy.ctx")
+    mitmproxy_tcp = types.ModuleType("mitmproxy.tcp")
 
-        class _Response:
-            status_code = 200
-            content = b""
+    class _Response:
+        status_code = 200
+        content = b""
 
-            @staticmethod
-            def make(status, body, headers):
-                r = _Response()
-                r.status_code = status
-                r.content = body.encode() if isinstance(body, str) else body
-                return r
+        @staticmethod
+        def make(status, body, headers):
+            r = _Response()
+            r.status_code = status
+            r.content = body.encode() if isinstance(body, str) else body
+            return r
 
-        class _HTTPFlow:
-            def __init__(self, host):
-                self.request = MagicMock()
-                self.request.pretty_host = host
-                self.request.path = "/test"
-                self.request.method = "GET"
-                self.request.scheme = "https"
-                self.request.port = 443
-                self.request.headers = {}
-                self.response = None
-                self.client_conn = MagicMock()
-                self.client_conn.peername = ("127.0.0.1", 12345)
-                self.metadata = {}
+    class _HTTPFlow:
+        def __init__(self, host):
+            self.request = MagicMock()
+            self.request.pretty_host = host
+            self.request.path = "/test"
+            self.request.method = "GET"
+            self.request.scheme = "https"
+            self.request.port = 443
+            self.request.headers = {}
+            self.response = None
+            self.client_conn = MagicMock()
+            self.client_conn.peername = ("127.0.0.1", 12345)
+            self.metadata = {}
 
-        mitmproxy_http.HTTPFlow = _HTTPFlow
-        mitmproxy_http.Response = _Response
-        mitmproxy_ctx.log = MagicMock()
+    mitmproxy_http.HTTPFlow = _HTTPFlow
+    mitmproxy_http.Response = _Response
+    mitmproxy_ctx.log = MagicMock()
 
-        sys.modules["mitmproxy"] = mitmproxy_pkg
-        sys.modules["mitmproxy.http"] = mitmproxy_http
-        sys.modules["mitmproxy.ctx"] = mitmproxy_ctx
+    sys.modules["mitmproxy"] = mitmproxy_pkg
+    sys.modules["mitmproxy.http"] = mitmproxy_http
+    sys.modules["mitmproxy.ctx"] = mitmproxy_ctx
+    sys.modules["mitmproxy.tcp"] = mitmproxy_tcp
 
     # Force reload so stubs are used on first import
     if "src.docker.proxy.addon" in sys.modules:
