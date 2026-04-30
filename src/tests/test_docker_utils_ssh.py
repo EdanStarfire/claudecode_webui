@@ -122,12 +122,12 @@ class TestPrepareSessionSsh:
         assert "nc -X 5 -x" in config_text
         assert "127.0.0.1:1080" in config_text
 
-    def test_ssh_config_identities_only(self, tmp_path):
+    def test_ssh_config_no_identities_only(self, tmp_path):
         secret = _make_secret()
         shared_dir = tmp_path / "shared"
         prepare_session_ssh([secret], tmp_path / "key", shared_dir)
         config_text = (shared_dir / "config").read_text()
-        assert "IdentitiesOnly yes" in config_text
+        assert "IdentitiesOnly" not in config_text
 
     def test_raises_on_multiple_ssh_keys(self, tmp_path):
         secrets = [_make_secret("key1"), _make_secret("key2")]

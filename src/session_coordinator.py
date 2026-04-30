@@ -1293,7 +1293,7 @@ class SessionCoordinator:
 
                             # inject_file: render placeholder into a mounted file
                             inject_file = secret.get("inject_file")
-                            if inject_file:
+                            if inject_file and not (secret.get("type") == "ssh_key" and effective_config.docker_proxy_enabled):
                                 file_path = inject_file.get("path")
                                 if file_path:
                                     fmt = inject_file.get("format", "raw")
