@@ -701,7 +701,13 @@ class ApplicationService:
         if session is None:
             return {"secrets": []}
 
-        assigned = getattr(session, "assigned_secrets", None) or []
+        assigned = list(getattr(session, "assigned_secrets", None) or [])
+        # Issue #1219: also include secrets from secret_placeholders — these capture
+        # template/profile-derived assigned_secrets that were never written back to
+        # session.assigned_secrets.
+        for name in (getattr(session, "secret_placeholders", None) or {}).values():
+            if name not in assigned:
+                assigned.append(name)
 
         # Collect transitive names (sibling refresh-token and client-secret records).
         all_names: list[str] = list(assigned)
