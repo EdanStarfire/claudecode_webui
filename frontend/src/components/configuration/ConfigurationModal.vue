@@ -1794,9 +1794,12 @@ function resetForm() {
 }
 
 function populateFormFromSession(session, effectiveConfig = null) {
-  // Issue #1059: For template-linked sessions, prefer effectiveConfig values (resolved from
-  // template + profiles + session_overrides) over stale flat fields on session.
-  const source = effectiveConfig || session
+  // Issue #1059: effectiveConfig holds resolved config fields but excludes identity fields
+  // like `name` (see src/session_config.py CONFIG_FIELDS). Overlay session.name so the
+  // name field is pre-populated even when effectiveConfig is used (fixes #1222).
+  const source = effectiveConfig
+    ? { ...effectiveConfig, name: session.name }
+    : session
   populateFormFromSource(source)
   populateSandboxFromSource(source)
 }
