@@ -15,6 +15,9 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     ncat \
     netcat-openbsd
 
+# ssh 7.3+ silently ignores an Include of a non-existent path — safe when no SSH secrets are configured.
+RUN echo "Include /run/ssh/config" >> /etc/ssh/ssh_config
+
 # Create non-root user
 RUN useradd -m -s /bin/bash claude
 
