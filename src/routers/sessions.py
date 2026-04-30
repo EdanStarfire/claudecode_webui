@@ -188,6 +188,10 @@ def build_router(webui) -> APIRouter:
 
         updates = {}
 
+        # Handle full config dict replacement (issue #1230)
+        if request.config is not None:
+            updates["_replace_config"] = request.config
+
         # Handle name update
         if request.name is not None:
             updates["name"] = request.name

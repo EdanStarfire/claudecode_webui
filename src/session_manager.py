@@ -1030,7 +1030,9 @@ class SessionManager:
                     return False
 
                 for key, value in kwargs.items():
-                    if key in CONFIG_FIELDS:
+                    if key == "_replace_config":
+                        session.config = {k: v for k, v in value.items() if k in CONFIG_FIELDS}
+                    elif key in CONFIG_FIELDS:
                         session.config[key] = value
                     elif hasattr(session, key):
                         setattr(session, key, value)

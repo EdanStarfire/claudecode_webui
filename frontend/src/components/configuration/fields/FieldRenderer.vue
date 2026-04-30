@@ -20,9 +20,28 @@
       <label class="form-label small mb-1">
         {{ field.label }}
         <template v-if="showBadges && fieldState">
-          <span v-if="fieldState === 'profile'" class="field-indicator profile" title="Value from profile">P</span>
-          <span v-if="fieldState === 'autofilled'" class="field-indicator autofilled">&lt;</span>
-          <span v-if="fieldState === 'modified'" class="field-indicator modified">*</span>
+          <!-- Object fieldState: new 3-tier model (issue #1230) -->
+          <template v-if="typeof fieldState === 'object'">
+            <span
+              v-if="fieldState.source && fieldState.source !== 'default'"
+              class="field-indicator source-label"
+              :class="fieldState.source"
+              :title="`Value from ${fieldState.source_label}`"
+            >{{ fieldState.source_label[0] }}</span>
+            <button
+              v-if="fieldState.is_set_here"
+              type="button"
+              class="field-reset-btn"
+              title="Reset to inherited value"
+              @click.stop="$emit('reset')"
+            >&#x21BA;</button>
+          </template>
+          <!-- String fieldState: legacy profile-editor mode -->
+          <template v-else>
+            <span v-if="fieldState === 'profile'" class="field-indicator profile" title="Value from profile">P</span>
+            <span v-if="fieldState === 'autofilled'" class="field-indicator autofilled">&lt;</span>
+            <span v-if="fieldState === 'modified'" class="field-indicator modified">*</span>
+          </template>
         </template>
       </label>
 
@@ -142,12 +161,13 @@ const props = defineProps({
   disabled: { type: Boolean, default: false },
   showBadges: { type: Boolean, default: false },
   showIncludeToggle: { type: Boolean, default: false },
-  fieldState: { type: String, default: 'normal' },
+  // String (legacy profile-editor) or Object {source, source_label, is_set_here} (issue #1230)
+  fieldState: { type: [String, Object], default: 'normal' },
   included: { type: Boolean, default: true },
   config: { type: Object, default: () => ({}) },
 })
 
-defineEmits(['update:value', 'update:included', 'browse'])
+defineEmits(['update:value', 'update:included', 'browse', 'reset'])
 
 const isDisabled = computed(() => {
   if (props.disabled) return true
@@ -191,4 +211,23 @@ const isDisabled = computed(() => {
 .field-indicator.autofilled { color: #856404; }
 .field-indicator.modified { color: #cc5500; }
 .field-indicator.profile { color: #0a6640; font-weight: bold; }
+.field-indicator.source-label { color: #6c757d; }
+.field-indicator.source-label.template { color: #0d6efd; }
+.field-indicator.source-label.profile { color: #0a6640; }
+.field-indicator.source-label.session { color: #cc5500; }
+
+.field-reset-btn {
+  background: none;
+  border: none;
+  padding: 0 0 0 0.15rem;
+  margin: 0;
+  font-size: 0.85rem;
+  color: #6c757d;
+  cursor: pointer;
+  line-height: 1;
+  vertical-align: middle;
+}
+.field-reset-btn:hover {
+  color: #dc3545;
+}
 </style>

@@ -36,10 +36,9 @@ def build_router(webui) -> APIRouter:
     @handle_exceptions("create template", value_error_status=400)
     async def create_template(request: TemplateCreateRequest):
         """Create new template"""
-        config = request
         return await webui.service.create_template(
             name=request.name,
-            config=config,
+            config=request.config if request.config is not None else request,
             role=request.role,
             system_prompt=request.system_prompt,
             description=request.description,
@@ -54,6 +53,8 @@ def build_router(webui) -> APIRouter:
         return await webui.service.update_template(
             template_id,
             name=request.name,
+            # Issue #1230: if config dict provided it replaces template.config entirely
+            config=request.config,
             permission_mode=request.permission_mode,
             allowed_tools=request.allowed_tools,
             disallowed_tools=request.disallowed_tools,

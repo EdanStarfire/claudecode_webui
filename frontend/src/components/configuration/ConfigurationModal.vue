@@ -326,7 +326,7 @@
                 :errors="errors"
                 :session="editSession"
                 :template="editTemplate"
-                :field-states="fieldStates"
+                :field-states="mergedFieldStates"
                 :profile-ids="formData.profile_ids"
                 @update:form-data="updateFormData"
                 @update:profile-ids="(v) => { formData.profile_ids = v }"
@@ -334,6 +334,7 @@
                 @show-quick="showAdvanced = false"
                 @browse-additional-dir="browseAdditionalDir"
                 @update:has-errors="(v) => { templatePathErrors = v }"
+                @reset-field="resetField"
               />
             </div>
           </div>
@@ -406,6 +407,8 @@ import { useSessionStore } from '@/stores/session'
 import { useUIStore } from '@/stores/ui'
 import { useProfileStore } from '@/stores/profile'
 import { api, getAuthToken } from '@/utils/api'
+import { CONFIG_FIELDS_LIST } from '@/utils/configFields'
+import { useFieldState } from '@/composables/useFieldState'
 import QuickSettingsPanel from './QuickSettingsPanel.vue'
 import AdvancedSettingsPanel from './AdvancedSettingsPanel.vue'
 import PermissionPreviewModal from './PermissionPreviewModal.vue'
@@ -487,6 +490,23 @@ function isDefaultValue(value, meta) {
     return Array.isArray(value) && JSON.stringify(value) === JSON.stringify(meta.default)
   }
   return value === meta.default
+}
+
+// Issue #1230: set of CONFIG_FIELDS from the backend — these live in session.config / template.config
+const BACKEND_CONFIG_FIELDS = new Set(CONFIG_FIELDS_LIST)
+
+// Issue #1230: tracks which CONFIG_FIELDS are explicitly set in the current editing layer.
+// Populated from session.config or template.config when the form opens; updated when user edits.
+const layerConfig = ref({})
+
+// Normalize a source object so CONFIG_FIELDS can always be read from a flat dict.
+// After Phase 1, session/template objects have CONFIG_FIELDS in a nested `config` dict.
+// effective_config (from API) is already flat — source.config will be undefined, so fall through.
+function normalizeConfigSource(source) {
+  if (source && source.config && typeof source.config === 'object') {
+    return { ...source, ...source.config }
+  }
+  return source
 }
 
 // --- CONFIG_FIELDS schema (issue #731) ---
@@ -793,20 +813,36 @@ function resetFormFields() {
 }
 
 function populateFormFromSource(source) {
+  // Issue #1230: after Phase 1, BACKEND CONFIG_FIELDS live in source.config (nested dict).
+  // Normalize so fromSource and default reads always see a flat object.
+  const flat = normalizeConfigSource(source)
   for (const [field, meta] of Object.entries(CONFIG_FIELDS)) {
     if (meta.fromSource) {
-      formData[field] = meta.fromSource(source)
+      formData[field] = meta.fromSource(flat)
     } else {
-      formData[field] = source[field] ?? meta.default
+      formData[field] = flat[field] ?? meta.default
     }
   }
 }
 
 function extractPayload(context) {
+  // Issue #1230: for update and template contexts, CONFIG_FIELDS go in the config dict.
+  if (context === 'update' || context === 'template') {
+    const payload = {}
+    for (const [field, meta] of Object.entries(CONFIG_FIELDS)) {
+      if (!meta.contexts.includes(context)) continue
+      if (BACKEND_CONFIG_FIELDS.has(field)) continue  // handled via config dict below
+      const transform = meta.toPayload
+      payload[field] = transform ? transform(formData[field], formData) : formData[field]
+    }
+    payload.config = buildConfigPayload()
+    return payload
+  }
+  // Legacy flat format for 'session' (create-minion) and 'ephemeral' contexts
   const payload = {}
   for (const [field, meta] of Object.entries(CONFIG_FIELDS)) {
     if (!meta.contexts.includes(context)) continue
-    const transform = (context === 'update' && meta.toUpdatePayload) ? meta.toUpdatePayload : meta.toPayload
+    const transform = meta.toPayload
     payload[field] = transform ? transform(formData[field], formData) : formData[field]
   }
   return payload
@@ -868,6 +904,30 @@ function setupFieldStateWatchers() {
   }
 }
 
+// Issue #1230: per-field resolution metadata for the reset-icon UI.
+// Uses the current layerConfig (session or template layer) and the linked template.config.
+const { fieldStates: resolvedFieldStates } = useFieldState({
+  sessionConfig: computed(() => isSessionMode.value ? layerConfig.value : {}),
+  templateConfig: computed(() => {
+    if (isTemplateMode.value) return layerConfig.value
+    return editTemplate.value?.config || {}
+  }),
+  profileConfig: computed(() => ({})),
+  layer: computed(() => isSessionMode.value ? 'session' : 'template'),
+})
+
+// Merged field states: Object format (from useFieldState) for CONFIG_FIELDS,
+// string format (from existing watchers) for non-config fields and sandbox sub-keys.
+const mergedFieldStates = computed(() => {
+  const result = { ...fieldStates }
+  if (resolvedFieldStates.value) {
+    for (const [field, state] of Object.entries(resolvedFieldStates.value)) {
+      result[field] = state
+    }
+  }
+  return result
+})
+
 // Handles both array (from backend/templates) and string (from profile editor) values
 function sandboxArrToStr(v) {
   if (Array.isArray(v)) return v.join(', ')
@@ -875,7 +935,9 @@ function sandboxArrToStr(v) {
 }
 
 function populateSandboxFromSource(source) {
-  const sc = source.sandbox_config || {}
+  // Issue #1230: sandbox_config is a CONFIG_FIELD — lives in source.config after Phase 1.
+  const flat = normalizeConfigSource(source)
+  const sc = flat.sandbox_config || {}
   formData.sandbox.autoAllowBashIfSandboxed = sc.autoAllowBashIfSandboxed ?? true
   formData.sandbox.allowUnsandboxedCommands = sc.allowUnsandboxedCommands ?? false
   formData.sandbox.excludedCommands = sandboxArrToStr(sc.excludedCommands)
@@ -1108,6 +1170,41 @@ function updateFormData(field, value) {
 
   // Clear related errors
   if (field === 'name') errors.name = ''
+
+  // Issue #1230: mark CONFIG_FIELDs as explicitly set in the current layer
+  if (BACKEND_CONFIG_FIELDS.has(field)) {
+    layerConfig.value = { ...layerConfig.value, [field]: value }
+  }
+}
+
+function resetField(fieldName) {
+  if (!BACKEND_CONFIG_FIELDS.has(fieldName)) return
+  const updated = { ...layerConfig.value }
+  delete updated[fieldName]
+  layerConfig.value = updated
+  // Reset widget to default so the display shows the inherited value
+  const meta = CONFIG_FIELDS[fieldName]
+  if (meta) {
+    formData[fieldName] = structuredClone(meta.default)
+  }
+}
+
+// Build a config dict payload (backend format) from the current layerConfig (UI format).
+function buildConfigPayload() {
+  const config = {}
+  for (const [field, value] of Object.entries(layerConfig.value)) {
+    const meta = CONFIG_FIELDS[field]
+    if (!meta) continue
+    const transform = meta.toPayload
+    config[field] = transform ? transform(value, formData) : value
+  }
+  // Sandbox fields: sandbox_enabled and sandbox_config are CONFIG_FIELDs that require
+  // special assembly from formData.sandbox (nested UI structure)
+  if ('sandbox_enabled' in layerConfig.value || 'sandbox_config' in layerConfig.value) {
+    config.sandbox_enabled = formData.sandbox_enabled
+    config.sandbox_config = formData.sandbox_enabled ? buildSandboxConfig() : null
+  }
+  return config
 }
 
 function updateSelectedTemplate(templateId) {
@@ -1166,23 +1263,26 @@ function applyTemplate() {
     }
   }
 
+  // Issue #1230: normalize template so CONFIG_FIELDS can be read from template.config
+  const templateFlat = normalizeConfigSource(template)
+
   // Apply schema fields from template with field-state tracking
   for (const [field, meta] of Object.entries(CONFIG_FIELDS)) {
     if (!meta.trackState) {
       // Non-tracked fields: just populate
       if (meta.fromSource) {
-        formData[field] = meta.fromSource(template)
+        formData[field] = meta.fromSource(templateFlat)
       } else {
-        formData[field] = template[field] ?? meta.default
+        formData[field] = templateFlat[field] ?? meta.default
       }
       continue
     }
     // Tracked fields: populate + set autofilled state
     let value
     if (meta.fromSource) {
-      value = meta.fromSource(template)
+      value = meta.fromSource(templateFlat)
     } else {
-      value = template[field] ?? null
+      value = templateFlat[field] ?? null
     }
     if (value !== null && value !== '' && !isDefaultValue(value, meta)) {
       formData[field] = value
@@ -1200,10 +1300,11 @@ function applyTemplate() {
   populateSandboxFromSource(template)
 
   // Track all sandbox sub-fields as template-autofilled
-  const sandboxTemplateVals = sandboxTrackingValues(template.sandbox_config)
+  const templateSandboxConfig = templateFlat.sandbox_config
+  const sandboxTemplateVals = sandboxTrackingValues(templateSandboxConfig)
   for (const [key, value] of Object.entries(sandboxTemplateVals)) {
     // Booleans are always present; only mark text fields as autofilled when non-empty
-    const isNonDefault = typeof value === 'boolean' ? template.sandbox_config != null : !!value
+    const isNonDefault = typeof value === 'boolean' ? templateSandboxConfig != null : !!value
     templateOriginalValues.value[key] = isNonDefault ? value : null
     if (isNonDefault) fieldStates[key] = 'autofilled'
   }
@@ -1743,9 +1844,7 @@ async function updateSession() {
 async function createTemplate() {
   const payload = {
     ...extractPayload('template'),
-    sandbox_config: formData.sandbox_enabled ? buildSandboxConfig() : null,
     profile_ids: Object.keys(formData.profile_ids).length > 0 ? formData.profile_ids : null,
-    template_overrides: Object.keys(formData.template_overrides).length > 0 ? formData.template_overrides : null,
   }
 
   await api.post('/api/templates', payload)
@@ -1765,9 +1864,7 @@ async function updateTemplate() {
 
   const payload = {
     ...extractPayload('template'),
-    sandbox_config: formData.sandbox_enabled ? buildSandboxConfig() : null,
     profile_ids: Object.keys(formData.profile_ids).length > 0 ? formData.profile_ids : null,
-    template_overrides: Object.keys(formData.template_overrides).length > 0 ? formData.template_overrides : null,
   }
 
   await api.put(`/api/templates/${editTemplate.value.template_id}`, payload)
@@ -1791,6 +1888,7 @@ function resetForm() {
   showAdvanced.value = false
   formData.profile_ids = {}
   formData.template_overrides = {}
+  layerConfig.value = {}
 }
 
 function populateFormFromSession(session, effectiveConfig = null) {
@@ -1802,13 +1900,16 @@ function populateFormFromSession(session, effectiveConfig = null) {
     : session
   populateFormFromSource(source)
   populateSandboxFromSource(source)
+  // Issue #1230: populate layerConfig from session.config (the session-layer explicit overrides)
+  layerConfig.value = session.config ? { ...session.config } : {}
 }
 
 function populateFormFromTemplate(template) {
   populateFormFromSource(template)
   populateSandboxFromSource(template)
   formData.profile_ids = template.profile_ids ? { ...template.profile_ids } : {}
-  formData.template_overrides = template.template_overrides ? { ...template.template_overrides } : {}
+  // Issue #1230: populate layerConfig from template.config (the template-layer explicit fields)
+  layerConfig.value = template.config ? { ...template.config } : {}
 }
 
 function onModalShown() {

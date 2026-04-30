@@ -54,6 +54,8 @@ class SessionNameUpdateRequest(BaseModel):
 class SessionUpdateRequest(BaseModel):
     """Generic session update request - all fields optional"""
     name: str | None = None
+    # Issue #1230: full config dict replacement (preferred over flat fields below)
+    config: dict | None = None
     model: str | None = None  # sonnet, opus, haiku, opusplan
     allowed_tools: list[str] | None = None  # List of tool names to allow
     disallowed_tools: list[str] | None = None  # Issue #461: tools to deny
@@ -155,6 +157,8 @@ class TemplateCreateRequest(SessionConfig):
     capabilities: list[str] | None = None
     # Composable profiles (issue #1062)
     profile_ids: dict[str, str] | None = None
+    # Issue #1230: full config dict (preferred over flat SessionConfig fields)
+    config: dict | None = None
     template_overrides: dict | None = None
     session_overrides: dict | None = None
 
@@ -217,6 +221,8 @@ class TemplateUpdateRequest(BaseModel):
     env_scrub_enabled: bool | None = None
     # Composable profiles (issue #1062)
     profile_ids: dict[str, str] | None = None
+    # Issue #1230: full config dict (preferred over flat fields above)
+    config: dict | None = None
     template_overrides: dict | None = None
     session_overrides: dict | None = None
 
