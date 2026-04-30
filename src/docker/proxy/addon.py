@@ -139,6 +139,13 @@ _INJECT_DISPATCH: dict = {
 }
 
 
+def _host_matches_targets(host: str, target_hosts: list) -> bool:
+    """Return True if host matches any target. Empty list means unconstrained."""
+    if not target_hosts:
+        return True
+    return any(host == th or host.endswith("." + th) for th in target_hosts)
+
+
 # ---------------------------------------------------------------------------
 # Scrub helpers — defense-in-depth for all types
 # ---------------------------------------------------------------------------
@@ -375,6 +382,9 @@ class ProxyAddon:
 
         credential_used = None
         for ph, record in self._records.items():
+            target_hosts = record.get("target_hosts") or []
+            if not _host_matches_targets(host, target_hosts):
+                continue
             secret_type = record.get("type", "generic")
 
             # Per-placeholder lock prevents parallel refresh on the same token.
