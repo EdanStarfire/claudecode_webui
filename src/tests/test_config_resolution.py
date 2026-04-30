@@ -25,7 +25,6 @@ from unittest.mock import AsyncMock
 import pytest
 
 from ..config_resolution import (
-    ADDITIVE_LIST_FIELDS,
     CONFIG_FIELDS,
     FIELD_TO_AREA,
     PROFILE_AREAS,
@@ -594,15 +593,33 @@ class TestResolveTemplateConfig:
 
 
 @pytest.mark.asyncio
-class TestAdditiveAllowlistMerge:
-    """Test #15 — ADDITIVE_LIST_FIELDS union merge for docker_proxy_allowlist_domains (issue #1053)."""
+class TestTagFieldReplaceSemantics:
+    """Test #15 — tag-style list fields use last-wins (replace) semantics (issue #1223).
 
-    def test_additive_list_fields_contains_allowlist_domain(self):
-        """docker_proxy_allowlist_domains must be in ADDITIVE_LIST_FIELDS."""
-        assert "docker_proxy_allowlist_domains" in ADDITIVE_LIST_FIELDS
+    docker_proxy_allowlist_domains and assigned_secrets no longer use additive merge;
+    they follow standard last-wins precedence like all other config fields.
+    """
 
-    async def test_additive_merge_allowlist_domains_unions_all_tiers(self):
-        """Domains from profile + template_overrides + session_overrides are unioned, not last-wins."""
+    async def test_template_override_replaces_profile_secrets(self):
+        """template_overrides.assigned_secrets replaces (not unions) the profile value."""
+        profile = _make_profile(
+            area="isolation",
+            config={"assigned_secrets": ["ssh_test"]},
+        )
+        pm = _make_profile_manager([profile])
+        template = _make_template(
+            template_overrides={"assigned_secrets": ["ssh_test2"]},
+            profile_ids={"isolation": profile.profile_id},
+        )
+        session = _make_session(template_id="tmpl-001")
+        tm = _make_template_manager(template)
+
+        config = await resolve_effective_config(session, tm, pm)
+
+        assert config.assigned_secrets == ["ssh_test2"]
+
+    async def test_template_override_replaces_profile_allowlist_domains(self):
+        """template_overrides.docker_proxy_allowlist_domains replaces (not unions) the profile value."""
         profile = _make_profile(
             area="isolation",
             config={"docker_proxy_allowlist_domains": "profile.com"},
@@ -612,38 +629,21 @@ class TestAdditiveAllowlistMerge:
             template_overrides={"docker_proxy_allowlist_domains": ["override.com"]},
             profile_ids={"isolation": profile.profile_id},
         )
-        session = _make_session(
-            template_id="tmpl-001",
-            session_overrides={"docker_proxy_allowlist_domains": ["session.com"]},
-        )
+        session = _make_session(template_id="tmpl-001")
         tm = _make_template_manager(template)
 
         config = await resolve_effective_config(session, tm, pm)
 
-        assert config.docker_proxy_allowlist_domains is not None
-        domains = set(config.docker_proxy_allowlist_domains)
-        assert "profile.com" in domains
-        assert "override.com" in domains
-        assert "session.com" in domains
+        assert config.docker_proxy_allowlist_domains == ["override.com"]
 
-    async def test_empty_allowlist_no_crash(self):
-        """None/empty at all tiers produces None (no crash)."""
-        template = _make_template()
-        session = _make_session(template_id="tmpl-001")
-        tm = _make_template_manager(template)
-
-        config = await resolve_effective_config(session, tm)
-        assert config.docker_proxy_allowlist_domains is None
-
-    async def test_allowlist_deduplication(self):
-        """Duplicate domains across tiers produce a unique sorted set."""
+    async def test_template_omits_field_inherits_profile_secrets(self):
+        """When template sets no override, profile assigned_secrets is inherited unchanged."""
         profile = _make_profile(
             area="isolation",
-            config={"docker_proxy_allowlist_domains": "dup.com, unique.com"},
+            config={"assigned_secrets": ["ssh_test"]},
         )
         pm = _make_profile_manager([profile])
         template = _make_template(
-            template_overrides={"docker_proxy_allowlist_domains": ["dup.com", "other.com"]},
             profile_ids={"isolation": profile.profile_id},
         )
         session = _make_session(template_id="tmpl-001")
@@ -651,12 +651,93 @@ class TestAdditiveAllowlistMerge:
 
         config = await resolve_effective_config(session, tm, pm)
 
-        domains = config.docker_proxy_allowlist_domains
-        assert domains is not None
-        # No duplicates
-        assert len(domains) == len(set(domains))
-        assert "dup.com" in domains
-        assert "unique.com" in domains
+        assert config.assigned_secrets == ["ssh_test"]
+
+    async def test_template_omits_field_inherits_profile_allowlist_domains(self):
+        """When template sets no override, profile docker_proxy_allowlist_domains is inherited."""
+        profile = _make_profile(
+            area="isolation",
+            config={"docker_proxy_allowlist_domains": ["profile.com"]},
+        )
+        pm = _make_profile_manager([profile])
+        template = _make_template(
+            profile_ids={"isolation": profile.profile_id},
+        )
+        session = _make_session(template_id="tmpl-001")
+        tm = _make_template_manager(template)
+
+        config = await resolve_effective_config(session, tm, pm)
+
+        assert config.docker_proxy_allowlist_domains == ["profile.com"]
+
+    async def test_template_override_empty_list_produces_empty_secrets(self):
+        """template_overrides.assigned_secrets=[] resolves to [] (not None fallback to profile)."""
+        profile = _make_profile(
+            area="isolation",
+            config={"assigned_secrets": ["ssh_test"]},
+        )
+        pm = _make_profile_manager([profile])
+        template = _make_template(
+            template_overrides={"assigned_secrets": []},
+            profile_ids={"isolation": profile.profile_id},
+        )
+        session = _make_session(template_id="tmpl-001")
+        tm = _make_template_manager(template)
+
+        config = await resolve_effective_config(session, tm, pm)
+
+        assert config.assigned_secrets == []
+
+    async def test_template_override_empty_list_produces_empty_allowlist_domains(self):
+        """template_overrides.docker_proxy_allowlist_domains=[] resolves to []."""
+        profile = _make_profile(
+            area="isolation",
+            config={"docker_proxy_allowlist_domains": ["profile.com"]},
+        )
+        pm = _make_profile_manager([profile])
+        template = _make_template(
+            template_overrides={"docker_proxy_allowlist_domains": []},
+            profile_ids={"isolation": profile.profile_id},
+        )
+        session = _make_session(template_id="tmpl-001")
+        tm = _make_template_manager(template)
+
+        config = await resolve_effective_config(session, tm, pm)
+
+        assert config.docker_proxy_allowlist_domains == []
+
+    async def test_session_override_replaces_profile_value(self):
+        """session_overrides fully replaces (not unions) the profile value for tag fields."""
+        profile = _make_profile(
+            area="isolation",
+            config={"assigned_secrets": ["ssh_test"]},
+        )
+        pm = _make_profile_manager([profile])
+        template = _make_template(
+            profile_ids={"isolation": profile.profile_id},
+        )
+        session = _make_session(
+            template_id="tmpl-001",
+            session_overrides={"assigned_secrets": ["session_secret"]},
+        )
+        tm = _make_template_manager(template)
+
+        config = await resolve_effective_config(session, tm, pm)
+
+        assert config.assigned_secrets == ["session_secret"]
+
+    async def test_template_override_supersedes_template_flat_field(self):
+        """template_overrides wins over template flat field for tag fields."""
+        template = _make_template(
+            assigned_secrets=["flat_secret"],
+            template_overrides={"assigned_secrets": ["override_secret"]},
+        )
+        session = _make_session(template_id="tmpl-001")
+        tm = _make_template_manager(template)
+
+        config = await resolve_effective_config(session, tm)
+
+        assert config.assigned_secrets == ["override_secret"]
 
 
 @pytest.mark.asyncio

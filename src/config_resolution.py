@@ -74,13 +74,6 @@ _LIST_FIELDS: frozenset[str] = frozenset({
     "assigned_secrets", "docker_proxy_allowlist_domains",
 })
 
-# Fields that use additive (union) merge across tiers instead of last-wins.
-# All tiers contribute their values; duplicates are removed and result is sorted.
-ADDITIVE_LIST_FIELDS: frozenset[str] = frozenset({
-    "docker_proxy_allowlist_domains",
-    "assigned_secrets",
-})
-
 
 def _coerce_list(value: object) -> object:
     """Convert a comma-separated string to a list for fields that require list[str]."""
@@ -140,41 +133,6 @@ async def resolve_effective_config(
     for field_name in CONFIG_FIELDS:
         if field_name in session_overrides:
             config_data[field_name] = session_overrides[field_name]
-
-    # Additive merge for ADDITIVE_LIST_FIELDS: union all tiers instead of last-wins.
-    # Must happen after standard resolution so all sources are consulted.
-    if ADDITIVE_LIST_FIELDS:
-        profile_cache: dict[str, object] = {}
-        template_profile_ids = template.profile_ids or {}
-        template_overrides_dict = template.template_overrides or {}
-        for field in ADDITIVE_LIST_FIELDS:
-            merged: set[str] = set()
-            # Tier 1: template flat field
-            flat_val = getattr(template, field, None)
-            if flat_val:
-                merged.update(flat_val if isinstance(flat_val, list) else [flat_val])
-            # Tier 2: profile value for the field's area
-            area = FIELD_TO_AREA.get(field)
-            if area and area in template_profile_ids and profile_manager:
-                profile = await _load_profile_cached(
-                    template_profile_ids[area], profile_manager, profile_cache
-                )
-                if profile is not None and field in profile.config:
-                    raw = profile.config[field]
-                    coerced = _coerce_list(raw)
-                    if coerced:
-                        merged.update(coerced if isinstance(coerced, list) else [coerced])
-            # Tier 3: template overrides
-            if field in template_overrides_dict:
-                val = template_overrides_dict[field]
-                if val:
-                    merged.update(val if isinstance(val, list) else [val])
-            # Tier 4: session overrides
-            if field in session_overrides:
-                val = session_overrides[field]
-                if val:
-                    merged.update(val if isinstance(val, list) else [val])
-            config_data[field] = sorted(merged) if merged else None
 
     # Carry template_id through for downstream reference
     config_data["template_id"] = session_info.template_id
