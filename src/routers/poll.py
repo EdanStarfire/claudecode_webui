@@ -4,6 +4,9 @@ from fastapi import APIRouter, HTTPException
 
 from ..event_queue import EventQueue
 from ..exception_handlers import handle_exceptions
+from ..logging_config import get_logger
+
+_polling_logger = get_logger('polling', category='POLL')
 
 
 def build_router(webui) -> APIRouter:
@@ -16,6 +19,11 @@ def build_router(webui) -> APIRouter:
         effective_timeout = min(float(timeout), 30.0)
         await webui.ui_queue.wait_for_events(since, timeout=effective_timeout)
         events, next_cursor = webui.ui_queue.events_since(since)
+        if events:
+            _polling_logger.info(
+                "poll ui returned %d event(s) since=%d next_cursor=%d",
+                len(events), since, next_cursor
+            )
         return {"events": events, "next_cursor": next_cursor}
 
     @router.get("/api/poll/cursor")
@@ -46,6 +54,11 @@ def build_router(webui) -> APIRouter:
         effective_timeout = min(float(timeout), 30.0)
         await queue.wait_for_events(since, timeout=effective_timeout)
         events, next_cursor = queue.events_since(since)
+        if events:
+            _polling_logger.info(
+                "poll session %s returned %d event(s) since=%d next_cursor=%d",
+                session_id, len(events), since, next_cursor
+            )
         return {"events": events, "next_cursor": next_cursor}
 
     return router

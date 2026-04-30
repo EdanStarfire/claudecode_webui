@@ -1,7 +1,7 @@
 """Comprehensive logging configuration for Claude Code WebUI.
 
 This module provides a multi-tier logging system with:
-- Category-based debug logging to separate files (e.g., websocket_debug.log, sdk_debug.log)
+- Category-based debug logging to separate files (e.g., polling.log, sdk_debug.log)
 - Unified error logging to error.log (all ERROR+ messages route here)
 - Console output for errors (always) and debug messages (when enabled via CLI flags)
 - Standardized log formatting with timestamps and category tags
@@ -56,6 +56,37 @@ import logging
 import logging.handlers
 from pathlib import Path
 
+
+class PollAccessLogFilter(logging.Filter):
+    """Filter for uvicorn.access that suppresses idle /api/poll/* log lines.
+
+    When allow_all=False (default), records whose request path starts with
+    /api/poll/ are dropped so idle long-poll lines don't flood stdout.
+    When allow_all=True (--debug-all-polling), all records pass through.
+
+    Robust against uvicorn access-log record shapes: if args is not the
+    expected tuple, falls back to getMessage() substring match; on any
+    unexpected shape the record is allowed through (never silently drops
+    unrelated logs).
+    """
+
+    def __init__(self, *, allow_all: bool):
+        super().__init__()
+        self.allow_all = allow_all
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if self.allow_all:
+            return True
+        try:
+            # uvicorn formats: '%s - "%s %s HTTP/%s" %d' % (client, method, path, http_ver, status)
+            if isinstance(record.args, (tuple, list)) and len(record.args) >= 3:
+                path = str(record.args[2])
+            else:
+                path = record.getMessage()
+        except Exception:
+            return True
+        return "/api/poll/" not in path
+
 # Logging configuration constants
 MAX_LOG_FILE_SIZE = 10 * 1024 * 1024  # 10 MB
 LOG_BACKUP_COUNT = 5
@@ -99,8 +130,8 @@ _log_config = {}
 
 
 def configure_logging(
-    debug_websocket: bool = False,
-    debug_ping_pong: bool = False,
+    debug_polling: bool = False,
+    debug_all_polling: bool = False,
     debug_sdk: bool = False,
     debug_permissions: bool = False,
     debug_storage: bool = False,
@@ -120,8 +151,8 @@ def configure_logging(
     """Configure the logging system with CLI flag controls.
 
     Args:
-        debug_websocket: Enable WebSocket lifecycle debugging
-        debug_ping_pong: Enable WebSocket ping/pong logging (excluded from debug_all)
+        debug_polling: Enable poll transport signal logging (events-returned lines)
+        debug_all_polling: Enable full uvicorn access-log lines for /api/poll/* (excluded from debug_all)
         debug_sdk: Enable SDK integration debugging
         debug_permissions: Enable permission callback debugging
         debug_storage: Enable data storage debugging
@@ -135,7 +166,7 @@ def configure_logging(
         debug_queue_processor: Enable queue processor debugging
         debug_archive: Enable archive manager debugging
         debug_project_manager: Enable project manager debugging
-        debug_all: Enable all debug logging (excludes ping/pong due to excessive noise)
+        debug_all: Enable all debug logging (excludes debug_all_polling due to excessive noise)
         log_dir: Directory for log files
 
     Behavior:
@@ -145,10 +176,10 @@ def configure_logging(
           and console output, regardless of debug flag settings.
         - This ensures critical errors are never lost due to disabled debug
           settings.
-        - Ping/pong logging is intentionally excluded from debug_all to prevent
-          excessive noise. WebSocket keepalive messages occur every 3 seconds per
-          connection, generating thousands of log entries that obscure other debug
-          information. Use --debug-ping-pong explicitly if needed.
+        - Full polling access-log lines are intentionally excluded from debug_all
+          to prevent excessive noise. Idle long-poll hits occur every 30 seconds
+          per connected client, generating many access lines that obscure other
+          debug information. Use --debug-all-polling explicitly if needed.
     """
     global _log_config
 
@@ -156,10 +187,10 @@ def configure_logging(
     Path(log_dir).mkdir(parents=True, exist_ok=True)
 
     # Store configuration for get_logger to reference
-    # Note: debug_all excludes ping/pong logging due to excessive noise that obscures other debug output
+    # Note: debug_all excludes debug_all_polling due to excessive noise that obscures other debug output
     _log_config = {
-        'debug_websocket': debug_websocket or debug_all,
-        'debug_ping_pong': debug_ping_pong,  # Only enabled with explicit --debug-ping-pong (excluded from debug_all)
+        'debug_polling': debug_polling or debug_all,
+        'debug_all_polling': debug_all_polling,  # Only enabled with explicit --debug-all-polling (excluded from debug_all)
         'debug_sdk': debug_sdk or debug_all,
         'debug_permissions': debug_permissions or debug_all,
         'debug_storage': debug_storage or debug_all,
@@ -196,16 +227,16 @@ def configure_logging(
 
     # Configure logger definitions
     logger_configs = {
-        'websocket_debug': {
-            'file': f"{log_dir}/websocket_debug.log",
-            'enabled': _log_config['debug_websocket'],
-            'console': _log_config['debug_websocket'],
+        'polling': {
+            'file': f"{log_dir}/polling.log",
+            'enabled': _log_config['debug_polling'],
+            'console': _log_config['debug_polling'],
             'level': logging.DEBUG
         },
-        'websocket_verbose': {
-            'file': f"{log_dir}/websocket_verbose.log",
-            'enabled': _log_config['debug_ping_pong'],
-            'console': _log_config['debug_ping_pong'],
+        'polling_verbose': {
+            'file': f"{log_dir}/polling_verbose.log",
+            'enabled': _log_config['debug_all_polling'],
+            'console': _log_config['debug_all_polling'],
             'level': logging.DEBUG
         },
         # Enable SDK logging when either SDK or permissions debugging is active,
@@ -329,6 +360,13 @@ def configure_logging(
     root_logger.addHandler(error_handler)
     root_logger.addHandler(console_error_handler)
 
+    # Attach PollAccessLogFilter to uvicorn.access (idempotent: clear prior instances first)
+    uvicorn_access_logger = logging.getLogger('uvicorn.access')
+    uvicorn_access_logger.filters = [
+        f for f in uvicorn_access_logger.filters if not isinstance(f, PollAccessLogFilter)
+    ]
+    uvicorn_access_logger.addFilter(PollAccessLogFilter(allow_all=_log_config['debug_all_polling']))
+
     # Log configuration status
     coord_logger = logging.getLogger('coordinator')
     coord_logger.info("Logging system configured")
@@ -338,7 +376,7 @@ def get_logger(name: str, category: str | None = None) -> logging.Logger:
     """Get a logger instance with optional category.
 
     Args:
-        name: Logger name (e.g., 'websocket_debug', 'sdk_debug', 'coordinator')
+        name: Logger name (e.g., 'polling', 'sdk_debug', 'coordinator')
         category: Optional category tag for log messages (e.g., 'WS_LIFECYCLE', 'SDK')
 
     Returns:

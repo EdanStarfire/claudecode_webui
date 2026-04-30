@@ -761,7 +761,7 @@ data/
 │   ├── parser.log                  # Message parsing
 │   ├── sdk_debug.log               # SDK integration
 │   ├── storage.log                 # File operations
-│   └── websocket_debug.log         # WebSocket lifecycle
+│   └── polling.log                 # Poll transport signal logging
 │
 ├── projects/{uuid}/                # One folder per project
 │   └── state.json                  # ProjectInfo serialized
@@ -879,7 +879,7 @@ For the complete endpoint reference with request/response details, see [.claude/
 → **Solution**: `src/session_coordinator.py:177-289` (start_session()) + enable `--debug-sdk`
 
 **Problem**: Long-poll events not arriving
-→ **Solution**: Check `src/web_server.py` poll endpoints and `src/event_queue.py`; enable `--debug-websocket` (covers polling)
+→ **Solution**: Check `src/web_server.py` poll endpoints and `src/event_queue.py`; enable `--debug-polling`
 
 **Problem**: Messages not persisting
 → **Solution**: `src/data_storage.py:51-67` (append_message()) + enable `--debug-storage`
