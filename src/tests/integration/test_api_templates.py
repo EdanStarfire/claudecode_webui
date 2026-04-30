@@ -84,3 +84,89 @@ async def test_issue_1116_put_template_persists_runtime_flags(api_integration_en
     assert t["setting_sources"] == ["user", "project"]
     assert t["bare_mode"] is True
     assert t["env_scrub_enabled"] is True
+
+
+@pytest.mark.asyncio
+async def test_issue_1229_clear_docker_proxy_allowlist_domains(api_integration_env):
+    """PUT with docker_proxy_allowlist_domains=[] must persist the empty list (not be dropped)."""
+    client = api_integration_env["client"]
+
+    create_resp = await client.post(
+        "/api/templates",
+        json={"name": "Allowlist Clear Test", "permission_mode": "default"},
+    )
+    assert create_resp.status_code == 200, create_resp.text
+    template_id = create_resp.json()["template_id"]
+
+    # Populate the field
+    await client.put(
+        f"/api/templates/{template_id}",
+        json={"docker_proxy_allowlist_domains": ["httpbin.org"]},
+    )
+
+    # Clear it by sending []
+    clear_resp = await client.put(
+        f"/api/templates/{template_id}",
+        json={"docker_proxy_allowlist_domains": []},
+    )
+    assert clear_resp.status_code == 200, clear_resp.text
+
+    get_resp = await client.get(f"/api/templates/{template_id}")
+    assert get_resp.status_code == 200, get_resp.text
+    assert get_resp.json()["docker_proxy_allowlist_domains"] == []
+
+
+@pytest.mark.asyncio
+async def test_issue_1229_clear_assigned_secrets(api_integration_env):
+    """PUT with assigned_secrets=[] must persist the empty list (not be dropped)."""
+    client = api_integration_env["client"]
+
+    create_resp = await client.post(
+        "/api/templates",
+        json={"name": "Secrets Clear Test", "permission_mode": "default"},
+    )
+    assert create_resp.status_code == 200, create_resp.text
+    template_id = create_resp.json()["template_id"]
+
+    await client.put(
+        f"/api/templates/{template_id}",
+        json={"assigned_secrets": ["vault-cred-1"]},
+    )
+
+    clear_resp = await client.put(
+        f"/api/templates/{template_id}",
+        json={"assigned_secrets": []},
+    )
+    assert clear_resp.status_code == 200, clear_resp.text
+
+    get_resp = await client.get(f"/api/templates/{template_id}")
+    assert get_resp.status_code == 200, get_resp.text
+    assert get_resp.json()["assigned_secrets"] == []
+
+
+@pytest.mark.asyncio
+async def test_issue_1229_clear_allowed_tools(api_integration_env):
+    """PUT with allowed_tools=[] must persist the empty list (not be dropped)."""
+    client = api_integration_env["client"]
+
+    create_resp = await client.post(
+        "/api/templates",
+        json={"name": "AllowedTools Clear Test", "permission_mode": "default"},
+    )
+    assert create_resp.status_code == 200, create_resp.text
+    template_id = create_resp.json()["template_id"]
+
+    await client.put(
+        f"/api/templates/{template_id}",
+        json={"allowed_tools": ["Bash", "Read"]},
+    )
+
+    clear_resp = await client.put(
+        f"/api/templates/{template_id}",
+        json={"allowed_tools": []},
+    )
+    assert clear_resp.status_code == 200, clear_resp.text
+
+    get_resp = await client.get(f"/api/templates/{template_id}")
+    assert get_resp.status_code == 200, get_resp.text
+    assert get_resp.json()["allowed_tools"] == []
