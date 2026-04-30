@@ -64,11 +64,11 @@ def main():
 
     # Debug flags (grouped so they appear under their own section)
     debug_group = parser.add_argument_group("Debug Flags")
-    debug_group.add_argument('--debug-websocket', action='store_true', help='Enable WebSocket lifecycle debugging')
-    # Note: debug_all excludes ping/pong logging due to excessive noise that obscures other debug output.
-    # Ping/pong keepalive messages occur every 3 seconds per WebSocket connection, generating thousands
-    # of log entries that make it difficult to identify relevant debugging information.
-    debug_group.add_argument('--debug-ping-pong', action='store_true', help='Enable WebSocket ping/pong logging (high volume)')
+    debug_group.add_argument('--debug-polling', action='store_true', help='Enable poll transport signal logging (events-returned lines)')
+    # Note: debug_all excludes debug_all_polling due to excessive noise that obscures other debug output.
+    # Idle long-poll hits occur every 30 seconds per connected client, generating access lines
+    # that make it difficult to identify relevant debugging information.
+    debug_group.add_argument('--debug-all-polling', action='store_true', help='Enable full uvicorn access-log for /api/poll/* (high volume)')
     debug_group.add_argument('--debug-sdk', action='store_true', help='Enable SDK integration debugging')
     debug_group.add_argument('--debug-permissions', action='store_true', help='Enable permission callback debugging')
     debug_group.add_argument('--debug-storage', action='store_true', help='Enable data storage debugging')
@@ -82,7 +82,7 @@ def main():
     debug_group.add_argument('--debug-queue-processor', action='store_true', help='Enable queue processor debugging')
     debug_group.add_argument('--debug-archive', action='store_true', help='Enable archive manager debugging')
     debug_group.add_argument('--debug-project-manager', action='store_true', help='Enable project manager debugging')
-    debug_group.add_argument('--debug-all', action='store_true', help='Enable all debug logging (excludes ping/pong)')
+    debug_group.add_argument('--debug-all', action='store_true', help='Enable all debug logging (excludes --debug-all-polling)')
 
     args = parser.parse_args()
 
@@ -108,8 +108,8 @@ def main():
 
     # Configure logging with debug flags
     configure_logging(
-        debug_websocket=args.debug_websocket,
-        debug_ping_pong=args.debug_ping_pong,
+        debug_polling=args.debug_polling,
+        debug_all_polling=args.debug_all_polling,
         debug_sdk=args.debug_sdk,
         debug_permissions=args.debug_permissions,
         debug_storage=args.debug_storage,

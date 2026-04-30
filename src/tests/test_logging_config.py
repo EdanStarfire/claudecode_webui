@@ -46,7 +46,7 @@ def reset_logging():
 
     # Clear all category loggers
     logger_names = [
-        'websocket_debug', 'websocket_verbose', 'sdk_debug',
+        'polling', 'polling_verbose', 'sdk_debug',
         'coordinator', 'storage', 'parser', 'error_handler',
         'session_manager', 'legion', 'template_manager'
     ]
@@ -187,15 +187,15 @@ class TestConfigureLoggingBasics:
         configure_logging(debug_all=True, log_dir=temp_log_dir)
 
         # Check that key loggers are enabled
-        assert len(logging.getLogger('websocket_debug').handlers) > 2
+        assert len(logging.getLogger('polling').handlers) > 2
         assert len(logging.getLogger('sdk_debug').handlers) > 2
         assert len(logging.getLogger('storage').handlers) > 2
 
-    def test_ping_pong_excluded_from_debug_all(self, temp_log_dir):
-        """Test that ping/pong logging is NOT enabled by debug_all."""
+    def test_all_polling_excluded_from_debug_all(self, temp_log_dir):
+        """Test that full poll access-log is NOT enabled by debug_all."""
         configure_logging(debug_all=True, log_dir=temp_log_dir)
 
-        verbose_logger = logging.getLogger('websocket_verbose')
+        verbose_logger = logging.getLogger('polling_verbose')
         # Should only have error handlers, not debug handlers
         assert len(verbose_logger.handlers) == 2  # error.log + console error
 
@@ -203,13 +203,13 @@ class TestConfigureLoggingBasics:
 class TestIndividualDebugFlags:
     """Test individual debug flag behavior."""
 
-    def test_debug_websocket_flag(self, temp_log_dir):
-        """Test debug_websocket flag enables websocket logging."""
-        configure_logging(debug_websocket=True, log_dir=temp_log_dir)
+    def test_debug_polling_flag(self, temp_log_dir):
+        """Test debug_polling flag enables polling signal logging."""
+        configure_logging(debug_polling=True, log_dir=temp_log_dir)
 
-        ws_logger = logging.getLogger('websocket_debug')
+        poll_logger = logging.getLogger('polling')
         # Should have: file handler + console + error.log + console error
-        assert len(ws_logger.handlers) >= 3
+        assert len(poll_logger.handlers) >= 3
 
     def test_debug_sdk_flag(self, temp_log_dir):
         """Test debug_sdk flag enables SDK logging."""
@@ -420,14 +420,14 @@ class TestIntegration:
         configure_logging(
             debug_sdk=True,
             debug_storage=True,
-            debug_websocket=True,
+            debug_polling=True,
             log_dir=temp_log_dir
         )
 
         # Create loggers with categories
         sdk_logger = get_logger('sdk_debug', category='SDK')
         storage_logger = get_logger('storage', category='STORAGE')
-        ws_logger = get_logger('websocket_debug', category='WS')
+        poll_logger = get_logger('polling', category='POLL')
 
         # Write various log levels
         sdk_logger.debug('SDK debug message')
@@ -436,12 +436,12 @@ class TestIntegration:
         storage_logger.info('Storage info message')
         storage_logger.error('Storage error message')
 
-        ws_logger.debug('WebSocket debug message')
+        poll_logger.info('poll ui returned 3 event(s)')
 
         # Verify files exist
         assert (Path(temp_log_dir) / 'sdk_debug.log').exists()
         assert (Path(temp_log_dir) / 'storage.log').exists()
-        assert (Path(temp_log_dir) / 'websocket_debug.log').exists()
+        assert (Path(temp_log_dir) / 'polling.log').exists()
         assert (Path(temp_log_dir) / 'error.log').exists()
 
         # Verify content routing
