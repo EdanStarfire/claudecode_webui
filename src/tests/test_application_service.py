@@ -468,3 +468,55 @@ async def test_create_template_returns_dict(service, mock_coordinator):
     result = await service.create_template(name="mytemplate")
 
     assert result == template.to_dict()
+
+
+# ---------------------------------------------------------------------------
+# Secrets / Issue #1219
+# ---------------------------------------------------------------------------
+
+
+def _make_session_with_secrets(assigned_secrets=None, secret_placeholders=None):
+    s = MagicMock()
+    s.assigned_secrets = assigned_secrets
+    s.secret_placeholders = secret_placeholders
+    return s
+
+
+@pytest.mark.asyncio
+async def test_issue_1219_resolves_from_placeholder_when_assigned_empty(service, mock_coordinator):
+    session = _make_session_with_secrets(
+        assigned_secrets=None,
+        secret_placeholders={"CC_SECRET_tok_abc": "claudecode_token"},
+    )
+    mock_coordinator.session_manager.get_session_info.return_value = session
+    mock_coordinator.credential_vault = MagicMock()
+    mock_coordinator.credential_vault.list_secrets = AsyncMock(return_value=[])
+    mock_coordinator.credential_vault.resolve_secrets_for_assignment = AsyncMock(
+        return_value=[{"name": "claudecode_token", "value": "tok123"}]
+    )
+
+    result = await service.resolve_secrets_for_session("s1")
+
+    mock_coordinator.credential_vault.resolve_secrets_for_assignment.assert_called_once_with(
+        ["claudecode_token"]
+    )
+    assert any(s["name"] == "claudecode_token" for s in result["secrets"])
+
+
+@pytest.mark.asyncio
+async def test_issue_1219_no_duplicates_when_both_assigned_and_placeholder_set(service, mock_coordinator):
+    session = _make_session_with_secrets(
+        assigned_secrets=["claudecode_token"],
+        secret_placeholders={"CC_SECRET_tok_abc": "claudecode_token"},
+    )
+    mock_coordinator.session_manager.get_session_info.return_value = session
+    mock_coordinator.credential_vault = MagicMock()
+    mock_coordinator.credential_vault.list_secrets = AsyncMock(return_value=[])
+    mock_coordinator.credential_vault.resolve_secrets_for_assignment = AsyncMock(
+        return_value=[{"name": "claudecode_token", "value": "tok123"}]
+    )
+
+    await service.resolve_secrets_for_session("s1")
+
+    names_passed = mock_coordinator.credential_vault.resolve_secrets_for_assignment.call_args[0][0]
+    assert names_passed.count("claudecode_token") == 1
