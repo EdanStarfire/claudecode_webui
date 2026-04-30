@@ -25,26 +25,6 @@ def main():
     # Parse command-line arguments
     parser = argparse.ArgumentParser(
         description="Claude Code WebUI Server",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Debug Flags:
-  --debug-websocket         Enable WebSocket lifecycle debugging
-  --debug-ping-pong         Enable WebSocket ping/pong logging (high volume)
-  --debug-sdk               Enable SDK integration debugging
-  --debug-permissions       Enable permission callback debugging
-  --debug-storage           Enable data storage debugging
-  --debug-parser            Enable message parser debugging
-  --debug-error-handler     Enable error handler debugging
-  --debug-legion            Enable Legion multi-agent system debugging
-  --debug-session-manager   Enable session manager debugging
-  --debug-template-manager  Enable template manager debugging
-  --debug-skill-manager     Enable skill manager debugging
-  --debug-queue-manager     Enable queue manager debugging
-  --debug-queue-processor   Enable queue processor debugging
-  --debug-archive           Enable archive manager debugging
-  --debug-project-manager   Enable project manager debugging
-  --debug-all               Enable all debug logging (excludes ping/pong)
-        """
     )
 
     # Server options
@@ -54,27 +34,6 @@ Debug Flags:
     )
     parser.add_argument('--port', type=int, default=8000, help='Port to bind to (default: 8000)')
     parser.add_argument('--data-dir', default='./data', help='Data directory location (default: ./data)')
-
-    # Debug flags
-    parser.add_argument('--debug-websocket', action='store_true', help='Enable WebSocket lifecycle debugging')
-    # Note: debug_all excludes ping/pong logging due to excessive noise that obscures other debug output.
-    # Ping/pong keepalive messages occur every 3 seconds per WebSocket connection, generating thousands
-    # of log entries that make it difficult to identify relevant debugging information.
-    parser.add_argument('--debug-ping-pong', action='store_true', help='Enable WebSocket ping/pong logging (high volume)')
-    parser.add_argument('--debug-sdk', action='store_true', help='Enable SDK integration debugging')
-    parser.add_argument('--debug-permissions', action='store_true', help='Enable permission callback debugging')
-    parser.add_argument('--debug-storage', action='store_true', help='Enable data storage debugging')
-    parser.add_argument('--debug-parser', action='store_true', help='Enable message parser debugging')
-    parser.add_argument('--debug-error-handler', action='store_true', help='Enable error handler debugging')
-    parser.add_argument('--debug-legion', action='store_true', help='Enable Legion multi-agent system debugging')
-    parser.add_argument('--debug-session-manager', action='store_true', help='Enable session manager debugging')
-    parser.add_argument('--debug-template-manager', action='store_true', help='Enable template manager debugging')
-    parser.add_argument('--debug-skill-manager', action='store_true', help='Enable skill manager debugging')
-    parser.add_argument('--debug-queue-manager', action='store_true', help='Enable queue manager debugging')
-    parser.add_argument('--debug-queue-processor', action='store_true', help='Enable queue processor debugging')
-    parser.add_argument('--debug-archive', action='store_true', help='Enable archive manager debugging')
-    parser.add_argument('--debug-project-manager', action='store_true', help='Enable project manager debugging')
-    parser.add_argument('--debug-all', action='store_true', help='Enable all debug logging (excludes ping/pong)')
 
     # Experimental features
     parser.add_argument('--experimental', action='store_true', help='Enable experimental features (Agent Teams)')
@@ -102,6 +61,28 @@ Debug Flags:
         '--fixtures-dir', type=str, default=None,
         help='Directory containing named fixture subdirectories (required with --mock-sdk)'
     )
+
+    # Debug flags (grouped so they appear under their own section)
+    debug_group = parser.add_argument_group("Debug Flags")
+    debug_group.add_argument('--debug-websocket', action='store_true', help='Enable WebSocket lifecycle debugging')
+    # Note: debug_all excludes ping/pong logging due to excessive noise that obscures other debug output.
+    # Ping/pong keepalive messages occur every 3 seconds per WebSocket connection, generating thousands
+    # of log entries that make it difficult to identify relevant debugging information.
+    debug_group.add_argument('--debug-ping-pong', action='store_true', help='Enable WebSocket ping/pong logging (high volume)')
+    debug_group.add_argument('--debug-sdk', action='store_true', help='Enable SDK integration debugging')
+    debug_group.add_argument('--debug-permissions', action='store_true', help='Enable permission callback debugging')
+    debug_group.add_argument('--debug-storage', action='store_true', help='Enable data storage debugging')
+    debug_group.add_argument('--debug-parser', action='store_true', help='Enable message parser debugging')
+    debug_group.add_argument('--debug-error-handler', action='store_true', help='Enable error handler debugging')
+    debug_group.add_argument('--debug-legion', action='store_true', help='Enable Legion multi-agent system debugging')
+    debug_group.add_argument('--debug-session-manager', action='store_true', help='Enable session manager debugging')
+    debug_group.add_argument('--debug-template-manager', action='store_true', help='Enable template manager debugging')
+    debug_group.add_argument('--debug-skill-manager', action='store_true', help='Enable skill manager debugging')
+    debug_group.add_argument('--debug-queue-manager', action='store_true', help='Enable queue manager debugging')
+    debug_group.add_argument('--debug-queue-processor', action='store_true', help='Enable queue processor debugging')
+    debug_group.add_argument('--debug-archive', action='store_true', help='Enable archive manager debugging')
+    debug_group.add_argument('--debug-project-manager', action='store_true', help='Enable project manager debugging')
+    debug_group.add_argument('--debug-all', action='store_true', help='Enable all debug logging (excludes ping/pong)')
 
     args = parser.parse_args()
 
