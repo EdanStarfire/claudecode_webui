@@ -187,6 +187,8 @@ iptables -A OUTPUT -p tcp -m conntrack --ctstate NEW -j DROP
 # To add future protocol proxies: insert uid ACCEPT before the DROP.
 echo "Configuring default-deny UDP OUTPUT..."
 iptables -A OUTPUT -p udp -m owner --uid-owner 9998 -j ACCEPT
+# Allow mitmdump (uid 9999) DNS — nat OUTPUT already redirects these to CoreDNS (see #1204)
+iptables -A OUTPUT -p udp --dport 53 -m owner --uid-owner 9999 -j ACCEPT
 # Route mitmdump DNS queries to CoreDNS via loopback
 iptables -t nat -A OUTPUT -p udp --dport 53 \
     -m owner --uid-owner 9999 \
