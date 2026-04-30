@@ -316,7 +316,7 @@ def _make_send_comm_system(session_id: str, docker_enabled: bool, data_dir):
     from unittest.mock import AsyncMock, MagicMock
 
     session_info = MagicMock()
-    session_info.docker_enabled = docker_enabled
+    session_info.config = {"docker_enabled": docker_enabled}
 
     session_manager = MagicMock()
     session_manager.get_session_info = AsyncMock(return_value=session_info)

@@ -12,7 +12,7 @@ class TestMinionTemplateProfileIds:
         template = MinionTemplate(
             template_id="tmpl-001",
             name="Test Template",
-            permission_mode="acceptEdits",
+            config={"permission_mode": "acceptEdits"},
         )
         assert template.profile_ids == {}
 
@@ -21,7 +21,7 @@ class TestMinionTemplateProfileIds:
         data = {
             "template_id": "tmpl-002",
             "name": "Legacy Template",
-            "permission_mode": "default",
+            "config": {"permission_mode": "default"},
             "created_at": "2025-01-01T00:00:00+00:00",
             "updated_at": "2025-01-01T00:00:00+00:00",
         }
@@ -33,7 +33,7 @@ class TestMinionTemplateProfileIds:
         template = MinionTemplate(
             template_id="tmpl-003",
             name="Profile Template",
-            permission_mode="acceptEdits",
+            config={"permission_mode": "acceptEdits"},
             profile_ids={"model": "profile-xyz"},
         )
         restored = MinionTemplate.from_dict(template.to_dict())

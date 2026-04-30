@@ -14,7 +14,7 @@ import shutil
 import subprocess
 import time
 from collections.abc import Callable
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import Enum
 from pathlib import Path
@@ -30,13 +30,6 @@ from .template_manager import TemplateManager
 session_logger = get_logger('session_manager', category='SESSION_MANAGER')
 # Keep standard logger for errors
 logger = logging.getLogger(__name__)
-
-# Naming asymmetry map: SessionInfo field name → canonical override/template field name.
-# Used by _track_overrides() to look up the correct template field and override key.
-_FIELD_NAME_MAP: dict[str, str] = {
-    "current_permission_mode": "permission_mode",
-    "initial_permission_mode": "permission_mode",
-}
 
 
 # Valid model identifiers (current API aliases)
@@ -80,20 +73,20 @@ AUTO_START_STATES: frozenset[SessionState] = frozenset({
 
 @dataclass
 class SessionInfo:
-    """Session metadata and state information (all sessions are minions - issue #349)"""
+    """Session metadata and state information (all sessions are minions - issue #349).
+
+    Identity/lifecycle fields stay flat. All CONFIG_FIELDS live in the `config` dict,
+    which is the session's layer in the 3-tier resolution chain:
+      profile.config → template.config → session.config
+    """
     session_id: str
     state: SessionState
     created_at: datetime
     updated_at: datetime
     working_directory: str | None = None
-    additional_directories: list[str] | None = None  # Extra dirs agent can access (issue #630)
+    # Live runtime permission mode (distinct from config["permission_mode"])
     current_permission_mode: str = "acceptEdits"
     initial_permission_mode: str | None = None
-    system_prompt: str | None = None
-    override_system_prompt: bool = False  # If True, use custom prompt only (no Claude Code preset)
-    allowed_tools: list[str] = None
-    disallowed_tools: list[str] = None  # Tools explicitly denied (issue #461)
-    model: str | None = None
     error_message: str | None = None
     claude_code_session_id: str | None = None
     is_processing: bool = False
@@ -119,61 +112,20 @@ class SessionInfo:
     latest_message_type: str | None = None  # "user", "assistant", "system"
     latest_message_time: datetime | None = None  # When the message was received
 
-    # Sandbox mode support (issue #319)
-    sandbox_enabled: bool = False  # If True, enable OS-level sandboxing via SDK
-    sandbox_config: dict | None = None  # Optional SandboxSettings config (auto_allow_bash, excluded_commands, etc.)
-
-    # Settings sources (issue #36) - which settings files to load permissions from
-    setting_sources: list[str] | None = None  # Default: ["user", "project", "local"]
+    # Ephemeral session support (issue #578)
+    is_ephemeral: bool = False  # True for temporary sessions created by ephemeral schedules
 
     # Message queue configuration (issue #500)
     queue_config: dict | None = None  # {max_queue_size, min_wait_seconds, min_idle_seconds, default_reset_session}
     queue_paused: bool = False  # If True, queue processor skips delivery
 
-    # CLI path override (issue #489) - custom executable for tool execution (e.g., Docker launcher)
-    cli_path: str | None = None
-
-    # Docker session isolation (issue #496)
-    docker_enabled: bool = False
-    docker_image: str | None = None  # Custom image name (default: claude-code:local)
-    docker_extra_mounts: list[str] | None = None  # Additional volume mount specs
-    docker_home_directory: str | None = None  # Home directory inside container (for custom images)
-    # Issue #1050: Proxy lifecycle management
-    docker_proxy_enabled: bool = False   # Intent toggle: enable proxy sidecar
-    docker_proxy_image: str | None = None  # Image override (None = use app config default)
-    # Issue #827: Assigned secrets from vault + extra allowed domains
-    assigned_secrets: list[str] | None = None  # Secret names from vault to inject at session start
-    docker_proxy_allowlist_domains: list[str] | None = None  # Extra domains to allow through proxy
-
-    # Thinking and effort configuration (issue #540)
-    thinking_mode: str | None = None  # "adaptive", "enabled", "disabled", or None (SDK default)
-    thinking_budget_tokens: int | None = None  # Token budget when thinking_mode="enabled" (min 1024)
-    effort: str | None = None  # "low", "medium", "high", or None (SDK default)
-
-    # Ephemeral session support (issue #578)
-    is_ephemeral: bool = False  # True for temporary sessions created by ephemeral schedules
-
-    # History distillation toggle (issue #710, renamed #736)
-    history_distillation_enabled: bool = True  # When False, skip distillation and history references
-
-    # Auto-memory mode (issue #709, replaces #708 disable_auto_memory boolean)
-    auto_memory_mode: str = "claude"  # "claude" | "session" | "disabled"
-    # Custom directory for auto-memory when mode is "claude" (issue #906)
-    auto_memory_directory: str | None = None
-
-    # Skill creating toggle (issue #749)
-    skill_creating_enabled: bool = False
-
-    # MCP server configuration (issue #676)
-    mcp_server_ids: list[str] | None = None  # Global MCP config IDs attached to this session
-    enable_claudeai_mcp_servers: bool = True  # Toggle ENABLE_CLAUDEAI_MCP_SERVERS env var
-    strict_mcp_config: bool = False  # Pass --strict-mcp-config to disable local .mcp.json
-    bare_mode: bool = False  # Pass --bare to skip hooks, LSP, plugin sync, skill walks
-    env_scrub_enabled: bool = False  # Issue #957: Strip credentials from subprocess envs
-
     # Template linkage (issue #1059)
     template_id: str | None = None
-    session_overrides: dict[str, Any] | None = None
+
+    # Unified config dict — replaces flat CONFIG_FIELDS + session_overrides (issue #1230).
+    # All mergeable configuration (permission_mode, allowed_tools, model, docker_*, etc.)
+    # lives here. Resolution chain: profile.config → template.config → session.config.
+    config: dict[str, Any] = field(default_factory=dict)
 
     # Watchdog activity tracking (issue #1130) — in-memory only on hot path
     last_activity_at: datetime | None = None
@@ -190,132 +142,178 @@ class SessionInfo:
     def __post_init__(self):
         if self.secret_placeholders is None:
             self.secret_placeholders = {}
-        if self.additional_directories is None:
-            self.additional_directories = []
-        if self.allowed_tools is None:
-            self.allowed_tools = ["bash", "edit", "read"]
-        if self.disallowed_tools is None:
-            self.disallowed_tools = []
         if self.child_minion_ids is None:
             self.child_minion_ids = []
         if self.capabilities is None:
             self.capabilities = []
-        if self.docker_extra_mounts is None:
-            self.docker_extra_mounts = []
-        if self.mcp_server_ids is None:
-            self.mcp_server_ids = []
-        if self.session_overrides is None:
-            self.session_overrides = {}
+        if self.config is None:
+            self.config = {}
 
     def to_dict(self) -> dict[str, Any]:
-        """Convert to dictionary for JSON serialization"""
-        data = asdict(self)
-        data['state'] = self.state.value
-        data['created_at'] = self.created_at.isoformat()
-        data['updated_at'] = self.updated_at.isoformat()
-        # Convert latest_message_time if present (issue #291)
-        if self.latest_message_time:
-            data['latest_message_time'] = self.latest_message_time.isoformat()
-        # Convert last_activity_at if present (issue #1130)
-        if self.last_activity_at:
-            data['last_activity_at'] = self.last_activity_at.isoformat()
-        return data
+        """Convert to dictionary for JSON serialization."""
+        return {
+            "can_spawn_minions": self.can_spawn_minions,
+            "capabilities": self.capabilities,
+            "child_minion_ids": self.child_minion_ids,
+            "claude_code_session_id": self.claude_code_session_id,
+            "config": self.config,
+            "created_at": self.created_at.isoformat(),
+            "current_permission_mode": self.current_permission_mode,
+            "error_message": self.error_message,
+            "expertise_score": self.expertise_score,
+            "initial_permission_mode": self.initial_permission_mode,
+            "is_ephemeral": self.is_ephemeral,
+            "is_overseer": self.is_overseer,
+            "is_processing": self.is_processing,
+            "last_activity_at": self.last_activity_at.isoformat() if self.last_activity_at else None,
+            "latest_message": self.latest_message,
+            "latest_message_time": self.latest_message_time.isoformat() if self.latest_message_time else None,
+            "latest_message_type": self.latest_message_type,
+            "name": self.name,
+            "order": self.order,
+            "overseer_level": self.overseer_level,
+            "parent_overseer_id": self.parent_overseer_id,
+            "project_id": self.project_id,
+            "queue_config": self.queue_config,
+            "queue_paused": self.queue_paused,
+            "role": self.role,
+            "sdk_generated_name": self.sdk_generated_name,
+            "secret_fetch_token": self.secret_fetch_token,
+            "secret_placeholders": self.secret_placeholders,
+            "session_id": self.session_id,
+            "slug": self.slug,
+            "state": self.state.value,
+            "template_id": self.template_id,
+            "updated_at": self.updated_at.isoformat(),
+            "working_directory": self.working_directory,
+        }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> 'SessionInfo':
-        """Create from dictionary loaded from JSON"""
-        data['state'] = SessionState(data['state'])
-        data['created_at'] = datetime.fromisoformat(data['created_at'])
-        data['updated_at'] = datetime.fromisoformat(data['updated_at'])
-        # Convert latest_message_time if present (issue #291)
-        if 'latest_message_time' in data and data['latest_message_time']:
-            data['latest_message_time'] = datetime.fromisoformat(data['latest_message_time'])
+    def from_dict(cls, data: dict[str, Any]) -> "SessionInfo":
+        """Create from dictionary loaded from JSON.
+
+        Expects the post-#1230 shape with a top-level ``config`` dict.
+        Legacy (flat-field) data must be migrated by ``_migrate_session_to_config_dict``
+        in session_manager.py before this method is called.
+        """
+        data = dict(data)
+        data["state"] = SessionState(data["state"])
+        data["created_at"] = datetime.fromisoformat(data["created_at"])
+        data["updated_at"] = datetime.fromisoformat(data["updated_at"])
+        if data.get("latest_message_time"):
+            data["latest_message_time"] = datetime.fromisoformat(data["latest_message_time"])
+        if data.get("last_activity_at"):
+            data["last_activity_at"] = datetime.fromisoformat(data["last_activity_at"])
+
         # Issue #349: Silently ignore deprecated is_minion field from old data
-        data.pop('is_minion', None)
+        data.pop("is_minion", None)
         # Issue #546: Derive slug from name if missing (backward compat)
-        if 'slug' not in data or not data.get('slug'):
-            name = data.get('name')
+        if not data.get("slug"):
+            name = data.get("name")
             if name:
-                data['slug'] = slugify_name(name)
-        # Backward-compat defaults for fields added after initial schema
-        data.setdefault('additional_directories', None)
-        data.setdefault('override_system_prompt', False)
-        data.setdefault('disallowed_tools', None)
-        data.setdefault('expertise_score', 0.5)
-        data.setdefault('can_spawn_minions', True)
-        data.setdefault('overseer_level', 0)
-        data.setdefault('latest_message', None)
-        data.setdefault('latest_message_type', None)
-        data.setdefault('latest_message_time', None)
-        data.setdefault('sandbox_enabled', False)
-        data.setdefault('sandbox_config', None)
-        data.setdefault('setting_sources', None)
-        data.setdefault('queue_config', None)
-        data.setdefault('queue_paused', False)
-        data.setdefault('cli_path', None)
-        data.setdefault('docker_enabled', False)
-        data.setdefault('docker_image', None)
-        data.setdefault('docker_extra_mounts', None)
-        data.setdefault('docker_home_directory', None)
-        data.setdefault('docker_proxy_enabled', False)
-        data.setdefault('docker_proxy_image', None)
-        # Issue #1053: migrate docker_proxy_credentials (inline dicts) → removed
-        if 'docker_proxy_credentials' in data:
-            import logging as _logging
-            _logging.getLogger(__name__).warning(
-                "Session state.json contains deprecated 'docker_proxy_credentials' field — "
-                "ignoring (re-enter secrets via the Secrets UI)."
-            )
-            data.pop('docker_proxy_credentials')
-        # Issue #827: rename docker_proxy_credential_names → assigned_secrets (log warning, no migration)
-        if 'docker_proxy_credential_names' in data and 'assigned_secrets' not in data:
-            import logging as _logging
-            _logging.getLogger(__name__).warning(
-                "Session state.json contains deprecated 'docker_proxy_credential_names' field — "
-                "field renamed to 'assigned_secrets'. Re-assign secrets via the Secrets UI."
-            )
-            data.pop('docker_proxy_credential_names')
-        else:
-            data.pop('docker_proxy_credential_names', None)
-        data.setdefault('assigned_secrets', None)
-        data.setdefault('docker_proxy_allowlist_domains', None)
-        data.setdefault('thinking_mode', None)
-        data.setdefault('thinking_budget_tokens', None)
-        data.setdefault('effort', None)
-        if data.get('effort') == 'max':
-            data['effort'] = 'high'
-        data.setdefault('is_ephemeral', False)
-        # Migrate knowledge_management_enabled → history_distillation_enabled (issue #736)
-        if 'knowledge_management_enabled' in data and 'history_distillation_enabled' not in data:
-            data['history_distillation_enabled'] = data.pop('knowledge_management_enabled')
-        else:
-            data.pop('knowledge_management_enabled', None)
-            data.setdefault('history_distillation_enabled', True)
-        # Migrate legacy disable_auto_memory boolean to auto_memory_mode enum (issue #709)
-        if 'disable_auto_memory' in data and 'auto_memory_mode' not in data:
-            data['auto_memory_mode'] = "disabled" if data.pop('disable_auto_memory') else "claude"
-        else:
-            data.pop('disable_auto_memory', None)
-            data.setdefault('auto_memory_mode', 'claude')
-        data.setdefault('auto_memory_directory', None)
-        data.setdefault('sdk_generated_name', None)
-        data.setdefault('skill_creating_enabled', False)
-        data.setdefault('mcp_server_ids', None)
-        data.setdefault('enable_claudeai_mcp_servers', True)
-        data.setdefault('strict_mcp_config', False)
-        data.setdefault('bare_mode', False)
-        data.setdefault('env_scrub_enabled', False)
-        data.setdefault('template_id', None)
-        data.setdefault('session_overrides', None)
-        # Watchdog activity tracking (issue #1130)
-        data.setdefault('last_activity_at', None)
-        if data.get('last_activity_at'):
-            data['last_activity_at'] = datetime.fromisoformat(data['last_activity_at'])
-        # Per-session secrets token (issue #827)
-        data.setdefault('secret_fetch_token', None)
-        # Issue #1134: placeholder map (None → empty dict in __post_init__)
-        data.setdefault('secret_placeholders', None)
+                data["slug"] = slugify_name(name)
+
+        data.setdefault("initial_permission_mode", data.get("current_permission_mode", "acceptEdits"))
+        data.setdefault("sdk_generated_name", None)
+        data.setdefault("overseer_level", 0)
+        data.setdefault("expertise_score", 0.5)
+        data.setdefault("can_spawn_minions", True)
+        data.setdefault("latest_message", None)
+        data.setdefault("latest_message_type", None)
+        data.setdefault("latest_message_time", None)
+        data.setdefault("is_ephemeral", False)
+        data.setdefault("queue_config", None)
+        data.setdefault("queue_paused", False)
+        data.setdefault("template_id", None)
+        data.setdefault("last_activity_at", None)
+        data.setdefault("secret_fetch_token", None)
+        data.setdefault("secret_placeholders", None)
+        data.setdefault("config", {})
+
+        # Drop any keys not in the post-#1230 schema (legacy flat CONFIG_FIELDS
+        # and session_overrides are removed by migration before from_dict is called).
+        known = {
+            "session_id", "state", "created_at", "updated_at", "working_directory",
+            "current_permission_mode", "initial_permission_mode", "error_message",
+            "claude_code_session_id", "is_processing", "name", "sdk_generated_name",
+            "slug", "order", "project_id", "role", "is_overseer", "overseer_level",
+            "parent_overseer_id", "child_minion_ids", "capabilities", "expertise_score",
+            "can_spawn_minions", "latest_message", "latest_message_type",
+            "latest_message_time", "is_ephemeral", "queue_config", "queue_paused",
+            "template_id", "config", "last_activity_at", "secret_fetch_token",
+            "secret_placeholders",
+        }
+        for k in list(data.keys()):
+            if k not in known:
+                data.pop(k)
+
         return cls(**data)
+
+
+def _migrate_session_to_config_dict(raw: dict) -> tuple[dict, bool]:
+    """Promote pre-1230 flat CONFIG_FIELDS + session_overrides into a ``config`` dict.
+
+    For template-linked sessions: drop stale flat fields without promotion (they
+    were stale-by-design under #1059). Promote ``session_overrides`` entries.
+
+    For non-template-linked legacy sessions: promote non-default flat fields
+    (this was the only place the user could express config). Equivalent to the
+    legacy ``_config_from_session_info`` chain made explicit at storage time.
+
+    Returns (migrated_raw, changed). Idempotent.
+    """
+    if "config" in raw:
+        return raw, False
+
+    from .session_config import CONFIG_FIELDS, DEFAULTS
+
+    raw = dict(raw)
+    config: dict = {}
+    template_linked = bool(raw.get("template_id"))
+
+    if template_linked:
+        # Drop flat CONFIG_FIELDs without promotion; they were stale-by-design.
+        for field_name in list(CONFIG_FIELDS):
+            raw.pop(field_name, None)
+        # Also drop legacy system_prompt flat field
+        raw.pop("system_prompt", None)
+        # Promote session_overrides entries.
+        for k, v in (raw.pop("session_overrides", None) or {}).items():
+            if k in CONFIG_FIELDS:
+                config[k] = v
+    else:
+        # Legacy non-template session: flat fields ARE the user's config.
+        for field_name in list(CONFIG_FIELDS):
+            if field_name not in raw:
+                continue
+            value = raw.pop(field_name)
+            if value is None:
+                continue
+            if value == DEFAULTS.get(field_name):
+                continue
+            config[field_name] = value
+        # Handle legacy system_prompt flat field
+        if "system_prompt" in raw:
+            sp = raw.pop("system_prompt")
+            if sp:
+                config["system_prompt"] = sp
+        # session_overrides on legacy sessions should be empty, but handle safely.
+        for k, v in (raw.pop("session_overrides", None) or {}).items():
+            if k in CONFIG_FIELDS:
+                config[k] = v
+
+    # Handle common legacy field migrations that may appear in raw data
+    raw.pop("override_system_prompt", None)  # now in config if set
+
+    # Adapt current_permission_mode to config["permission_mode"] for non-template sessions
+    # (only when it hasn't already been promoted from flat CONFIG_FIELDS above)
+    if not template_linked and "permission_mode" not in config:
+        cpm = raw.get("current_permission_mode")
+        if cpm and cpm != DEFAULTS.get("permission_mode"):
+            config["permission_mode"] = cpm
+
+    raw["config"] = config
+    return raw, True
 
 
 class SessionManager:
@@ -342,6 +340,9 @@ class SessionManager:
     async def _load_existing_sessions(self):
         """Load existing session state from filesystem"""
         try:
+            from .storage_utils import backup_legacy_sessions_once, write_alphabetized_json
+            backup_legacy_sessions_once(self.sessions_dir)
+
             for session_dir in self.sessions_dir.iterdir():
                 if session_dir.is_dir():
                     state_file = session_dir / "state.json"
@@ -350,9 +351,10 @@ class SessionManager:
                             with open(state_file) as f:
                                 data = json.load(f)
 
-                            # Migration: Add initial_permission_mode if missing
-                            if 'initial_permission_mode' not in data:
-                                data['initial_permission_mode'] = data.get('current_permission_mode', 'acceptEdits')
+                            # Issue #1230: promote flat CONFIG_FIELDS → config dict
+                            data, _changed = _migrate_session_to_config_dict(data)
+                            if _changed:
+                                write_alphabetized_json(state_file, data)
 
                             session_info = SessionInfo.from_dict(data)
 
@@ -438,42 +440,10 @@ class SessionManager:
         if order is None:
             order = 0
 
-        # Issue #1059: Template-linked sessions store only template_id + session_overrides.
-        # CONFIG_FIELDS are resolved at read-time via resolve_effective_config().
-        skip_flat = bool(config.template_id)
-        # CONFIG_FIELDS that map to non-None/bool SessionInfo fields need explicit defaults.
-        flat_config_kwargs: dict = {} if skip_flat else {
-            "additional_directories": config.additional_directories if config.additional_directories is not None else [],
-            "system_prompt": config.system_prompt,
-            "override_system_prompt": config.override_system_prompt,
-            "allowed_tools": config.allowed_tools if config.allowed_tools is not None else [],
-            "disallowed_tools": config.disallowed_tools if config.disallowed_tools is not None else [],
-            "model": config.model,
-            "sandbox_enabled": config.sandbox_enabled,
-            "sandbox_config": config.sandbox_config,
-            "setting_sources": config.setting_sources,
-            "cli_path": config.cli_path,
-            "docker_enabled": config.docker_enabled,
-            "docker_image": config.docker_image,
-            "docker_extra_mounts": config.docker_extra_mounts if config.docker_extra_mounts is not None else [],
-            "docker_home_directory": config.docker_home_directory,
-            "docker_proxy_enabled": config.docker_proxy_enabled,
-            "docker_proxy_image": config.docker_proxy_image,
-            "assigned_secrets": config.assigned_secrets,
-            "docker_proxy_allowlist_domains": config.docker_proxy_allowlist_domains,
-            "thinking_mode": config.thinking_mode,
-            "thinking_budget_tokens": config.thinking_budget_tokens,
-            "effort": config.effort,
-            "history_distillation_enabled": config.history_distillation_enabled,
-            "auto_memory_mode": config.auto_memory_mode,
-            "auto_memory_directory": config.auto_memory_directory,
-            "skill_creating_enabled": config.skill_creating_enabled,
-            "mcp_server_ids": config.mcp_server_ids if config.mcp_server_ids is not None else [],
-            "enable_claudeai_mcp_servers": config.enable_claudeai_mcp_servers,
-            "strict_mcp_config": config.strict_mcp_config,
-            "bare_mode": config.bare_mode,
-            "env_scrub_enabled": config.env_scrub_enabled,
-        }
+        # Build config dict from all CONFIG_FIELDS in the incoming SessionConfig.
+        # For template-linked sessions the resolution chain fills gaps at start time;
+        # session.config holds only what was explicitly configured at session creation.
+        config_dict = {k: v for k, v in config.model_dump().items() if k in CONFIG_FIELDS}
 
         session_info = SessionInfo(
             session_id=session_id,
@@ -481,23 +451,19 @@ class SessionManager:
             created_at=now,
             updated_at=now,
             working_directory=config.working_directory,
-            # Session-state fields — always set regardless of template linkage:
             current_permission_mode=config.permission_mode,
             initial_permission_mode=config.permission_mode,
             name=name,
             slug=slugify_name(name) if name else None,
             order=order,
             project_id=project_id,
-            # Multi-agent fields (universal Legion - issue #313, #349)
             role=role,
             capabilities=capabilities if capabilities is not None else [],
             parent_overseer_id=parent_overseer_id,
             overseer_level=overseer_level,
             can_spawn_minions=can_spawn_minions,
-            # Template linkage (issue #1059)
             template_id=config.template_id,
-            # CONFIG_FIELDS — only populated for non-template-linked sessions:
-            **flat_config_kwargs,
+            config=config_dict,
         )
 
         try:
@@ -715,15 +681,15 @@ class SessionManager:
         await self._notify_state_change_callbacks(session_id, new_state)
 
     async def _persist_session_state(self, session_id: str):
-        """Persist session state to filesystem"""
+        """Persist session state to filesystem (alphabetized JSON)."""
         try:
+            from .storage_utils import write_alphabetized_json
             session = self._active_sessions[session_id]
             session_dir = self.sessions_dir / session_id
             session_dir.mkdir(exist_ok=True)
 
             state_file = session_dir / "state.json"
-            with open(state_file, 'w') as f:
-                json.dump(session.to_dict(), f, indent=2)
+            write_alphabetized_json(state_file, session.to_dict())
 
         except Exception as e:
             logger.error(f"Failed to persist session state for {session_id}: {e}")
@@ -736,6 +702,7 @@ class SessionManager:
         Falls back to full write if the file doesn't exist yet.
         """
         try:
+            from .storage_utils import write_alphabetized_json
             session = self._active_sessions[session_id]
             state_file = self.sessions_dir / session_id / "state.json"
 
@@ -747,11 +714,10 @@ class SessionManager:
             with open(state_file) as f:
                 data = json.load(f)
 
-            data['is_processing'] = session.is_processing
-            data['updated_at'] = session.updated_at.isoformat()
+            data["is_processing"] = session.is_processing
+            data["updated_at"] = session.updated_at.isoformat()
 
-            with open(state_file, 'w') as f:
-                json.dump(data, f, indent=2)
+            write_alphabetized_json(state_file, data)
 
         except Exception as e:
             logger.error(f"Failed to persist processing state for {session_id}: {e}")
@@ -821,7 +787,8 @@ class SessionManager:
     ) -> bool:
         """Update session permission mode.
 
-        Pass template_manager to enable smart-diff override tracking (issue #1059).
+        Updates both the live runtime field (current_permission_mode) and the
+        persistent config dict (config["permission_mode"]).
         """
         async with self._get_session_lock(session_id):
             try:
@@ -835,10 +802,8 @@ class SessionManager:
                     logger.error(f"Invalid permission mode: {mode}")
                     return False
 
-                if template_manager and session.template_id:
-                    await self._track_overrides(session, "current_permission_mode", mode, template_manager)
-
                 session.current_permission_mode = mode
+                session.config["permission_mode"] = mode
                 session.updated_at = datetime.now(UTC)
                 await self._persist_session_state(session_id)
                 await self._notify_state_change_callbacks(session_id, session.state)
@@ -849,7 +814,7 @@ class SessionManager:
                 return False
 
     async def update_additional_directories(self, session_id: str, dirs_to_add: list[str]) -> bool:
-        """Add directories to session's additional_directories list (deduplicated).
+        """Add directories to session's config["additional_directories"] list (deduplicated).
 
         Issue #630: Persist addDirectories permission suggestions to session configuration.
         """
@@ -860,7 +825,7 @@ class SessionManager:
                     logger.error(f"Session {session_id} not found")
                     return False
 
-                existing = set(session.additional_directories or [])
+                existing = set(session.config.get("additional_directories") or [])
                 added = []
                 for d in dirs_to_add:
                     d = d.strip()
@@ -869,7 +834,7 @@ class SessionManager:
                         added.append(d)
 
                 if added:
-                    session.additional_directories = list(existing)
+                    session.config["additional_directories"] = list(existing)
                     session.updated_at = datetime.now(UTC)
                     await self._persist_session_state(session_id)
                     session_logger.info(
@@ -881,7 +846,7 @@ class SessionManager:
                 return False
 
     async def update_allowed_tools(self, session_id: str, tools_to_add: list[str]) -> bool:
-        """Add tools to session's allowed_tools list (case-sensitive, deduplicated).
+        """Add tools to session's config["allowed_tools"] list (case-sensitive, deduplicated).
 
         Issue #433: Persist permission approvals to session configuration.
         """
@@ -892,12 +857,12 @@ class SessionManager:
                     logger.error(f"Session {session_id} not found")
                     return False
 
-                existing = set(session.allowed_tools or [])
+                existing = set(session.config.get("allowed_tools") or [])
                 new_tools = [t for t in tools_to_add if t not in existing]
                 if not new_tools:
                     return True  # Already present
 
-                session.allowed_tools = list(existing | set(new_tools))
+                session.config["allowed_tools"] = list(existing | set(new_tools))
                 session.updated_at = datetime.now(UTC)
                 await self._persist_session_state(session_id)
                 await self._notify_state_change_callbacks(session_id, session.state)
@@ -1045,15 +1010,10 @@ class SessionManager:
         template_manager: TemplateManager | None = None,
         **kwargs,
     ) -> bool:
-        """
-        Update session fields dynamically (Phase 5 - for hierarchy management).
+        """Update session fields dynamically (for hierarchy management and config updates).
 
-        Supported fields:
-        - is_overseer (bool)
-        - child_minion_ids (List[str])
-        - Any other SessionInfo field
-
-        Pass template_manager to enable smart-diff override tracking (issue #1059).
+        CONFIG_FIELDS (permission_mode, allowed_tools, model, etc.) are written to
+        session.config dict. All other known fields are set directly on the dataclass.
 
         Example:
             await session_manager.update_session(
@@ -1069,18 +1029,12 @@ class SessionManager:
                     logger.error(f"Session {session_id} not found")
                     return False
 
-                # Update fields
                 for key, value in kwargs.items():
-                    if hasattr(session, key):
-                        if template_manager and session.template_id:
-                            await self._track_overrides(session, key, value, template_manager)
-                        # Issue #1059: For template-linked sessions, suppress flat writes for
-                        # CONFIG_FIELDS. The _track_overrides() call above already wrote to
-                        # session_overrides; the flat field stays at its default so that
-                        # resolve_effective_config() remains the single source of truth.
-                        canonical = _FIELD_NAME_MAP.get(key, key)
-                        if session.template_id and canonical in CONFIG_FIELDS:
-                            continue
+                    if key == "_replace_config":
+                        session.config = {k: v for k, v in value.items() if k in CONFIG_FIELDS}
+                    elif key in CONFIG_FIELDS:
+                        session.config[key] = value
+                    elif hasattr(session, key):
                         setattr(session, key, value)
                     else:
                         logger.warning(f"Session field '{key}' does not exist, skipping")
@@ -1093,44 +1047,6 @@ class SessionManager:
             except Exception as e:
                 logger.error(f"Failed to update session {session_id}: {e}")
                 return False
-
-    async def _track_overrides(
-        self,
-        session: "SessionInfo",
-        field_name: str,
-        new_value: Any,
-        template_manager: TemplateManager,
-    ) -> None:
-        """Smart-diff: sync session_overrides with template for a single field change.
-
-        Called before setattr() so comparison uses the pre-mutation state for context
-        but records the incoming new_value as the override candidate.
-        """
-        if not session.template_id:
-            return  # No template linked — no tracking needed
-
-        template = await template_manager.get_template(session.template_id)
-        if template is None:
-            return  # Template deleted — no tracking possible
-
-        # Map SessionInfo field names to the canonical config field name
-        canonical = _FIELD_NAME_MAP.get(field_name, field_name)
-
-        # Field must exist on template to be trackable
-        if not hasattr(template, canonical):
-            return
-
-        template_value = getattr(template, canonical)
-
-        if session.session_overrides is None:
-            session.session_overrides = {}
-
-        if new_value == template_value:
-            # Value matches template — remove override (back in sync)
-            session.session_overrides.pop(canonical, None)
-        else:
-            # Value differs from template — record override
-            session.session_overrides[canonical] = new_value
 
     async def reorder_sessions(self, session_ids: list[str]) -> bool:
         """Reorder sessions by assigning sequential order values (within project context)"""

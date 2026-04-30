@@ -80,13 +80,12 @@ async def test_session_config_propagation_to_session_info(tmp_path):
     await sm.create_session("test-session-1", config)
 
     info = await sm.get_session_info("test-session-1")
-    assert info.docker_proxy_enabled is True
-    assert info.docker_proxy_image == "custom-proxy:v2"
+    assert info.config.get("docker_proxy_enabled") is True
+    assert info.config.get("docker_proxy_image") == "custom-proxy:v2"
 
-    # Also verify to_dict exposes both fields
-    d = info.to_dict()
-    assert d["docker_proxy_enabled"] is True
-    assert d["docker_proxy_image"] == "custom-proxy:v2"
+    # Also verify config dict exposes both fields
+    assert info.config["docker_proxy_enabled"] is True
+    assert info.config["docker_proxy_image"] == "custom-proxy:v2"
 
 
 # ---------------------------------------------------------------------------
@@ -94,7 +93,7 @@ async def test_session_config_propagation_to_session_info(tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_session_info_backward_compat_no_proxy_enabled():
-    """SessionInfo.from_dict without docker_proxy_enabled defaults to False."""
+    """SessionInfo.from_dict without docker_proxy_enabled in config defaults to False."""
     from datetime import UTC, datetime
 
     from src.session_manager import SessionInfo, SessionState
@@ -104,12 +103,12 @@ def test_session_info_backward_compat_no_proxy_enabled():
         "state": SessionState.CREATED.value,
         "created_at": datetime.now(UTC).isoformat(),
         "updated_at": datetime.now(UTC).isoformat(),
-        # docker_proxy_enabled intentionally absent
-        "docker_proxy_image": "some-image:v1",
+        # docker_proxy_enabled intentionally absent from config
+        "config": {"docker_proxy_image": "some-image:v1"},
     }
     info = SessionInfo.from_dict(data)
-    assert info.docker_proxy_enabled is False
-    assert info.docker_proxy_image == "some-image:v1"
+    assert info.config.get("docker_proxy_enabled", False) is False
+    assert info.config.get("docker_proxy_image") == "some-image:v1"
 
 
 # ---------------------------------------------------------------------------
@@ -130,8 +129,8 @@ async def test_effective_proxy_image_disabled(tmp_path):
 
     # Simulate the resolution logic from SessionCoordinator
     proxy_image = (
-        (info.docker_proxy_image or "claude-proxy:local")
-        if info.docker_proxy_enabled
+        (info.config.get("docker_proxy_image") or "claude-proxy:local")
+        if info.config.get("docker_proxy_enabled", False)
         else None
     )
     assert proxy_image is None
@@ -155,8 +154,8 @@ async def test_effective_proxy_image_enabled_default(tmp_path):
         mock_load.return_value = mock_app_config
 
         proxy_image = (
-            (info.docker_proxy_image or mock_app_config.proxy.proxy_image)
-            if info.docker_proxy_enabled
+            (info.config.get("docker_proxy_image") or mock_app_config.proxy.proxy_image)
+            if info.config.get("docker_proxy_enabled", False)
             else None
         )
     assert proxy_image == "claude-proxy:local"
@@ -175,8 +174,8 @@ async def test_effective_proxy_image_enabled_override(tmp_path):
     info = await sm.get_session_info("eff-test-3")
 
     proxy_image = (
-        (info.docker_proxy_image or "claude-proxy:local")
-        if info.docker_proxy_enabled
+        (info.config.get("docker_proxy_image") or "claude-proxy:local")
+        if info.config.get("docker_proxy_enabled", False)
         else None
     )
     assert proxy_image == "custom:v2"

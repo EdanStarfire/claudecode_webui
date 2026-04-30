@@ -261,7 +261,7 @@ class TestMinionTemplateMigration:
         data = {
             "template_id": "t1",
             "name": "Legacy",
-            "permission_mode": "default",
+            "config": {"permission_mode": "default"},
             "profile_id": "some-old-uuid",  # Legacy field
             "created_at": datetime.now(UTC).isoformat(),
             "updated_at": datetime.now(UTC).isoformat(),
@@ -269,37 +269,36 @@ class TestMinionTemplateMigration:
         template = MinionTemplate.from_dict(data)
         assert not hasattr(template, "profile_id")
         assert template.profile_ids == {}
-        assert template.template_overrides == {}
+        assert template.config.get("permission_mode") == "default"
 
     def test_profile_ids_roundtrip(self):
-        """profile_ids and template_overrides survive to_dict/from_dict."""
+        """profile_ids and config survive to_dict/from_dict."""
         now = datetime.now(UTC)
         template = MinionTemplate(
             template_id="t1",
             name="Profiled",
-            permission_mode="default",
+            config={"permission_mode": "default", "model": "claude-opus-4-5"},
             profile_ids={"model": "uuid-1", "permissions": "uuid-2"},
-            template_overrides={"model": "claude-opus-4-5"},
             created_at=now,
             updated_at=now,
         )
         data = template.to_dict()
         restored = MinionTemplate.from_dict(data)
         assert restored.profile_ids == {"model": "uuid-1", "permissions": "uuid-2"}
-        assert restored.template_overrides == {"model": "claude-opus-4-5"}
+        assert restored.config.get("model") == "claude-opus-4-5"
 
     def test_missing_profile_ids_defaults_to_empty(self):
         """Templates without profile_ids default to {} (not None)."""
         data = {
             "template_id": "t1",
             "name": "No Profile",
-            "permission_mode": "default",
+            "config": {"permission_mode": "default"},
             "created_at": datetime.now(UTC).isoformat(),
             "updated_at": datetime.now(UTC).isoformat(),
         }
         template = MinionTemplate.from_dict(data)
         assert template.profile_ids == {}
-        assert template.template_overrides == {}
+        assert template.config.get("permission_mode") == "default"
 
 
 # ---- TemplateManager with profile_ids ----
@@ -315,7 +314,7 @@ class TestTemplateManagerProfileIds:
             template_overrides={"effort": "high"},
         )
         assert template.profile_ids == {"model": "uuid-model-profile"}
-        assert template.template_overrides == {"effort": "high"}
+        assert template.config.get("effort") == "high"
 
     async def test_update_template_profile_ids(self, template_manager):
         template = await template_manager.create_template(
@@ -333,11 +332,10 @@ class TestTemplateManagerProfileIds:
             "version": 1,
             "template": {
                 "name": "Import Profile Test",
-                "permission_mode": "default",
+                "config": {"permission_mode": "default", "effort": "low"},
                 "profile_ids": {"model": "uuid-model"},
-                "template_overrides": {"effort": "low"},
             },
         }
         template = await template_manager.import_template(envelope)
         assert template.profile_ids == {"model": "uuid-model"}
-        assert template.template_overrides == {"effort": "low"}
+        assert template.config.get("effort") == "low"

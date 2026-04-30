@@ -14,7 +14,6 @@ Default templates are shipped as source files in src/default_templates/ and
 seeded into data/templates/ on first run (or when new defaults are added).
 """
 
-import dataclasses
 import importlib.resources
 import json
 import logging
@@ -30,16 +29,56 @@ if TYPE_CHECKING:
 from .logging_config import get_logger
 from .models.minion_template import MinionTemplate
 from .models.permission_mode import PermissionMode
-from .session_config import SessionConfig
+from .session_config import CONFIG_FIELDS, SessionConfig
 from .slug_utils import slugify as _slugify
 
-# Fields set directly by create_template() — must not be overridden by config spread.
-# system_prompt exists on both SessionConfig and MinionTemplate; the direct param wins.
-_DIRECT_FIELDS = {"template_id", "name", "role", "system_prompt", "description",
-                  "capabilities", "profile_ids", "template_overrides", "created_at", "updated_at"}
 
-# MinionTemplate field names — computed once at import time for performance.
-_TEMPLATE_FIELDS = {f.name for f in dataclasses.fields(MinionTemplate)}
+def _migrate_template_to_config_dict(raw: dict) -> tuple[dict, bool]:
+    """Promote pre-1230 flat CONFIG_FIELDS + template_overrides into a ``config`` dict.
+
+    Returns (migrated_raw, changed). Idempotent: if ``config`` is already present,
+    returns input unchanged with changed=False.
+    """
+    if "config" in raw:
+        return raw, False
+
+    from .session_config import CONFIG_FIELDS, DEFAULTS
+
+    raw = dict(raw)
+    config: dict = {}
+
+    # Promote non-default flat fields (default-valued fields are dropped — the
+    # template was implicitly inheriting them via the resolution chain anyway).
+    for field_name in list(CONFIG_FIELDS):
+        if field_name not in raw:
+            continue
+        value = raw.pop(field_name)
+        if value is None:
+            continue
+        if value == DEFAULTS.get(field_name):
+            continue
+        config[field_name] = value
+
+    # All template_overrides entries were explicit user intent — promote unconditionally.
+    overrides = raw.pop("template_overrides", None) or {}
+    for k, v in overrides.items():
+        if k in CONFIG_FIELDS:
+            config[k] = v
+
+    # Handle legacy system_prompt flat field (it's a CONFIG_FIELD but stored in .md too)
+    if "system_prompt" in raw:
+        sp = raw.pop("system_prompt")
+        if sp:
+            config["system_prompt"] = sp
+
+    # Handle legacy backward-compat field renames that may appear in very old data
+    if "default_system_prompt" in raw:
+        sp = raw.pop("default_system_prompt")
+        if sp and "system_prompt" not in config:
+            config["system_prompt"] = sp
+
+    raw["config"] = config
+    return raw, True
 
 
 class TemplateConflictError(Exception):
@@ -103,19 +142,26 @@ class TemplateManager:
         self.templates.clear()
         loaded_count = 0
 
+        from .storage_utils import backup_legacy_dir_once, write_alphabetized_json
+        backup_legacy_dir_once(self.templates_dir)
+
         for template_file in self.templates_dir.glob("*.json"):
             try:
                 with open(template_file) as f:
                     data = json.load(f)
 
-                # Load companion .md file as system_prompt
+                # Phase 3 migration: promote flat CONFIG_FIELDS → config dict
+                data, _changed = _migrate_template_to_config_dict(data)
+                if _changed:
+                    write_alphabetized_json(template_file, data)
+
+                # Load companion .md file as config["system_prompt"]
                 md_file = template_file.with_suffix(".md")
+                data.setdefault("config", {})
                 if md_file.exists():
-                    data["system_prompt"] = md_file.read_text(
-                        encoding="utf-8"
-                    ).strip()
-                elif "system_prompt" not in data:
-                    data["system_prompt"] = None
+                    data["config"]["system_prompt"] = md_file.read_text(encoding="utf-8").strip()
+                else:
+                    data["config"].setdefault("system_prompt", None)
 
                 template = MinionTemplate.from_dict(data)
                 self.templates[template.template_id] = template
@@ -175,22 +221,23 @@ class TemplateManager:
     async def create_template(
         self,
         name: str,
-        config: SessionConfig,
+        config: SessionConfig | dict,
         role: str | None = None,
         system_prompt: str | None = None,
         description: str | None = None,
         capabilities: list[str] | None = None,
         profile_ids: dict[str, str] | None = None,
-        template_overrides: dict[str, Any] | None = None,
         watchdog: dict[str, Any] | None = None,
+        # Deprecated: template_overrides merged into config for backward compat with callers
+        template_overrides: dict[str, Any] | None = None,
     ) -> MinionTemplate:
         """Create a new template.
 
         Args:
             name: Template display name
-            config: Bundled configuration (permission_mode, tools, model, etc.)
+            config: Bundled configuration (SessionConfig) or explicit config dict
             role: Default role for minions using this template
-            system_prompt: System prompt content
+            system_prompt: System prompt content (stored in config["system_prompt"])
             description: Template description
             capabilities: Capability tags
         """
@@ -200,28 +247,35 @@ class TemplateManager:
         if any(t.name == name for t in self.templates.values()):
             raise ValueError(f"Template with name '{name}' already exists")
 
-        if config.permission_mode not in PermissionMode._value2member_map_:
-            raise ValueError(
-                f"Invalid permission_mode. Must be one of: {', '.join(PermissionMode._value2member_map_)}"
-            )
+        # Build config dict from SessionConfig (or accept explicit dict)
+        if isinstance(config, dict):
+            config_dict = {k: v for k, v in config.items() if k in CONFIG_FIELDS}
+        else:
+            if config.permission_mode not in PermissionMode._value2member_map_:
+                raise ValueError(
+                    f"Invalid permission_mode. Must be one of: {', '.join(PermissionMode._value2member_map_)}"
+                )
+            config_dict = {k: v for k, v in config.model_dump().items() if k in CONFIG_FIELDS}
 
-        # Extract config values for fields shared between SessionConfig and MinionTemplate,
-        # excluding fields managed directly by this method. MinionTemplate.__post_init__
-        # converts any None list fields to [] so we do not need to guard them here.
-        config_data = {k: v for k, v in config.model_dump().items()
-                       if k in _TEMPLATE_FIELDS and k not in _DIRECT_FIELDS}
+        # system_prompt is a CONFIG_FIELD; the direct parameter takes precedence
+        if system_prompt is not None:
+            config_dict["system_prompt"] = system_prompt
+
+        # Absorb legacy template_overrides into config (callers may still pass it)
+        if template_overrides:
+            for k, v in template_overrides.items():
+                if k in CONFIG_FIELDS:
+                    config_dict[k] = v
 
         template = MinionTemplate(
             template_id=str(uuid.uuid4()),
             name=name.strip(),
             role=role,
-            system_prompt=system_prompt,
             description=description,
             capabilities=capabilities if capabilities is not None else [],
             profile_ids=profile_ids if profile_ids is not None else {},
-            template_overrides=template_overrides if template_overrides is not None else {},
+            config=config_dict,
             watchdog=watchdog,
-            **config_data,
         )
 
         await self._save_template(template)
@@ -249,30 +303,32 @@ class TemplateManager:
         self,
         template_id: str,
         name: str | None = None,
+        role: str | None = None,
+        description: str | None = None,
+        capabilities: list[str] | None = None,
+        profile_ids: dict[str, str] | None = None,
+        watchdog: dict[str, Any] | None = None,
+        # config dict replaces all flat CONFIG_FIELD params (issue #1230)
+        config: dict[str, Any] | None = None,
+        # Deprecated flat-field params — absorbed into config for backward compat
         permission_mode: str | None = None,
         allowed_tools: list[str] | None = None,
         disallowed_tools: list[str] | None = None,
-        role: str | None = None,
         system_prompt: str | None = None,
-        description: str | None = None,
         model: str | None = None,
-        capabilities: list[str] | None = None,
         override_system_prompt: bool | None = None,
         sandbox_enabled: bool | None = None,
         sandbox_config: dict | None = None,
         cli_path: str | None = None,
         additional_directories: list[str] | None = None,
-        # Docker session isolation (issue #496)
         docker_enabled: bool | None = None,
         docker_image: str | None = None,
         docker_extra_mounts: list[str] | None = None,
-        # Docker proxy configuration (issue #1116)
         docker_home_directory: str | None = None,
         docker_proxy_enabled: bool | None = None,
         docker_proxy_image: str | None = None,
         assigned_secrets: list[str] | None = None,
         docker_proxy_allowlist_domains: list[str] | None = None,
-        # Thinking and effort configuration (issue #580)
         thinking_mode: str | None = None,
         thinking_budget_tokens: int | None = None,
         effort: str | None = None,
@@ -281,19 +337,20 @@ class TemplateManager:
         auto_memory_directory: str | None = None,
         skill_creating_enabled: bool | None = None,
         mcp_server_ids: list[str] | None = None,
-        # MCP toggle configuration (issue #786)
         enable_claudeai_mcp_servers: bool | None = None,
         strict_mcp_config: bool | None = None,
-        # Runtime feature flags (issue #1116)
         setting_sources: list[str] | None = None,
         bare_mode: bool | None = None,
         env_scrub_enabled: bool | None = None,
-        # Composable profiles (issue #1062)
-        profile_ids: dict[str, str] | None = None,
+        # Deprecated: template_overrides absorbed into config
         template_overrides: dict[str, Any] | None = None,
-        watchdog: dict[str, Any] | None = None,
     ) -> MinionTemplate:
-        """Update existing template."""
+        """Update existing template.
+
+        When ``config`` is provided it replaces template.config entirely (explicit
+        set/reset semantics). Individual CONFIG_FIELD kwargs are supported for
+        backward compatibility with existing callers; they are merged into config.
+        """
         template = self.templates.get(template_id)
         if not template:
             raise ValueError(f"Template {template_id} not found")
@@ -306,113 +363,73 @@ class TemplateManager:
                 raise ValueError(f"Template with name '{name}' already exists")
             template.name = name.strip()
 
-        if permission_mode:
-            if permission_mode not in PermissionMode._value2member_map_:
-                raise ValueError("Invalid permission_mode")
-            template.permission_mode = permission_mode
-
-        if allowed_tools is not None:
-            template.allowed_tools = allowed_tools
-
-        if disallowed_tools is not None:
-            template.disallowed_tools = disallowed_tools
-
         if role is not None:
             template.role = role
-
-        if system_prompt is not None:
-            template.system_prompt = system_prompt
-
         if description is not None:
             template.description = description
-
-        if model is not None:
-            template.model = model
-
         if capabilities is not None:
             template.capabilities = capabilities
-
-        if override_system_prompt is not None:
-            template.override_system_prompt = override_system_prompt
-
-        if sandbox_enabled is not None:
-            template.sandbox_enabled = sandbox_enabled
-
-        if sandbox_config is not None:
-            template.sandbox_config = sandbox_config
-
-        if cli_path is not None:
-            template.cli_path = cli_path
-
-        if additional_directories is not None:
-            template.additional_directories = additional_directories
-
-        # Docker session isolation (issue #496)
-        if docker_enabled is not None:
-            template.docker_enabled = docker_enabled
-        if docker_image is not None:
-            template.docker_image = docker_image
-        if docker_extra_mounts is not None:
-            template.docker_extra_mounts = docker_extra_mounts
-
-        # Docker proxy configuration (issue #1116)
-        if docker_home_directory is not None:
-            template.docker_home_directory = docker_home_directory
-        if docker_proxy_enabled is not None:
-            template.docker_proxy_enabled = docker_proxy_enabled
-        if docker_proxy_image is not None:
-            template.docker_proxy_image = docker_proxy_image
-        if assigned_secrets is not None:
-            template.assigned_secrets = assigned_secrets
-        if docker_proxy_allowlist_domains is not None:
-            template.docker_proxy_allowlist_domains = docker_proxy_allowlist_domains
-
-        # Thinking and effort configuration (issue #580)
-        if thinking_mode is not None:
-            template.thinking_mode = thinking_mode
-        if thinking_budget_tokens is not None:
-            template.thinking_budget_tokens = thinking_budget_tokens
-        if effort is not None:
-            template.effort = effort
-
-        if history_distillation_enabled is not None:
-            template.history_distillation_enabled = history_distillation_enabled
-
-        if auto_memory_mode is not None:
-            template.auto_memory_mode = auto_memory_mode
-
-        if auto_memory_directory is not None:
-            template.auto_memory_directory = auto_memory_directory
-
-        if skill_creating_enabled is not None:
-            template.skill_creating_enabled = skill_creating_enabled
-
-        if mcp_server_ids is not None:
-            template.mcp_server_ids = mcp_server_ids
-
-        if enable_claudeai_mcp_servers is not None:
-            template.enable_claudeai_mcp_servers = enable_claudeai_mcp_servers
-
-        if strict_mcp_config is not None:
-            template.strict_mcp_config = strict_mcp_config
-
-        # Runtime feature flags (issue #1116)
-        if setting_sources is not None:
-            template.setting_sources = setting_sources
-        if bare_mode is not None:
-            template.bare_mode = bare_mode
-        if env_scrub_enabled is not None:
-            template.env_scrub_enabled = env_scrub_enabled
-
         if profile_ids is not None:
             template.profile_ids = profile_ids
-
-        if template_overrides is not None:
-            template.template_overrides = template_overrides
-
         if watchdog is not None:
             template.watchdog = watchdog
 
+        # Apply config dict if provided (replaces entire config)
+        if config is not None:
+            template.config = {k: v for k, v in config.items() if k in CONFIG_FIELDS}
+
+        # Apply individual CONFIG_FIELD kwargs (backward compat + partial updates)
+        flat_updates: dict[str, Any] = {}
+        local_vars = {
+            "permission_mode": permission_mode,
+            "allowed_tools": allowed_tools,
+            "disallowed_tools": disallowed_tools,
+            "system_prompt": system_prompt,
+            "model": model,
+            "override_system_prompt": override_system_prompt,
+            "sandbox_enabled": sandbox_enabled,
+            "sandbox_config": sandbox_config,
+            "cli_path": cli_path,
+            "additional_directories": additional_directories,
+            "docker_enabled": docker_enabled,
+            "docker_image": docker_image,
+            "docker_extra_mounts": docker_extra_mounts,
+            "docker_home_directory": docker_home_directory,
+            "docker_proxy_enabled": docker_proxy_enabled,
+            "docker_proxy_image": docker_proxy_image,
+            "assigned_secrets": assigned_secrets,
+            "docker_proxy_allowlist_domains": docker_proxy_allowlist_domains,
+            "thinking_mode": thinking_mode,
+            "thinking_budget_tokens": thinking_budget_tokens,
+            "effort": effort,
+            "history_distillation_enabled": history_distillation_enabled,
+            "auto_memory_mode": auto_memory_mode,
+            "auto_memory_directory": auto_memory_directory,
+            "skill_creating_enabled": skill_creating_enabled,
+            "mcp_server_ids": mcp_server_ids,
+            "enable_claudeai_mcp_servers": enable_claudeai_mcp_servers,
+            "strict_mcp_config": strict_mcp_config,
+            "setting_sources": setting_sources,
+            "bare_mode": bare_mode,
+            "env_scrub_enabled": env_scrub_enabled,
+        }
+        for field_name, value in local_vars.items():
+            if value is not None and field_name in CONFIG_FIELDS:
+                flat_updates[field_name] = value
+
+        # Validate permission_mode if explicitly supplied
+        if "permission_mode" in flat_updates:
+            pm = flat_updates["permission_mode"]
+            if pm not in PermissionMode._value2member_map_:
+                raise ValueError("Invalid permission_mode")
+
+        # Absorb legacy template_overrides into config
+        if template_overrides:
+            for k, v in template_overrides.items():
+                if k in CONFIG_FIELDS:
+                    flat_updates[k] = v
+
+        template.config.update(flat_updates)
         template.updated_at = datetime.now(UTC)
 
         # If name changed, remove old files before saving with new slug
@@ -474,19 +491,20 @@ class TemplateManager:
         """Save template to disk as JSON + optional MD file pair.
 
         Files are named using the slugified template name for readability.
-        The JSON file contains all config fields except default_system_prompt.
-        The .md file contains the system prompt separately for easy editing.
+        system_prompt lives in config["system_prompt"] but is stored in the
+        companion .md file for easy direct editing.
         """
+        from .storage_utils import write_alphabetized_json
+
         slug = _slugify(template.name)
 
-        # Build dict for JSON, excluding system_prompt (stored in .md file)
+        # Extract system_prompt from config before writing JSON
         data = template.to_dict()
-        system_prompt = data.pop("system_prompt", None)
+        system_prompt = data["config"].pop("system_prompt", None)
 
-        # Write JSON config
+        # Write JSON config (alphabetized)
         template_file = self.templates_dir / f"{slug}.json"
-        with open(template_file, 'w') as f:
-            json.dump(data, f, indent=2)
+        write_alphabetized_json(template_file, data)
 
         # Write .md system prompt (create/update/delete as needed)
         md_file = self.templates_dir / f"{slug}.md"
@@ -536,29 +554,33 @@ class TemplateManager:
         sanitized = {k: v for k, v in template_data.items()
                      if k not in ("template_id", "created_at", "updated_at")}
 
-        # Pydantic v2 ignores extra keys (name, role, description, etc.) and
-        # applies field defaults for any missing keys — handles both legacy v1
-        # envelopes and future fields without requiring manual enumeration.
-        config = SessionConfig.model_validate(sanitized)
-
-        # Carry profile_ids and template_overrides through import.
+        # Carry profile_ids through import.
         # Warn if profile_ids reference profiles that don't exist locally; don't block.
         imported_profile_ids = sanitized.get("profile_ids") or {}
         if imported_profile_ids:
             template_logger.warning(
                 f"Imported template '{name}' references profile_ids: {imported_profile_ids}. "
-                "Verify these profiles exist locally; missing profiles fall back to template flat fields."
+                "Verify these profiles exist locally; missing profiles fall back to defaults."
             )
+
+        # Accept new-style envelope (has "config" key) or legacy flat-field envelope
+        if "config" in sanitized:
+            config_dict = sanitized["config"]
+            system_prompt = config_dict.pop("system_prompt", None) or sanitized.get("system_prompt")
+        else:
+            # Legacy envelope: migrate flat fields into config dict inline
+            migrated, _ = _migrate_template_to_config_dict(sanitized)
+            config_dict = migrated.get("config", {})
+            system_prompt = config_dict.pop("system_prompt", None) or sanitized.get("system_prompt")
 
         template = await self.create_template(
             name=name,
-            config=config,
+            config=config_dict,
             role=sanitized.get("role"),
-            system_prompt=sanitized.get("system_prompt"),
+            system_prompt=system_prompt,
             description=sanitized.get("description"),
             capabilities=sanitized.get("capabilities"),
             profile_ids=imported_profile_ids if imported_profile_ids else None,
-            template_overrides=sanitized.get("template_overrides"),
         )
 
         template_logger.info(
@@ -607,25 +629,24 @@ class TemplateManager:
                 existing = existing_by_name.get(name)
                 if existing:
                     # Template exists — seed .md prompt file if missing
-                    if source_prompt and not existing.system_prompt:
+                    if source_prompt and not existing.config.get("system_prompt"):
                         slug = _slugify(existing.name)
                         runtime_md = self.templates_dir / f"{slug}.md"
                         if not runtime_md.exists():
                             runtime_md.write_text(source_prompt, encoding="utf-8")
-                            existing.system_prompt = source_prompt
+                            existing.config["system_prompt"] = source_prompt
                             prompt_seeded_count += 1
                             template_logger.info(
                                 f"Seeded system prompt for existing template: {name}"
                             )
                     continue
 
-                # Pydantic v2 ignores extra keys (name, role, description, etc.)
-                # and defaults any missing fields — identical semantics to the
-                # previous manual .get() calls but automatically covers new fields.
-                seed_config = SessionConfig.model_validate(data)
+                # Migrate default template data → config dict shape
+                migrated, _ = _migrate_template_to_config_dict(dict(data))
+                config_dict = migrated.get("config", {})
                 await self.create_template(
                     name=data["name"],
-                    config=seed_config,
+                    config=config_dict,
                     role=data.get("role") or data.get("default_role"),
                     system_prompt=source_prompt,
                     description=data.get("description"),

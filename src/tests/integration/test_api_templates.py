@@ -45,11 +45,11 @@ async def test_issue_1116_put_template_persists_docker_proxy_allowlist_domains(
     assert get_resp.status_code == 200, get_resp.text
     t = get_resp.json()
 
-    assert t["docker_proxy_allowlist_domains"] == ["example.com", "api.example.com"]
-    assert t["assigned_secrets"] == ["vault-cred-1"]
-    assert t["docker_proxy_enabled"] is True
-    assert t["docker_proxy_image"] == "proxy:v2"
-    assert t["docker_home_directory"] == "/home/agent"
+    assert t["config"].get("docker_proxy_allowlist_domains") == ["example.com", "api.example.com"]
+    assert t["config"].get("assigned_secrets") == ["vault-cred-1"]
+    assert t["config"].get("docker_proxy_enabled") is True
+    assert t["config"].get("docker_proxy_image") == "proxy:v2"
+    assert t["config"].get("docker_home_directory") == "/home/agent"
 
 
 @pytest.mark.asyncio
@@ -81,9 +81,9 @@ async def test_issue_1116_put_template_persists_runtime_flags(api_integration_en
     assert get_resp.status_code == 200, get_resp.text
     t = get_resp.json()
 
-    assert t["setting_sources"] == ["user", "project"]
-    assert t["bare_mode"] is True
-    assert t["env_scrub_enabled"] is True
+    assert t["config"].get("setting_sources") == ["user", "project"]
+    assert t["config"].get("bare_mode") is True
+    assert t["config"].get("env_scrub_enabled") is True
 
 
 @pytest.mark.asyncio
@@ -113,7 +113,7 @@ async def test_issue_1229_clear_docker_proxy_allowlist_domains(api_integration_e
 
     get_resp = await client.get(f"/api/templates/{template_id}")
     assert get_resp.status_code == 200, get_resp.text
-    assert get_resp.json()["docker_proxy_allowlist_domains"] == []
+    assert get_resp.json()["config"].get("docker_proxy_allowlist_domains") == []
 
 
 @pytest.mark.asyncio
@@ -141,7 +141,7 @@ async def test_issue_1229_clear_assigned_secrets(api_integration_env):
 
     get_resp = await client.get(f"/api/templates/{template_id}")
     assert get_resp.status_code == 200, get_resp.text
-    assert get_resp.json()["assigned_secrets"] == []
+    assert get_resp.json()["config"].get("assigned_secrets") == []
 
 
 @pytest.mark.asyncio
@@ -169,4 +169,41 @@ async def test_issue_1229_clear_allowed_tools(api_integration_env):
 
     get_resp = await client.get(f"/api/templates/{template_id}")
     assert get_resp.status_code == 200, get_resp.text
-    assert get_resp.json()["allowed_tools"] == []
+    assert get_resp.json()["config"].get("allowed_tools") == []
+
+
+@pytest.mark.asyncio
+async def test_issue_1230_post_template_with_template_overrides_rejected(api_integration_env):
+    """POST /api/templates with template_overrides must be rejected (issue #1230)."""
+    client = api_integration_env["client"]
+
+    resp = await client.post(
+        "/api/templates",
+        json={
+            "name": "Legacy Template",
+            "permission_mode": "default",
+            "template_overrides": {"model": "claude-opus-4-7"},
+        },
+    )
+    assert resp.status_code == 422, f"Expected 422, got {resp.status_code}: {resp.text}"
+
+
+@pytest.mark.asyncio
+async def test_issue_1230_put_template_with_template_overrides_rejected(api_integration_env):
+    """PUT /api/templates/{id} with template_overrides must be rejected (issue #1230)."""
+    client = api_integration_env["client"]
+
+    # First create a valid template
+    create_resp = await client.post(
+        "/api/templates",
+        json={"name": "Update Target", "permission_mode": "default"},
+    )
+    assert create_resp.status_code == 200, create_resp.text
+    template_id = create_resp.json()["template_id"]
+
+    # Now attempt update with legacy field
+    resp = await client.put(
+        f"/api/templates/{template_id}",
+        json={"template_overrides": {"model": "claude-opus-4-7"}},
+    )
+    assert resp.status_code == 422, f"Expected 422, got {resp.status_code}: {resp.text}"

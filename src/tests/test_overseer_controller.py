@@ -25,26 +25,28 @@ def _make_session(session_id, name, project_id="legion-1", parent_id=None, child
     s.state = SessionState.ACTIVE
     s.working_directory = "/tmp/test"
     s.role = "worker"
-    # Attributes inherited by child minion SessionConfig construction
-    s.thinking_mode = None
-    s.thinking_budget_tokens = None
-    s.effort = None
-    s.setting_sources = None
-    s.additional_directories = []
-    s.sandbox_config = None
-    s.docker_enabled = False
-    s.docker_image = None
-    s.docker_extra_mounts = []
-    s.docker_home_directory = None
-    s.history_distillation_enabled = True
-    s.auto_memory_mode = "claude"
-    s.auto_memory_directory = None
-    s.skill_creating_enabled = False
-    s.mcp_server_ids = []
-    s.enable_claudeai_mcp_servers = True
-    s.strict_mcp_config = False
-    s.bare_mode = False
-    s.env_scrub_enabled = False
+    # All CONFIG_FIELDS live in session.config (issue #1230)
+    s.config = {
+        "thinking_mode": None,
+        "thinking_budget_tokens": None,
+        "effort": None,
+        "setting_sources": None,
+        "additional_directories": [],
+        "sandbox_config": None,
+        "docker_enabled": False,
+        "docker_image": None,
+        "docker_extra_mounts": [],
+        "docker_home_directory": None,
+        "history_distillation_enabled": True,
+        "auto_memory_mode": "claude",
+        "auto_memory_directory": None,
+        "skill_creating_enabled": False,
+        "mcp_server_ids": [],
+        "enable_claudeai_mcp_servers": True,
+        "strict_mcp_config": False,
+        "bare_mode": False,
+        "env_scrub_enabled": False,
+    }
     return s
 
 

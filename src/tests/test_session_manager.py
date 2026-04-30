@@ -57,8 +57,7 @@ class TestSessionInfo:
         assert info.updated_at == now
         assert info.working_directory is None
         assert info.current_permission_mode == "acceptEdits"
-        assert info.allowed_tools == ["bash", "edit", "read"]
-        assert info.model is None  # No default model
+        assert info.config == {}  # CONFIG_FIELDS live in config dict, not flat
 
     def test_session_info_to_dict(self):
         """Test SessionInfo to_dict conversion."""
@@ -93,10 +92,8 @@ class TestSessionInfo:
             "updated_at": now.isoformat(),
             "working_directory": "/test/path",
             "current_permission_mode": "acceptEdits",
-            "system_prompt": None,
-            "allowed_tools": ["bash", "edit"],
-            "model": "claude-3-sonnet-20241022",
-            "error_message": None
+            "error_message": None,
+            "config": {"allowed_tools": ["bash", "edit"], "model": "claude-3-sonnet-20241022"},
         }
 
         info = SessionInfo.from_dict(data)
@@ -106,23 +103,23 @@ class TestSessionInfo:
         assert info.created_at == now
         assert info.updated_at == now
         assert info.working_directory == "/test/path"
-        assert info.allowed_tools == ["bash", "edit"]
+        assert info.config.get("allowed_tools") == ["bash", "edit"]
 
     def test_bare_mode_persists(self):
-        """Test bare_mode=True round-trips through to_dict/from_dict."""
+        """Test bare_mode=True round-trips through config → to_dict → from_dict."""
         now = datetime.now(UTC)
         info = SessionInfo(
             session_id="test-bare-123",
             state=SessionState.CREATED,
             created_at=now,
             updated_at=now,
-            bare_mode=True,
+            config={"bare_mode": True},
         )
         restored = SessionInfo.from_dict(info.to_dict())
-        assert restored.bare_mode is True
+        assert restored.config.get("bare_mode") is True
 
     def test_bare_mode_default_false(self):
-        """Test bare_mode defaults to False when absent from dict."""
+        """Test bare_mode absent from config dict defaults to None/False."""
         now = datetime.now(UTC)
         data = {
             "session_id": "test-bare-456",
@@ -131,7 +128,7 @@ class TestSessionInfo:
             "updated_at": now.isoformat(),
         }
         info = SessionInfo.from_dict(data)
-        assert info.bare_mode is False
+        assert info.config.get("bare_mode", False) is False
 
     # --- Issue #1059: template_id / session_overrides schema tests ---
 
@@ -146,19 +143,19 @@ class TestSessionInfo:
         )
         assert info.template_id is None
 
-    def test_session_info_session_overrides_default(self):
-        """session_overrides defaults to {} via __post_init__ when not provided."""
+    def test_session_info_config_default(self):
+        """config defaults to {} when not provided."""
         now = datetime.now(UTC)
         info = SessionInfo(
-            session_id="test-overrides-default",
+            session_id="test-config-default",
             state=SessionState.CREATED,
             created_at=now,
             updated_at=now,
         )
-        assert info.session_overrides == {}
+        assert info.config == {}
 
     def test_session_info_to_dict_template_fields(self):
-        """to_dict includes template_id and session_overrides."""
+        """to_dict includes template_id and config."""
         now = datetime.now(UTC)
         info = SessionInfo(
             session_id="test-tmpl-dict",
@@ -166,11 +163,11 @@ class TestSessionInfo:
             created_at=now,
             updated_at=now,
             template_id="tmpl-1",
-            session_overrides={"model": "opus"},
+            config={"model": "opus"},
         )
         data = info.to_dict()
         assert data["template_id"] == "tmpl-1"
-        assert data["session_overrides"] == {"model": "opus"}
+        assert data["config"]["model"] == "opus"
 
     def test_session_info_from_dict_backward_compat(self):
         """from_dict with missing template fields defaults to None / {}."""
@@ -183,10 +180,10 @@ class TestSessionInfo:
         }
         info = SessionInfo.from_dict(data)
         assert info.template_id is None
-        assert info.session_overrides == {}
+        assert info.config == {}
 
     def test_session_info_from_dict_with_template_fields(self):
-        """from_dict preserves explicit template_id and session_overrides."""
+        """from_dict preserves explicit template_id and config."""
         now = datetime.now(UTC)
         data = {
             "session_id": "test-from-dict-tmpl",
@@ -194,14 +191,14 @@ class TestSessionInfo:
             "created_at": now.isoformat(),
             "updated_at": now.isoformat(),
             "template_id": "tmpl-42",
-            "session_overrides": {"effort": "high"},
+            "config": {"effort": "high"},
         }
         info = SessionInfo.from_dict(data)
         assert info.template_id == "tmpl-42"
-        assert info.session_overrides == {"effort": "high"}
+        assert info.config.get("effort") == "high"
 
     def test_session_info_round_trip_template_fields(self):
-        """to_dict() → from_dict() round-trip preserves template_id and session_overrides."""
+        """to_dict() → from_dict() round-trip preserves template_id and config."""
         now = datetime.now(UTC)
         info = SessionInfo(
             session_id="test-round-trip",
@@ -209,11 +206,11 @@ class TestSessionInfo:
             created_at=now,
             updated_at=now,
             template_id="tmpl-rt",
-            session_overrides={"model": "haiku", "thinking_mode": "adaptive"},
+            config={"model": "haiku", "thinking_mode": "adaptive"},
         )
         restored = SessionInfo.from_dict(info.to_dict())
         assert restored.template_id == "tmpl-rt"
-        assert restored.session_overrides == {"model": "haiku", "thinking_mode": "adaptive"}
+        assert restored.config == {"model": "haiku", "thinking_mode": "adaptive"}
 
 
 class TestSessionManager:
@@ -265,8 +262,9 @@ class TestSessionManager:
 
         session_info = manager._active_sessions[session_id]
         assert session_info.current_permission_mode == "acceptEdits"
-        assert session_info.allowed_tools == []  # No default tools (must be specified explicitly)
-        assert session_info.model is None  # No default model
+        # CONFIG_FIELDS live in session.config, not as flat attributes
+        assert session_info.config.get("allowed_tools") is None
+        assert session_info.config.get("model") is None
 
     @pytest.mark.asyncio
     async def test_start_session(self, temp_session_manager, sample_session_config):
@@ -470,11 +468,16 @@ class TestSessionManager:
         assert state_data["state"] == "starting"
 
 
-# --- Issue #1059 Phase 2: Override tracking tests ---
+# --- Issue #1059 Phase 2 / Issue #1230: Config dict update tests ---
 
 
 def _make_template(template_id: str = "tmpl-001", permission_mode: str = "acceptEdits", **kwargs) -> MinionTemplate:
-    return MinionTemplate(template_id=template_id, name="Test Template", permission_mode=permission_mode, **kwargs)
+    """Build a test MinionTemplate. CONFIG_FIELDS go into config dict."""
+    from ..session_config import CONFIG_FIELDS as _CF
+    config = {"permission_mode": permission_mode}
+    config.update({k: v for k, v in kwargs.items() if k in _CF})
+    identity = {k: v for k, v in kwargs.items() if k not in _CF}
+    return MinionTemplate(template_id=template_id, name="Test Template", config=config, **identity)
 
 
 def _make_template_manager(template: MinionTemplate | None) -> AsyncMock:
@@ -484,143 +487,70 @@ def _make_template_manager(template: MinionTemplate | None) -> AsyncMock:
 
 
 @pytest.mark.asyncio
-class TestOverrideTracking:
-    """Tests for SessionManager._track_overrides() and its wiring into update_session/update_permission_mode."""
+class TestConfigDictUpdates:
+    """Tests for config dict write behavior in update_session/update_permission_mode (issue #1230)."""
 
-    async def _create_session_with_template(
-        self,
-        manager: SessionManager,
-        template_id: str = "tmpl-001",
-    ) -> str:
-        """Helper: create a session linked to a template."""
-        session_id = str(uuid.uuid4())
-        config = SessionConfig(template_id=template_id)
-        await manager.create_session(session_id, config=config)
-        # Manually set template_id since create_session doesn't store it from SessionConfig yet
-        await manager.update_session(session_id, template_id=template_id)
-        return session_id
-
-    async def test_override_add(self, temp_session_manager):
-        """Updating a field to a value different from template records an override."""
+    async def test_config_field_update_writes_to_config_dict(self, temp_session_manager):
+        """update_session with a CONFIG_FIELD writes to session.config."""
         manager = temp_session_manager
-        template = _make_template(model="claude-sonnet-4-6")
-        tm = _make_template_manager(template)
-
-        session_id = await self._create_session_with_template(manager)
-
-        # Update model to something different from template
-        await manager.update_session(session_id, template_manager=tm, model="claude-opus-4-5")
-
-        session = await manager.get_session_info(session_id)
-        assert session.session_overrides.get("model") == "claude-opus-4-5"
-
-    async def test_override_remove(self, temp_session_manager):
-        """Updating a field to match the template value removes the override."""
-        manager = temp_session_manager
-        template = _make_template(model="claude-sonnet-4-6")
-        tm = _make_template_manager(template)
-
-        session_id = await self._create_session_with_template(manager)
-        # Seed an existing override
-        await manager.update_session(session_id, template_manager=tm, model="claude-opus-4-5")
-        session = await manager.get_session_info(session_id)
-        assert "model" in session.session_overrides
-
-        # Now update to match template value — override should disappear
-        await manager.update_session(session_id, template_manager=tm, model="claude-sonnet-4-6")
-        session = await manager.get_session_info(session_id)
-        assert "model" not in session.session_overrides
-
-    async def test_override_no_template(self, temp_session_manager):
-        """Updating a field on a session without template_id leaves session_overrides unchanged."""
-        manager = temp_session_manager
-        tm = _make_template_manager(_make_template())
-
         session_id = str(uuid.uuid4())
         await manager.create_session(session_id, config=SessionConfig())
-        # Ensure no template_id
-        session = await manager.get_session_info(session_id)
-        assert session.template_id is None
 
-        await manager.update_session(session_id, template_manager=tm, model="claude-opus-4-5")
+        await manager.update_session(session_id, model="claude-opus-4-5")
 
         session = await manager.get_session_info(session_id)
-        assert session.session_overrides == {}
-        # get_template should not be called when template_id is None
-        tm.get_template.assert_not_called()
+        assert session.config.get("model") == "claude-opus-4-5"
 
-    async def test_override_permission_mode(self, temp_session_manager):
-        """update_permission_mode tracks override using canonical key 'permission_mode'."""
+    async def test_non_config_field_not_written_to_config(self, temp_session_manager):
+        """update_session with a non-CONFIG_FIELD (e.g. queue_paused) does NOT write to config."""
         manager = temp_session_manager
-        template = _make_template(permission_mode="acceptEdits")
-        tm = _make_template_manager(template)
+        session_id = str(uuid.uuid4())
+        await manager.create_session(session_id, config=SessionConfig())
 
-        session_id = await self._create_session_with_template(manager)
-
-        await manager.update_permission_mode(session_id, "bypassPermissions", template_manager=tm)
+        await manager.update_session(session_id, queue_paused=True)
 
         session = await manager.get_session_info(session_id)
-        # Override key is canonical "permission_mode", not "current_permission_mode"
-        assert session.session_overrides.get("permission_mode") == "bypassPermissions"
+        assert "queue_paused" not in session.config
+        assert session.queue_paused is True
 
-    async def test_override_permission_mode_matches_template_removes_override(self, temp_session_manager):
-        """Setting permission_mode to template value removes the override."""
+    async def test_update_permission_mode_writes_to_config_and_flat(self, temp_session_manager):
+        """update_permission_mode writes to both config['permission_mode'] and current_permission_mode."""
         manager = temp_session_manager
-        template = _make_template(permission_mode="acceptEdits")
-        tm = _make_template_manager(template)
+        session_id = str(uuid.uuid4())
+        await manager.create_session(session_id, config=SessionConfig())
 
-        session_id = await self._create_session_with_template(manager)
+        await manager.update_permission_mode(session_id, "bypassPermissions")
 
-        # First set a non-template mode
-        await manager.update_permission_mode(session_id, "bypassPermissions", template_manager=tm)
         session = await manager.get_session_info(session_id)
-        assert "permission_mode" in session.session_overrides
+        assert session.config.get("permission_mode") == "bypassPermissions"
+        assert session.current_permission_mode == "bypassPermissions"
 
-        # Then set back to template mode
-        await manager.update_permission_mode(session_id, "acceptEdits", template_manager=tm)
-        session = await manager.get_session_info(session_id)
-        assert "permission_mode" not in session.session_overrides
-
-    async def test_override_template_deleted(self, temp_session_manager):
-        """When template is deleted, _track_overrides exits silently with no change."""
+    async def test_update_session_multiple_config_fields(self, temp_session_manager):
+        """update_session writes multiple CONFIG_FIELDS to config dict."""
         manager = temp_session_manager
-        tm = _make_template_manager(None)  # Template not found
+        session_id = str(uuid.uuid4())
+        await manager.create_session(session_id, config=SessionConfig())
 
-        session_id = await self._create_session_with_template(manager)
-
-        # Should not raise; session_overrides unchanged
-        await manager.update_session(session_id, template_manager=tm, model="claude-opus-4-5")
+        await manager.update_session(session_id, model="claude-opus-4-5", sandbox_enabled=True)
 
         session = await manager.get_session_info(session_id)
-        assert session.session_overrides == {}
-
-    async def test_non_config_field_not_tracked(self, temp_session_manager):
-        """Fields not on MinionTemplate (e.g. queue_paused) don't add overrides."""
-        manager = temp_session_manager
-        template = _make_template()
-        tm = _make_template_manager(template)
-
-        session_id = await self._create_session_with_template(manager)
-
-        await manager.update_session(session_id, template_manager=tm, queue_paused=True)
-
-        session = await manager.get_session_info(session_id)
-        assert "queue_paused" not in session.session_overrides
+        assert session.config.get("model") == "claude-opus-4-5"
+        assert session.config.get("sandbox_enabled") is True
 
 
-# --- Issue #1059: Lean session creation tests ---
+# --- Issue #1059 / #1230: Session config storage tests ---
 
 
 @pytest.mark.asyncio
-class TestLeanSessionCreation:
-    """Tests for issue #1059 — template-linked sessions skip flat CONFIG_FIELDS."""
+class TestSessionConfigStorage:
+    """Tests for issue #1230 — CONFIG_FIELDS stored in session.config dict."""
 
     @pytest.fixture
     def config_with_template(self):
         return SessionConfig(
             working_directory="/test/project",
             permission_mode="acceptEdits",
-            system_prompt="Should not be stored flat",
+            system_prompt="Stored in config dict",
             allowed_tools=["bash", "edit"],
             model="claude-opus-4-5",
             template_id="tmpl-test-001",
@@ -631,97 +561,186 @@ class TestLeanSessionCreation:
         return SessionConfig(
             working_directory="/test/project",
             permission_mode="acceptEdits",
-            system_prompt="Stored flat for legacy sessions",
+            system_prompt="Stored in config dict",
             allowed_tools=["bash", "edit"],
             model="claude-opus-4-5",
         )
 
-    async def test_lean_session_skips_config_fields(
+    async def test_config_fields_stored_in_config_dict(
         self, temp_session_manager, config_with_template
     ):
-        """Template-linked sessions must not store CONFIG_FIELDS flat on SessionInfo."""
-
+        """CONFIG_FIELDS from SessionConfig are stored in session.config dict (not flat)."""
         manager = temp_session_manager
         session_id = str(uuid.uuid4())
         await manager.create_session(session_id, config=config_with_template)
         session = await manager.get_session_info(session_id)
 
         assert session.template_id == "tmpl-test-001"
-        # Core CONFIG_FIELDS must be at dataclass defaults, not copied from config
-        assert session.model is None
-        assert session.system_prompt is None
-        assert session.allowed_tools == ["bash", "edit", "read"]  # __post_init__ default
-        assert session.docker_enabled is False
-        assert session.docker_proxy_allowlist_domains is None
-        assert session.assigned_secrets is None
-        assert session.mcp_server_ids == []  # __post_init__ default
+        # CONFIG_FIELDS are in session.config
+        assert session.config.get("model") == "claude-opus-4-5"
+        assert session.config.get("system_prompt") == "Stored in config dict"
+        assert session.config.get("allowed_tools") == ["bash", "edit"]
 
-    async def test_lean_session_keeps_session_state_fields(
+    async def test_session_state_fields_remain_flat(
         self, temp_session_manager, config_with_template
     ):
-        """Template-linked sessions must still set session-state fields from config."""
+        """Non-CONFIG_FIELDS (runtime state) remain as flat attributes."""
         manager = temp_session_manager
         session_id = str(uuid.uuid4())
         await manager.create_session(session_id, config=config_with_template)
         session = await manager.get_session_info(session_id)
 
-        # Runtime-state fields are always set from config, even for template-linked sessions
+        # Runtime-state fields stay flat
         assert session.current_permission_mode == "acceptEdits"
         assert session.initial_permission_mode == "acceptEdits"
         assert session.working_directory == "/test/project"
         assert session.template_id == "tmpl-test-001"
 
-    async def test_legacy_session_populates_flat_fields(
+    async def test_config_fields_stored_without_template(
         self, temp_session_manager, config_without_template
     ):
-        """Non-template sessions must still populate flat CONFIG_FIELDS (legacy path)."""
+        """Non-template sessions also store CONFIG_FIELDS in config dict."""
         manager = temp_session_manager
         session_id = str(uuid.uuid4())
         await manager.create_session(session_id, config=config_without_template)
         session = await manager.get_session_info(session_id)
 
         assert session.template_id is None
-        assert session.model == "claude-opus-4-5"
-        assert session.system_prompt == "Stored flat for legacy sessions"
-        assert session.allowed_tools == ["bash", "edit"]
+        assert session.config.get("model") == "claude-opus-4-5"
+        assert session.config.get("system_prompt") == "Stored in config dict"
+        assert session.config.get("allowed_tools") == ["bash", "edit"]
 
-    async def test_update_session_suppresses_config_fields_for_template_session(
+    async def test_update_session_writes_config_field_to_config_dict(
         self, temp_session_manager
     ):
-        """update_session() must NOT write CONFIG_FIELDS flat for template-linked sessions."""
+        """update_session() writes CONFIG_FIELDS into session.config."""
         manager = temp_session_manager
         config = SessionConfig(template_id="tmpl-x")
         session_id = str(uuid.uuid4())
         await manager.create_session(session_id, config=config)
 
-        template = _make_template(model="claude-sonnet-4-6")
-        tm = _make_template_manager(template)
-
-        # Update model — for template session, flat field stays at default
-        await manager.update_session(session_id, template_manager=tm, model="claude-opus-4-5")
+        await manager.update_session(session_id, model="claude-opus-4-5")
 
         session = await manager.get_session_info(session_id)
-        # Flat field must NOT be written
-        assert session.model is None
-        # Override must be recorded
-        assert session.session_overrides.get("model") == "claude-opus-4-5"
+        assert session.config.get("model") == "claude-opus-4-5"
 
-    async def test_update_session_writes_flat_fields_for_legacy_session(
+    async def test_update_session_non_config_field_stays_flat(
         self, temp_session_manager
     ):
-        """update_session() still writes flat CONFIG_FIELDS for non-template sessions."""
+        """update_session() for non-CONFIG_FIELD sets flat attribute, not config dict."""
         manager = temp_session_manager
-        config = SessionConfig()  # No template_id
+        config = SessionConfig()
         session_id = str(uuid.uuid4())
         await manager.create_session(session_id, config=config)
 
-        template = _make_template(model="claude-sonnet-4-6")
-        tm = _make_template_manager(template)
-
-        # Update model — for legacy session, flat field IS written
-        await manager.update_session(session_id, template_manager=tm, model="claude-opus-4-5")
+        await manager.update_session(session_id, queue_paused=True)
 
         session = await manager.get_session_info(session_id)
-        assert session.model == "claude-opus-4-5"
-        # No override tracking for legacy sessions
-        assert session.session_overrides == {}
+        assert session.queue_paused is True
+        assert "queue_paused" not in session.config
+
+
+# --- Issue #1230: Session migration tests ---
+
+
+class TestMigrateSessionToConfigDict:
+    """Test _migrate_session_to_config_dict — pre-1230 flat fields → config dict."""
+
+    def test_template_linked_session_overrides_promoted_flat_fields_dropped(self):
+        """Template-linked session: session_overrides promoted; flat CONFIG_FIELDS dropped."""
+        from src.session_manager import _migrate_session_to_config_dict
+
+        raw = {
+            "session_id": "sess-001",
+            "template_id": "tmpl-abc",
+            "name": "Worker",
+            "state": "active",
+            "created_at": "2024-01-01T00:00:00+00:00",
+            "updated_at": "2024-01-01T00:00:00+00:00",
+            # Stale flat CONFIG_FIELDS (should be dropped, not promoted)
+            "permission_mode": "acceptEdits",
+            "model": "claude-sonnet-4-20250514",
+            # session_overrides are the real user intent (should be promoted)
+            "session_overrides": {
+                "model": "claude-opus-4-7",
+                "bare_mode": True,
+            },
+        }
+
+        migrated, changed = _migrate_session_to_config_dict(raw)
+
+        assert changed is True
+        config = migrated["config"]
+        # session_overrides promoted
+        assert config["model"] == "claude-opus-4-7"
+        assert config["bare_mode"] is True
+        # Stale flat fields NOT promoted (template-linked)
+        assert "permission_mode" not in config
+        # Flat keys removed from top level
+        assert "permission_mode" not in migrated
+        assert "session_overrides" not in migrated
+
+    def test_non_template_session_non_default_flat_fields_promoted(self):
+        """Non-template session: non-default flat CONFIG_FIELDS are promoted."""
+        from src.session_manager import _migrate_session_to_config_dict
+
+        raw = {
+            "session_id": "sess-002",
+            "name": "Standalone",
+            "state": "active",
+            "created_at": "2024-01-01T00:00:00+00:00",
+            "updated_at": "2024-01-01T00:00:00+00:00",
+            "permission_mode": "bypassPermissions",  # non-default — promote
+            "docker_enabled": True,                 # non-default — promote
+            "history_distillation_enabled": True,   # default — drop
+        }
+
+        migrated, changed = _migrate_session_to_config_dict(raw)
+
+        assert changed is True
+        config = migrated["config"]
+        assert config["permission_mode"] == "bypassPermissions"
+        assert config["docker_enabled"] is True
+        # Default value dropped
+        assert "history_distillation_enabled" not in config
+
+    def test_idempotent_when_config_already_present(self):
+        """Migration is a no-op when 'config' key already exists."""
+        from src.session_manager import _migrate_session_to_config_dict
+
+        raw = {
+            "session_id": "sess-003",
+            "config": {"permission_mode": "acceptEdits"},
+            "created_at": "2024-01-01T00:00:00+00:00",
+            "updated_at": "2024-01-01T00:00:00+00:00",
+        }
+
+        migrated, changed = _migrate_session_to_config_dict(raw)
+
+        assert changed is False
+        assert migrated is raw  # Same object returned unchanged
+
+    @pytest.mark.asyncio
+    async def test_orphan_key_in_config_does_not_fail_resolution(self):
+        """Config dict with an unknown/removed field does not cause AttributeError at resolution.
+
+        At resolution time, CONFIG_FIELDS filter silently drops orphan keys.
+        """
+        from src.config_resolution import resolve_effective_config
+
+        now = datetime(2024, 1, 1, tzinfo=__import__("datetime").timezone.utc)
+        session = SessionInfo(
+            session_id="sess-orphan",
+            state=SessionState.CREATED,
+            created_at=now,
+            updated_at=now,
+            config={
+                "permission_mode": "acceptEdits",
+                "removed_field_from_future_version": "some_value",
+            },
+        )
+
+        result = await resolve_effective_config(session, template_manager=None)
+        assert result.permission_mode == "acceptEdits"
+        # Orphan key not in effective config
+        assert not hasattr(result, "removed_field_from_future_version")

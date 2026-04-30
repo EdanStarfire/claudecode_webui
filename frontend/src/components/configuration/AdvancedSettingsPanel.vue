@@ -60,6 +60,7 @@
           :show-include-toggle="false"
           :field-states="props.fieldStates"
           @update:config="handleFieldUpdate"
+          @reset="(f) => emit('reset-field', f)"
         />
       </div>
     </div>
@@ -96,6 +97,7 @@
           :field-states="props.fieldStates"
           @update:config="handleFieldUpdate"
           @browse="onBrowse"
+          @reset="(f) => emit('reset-field', f)"
         />
 
         <!-- Permission Preview (session modes only) -->
@@ -182,6 +184,7 @@
           :show-include-toggle="false"
           :field-states="props.fieldStates"
           @update:config="handleFeaturesUpdate"
+          @reset="(f) => emit('reset-field', f)"
         />
       </div>
     </div>
@@ -217,6 +220,7 @@
           :show-include-toggle="false"
           :field-states="props.fieldStates"
           @update:config="handleFieldUpdate"
+          @reset="(f) => emit('reset-field', f)"
         />
       </div>
     </div>
@@ -263,6 +267,7 @@
           :show-include-toggle="false"
           :field-states="props.fieldStates"
           @update:config="handleIsolationUpdate"
+          @reset="(f) => emit('reset-field', f)"
         />
       </div>
     </div>
@@ -319,6 +324,7 @@ const emit = defineEmits([
   'show-quick',
   'browse-additional-dir',
   'update:has-errors',
+  'reset-field',
 ])
 
 const { profilesForArea, getProfileForArea, setProfileForArea } = useProfileSelector(props, emit)

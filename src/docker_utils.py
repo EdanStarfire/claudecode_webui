@@ -251,7 +251,7 @@ async def translate_docker_tmp_path(
         return file_path
     try:
         session_info = await session_coordinator.session_manager.get_session_info(session_id)
-        if session_info and getattr(session_info, "docker_enabled", False):
+        if session_info and session_info.config.get("docker_enabled", False):
             session_dir = session_coordinator.data_dir / "sessions" / session_id
             relative = file_path[len("/tmp/"):]
             translated = str(session_dir / "tmp" / relative)

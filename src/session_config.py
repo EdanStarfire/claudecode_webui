@@ -79,7 +79,7 @@ class SessionConfig(BaseModel):
 
 # Fields that exist on both MinionTemplate and SessionConfig (the mergeable set).
 # Excludes identity fields (template_id, name, role, description, capabilities,
-# profile_ids, template_overrides), lifecycle fields (created_at, updated_at),
+# profile_ids), lifecycle fields (created_at, updated_at),
 # and session-only fields (working_directory).
 CONFIG_FIELDS: set[str] = {
     "permission_mode", "system_prompt", "override_system_prompt",
@@ -95,3 +95,7 @@ CONFIG_FIELDS: set[str] = {
     "mcp_server_ids", "enable_claudeai_mcp_servers", "strict_mcp_config",
     "bare_mode", "env_scrub_enabled",
 }
+
+# Default values for all CONFIG_FIELDS — derived from a fresh SessionConfig instance.
+# Used by migration helpers (Phase 3) and resolution chain (Phase 2).
+DEFAULTS: dict = {k: v for k, v in SessionConfig().model_dump().items() if k in CONFIG_FIELDS}

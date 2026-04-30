@@ -71,27 +71,60 @@ def _make_session(
     session_overrides: dict | None = None,
     **kwargs,
 ) -> SessionInfo:
-    """Build a minimal SessionInfo for testing."""
+    """Build a minimal SessionInfo for testing.
+
+    CONFIG_FIELDS kwargs go into session.config; non-CONFIG_FIELDS stay flat.
+    session_overrides (legacy name) are merged into config.
+    current_permission_mode is set flat AND copied into config["permission_mode"]
+    so that resolve_effective_config can read it on the non-template path.
+    """
     now = datetime.now(UTC)
+    config: dict = {}
+    flat: dict = {}
+
+    for k, v in kwargs.items():
+        if k in CONFIG_FIELDS:
+            config[k] = v
+        elif k == "current_permission_mode":
+            flat[k] = v
+            # Also write into config so resolver can see it on the non-template path
+            config.setdefault("permission_mode", v)
+        else:
+            flat[k] = v
+
+    # Merge legacy session_overrides into config (higher priority)
+    if session_overrides:
+        config.update(session_overrides)
+
     return SessionInfo(
         session_id="test-session",
         state=SessionState.CREATED,
         created_at=now,
         updated_at=now,
         template_id=template_id,
-        session_overrides=session_overrides or {},
-        **kwargs,
+        config=config,
+        **flat,
     )
 
 
 def _make_template(**kwargs) -> MinionTemplate:
-    """Build a minimal MinionTemplate for testing."""
-    defaults = {
-        "template_id": "tmpl-001",
-        "name": "Test Template",
-        "permission_mode": "acceptEdits",
-    }
-    defaults.update(kwargs)
+    """Build a minimal MinionTemplate for testing.
+
+    All CONFIG_FIELDS kwargs go into template.config; identity/lifecycle fields
+    stay flat (template_id, name, profile_ids, watchdog).
+    """
+    identity_fields = {"template_id", "name", "profile_ids", "watchdog", "role", "description",
+                       "capabilities", "created_at", "updated_at"}
+    # Deprecated: template_overrides are merged into config
+    template_overrides = kwargs.pop("template_overrides", None) or {}
+
+    config = {k: v for k, v in kwargs.items() if k in CONFIG_FIELDS}
+    config.update(template_overrides)
+    identity = {k: v for k, v in kwargs.items() if k in identity_fields}
+
+    defaults = {"template_id": "tmpl-001", "name": "Test Template"}
+    defaults.update(identity)
+    defaults["config"] = config
     return MinionTemplate(**defaults)
 
 
@@ -268,41 +301,33 @@ class TestConfigFieldsCompleteness:
     """Test #6 — structural test: CONFIG_FIELDS covers all shared fields."""
 
     def test_config_fields_covers_shared_miniontemplate_sessionconfig_fields(self):
-        """CONFIG_FIELDS must include every field present on both MinionTemplate and SessionConfig.
+        """MinionTemplate identity/lifecycle fields must not overlap with CONFIG_FIELDS.
 
-        Excluded from CONFIG_FIELDS (intentional):
-        - Identity fields: template_id, name, role, description, capabilities
-        - Composition fields: profile_ids, template_overrides
-        - Lifecycle fields: created_at, updated_at
-        - Session-only fields: working_directory (always from session, never from template)
+        Post-#1230: all CONFIG_FIELDS live in MinionTemplate.config (a dict), not as
+        flat dataclass fields. The flat fields are identity/lifecycle only.
+        This test verifies that the flat MinionTemplate fields do NOT appear in
+        CONFIG_FIELDS (they are intentionally excluded).
         """
-        template_fields = {f.name for f in dataclasses.fields(MinionTemplate)}
+        template_flat_fields = {f.name for f in dataclasses.fields(MinionTemplate)}
         config_field_names = set(SessionConfig.model_fields.keys())
 
-        # Fields that appear on BOTH MinionTemplate and SessionConfig
-        shared = template_fields & config_field_names
+        # Fields that appear on BOTH MinionTemplate flat schema and SessionConfig
+        shared = template_flat_fields & config_field_names
 
-        # Known intentional exclusions from CONFIG_FIELDS
+        # Known intentional exclusions from CONFIG_FIELDS (identity/lifecycle fields
+        # that may still appear on SessionConfig but are NOT config values)
         excluded_from_config_fields = {
             "template_id",       # Identity field
-            "name",              # Identity field — not on SessionConfig anyway
-            "role",              # Identity — not on SessionConfig
-            "description",       # Identity — not on SessionConfig
-            "capabilities",      # Identity — not on SessionConfig
-            "profile_ids",       # Composition metadata, not a config value
-            "template_overrides",  # Composition metadata, not a config value
-            "created_at",        # Lifecycle
-            "updated_at",        # Lifecycle
             "working_directory",  # Session-only
         }
 
-        # Every shared field (minus intentional exclusions) must be in CONFIG_FIELDS
-        expected_in_config = shared - excluded_from_config_fields
-        missing = expected_in_config - CONFIG_FIELDS
-        assert missing == set(), (
-            f"CONFIG_FIELDS is missing fields that exist on both MinionTemplate "
-            f"and SessionConfig: {missing}. Add them to CONFIG_FIELDS or to the "
-            f"excluded_from_config_fields set above if intentionally excluded."
+        # Flat MinionTemplate fields that appear in CONFIG_FIELDS would be a bug
+        # (they should be in MinionTemplate.config dict, not flat).
+        unexpected_in_config_fields = (shared - excluded_from_config_fields) & CONFIG_FIELDS
+        assert unexpected_in_config_fields == set(), (
+            f"These MinionTemplate flat fields should NOT be in CONFIG_FIELDS "
+            f"(they must live in MinionTemplate.config dict instead): "
+            f"{unexpected_in_config_fields}"
         )
 
 
@@ -314,14 +339,15 @@ class TestResolveWithProfile:
     """Test #7 — profile values used as base when profile assigned to template area."""
 
     async def test_profile_value_used_when_assigned(self):
-        """Profile value overrides template flat field when profile assigned."""
+        """Profile value is used when template does not explicitly set the field in config."""
         profile = _make_profile(
             area="model",
             config={"model": "claude-opus-4-5"},
         )
         pm = _make_profile_manager([profile])
+        # Template has profile assigned for model area but does NOT set model in config
+        # (so profile value fills in from layer 1a)
         template = _make_template(
-            model="claude-haiku-4-5",  # Template flat value (lower priority)
             profile_ids={"model": profile.profile_id},
         )
         session = _make_session(template_id="tmpl-001")
@@ -329,18 +355,18 @@ class TestResolveWithProfile:
 
         result = await resolve_effective_config(session, tm, pm)
 
-        assert result.model == "claude-opus-4-5"  # Profile wins over template flat
+        assert result.model == "claude-opus-4-5"  # Profile fills in (template has no model set)
 
     async def test_profile_missing_field_falls_back_to_template_flat(self):
-        """Profile config may omit fields; template flat value fills in."""
+        """Profile config may omit fields; template config value fills in."""
         profile = _make_profile(
             area="model",
-            config={"thinking_mode": "enabled"},  # Only overrides thinking_mode
+            config={"thinking_mode": "enabled"},  # Only provides thinking_mode
         )
         pm = _make_profile_manager([profile])
         template = _make_template(
-            model="claude-sonnet-4-6",
-            thinking_mode="auto",  # Will be overridden by profile
+            model="claude-sonnet-4-6",  # Template config sets model (profile omits it)
+            # Note: template does NOT set thinking_mode, so profile's value wins
             profile_ids={"model": profile.profile_id},
         )
         session = _make_session(template_id="tmpl-001")
@@ -348,17 +374,17 @@ class TestResolveWithProfile:
 
         result = await resolve_effective_config(session, tm, pm)
 
-        assert result.model == "claude-sonnet-4-6"  # Template flat (profile omits this)
-        assert result.thinking_mode == "enabled"     # Profile value
+        assert result.model == "claude-sonnet-4-6"  # Template config (profile omits this)
+        assert result.thinking_mode == "enabled"     # Profile value (template omits this)
 
     async def test_area_without_profile_uses_template_flat(self):
-        """Areas with no profile assigned use template flat values."""
+        """Areas with no profile assigned use template config values."""
         profile = _make_profile(area="model", config={"model": "claude-opus-4-5"})
         pm = _make_profile_manager([profile])
-        # Template only assigns profile to 'model' area, not 'permissions'
+        # Template assigns profile to 'model' area; permission_mode from template config
+        # Template does NOT set model in config → profile fills it in
         template = _make_template(
             permission_mode="acceptEdits",
-            model="claude-haiku-4-5",
             profile_ids={"model": profile.profile_id},
         )
         session = _make_session(template_id="tmpl-001")
@@ -366,8 +392,8 @@ class TestResolveWithProfile:
 
         result = await resolve_effective_config(session, tm, pm)
 
-        assert result.model == "claude-opus-4-5"        # From profile
-        assert result.permission_mode == "acceptEdits"  # From template flat (no profile)
+        assert result.model == "claude-opus-4-5"        # From profile (template has no model)
+        assert result.permission_mode == "acceptEdits"  # From template config (no profile for permissions)
 
 
 @pytest.mark.asyncio
@@ -437,17 +463,17 @@ class TestResolveMixedAreas:
     """Test #11 — mixed areas (some with profiles, some without) per-area resolution."""
 
     async def test_mixed_areas(self):
-        """Profile assigned to model area only; permissions uses template flat."""
+        """Profile assigned to model area only; permissions uses template config."""
         model_profile = _make_profile(
             profile_id="model-p",
             area="model",
             config={"model": "claude-opus-4-5", "effort": "high"},
         )
         pm = _make_profile_manager([model_profile])
+        # Template does NOT set model or effort (profile fills those in)
+        # Template sets permission_mode (no profile for permissions area)
         template = _make_template(
-            model="claude-haiku-4-5",    # Template flat (overridden by profile)
-            effort="low",                 # Template flat (overridden by profile)
-            permission_mode="default",    # No profile for permissions area
+            permission_mode="default",    # Template config (no profile for permissions)
             profile_ids={"model": "model-p"},  # Only model area has profile
         )
         session = _make_session(template_id="tmpl-001")
@@ -455,9 +481,9 @@ class TestResolveMixedAreas:
 
         result = await resolve_effective_config(session, tm, pm)
 
-        assert result.model == "claude-opus-4-5"  # From profile
-        assert result.effort == "high"            # From profile
-        assert result.permission_mode == "default"  # From template flat
+        assert result.model == "claude-opus-4-5"  # From profile (template omits model)
+        assert result.effort == "high"            # From profile (template omits effort)
+        assert result.permission_mode == "default"  # From template config
 
 
 @pytest.mark.asyncio
@@ -570,15 +596,15 @@ class TestResolveTemplateConfig:
         assert result["permission_mode"] == "plan"
 
     async def test_resolve_template_config_with_profile(self):
-        """With profile, profile values override template flat values."""
+        """With profile, profile value is used when template does not set the field."""
         profile = _make_profile(area="model", config={"model": "claude-sonnet-4-6"})
         pm = _make_profile_manager([profile])
+        # Template does NOT set model in config → profile fills it in
         template = _make_template(
-            model="claude-haiku-4-5",  # Template flat (lower priority)
             profile_ids={"model": profile.profile_id},
         )
         result = await resolve_template_config(template, pm)
-        assert result["model"] == "claude-sonnet-4-6"  # Profile wins
+        assert result["model"] == "claude-sonnet-4-6"  # Profile fills in (template has no model)
 
     async def test_resolve_template_config_template_overrides_win(self):
         """template_overrides have priority over profile values."""
@@ -750,7 +776,10 @@ class TestLeanSessionInfo:
     """
 
     def _make_lean_session(self, template_id: str = "tmpl-lean", session_overrides: dict | None = None) -> "SessionInfo":
-        """Build a SessionInfo with CONFIG_FIELDS at dataclass defaults (lean)."""
+        """Build a SessionInfo with CONFIG_FIELDS at dataclass defaults (lean).
+
+        session_overrides is placed into session.config (the new unified dict).
+        """
         from datetime import UTC, datetime
 
         from ..session_manager import SessionInfo, SessionState
@@ -764,10 +793,7 @@ class TestLeanSessionInfo:
             current_permission_mode="acceptEdits",
             initial_permission_mode="acceptEdits",
             template_id=template_id,
-            session_overrides=session_overrides or {},
-            # CONFIG_FIELDS at dataclass defaults (as lean session creation leaves them):
-            # model=None, system_prompt=None, allowed_tools=["bash","edit","read"],
-            # docker_enabled=False, docker_proxy_allowlist_domains=None, etc.
+            config=dict(session_overrides or {}),
         )
 
     async def test_lean_session_derives_model_from_template(self):

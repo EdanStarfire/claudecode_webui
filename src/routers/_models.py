@@ -4,7 +4,7 @@ Pydantic request models for all API endpoints.
 Moved from src/web_server.py to centralize model definitions.
 """
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from ..mcp_config_manager import McpServerType
 from ..session_config import SessionConfig
@@ -54,6 +54,8 @@ class SessionNameUpdateRequest(BaseModel):
 class SessionUpdateRequest(BaseModel):
     """Generic session update request - all fields optional"""
     name: str | None = None
+    # Issue #1230: full config dict replacement (preferred over flat fields below)
+    config: dict | None = None
     model: str | None = None  # sonnet, opus, haiku, opusplan
     allowed_tools: list[str] | None = None  # List of tool names to allow
     disallowed_tools: list[str] | None = None  # Issue #461: tools to deny
@@ -87,6 +89,18 @@ class SessionUpdateRequest(BaseModel):
     enable_claudeai_mcp_servers: bool | None = None
     strict_mcp_config: bool | None = None
     bare_mode: bool | None = None
+    # Issue #1230: reject legacy field that was removed
+    session_overrides: dict | None = None
+
+    @field_validator("session_overrides", mode="before")
+    @classmethod
+    def _reject_session_overrides(cls, v):
+        if v is not None:
+            raise ValueError(
+                "'session_overrides' is no longer accepted (issue #1230); "
+                "set config fields directly in the request body"
+            )
+        return v
 
 
 class SessionReorderRequest(BaseModel):
@@ -155,7 +169,20 @@ class TemplateCreateRequest(SessionConfig):
     capabilities: list[str] | None = None
     # Composable profiles (issue #1062)
     profile_ids: dict[str, str] | None = None
+    # Issue #1230: full config dict (preferred over flat SessionConfig fields)
+    config: dict | None = None
     template_overrides: dict | None = None
+    session_overrides: dict | None = None
+
+    @field_validator("template_overrides", "session_overrides", mode="before")
+    @classmethod
+    def _reject_legacy_overrides(cls, v, info):
+        if v is not None:
+            raise ValueError(
+                f"'{info.field_name}' is no longer accepted (issue #1230); "
+                "set config fields directly in the request body"
+            )
+        return v
 
 
 class TemplateUpdateRequest(BaseModel):
@@ -206,7 +233,20 @@ class TemplateUpdateRequest(BaseModel):
     env_scrub_enabled: bool | None = None
     # Composable profiles (issue #1062)
     profile_ids: dict[str, str] | None = None
+    # Issue #1230: full config dict (preferred over flat fields above)
+    config: dict | None = None
     template_overrides: dict | None = None
+    session_overrides: dict | None = None
+
+    @field_validator("template_overrides", "session_overrides", mode="before")
+    @classmethod
+    def _reject_legacy_overrides(cls, v, info):
+        if v is not None:
+            raise ValueError(
+                f"'{info.field_name}' is no longer accepted (issue #1230); "
+                "set config fields directly in the request body"
+            )
+        return v
 
 
 # Profile request models (issue #1062)

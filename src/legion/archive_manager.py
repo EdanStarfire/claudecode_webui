@@ -155,7 +155,7 @@ class ArchiveManager:
             # Fire-and-forget distillation of session history into markdown
             # Write into the archive directory — sessions/{id}/ gets deleted after disposal.
             # Issue #710: Skip distillation when history distillation is disabled
-            if session_info.history_distillation_enabled:
+            if session_info.config.get("history_distillation_enabled", True):
                 archived_messages = archive_dir / "messages.jsonl"
                 if archived_messages.exists():
                     history_output = archive_dir / "history.md"

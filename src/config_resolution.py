@@ -1,12 +1,12 @@
 """
 Config Resolution
 
-Resolves effective SessionConfig by merging profile defaults, template overrides,
-and session-level overrides. Called at session start/restart so config changes
-apply on the next restart (not live to running sessions).
+Resolves effective SessionConfig by merging profile defaults, template config,
+and session config. Called at session start/restart so config changes take
+effect on the next restart (not live to running sessions).
 
-3-tier resolution (high to low priority):
-  session_overrides > template_overrides > profile values > template flat fields > defaults
+3-tier resolution chain (high to low priority):
+  session.config > template.config > profile.config > field defaults
 """
 
 from __future__ import annotations
@@ -102,42 +102,45 @@ async def resolve_effective_config(
     template_manager: TemplateManager,
     profile_manager: ProfileManager | None = None,
 ) -> SessionConfig:
-    """Build effective SessionConfig from profile + template overrides + session overrides.
+    """Build effective SessionConfig from the 3-tier resolution chain.
 
     Priority (high to low):
-      session_overrides > template_overrides > profile values > template flat fields > defaults
+      session.config > template.config > profile.config > field defaults
 
     Called in start_session() — config takes effect at the next session start/restart.
     Template updates between restarts are invisible to running sessions.
 
     Args:
-        session_info: Session state (template_id, session_overrides, flat fields).
+        session_info: Session state (template_id, config dict).
         template_manager: Used to fetch the linked template.
-        profile_manager: Optional; if provided enables 3-tier profile resolution.
+        profile_manager: Optional; enables profile resolution from template.profile_ids.
     """
-    # Legacy path: no template linked — build from flat session fields (identical to pre-#1059)
-    if not session_info.template_id:
-        return _config_from_session_info(session_info)
+    config_data: dict = {}
 
-    # Template path: fetch template, build base config, apply overrides
-    template = await template_manager.get_template(session_info.template_id)
-    if template is None:
-        # Template was deleted after session creation — fall back to flat fields
-        return _config_from_session_info(session_info)
+    # Layer 1: profile values + template.config (if template linked)
+    if session_info.template_id:
+        template = await template_manager.get_template(session_info.template_id)
+        if template:
+            profile_cache: dict = {}
+            for _area, profile_id in (template.profile_ids or {}).items():
+                profile = await _load_profile_cached(profile_id, profile_manager, profile_cache)
+                if profile:
+                    for k, v in (profile.config or {}).items():
+                        if k in CONFIG_FIELDS:
+                            config_data[k] = _coerce_list(v) if k in _LIST_FIELDS else v
+            for k, v in (template.config or {}).items():
+                if k in CONFIG_FIELDS:
+                    config_data[k] = v
 
-    # Get base config from template + profiles (reuse resolve_template_config)
-    config_data = await resolve_template_config(template, profile_manager)
+    # Layer 2: session.config (highest priority)
+    for k, v in (session_info.config or {}).items():
+        if k in CONFIG_FIELDS:
+            config_data[k] = v
 
-    # Apply session_overrides (highest priority, last-wins for most fields)
-    session_overrides = session_info.session_overrides or {}
-    for field_name in CONFIG_FIELDS:
-        if field_name in session_overrides:
-            config_data[field_name] = session_overrides[field_name]
-
-    # Carry template_id through for downstream reference
-    config_data["template_id"] = session_info.template_id
-
-    return SessionConfig(**config_data)
+    # Filter orphaned keys (fields removed from CONFIG_FIELDS in a future release)
+    known = {k: v for k, v in config_data.items() if k in CONFIG_FIELDS}
+    known["template_id"] = session_info.template_id
+    return SessionConfig(**known)
 
 
 async def resolve_template_config(
@@ -146,68 +149,24 @@ async def resolve_template_config(
 ) -> dict:
     """Resolve template + profile values without session overrides.
 
-    Returns a dict of config field -> value for use in minion spawn path.
+    Returns a dict of config field -> value for use in the minion spawn path.
     Shared helper between session-start and minion-spawn code paths.
 
-    Priority (high to low): template_overrides > profile values > template flat fields
+    Priority (high to low): template.config > profile.config > field defaults
     """
-    profile_cache: dict[str, object] = {}
+    profile_cache: dict = {}
     config_data: dict = {}
     template_profile_ids = template.profile_ids or {}
-    template_overrides_dict = template.template_overrides or {}
 
-    for field_name in CONFIG_FIELDS:
-        if hasattr(template, field_name):
-            config_data[field_name] = getattr(template, field_name)
+    for _area, profile_id in template_profile_ids.items():
+        profile = await _load_profile_cached(profile_id, profile_manager, profile_cache)
+        if profile:
+            for k, v in (profile.config or {}).items():
+                if k in CONFIG_FIELDS:
+                    config_data[k] = _coerce_list(v) if k in _LIST_FIELDS else v
 
-        area = FIELD_TO_AREA.get(field_name)
-        if area and area in template_profile_ids and profile_manager:
-            profile = await _load_profile_cached(
-                template_profile_ids[area], profile_manager, profile_cache
-            )
-            if profile is not None and field_name in profile.config:
-                raw = profile.config[field_name]
-                config_data[field_name] = _coerce_list(raw) if field_name in _LIST_FIELDS else raw
-
-        if field_name in template_overrides_dict:
-            config_data[field_name] = template_overrides_dict[field_name]
+    for k, v in (template.config or {}).items():
+        if k in CONFIG_FIELDS:
+            config_data[k] = v
 
     return config_data
-
-
-def _config_from_session_info(session_info: SessionInfo) -> SessionConfig:
-    """Legacy path: build SessionConfig from flat SessionInfo fields (pre-#1059 behavior)."""
-    return SessionConfig(
-        permission_mode=session_info.current_permission_mode,
-        system_prompt=session_info.system_prompt,
-        override_system_prompt=session_info.override_system_prompt,
-        allowed_tools=session_info.allowed_tools,
-        disallowed_tools=session_info.disallowed_tools,
-        model=session_info.model,
-        additional_directories=session_info.additional_directories,
-        cli_path=session_info.cli_path,
-        setting_sources=session_info.setting_sources,
-        sandbox_enabled=session_info.sandbox_enabled,
-        sandbox_config=session_info.sandbox_config,
-        docker_enabled=session_info.docker_enabled,
-        docker_image=session_info.docker_image,
-        docker_extra_mounts=session_info.docker_extra_mounts,
-        docker_home_directory=session_info.docker_home_directory,
-        docker_proxy_enabled=session_info.docker_proxy_enabled,
-        docker_proxy_image=session_info.docker_proxy_image,
-        assigned_secrets=getattr(session_info, "assigned_secrets", None),
-        docker_proxy_allowlist_domains=getattr(session_info, "docker_proxy_allowlist_domains", None),
-        thinking_mode=session_info.thinking_mode,
-        thinking_budget_tokens=session_info.thinking_budget_tokens,
-        effort=session_info.effort,
-        history_distillation_enabled=session_info.history_distillation_enabled,
-        auto_memory_mode=session_info.auto_memory_mode,
-        auto_memory_directory=session_info.auto_memory_directory,
-        skill_creating_enabled=session_info.skill_creating_enabled,
-        mcp_server_ids=session_info.mcp_server_ids,
-        enable_claudeai_mcp_servers=session_info.enable_claudeai_mcp_servers,
-        strict_mcp_config=session_info.strict_mcp_config,
-        bare_mode=session_info.bare_mode,
-        env_scrub_enabled=session_info.env_scrub_enabled,
-        template_id=session_info.template_id,
-    )

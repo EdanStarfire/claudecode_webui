@@ -21,7 +21,7 @@ from src.docker_utils import (
 def _make_coordinator(session_id: str, docker_enabled: bool, data_dir: Path):
     """Build a minimal mock SessionCoordinator for path-translation tests."""
     session_info = MagicMock()
-    session_info.docker_enabled = docker_enabled
+    session_info.config = {"docker_enabled": docker_enabled}
 
     session_manager = MagicMock()
     session_manager.get_session_info = AsyncMock(return_value=session_info)
