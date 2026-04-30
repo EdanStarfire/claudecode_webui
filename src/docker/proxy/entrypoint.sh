@@ -187,6 +187,10 @@ iptables -A OUTPUT -p tcp -m conntrack --ctstate NEW -j DROP
 # To add future protocol proxies: insert uid ACCEPT before the DROP.
 echo "Configuring default-deny UDP OUTPUT..."
 iptables -A OUTPUT -p udp -m owner --uid-owner 9998 -j ACCEPT
+# Route mitmdump DNS queries to CoreDNS via loopback
+iptables -t nat -A OUTPUT -p udp --dport 53 \
+    -m owner --uid-owner 9999 \
+    -j REDIRECT --to-ports 53
 # Issue #1060: NFLOG before DROP for per-connection dropped UDP logging.
 if [ -d "$LOG_DIR" ]; then
     iptables -A OUTPUT -p udp \
