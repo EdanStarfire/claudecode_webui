@@ -35,7 +35,7 @@
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useProxyStore } from '@/stores/proxy'
 import { useSecretsStore } from '@/stores/secrets'
 
@@ -69,6 +69,11 @@ const selectedList = computed(() => {
   if (!props.value) return []
   if (Array.isArray(props.value)) return props.value.filter(Boolean)
   return props.value.split(',').map(s => s.trim()).filter(Boolean)
+})
+
+// Fetch secrets lazily when this field is the consumer — covers all editor modals without a modal-level fetch per consumer.
+onMounted(() => {
+  if (props.optionsFrom === 'secrets') secretsStore.fetchIfEmpty()
 })
 
 // Options not yet selected

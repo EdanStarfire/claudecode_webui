@@ -21,6 +21,7 @@ export const useSecretsStore = defineStore('secrets', () => {
 
   const loading = ref(false)
   const error = ref(null)
+  const loaded = ref(false)
 
   // ========== ACTIONS ==========
 
@@ -28,9 +29,15 @@ export const useSecretsStore = defineStore('secrets', () => {
     try {
       const result = await api.get('/api/secrets')
       secrets.value = result.secrets || []
+      loaded.value = true
     } catch (e) {
       console.error('Failed to fetch secrets:', e)
     }
+  }
+
+  async function fetchIfEmpty() {
+    if (loaded.value) return
+    await fetchSecrets()
   }
 
   async function createSecret(data) {
@@ -72,7 +79,9 @@ export const useSecretsStore = defineStore('secrets', () => {
     backendWarning,
     loading,
     error,
+    loaded,
     fetchSecrets,
+    fetchIfEmpty,
     createSecret,
     updateSecret,
     deleteSecret,
