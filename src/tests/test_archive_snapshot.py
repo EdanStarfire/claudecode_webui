@@ -347,3 +347,139 @@ class TestSnapshotArtifactsReset:
         # Live dirs must be untouched
         assert (session_dir / "history").exists()
         assert (session_dir / "memory").exists()
+
+
+# ---------------------------------------------------------------------------
+# Reset cleanup helpers (DataStorageManager + session_coordinator)
+# ---------------------------------------------------------------------------
+
+
+class TestResetCleanupHelpers:
+    @pytest.mark.asyncio
+    async def test_clear_queue_truncates_file(self, tmp_data):
+        """clear_queue() truncates queue.jsonl to empty."""
+        from src.data_storage import DataStorageManager
+
+        session_id = "sess-clr-q"
+        session_dir = tmp_data / "sessions" / session_id
+        session_dir.mkdir(parents=True)
+        queue_file = session_dir / "queue.jsonl"
+        queue_file.write_text('{"id":"q1"}\n')
+
+        mgr = DataStorageManager(session_dir)
+        result = await mgr.clear_queue()
+
+        assert result is True
+        assert queue_file.exists()
+        assert queue_file.read_bytes() == b""
+
+    @pytest.mark.asyncio
+    async def test_clear_queue_no_file_is_noop(self, tmp_data):
+        """clear_queue() succeeds even when queue.jsonl does not exist."""
+        from src.data_storage import DataStorageManager
+
+        session_dir = tmp_data / "sessions" / "sess-no-q"
+        session_dir.mkdir(parents=True)
+        mgr = DataStorageManager(session_dir)
+        result = await mgr.clear_queue()
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_clear_attachments_removes_dir(self, tmp_data):
+        """clear_attachments() removes the attachments/ directory."""
+        from src.data_storage import DataStorageManager
+
+        session_id = "sess-clr-att"
+        session_dir = tmp_data / "sessions" / session_id
+        session_dir.mkdir(parents=True)
+        att = session_dir / "attachments"
+        att.mkdir()
+        (att / "file.txt").write_text("hello")
+
+        mgr = DataStorageManager(session_dir)
+        result = await mgr.clear_attachments()
+
+        assert result is True
+        assert not att.exists()
+
+    @pytest.mark.asyncio
+    async def test_clear_attachments_no_dir_is_noop(self, tmp_data):
+        """clear_attachments() succeeds when attachments/ does not exist."""
+        from src.data_storage import DataStorageManager
+
+        session_dir = tmp_data / "sessions" / "sess-no-att"
+        session_dir.mkdir(parents=True)
+        mgr = DataStorageManager(session_dir)
+        result = await mgr.clear_attachments()
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_rotate_proxy_logs_truncates(self, tmp_data):
+        """_rotate_proxy_logs() truncates each proxy log to empty bytes."""
+        from unittest.mock import Mock
+
+        from src.session_coordinator import SessionCoordinator
+
+        sessions_dir = tmp_data / "sessions"
+        session_id = "sess-plog"
+        proxy_dir = sessions_dir / session_id / "docker_claude_data" / "proxy"
+        proxy_dir.mkdir(parents=True)
+        for name in ("access.log", "dns.log", "socks5.log", "dropped.log"):
+            (proxy_dir / name).write_text("data")
+
+        coord = Mock(spec=SessionCoordinator)
+        coord.session_manager = Mock()
+        coord.session_manager.sessions_dir = sessions_dir
+        coord._rotate_proxy_logs = SessionCoordinator._rotate_proxy_logs.__get__(coord)
+
+        await coord._rotate_proxy_logs(session_id)
+
+        for name in ("access.log", "dns.log", "socks5.log", "dropped.log"):
+            assert (proxy_dir / name).read_bytes() == b""
+
+    @pytest.mark.asyncio
+    async def test_clear_docker_claude_data_except_proxy(self, tmp_data):
+        """_clear_docker_claude_data keeps proxy/ and removes others."""
+        from unittest.mock import Mock
+
+        from src.session_coordinator import SessionCoordinator
+
+        sessions_dir = tmp_data / "sessions"
+        session_id = "sess-docker"
+        docker_dir = sessions_dir / session_id / "docker_claude_data"
+        for sub in ("proxy", "projects", "todos", "tasks"):
+            (docker_dir / sub).mkdir(parents=True)
+            (docker_dir / sub / "f.txt").write_text("data")
+
+        coord = Mock(spec=SessionCoordinator)
+        coord.session_manager = Mock()
+        coord.session_manager.sessions_dir = sessions_dir
+        coord._clear_docker_claude_data = SessionCoordinator._clear_docker_claude_data.__get__(coord)
+
+        await coord._clear_docker_claude_data(session_id, keep_subdirs={"proxy"})
+
+        assert (docker_dir / "proxy").exists()
+        assert not (docker_dir / "projects").exists()
+        assert not (docker_dir / "todos").exists()
+        assert not (docker_dir / "tasks").exists()
+
+    @pytest.mark.asyncio
+    async def test_clear_session_tmp(self, tmp_data):
+        """_clear_session_tmp removes the tmp/ directory."""
+        from unittest.mock import Mock
+
+        from src.session_coordinator import SessionCoordinator
+
+        sessions_dir = tmp_data / "sessions"
+        session_id = "sess-tmp"
+        tmp_dir = sessions_dir / session_id / "tmp"
+        tmp_dir.mkdir(parents=True)
+        (tmp_dir / "a.txt").write_text("temp")
+
+        coord = Mock(spec=SessionCoordinator)
+        coord.session_manager = Mock()
+        coord.session_manager.sessions_dir = sessions_dir
+        coord._clear_session_tmp = SessionCoordinator._clear_session_tmp.__get__(coord)
+
+        await coord._clear_session_tmp(session_id)
+        assert not tmp_dir.exists()

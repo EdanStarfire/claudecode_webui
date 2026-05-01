@@ -12,6 +12,7 @@ import logging
 import os
 import re
 import secrets
+import shutil
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -2452,6 +2453,57 @@ class SessionCoordinator:
         except Exception as e:
             coord_logger.warning(f"Archive before reset failed for {session_id}: {e}")
             return False
+
+    async def _rotate_proxy_logs(self, session_id: str) -> None:
+        """Truncate proxy log files to empty after archiving (issue #1244, decision #11).
+
+        Truncate rather than unlink so the file descriptor stays valid if the
+        proxy container is mid-write at reset time.
+        """
+        proxy_dir = self.session_manager.sessions_dir / session_id / "docker_claude_data" / "proxy"
+        if not proxy_dir.is_dir():
+            return
+        for name in ("access.log", "dns.log", "socks5.log", "dropped.log"):
+            log_file = proxy_dir / name
+            if log_file.exists():
+                try:
+                    log_file.write_bytes(b"")
+                    coord_logger.debug(f"Truncated proxy log {name} for {session_id}")
+                except OSError:
+                    logger.exception(f"Failed to truncate proxy log {name} for {session_id}")
+
+    async def _clear_docker_claude_data(
+        self, session_id: str, keep_subdirs: set[str] | None = None
+    ) -> None:
+        """Remove all subdirs under docker_claude_data/ except those in keep_subdirs.
+
+        Subdirs are recreated by claude-docker on next session start.
+        """
+        keep = keep_subdirs or set()
+        docker_data_dir = (
+            self.session_manager.sessions_dir / session_id / "docker_claude_data"
+        )
+        if not docker_data_dir.is_dir():
+            return
+        for child in docker_data_dir.iterdir():
+            if child.is_dir() and child.name not in keep:
+                try:
+                    shutil.rmtree(child)
+                    coord_logger.debug(f"Removed docker_claude_data/{child.name} for {session_id}")
+                except OSError:
+                    logger.exception(
+                        f"Failed to remove docker_claude_data/{child.name} for {session_id}"
+                    )
+
+    async def _clear_session_tmp(self, session_id: str) -> None:
+        """Remove the session's tmp/ directory (issue #1244, decision #3)."""
+        tmp_dir = self.session_manager.sessions_dir / session_id / "tmp"
+        if tmp_dir.is_dir():
+            try:
+                shutil.rmtree(tmp_dir)
+                coord_logger.debug(f"Removed tmp/ for {session_id}")
+            except OSError:
+                logger.exception(f"Failed to remove tmp/ for {session_id}")
 
     async def get_session_info(self, session_id: str) -> dict[str, Any] | None:
         """Get comprehensive session information"""
