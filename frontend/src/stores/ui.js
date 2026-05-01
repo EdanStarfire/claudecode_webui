@@ -144,11 +144,22 @@ export const useUIStore = defineStore('ui', () => {
     watchdogAlerts.value = watchdogAlerts.value.filter(a => a.id !== id)
   }
 
+  let _pendingQueueHeight = null
+  let _queueHeightRafId = null
+
   function setQueuePanelHeight(height, containerHeight = 600) {
     const maxHeight = Math.floor(containerHeight * 0.6)
-    const clamped = Math.max(80, Math.min(height, maxHeight))
-    queuePanelHeight.value = clamped
-    writeStorage('queuePanelHeight', clamped)
+    _pendingQueueHeight = Math.max(80, Math.min(height, maxHeight))
+    if (_queueHeightRafId === null) {
+      _queueHeightRafId = requestAnimationFrame(() => {
+        queuePanelHeight.value = _pendingQueueHeight
+        _queueHeightRafId = null
+      })
+    }
+  }
+
+  function commitQueuePanelHeight() {
+    writeStorage('queuePanelHeight', queuePanelHeight.value)
   }
 
   function initBackgroundColor() {
@@ -277,6 +288,7 @@ export const useUIStore = defineStore('ui', () => {
     setTTSReadAloud,
     setSuppressAutoShow,
     setQueuePanelHeight,
+    commitQueuePanelHeight,
     initBackgroundColor,
     toggleBackgroundColor,
     showModal,

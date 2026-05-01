@@ -26,7 +26,7 @@
     ></div>
 
     <!-- Message Queue Section (Issue #500) -->
-    <QueueSection :height="uiStore.queuePanelHeight" />
+    <QueueSection :height="uiStore.queuePanelHeight" :is-resizing="isResizingQueue" />
   </div>
 </template>
 
@@ -108,6 +108,7 @@ function stopQueueResize() {
   document.removeEventListener('pointerup', stopQueueResize)
   document.body.style.userSelect = ''
   document.body.style.cursor = ''
+  uiStore.commitQueuePanelHeight()
 }
 
 onBeforeUnmount(() => {
@@ -122,6 +123,7 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   height: 100%;
+  contain: layout;
 }
 
 .task-list {
