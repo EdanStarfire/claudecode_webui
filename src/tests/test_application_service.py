@@ -520,3 +520,105 @@ async def test_issue_1219_no_duplicates_when_both_assigned_and_placeholder_set(s
 
     names_passed = mock_coordinator.credential_vault.resolve_secrets_for_assignment.call_args[0][0]
     assert names_passed.count("claudecode_token") == 1
+
+
+# ---------------------------------------------------------------------------
+# Secrets / Issue #1241 — proxy write-back fix for template-linked sessions
+# ---------------------------------------------------------------------------
+
+
+def _make_session_post_1230(assigned_secrets=None, secret_placeholders=None):
+    s = MagicMock()
+    s.config = {"assigned_secrets": assigned_secrets} if assigned_secrets is not None else {}
+    s.secret_placeholders = secret_placeholders or {}
+    return s
+
+
+@pytest.mark.asyncio
+async def test_issue_1241_patch_template_derived_secret_succeeds(service, mock_coordinator):
+    session = _make_session_post_1230(
+        assigned_secrets=None,
+        secret_placeholders={"CC_SECRET_x": "claudecode_token"},
+    )
+    mock_coordinator.session_manager.get_session_info.return_value = session
+    mock_coordinator.credential_vault = MagicMock()
+    mock_coordinator.credential_vault.list_secrets = AsyncMock(return_value=[])
+    service.update_secret = AsyncMock(return_value={"name": "claudecode_token"})
+
+    result = await service.update_secret_for_session("s1", "claudecode_token", value="new_tok")
+
+    service.update_secret.assert_called_once_with(name="claudecode_token", value="new_tok")
+    assert result == {"name": "claudecode_token"}
+
+
+@pytest.mark.asyncio
+async def test_issue_1241_patch_profile_derived_secret_succeeds(service, mock_coordinator):
+    # Profile-derived names flow through secret_placeholders identically to template-derived ones.
+    session = _make_session_post_1230(
+        assigned_secrets=None,
+        secret_placeholders={"CC_SECRET_profile": "profile_token"},
+    )
+    mock_coordinator.session_manager.get_session_info.return_value = session
+    mock_coordinator.credential_vault = MagicMock()
+    mock_coordinator.credential_vault.list_secrets = AsyncMock(return_value=[])
+    service.update_secret = AsyncMock(return_value={"name": "profile_token"})
+
+    result = await service.update_secret_for_session("s1", "profile_token", value="refreshed")
+
+    service.update_secret.assert_called_once_with(name="profile_token", value="refreshed")
+    assert result == {"name": "profile_token"}
+
+
+@pytest.mark.asyncio
+async def test_issue_1241_patch_unrelated_secret_rejected(service, mock_coordinator):
+    session = _make_session_post_1230(
+        assigned_secrets=None,
+        secret_placeholders={"CC_SECRET_x": "claudecode_token"},
+    )
+    mock_coordinator.session_manager.get_session_info.return_value = session
+    mock_coordinator.credential_vault = MagicMock()
+    mock_coordinator.credential_vault.list_secrets = AsyncMock(return_value=[])
+
+    with pytest.raises(PermissionError):
+        await service.update_secret_for_session("s1", "some_other_secret")
+
+
+@pytest.mark.asyncio
+async def test_issue_1241_patch_transitive_sibling_succeeds(service, mock_coordinator):
+    session = _make_session_post_1230(
+        assigned_secrets=None,
+        secret_placeholders={"CC_SECRET_tok": "oauth_token"},
+    )
+    mock_coordinator.session_manager.get_session_info.return_value = session
+    mock_coordinator.credential_vault = MagicMock()
+    mock_coordinator.credential_vault.list_secrets = AsyncMock(
+        return_value=[
+            {
+                "name": "oauth_token",
+                "refresh": {"refresh_token_secret_name": "oauth_refresh"},
+            }
+        ]
+    )
+    service.update_secret = AsyncMock(return_value={"name": "oauth_refresh"})
+
+    result = await service.update_secret_for_session("s1", "oauth_refresh", value="new_refresh")
+
+    service.update_secret.assert_called_once_with(name="oauth_refresh", value="new_refresh")
+    assert result == {"name": "oauth_refresh"}
+
+
+@pytest.mark.asyncio
+async def test_issue_1241_patch_session_overridden_secret_succeeds(service, mock_coordinator):
+    session = _make_session_post_1230(
+        assigned_secrets=["my_secret"],
+        secret_placeholders=None,
+    )
+    mock_coordinator.session_manager.get_session_info.return_value = session
+    mock_coordinator.credential_vault = MagicMock()
+    mock_coordinator.credential_vault.list_secrets = AsyncMock(return_value=[])
+    service.update_secret = AsyncMock(return_value={"name": "my_secret"})
+
+    result = await service.update_secret_for_session("s1", "my_secret", value="direct_val")
+
+    service.update_secret.assert_called_once_with(name="my_secret", value="direct_val")
+    assert result == {"name": "my_secret"}

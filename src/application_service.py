@@ -690,6 +690,19 @@ class ApplicationService:
             value=None,
         )
 
+    def _resolve_writeable_secret_names(self, session) -> list[str]:
+        """Names the proxy can both resolve and write back for this session.
+
+        Source order (deduped, preserves first occurrence):
+          1. session.config["assigned_secrets"] — direct session-level overrides
+          2. session.secret_placeholders.values() — template/profile-derived names captured at start_session()
+        """
+        names: list[str] = list(session.config.get("assigned_secrets") or [])
+        for name in (session.secret_placeholders or {}).values():
+            if name not in names:
+                names.append(name)
+        return names
+
     async def resolve_secrets_for_session(self, session_id: str) -> dict:
         """Return resolved secrets (including values) for a session's assigned_secrets list.
 
@@ -701,13 +714,7 @@ class ApplicationService:
         if session is None:
             return {"secrets": []}
 
-        assigned = list(session.config.get("assigned_secrets") or [])
-        # Issue #1219: also include secrets from secret_placeholders — these capture
-        # template/profile-derived assigned_secrets that were never written back to
-        # session.assigned_secrets.
-        for name in (session.secret_placeholders or {}).values():
-            if name not in assigned:
-                assigned.append(name)
+        assigned = self._resolve_writeable_secret_names(session)
 
         # Collect transitive names (sibling refresh-token and client-secret records).
         all_names: list[str] = list(assigned)
@@ -741,7 +748,7 @@ class ApplicationService:
         session = await self.coordinator.session_manager.get_session_info(session_id)
         if session is None:
             return None
-        assigned = session.config.get("assigned_secrets") or []
+        assigned = self._resolve_writeable_secret_names(session)
         allowed: set[str] = set(assigned)
         # Also allow transitive sibling records referenced by assigned refresh specs.
         for secret in await self.coordinator.credential_vault.list_secrets():
