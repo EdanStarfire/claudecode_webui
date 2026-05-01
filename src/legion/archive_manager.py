@@ -255,31 +255,23 @@ class ArchiveManager:
             archive_dir = self.archives_dir / minion_id / timestamp
             archive_dir.mkdir(parents=True, exist_ok=True)
 
-            files_archived = []
-
             # Get source session directory
             session_dir = self.system.session_coordinator.session_manager.sessions_dir / minion_id
 
-            # Copy messages.jsonl if exists
-            messages_file = session_dir / "messages.jsonl"
-            if messages_file.exists():
-                shutil.copy2(messages_file, archive_dir / "messages.jsonl")
-                files_archived.append("messages.jsonl")
-                archive_logger.debug(f"Archived messages.jsonl for minion {minion_id}")
-
-            # Copy state.json if exists
-            state_file = session_dir / "state.json"
-            if state_file.exists():
-                shutil.copy2(state_file, archive_dir / "state.json")
-                files_archived.append("state.json")
-                archive_logger.debug(f"Archived state.json for minion {minion_id}")
-
-            # Copy memory/ directory if exists (issue #709)
-            memory_dir = session_dir / "memory"
-            if memory_dir.exists() and memory_dir.is_dir():
-                shutil.copytree(memory_dir, archive_dir / "memory")
-                files_archived.append("memory/")
-                archive_logger.debug(f"Archived memory/ directory for minion {minion_id}")
+            # Build snapshot context from session config
+            cfg = session_info.config or {}
+            auto_mem_raw = cfg.get("auto_memory_directory")
+            auto_mem_dir: Path | None = Path(auto_mem_raw) if auto_mem_raw else None
+            ctx = SnapshotContext(
+                session_id=minion_id,
+                legion_id=session_info.project_id or None,
+                auto_memory_directory=auto_mem_dir,
+                docker_enabled=bool(cfg.get("docker_enabled", False)),
+                proxy_enabled=bool(cfg.get("docker_proxy_enabled", False)),
+                is_reset=False,
+                will_be_deleted=will_be_deleted,
+            )
+            files_archived = await self.snapshot_artifacts(session_dir, archive_dir, ctx)
 
             # Create disposal metadata
             # Use "deleted" as final_state if session will be deleted after archive
@@ -309,13 +301,15 @@ class ArchiveManager:
                 f"Archived minion {session_info.name} ({minion_id}) to {archive_dir}"
             )
 
-            # Fire-and-forget distillation of session history into markdown
-            # Write into the archive directory — sessions/{id}/ gets deleted after disposal.
+            # Fire-and-forget distillation — writes a final entry into archive_dir/history/.
+            # The live history/ was already copied by snapshot_artifacts (disposal path).
             # Issue #710: Skip distillation when history distillation is disabled
-            if session_info.config.get("history_distillation_enabled", True):
+            if cfg.get("history_distillation_enabled", True):
                 archived_messages = archive_dir / "messages.jsonl"
                 if archived_messages.exists():
-                    history_output = archive_dir / "history.md"
+                    history_dir = archive_dir / "history"
+                    history_dir.mkdir(exist_ok=True)
+                    history_output = history_dir / f"{timestamp}_disposal.md"
                     archive_ts = datetime.now(UTC).isoformat()
                     t = asyncio.create_task(
                         distill_session_history(archived_messages, history_output, minion_id, archive_ts)
