@@ -18,6 +18,7 @@ from pathlib import Path
 
 from .models.secret_record import SecretRecord, SecretType, validate_secret_name
 from .secrets_keyring import delete_secret_value, get_secret_value, set_secret_value
+from .slug_utils import slugify_secret
 
 logger = logging.getLogger(__name__)
 
@@ -48,18 +49,19 @@ class SecretsVault:
         for meta_path in sorted(self._creds_dir.glob("*.json")):
             try:
                 data = json.loads(meta_path.read_text())
-                # Skip files that look like old-format credentials (no 'type' field)
-                # They will be picked up once re-created via the new API.
-                if "name" not in data:
+                try:
+                    record = SecretRecord.from_dict(data)
+                except (KeyError, ValueError, TypeError):
+                    logger.debug(f"Skipping non-conformant secret file {meta_path.name}")
                     continue
-                results.append(self._strip_value(data))
+                results.append(self._strip_value(record.to_dict()))
             except Exception:
                 logger.exception(f"Failed to read secret metadata from {meta_path}")
         return results
 
     async def get_secret(self, name: str) -> dict | None:
         """Return metadata for a single secret. Returns None if not found."""
-        meta_path = self._creds_dir / f"{name}.json"
+        meta_path = self._secret_filename(name)
         if not meta_path.exists():
             return None
         try:
@@ -78,9 +80,11 @@ class SecretsVault:
         validate_secret_name(record.name)
         record.validate()
 
-        meta_path = self._creds_dir / f"{record.name}.json"
+        meta_path = self._secret_filename(record.name)
         if meta_path.exists():
-            raise ValueError(f"Secret '{record.name}' already exists")
+            raise ValueError(
+                f"Secret '{record.name}' already exists (slug '{slugify_secret(record.name)}')"
+            )
 
         # Issue #1052: For ssh_key type, validate the PEM and persist derived public-key metadata.
         if record.type == SecretType.SSH_KEY:
@@ -111,7 +115,7 @@ class SecretsVault:
         Returns updated metadata, or None if secret not found.
         Raises ValueError on validation failure.
         """
-        meta_path = self._creds_dir / f"{name}.json"
+        meta_path = self._secret_filename(name)
         if not meta_path.exists():
             return None
 
@@ -136,7 +140,7 @@ class SecretsVault:
 
     async def delete_secret(self, name: str) -> bool:
         """Delete secret metadata and keyring entry. Returns True if deleted, False if not found."""
-        meta_path = self._creds_dir / f"{name}.json"
+        meta_path = self._secret_filename(name)
         if not meta_path.exists():
             return False
 
@@ -158,7 +162,7 @@ class SecretsVault:
         """
         results = []
         for name in names:
-            meta_path = self._creds_dir / f"{name}.json"
+            meta_path = self._secret_filename(name)
             if not meta_path.exists():
                 logger.warning(f"Secret '{name}' not found in vault, skipping")
                 continue
@@ -178,6 +182,13 @@ class SecretsVault:
     # -------------------------------------------------------------------------
     # Helpers
     # -------------------------------------------------------------------------
+
+    def _secret_filename(self, name: str) -> Path:
+        """Return the metadata file path for a secret name, slugified for filesystem safety."""
+        slug = slugify_secret(name)
+        if not slug:
+            raise ValueError(f"Secret name '{name}' is empty after slugification")
+        return self._creds_dir / f"{slug}.json"
 
     @staticmethod
     def _strip_value(data: dict) -> dict:

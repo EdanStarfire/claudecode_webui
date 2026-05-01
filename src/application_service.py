@@ -628,7 +628,7 @@ class ApplicationService:
             refresh_spec = RefreshSpec.from_dict(existing["refresh"])
 
         record = SecretRecord(
-            name=name,
+            name=existing.get("name", name),
             type=SecretType(secret_type or existing.get("type", "generic")),
             target_hosts=target_hosts if target_hosts is not None else existing.get("target_hosts", []),
             inject_env=inject_env if inject_env is not None else existing.get("inject_env"),
