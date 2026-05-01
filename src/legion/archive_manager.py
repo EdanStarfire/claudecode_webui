@@ -28,6 +28,27 @@ archive_logger = get_logger('archive', category='ARCHIVE')
 logger = logging.getLogger(__name__)
 
 
+_SCRUB_KEYS = {"secret_fetch_token"}
+_RUNTIME_KEYS = {
+    "is_processing",
+    "latest_message",
+    "latest_message_type",
+    "latest_message_time",
+    "claude_code_session_id",
+}
+
+
+def scrub_state_for_archive(state: dict) -> dict:
+    """Return a copy of state with sensitive and runtime-only keys removed."""
+    out = {k: v for k, v in state.items() if k not in _SCRUB_KEYS}
+    for k in _RUNTIME_KEYS:
+        out.pop(k, None)
+    err = out.pop("error_message", None)
+    if err:
+        out["error_summary"] = (err[:200] + "…") if len(err) > 200 else err
+    return out
+
+
 class ArchiveManager:
     """Manages archiving of disposed minion session data."""
 
