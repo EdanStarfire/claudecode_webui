@@ -582,6 +582,134 @@ class ArchiveManager:
             archive_logger.error(f"Failed to read archive resource file: {e}")
             return None
 
+    async def get_archive_queue(
+        self, session_id: str, archive_id: str
+    ) -> list[dict]:
+        """Read queue.jsonl from an archive, returning parsed records."""
+        archive_dir = self.archives_dir / session_id / archive_id
+        queue_file = archive_dir / "queue.jsonl"
+        if not queue_file.exists():
+            return []
+        records: list[dict] = []
+        try:
+            with open(queue_file, encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        try:
+                            records.append(json.loads(line))
+                        except json.JSONDecodeError:
+                            pass
+        except OSError as e:
+            archive_logger.error(f"Failed to read archive queue: {e}")
+        return records
+
+    async def get_archive_proxy_logs(
+        self, session_id: str, archive_id: str
+    ) -> list[dict]:
+        """List archived proxy log files with size and line count.
+
+        Returns list of {name, size_bytes, line_count} for each log present.
+        """
+        archive_dir = self.archives_dir / session_id / archive_id
+        proxy_dir = archive_dir / "proxy"
+        if not proxy_dir.is_dir():
+            return []
+        result: list[dict] = []
+        for name in _PROXY_LOG_NAMES:
+            log_file = proxy_dir / name
+            if not log_file.exists():
+                continue
+            try:
+                content = log_file.read_bytes()
+                line_count = content.count(b"\n")
+                result.append({
+                    "name": name,
+                    "size_bytes": len(content),
+                    "line_count": line_count,
+                })
+            except OSError as e:
+                archive_logger.error(f"Failed to stat proxy log {name}: {e}")
+        return result
+
+    async def get_archive_history(
+        self, session_id: str, archive_id: str
+    ) -> list[dict]:
+        """List history .md files in an archive, returning {name, size_bytes, mtime}."""
+        archive_dir = self.archives_dir / session_id / archive_id
+        history_dir = archive_dir / "history"
+        if not history_dir.is_dir():
+            return []
+        entries: list[dict] = []
+        for md_file in sorted(history_dir.glob("*.md")):
+            try:
+                stat = md_file.stat()
+                entries.append({
+                    "name": md_file.name,
+                    "size_bytes": stat.st_size,
+                    "mtime": stat.st_mtime,
+                })
+            except OSError:
+                pass
+        return entries
+
+    async def get_archive_schedules(
+        self, session_id: str, archive_id: str
+    ) -> dict:
+        """Read archived schedules.json and schedule_history.jsonl from an archive.
+
+        Returns {schedules: list, history: list}.
+        """
+        archive_dir = self.archives_dir / session_id / archive_id
+        schedules: list = []
+        history: list = []
+
+        sched_file = archive_dir / "schedules.json"
+        if sched_file.exists():
+            try:
+                schedules = json.loads(sched_file.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError) as e:
+                archive_logger.error(f"Failed to read archived schedules: {e}")
+
+        hist_file = archive_dir / "schedule_history.jsonl"
+        if hist_file.exists():
+            try:
+                with open(hist_file, encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if line:
+                            try:
+                                history.append(json.loads(line))
+                            except json.JSONDecodeError:
+                                pass
+            except OSError as e:
+                archive_logger.error(f"Failed to read archived schedule history: {e}")
+
+        return {"schedules": schedules, "history": history}
+
+    async def get_archive_attachments(
+        self, session_id: str, archive_id: str
+    ) -> list[dict]:
+        """List files in archived attachments/ directory.
+
+        Returns list of {name, size_bytes} for each file present.
+        """
+        archive_dir = self.archives_dir / session_id / archive_id
+        att_dir = archive_dir / "attachments"
+        if not att_dir.is_dir():
+            return []
+        entries: list[dict] = []
+        for att_file in sorted(att_dir.iterdir()):
+            if att_file.is_file():
+                try:
+                    entries.append({
+                        "name": att_file.name,
+                        "size_bytes": att_file.stat().st_size,
+                    })
+                except OSError:
+                    pass
+        return entries
+
     async def list_project_deleted_agents(self, project_id: str) -> list[dict]:
         """
         List deleted agents for a project by scanning archives.
