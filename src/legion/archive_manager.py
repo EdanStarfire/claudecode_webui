@@ -11,6 +11,7 @@ import asyncio
 import json
 import logging
 import shutil
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -49,6 +50,21 @@ def scrub_state_for_archive(state: dict) -> dict:
     return out
 
 
+_PROXY_LOG_NAMES = ("access.log", "dns.log", "socks5.log", "dropped.log")
+
+
+@dataclass
+class SnapshotContext:
+    """Describes what to include in an archive snapshot."""
+    session_id: str
+    legion_id: str | None
+    auto_memory_directory: Path | None
+    docker_enabled: bool
+    proxy_enabled: bool
+    is_reset: bool
+    will_be_deleted: bool
+
+
 class ArchiveManager:
     """Manages archiving of disposed minion session data."""
 
@@ -70,6 +86,126 @@ class ArchiveManager:
             self._archives_dir = data_dir / "archives" / "minions"
             self._archives_dir.mkdir(parents=True, exist_ok=True)
         return self._archives_dir
+
+    # ------------------------------------------------------------------
+    # Unified snapshot helper (issue #1244)
+    # ------------------------------------------------------------------
+
+    async def snapshot_artifacts(
+        self,
+        session_dir: Path,
+        archive_dir: Path,
+        ctx: SnapshotContext,
+    ) -> list[str]:
+        """Copy the unified artifact set into archive_dir.
+
+        Returns list of artifact name tokens archived (for telemetry).
+        archive_dir is created by the caller before this method is invoked.
+        """
+        archived: list[str] = []
+
+        # Always-archive artifacts
+        self._copy_if_exists(session_dir / "messages.jsonl", archive_dir, archived)
+        self._scrub_and_copy_state(session_dir, archive_dir, archived)
+        self._copy_if_exists(session_dir / "queue.jsonl", archive_dir, archived)
+        self._copy_dir_if_exists(session_dir / "resources", archive_dir, archived)
+        self._copy_dir_if_exists(session_dir / "attachments", archive_dir, archived)
+
+        # Disposal-only artifacts
+        if not ctx.is_reset:
+            self._copy_dir_if_exists(session_dir / "history", archive_dir, archived)
+
+            if ctx.auto_memory_directory is not None:
+                self._copy_external_memory(
+                    ctx.auto_memory_directory, session_dir, archive_dir, archived
+                )
+            else:
+                self._copy_dir_if_exists(session_dir / "memory", archive_dir, archived)
+
+            if ctx.legion_id:
+                self._copy_legion_schedules(ctx.legion_id, archive_dir, archived)
+
+        # Proxy logs — both disposal and reset (decision #11)
+        if ctx.proxy_enabled:
+            self._copy_proxy_logs(session_dir, archive_dir, archived)
+
+        return archived
+
+    def _copy_if_exists(self, src: Path, dst_dir: Path, archived: list[str]) -> None:
+        if src.exists():
+            shutil.copy2(src, dst_dir / src.name)
+            archived.append(src.name)
+
+    def _scrub_and_copy_state(
+        self, session_dir: Path, archive_dir: Path, archived: list[str]
+    ) -> None:
+        state_file = session_dir / "state.json"
+        if not state_file.exists():
+            return
+        try:
+            state = json.loads(state_file.read_text(encoding="utf-8"))
+            scrubbed = scrub_state_for_archive(state)
+            (archive_dir / "state.json").write_text(
+                json.dumps(scrubbed, indent=2, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            archived.append("state.json")
+        except Exception:
+            logger.exception("Failed to scrub/copy state.json for archive")
+
+    def _copy_dir_if_exists(self, src: Path, dst_dir: Path, archived: list[str]) -> None:
+        if src.is_dir():
+            shutil.copytree(src, dst_dir / src.name)
+            archived.append(f"{src.name}/")
+
+    def _copy_external_memory(
+        self,
+        custom_dir: Path,
+        session_dir: Path,
+        archive_dir: Path,
+        archived: list[str],
+    ) -> None:
+        """Copy out-of-tree memory dir into archive_dir/memory_external/."""
+        try:
+            resolved_custom = custom_dir.resolve()
+            resolved_session = session_dir.resolve()
+            if resolved_custom.is_relative_to(resolved_session):
+                # In-tree — handled by normal _copy_dir_if_exists on memory/
+                self._copy_dir_if_exists(custom_dir, archive_dir, archived)
+                return
+            if custom_dir.is_dir():
+                shutil.copytree(custom_dir, archive_dir / "memory_external")
+                archived.append("memory_external/")
+        except Exception:
+            logger.exception("Failed to copy external memory for archive")
+
+    def _copy_proxy_logs(
+        self, session_dir: Path, archive_dir: Path, archived: list[str]
+    ) -> None:
+        proxy_src = session_dir / "docker_claude_data" / "proxy"
+        if not proxy_src.is_dir():
+            return
+        proxy_dst = archive_dir / "proxy"
+        any_copied = False
+        for name in _PROXY_LOG_NAMES:
+            src = proxy_src / name
+            if src.exists():
+                proxy_dst.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src, proxy_dst / name)
+                any_copied = True
+        if any_copied:
+            archived.append("proxy/")
+
+    def _copy_legion_schedules(
+        self, legion_id: str, archive_dir: Path, archived: list[str]
+    ) -> None:
+        data_dir = self.system.session_coordinator.session_manager.data_dir
+        legion_dir = data_dir / "legions" / legion_id
+        for fname in ("schedules.json", "schedule_history.jsonl"):
+            src = legion_dir / fname
+            if src.exists():
+                shutil.copy2(src, archive_dir / fname)
+                archived.append(fname)
 
     async def archive_minion(
         self,
