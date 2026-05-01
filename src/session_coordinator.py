@@ -2337,6 +2337,16 @@ class SessionCoordinator:
                 coord_logger.info(f"Cleared message history for session {session_id}")
                 await storage.clear_resources()
                 coord_logger.info(f"Cleared resources for session {session_id}")
+                # Issue #1244: clear queue + attachments (archive already captured them)
+                await storage.clear_queue()
+                coord_logger.info(f"Cleared queue for session {session_id}")
+                await storage.clear_attachments()
+                coord_logger.info(f"Cleared attachments for session {session_id}")
+
+            # Issue #1244: rotate proxy logs then clear non-proxy docker_claude_data and tmp
+            await self._rotate_proxy_logs(session_id)
+            await self._clear_docker_claude_data(session_id, keep_subdirs={"proxy"})
+            await self._clear_session_tmp(session_id)
 
             # Issue #310: Reset DisplayProjection state (clears tool tracking)
             self._reset_display_projection(session_id)
