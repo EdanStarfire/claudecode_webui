@@ -51,7 +51,7 @@
     </div>
 
     <!-- Docker badge -->
-    <div v-if="session.docker_enabled" class="ac-docker-badge" title="Running with Docker isolation" aria-label="Docker isolated">
+    <div v-if="session.config?.docker_enabled" class="ac-docker-badge" title="Running with Docker isolation" aria-label="Docker isolated">
       <svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor">
         <rect x="1" y="4" width="5" height="4" rx="0.5" stroke="currentColor" stroke-width="0.8" fill="none"/>
         <rect x="1" y="8" width="14" height="5" rx="1" stroke="currentColor" stroke-width="0.8" fill="none"/>
@@ -61,7 +61,7 @@
     </div>
 
     <!-- Proxy badge -->
-    <div v-if="session.docker_proxy_enabled" class="ac-proxy-badge" title="Network proxy active" aria-label="Network proxy active">
+    <div v-if="session.config?.docker_proxy_enabled" class="ac-proxy-badge" title="Network proxy active" aria-label="Network proxy active">
       🛡️
     </div>
   </div>
@@ -151,8 +151,8 @@ const chipTooltip = computed(() => {
   if (props.session.sdk_generated_name) parts.push(`Title: ${props.session.sdk_generated_name}`)
   parts.push(`Status: ${statusText.value}`)
   if (props.session.model) parts.push(`Model: ${props.session.model}`)
-  if (props.session.docker_enabled) parts.push('Docker isolated')
-  if (props.session.docker_proxy_enabled) parts.push('Network proxy active')
+  if (props.session.config?.docker_enabled) parts.push('Docker isolated')
+  if (props.session.config?.docker_proxy_enabled) parts.push('Network proxy active')
   return parts.join('\n')
 })
 

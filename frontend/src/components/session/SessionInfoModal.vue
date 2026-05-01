@@ -400,7 +400,7 @@ watch(
           mcpConfigStore.fetchConfigs()
         }
         // Fetch proxy status and blocked log if proxy is enabled
-        if (session?.docker_proxy_enabled) {
+        if (session?.config?.docker_proxy_enabled) {
           proxyStore.fetchProxyStatus(data.sessionId)
           proxyStore.fetchBlockedLog(data.sessionId)
         }
