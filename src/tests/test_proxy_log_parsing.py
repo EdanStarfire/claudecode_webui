@@ -222,3 +222,86 @@ class TestDnsLogParsing:
     async def test_missing_dns_log_returns_empty(self, coordinator, proxy_dir, session_id):
         result = await coordinator.get_proxy_logs(session_id, log_type="dns", limit=200)
         assert result == {"entries": [], "total_lines": 0, "log_type": "dns"}
+
+
+# ==================== SOCKS5 log parsing ====================
+
+
+class TestSocks5LogParsing:
+    @pytest.fixture
+    async def coordinator(self, tmp_path):
+        from unittest.mock import MagicMock
+
+        from ..session_coordinator import SessionCoordinator
+
+        coord = SessionCoordinator.__new__(SessionCoordinator)
+        coord.data_dir = tmp_path
+        coord.logger = MagicMock()
+        return coord
+
+    @pytest.fixture
+    def session_id(self):
+        return "test-session-003"
+
+    @pytest.fixture
+    def proxy_dir(self, tmp_path, session_id):
+        d = tmp_path / "sessions" / session_id / "docker_claude_data" / "proxy"
+        d.mkdir(parents=True)
+        return d
+
+    @pytest.mark.asyncio
+    async def test_allowed_and_denied_entries_parsed(self, coordinator, proxy_dir, session_id):
+        entries = [
+            {"ts": "2026-04-30T12:34:56+0000", "session_id": session_id,
+             "host": "github.com", "port": 22, "allowed": True, "reason": "ok"},
+            {"ts": "2026-04-30T12:35:00+0000", "session_id": session_id,
+             "host": "example.com", "port": 22, "allowed": False, "reason": "not_allowlisted"},
+            {"ts": "2026-04-30T12:35:10+0000", "session_id": session_id,
+             "host": "1.2.3.4", "port": 22, "allowed": False, "reason": "ip_literal"},
+        ]
+        socks5_log = proxy_dir / "socks5.log"
+        socks5_log.write_text("\n".join(json.dumps(e) for e in entries) + "\n")
+
+        result = await coordinator.get_proxy_logs(session_id, log_type="socks5", limit=200)
+
+        assert result["log_type"] == "socks5"
+        assert result["total_lines"] == 3
+        assert len(result["entries"]) == 3
+        assert result["entries"][0]["host"] == "github.com"
+        assert result["entries"][0]["port"] == 22
+        assert result["entries"][0]["allowed"] is True
+        assert result["entries"][0]["reason"] == "ok"
+        assert result["entries"][1]["allowed"] is False
+        assert result["entries"][1]["reason"] == "not_allowlisted"
+        assert result["entries"][2]["reason"] == "ip_literal"
+
+    @pytest.mark.asyncio
+    async def test_missing_socks5_log_returns_empty(self, coordinator, proxy_dir, session_id):
+        result = await coordinator.get_proxy_logs(session_id, log_type="socks5", limit=200)
+        assert result == {"entries": [], "total_lines": 0, "log_type": "socks5"}
+
+    @pytest.mark.asyncio
+    async def test_malformed_lines_skipped(self, coordinator, proxy_dir, session_id):
+        socks5_log = proxy_dir / "socks5.log"
+        socks5_log.write_text(
+            '{"ts": "2026-04-30T12:34:56+0000", "host": "github.com", "port": 22, "allowed": true, "reason": "ok"}\n'
+            "not valid json\n"
+            '{"ts": "2026-04-30T12:35:00+0000", "host": "example.com", "port": 22, "allowed": false, "reason": "not_allowlisted"}\n'
+        )
+
+        result = await coordinator.get_proxy_logs(session_id, log_type="socks5", limit=200)
+        assert len(result["entries"]) == 2
+        assert result["entries"][0]["host"] == "github.com"
+        assert result["entries"][1]["host"] == "example.com"
+
+    @pytest.mark.asyncio
+    async def test_invalid_log_type_not_routed_to_socks5(self, coordinator, proxy_dir, session_id):
+        """Validator rejection is tested at the router layer; here we verify coordinator
+        treats an unknown log_type as dns (falls through to else branch), not socks5."""
+        socks5_log = proxy_dir / "socks5.log"
+        socks5_log.write_text(
+            '{"ts": "2026-04-30T12:34:56+0000", "host": "github.com", "port": 22, "allowed": true, "reason": "ok"}\n'
+        )
+        # An unknown type falls through to the dns branch, which won't find dns.log
+        result = await coordinator.get_proxy_logs(session_id, log_type="unknown", limit=200)
+        assert result == {"entries": [], "total_lines": 0, "log_type": "unknown"}

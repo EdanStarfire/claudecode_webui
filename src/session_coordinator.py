@@ -826,10 +826,11 @@ class SessionCoordinator:
 
         Issue #1102: Reads access.log (HTTP) or dns.log (DNS) from the proxy sidecar
         data directory and returns the last `limit` parsed entries.
+        Issue #1214: Also supports socks5.log for SOCKS5 connection entries.
 
         Args:
             session_id: Session ID
-            log_type: "http" or "dns"
+            log_type: "http", "dns", or "socks5"
             limit: Maximum number of entries to return (tail-read)
 
         Returns:
@@ -838,6 +839,8 @@ class SessionCoordinator:
         session_dir = self.data_dir / "sessions" / session_id
         if log_type == "http":
             log_path = session_dir / "docker_claude_data" / "proxy" / "access.log"
+        elif log_type == "socks5":
+            log_path = session_dir / "docker_claude_data" / "proxy" / "socks5.log"
         else:
             log_path = session_dir / "docker_claude_data" / "proxy" / "dns.log"
 
@@ -870,6 +873,22 @@ class SessionCoordinator:
                     })
                 except (json.JSONDecodeError, ValueError):
                     self.logger.warning(f"Skipping malformed HTTP proxy log line in session {session_id}")
+        elif log_type == "socks5":
+            for line in lines:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    raw = json.loads(line)
+                    entries.append({
+                        "ts": raw.get("ts"),
+                        "host": raw.get("host"),
+                        "port": raw.get("port"),
+                        "allowed": raw.get("allowed"),
+                        "reason": raw.get("reason"),
+                    })
+                except (json.JSONDecodeError, ValueError):
+                    self.logger.warning(f"Skipping malformed SOCKS5 proxy log line in session {session_id}")
         else:
             # CoreDNS log format:
             # [INFO] 10.0.0.2:54312 - 12345 "A IN api.github.com. udp 128 false 4096" NOERROR qr,rd,ra 73 0.023s
