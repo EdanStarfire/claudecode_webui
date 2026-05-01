@@ -94,7 +94,7 @@ const sessionId = computed(() => sessionStore.currentSessionId)
 // Start/stop polling based on visibility and session
 watch([isVisible, sessionId], ([visible, sid]) => {
   proxyStore.stopPolling()
-  if (visible && sid && sessionStore.currentSession?.docker_proxy_enabled) {
+  if (visible && sid && sessionStore.currentSession?.config?.docker_proxy_enabled) {
     proxyStore.loadAllLogs(sid)
     proxyStore.startPolling(sid)
   }

@@ -109,7 +109,7 @@ const schedulesHasError = computed(() => {
   return scheduleStore.getSchedules(projectId).some(s => s.monitor_error)
 })
 
-const proxyEnabled = computed(() => sessionStore.currentSession?.docker_proxy_enabled === true)
+const proxyEnabled = computed(() => sessionStore.currentSession?.config?.docker_proxy_enabled === true)
 const proxyBadge = computed(() => proxyStore.currentTotalCount)
 const editHistoryCount = computed(() =>
   editHistoryStore.entryCount(sessionStore.currentSessionId)

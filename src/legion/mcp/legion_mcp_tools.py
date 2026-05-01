@@ -28,7 +28,7 @@ except ImportError:
 
 from src.config_resolution import resolve_template_config
 from src.docker_utils import translate_docker_tmp_path
-from src.session_config import SessionConfig
+from src.session_config import DEFAULTS as _SESSION_DEFAULTS, SessionConfig
 from src.task_utils import task_done_log_exception
 
 logger = logging.getLogger(__name__)
@@ -991,24 +991,25 @@ class LegionMCPTools:
                 docker_home_directory = (
                     resolved.get('docker_home_directory') or _pc.get('docker_home_directory')
                 )
-                # Booleans: use resolved value with parent fallback to avoid falsy-value bugs
+                # Booleans: fall back to SessionConfig defaults when neither resolved nor
+                # parent config has the field (post-#1230 config dicts omit default values).
                 history_distillation_enabled = resolved.get(
                     'history_distillation_enabled',
-                    _pc.get('history_distillation_enabled'),
+                    _pc.get('history_distillation_enabled', _SESSION_DEFAULTS['history_distillation_enabled']),
                 )
                 auto_memory_mode = resolved.get('auto_memory_mode') or _pc.get('auto_memory_mode')
                 skill_creating_enabled = resolved.get(
                     'skill_creating_enabled',
-                    _pc.get('skill_creating_enabled'),
+                    _pc.get('skill_creating_enabled', _SESSION_DEFAULTS['skill_creating_enabled']),
                 )
                 mcp_server_ids = resolved.get('mcp_server_ids') or _pc.get('mcp_server_ids')
                 enable_claudeai_mcp_servers = resolved.get(
                     'enable_claudeai_mcp_servers',
-                    _pc.get('enable_claudeai_mcp_servers'),
+                    _pc.get('enable_claudeai_mcp_servers', _SESSION_DEFAULTS['enable_claudeai_mcp_servers']),
                 )
                 strict_mcp_config = resolved.get(
                     'strict_mcp_config',
-                    _pc.get('strict_mcp_config'),
+                    _pc.get('strict_mcp_config', _SESSION_DEFAULTS['strict_mcp_config']),
                 )
 
             except Exception as e:
@@ -1039,12 +1040,12 @@ class LegionMCPTools:
             additional_directories = _pc.get('additional_directories') or []
             sandbox_config = _pc.get('sandbox_config')
             docker_home_directory = _pc.get('docker_home_directory')
-            history_distillation_enabled = _pc.get('history_distillation_enabled')
+            history_distillation_enabled = _pc.get('history_distillation_enabled', _SESSION_DEFAULTS['history_distillation_enabled'])
             auto_memory_mode = _pc.get('auto_memory_mode')
-            skill_creating_enabled = _pc.get('skill_creating_enabled')
+            skill_creating_enabled = _pc.get('skill_creating_enabled', _SESSION_DEFAULTS['skill_creating_enabled'])
             mcp_server_ids = _pc.get('mcp_server_ids')
-            enable_claudeai_mcp_servers = _pc.get('enable_claudeai_mcp_servers')
-            strict_mcp_config = _pc.get('strict_mcp_config')
+            enable_claudeai_mcp_servers = _pc.get('enable_claudeai_mcp_servers', _SESSION_DEFAULTS['enable_claudeai_mcp_servers'])
+            strict_mcp_config = _pc.get('strict_mcp_config', _SESSION_DEFAULTS['strict_mcp_config'])
 
         # Validate role is set (from parameter or template)
         if not role:
