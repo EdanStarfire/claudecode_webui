@@ -252,10 +252,27 @@ if [ -n "$PROXY_IMAGE" ]; then
         done
     fi
 
+    # Issue #1233: --add-host overrides macOS/Windows runtime-provided host.docker.internal
+    # entry, breaking Rancher Desktop. Apply only on native Linux where Docker doesn't
+    # auto-inject. WSL2 reports uname -s as Linux but uses Docker Desktop's host gateway
+    # injection, so detect and skip there as well.
+    ADD_HOST_FLAG=""
+    if [ "$(uname -s)" = "Linux" ]; then
+        IS_WSL=0
+        if [ -r /proc/sys/kernel/osrelease ]; then
+            case "$(cat /proc/sys/kernel/osrelease)" in
+                *microsoft*|*Microsoft*|*WSL*) IS_WSL=1 ;;
+            esac
+        fi
+        if [ "$IS_WSL" = "0" ]; then
+            ADD_HOST_FLAG="--add-host=host.docker.internal:host-gateway"
+        fi
+    fi
+
     docker run -d \
         --name "$PROXY_NAME" \
         --cap-add NET_ADMIN \
-        --add-host=host.docker.internal:host-gateway \
+        $ADD_HOST_FLAG \
         --sysctl net.ipv4.ip_forward=1 \
         --sysctl net.ipv4.conf.lo.accept_local=1 \
         -v "$PROXY_CERTS:/var/lib/mitmproxy" \
