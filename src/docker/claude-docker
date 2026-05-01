@@ -259,7 +259,9 @@ if [ -n "$PROXY_IMAGE" ]; then
     # NET_ADMIN/sysctl flags (the proxy sidecar uses both). A plain Alpine container
     # without those flags always receives the correct entry — extract that IP and
     # pin it as cc-webui.internal via --add-host.
-    _PROBE_IP=$(timeout 5 docker run --rm --pull=missing alpine \
+    # Issue #1266: Do NOT use `timeout` — it is GNU coreutils and unavailable on macOS,
+    # causing the probe to fail silently on the platform where it is most needed.
+    _PROBE_IP=$(docker run --rm --pull=missing alpine \
         sh -c "getent hosts host.docker.internal 2>/dev/null | awk 'NR==1{print \$1}'" \
         2>/dev/null || true)
     if [ -n "$_PROBE_IP" ]; then
