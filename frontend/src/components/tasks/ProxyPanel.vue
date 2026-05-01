@@ -22,15 +22,23 @@
           {{ proxyStore.currentDnsCount }}
         </span>
       </button>
+      <button
+        class="btn btn-sm ms-auto"
+        :class="hideAnthropic ? 'btn-primary' : 'btn-outline-secondary'"
+        title="Hide Anthropic traffic"
+        @click="hideAnthropic = !hideAnthropic"
+      >
+        Hide Anthropic
+      </button>
     </div>
 
     <!-- HTTP sub-tab -->
     <div v-show="proxyStore.activeSubTab === 'http'" class="proxy-log-list">
-      <div v-if="proxyStore.currentHttpLogs.length === 0" class="empty-state">
+      <div v-if="filteredHttpLogs.length === 0" class="empty-state">
         No HTTP requests logged yet
       </div>
       <div
-        v-for="entry in [...proxyStore.currentHttpLogs].reverse()"
+        v-for="entry in [...filteredHttpLogs].reverse()"
         :key="`${entry.ts}-${entry.host}-${entry.path}`"
         class="proxy-entry http-entry"
       >
@@ -49,11 +57,11 @@
 
     <!-- DNS sub-tab -->
     <div v-show="proxyStore.activeSubTab === 'dns'" class="proxy-log-list">
-      <div v-if="proxyStore.currentDnsLogs.length === 0" class="empty-state">
+      <div v-if="filteredDnsLogs.length === 0" class="empty-state">
         No DNS queries logged yet
       </div>
       <div
-        v-for="(entry, idx) in proxyStore.currentDnsLogs"
+        v-for="(entry, idx) in filteredDnsLogs"
         :key="idx"
         class="proxy-entry dns-entry"
       >
@@ -79,7 +87,7 @@
 </template>
 
 <script setup>
-import { computed, watch, onUnmounted } from 'vue'
+import { computed, ref, watch, onUnmounted } from 'vue'
 import { useProxyStore } from '@/stores/proxy'
 import { useSessionStore } from '@/stores/session'
 import { useUIStore } from '@/stores/ui'
@@ -90,6 +98,28 @@ const uiStore = useUIStore()
 
 const isVisible = computed(() => uiStore.rightSidebarActiveTab === 'proxy')
 const sessionId = computed(() => sessionStore.currentSessionId)
+
+// Persist hide-anthropic preference in localStorage (default: true = filter on)
+let _initHide = true
+try { _initHide = JSON.parse(localStorage.getItem('webui-proxy-hide-anthropic') ?? 'true') } catch {}
+const hideAnthropic = ref(_initHide)
+watch(hideAnthropic, (val) => { try { localStorage.setItem('webui-proxy-hide-anthropic', JSON.stringify(val)) } catch {} })
+
+function isAnthropicDomain(host) {
+  if (!host) return false
+  const h = host.toLowerCase()
+  return h === 'anthropic.com' || h.endsWith('.anthropic.com')
+}
+
+const filteredHttpLogs = computed(() => {
+  if (!hideAnthropic.value) return proxyStore.currentHttpLogs
+  return proxyStore.currentHttpLogs.filter(e => !isAnthropicDomain(e.host))
+})
+
+const filteredDnsLogs = computed(() => {
+  if (!hideAnthropic.value) return proxyStore.currentDnsLogs
+  return proxyStore.currentDnsLogs.filter(e => !isAnthropicDomain(e.hostname))
+})
 
 // Start/stop polling based on visibility and session
 watch([isVisible, sessionId], ([visible, sid]) => {
