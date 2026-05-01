@@ -12,7 +12,6 @@ import logging
 import os
 import re
 import secrets
-import shutil
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -2366,42 +2365,26 @@ class SessionCoordinator:
     async def _archive_session_for_reset(self, session_id: str) -> bool:
         """Archive session data before a reset so it can be reviewed later.
 
-        Copies messages.jsonl, state.json, and resources/ into
-        data/archives/minions/{session_id}/{timestamp}/ and writes a
-        disposal_metadata.json with reason="reset".
+        Uses snapshot_artifacts() with is_reset=True so that queue.jsonl,
+        attachments/, and proxy logs are captured but history/memory are left
+        in place (decision #5).  Writes disposal_metadata.json with reason="reset".
 
         Returns True on success, False on failure (logged, never raised).
         """
         try:
+            from src.legion.archive_manager import SnapshotContext
+            from src.models.archive_models import DisposalMetadata
+
             session_info = await self.session_manager.get_session_info(session_id)
             session_dir = self.session_manager.sessions_dir / session_id
-            timestamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
+            # Use microsecond-precision timestamp for cross-path consistency
+            timestamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S_%f")
             archive_dir = (
                 self.session_manager.data_dir / "archives" / "minions" / session_id / timestamp
             )
             archive_dir.mkdir(parents=True, exist_ok=True)
 
-            # Copy messages.jsonl
-            messages_file = session_dir / "messages.jsonl"
-            if messages_file.exists():
-                shutil.copy2(messages_file, archive_dir / "messages.jsonl")
-
-            # Copy state.json
-            state_file = session_dir / "state.json"
-            if state_file.exists():
-                shutil.copy2(state_file, archive_dir / "state.json")
-
-            # Copy resources/ directory
-            resources_dir = session_dir / "resources"
-            if resources_dir.exists() and resources_dir.is_dir():
-                shutil.copytree(resources_dir, archive_dir / "resources")
-
-            # Copy memory/ directory if exists (issue #709)
-            memory_dir = session_dir / "memory"
-            if memory_dir.exists() and memory_dir.is_dir():
-                shutil.copytree(memory_dir, archive_dir / "memory")
-
-            # Determine project/legion ID for metadata
+            # Determine project/legion ID for metadata + snapshot context
             project_id = ""
             if session_info:
                 for proj in await self.project_manager.list_projects():
@@ -2409,29 +2392,43 @@ class SessionCoordinator:
                         project_id = proj.project_id
                         break
 
-            # Write disposal_metadata.json
-            metadata = {
-                "disposed_at": datetime.now(UTC).timestamp(),
-                "reason": "reset",
-                "parent_overseer_id": None,
-                "parent_overseer_name": None,
-                "legion_id": project_id,
-                "final_state": "reset",
-                "minion_id": session_id,
-                "minion_name": session_info.name if session_info else "",
-                "minion_role": session_info.role if session_info else None,
-                "overseer_level": 0,
-                "child_minion_ids": [],
-                "descendants_count": 0,
-                "metadata": {},
-            }
-            metadata_path = archive_dir / "disposal_metadata.json"
-            metadata_path.write_text(json.dumps(metadata, indent=2))
+            # Build snapshot context
+            cfg = session_info.config if session_info else {}
+            auto_mem_raw = cfg.get("auto_memory_directory")
+            ctx = SnapshotContext(
+                session_id=session_id,
+                legion_id=project_id or None,
+                auto_memory_directory=Path(auto_mem_raw) if auto_mem_raw else None,
+                docker_enabled=bool(cfg.get("docker_enabled", False)),
+                proxy_enabled=bool(cfg.get("docker_proxy_enabled", False)),
+                is_reset=True,
+                will_be_deleted=False,
+            )
 
-            # Fire-and-forget distillation of session history into markdown
-            # Use the archived copy of messages.jsonl, not the live file — the live
-            # file gets truncated by clear_messages() right after this method returns.
-            # Skip distillation when knowledge management is disabled.
+            # Delegate to unified artifact snapshot
+            archive_manager = self.legion_system.archive_manager
+            await archive_manager.snapshot_artifacts(session_dir, archive_dir, ctx)
+
+            # Write disposal_metadata.json using the shared dataclass
+            metadata = DisposalMetadata(
+                disposed_at=datetime.now(UTC).timestamp(),
+                reason="reset",
+                parent_overseer_id=None,
+                parent_overseer_name=None,
+                legion_id=project_id,
+                final_state="reset",
+                minion_id=session_id,
+                minion_name=session_info.name if session_info else "",
+                minion_role=session_info.role if session_info else None,
+                overseer_level=0,
+                child_minion_ids=[],
+                descendants_count=0,
+            )
+            metadata_path = archive_dir / "disposal_metadata.json"
+            metadata_path.write_text(json.dumps(metadata.to_dict(), indent=2))
+
+            # Fire-and-forget distillation — writes to live history/ (decision #5).
+            # Uses the archived copy of messages.jsonl so the live file can be truncated.
             # Issue #1059: Use resolve_effective_config to support template-linked sessions.
             _eff_for_archive = await resolve_effective_config(
                 session_info, self.template_manager, self.profile_manager
