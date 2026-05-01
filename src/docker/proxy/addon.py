@@ -36,7 +36,7 @@ ALLOWLIST_PATH = "/etc/proxy/allowlist.json"
 SESSION_TOKEN_PATH = "/etc/proxy/session_token"
 SESSION_ID_PATH = "/etc/proxy/session_id"
 LOG_DIR = "/var/log/proxy"
-WEBUI_BASE_URL = os.environ.get("WEBUI_BASE_URL", "http://host.docker.internal:8000")
+WEBUI_BASE_URL = os.environ.get("WEBUI_BASE_URL", "http://cc-webui.internal:8000")
 SOCKS5_LOG_FILENAME = "socks5.log"
 
 _BINARY_CONTENT_TYPES = frozenset({

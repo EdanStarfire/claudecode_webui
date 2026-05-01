@@ -16,6 +16,12 @@ cat > "$COREFILE" <<'HEADER'
 HEADER
 
 for domain in $DOMAINS; do
+    if [ "$domain" = "cc-webui.internal" ]; then
+        # Resolved via /etc/hosts (--add-host injection from claude-docker).
+        # 8.8.8.8 cannot resolve WebUI-internal names, so generating a forward
+        # zone here would produce broken NXDOMAIN responses.
+        continue
+    fi
     cat >> "$COREFILE" <<EOF
 
 ${domain} {

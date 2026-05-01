@@ -252,21 +252,22 @@ if [ -n "$PROXY_IMAGE" ]; then
         done
     fi
 
-    # Issue #1233: --add-host overrides macOS/Windows runtime-provided host.docker.internal
-    # entry, breaking Rancher Desktop. Apply only on native Linux where Docker doesn't
-    # auto-inject. WSL2 reports uname -s as Linux but uses Docker Desktop's host gateway
-    # injection, so detect and skip there as well.
-    ADD_HOST_FLAG=""
-    if [ "$(uname -s)" = "Linux" ]; then
-        IS_WSL=0
-        if [ -r /proc/sys/kernel/osrelease ]; then
-            case "$(cat /proc/sys/kernel/osrelease)" in
-                *microsoft*|*Microsoft*|*WSL*) IS_WSL=1 ;;
-            esac
-        fi
-        if [ "$IS_WSL" = "0" ]; then
-            ADD_HOST_FLAG="--add-host=host.docker.internal:host-gateway"
-        fi
+    # Issue #1264: Probe a plain Alpine container to discover the real host IP.
+    # On Rancher Desktop (macOS/ARM64), --add-host=...:host-gateway resolves to the
+    # Lima VM's docker0 bridge (172.17.0.1), not the macOS host. Docker Desktop and
+    # Rancher Desktop do not auto-inject host.docker.internal into containers with
+    # NET_ADMIN/sysctl flags (the proxy sidecar uses both). A plain Alpine container
+    # without those flags always receives the correct entry — extract that IP and
+    # pin it as cc-webui.internal via --add-host.
+    _PROBE_IP=$(timeout 5 docker run --rm --pull=missing alpine \
+        sh -c "getent hosts host.docker.internal 2>/dev/null | awk 'NR==1{print \$1}'" \
+        2>/dev/null || true)
+    if [ -n "$_PROBE_IP" ]; then
+        echo "[claude-docker] Host IP probe: cc-webui.internal -> $_PROBE_IP" >&2
+        ADD_HOST_FLAG="--add-host=cc-webui.internal:$_PROBE_IP"
+    else
+        echo "[claude-docker] Host IP probe failed; falling back to host-gateway" >&2
+        ADD_HOST_FLAG="--add-host=cc-webui.internal:host-gateway"
     fi
 
     docker run -d \
