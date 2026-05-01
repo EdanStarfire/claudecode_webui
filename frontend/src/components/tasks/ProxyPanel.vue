@@ -23,6 +23,16 @@
         </span>
       </button>
       <button
+        class="btn btn-sm"
+        :class="proxyStore.activeSubTab === 'socks5' ? 'btn-primary' : 'btn-outline-secondary'"
+        @click="proxyStore.setSubTab('socks5')"
+      >
+        SOCKS5
+        <span v-if="proxyStore.currentSocks5Count > 0" class="ms-1 badge bg-secondary">
+          {{ proxyStore.currentSocks5Count }}
+        </span>
+      </button>
+      <button
         class="btn btn-sm ms-auto"
         :class="hideAnthropic ? 'btn-primary' : 'btn-outline-secondary'"
         title="Hide Anthropic traffic"
@@ -76,8 +86,31 @@
       </div>
     </div>
 
+    <!-- SOCKS5 sub-tab -->
+    <div v-show="proxyStore.activeSubTab === 'socks5'" class="proxy-log-list">
+      <div v-if="proxyStore.currentSocks5Logs.length === 0" class="empty-state">
+        No SOCKS5 connections logged yet
+      </div>
+      <div
+        v-for="(entry, idx) in [...proxyStore.currentSocks5Logs].reverse()"
+        :key="idx"
+        class="proxy-entry socks5-entry"
+      >
+        <span class="entry-status" :class="entry.allowed ? 'status-allowed' : 'status-blocked'">
+          {{ entry.allowed ? '✓' : '✗' }}
+        </span>
+        <span class="entry-host">{{ entry.host }}</span>
+        <span class="entry-port">:{{ entry.port }}</span>
+        <span
+          v-if="!entry.allowed"
+          class="entry-reason"
+          :title="entry.reason"
+        >{{ abbreviateReason(entry.reason) }}</span>
+      </div>
+    </div>
+
     <!-- Loading / error states -->
-    <div v-if="proxyStore.loading && proxyStore.currentHttpLogs.length === 0 && proxyStore.currentDnsLogs.length === 0" class="loading-state">
+    <div v-if="proxyStore.loading && proxyStore.currentHttpLogs.length === 0 && proxyStore.currentDnsLogs.length === 0 && proxyStore.currentSocks5Logs.length === 0" class="loading-state">
       Loading...
     </div>
     <div v-if="proxyStore.error" class="error-state">
@@ -140,6 +173,17 @@ function httpStatusClass(status) {
   if (status >= 400 && status < 500) return 'http-4xx'
   if (status >= 500) return 'http-5xx'
   return ''
+}
+
+const REASON_LABELS = {
+  not_allowlisted: 'blocked',
+  ip_literal: 'ip-literal',
+  no_address: 'no-addr',
+  empty_address: 'no-addr',
+}
+
+function abbreviateReason(reason) {
+  return REASON_LABELS[reason] ?? reason
 }
 </script>
 
@@ -266,6 +310,23 @@ function httpStatusClass(status) {
 .entry-result {
   flex-shrink: 0;
   font-size: 11px;
+}
+
+.entry-port {
+  flex-shrink: 0;
+  color: #64748b;
+  font-size: 11px;
+}
+
+.entry-reason {
+  flex-shrink: 0;
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: #fee2e2;
+  color: #dc2626;
+  font-weight: 600;
+  cursor: default;
 }
 
 .loading-state {

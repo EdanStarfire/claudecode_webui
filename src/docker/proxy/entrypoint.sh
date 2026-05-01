@@ -217,6 +217,11 @@ iptables -A OUTPUT -p udp -j DROP
 #
 # PID 1 (this shell) remains as the container's init process and forwards
 # SIGTERM/SIGINT to the child processes for clean shutdown.
+# Issue #1214: Truncate SOCKS5 log at sidecar start so each session begins clean.
+if [ -d "$LOG_DIR" ]; then
+    : > "$LOG_DIR/socks5.log"
+fi
+
 echo "Starting mitmdump (transparent + SOCKS5) on :8080 / 127.0.0.1:1080..."
 echo "Addon: /etc/proxy/addon.py"
 # Issue #1060: Add -w flag to write mitmproxy flow file when log dir is mounted.

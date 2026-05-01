@@ -60,7 +60,19 @@ export const useProxyStore = defineStore('proxy', () => {
     return logsBySession.value.get(sessionStore.currentSessionId)?.dns?.total_lines ?? 0
   })
 
-  const currentTotalCount = computed(() => currentHttpCount.value + currentDnsCount.value)
+  const currentSocks5Logs = computed(() => {
+    const sessionStore = useSessionStore()
+    if (!sessionStore.currentSessionId) return []
+    return logsBySession.value.get(sessionStore.currentSessionId)?.socks5?.entries ?? []
+  })
+
+  const currentSocks5Count = computed(() => {
+    const sessionStore = useSessionStore()
+    if (!sessionStore.currentSessionId) return 0
+    return logsBySession.value.get(sessionStore.currentSessionId)?.socks5?.total_lines ?? 0
+  })
+
+  const currentTotalCount = computed(() => currentHttpCount.value + currentDnsCount.value + currentSocks5Count.value)
 
   // ========== ACTIONS (Issue #1053) ==========
 
@@ -144,7 +156,7 @@ export const useProxyStore = defineStore('proxy', () => {
     if (!sessionId) return
     loading.value = true
     try {
-      await Promise.all([loadLogs(sessionId, 'http'), loadLogs(sessionId, 'dns')])
+      await Promise.all([loadLogs(sessionId, 'http'), loadLogs(sessionId, 'dns'), loadLogs(sessionId, 'socks5')])
     } finally {
       loading.value = false
     }
@@ -207,8 +219,10 @@ export const useProxyStore = defineStore('proxy', () => {
     pollingInterval,
     currentHttpLogs,
     currentDnsLogs,
+    currentSocks5Logs,
     currentHttpCount,
     currentDnsCount,
+    currentSocks5Count,
     currentTotalCount,
     loadLogs,
     loadAllLogs,
