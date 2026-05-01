@@ -406,3 +406,103 @@ async def test_get_minion_info_empty_name(legion_test_env):
 
     response_text = result["content"][0]["text"]
     assert "required" in response_text.lower()
+
+
+# ============================================================================
+# working_directory field Tests
+# ============================================================================
+
+@pytest.mark.asyncio
+async def test_list_minions_includes_working_directory(legion_test_env):
+    """
+    Test list_minions includes working_directory for each minion entry.
+
+    Verifies:
+    - Each real minion entry shows a Working Directory line
+    - The configured path value is present in the output
+    """
+    env = legion_test_env
+    legion_system = env["legion_system"]
+    session_manager = env["session_coordinator"].session_manager
+
+    minion1, minion2 = await _setup_siblings(
+        env,
+        ("wd-worker1", "Worker"),
+        ("wd-worker2", "Analyst"),
+    )
+
+    # Set distinct working directories on each minion
+    await session_manager.update_session(minion1.session_id, working_directory="/tmp/worker1")
+    await session_manager.update_session(minion2.session_id, working_directory="/tmp/worker2")
+
+    result = await legion_system.mcp_tools._handle_list_minions({
+        "_from_minion_id": minion1.session_id
+    })
+
+    assert result.get("is_error") is not True
+    response_text = result["content"][0]["text"]
+
+    # worker2 is visible as a sibling; its path must appear
+    assert "Working Directory:" in response_text
+    assert "/tmp/worker2" in response_text
+
+
+@pytest.mark.asyncio
+async def test_get_minion_info_includes_working_directory(legion_test_env):
+    """
+    Test get_minion_info profile includes Working Directory field.
+
+    Verifies:
+    - Profile contains a Working Directory line
+    - The configured path value is present
+    """
+    env = legion_test_env
+    legion_system = env["legion_system"]
+    session_manager = env["session_coordinator"].session_manager
+
+    target = await env["create_minion"]("wd-target", role="Target")
+    caller = await env["create_minion"]("wd-caller", role="Caller")
+
+    await session_manager.update_session(target.session_id, working_directory="/tmp/target_work")
+
+    result = await legion_system.mcp_tools._handle_get_minion_info({
+        "_from_minion_id": caller.session_id,
+        "minion_name": "wd-target"
+    })
+
+    assert result.get("is_error") is not True
+    response_text = result["content"][0]["text"]
+
+    assert "Working Directory:" in response_text
+    assert "/tmp/target_work" in response_text
+
+
+@pytest.mark.asyncio
+async def test_get_minion_info_working_directory_null(legion_test_env):
+    """
+    Test get_minion_info shows Working Directory: N/A when cwd is None.
+
+    Verifies:
+    - Field is always present (not omitted)
+    - Null/missing cwd renders as N/A
+    """
+    env = legion_test_env
+    legion_system = env["legion_system"]
+    session_manager = env["session_coordinator"].session_manager
+
+    target = await env["create_minion"]("null-cwd-target", role="Target")
+    caller = await env["create_minion"]("null-cwd-caller", role="Caller")
+
+    # Explicitly clear working_directory to simulate missing cwd
+    await session_manager.update_session(target.session_id, working_directory=None)
+
+    result = await legion_system.mcp_tools._handle_get_minion_info({
+        "_from_minion_id": caller.session_id,
+        "minion_name": "null-cwd-target"
+    })
+
+    assert result.get("is_error") is not True
+    response_text = result["content"][0]["text"]
+
+    assert "Working Directory:" in response_text
+    assert "N/A" in response_text

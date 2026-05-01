@@ -28,7 +28,8 @@ except ImportError:
 
 from src.config_resolution import resolve_template_config
 from src.docker_utils import translate_docker_tmp_path
-from src.session_config import DEFAULTS as _SESSION_DEFAULTS, SessionConfig
+from src.session_config import DEFAULTS as _SESSION_DEFAULTS
+from src.session_config import SessionConfig
 from src.task_utils import task_done_log_exception
 
 logger = logging.getLogger(__name__)
@@ -1534,11 +1535,13 @@ class LegionMCPTools:
                 role = minion.role or "No role specified"
                 state = minion.state.value if hasattr(minion.state, 'value') else str(minion.state)
                 capabilities = ", ".join(minion.capabilities) if minion.capabilities else "None"
+                cwd = minion.working_directory or "N/A"
 
                 minion_lines.append(
                     f"• **{name}** (slug: {slug}, ID: {minion.session_id})\n"
                     f"  - Role: {role}\n"
                     f"  - State: {state}\n"
+                    f"  - Working Directory: {cwd}\n"
                     f"  - Capabilities: {capabilities}"
                 )
 
@@ -1634,6 +1637,7 @@ class LegionMCPTools:
         profile_lines.append(f"**ID:** {minion.session_id[:8]}...")
         profile_lines.append(f"**Slug:** {minion.slug or 'N/A'}")
         profile_lines.append(f"**Role:** {minion.role or 'No role specified'}")
+        profile_lines.append(f"**Working Directory:** {minion.working_directory or 'N/A'}")
 
         # State
         state_str = minion.state.value if hasattr(minion.state, 'value') else str(minion.state)
