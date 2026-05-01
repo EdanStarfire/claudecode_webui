@@ -154,10 +154,18 @@ const filteredDnsLogs = computed(() => {
   return proxyStore.currentDnsLogs.filter(e => !isAnthropicDomain(e.hostname))
 })
 
+function isProxyEnabledForCurrent() {
+  const session = sessionStore.currentSession
+  if (!session) return false
+  if (session.config?.docker_proxy_enabled === true) return true
+  const ec = sessionStore.effectiveConfigBySession.get(session.session_id)
+  return ec?.docker_proxy_enabled === true
+}
+
 // Start/stop polling based on visibility and session
 watch([isVisible, sessionId], ([visible, sid]) => {
   proxyStore.stopPolling()
-  if (visible && sid && sessionStore.currentSession?.config?.docker_proxy_enabled) {
+  if (visible && sid && isProxyEnabledForCurrent()) {
     proxyStore.loadAllLogs(sid)
     proxyStore.startPolling(sid)
   }

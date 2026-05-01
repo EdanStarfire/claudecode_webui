@@ -51,7 +51,7 @@
     </div>
 
     <!-- Docker badge -->
-    <div v-if="session.config?.docker_enabled" class="ac-docker-badge" title="Running with Docker isolation" aria-label="Docker isolated">
+    <div v-if="effectiveDockerEnabled" class="ac-docker-badge" title="Running with Docker isolation" aria-label="Docker isolated">
       <svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor">
         <rect x="1" y="4" width="5" height="4" rx="0.5" stroke="currentColor" stroke-width="0.8" fill="none"/>
         <rect x="1" y="8" width="14" height="5" rx="1" stroke="currentColor" stroke-width="0.8" fill="none"/>
@@ -61,7 +61,7 @@
     </div>
 
     <!-- Proxy badge -->
-    <div v-if="session.config?.docker_proxy_enabled" class="ac-proxy-badge" title="Network proxy active" aria-label="Network proxy active">
+    <div v-if="effectiveDockerProxyEnabled" class="ac-proxy-badge" title="Network proxy active" aria-label="Network proxy active">
       🛡️
     </div>
   </div>
@@ -100,6 +100,18 @@ const { onTouchStart, onTouchMove, onTouchEnd, onTouchCancel, fired } = useLongP
 const hasSchedules = computed(() =>
   scheduleStore.getScheduleCount(props.session.session_id) > 0
 )
+
+const effectiveDockerEnabled = computed(() => {
+  if (props.session.config?.docker_enabled === true) return true
+  const ec = sessionStore.effectiveConfigBySession.get(props.session.session_id)
+  return ec?.docker_enabled === true
+})
+
+const effectiveDockerProxyEnabled = computed(() => {
+  if (props.session.config?.docker_proxy_enabled === true) return true
+  const ec = sessionStore.effectiveConfigBySession.get(props.session.session_id)
+  return ec?.docker_proxy_enabled === true
+})
 
 const displayName = computed(() =>
   props.session.name || props.session.role || 'Agent'
@@ -151,8 +163,8 @@ const chipTooltip = computed(() => {
   if (props.session.sdk_generated_name) parts.push(`Title: ${props.session.sdk_generated_name}`)
   parts.push(`Status: ${statusText.value}`)
   if (props.session.model) parts.push(`Model: ${props.session.model}`)
-  if (props.session.config?.docker_enabled) parts.push('Docker isolated')
-  if (props.session.config?.docker_proxy_enabled) parts.push('Network proxy active')
+  if (effectiveDockerEnabled.value) parts.push('Docker isolated')
+  if (effectiveDockerProxyEnabled.value) parts.push('Network proxy active')
   return parts.join('\n')
 })
 

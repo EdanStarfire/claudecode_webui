@@ -316,6 +316,17 @@ export const useSessionStore = defineStore('session', () => {
         }
       }
 
+      // Lazy-fetch effective config for template-linked sessions (#1248)
+      // Old template-linked sessions have session.config = {} because the #1230
+      // migration intentionally drops flat fields. The Proxy tab and isolation
+      // badges read fields from session.config, so without the resolved effective
+      // config they would never appear.
+      if (session && session.template_id && !effectiveConfigBySession.value.has(sessionId)) {
+        fetchSessionDetails(sessionId).catch(err => {
+          console.warn(`Effective config fetch failed for ${sessionId}:`, err)
+        })
+      }
+
       // Ephemeral sessions (managed by schedules) should never be auto-started by the UI.
       // Redirect to the latest archive if one exists, or show an informational view.
       if (session && session.is_ephemeral &&
