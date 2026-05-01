@@ -4289,14 +4289,15 @@ class SessionCoordinator:
         if not raw_error:
             return f"Session failed: {friendly_error}" if friendly_error else "Session process exited with error"
 
-        # Pattern-match well-known error conditions for a clean label
+        # Pattern-match well-known error conditions for a clean label.
+        # More-specific patterns come first (proxy names before generic DNS).
         known_patterns = [
+            (r"cc-webui\.internal|host\.docker\.internal", "Proxy startup failed: cc-webui.internal not reachable"),
             (r"permission denied", "Permission denied"),
             (r"name or service not known|name resolution fail|no such host", "DNS name resolution failed"),
             (r"connection refused", "Connection refused"),
             (r"no such file or directory", "File or directory not found"),
             (r"address already in use", "Port already in use"),
-            (r"host\.docker\.internal", "Proxy startup failed: host.docker.internal"),
         ]
         for pattern, label in known_patterns:
             if re.search(pattern, raw_error, re.IGNORECASE):

@@ -9,6 +9,7 @@
     "github.com",
     "registry.npmjs.org",
     "pypi.org",
-    "files.pythonhosted.org"
+    "files.pythonhosted.org",
+    "cc-webui.internal"
   ]
 }
