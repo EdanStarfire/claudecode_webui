@@ -1484,31 +1484,28 @@ function buildTemplateFromSession() {
     return null
   }
 
-  // Post-#1230: CONFIG_FIELDS live in session.config (not flat on session).
-  // current_permission_mode and role remain flat identity fields.
-  const cfg = session.config || {}
   return {
     permission_mode: session.current_permission_mode || 'default',
-    allowed_tools: parseList(cfg.allowed_tools),
-    disallowed_tools: parseList(cfg.disallowed_tools),
-    model: cfg.model || null,
-    system_prompt: cfg.system_prompt || null,
-    override_system_prompt: cfg.override_system_prompt ?? false,
+    allowed_tools: parseList(session.allowed_tools),
+    disallowed_tools: parseList(session.disallowed_tools),
+    model: session.model || null,
+    system_prompt: session.system_prompt || null,
+    override_system_prompt: session.override_system_prompt ?? false,
     role: session.role || null,
-    sandbox_enabled: cfg.sandbox_enabled ?? false,
-    sandbox_config: cfg.sandbox_config || null,
-    cli_path: cfg.cli_path || null,
-    docker_enabled: cfg.docker_enabled ?? false,
-    docker_image: cfg.docker_image || null,
-    docker_extra_mounts: parseList(cfg.docker_extra_mounts),
-    docker_home_directory: cfg.docker_home_directory || null,
-    docker_proxy_enabled: cfg.docker_proxy_enabled ?? false,
-    docker_proxy_image: cfg.docker_proxy_image || null,
-    assigned_secrets: parseList(cfg.assigned_secrets),
-    docker_proxy_allowlist_domains: parseList(cfg.docker_proxy_allowlist_domains),
-    thinking_mode: cfg.thinking_mode || null,
-    thinking_budget_tokens: cfg.thinking_budget_tokens || null,
-    effort: cfg.effort || null,
+    sandbox_enabled: session.sandbox_enabled ?? false,
+    sandbox_config: session.sandbox_config || null,
+    cli_path: session.cli_path || null,
+    docker_enabled: session.docker_enabled ?? false,
+    docker_image: session.docker_image || null,
+    docker_extra_mounts: parseList(session.docker_extra_mounts),
+    docker_home_directory: session.docker_home_directory || null,
+    docker_proxy_enabled: session.docker_proxy_enabled ?? false,
+    docker_proxy_image: session.docker_proxy_image || null,
+    assigned_secrets: parseList(session.assigned_secrets ?? session.docker_proxy_credential_names),
+    docker_proxy_allowlist_domains: parseList(session.docker_proxy_allowlist_domains),
+    thinking_mode: session.thinking_mode || null,
+    thinking_budget_tokens: session.thinking_budget_tokens || null,
+    effort: session.effort || null,
   }
 }
 
