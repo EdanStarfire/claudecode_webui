@@ -1,5 +1,5 @@
 <template>
-  <div class="border-top" :class="uiStore.isRedBackground ? 'theme-red-panel' : 'bg-light'">
+  <div class="border-top input-area-root" :class="uiStore.isRedBackground ? 'theme-red-panel' : 'bg-light'">
     <!-- Archived session banner (replaces all input controls) -->
     <div v-if="isArchived" class="archived-input-banner">
       <span class="archived-input-text">Archived session — read only</span>
@@ -714,8 +714,13 @@ textarea {
   max-height: calc(9em + 0.5rem + 2px); /* 6 rows height */
 }
 
+.input-area-root {
+  contain: layout;
+}
+
 .input-container {
   position: relative;
+  contain: layout;
 }
 
 .file-picker-btn {

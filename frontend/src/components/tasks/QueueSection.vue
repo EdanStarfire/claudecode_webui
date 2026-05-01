@@ -1,5 +1,5 @@
 <template>
-  <div class="queue-section" v-if="allItems.length > 0 || isPaused" :style="sectionStyle">
+  <div class="queue-section" v-if="allItems.length > 0 || isPaused" :style="sectionStyle" :class="{ 'is-resizing': isResizing }">
     <!-- Section Header -->
     <div
       class="queue-header d-flex align-items-center gap-2 px-3 py-2"
@@ -140,6 +140,10 @@ const props = defineProps({
   height: {
     type: Number,
     default: 200
+  },
+  isResizing: {
+    type: Boolean,
+    default: false
   }
 })
 
@@ -242,6 +246,11 @@ async function doLoadMore() {
 <style scoped>
 .queue-section {
   border-top: 1px solid #dee2e6;
+  contain: layout;
+}
+
+.queue-section.is-resizing {
+  will-change: height;
 }
 
 .queue-header {
