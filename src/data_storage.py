@@ -155,6 +155,31 @@ class DataStorageManager:
             logger.exception("Failed to clear messages")
             return False
 
+    async def clear_queue(self) -> bool:
+        """Truncate queue.jsonl to empty (issue #1244 reset cleanup)."""
+        try:
+            queue_file = self.session_dir / "queue.jsonl"
+            if queue_file.exists():
+                queue_file.write_bytes(b"")
+                storage_logger.info(f"Cleared queue.jsonl for session {self.session_dir.name}")
+            return True
+        except Exception:
+            logger.exception("Failed to clear queue")
+            return False
+
+    async def clear_attachments(self) -> bool:
+        """Remove attachments/ directory entirely (issue #1244 reset cleanup)."""
+        try:
+            import shutil
+            att_dir = self.session_dir / "attachments"
+            if att_dir.is_dir():
+                shutil.rmtree(att_dir)
+                storage_logger.info(f"Cleared attachments/ for session {self.session_dir.name}")
+            return True
+        except Exception:
+            logger.exception("Failed to clear attachments")
+            return False
+
     async def cleanup(self):
         """Cleanup and ensure all file handles and directory references are closed"""
         try:

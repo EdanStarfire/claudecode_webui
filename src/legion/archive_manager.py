@@ -11,6 +11,7 @@ import asyncio
 import json
 import logging
 import shutil
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -26,6 +27,42 @@ if TYPE_CHECKING:
 # Get specialized logger for archive operations
 archive_logger = get_logger('archive', category='ARCHIVE')
 logger = logging.getLogger(__name__)
+
+
+_SCRUB_KEYS = {"secret_fetch_token"}
+_RUNTIME_KEYS = {
+    "is_processing",
+    "latest_message",
+    "latest_message_type",
+    "latest_message_time",
+    "claude_code_session_id",
+}
+
+
+def scrub_state_for_archive(state: dict) -> dict:
+    """Return a copy of state with sensitive and runtime-only keys removed."""
+    out = {k: v for k, v in state.items() if k not in _SCRUB_KEYS}
+    for k in _RUNTIME_KEYS:
+        out.pop(k, None)
+    err = out.pop("error_message", None)
+    if err:
+        out["error_summary"] = (err[:200] + "…") if len(err) > 200 else err
+    return out
+
+
+_PROXY_LOG_NAMES = ("access.log", "dns.log", "socks5.log", "dropped.log")
+
+
+@dataclass
+class SnapshotContext:
+    """Describes what to include in an archive snapshot."""
+    session_id: str
+    legion_id: str | None
+    auto_memory_directory: Path | None
+    docker_enabled: bool
+    proxy_enabled: bool
+    is_reset: bool
+    will_be_deleted: bool
 
 
 class ArchiveManager:
@@ -49,6 +86,126 @@ class ArchiveManager:
             self._archives_dir = data_dir / "archives" / "minions"
             self._archives_dir.mkdir(parents=True, exist_ok=True)
         return self._archives_dir
+
+    # ------------------------------------------------------------------
+    # Unified snapshot helper (issue #1244)
+    # ------------------------------------------------------------------
+
+    async def snapshot_artifacts(
+        self,
+        session_dir: Path,
+        archive_dir: Path,
+        ctx: SnapshotContext,
+    ) -> list[str]:
+        """Copy the unified artifact set into archive_dir.
+
+        Returns list of artifact name tokens archived (for telemetry).
+        archive_dir is created by the caller before this method is invoked.
+        """
+        archived: list[str] = []
+
+        # Always-archive artifacts
+        self._copy_if_exists(session_dir / "messages.jsonl", archive_dir, archived)
+        self._scrub_and_copy_state(session_dir, archive_dir, archived)
+        self._copy_if_exists(session_dir / "queue.jsonl", archive_dir, archived)
+        self._copy_dir_if_exists(session_dir / "resources", archive_dir, archived)
+        self._copy_dir_if_exists(session_dir / "attachments", archive_dir, archived)
+
+        # Disposal-only artifacts
+        if not ctx.is_reset:
+            self._copy_dir_if_exists(session_dir / "history", archive_dir, archived)
+
+            if ctx.auto_memory_directory is not None:
+                self._copy_external_memory(
+                    ctx.auto_memory_directory, session_dir, archive_dir, archived
+                )
+            else:
+                self._copy_dir_if_exists(session_dir / "memory", archive_dir, archived)
+
+            if ctx.legion_id:
+                self._copy_legion_schedules(ctx.legion_id, archive_dir, archived)
+
+        # Proxy logs — both disposal and reset (decision #11)
+        if ctx.proxy_enabled:
+            self._copy_proxy_logs(session_dir, archive_dir, archived)
+
+        return archived
+
+    def _copy_if_exists(self, src: Path, dst_dir: Path, archived: list[str]) -> None:
+        if src.exists():
+            shutil.copy2(src, dst_dir / src.name)
+            archived.append(src.name)
+
+    def _scrub_and_copy_state(
+        self, session_dir: Path, archive_dir: Path, archived: list[str]
+    ) -> None:
+        state_file = session_dir / "state.json"
+        if not state_file.exists():
+            return
+        try:
+            state = json.loads(state_file.read_text(encoding="utf-8"))
+            scrubbed = scrub_state_for_archive(state)
+            (archive_dir / "state.json").write_text(
+                json.dumps(scrubbed, indent=2, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            archived.append("state.json")
+        except Exception:
+            logger.exception("Failed to scrub/copy state.json for archive")
+
+    def _copy_dir_if_exists(self, src: Path, dst_dir: Path, archived: list[str]) -> None:
+        if src.is_dir():
+            shutil.copytree(src, dst_dir / src.name)
+            archived.append(f"{src.name}/")
+
+    def _copy_external_memory(
+        self,
+        custom_dir: Path,
+        session_dir: Path,
+        archive_dir: Path,
+        archived: list[str],
+    ) -> None:
+        """Copy out-of-tree memory dir into archive_dir/memory_external/."""
+        try:
+            resolved_custom = custom_dir.resolve()
+            resolved_session = session_dir.resolve()
+            if resolved_custom.is_relative_to(resolved_session):
+                # In-tree — handled by normal _copy_dir_if_exists on memory/
+                self._copy_dir_if_exists(custom_dir, archive_dir, archived)
+                return
+            if custom_dir.is_dir():
+                shutil.copytree(custom_dir, archive_dir / "memory_external")
+                archived.append("memory_external/")
+        except Exception:
+            logger.exception("Failed to copy external memory for archive")
+
+    def _copy_proxy_logs(
+        self, session_dir: Path, archive_dir: Path, archived: list[str]
+    ) -> None:
+        proxy_src = session_dir / "docker_claude_data" / "proxy"
+        if not proxy_src.is_dir():
+            return
+        proxy_dst = archive_dir / "proxy"
+        any_copied = False
+        for name in _PROXY_LOG_NAMES:
+            src = proxy_src / name
+            if src.exists():
+                proxy_dst.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src, proxy_dst / name)
+                any_copied = True
+        if any_copied:
+            archived.append("proxy/")
+
+    def _copy_legion_schedules(
+        self, legion_id: str, archive_dir: Path, archived: list[str]
+    ) -> None:
+        data_dir = self.system.session_coordinator.session_manager.data_dir
+        legion_dir = data_dir / "legions" / legion_id
+        for fname in ("schedules.json", "schedule_history.jsonl"):
+            src = legion_dir / fname
+            if src.exists():
+                shutil.copy2(src, archive_dir / fname)
+                archived.append(fname)
 
     async def archive_minion(
         self,
@@ -98,31 +255,23 @@ class ArchiveManager:
             archive_dir = self.archives_dir / minion_id / timestamp
             archive_dir.mkdir(parents=True, exist_ok=True)
 
-            files_archived = []
-
             # Get source session directory
             session_dir = self.system.session_coordinator.session_manager.sessions_dir / minion_id
 
-            # Copy messages.jsonl if exists
-            messages_file = session_dir / "messages.jsonl"
-            if messages_file.exists():
-                shutil.copy2(messages_file, archive_dir / "messages.jsonl")
-                files_archived.append("messages.jsonl")
-                archive_logger.debug(f"Archived messages.jsonl for minion {minion_id}")
-
-            # Copy state.json if exists
-            state_file = session_dir / "state.json"
-            if state_file.exists():
-                shutil.copy2(state_file, archive_dir / "state.json")
-                files_archived.append("state.json")
-                archive_logger.debug(f"Archived state.json for minion {minion_id}")
-
-            # Copy memory/ directory if exists (issue #709)
-            memory_dir = session_dir / "memory"
-            if memory_dir.exists() and memory_dir.is_dir():
-                shutil.copytree(memory_dir, archive_dir / "memory")
-                files_archived.append("memory/")
-                archive_logger.debug(f"Archived memory/ directory for minion {minion_id}")
+            # Build snapshot context from session config
+            cfg = session_info.config or {}
+            auto_mem_raw = cfg.get("auto_memory_directory")
+            auto_mem_dir: Path | None = Path(auto_mem_raw) if auto_mem_raw else None
+            ctx = SnapshotContext(
+                session_id=minion_id,
+                legion_id=session_info.project_id or None,
+                auto_memory_directory=auto_mem_dir,
+                docker_enabled=bool(cfg.get("docker_enabled", False)),
+                proxy_enabled=bool(cfg.get("docker_proxy_enabled", False)),
+                is_reset=False,
+                will_be_deleted=will_be_deleted,
+            )
+            files_archived = await self.snapshot_artifacts(session_dir, archive_dir, ctx)
 
             # Create disposal metadata
             # Use "deleted" as final_state if session will be deleted after archive
@@ -152,13 +301,15 @@ class ArchiveManager:
                 f"Archived minion {session_info.name} ({minion_id}) to {archive_dir}"
             )
 
-            # Fire-and-forget distillation of session history into markdown
-            # Write into the archive directory — sessions/{id}/ gets deleted after disposal.
+            # Fire-and-forget distillation — writes a final entry into archive_dir/history/.
+            # The live history/ was already copied by snapshot_artifacts (disposal path).
             # Issue #710: Skip distillation when history distillation is disabled
-            if session_info.config.get("history_distillation_enabled", True):
+            if cfg.get("history_distillation_enabled", True):
                 archived_messages = archive_dir / "messages.jsonl"
                 if archived_messages.exists():
-                    history_output = archive_dir / "history.md"
+                    history_dir = archive_dir / "history"
+                    history_dir.mkdir(exist_ok=True)
+                    history_output = history_dir / f"{timestamp}_disposal.md"
                     archive_ts = datetime.now(UTC).isoformat()
                     t = asyncio.create_task(
                         distill_session_history(archived_messages, history_output, minion_id, archive_ts)
@@ -430,6 +581,134 @@ class ArchiveManager:
         except OSError as e:
             archive_logger.error(f"Failed to read archive resource file: {e}")
             return None
+
+    async def get_archive_queue(
+        self, session_id: str, archive_id: str
+    ) -> list[dict]:
+        """Read queue.jsonl from an archive, returning parsed records."""
+        archive_dir = self.archives_dir / session_id / archive_id
+        queue_file = archive_dir / "queue.jsonl"
+        if not queue_file.exists():
+            return []
+        records: list[dict] = []
+        try:
+            with open(queue_file, encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        try:
+                            records.append(json.loads(line))
+                        except json.JSONDecodeError:
+                            pass
+        except OSError as e:
+            archive_logger.error(f"Failed to read archive queue: {e}")
+        return records
+
+    async def get_archive_proxy_logs(
+        self, session_id: str, archive_id: str
+    ) -> list[dict]:
+        """List archived proxy log files with size and line count.
+
+        Returns list of {name, size_bytes, line_count} for each log present.
+        """
+        archive_dir = self.archives_dir / session_id / archive_id
+        proxy_dir = archive_dir / "proxy"
+        if not proxy_dir.is_dir():
+            return []
+        result: list[dict] = []
+        for name in _PROXY_LOG_NAMES:
+            log_file = proxy_dir / name
+            if not log_file.exists():
+                continue
+            try:
+                content = log_file.read_bytes()
+                line_count = content.count(b"\n")
+                result.append({
+                    "name": name,
+                    "size_bytes": len(content),
+                    "line_count": line_count,
+                })
+            except OSError as e:
+                archive_logger.error(f"Failed to stat proxy log {name}: {e}")
+        return result
+
+    async def get_archive_history(
+        self, session_id: str, archive_id: str
+    ) -> list[dict]:
+        """List history .md files in an archive, returning {name, size_bytes, mtime}."""
+        archive_dir = self.archives_dir / session_id / archive_id
+        history_dir = archive_dir / "history"
+        if not history_dir.is_dir():
+            return []
+        entries: list[dict] = []
+        for md_file in sorted(history_dir.glob("*.md")):
+            try:
+                stat = md_file.stat()
+                entries.append({
+                    "name": md_file.name,
+                    "size_bytes": stat.st_size,
+                    "mtime": stat.st_mtime,
+                })
+            except OSError:
+                pass
+        return entries
+
+    async def get_archive_schedules(
+        self, session_id: str, archive_id: str
+    ) -> dict:
+        """Read archived schedules.json and schedule_history.jsonl from an archive.
+
+        Returns {schedules: list, history: list}.
+        """
+        archive_dir = self.archives_dir / session_id / archive_id
+        schedules: list = []
+        history: list = []
+
+        sched_file = archive_dir / "schedules.json"
+        if sched_file.exists():
+            try:
+                schedules = json.loads(sched_file.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError) as e:
+                archive_logger.error(f"Failed to read archived schedules: {e}")
+
+        hist_file = archive_dir / "schedule_history.jsonl"
+        if hist_file.exists():
+            try:
+                with open(hist_file, encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if line:
+                            try:
+                                history.append(json.loads(line))
+                            except json.JSONDecodeError:
+                                pass
+            except OSError as e:
+                archive_logger.error(f"Failed to read archived schedule history: {e}")
+
+        return {"schedules": schedules, "history": history}
+
+    async def get_archive_attachments(
+        self, session_id: str, archive_id: str
+    ) -> list[dict]:
+        """List files in archived attachments/ directory.
+
+        Returns list of {name, size_bytes} for each file present.
+        """
+        archive_dir = self.archives_dir / session_id / archive_id
+        att_dir = archive_dir / "attachments"
+        if not att_dir.is_dir():
+            return []
+        entries: list[dict] = []
+        for att_file in sorted(att_dir.iterdir()):
+            if att_file.is_file():
+                try:
+                    entries.append({
+                        "name": att_file.name,
+                        "size_bytes": att_file.stat().st_size,
+                    })
+                except OSError:
+                    pass
+        return entries
 
     async def list_project_deleted_agents(self, project_id: str) -> list[dict]:
         """

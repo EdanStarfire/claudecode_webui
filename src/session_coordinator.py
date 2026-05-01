@@ -2337,6 +2337,16 @@ class SessionCoordinator:
                 coord_logger.info(f"Cleared message history for session {session_id}")
                 await storage.clear_resources()
                 coord_logger.info(f"Cleared resources for session {session_id}")
+                # Issue #1244: clear queue + attachments (archive already captured them)
+                await storage.clear_queue()
+                coord_logger.info(f"Cleared queue for session {session_id}")
+                await storage.clear_attachments()
+                coord_logger.info(f"Cleared attachments for session {session_id}")
+
+            # Issue #1244: rotate proxy logs then clear non-proxy docker_claude_data and tmp
+            await self._rotate_proxy_logs(session_id)
+            await self._clear_docker_claude_data(session_id, keep_subdirs={"proxy"})
+            await self._clear_session_tmp(session_id)
 
             # Issue #310: Reset DisplayProjection state (clears tool tracking)
             self._reset_display_projection(session_id)
@@ -2366,42 +2376,26 @@ class SessionCoordinator:
     async def _archive_session_for_reset(self, session_id: str) -> bool:
         """Archive session data before a reset so it can be reviewed later.
 
-        Copies messages.jsonl, state.json, and resources/ into
-        data/archives/minions/{session_id}/{timestamp}/ and writes a
-        disposal_metadata.json with reason="reset".
+        Uses snapshot_artifacts() with is_reset=True so that queue.jsonl,
+        attachments/, and proxy logs are captured but history/memory are left
+        in place (decision #5).  Writes disposal_metadata.json with reason="reset".
 
         Returns True on success, False on failure (logged, never raised).
         """
         try:
+            from src.legion.archive_manager import SnapshotContext
+            from src.models.archive_models import DisposalMetadata
+
             session_info = await self.session_manager.get_session_info(session_id)
             session_dir = self.session_manager.sessions_dir / session_id
-            timestamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
+            # Use microsecond-precision timestamp for cross-path consistency
+            timestamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S_%f")
             archive_dir = (
                 self.session_manager.data_dir / "archives" / "minions" / session_id / timestamp
             )
             archive_dir.mkdir(parents=True, exist_ok=True)
 
-            # Copy messages.jsonl
-            messages_file = session_dir / "messages.jsonl"
-            if messages_file.exists():
-                shutil.copy2(messages_file, archive_dir / "messages.jsonl")
-
-            # Copy state.json
-            state_file = session_dir / "state.json"
-            if state_file.exists():
-                shutil.copy2(state_file, archive_dir / "state.json")
-
-            # Copy resources/ directory
-            resources_dir = session_dir / "resources"
-            if resources_dir.exists() and resources_dir.is_dir():
-                shutil.copytree(resources_dir, archive_dir / "resources")
-
-            # Copy memory/ directory if exists (issue #709)
-            memory_dir = session_dir / "memory"
-            if memory_dir.exists() and memory_dir.is_dir():
-                shutil.copytree(memory_dir, archive_dir / "memory")
-
-            # Determine project/legion ID for metadata
+            # Determine project/legion ID for metadata + snapshot context
             project_id = ""
             if session_info:
                 for proj in await self.project_manager.list_projects():
@@ -2409,29 +2403,43 @@ class SessionCoordinator:
                         project_id = proj.project_id
                         break
 
-            # Write disposal_metadata.json
-            metadata = {
-                "disposed_at": datetime.now(UTC).timestamp(),
-                "reason": "reset",
-                "parent_overseer_id": None,
-                "parent_overseer_name": None,
-                "legion_id": project_id,
-                "final_state": "reset",
-                "minion_id": session_id,
-                "minion_name": session_info.name if session_info else "",
-                "minion_role": session_info.role if session_info else None,
-                "overseer_level": 0,
-                "child_minion_ids": [],
-                "descendants_count": 0,
-                "metadata": {},
-            }
-            metadata_path = archive_dir / "disposal_metadata.json"
-            metadata_path.write_text(json.dumps(metadata, indent=2))
+            # Build snapshot context
+            cfg = session_info.config if session_info else {}
+            auto_mem_raw = cfg.get("auto_memory_directory")
+            ctx = SnapshotContext(
+                session_id=session_id,
+                legion_id=project_id or None,
+                auto_memory_directory=Path(auto_mem_raw) if auto_mem_raw else None,
+                docker_enabled=bool(cfg.get("docker_enabled", False)),
+                proxy_enabled=bool(cfg.get("docker_proxy_enabled", False)),
+                is_reset=True,
+                will_be_deleted=False,
+            )
 
-            # Fire-and-forget distillation of session history into markdown
-            # Use the archived copy of messages.jsonl, not the live file — the live
-            # file gets truncated by clear_messages() right after this method returns.
-            # Skip distillation when knowledge management is disabled.
+            # Delegate to unified artifact snapshot
+            archive_manager = self.legion_system.archive_manager
+            await archive_manager.snapshot_artifacts(session_dir, archive_dir, ctx)
+
+            # Write disposal_metadata.json using the shared dataclass
+            metadata = DisposalMetadata(
+                disposed_at=datetime.now(UTC).timestamp(),
+                reason="reset",
+                parent_overseer_id=None,
+                parent_overseer_name=None,
+                legion_id=project_id,
+                final_state="reset",
+                minion_id=session_id,
+                minion_name=session_info.name if session_info else "",
+                minion_role=session_info.role if session_info else None,
+                overseer_level=0,
+                child_minion_ids=[],
+                descendants_count=0,
+            )
+            metadata_path = archive_dir / "disposal_metadata.json"
+            metadata_path.write_text(json.dumps(metadata.to_dict(), indent=2))
+
+            # Fire-and-forget distillation — writes to live history/ (decision #5).
+            # Uses the archived copy of messages.jsonl so the live file can be truncated.
             # Issue #1059: Use resolve_effective_config to support template-linked sessions.
             _eff_for_archive = await resolve_effective_config(
                 session_info, self.template_manager, self.profile_manager
@@ -2455,6 +2463,57 @@ class SessionCoordinator:
         except Exception as e:
             coord_logger.warning(f"Archive before reset failed for {session_id}: {e}")
             return False
+
+    async def _rotate_proxy_logs(self, session_id: str) -> None:
+        """Truncate proxy log files to empty after archiving (issue #1244, decision #11).
+
+        Truncate rather than unlink so the file descriptor stays valid if the
+        proxy container is mid-write at reset time.
+        """
+        proxy_dir = self.session_manager.sessions_dir / session_id / "docker_claude_data" / "proxy"
+        if not proxy_dir.is_dir():
+            return
+        for name in ("access.log", "dns.log", "socks5.log", "dropped.log"):
+            log_file = proxy_dir / name
+            if log_file.exists():
+                try:
+                    log_file.write_bytes(b"")
+                    coord_logger.debug(f"Truncated proxy log {name} for {session_id}")
+                except OSError:
+                    logger.exception(f"Failed to truncate proxy log {name} for {session_id}")
+
+    async def _clear_docker_claude_data(
+        self, session_id: str, keep_subdirs: set[str] | None = None
+    ) -> None:
+        """Remove all subdirs under docker_claude_data/ except those in keep_subdirs.
+
+        Subdirs are recreated by claude-docker on next session start.
+        """
+        keep = keep_subdirs or set()
+        docker_data_dir = (
+            self.session_manager.sessions_dir / session_id / "docker_claude_data"
+        )
+        if not docker_data_dir.is_dir():
+            return
+        for child in docker_data_dir.iterdir():
+            if child.is_dir() and child.name not in keep:
+                try:
+                    shutil.rmtree(child)
+                    coord_logger.debug(f"Removed docker_claude_data/{child.name} for {session_id}")
+                except OSError:
+                    logger.exception(
+                        f"Failed to remove docker_claude_data/{child.name} for {session_id}"
+                    )
+
+    async def _clear_session_tmp(self, session_id: str) -> None:
+        """Remove the session's tmp/ directory (issue #1244, decision #3)."""
+        tmp_dir = self.session_manager.sessions_dir / session_id / "tmp"
+        if tmp_dir.is_dir():
+            try:
+                shutil.rmtree(tmp_dir)
+                coord_logger.debug(f"Removed tmp/ for {session_id}")
+            except OSError:
+                logger.exception(f"Failed to remove tmp/ for {session_id}")
 
     async def get_session_info(self, session_id: str) -> dict[str, Any] | None:
         """Get comprehensive session information"""
