@@ -60,12 +60,10 @@ def _inject_generic(flow: http.HTTPFlow, record: dict, placeholder: str) -> bool
         if placeholder in val:
             flow.request.headers[name] = val.replace(placeholder, value)
             modified = True
-    qs = flow.request.query_string
-    if isinstance(qs, bytes):
-        qs = qs.decode("utf-8", errors="replace")
-    if placeholder in qs:
-        flow.request.query_string = qs.replace(placeholder, value)
-        modified = True
+    for k, v in list(flow.request.query.items()):
+        if placeholder in v:
+            flow.request.query[k] = v.replace(placeholder, value)
+            modified = True
     if flow.request.content and placeholder.encode() in flow.request.content:
         flow.request.content = flow.request.content.replace(
             placeholder.encode(), value.encode()
@@ -113,12 +111,10 @@ def _inject_api_key(flow: http.HTTPFlow, record: dict, placeholder: str) -> bool
     modified = False
 
     if location == "query_param":
-        qs = flow.request.query_string
-        if isinstance(qs, bytes):
-            qs = qs.decode("utf-8", errors="replace")
-        if placeholder in qs:
-            flow.request.query_string = qs.replace(placeholder, value)
-            modified = True
+        for k, v in list(flow.request.query.items()):
+            if placeholder in v:
+                flow.request.query[k] = v.replace(placeholder, value)
+                modified = True
     else:
         prefix = injection.get("prefix", "Bearer")
         formatted = f"{prefix} {value}".strip() if prefix else value
