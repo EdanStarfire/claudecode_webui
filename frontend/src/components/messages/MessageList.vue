@@ -547,6 +547,21 @@ function shouldDisplayMessage(message) {
     }
   }
 
+  // Issue #1242: Hide signature-only assistant messages emitted in Auto permission mode.
+  // These contain a ThinkingBlock with empty thinking text plus a signature blob, no text,
+  // no tool_use. Keeping them fragments tool timelines because the grouping walk-back in
+  // groupToolsToParentMessages stops at the first empty assistant it finds.
+  if (message.type === 'assistant') {
+    const meta = message.metadata || {}
+    const text = (message.content || '').trim()
+    const hasText = text.length > 0 && text !== 'Assistant response'
+    const hasThinkingText = (meta.thinking_content || '').trim().length > 0
+    const hasTools = (meta.tool_uses || []).length > 0
+    if (!hasText && !hasThinkingText && !hasTools) {
+      return false
+    }
+  }
+
   return true
 }
 
