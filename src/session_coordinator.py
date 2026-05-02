@@ -296,8 +296,6 @@ class SessionCoordinator:
             session_coordinator=self,
             broadcast_callback=self._broadcast_resource_registered
         )
-        # Backward compatibility alias
-        self.image_viewer_mcp_tools = self.resource_mcp_tools
 
     @staticmethod
     def _default_sdk_factory(session_id, working_directory, **kwargs):
@@ -683,67 +681,6 @@ class SessionCoordinator:
     async def get_session_storage(self, session_id: str):
         """Get storage manager for a session"""
         return self._storage_managers.get(session_id)
-
-    async def get_session_images(self, session_id: str, limit: int = 100, offset: int = 0) -> dict:
-        """
-        Get image metadata for a session, paginated.
-
-        Issue #404: Used by REST endpoint to list session images.
-
-        Args:
-            session_id: Session ID
-            limit: Maximum number of images to return
-            offset: Number of images to skip
-
-        Returns:
-            Paginated dict with images, total, limit, offset, has_more
-        """
-        storage_manager = self._storage_managers.get(session_id)
-        if not storage_manager:
-            # Try to get from session directory
-            session_dir = await self.session_manager.get_session_directory(session_id)
-            if session_dir:
-                storage_manager = DataStorageManager(session_dir)
-                await storage_manager.initialize()
-
-        all_images: list[dict] = []
-        if storage_manager:
-            all_images = await storage_manager.read_images()
-
-        total = len(all_images)
-        sliced = all_images[offset : offset + limit]
-        return {
-            "images": sliced,
-            "total": total,
-            "limit": limit,
-            "offset": offset,
-            "has_more": offset + len(sliced) < total,
-        }
-
-    async def get_session_image_file(self, session_id: str, image_id: str) -> bytes | None:
-        """
-        Get raw image bytes for a specific image.
-
-        Issue #404: Used by REST endpoint to serve image files.
-
-        Args:
-            session_id: Session ID
-            image_id: Image ID
-
-        Returns:
-            Raw image bytes or None
-        """
-        storage_manager = self._storage_managers.get(session_id)
-        if not storage_manager:
-            session_dir = await self.session_manager.get_session_directory(session_id)
-            if session_dir:
-                storage_manager = DataStorageManager(session_dir)
-                await storage_manager.initialize()
-
-        if storage_manager:
-            return await storage_manager.get_image_file(image_id)
-
-        return None
 
     async def get_session_resources(
         self,

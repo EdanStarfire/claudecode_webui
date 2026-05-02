@@ -496,16 +496,6 @@ export const usePollingStore = defineStore('polling', () => {
         }
         break
 
-      case 'image_registered':
-        if (payload.image) {
-          const resourceStore = useResourceStore()
-          resourceStore.addResource(sessionId, {
-            ...payload.image,
-            resource_id: payload.image.image_id
-          })
-        }
-        break
-
       case 'queue_update': {
         const queueStore = useQueueStore()
         queueStore.handleQueueUpdate(sessionId, payload)

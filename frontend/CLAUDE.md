@@ -7,7 +7,7 @@ Agent-oriented guide to the Claude WebUI frontend. For backend architecture, see
 | Metric | Value |
 |--------|-------|
 | Framework | Vue 3.4 + Composition API |
-| State | Pinia 2.1 (14 stores) |
+| State | Pinia 2.1 (13 stores) |
 | Build | Vite 7.1 |
 | Router | Vue Router 4 (hash history) |
 | CSS | Bootstrap 5.3 + scoped component styles |
@@ -23,7 +23,7 @@ frontend/
 │   ├── main.js                    # App entry: createApp, Pinia, Router
 │   ├── App.vue                    # Root component
 │   ├── router/index.js            # 5 routes (home, project, session, session/archive, archive/agent)
-│   ├── stores/                    # 14 Pinia stores
+│   ├── stores/                    # 13 Pinia stores
 │   ├── composables/               # 9 reusable composition functions
 │   ├── utils/                     # 5 utility modules
 │   ├── components/
@@ -60,7 +60,7 @@ Hash-based routing (`createWebHashHistory`):
 | `/session/:sessionId/archive/:archiveId` | `SessionView` | Archived session (read-only) |
 | `/archive/agent/:agentId/:archiveId` | `SessionView` | Deleted agent archive (read-only) |
 
-## Pinia Stores (14)
+## Pinia Stores (13)
 
 ### Core Stores (6)
 
@@ -107,7 +107,6 @@ Hash-based routing (`createWebHashHistory`):
 - **State**: `resourcesBySession` (Map), `fullViewOpen`, `currentResourceIndex`, `textContentCache` (Map)
 - **Key actions**: `loadResources()`, `addResource()`, `removeResource()`, `openFullView()`, `fetchTextContent()`
 - **Helpers**: `isImageResource()`, `isTextResource()`, `getResourceIcon()`, `getResourceUrl()`
-- **Note**: Backward-compatible aliases for legacy `useImageStore`
 
 #### `diff.js` — Git diff per session
 - **State**: `diffBySession` (Map), `currentMode` ('total'|'commits'), `fullViewOpen`, `fileDiffCache` (Map)
@@ -123,9 +122,6 @@ Hash-based routing (`createWebHashHistory`):
 
 #### `mcpConfig.js` — MCP server configuration CRUD
 - Persistent MCP server definitions (STDIO/SSE/HTTP, OAuth 2.1, enable/disable)
-
-#### `image.js` — Deprecated shim
-- Re-exports `useResourceStore` for backward compatibility. All functionality lives in `resource.js`.
 
 ## Composables (9)
 
