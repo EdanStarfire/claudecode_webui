@@ -62,8 +62,6 @@ async def test_send_comm_to_active_minion(legion_test_env):
     Verifies:
     - Tool returns success
     - Timeline JSONL contains comm
-    - Sender comms.jsonl contains comm
-    - Recipient comms.jsonl contains comm
     - Recipient messages.jsonl contains formatted message
     """
     env = legion_test_env
@@ -123,27 +121,7 @@ async def test_send_comm_to_active_minion(legion_test_env):
     assert comm["content"] == "Please process data.csv"
     assert comm["comm_type"] == "task"
 
-    # SIDE EFFECT 2: Sender comms.jsonl
-    sender_comms_file = data_dir / "legions" / legion_id / "minions" / sender.session_id / "comms.jsonl"
-    assert sender_comms_file.exists(), "Sender comms file should exist"
-
-    with open(sender_comms_file) as f:
-        sender_comms = [json.loads(line) for line in f]
-
-    assert len(sender_comms) > 0, "Sender should have comm in log"
-    assert any(c["summary"] == "Task assigned" for c in sender_comms)
-
-    # SIDE EFFECT 3: Recipient comms.jsonl
-    recipient_comms_file = data_dir / "legions" / legion_id / "minions" / recipient.session_id / "comms.jsonl"
-    assert recipient_comms_file.exists(), "Recipient comms file should exist"
-
-    with open(recipient_comms_file) as f:
-        recipient_comms = [json.loads(line) for line in f]
-
-    assert len(recipient_comms) > 0, "Recipient should have comm in log"
-    assert any(c["summary"] == "Task assigned" for c in recipient_comms)
-
-    # SIDE EFFECT 4: Recipient SDK message queue injection
+    # SIDE EFFECT 2: Recipient SDK message queue injection
     # Note: SessionCoordinator.send_message() queues messages to the SDK.
     # LIMITATION: In integration tests without Claude API access, the SDK conversation
     # loop cannot fully process messages (would require actual API calls to Claude).
@@ -152,7 +130,6 @@ async def test_send_comm_to_active_minion(legion_test_env):
     #
     # What we CAN verify:
     # - Comm routed to timeline.jsonl ✓ (verified above)
-    # - Comm logged to sender/recipient comms.jsonl ✓ (verified above)
     # - Message queued to SDK (verified by successful send_message call)
     #
     # What requires end-to-end testing with live API:

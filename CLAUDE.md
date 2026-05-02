@@ -786,7 +786,6 @@ data/
     └── minions/{minion_id}/
         ├── minion_state.json
         ├── session_messages.jsonl  # SDK messages
-        ├── comms.jsonl             # Minion-specific comm log
         ├── short_term_memory.json  # (Future)
         └── long_term_memory.json   # (Future)
 ```

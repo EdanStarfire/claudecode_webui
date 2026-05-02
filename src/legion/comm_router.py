@@ -536,8 +536,6 @@ class CommRouter:
 
         Comms are stored in:
         1. Legion timeline (main timeline.jsonl)
-        2. Source minion's comm log (if from minion)
-        3. Destination minion's comm log (if to minion)
 
         Args:
             comm: Comm to persist
@@ -553,12 +551,6 @@ class CommRouter:
             if minion:
                 legion_id = minion.project_id  # project_id IS the legion_id
                 from_minion_name = minion.name
-                # Persist to source minion's log
-                await self._append_to_comm_log(
-                    legion_id,
-                    f"minions/{comm.from_minion_id}",
-                    comm
-                )
 
         if comm.to_minion_id:
             # Get minion info to find legion_id (project_id)
@@ -566,12 +558,6 @@ class CommRouter:
             if minion:
                 legion_id = minion.project_id  # project_id IS the legion_id
                 to_minion_name = minion.name
-                # Persist to destination minion's log
-                await self._append_to_comm_log(
-                    legion_id,
-                    f"minions/{comm.to_minion_id}",
-                    comm
-                )
 
         # If legion_id still not found and this is from user, need to get it from to_minion
         if not legion_id and comm.from_user:
@@ -626,36 +612,6 @@ class CommRouter:
                 )
             except Exception as e:
                 legion_logger.error(f"Failed to emit comm to audit writer: {e}")
-
-    async def _append_to_comm_log(
-        self,
-        legion_id: str,
-        subpath: str,
-        comm: Comm
-    ) -> None:
-        """
-        Append Comm to a JSONL log file.
-
-        Args:
-            legion_id: Legion ID
-            subpath: Subpath within legion directory (e.g., "minions/{minion_id}")
-            comm: Comm to append
-        """
-        # Get data_dir from SessionCoordinator
-        data_dir = self.system.session_coordinator.data_dir
-
-        # Construct path: {data_dir}/legions/{legion_id}/{subpath}/comms.jsonl
-        log_dir = data_dir / "legions" / legion_id / subpath
-        log_dir.mkdir(parents=True, exist_ok=True)
-
-        log_file = log_dir / "comms.jsonl"
-
-        # Append comm as JSON line
-        with open(log_file, "a", encoding="utf-8") as f:
-            json.dump(comm.to_dict(), f)
-            f.write("\n")
-
-        legion_logger.debug(f"Appended comm {comm.comm_id} to {log_file}")
 
     async def _append_to_timeline(self, legion_id: str, comm: Comm) -> None:
         """
