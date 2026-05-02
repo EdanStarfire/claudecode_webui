@@ -67,7 +67,12 @@ const baseConfig = computed(() => {
 })
 
 const draft        = computed(() => settingsStore.getDraft(areaKey.value))
-const mergedConfig = computed(() => ({ ...baseConfig.value, ...draft.value }))
+const mergedConfig = computed(() => {
+  const c = { ...baseConfig.value, ...draft.value }
+  // docker_extra_mounts is stored as array in API; TextareaWidget expects newline-separated string
+  if (Array.isArray(c.docker_extra_mounts)) c.docker_extra_mounts = c.docker_extra_mounts.join('\n')
+  return c
+})
 const isDirty      = computed(() => settingsStore.dirtyAreas.has(areaKey.value))
 const saving       = ref(false)
 
@@ -113,6 +118,10 @@ async function handleSave() {
   saving.value = true
   try {
     const d = { ...draft.value }
+    // Convert textarea string back to array for the API
+    if ('docker_extra_mounts' in d && typeof d.docker_extra_mounts === 'string') {
+      d.docker_extra_mounts = d.docker_extra_mounts.split('\n').map(s => s.trim()).filter(Boolean)
+    }
     if (isTemplateMode.value) {
       await templateStore.updateTemplate(entityId.value, d)
     } else {

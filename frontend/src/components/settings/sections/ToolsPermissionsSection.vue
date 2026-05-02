@@ -74,7 +74,15 @@ const baseConfig = computed(() => {
 })
 
 const draft        = computed(() => settingsStore.getDraft(areaKey.value))
-const mergedConfig = computed(() => ({ ...baseConfig.value, ...draft.value }))
+const mergedConfig = computed(() => {
+  const c = { ...baseConfig.value, ...draft.value }
+  // Normalize array fields to string formats required by TagInputWidget / DirListWidget
+  for (const k of ['allowed_tools', 'disallowed_tools', 'capabilities']) {
+    if (Array.isArray(c[k])) c[k] = c[k].join(', ')
+  }
+  if (Array.isArray(c.additional_directories)) c.additional_directories = c.additional_directories.join('\n')
+  return c
+})
 const isDirty      = computed(() => settingsStore.dirtyAreas.has(areaKey.value))
 const saving       = ref(false)
 
@@ -118,7 +126,14 @@ async function handleSave() {
   if (!entity.value || !isDirty.value) return
   saving.value = true
   try {
-    const d = draft.value
+    const d = { ...draft.value }
+    // Convert widget string formats back to arrays for the API
+    for (const k of ['allowed_tools', 'disallowed_tools', 'capabilities']) {
+      if (k in d && typeof d[k] === 'string') d[k] = d[k].split(',').map(s => s.trim()).filter(Boolean)
+    }
+    if ('additional_directories' in d && typeof d.additional_directories === 'string') {
+      d.additional_directories = d.additional_directories.split('\n').map(s => s.trim()).filter(Boolean)
+    }
     if (isTemplateMode.value) {
       await templateStore.updateTemplate(entityId.value, d)
     } else {
