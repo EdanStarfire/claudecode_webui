@@ -284,32 +284,8 @@ class TestCommRouter:
         assert result is True
 
     @pytest.mark.asyncio
-    async def test_append_to_comm_log(self, comm_router, tmp_path):
-        """Test appending Comm to JSONL log file."""
-        # Point data_dir to tmp_path so _append_to_comm_log writes there
-        comm_router.system.session_coordinator.data_dir = tmp_path
-
-        comm = Comm(
-            comm_id=str(uuid.uuid4()),
-            from_user=True,
-            to_minion_id="test-minion-123",
-            content="Test message"
-        )
-
-        await comm_router._append_to_comm_log(
-            "test-legion-456",
-            "minions/test-minion-123",
-            comm
-        )
-
-        # Verify log file was created with comm data
-        log_file = tmp_path / "legions" / "test-legion-456" / "minions" / "test-minion-123" / "comms.jsonl"
-        assert log_file.exists()
-        assert log_file.read_text().strip() != ""
-
-    @pytest.mark.asyncio
     async def test_persist_comm_from_minion(self, comm_router, sample_minion, legion_system):
-        """Test persisting Comm from minion."""
+        """Test persisting Comm from minion writes to timeline."""
         # Mock legion_coordinator.get_minion_info
         legion_system.legion_coordinator.get_minion_info = AsyncMock(return_value=sample_minion)
 
@@ -320,14 +296,13 @@ class TestCommRouter:
             content="Test message"
         )
 
-        with patch.object(comm_router, '_append_to_comm_log', new=AsyncMock()) as mock_append:
+        with patch.object(comm_router, '_append_to_timeline', new=AsyncMock()) as mock_append_timeline:
             await comm_router._persist_comm(comm)
-            # Should append to source minion's log
-            mock_append.assert_called_once()
+            mock_append_timeline.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_persist_comm_to_minion(self, comm_router, sample_minion, legion_system):
-        """Test persisting Comm to minion."""
+        """Test persisting Comm to minion writes to timeline."""
         legion_system.legion_coordinator.get_minion_info = AsyncMock(return_value=sample_minion)
 
         comm = Comm(
@@ -337,10 +312,9 @@ class TestCommRouter:
             content="Test message"
         )
 
-        with patch.object(comm_router, '_append_to_comm_log', new=AsyncMock()) as mock_append:
+        with patch.object(comm_router, '_append_to_timeline', new=AsyncMock()) as mock_append_timeline:
             await comm_router._persist_comm(comm)
-            # Should append to destination minion's log
-            mock_append.assert_called_once()
+            mock_append_timeline.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_issue_939_attachment_metadata_in_comm(self, comm_router, tmp_path):
