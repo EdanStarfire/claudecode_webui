@@ -43,33 +43,28 @@
 </template>
 
 <script setup>
-import { onMounted, watch } from 'vue'
+import { onMounted } from 'vue'
+import { useRouter } from 'vue-router'
 import { useTemplateStore } from '@/stores/template'
 import { useUIStore } from '@/stores/ui'
 import SettingsToolbar from '../SettingsToolbar.vue'
 
+const router = useRouter()
 const templateStore = useTemplateStore()
 const uiStore = useUIStore()
 
 function openCreate() {
+  // Still use modal for creation (Phase 4 will handle this)
   uiStore.showModal('configuration', { mode: 'create-template' })
 }
 
 function openEdit(template) {
-  uiStore.showModal('configuration', { mode: 'edit-template', template })
+  router.push(`/settings/template/${template.template_id}/general`)
 }
 
 function openImport() {
-  // Open template-list mode which has the import button
   uiStore.showModal('template-management')
 }
-
-// Refetch when ConfigurationModal closes so the list stays in sync
-watch(() => uiStore.currentModal, (modal, prev) => {
-  if (!modal && prev?.name === 'configuration') {
-    templateStore.fetchTemplates()
-  }
-})
 
 onMounted(() => {
   templateStore.fetchTemplates()

@@ -8,6 +8,7 @@
           :key="chip.type + chip.label"
           :type="chip.type"
           :label="chip.label"
+          :to="chip.to || ''"
         />
       </div>
     </div>

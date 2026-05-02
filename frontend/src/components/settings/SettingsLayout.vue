@@ -56,6 +56,13 @@ import ApplicationMcpSection from './sections/ApplicationMcpSection.vue'
 import LibraryTemplatesSection from './sections/LibraryTemplatesSection.vue'
 import LibraryProfilesSection from './sections/LibraryProfilesSection.vue'
 import LibrarySecretsSection from './sections/LibrarySecretsSection.vue'
+import GeneralSection from './sections/GeneralSection.vue'
+import ModelTuningSection from './sections/ModelTuningSection.vue'
+import ToolsPermissionsSection from './sections/ToolsPermissionsSection.vue'
+import McpServersSection from './sections/McpServersSection.vue'
+import FeaturesSection from './sections/FeaturesSection.vue'
+import SystemPromptSection from './sections/SystemPromptSection.vue'
+import IsolationSection from './sections/IsolationSection.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -69,8 +76,23 @@ const modeTintVars = computed(() => {
   return {}
 })
 
+const EDIT_SECTION_MAP = {
+  'general':           GeneralSection,
+  'model-tuning':      ModelTuningSection,
+  'tools-permissions': ToolsPermissionsSection,
+  'mcp-servers':       McpServersSection,
+  'features':          FeaturesSection,
+  'system-prompt':     SystemPromptSection,
+  'isolation':         IsolationSection,
+}
+
 const sectionComponent = computed(() => {
-  switch (route.path) {
+  const p = route.path
+  if (p.startsWith('/settings/template/') || p.startsWith('/settings/profile/')) {
+    const section = route.params.section || 'general'
+    return EDIT_SECTION_MAP[section] ?? null
+  }
+  switch (p) {
     case '/settings/features':      return ApplicationFeaturesSection
     case '/settings/notifications': return ApplicationNotifsSection
     case '/settings/read-aloud':    return ApplicationReadAloudSection
@@ -150,7 +172,11 @@ watch(sectionComponent, () => {
 })
 // ──────────────────────────────────────────────────────────────────────────
 
-function onGuardApply() {
+async function onGuardApply() {
+  // Save current section before navigating
+  if (sectionHostRef.value?.save) {
+    await sectionHostRef.value.save()
+  }
   const dest = settingsStore.confirmNavigation('apply')
   if (dest) router.push(dest)
 }

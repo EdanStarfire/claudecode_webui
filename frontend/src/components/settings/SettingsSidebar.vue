@@ -18,6 +18,24 @@
         @update:model-value="settingsStore.setSearchQuery"
       />
 
+      <!-- Edit group: "This Template" or "This Profile" (shown when on an edit route) -->
+      <SettingsSidebarGroup
+        v-if="isEditMode && (filteredEditItems.length > 0 || !settingsStore.searchQuery)"
+        :title="editGroupTitle"
+        :short-title="editGroupShort"
+      >
+        <SettingsSidebarItem
+          v-for="item in filteredEditItems"
+          :key="item.to"
+          :to="item.to"
+          :icon="item.icon"
+          :label="item.label"
+        />
+        <div v-if="settingsStore.searchQuery && !filteredEditItems.length" class="no-results">
+          No results
+        </div>
+      </SettingsSidebarGroup>
+
       <!-- Application group -->
       <SettingsSidebarGroup title="Application" short-title="App">
         <SettingsSidebarItem
@@ -51,17 +69,77 @@
 
 <script setup>
 import { computed } from 'vue'
+import { useRoute } from 'vue-router'
 import { useSettingsStore } from '@/stores/settings'
 import SettingsSidebarSearch from './SettingsSidebarSearch.vue'
 import SettingsSidebarGroup from './SettingsSidebarGroup.vue'
 import SettingsSidebarItem from './SettingsSidebarItem.vue'
 import { settingsIndex } from './search/settingsIndex.js'
 
+const route = useRoute()
 const settingsStore = useSettingsStore()
 
 function toggleSidebar() {
   settingsStore.setSidebarExpanded(!settingsStore.sidebarExpanded)
 }
+
+// ── Edit-mode (template / profile) dynamic group ──────────────────────────
+
+const isTemplateEdit = computed(() => route.path.startsWith('/settings/template/'))
+const isProfileEdit  = computed(() => route.path.startsWith('/settings/profile/'))
+const isEditMode     = computed(() => isTemplateEdit.value || isProfileEdit.value)
+
+const editEntityId = computed(() => {
+  return route.params.templateId || route.params.profileId || ''
+})
+
+const editGroupTitle = computed(() => {
+  if (isTemplateEdit.value) return 'This Template'
+  if (isProfileEdit.value)  return 'This Profile'
+  return ''
+})
+
+const editGroupShort = computed(() => {
+  if (isTemplateEdit.value) return 'Tmpl'
+  if (isProfileEdit.value)  return 'Prof'
+  return ''
+})
+
+const EDIT_SECTIONS = [
+  { section: 'general',           icon: '◉', label: 'General',             sectionKey: 'edit-general' },
+  { section: 'model-tuning',      icon: '⬡', label: 'Model Tuning',        sectionKey: 'edit-model-tuning' },
+  { section: 'tools-permissions', icon: '⬡', label: 'Tools & Permissions', sectionKey: 'edit-tools-permissions' },
+  { section: 'mcp-servers',       icon: '◈', label: 'MCP Servers',         sectionKey: 'edit-mcp-servers' },
+  { section: 'features',          icon: '⚡', label: 'Features',            sectionKey: 'edit-features' },
+  { section: 'system-prompt',     icon: '☰', label: 'System Prompt',       sectionKey: 'edit-system-prompt' },
+  { section: 'isolation',         icon: '⊞', label: 'Isolation',           sectionKey: 'edit-isolation' },
+]
+
+const editSectionItems = computed(() => {
+  if (!editEntityId.value) return []
+  const base = isTemplateEdit.value
+    ? `/settings/template/${editEntityId.value}`
+    : `/settings/profile/${editEntityId.value}`
+  return EDIT_SECTIONS.map(s => ({
+    to: `${base}/${s.section}`,
+    icon: s.icon,
+    label: s.label,
+    sectionKey: s.sectionKey,
+  }))
+})
+
+const filteredEditItems = computed(() => {
+  const q = settingsStore.searchQuery.toLowerCase().trim()
+  if (!q) return editSectionItems.value
+  return editSectionItems.value.filter(item => {
+    if (item.label.toLowerCase().includes(q)) return true
+    return settingsIndex
+      .filter(e => e.section === item.sectionKey)
+      .some(e => e.label.toLowerCase().includes(q))
+  })
+})
+
+// ── Static sidebar groups ─────────────────────────────────────────────────
 
 const APP_ITEMS = [
   { to: '/settings/features',      icon: '⚡', label: 'Features',      sectionKey: 'features' },
