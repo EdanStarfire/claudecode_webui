@@ -109,9 +109,8 @@ function onGuardCancel() {
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  /* background is on the inner SettingsSidebar component */
-  background: #0f172a;
-  border-right: 1px solid #1e293b;
+  background: var(--bs-tertiary-bg);
+  border-right: 1px solid var(--bs-border-color);
 }
 
 .settings-content {
@@ -120,7 +119,8 @@ function onGuardCancel() {
   flex-direction: column;
   min-width: 0;
   overflow: hidden;
-  background: #131c2e;
+  background: var(--bs-body-bg);
+  color: var(--bs-body-color);
 }
 
 .section-host {
@@ -149,13 +149,13 @@ function onGuardCancel() {
 .coming-soon-label {
   font-size: 18px;
   font-weight: 600;
-  color: #94a3b8;
+  color: var(--bs-secondary-color);
   margin: 0 0 8px;
 }
 
 .coming-soon-route {
   font-size: 12px;
-  color: #475569;
+  color: var(--bs-tertiary-color);
   font-family: monospace;
   margin: 0;
 }

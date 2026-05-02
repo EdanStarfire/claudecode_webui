@@ -47,7 +47,7 @@ function handleClick() {
   border: none;
   border-left: 2px solid transparent;
   border-radius: 0 6px 6px 0;
-  color: #94a3b8;
+  color: var(--bs-secondary-color);
   font-size: 13px;
   cursor: pointer;
   text-align: left;
@@ -57,13 +57,13 @@ function handleClick() {
 }
 
 .settings-sidebar-item:hover:not(.is-disabled) {
-  background: #1e293b;
-  color: #e2e8f0;
+  background: var(--bs-secondary-bg);
+  color: var(--bs-emphasis-color);
 }
 
 .settings-sidebar-item.is-active {
-  background: #1e293b;
-  color: #a5b4fc;
+  background: rgba(99, 102, 241, 0.15);
+  color: #6366f1;
   border-left-color: #6366f1;
 }
 

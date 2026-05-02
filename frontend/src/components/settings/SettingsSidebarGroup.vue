@@ -29,7 +29,7 @@ defineProps({
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.08em;
-  color: #475569;
+  color: var(--bs-tertiary-color);
   white-space: nowrap;
 }
 </style>
