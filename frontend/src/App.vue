@@ -103,7 +103,9 @@ const rightPanelVisible = computed(() => uiStore.rightPanelVisible)
 const isTabletOrMobile = computed(() => uiStore.windowWidth < 768)
 
 // Full-width routes suppress the right sidebar (#1154)
-const isFullWidthRoute = computed(() => ['analytics', 'audit'].includes(route.name))
+const isFullWidthRoute = computed(() =>
+  ['analytics', 'audit'].includes(route.name) || route.path.startsWith('/settings/')
+)
 
 // Clear project/session selection when navigating to analytics or audit (#1155, #1158)
 watch(() => route.name, (routeName) => {
