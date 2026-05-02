@@ -32,16 +32,18 @@
         </div>
       </SettingsSidebarGroup>
 
-      <!-- Library group — non-functional stubs for Phase 1 -->
-      <SettingsSidebarGroup v-if="!settingsStore.searchQuery" title="Library" short-title="Lib">
+      <!-- Library group -->
+      <SettingsSidebarGroup v-if="filteredLibItems.length > 0 || !settingsStore.searchQuery" title="Library" short-title="Lib">
         <SettingsSidebarItem
-          v-for="item in libraryItems"
+          v-for="item in filteredLibItems"
           :key="item.to"
           :to="item.to"
           :icon="item.icon"
           :label="item.label"
-          :disabled="true"
         />
+        <div v-if="settingsStore.searchQuery && !filteredLibItems.length" class="no-results">
+          No results
+        </div>
       </SettingsSidebarGroup>
     </div>
   </nav>
@@ -78,6 +80,17 @@ const filteredAppItems = computed(() => {
   const q = settingsStore.searchQuery.toLowerCase().trim()
   if (!q) return APP_ITEMS
   return APP_ITEMS.filter(item => {
+    if (item.label.toLowerCase().includes(q)) return true
+    return settingsIndex
+      .filter(e => e.section === item.sectionKey)
+      .some(e => e.label.toLowerCase().includes(q))
+  })
+})
+
+const filteredLibItems = computed(() => {
+  const q = settingsStore.searchQuery.toLowerCase().trim()
+  if (!q) return libraryItems
+  return libraryItems.filter(item => {
     if (item.label.toLowerCase().includes(q)) return true
     return settingsIndex
       .filter(e => e.section === item.sectionKey)
