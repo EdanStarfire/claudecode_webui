@@ -53,6 +53,9 @@ import ApplicationFeaturesSection from './sections/ApplicationFeaturesSection.vu
 import ApplicationNotifsSection from './sections/ApplicationNotifsSection.vue'
 import ApplicationReadAloudSection from './sections/ApplicationReadAloudSection.vue'
 import ApplicationMcpSection from './sections/ApplicationMcpSection.vue'
+import LibraryTemplatesSection from './sections/LibraryTemplatesSection.vue'
+import LibraryProfilesSection from './sections/LibraryProfilesSection.vue'
+import LibrarySecretsSection from './sections/LibrarySecretsSection.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -72,6 +75,9 @@ const sectionComponent = computed(() => {
     case '/settings/notifications': return ApplicationNotifsSection
     case '/settings/read-aloud':    return ApplicationReadAloudSection
     case '/settings/mcp-servers':   return ApplicationMcpSection
+    case '/settings/templates':     return LibraryTemplatesSection
+    case '/settings/profiles':      return LibraryProfilesSection
+    case '/settings/secrets':       return LibrarySecretsSection
     default:                        return null
   }
 })
