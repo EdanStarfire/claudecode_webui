@@ -53,22 +53,22 @@ function humanize(slug) {
   gap: 6px;
   padding: 7px 16px;
   font-size: 12px;
-  background: var(--mode-tint, rgba(15, 23, 42, 0.5));
-  border-bottom: 1px solid var(--mode-border, #1e293b);
+  background: var(--mode-tint, var(--bs-tertiary-bg));
+  border-bottom: 1px solid var(--mode-border, var(--bs-border-color));
   flex-shrink: 0;
 }
 
 .bc-root {
-  color: #475569;
+  color: var(--bs-secondary-color);
   font-weight: 500;
 }
 
 .bc-sep {
-  color: #334155;
+  color: var(--bs-tertiary-color);
 }
 
 .bc-section {
-  color: var(--mode-fg, #94a3b8);
+  color: var(--mode-fg, var(--bs-body-color));
   font-weight: 500;
 }
 </style>

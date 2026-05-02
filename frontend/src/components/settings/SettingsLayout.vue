@@ -23,6 +23,7 @@
       <component
         :is="sectionComponent"
         v-if="sectionComponent"
+        ref="sectionHostRef"
         class="section-host"
       />
       <div v-else class="settings-coming-soon">
@@ -42,7 +43,7 @@
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, ref, watch, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useSettingsStore } from '@/stores/settings'
 import SettingsSidebar from './SettingsSidebar.vue'
@@ -74,6 +75,74 @@ const sectionComponent = computed(() => {
     default:                        return null
   }
 })
+
+// ── Content-area search highlighting ──────────────────────────────────────
+const sectionHostRef = ref(null)
+let highlightTimer = null
+
+function clearHighlights(root) {
+  const marks = root.querySelectorAll('mark.settings-hl')
+  marks.forEach(mark => {
+    const parent = mark.parentNode
+    parent.replaceChild(document.createTextNode(mark.textContent), mark)
+    parent.normalize()
+  })
+}
+
+function applyHighlights(root, query) {
+  const q = query.trim()
+  if (!q) return
+  const lq = q.toLowerCase()
+
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+    acceptNode(node) {
+      const tag = node.parentElement?.tagName?.toLowerCase()
+      if (['script', 'style', 'input', 'textarea', 'button', 'select', 'mark'].includes(tag)) {
+        return NodeFilter.FILTER_REJECT
+      }
+      if (!node.textContent.toLowerCase().includes(lq)) return NodeFilter.FILTER_SKIP
+      return NodeFilter.FILTER_ACCEPT
+    },
+  })
+
+  const nodes = []
+  let n
+  while ((n = walker.nextNode())) nodes.push(n)
+
+  nodes.forEach(textNode => {
+    const text = textNode.textContent
+    const idx = text.toLowerCase().indexOf(lq)
+    if (idx === -1) return
+    const before = document.createTextNode(text.slice(0, idx))
+    const mark = document.createElement('mark')
+    mark.className = 'settings-hl'
+    mark.textContent = text.slice(idx, idx + q.length)
+    const after = document.createTextNode(text.slice(idx + q.length))
+    const parent = textNode.parentNode
+    parent.replaceChild(after, textNode)
+    parent.insertBefore(mark, after)
+    parent.insertBefore(before, mark)
+  })
+}
+
+function scheduleHighlight() {
+  clearTimeout(highlightTimer)
+  highlightTimer = setTimeout(async () => {
+    await nextTick()
+    const el = sectionHostRef.value?.$el ?? sectionHostRef.value
+    if (!el) return
+    clearHighlights(el)
+    const q = settingsStore.searchQuery
+    if (q.trim()) applyHighlights(el, q)
+  }, 80)
+}
+
+watch(() => settingsStore.searchQuery, scheduleHighlight)
+watch(sectionComponent, () => {
+  // Section changed — clear old marks; reapply after render
+  nextTick(scheduleHighlight)
+})
+// ──────────────────────────────────────────────────────────────────────────
 
 function onGuardApply() {
   const dest = settingsStore.confirmNavigation('apply')
@@ -109,9 +178,8 @@ function onGuardCancel() {
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  /* background is on the inner SettingsSidebar component */
-  background: #0f172a;
-  border-right: 1px solid #1e293b;
+  background: var(--bs-tertiary-bg);
+  border-right: 1px solid var(--bs-border-color);
 }
 
 .settings-content {
@@ -120,7 +188,8 @@ function onGuardCancel() {
   flex-direction: column;
   min-width: 0;
   overflow: hidden;
-  background: #131c2e;
+  background: var(--bs-body-bg);
+  color: var(--bs-body-color);
 }
 
 .section-host {
@@ -149,13 +218,13 @@ function onGuardCancel() {
 .coming-soon-label {
   font-size: 18px;
   font-weight: 600;
-  color: #94a3b8;
+  color: var(--bs-secondary-color);
   margin: 0 0 8px;
 }
 
 .coming-soon-route {
   font-size: 12px;
-  color: #475569;
+  color: var(--bs-tertiary-color);
   font-family: monospace;
   margin: 0;
 }
@@ -196,5 +265,13 @@ function onGuardCancel() {
   .settings-backdrop {
     display: block;
   }
+}
+
+:deep(mark.settings-hl) {
+  background: rgba(99, 102, 241, 0.25);
+  color: inherit;
+  border-radius: 2px;
+  padding: 0 1px;
+  font-weight: 700;
 }
 </style>

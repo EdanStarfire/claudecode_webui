@@ -9,6 +9,7 @@
       :value="modelValue"
       @input="$emit('update:modelValue', $event.target.value)"
       @keydown.escape="$emit('update:modelValue', '')"
+      @focus="settingsStore.setSidebarExpanded(true)"
       aria-label="Search settings"
     />
     <button
@@ -23,9 +24,12 @@
 
 <script setup>
 import { ref } from 'vue'
+import { useSettingsStore } from '@/stores/settings'
 
 defineProps({ modelValue: { type: String, default: '' } })
 defineEmits(['update:modelValue'])
+
+const settingsStore = useSettingsStore()
 
 const inputRef = ref(null)
 
@@ -41,8 +45,8 @@ defineExpose({ focus })
   display: flex;
   align-items: center;
   margin: 8px 8px 4px;
-  background: #1e293b;
-  border: 1px solid #334155;
+  background: var(--bs-secondary-bg);
+  border: 1px solid var(--bs-border-color);
   border-radius: 5px;
   overflow: hidden;
   transition: border-color 0.15s;
@@ -54,7 +58,7 @@ defineExpose({ focus })
 
 .search-icon {
   padding: 0 6px 0 8px;
-  color: #475569;
+  color: var(--bs-tertiary-color);
   font-size: 14px;
   flex-shrink: 0;
 }
@@ -63,7 +67,7 @@ defineExpose({ focus })
   flex: 1;
   background: transparent;
   border: none;
-  color: #e2e8f0;
+  color: var(--bs-body-color);
   font-size: 12px;
   padding: 5px 4px;
   outline: none;
@@ -71,13 +75,13 @@ defineExpose({ focus })
 }
 
 .search-input::placeholder {
-  color: #475569;
+  color: var(--bs-tertiary-color);
 }
 
 .search-clear {
   background: none;
   border: none;
-  color: #475569;
+  color: var(--bs-tertiary-color);
   font-size: 11px;
   padding: 0 8px;
   cursor: pointer;
@@ -88,6 +92,6 @@ defineExpose({ focus })
 }
 
 .search-clear:hover {
-  color: #94a3b8;
+  color: var(--bs-secondary-color);
 }
 </style>

@@ -15,8 +15,42 @@
 
 /* Reduce default font size */
 :root {
-    color-scheme: light;
     --bs-body-font-size: 0.875rem; /* 14px if base is 16px */
+}
+
+/* ========== DARK THEME — slate/navy palette ========== */
+/* Overrides Bootstrap's default gray dark-mode palette with the app's blue-gray theme. */
+/* Toggle by flipping data-bs-theme on <html>. */
+[data-bs-theme="dark"] {
+    color-scheme: dark;
+
+    /* Surfaces */
+    --bs-body-bg:             #131c2e;   /* main content area   (slate-925) */
+    --bs-body-bg-rgb:         19,28,46;
+    --bs-secondary-bg:        #1e293b;   /* inputs, hovers       (slate-800) */
+    --bs-secondary-bg-rgb:    30,41,59;
+    --bs-tertiary-bg:         #0f172a;   /* sidebar / toolbar    (slate-900) */
+    --bs-tertiary-bg-rgb:     15,23,42;
+
+    /* Text */
+    --bs-body-color:          #cbd5e1;   /* primary text         (slate-300) */
+    --bs-body-color-rgb:      203,213,225;
+    --bs-secondary-color:     rgba(203,213,225,0.75);
+    --bs-tertiary-color:      rgba(148,163,184,0.5);  /* slate-400 */
+    --bs-emphasis-color:      #e2e8f0;   /* headings / bold      (slate-200) */
+    --bs-emphasis-color-rgb:  226,232,240;
+
+    /* Borders */
+    --bs-border-color:              #1e293b;
+    --bs-border-color-translucent:  rgba(203,213,225,0.12);
+
+    /* Links */
+    --bs-link-color:       #818cf8;   /* indigo-400 */
+    --bs-link-hover-color: #a5b4fc;   /* indigo-300 */
+    --bs-link-color-rgb:   129,140,248;
+
+    /* Code */
+    --bs-code-color: #a78bfa;   /* violet-400 */
 }
 
 html {

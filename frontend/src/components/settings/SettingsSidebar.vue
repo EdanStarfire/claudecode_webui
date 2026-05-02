@@ -19,7 +19,7 @@
       />
 
       <!-- Application group -->
-      <SettingsSidebarGroup title="Application">
+      <SettingsSidebarGroup title="Application" short-title="App">
         <SettingsSidebarItem
           v-for="item in filteredAppItems"
           :key="item.to"
@@ -33,7 +33,7 @@
       </SettingsSidebarGroup>
 
       <!-- Library group — non-functional stubs for Phase 1 -->
-      <SettingsSidebarGroup v-if="!settingsStore.searchQuery" title="Library">
+      <SettingsSidebarGroup v-if="!settingsStore.searchQuery" title="Library" short-title="Lib">
         <SettingsSidebarItem
           v-for="item in libraryItems"
           :key="item.to"
@@ -91,7 +91,7 @@ const filteredAppItems = computed(() => {
   height: 100%;
   display: flex;
   flex-direction: column;
-  background: #0f172a;
+  background: var(--bs-tertiary-bg);
   overflow: hidden;
 }
 
@@ -104,8 +104,8 @@ const filteredAppItems = computed(() => {
   padding: 10px 12px;
   background: none;
   border: none;
-  border-bottom: 1px solid #1e293b;
-  color: #94a3b8;
+  border-bottom: 1px solid var(--bs-border-color);
+  color: var(--bs-secondary-color);
   font-size: 15px;
   cursor: pointer;
   text-align: left;
@@ -116,7 +116,7 @@ const filteredAppItems = computed(() => {
 }
 
 .sidebar-mobile-toggle:hover {
-  color: #e2e8f0;
+  color: var(--bs-emphasis-color);
 }
 
 .toggle-icon {
@@ -152,7 +152,7 @@ const filteredAppItems = computed(() => {
 .no-results {
   padding: 6px 12px;
   font-size: 12px;
-  color: #475569;
+  color: var(--bs-tertiary-color);
   font-style: italic;
 }
 </style>

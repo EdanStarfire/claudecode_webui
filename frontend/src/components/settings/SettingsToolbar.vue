@@ -41,8 +41,8 @@ defineEmits(['save', 'cancel'])
   justify-content: space-between;
   gap: 12px;
   padding: 12px 20px;
-  border-bottom: 1px solid #1e293b;
-  background: #0f172a;
+  border-bottom: 1px solid var(--bs-border-color);
+  background: var(--bs-tertiary-bg);
   flex-shrink: 0;
 }
 
@@ -58,7 +58,7 @@ defineEmits(['save', 'cancel'])
   margin: 0;
   font-size: 15px;
   font-weight: 600;
-  color: #e2e8f0;
+  color: var(--bs-emphasis-color);
   white-space: nowrap;
 }
 
@@ -91,13 +91,13 @@ defineEmits(['save', 'cancel'])
 
 .btn-cancel {
   background: none;
-  border-color: #334155;
-  color: #94a3b8;
+  border-color: var(--bs-border-color);
+  color: var(--bs-secondary-color);
 }
 
 .btn-cancel:hover:not(:disabled) {
-  background: #1e293b;
-  color: #e2e8f0;
+  background: var(--bs-secondary-bg);
+  color: var(--bs-emphasis-color);
 }
 
 .btn-save {

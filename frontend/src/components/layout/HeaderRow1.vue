@@ -18,12 +18,20 @@
           <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
         </svg>
       </button>
-      <router-link to="/analytics" class="header-btn analytics-nav-btn" title="Analytics" aria-label="Analytics dashboard">
-        ◈
-      </router-link>
-      <router-link to="/audit" class="header-btn audit-nav-btn" title="Audit" aria-label="Audit timeline">
-        ⎗
-      </router-link>
+      <button
+        class="header-btn analytics-nav-btn"
+        :class="{ 'nav-active': isAnalyticsRoute }"
+        title="Analytics"
+        aria-label="Analytics dashboard"
+        @click="toggleAnalytics()"
+      >◈</button>
+      <button
+        class="header-btn audit-nav-btn"
+        :class="{ 'nav-active': isAuditRoute }"
+        title="Audit"
+        aria-label="Audit timeline"
+        @click="toggleAudit()"
+      >⎗</button>
       <button class="header-btn" @click="uiStore.showRestartModal()" title="Restart server" aria-label="Restart server">
         ↻
       </button>
@@ -35,29 +43,19 @@
         :class="{ 'settings-active': isSettingsRoute }"
         title="Settings (new UI)"
         aria-label="Settings (new UI)"
-        @click="router.push('/settings/features')"
+        @click="toggleSettings()"
       >
         ⚙<sup class="new-badge" aria-hidden="true">new</sup>
-      </button>
-      <button
-        class="header-btn panel-toggle-btn"
-        @click="uiStore.toggleRightPanel()"
-        title="Toggle right panel"
-        aria-label="Toggle right panel"
-        :aria-expanded="uiStore.rightPanelVisible"
-        :class="{ 'panel-open': uiStore.rightPanelVisible }"
-      >
-        ☰
       </button>
     </div>
   </div>
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useUIStore } from '@/stores/ui'
 import { usePollingStore } from '@/stores/polling'
-import { RouterLink, useRoute, useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 
 const uiStore = useUIStore()
 const wsStore = usePollingStore()
@@ -65,7 +63,30 @@ const route = useRoute()
 const router = useRouter()
 
 const uiConnected = computed(() => wsStore.uiConnected)
-const isSettingsRoute = computed(() => route.path.startsWith('/settings/'))
+const isSettingsRoute  = computed(() => route.path.startsWith('/settings/'))
+const isAnalyticsRoute = computed(() => route.path === '/analytics')
+const isAuditRoute     = computed(() => route.path === '/audit')
+
+function isSpecialRoute(path) {
+  return path.startsWith('/settings/') || path === '/analytics' || path === '/audit'
+}
+
+const lastContentRoute = ref('/')
+watch(() => route.path, (path) => {
+  if (!isSpecialRoute(path)) lastContentRoute.value = path
+}, { immediate: true })
+
+function toggleSettings() {
+  router.push(isSettingsRoute.value ? lastContentRoute.value : '/settings/features')
+}
+
+function toggleAnalytics() {
+  router.push(isAnalyticsRoute.value ? lastContentRoute.value : '/analytics')
+}
+
+function toggleAudit() {
+  router.push(isAuditRoute.value ? lastContentRoute.value : '/audit')
+}
 </script>
 
 <style scoped>
@@ -154,21 +175,16 @@ const isSettingsRoute = computed(() => route.path.startsWith('/settings/'))
   color: #f87171;
 }
 
-.panel-toggle-btn.panel-open {
-  border-color: #3b82f6;
-  color: #93c5fd;
-}
-
 .analytics-nav-btn,
 .audit-nav-btn {
-  text-decoration: none;
   font-size: 14px;
 }
 
-.analytics-nav-btn.router-link-active,
-.audit-nav-btn.router-link-active {
+.analytics-nav-btn.nav-active,
+.audit-nav-btn.nav-active {
   border-color: #6366f1;
   color: #a5b4fc;
+  background: rgba(99, 102, 241, 0.1);
 }
 
 .settings-new-btn {

@@ -43,9 +43,25 @@
       </svg>
     </button>
     <span v-if="topLevelSessions.length === 0 && projectGhosts.length === 0" class="strip-empty">No agents yet</span>
+    <button
+      class="strip-panel-btn"
+      :class="{ 'panel-open': uiStore.rightPanelVisible }"
+      @click.stop="uiStore.toggleRightPanel()"
+      title="Toggle right panel"
+      aria-label="Toggle right panel"
+      :aria-expanded="uiStore.rightPanelVisible"
+    >☰</button>
   </div>
   <div v-else class="agent-strip agent-strip-empty" :class="{ 'theme-red': uiStore.isRedBackground }">
     <span class="strip-empty">Select a project above</span>
+    <button
+      class="strip-panel-btn"
+      :class="{ 'panel-open': uiStore.rightPanelVisible }"
+      @click.stop="uiStore.toggleRightPanel()"
+      title="Toggle right panel"
+      aria-label="Toggle right panel"
+      :aria-expanded="uiStore.rightPanelVisible"
+    >☰</button>
   </div>
 </template>
 
@@ -318,6 +334,37 @@ function handleGhostDismiss(agentId) {
   border-color: #94a3b8;
   color: #64748b;
   background: #f1f5f9;
+}
+
+.strip-panel-btn {
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  border: 1px solid #e2e8f0;
+  background: #f8fafc;
+  color: #94a3b8;
+  font-size: 14px;
+  cursor: pointer;
+  transition: all 0.15s;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: auto;
+  position: sticky;
+  right: 0;
+}
+
+.strip-panel-btn:hover {
+  border-color: #94a3b8;
+  color: #64748b;
+  background: #f1f5f9;
+}
+
+.strip-panel-btn.panel-open {
+  background: #ede9fe;
+  border-color: #6366f1;
+  color: #6366f1;
 }
 
 .agent-strip.theme-red {
