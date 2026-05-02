@@ -23,6 +23,7 @@
       <component
         :is="sectionComponent"
         v-if="sectionComponent"
+        :key="route.path"
         ref="sectionHostRef"
         class="section-host"
       />
