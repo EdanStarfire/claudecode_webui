@@ -27,8 +27,17 @@
       <button class="header-btn" @click="uiStore.showRestartModal()" title="Restart server" aria-label="Restart server">
         ↻
       </button>
-      <button class="header-btn" @click="uiStore.showModal('global-config')" title="Application Settings" aria-label="Application Settings">
+      <button class="header-btn" @click="uiStore.showModal('global-config')" title="Application Settings (legacy)" aria-label="Application Settings (legacy)">
         ⚙
+      </button>
+      <button
+        class="header-btn settings-new-btn"
+        :class="{ 'settings-active': isSettingsRoute }"
+        title="Settings (new UI)"
+        aria-label="Settings (new UI)"
+        @click="router.push('/settings/features')"
+      >
+        ⚙<sup class="new-badge" aria-hidden="true">new</sup>
       </button>
       <button
         class="header-btn panel-toggle-btn"
@@ -48,12 +57,15 @@
 import { computed } from 'vue'
 import { useUIStore } from '@/stores/ui'
 import { usePollingStore } from '@/stores/polling'
-import { RouterLink } from 'vue-router'
+import { RouterLink, useRoute, useRouter } from 'vue-router'
 
 const uiStore = useUIStore()
 const wsStore = usePollingStore()
+const route = useRoute()
+const router = useRouter()
 
 const uiConnected = computed(() => wsStore.uiConnected)
+const isSettingsRoute = computed(() => route.path.startsWith('/settings/'))
 </script>
 
 <style scoped>
@@ -157,6 +169,29 @@ const uiConnected = computed(() => wsStore.uiConnected)
 .audit-nav-btn.router-link-active {
   border-color: #6366f1;
   color: #a5b4fc;
+}
+
+.settings-new-btn {
+  color: #a5b4fc;
+  position: relative;
+}
+
+.settings-new-btn.settings-active {
+  border-color: #6366f1;
+  color: #a5b4fc;
+  background: rgba(99, 102, 241, 0.1);
+}
+
+.new-badge {
+  font-size: 7px;
+  font-weight: 700;
+  background: #6366f1;
+  color: #fff;
+  padding: 1px 3px;
+  border-radius: 2px;
+  vertical-align: super;
+  line-height: 1;
+  letter-spacing: 0;
 }
 
 @keyframes pulse-error {

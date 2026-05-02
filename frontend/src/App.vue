@@ -3,11 +3,11 @@
     <!-- Row 1: Dark app chrome bar -->
     <HeaderRow1 />
 
-    <!-- Row 2: Project pills -->
-    <ProjectPillBar />
+    <!-- Row 2: Project pills (hidden in settings routes) -->
+    <ProjectPillBar v-show="!isSettingsRoute" />
 
-    <!-- Row 3: Agent strip -->
-    <AgentStrip />
+    <!-- Row 3: Agent strip (hidden in settings routes) -->
+    <AgentStrip v-show="!isSettingsRoute" />
 
     <!-- Overlay backdrop for responsive right panel -->
     <div
@@ -106,6 +106,9 @@ const isTabletOrMobile = computed(() => uiStore.windowWidth < 768)
 const isFullWidthRoute = computed(() =>
   ['analytics', 'audit'].includes(route.name) || route.path.startsWith('/settings/')
 )
+
+// Settings routes suppress the project pill bar and agent strip
+const isSettingsRoute = computed(() => route.path.startsWith('/settings/'))
 
 // Clear project/session selection when navigating to analytics or audit (#1155, #1158)
 watch(() => route.name, (routeName) => {
