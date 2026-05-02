@@ -9,6 +9,7 @@
       :value="modelValue"
       @input="$emit('update:modelValue', $event.target.value)"
       @keydown.escape="$emit('update:modelValue', '')"
+      @focus="settingsStore.setSidebarExpanded(true)"
       aria-label="Search settings"
     />
     <button
@@ -23,9 +24,12 @@
 
 <script setup>
 import { ref } from 'vue'
+import { useSettingsStore } from '@/stores/settings'
 
 defineProps({ modelValue: { type: String, default: '' } })
 defineEmits(['update:modelValue'])
+
+const settingsStore = useSettingsStore()
 
 const inputRef = ref(null)
 

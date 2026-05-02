@@ -19,7 +19,7 @@
       />
 
       <!-- Application group -->
-      <SettingsSidebarGroup title="Application">
+      <SettingsSidebarGroup title="Application" short-title="App">
         <SettingsSidebarItem
           v-for="item in filteredAppItems"
           :key="item.to"
@@ -33,7 +33,7 @@
       </SettingsSidebarGroup>
 
       <!-- Library group — non-functional stubs for Phase 1 -->
-      <SettingsSidebarGroup v-if="!settingsStore.searchQuery" title="Library">
+      <SettingsSidebarGroup v-if="!settingsStore.searchQuery" title="Library" short-title="Lib">
         <SettingsSidebarItem
           v-for="item in libraryItems"
           :key="item.to"
