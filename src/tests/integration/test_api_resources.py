@@ -1,5 +1,5 @@
 """
-Stage 3: Integration tests for File Upload & Resource endpoints (9 routes).
+Stage 3: Integration tests for File Upload & Resource endpoints (7 routes).
 
 Tests:
 - POST /api/sessions/{session_id}/files — upload file
@@ -9,8 +9,6 @@ Tests:
 - GET /api/sessions/{session_id}/resources/{resource_id} — get resource file
 - GET /api/sessions/{session_id}/resources/{resource_id}/download — download as attachment
 - DELETE /api/sessions/{session_id}/resources/{resource_id} — soft-remove resource
-- GET /api/sessions/{session_id}/images — legacy image list
-- GET /api/sessions/{session_id}/images/{image_id} — legacy image get
 """
 
 import uuid
@@ -223,27 +221,6 @@ class TestRemoveResource:
         resp = await client.delete(f"/api/sessions/{sid}/resources/nonexistent")
         # API may return 200 (no-op) or 404 depending on implementation
         assert resp.status_code in (200, 404)
-
-
-class TestLegacyImages:
-    async def test_list_images_empty(self, api_integration_env):
-        client = api_integration_env["client"]
-        session = await _create_session_with_project(api_integration_env)
-        sid = session["session_id"]
-
-        resp = await client.get(f"/api/sessions/{sid}/images")
-        assert resp.status_code == 200
-        body = resp.json()
-        assert "images" in body
-        assert "total" in body
-
-    async def test_get_nonexistent_image(self, api_integration_env):
-        client = api_integration_env["client"]
-        session = await _create_session_with_project(api_integration_env)
-        sid = session["session_id"]
-
-        resp = await client.get(f"/api/sessions/{sid}/images/nonexistent")
-        assert resp.status_code == 404
 
 
 class TestSessionTmpEndpoint:

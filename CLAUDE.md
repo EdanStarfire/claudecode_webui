@@ -202,7 +202,7 @@ When upgrading `claude-agent-sdk`, check for new env vars by:
 
 ## Current Status
 
-The Vue 3 migration is **complete** and in production use. The frontend has grown significantly beyond the original migration scope with 14 Pinia stores, 99+ Vue components, 22 tool handlers, and 9 composables.
+The Vue 3 migration is **complete** and in production use. The frontend has grown significantly beyond the original migration scope with 13 Pinia stores, 99+ Vue components, 22 tool handlers, and 9 composables.
 
 **Documentation**: See [frontend/CLAUDE.md](./frontend/CLAUDE.md) for detailed frontend architecture.
 
@@ -211,7 +211,7 @@ The Vue 3 migration is **complete** and in production use. The frontend has grow
 ```
 frontend/
 ├── src/
-│   ├── stores/                    # 14 Pinia stores
+│   ├── stores/                    # 13 Pinia stores
 │   │   ├── session.js             # Session CRUD, selection, deep linking
 │   │   ├── project.js             # Project hierarchy, ordering
 │   │   ├── message.js             # Messages, tool calls, orphaned detection
@@ -224,8 +224,7 @@ frontend/
 │   │   ├── diff.js                # Per-session git diff data
 │   │   ├── task.js                # Per-session SDK task tracking
 │   │   ├── mcp.js                 # MCP server state (active servers)
-│   │   ├── mcpConfig.js           # MCP server configuration CRUD
-│   │   └── image.js               # Deprecated shim → resource.js
+│   │   └── mcpConfig.js           # MCP server configuration CRUD
 │   │
 │   ├── composables/               # 9 reusable composition functions
 │   │   ├── useToolResult.js       # Shared tool result extraction
@@ -291,7 +290,7 @@ npm run build  # Output: frontend/dist/
 
 ## Key Benefits Over Vanilla JS
 
-1. **State Management**: 14 Pinia stores replace 135+ instance variables and dual Map+Array storage
+1. **State Management**: 13 Pinia stores replace 135+ instance variables and dual Map+Array storage
 2. **Automatic Reactivity**: No manual `renderSessions()` calls - Vue reactivity handles all UI updates
 3. **Component Architecture**: 6767-line monolith split into 99+ focused, reusable components
 4. **Event Listener Cleanup**: Automatic cleanup prevents memory leaks
@@ -402,13 +401,10 @@ For detailed store documentation, see [frontend/CLAUDE.md](./frontend/CLAUDE.md#
 ### 11. Task Store (`stores/task.js`)
 **Responsibility**: Per-session SDK task tracking (TaskCreate/Update/List/Get tool integration)
 
-### 12. Image Store (`stores/image.js`)
-**Responsibility**: Deprecated shim re-exporting `useResourceStore`
-
-### 13. MCP Store (`stores/mcp.js`)
+### 12. MCP Store (`stores/mcp.js`)
 **Responsibility**: Active MCP server state per session
 
-### 14. MCP Config Store (`stores/mcpConfig.js`)
+### 13. MCP Config Store (`stores/mcpConfig.js`)
 **Responsibility**: MCP server configuration CRUD (STDIO/SSE/HTTP, OAuth 2.1)
 
 ## Vue Components (99+ files)
@@ -478,7 +474,7 @@ For detailed component documentation, see [frontend/CLAUDE.md](./frontend/CLAUDE
 │                       Browser (Vue 3 Frontend)                       │
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐             │
 │  │ Pinia Stores │  │ Components   │  │ Vue Router   │             │
-│  │ (14 stores)  │  │  (99+ files) │  │  (routing)   │             │
+│  │ (13 stores)  │  │  (99+ files) │  │  (routing)   │             │
 │  └──────────────┘  └──────────────┘  └──────────────┘             │
 └────────┬────────────────────┬────────────────────┬──────────────────┘
          │                    │                    │
@@ -1097,7 +1093,7 @@ Claude WebUI is a **production-ready web interface** for Claude Agent SDK with:
 - Git diff viewer with per-commit and aggregate views
 - Orphaned tool detection and cleanup
 - Persistent message storage (JSONL + JSON)
-- Vue 3 + Pinia reactive UI (14 stores, 99+ components)
+- Vue 3 + Pinia reactive UI (13 stores, 99+ components)
 - Mobile-responsive design
 
 **Multi-Agent Features (Legion)**:

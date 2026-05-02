@@ -675,7 +675,3 @@ At least one of resource_id or filename must be provided.""",
             logger.error(f"Failed to get storage manager for {session_id}: {e}")
 
         return None
-
-
-# Backward compatibility alias
-ImageViewerMCPTools = ResourceMCPTools

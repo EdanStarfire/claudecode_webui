@@ -54,13 +54,6 @@ Complete REST and WebSocket API reference for Claude WebUI. For backend architec
 | `GET` | `/api/sessions/{id}/resources/{resource_id}/download` | Download resource file |
 | `DELETE` | `/api/sessions/{id}/resources/{resource_id}` | Soft-remove resource |
 
-### Image Endpoints (Legacy)
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/api/sessions/{id}/images` | Get images gallery |
-| `GET` | `/api/sessions/{id}/images/{image_id}` | Get single image |
-
 ### Diff Endpoints
 
 | Method | Path | Description |

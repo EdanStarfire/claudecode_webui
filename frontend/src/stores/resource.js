@@ -753,6 +753,3 @@ export const useResourceStore = defineStore('resource', () => {
     clearImages
   }
 })
-
-// Backward compatibility alias
-export const useImageStore = useResourceStore
