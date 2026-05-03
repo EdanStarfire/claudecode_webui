@@ -29,9 +29,9 @@ export function useEditSectionFieldStates({ isTemplateMode, baseConfig, draft, b
     for (const f of fields) {
       const key = f.key
 
-      // Draft value = user is actively editing this field → selfKind
+      // Draft value = user is actively editing this field → selfKind (resettable)
       if (draft.value && key in draft.value) {
-        states[key] = { kind: selfKind }
+        states[key] = { kind: selfKind, resettable: true }
         continue
       }
 
@@ -39,7 +39,7 @@ export function useEditSectionFieldStates({ isTemplateMode, baseConfig, draft, b
       // are treated as "set at this level", not "inherited from profile".
       const base = baseConfig.value || {}
       if (key in base && base[key] !== null && base[key] !== undefined) {
-        states[key] = { kind: selfKind }
+        states[key] = { kind: selfKind, resettable: true }
         continue
       }
 

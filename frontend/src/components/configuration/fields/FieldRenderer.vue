@@ -16,13 +16,20 @@
     <!-- Label column -->
     <div class="field-label-col" :class="{ 'field-disabled': showIncludeToggle && !included }">
       <template v-if="showBadges && fieldState">
-        <!-- SourceMarker format: { kind: 'S'|'T'|'P'|'EMPTY', templateName?, profileName? } -->
+        <!-- SourceMarker format: { kind: 'S'|'T'|'P'|'EMPTY', templateName?, profileName?, resettable? } -->
         <template v-if="typeof fieldState === 'object' && 'kind' in fieldState">
           <SourceMarker
             :kind="fieldState.kind"
             :template-name="fieldState.templateName || null"
             :profile-name="fieldState.profileName || null"
           />
+          <button
+            v-if="fieldState.resettable"
+            type="button"
+            class="field-reset-btn"
+            title="Reset to inherited value"
+            @click.stop="$emit('reset')"
+          >↩</button>
         </template>
         <!-- Object fieldState: new 3-tier model (issue #1230) -->
         <template v-else-if="typeof fieldState === 'object'">

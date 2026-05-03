@@ -24,6 +24,7 @@
         :field-states="fieldStates"
         :show-include-toggle="false"
         @update:config="handleField"
+        @reset="handleReset"
       />
     </div>
   </div>
@@ -39,6 +40,7 @@ import SettingsToolbar from '../SettingsToolbar.vue'
 import FieldSection from '../../configuration/fields/FieldSection.vue'
 import { FIELD_SCHEMAS } from '../../configuration/fields/fieldSchemas.js'
 import { useEditSectionFieldStates } from '@/composables/useEditSectionFieldStates'
+import { useEditSectionReset } from '@/composables/useEditSectionReset'
 
 const PROFILE_AREA = 'model'
 const SECTION_KEY  = 'model-tuning'
@@ -86,6 +88,7 @@ const boundProfileId = computed(() => {
 const boundProfile = computed(() => boundProfileId.value ? profileStore.getProfile(boundProfileId.value) : null)
 
 const { fieldStates } = useEditSectionFieldStates({ isTemplateMode, baseConfig, draft, boundProfile, schemaFields: FIELD_SCHEMAS.model })
+const { handleReset } = useEditSectionReset({ isTemplateMode, areaKey, entityId, baseConfig })
 
 const toolbarChips = computed(() => {
   if (!isTemplateMode.value || !boundProfileId.value) return []
