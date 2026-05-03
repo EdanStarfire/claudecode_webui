@@ -71,8 +71,11 @@ const baseConfig = computed(() => entity.value?.config || {})
 const draft        = computed(() => settingsStore.getDraft(areaKey.value))
 const profileBase = computed(() => isTemplateMode.value && boundProfile.value?.config ? boundProfile.value.config : {})
 const mergedConfig = computed(() => {
-  const cleanDraft = Object.fromEntries(Object.entries(draft.value || {}).filter(([, v]) => v !== FIELD_RESET))
-  return { ...profileBase.value, ...baseConfig.value, ...cleanDraft }
+  const draftEntries = Object.entries(draft.value || {})
+  const resetKeys = new Set(draftEntries.filter(([, v]) => v === FIELD_RESET).map(([k]) => k))
+  const cleanDraft = Object.fromEntries(draftEntries.filter(([, v]) => v !== FIELD_RESET))
+  const cleanBase = Object.fromEntries(Object.entries(baseConfig.value || {}).filter(([k]) => !resetKeys.has(k)))
+  return { ...profileBase.value, ...cleanBase, ...cleanDraft }
 })
 const isDirty      = computed(() => settingsStore.dirtyAreas.has(areaKey.value))
 const saving       = ref(false)

@@ -78,8 +78,11 @@ const baseConfig = computed(() => entity.value?.config || {})
 const draft       = computed(() => settingsStore.getDraft(areaKey.value))
 const profileBase = computed(() => isTemplateMode.value && boundProfile.value?.config ? boundProfile.value.config : {})
 const mergedConfig = computed(() => {
-  const cleanDraft = Object.fromEntries(Object.entries(draft.value || {}).filter(([, v]) => v !== FIELD_RESET))
-  const c = { ...profileBase.value, ...baseConfig.value, ...cleanDraft }
+  const draftEntries = Object.entries(draft.value || {})
+  const resetKeys = new Set(draftEntries.filter(([, v]) => v === FIELD_RESET).map(([k]) => k))
+  const cleanDraft = Object.fromEntries(draftEntries.filter(([, v]) => v !== FIELD_RESET))
+  const cleanBase = Object.fromEntries(Object.entries(baseConfig.value || {}).filter(([k]) => !resetKeys.has(k)))
+  const c = { ...profileBase.value, ...cleanBase, ...cleanDraft }
   // Normalize array fields to string formats required by TagInputWidget / DirListWidget
   for (const k of ['allowed_tools', 'disallowed_tools', 'capabilities']) {
     if (Array.isArray(c[k])) c[k] = c[k].join(', ')
