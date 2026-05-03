@@ -65,9 +65,10 @@ const isNotApplicable = computed(() => isProfileMode.value && entity.value?.area
 
 const baseConfig = computed(() => entity.value?.config || {})
 
-const draft        = computed(() => settingsStore.getDraft(areaKey.value))
+const draft       = computed(() => settingsStore.getDraft(areaKey.value))
+const profileBase = computed(() => isTemplateMode.value && boundProfile.value?.config ? boundProfile.value.config : {})
 const mergedConfig = computed(() => {
-  const c = { ...baseConfig.value, ...draft.value }
+  const c = { ...profileBase.value, ...baseConfig.value, ...draft.value }
   // docker_extra_mounts is stored as array in API; TextareaWidget expects newline-separated string
   if (Array.isArray(c.docker_extra_mounts)) c.docker_extra_mounts = c.docker_extra_mounts.join('\n')
   return c

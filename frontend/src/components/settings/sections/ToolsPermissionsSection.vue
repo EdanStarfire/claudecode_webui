@@ -72,9 +72,10 @@ const isNotApplicable = computed(() => isProfileMode.value && entity.value?.area
 
 const baseConfig = computed(() => entity.value?.config || {})
 
-const draft        = computed(() => settingsStore.getDraft(areaKey.value))
+const draft       = computed(() => settingsStore.getDraft(areaKey.value))
+const profileBase = computed(() => isTemplateMode.value && boundProfile.value?.config ? boundProfile.value.config : {})
 const mergedConfig = computed(() => {
-  const c = { ...baseConfig.value, ...draft.value }
+  const c = { ...profileBase.value, ...baseConfig.value, ...draft.value }
   // Normalize array fields to string formats required by TagInputWidget / DirListWidget
   for (const k of ['allowed_tools', 'disallowed_tools', 'capabilities']) {
     if (Array.isArray(c[k])) c[k] = c[k].join(', ')
