@@ -35,8 +35,10 @@ export function useEditSectionFieldStates({ isTemplateMode, baseConfig, draft, b
         continue
       }
 
-      const base = baseConfig.value?.[key]
-      if (hasValue(base)) {
+      // Use key presence (not hasValue) so explicit empty values ([], '')
+      // are treated as "set at this level", not "inherited from profile".
+      const base = baseConfig.value || {}
+      if (key in base && base[key] !== null && base[key] !== undefined) {
         states[key] = { kind: selfKind }
         continue
       }
