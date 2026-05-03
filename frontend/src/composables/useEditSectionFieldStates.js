@@ -7,34 +7,37 @@ function hasValue(v) {
 }
 
 /**
- * Computes per-field source states ({ kind: 'S'|'P'|'EMPTY' }) for template/profile
+ * Computes per-field source states ({ kind: 'T'|'P'|'EMPTY' }) for template/profile
  * edit section components, to drive SourceMarker badges in FieldRenderer.
  *
  * In template mode:
- *   S = value is set on the template itself (or in the current draft)
+ *   T = value is set on the template itself (or in the current draft)
  *   P = value is unset on the template but the bound profile for this area has it
  *   EMPTY = neither template nor bound profile has a value
  *
  * In profile mode:
- *   S = value is set in the profile's config (or in the current draft)
+ *   P = value is set in the profile's config (or in the current draft)
  *   EMPTY = not set
  */
 export function useEditSectionFieldStates({ isTemplateMode, baseConfig, draft, boundProfile, schemaFields }) {
   const fieldStates = computed(() => {
     const states = {}
     const fields = typeof schemaFields === 'function' ? schemaFields() : (schemaFields?.value ?? schemaFields ?? [])
+    // "set at this level" kind: T when editing a template, P when editing a profile
+    const selfKind = isTemplateMode.value ? 'T' : 'P'
+
     for (const f of fields) {
       const key = f.key
 
-      // Draft value = user is actively editing this field → always S
+      // Draft value = user is actively editing this field → selfKind
       if (draft.value && key in draft.value) {
-        states[key] = { kind: 'S' }
+        states[key] = { kind: selfKind }
         continue
       }
 
       const base = baseConfig.value?.[key]
       if (hasValue(base)) {
-        states[key] = { kind: 'S' }
+        states[key] = { kind: selfKind }
         continue
       }
 
