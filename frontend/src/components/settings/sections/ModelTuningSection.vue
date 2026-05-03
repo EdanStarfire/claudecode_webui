@@ -41,6 +41,7 @@ import FieldSection from '../../configuration/fields/FieldSection.vue'
 import { FIELD_SCHEMAS } from '../../configuration/fields/fieldSchemas.js'
 import { useEditSectionFieldStates } from '@/composables/useEditSectionFieldStates'
 import { useEditSectionReset } from '@/composables/useEditSectionReset'
+import { FIELD_RESET } from '@/composables/fieldResetSentinel.js'
 
 const PROFILE_AREA = 'model'
 const SECTION_KEY  = 'model-tuning'
@@ -76,7 +77,10 @@ const baseConfig = computed(() => entity.value?.config || {})
 
 const draft       = computed(() => settingsStore.getDraft(areaKey.value))
 const profileBase = computed(() => isTemplateMode.value && boundProfile.value?.config ? boundProfile.value.config : {})
-const mergedConfig = computed(() => ({ ...profileBase.value, ...baseConfig.value, ...draft.value }))
+const mergedConfig = computed(() => {
+  const cleanDraft = Object.fromEntries(Object.entries(draft.value || {}).filter(([, v]) => v !== FIELD_RESET))
+  return { ...profileBase.value, ...baseConfig.value, ...cleanDraft }
+})
 const isDirty      = computed(() => settingsStore.dirtyAreas.has(areaKey.value))
 const saving       = ref(false)
 
@@ -108,11 +112,20 @@ async function handleSave() {
   if (!entity.value || !isDirty.value) return
   saving.value = true
   try {
-    const d = draft.value
+    const d = { ...draft.value }
+    const keysToDelete = Object.keys(d).filter(k => d[k] === FIELD_RESET)
+    for (const k of keysToDelete) delete d[k]
     if (isTemplateMode.value) {
-      await templateStore.updateTemplate(entityId.value, d)
+      if (keysToDelete.length > 0) {
+        const newConfig = { ...(entity.value?.config || {}), ...d }
+        for (const k of keysToDelete) delete newConfig[k]
+        await templateStore.updateTemplate(entityId.value, { config: newConfig })
+      } else {
+        await templateStore.updateTemplate(entityId.value, d)
+      }
     } else {
       const newConfig = { ...(entity.value?.config || {}), ...d }
+      for (const k of keysToDelete) delete newConfig[k]
       await profileStore.updateProfile(entityId.value, { config: newConfig })
     }
     settingsStore.markClean(areaKey.value)

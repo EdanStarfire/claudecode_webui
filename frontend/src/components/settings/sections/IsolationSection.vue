@@ -40,6 +40,7 @@ import FieldSection from '../../configuration/fields/FieldSection.vue'
 import { FIELD_SCHEMAS } from '../../configuration/fields/fieldSchemas.js'
 import { useEditSectionFieldStates } from '@/composables/useEditSectionFieldStates'
 import { useEditSectionReset } from '@/composables/useEditSectionReset'
+import { FIELD_RESET } from '@/composables/fieldResetSentinel.js'
 
 const PROFILE_AREA = 'isolation'
 const SECTION_KEY  = 'isolation'
@@ -70,7 +71,8 @@ const baseConfig = computed(() => entity.value?.config || {})
 const draft       = computed(() => settingsStore.getDraft(areaKey.value))
 const profileBase = computed(() => isTemplateMode.value && boundProfile.value?.config ? boundProfile.value.config : {})
 const mergedConfig = computed(() => {
-  const c = { ...profileBase.value, ...baseConfig.value, ...draft.value }
+  const cleanDraft = Object.fromEntries(Object.entries(draft.value || {}).filter(([, v]) => v !== FIELD_RESET))
+  const c = { ...profileBase.value, ...baseConfig.value, ...cleanDraft }
   // docker_extra_mounts is stored as array in API; TextareaWidget expects newline-separated string
   if (Array.isArray(c.docker_extra_mounts)) c.docker_extra_mounts = c.docker_extra_mounts.join('\n')
   return c
@@ -123,14 +125,23 @@ async function handleSave() {
   saving.value = true
   try {
     const d = { ...draft.value }
+    const keysToDelete = Object.keys(d).filter(k => d[k] === FIELD_RESET)
+    for (const k of keysToDelete) delete d[k]
     // Convert textarea string back to array for the API
     if ('docker_extra_mounts' in d && typeof d.docker_extra_mounts === 'string') {
       d.docker_extra_mounts = d.docker_extra_mounts.split('\n').map(s => s.trim()).filter(Boolean)
     }
     if (isTemplateMode.value) {
-      await templateStore.updateTemplate(entityId.value, d)
+      if (keysToDelete.length > 0) {
+        const newConfig = { ...(entity.value?.config || {}), ...d }
+        for (const k of keysToDelete) delete newConfig[k]
+        await templateStore.updateTemplate(entityId.value, { config: newConfig })
+      } else {
+        await templateStore.updateTemplate(entityId.value, d)
+      }
     } else {
       const newConfig = { ...(entity.value?.config || {}), ...d }
+      for (const k of keysToDelete) delete newConfig[k]
       await profileStore.updateProfile(entityId.value, { config: newConfig })
     }
     settingsStore.markClean(areaKey.value)

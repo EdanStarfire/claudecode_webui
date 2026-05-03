@@ -1,4 +1,5 @@
 import { computed } from 'vue'
+import { FIELD_RESET } from './fieldResetSentinel.js'
 
 function hasValue(v) {
   if (v === null || v === undefined || v === '') return false
@@ -30,9 +31,12 @@ export function useEditSectionFieldStates({ isTemplateMode, baseConfig, draft, b
       const key = f.key
 
       // Draft value = user is actively editing this field → selfKind (resettable)
+      // FIELD_RESET sentinel = field was reset; fall through to profile/empty check
       if (draft.value && key in draft.value) {
-        states[key] = { kind: selfKind, resettable: true }
-        continue
+        if (draft.value[key] !== FIELD_RESET) {
+          states[key] = { kind: selfKind, resettable: true }
+          continue
+        }
       }
 
       // Use key presence (not hasValue) so explicit empty values ([], '')
