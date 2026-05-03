@@ -53,21 +53,6 @@
         />
       </div>
 
-      <!-- Permission Mode (template only) -->
-      <div v-if="isTemplateMode" class="field-row">
-        <label class="field-label">Permission Mode</label>
-        <div class="perm-btn-group">
-          <button
-            v-for="opt in PERM_OPTIONS"
-            :key="opt.value"
-            type="button"
-            class="perm-btn"
-            :class="{ active: (mergedConfig.permission_mode || 'default') === opt.value }"
-            @click="handleField('permission_mode', opt.value)"
-          >{{ opt.label }}</button>
-        </div>
-      </div>
-
       <!-- Profile bindings per area (template only) -->
       <div v-if="isTemplateMode" class="profile-bindings">
         <div class="bindings-label">Profile Bindings</div>
@@ -137,15 +122,6 @@ const mergedConfig = computed(() => ({
 
 const isDirty = computed(() => settingsStore.dirtyAreas.has(areaKey.value))
 const saving  = ref(false)
-
-const PERM_OPTIONS = [
-  { value: 'default',            label: 'Default' },
-  { value: 'acceptEdits',        label: 'Accept Edits' },
-  { value: 'plan',               label: 'Plan' },
-  { value: 'dontAsk',            label: "Don't Ask" },
-  { value: 'auto',               label: 'Auto' },
-  { value: 'bypassPermissions',  label: 'Bypass' },
-]
 
 const PROFILE_AREAS = [
   { key: 'model',         label: 'Model' },
@@ -266,35 +242,6 @@ onMounted(() => {
   padding: 6px 0;
   font-weight: 500;
   text-transform: capitalize;
-}
-
-/* Permission mode button group */
-.perm-btn-group {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.perm-btn {
-  padding: 5px 12px;
-  border-radius: 6px;
-  font-size: 12px;
-  cursor: pointer;
-  border: 1px solid var(--bs-border-color);
-  background: none;
-  color: var(--bs-secondary-color);
-  transition: background 0.12s, color 0.12s, border-color 0.12s;
-}
-
-.perm-btn:hover {
-  background: var(--bs-secondary-bg);
-  color: var(--bs-emphasis-color);
-}
-
-.perm-btn.active {
-  background: rgba(99, 102, 241, 0.15);
-  border-color: #6366f1;
-  color: #6366f1;
 }
 
 /* Profile bindings */
