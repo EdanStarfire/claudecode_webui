@@ -42,8 +42,8 @@ defineEmits(['save', 'cancel'])
   justify-content: space-between;
   gap: 12px;
   padding: 12px 20px;
-  border-bottom: 1px solid var(--bs-border-color);
-  background: var(--bs-tertiary-bg);
+  border-bottom: 1px solid var(--mode-border, var(--bs-border-color));
+  background: var(--mode-tint, var(--bs-tertiary-bg));
   flex-shrink: 0;
 }
 
@@ -59,7 +59,7 @@ defineEmits(['save', 'cancel'])
   margin: 0;
   font-size: 15px;
   font-weight: 600;
-  color: var(--bs-emphasis-color);
+  color: var(--mode-fg, var(--bs-emphasis-color));
   white-space: nowrap;
 }
 
