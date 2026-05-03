@@ -23,6 +23,7 @@
         v-if="isEditMode && (filteredEditItems.length > 0 || !settingsStore.searchQuery)"
         :title="editGroupTitle"
         :short-title="editGroupShort"
+        :subtitle="editEntityName"
         :tinted="true"
       >
         <SettingsSidebarItem
@@ -73,13 +74,17 @@
 import { computed } from 'vue'
 import { useRoute } from 'vue-router'
 import { useSettingsStore } from '@/stores/settings'
+import { useTemplateStore } from '@/stores/template'
+import { useProfileStore } from '@/stores/profile'
 import SettingsSidebarSearch from './SettingsSidebarSearch.vue'
 import SettingsSidebarGroup from './SettingsSidebarGroup.vue'
 import SettingsSidebarItem from './SettingsSidebarItem.vue'
 import { settingsIndex } from './search/settingsIndex.js'
 
 const route = useRoute()
-const settingsStore = useSettingsStore()
+const settingsStore  = useSettingsStore()
+const templateStore  = useTemplateStore()
+const profileStore   = useProfileStore()
 
 function toggleSidebar() {
   settingsStore.setSidebarExpanded(!settingsStore.sidebarExpanded)
@@ -96,8 +101,14 @@ const editEntityId = computed(() => {
 })
 
 const editGroupTitle = computed(() => {
-  if (isTemplateEdit.value) return 'This Template'
-  if (isProfileEdit.value)  return 'This Profile'
+  if (isTemplateEdit.value) return 'Editing Template'
+  if (isProfileEdit.value)  return 'Editing Profile'
+  return ''
+})
+
+const editEntityName = computed(() => {
+  if (isTemplateEdit.value) return templateStore.getTemplate(editEntityId.value)?.name || ''
+  if (isProfileEdit.value)  return profileStore.getProfile(editEntityId.value)?.name || ''
   return ''
 })
 

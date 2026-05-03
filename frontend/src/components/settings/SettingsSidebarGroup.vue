@@ -3,6 +3,7 @@
     <div class="group-header">
       <span class="group-label group-label-full">{{ title }}</span>
       <span class="group-label group-label-short">{{ shortTitle || title }}</span>
+      <span v-if="subtitle" class="group-subtitle group-label-full">{{ subtitle }}</span>
     </div>
     <slot />
   </div>
@@ -12,6 +13,7 @@
 defineProps({
   title:      { type: String, required: true },
   shortTitle: { type: String, default: '' },
+  subtitle:   { type: String, default: '' },
   tinted:     { type: Boolean, default: false },
 })
 </script>
@@ -46,6 +48,19 @@ defineProps({
 
 .is-tinted .group-label {
   color: var(--mode-fg);
+}
+
+.group-subtitle {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--bs-emphasis-color);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-top: 1px;
+  text-transform: none;
+  letter-spacing: 0;
 }
 
 /* Collapsed rail: show short label only */
