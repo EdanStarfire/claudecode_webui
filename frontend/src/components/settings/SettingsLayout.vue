@@ -202,6 +202,17 @@ function onGuardCancel() {
   border-top: 2px solid var(--mode-border, transparent);
   /* Named container so @container rules in children can reference it */
   container: settings-area / inline-size;
+
+  /* Per-type marker colors — consumed by SourceMarker regardless of current mode */
+  --s-fg:     #58a6ff;
+  --s-border: rgba(88, 166, 255, 0.30);
+  --s-tint:   rgba(88, 166, 255, 0.12);
+  --t-fg:     #d29922;
+  --t-border: rgba(210, 153, 34, 0.30);
+  --t-tint:   rgba(210, 153, 34, 0.12);
+  --p-fg:     #3fb950;
+  --p-border: rgba(63, 185, 80, 0.30);
+  --p-tint:   rgba(63, 185, 80, 0.12);
 }
 
 /* ── Desktop sidebar (static 240px) ── */
