@@ -14,67 +14,79 @@
       <!-- Name -->
       <div class="field-row">
         <label class="field-label">{{ isTemplateMode ? 'Template Name' : 'Profile Name' }}</label>
-        <input
-          type="text"
-          class="field-input"
-          :value="mergedConfig.name"
-          placeholder="Name"
-          @input="handleField('name', $event.target.value)"
-        />
+        <div class="field-control">
+          <input
+            type="text"
+            class="field-input"
+            :value="mergedConfig.name"
+            placeholder="Name"
+            @input="handleField('name', $event.target.value)"
+          />
+        </div>
       </div>
 
       <!-- Description (template only) -->
       <div v-if="isTemplateMode" class="field-row">
         <label class="field-label">Description</label>
-        <textarea
-          class="field-input field-textarea"
-          :value="mergedConfig.description"
-          rows="2"
-          placeholder="Brief description of this template's purpose"
-          @input="handleField('description', $event.target.value)"
-        />
+        <div class="field-control">
+          <textarea
+            class="field-input field-textarea"
+            :value="mergedConfig.description"
+            rows="2"
+            placeholder="Brief description of this template's purpose"
+            @input="handleField('description', $event.target.value)"
+          />
+        </div>
       </div>
 
       <!-- Area (profile only, read-only) -->
       <div v-if="isProfileMode" class="field-row">
         <label class="field-label">Area</label>
-        <span class="field-value-readonly">{{ entity.area }}</span>
+        <div class="field-control">
+          <span class="field-value-readonly">{{ entity.area }}</span>
+        </div>
       </div>
 
       <!-- Role (template only) -->
       <div v-if="isTemplateMode" class="field-row">
         <label class="field-label">Role</label>
-        <input
-          type="text"
-          class="field-input"
-          :value="mergedConfig.role"
-          placeholder="e.g., Code review specialist"
-          @input="handleField('role', $event.target.value)"
-        />
+        <div class="field-control">
+          <input
+            type="text"
+            class="field-input"
+            :value="mergedConfig.role"
+            placeholder="e.g., Code review specialist"
+            @input="handleField('role', $event.target.value)"
+          />
+        </div>
       </div>
 
       <!-- Profile bindings per area (template only) -->
-      <div v-if="isTemplateMode" class="profile-bindings">
-        <div class="bindings-label">Profile Bindings</div>
-        <div class="bindings-help">Assign a profile to each configuration area for inheritance.</div>
-        <div
-          v-for="area in PROFILE_AREAS"
-          :key="area.key"
-          class="binding-row"
-        >
-          <label class="binding-area-label">{{ area.label }}</label>
-          <select
-            class="binding-select"
-            :value="(mergedConfig.profile_ids || {})[area.key] || ''"
-            @change="handleProfileBinding(area.key, $event.target.value || null)"
-          >
-            <option value="">(no profile)</option>
-            <option
-              v-for="p in profileStore.profilesForArea(area.key)"
-              :key="p.profile_id"
-              :value="p.profile_id"
-            >{{ p.name }}</option>
-          </select>
+      <div v-if="isTemplateMode" class="field-row field-row--bindings">
+        <label class="field-label field-label--top">Profile Bindings</label>
+        <div class="field-control">
+          <div class="bindings-help">Assign a profile to each configuration area for inheritance.</div>
+          <div class="profile-bindings">
+            <div
+              v-for="area in PROFILE_AREAS"
+              :key="area.key"
+              class="binding-row"
+            >
+              <label class="binding-area-label">{{ area.label }}</label>
+              <select
+                class="binding-select"
+                :value="(mergedConfig.profile_ids || {})[area.key] || ''"
+                @change="handleProfileBinding(area.key, $event.target.value || null)"
+              >
+                <option value="">(no profile)</option>
+                <option
+                  v-for="p in profileStore.profilesForArea(area.key)"
+                  :key="p.profile_id"
+                  :value="p.profile_id"
+                >{{ p.name }}</option>
+              </select>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -196,23 +208,33 @@ onMounted(() => {
   flex: 1;
   overflow-y: auto;
   padding: 20px;
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
 }
 
+/* Same grid as FieldRenderer: label (220px) | control (1fr) */
 .field-row {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  gap: 12px;
+  align-items: start;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--bs-border-color);
 }
 
 .field-label {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--bs-secondary-color);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+  display: flex;
+  align-items: center;
+  padding-top: 5px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--bs-emphasis-color);
+}
+
+.field-label--top {
+  align-items: flex-start;
+}
+
+.field-control {
+  min-width: 0;
 }
 
 .field-input {
@@ -239,31 +261,21 @@ onMounted(() => {
 .field-value-readonly {
   font-size: 13px;
   color: var(--bs-emphasis-color);
-  padding: 6px 0;
+  padding-top: 5px;
   font-weight: 500;
   text-transform: capitalize;
-}
-
-/* Profile bindings */
-.profile-bindings {
-  border: 1px solid var(--bs-border-color);
-  border-radius: 8px;
-  overflow: hidden;
-}
-
-.bindings-label {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--bs-secondary-color);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  padding: 10px 14px 4px;
 }
 
 .bindings-help {
   font-size: 11px;
   color: var(--bs-tertiary-color);
-  padding: 0 14px 8px;
+  margin-bottom: 8px;
+}
+
+.profile-bindings {
+  border: 1px solid var(--bs-border-color);
+  border-radius: 8px;
+  overflow: hidden;
 }
 
 .binding-row {
@@ -271,19 +283,22 @@ onMounted(() => {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 7px 14px;
-  border-top: 1px solid var(--bs-border-color);
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--bs-border-color);
+}
+
+.binding-row:last-child {
+  border-bottom: none;
 }
 
 .binding-area-label {
   font-size: 13px;
   color: var(--bs-body-color);
-  min-width: 120px;
+  min-width: 100px;
 }
 
 .binding-select {
   flex: 1;
-  max-width: 280px;
   background: var(--bs-body-bg);
   border: 1px solid var(--bs-border-color);
   border-radius: 5px;
@@ -295,5 +310,15 @@ onMounted(() => {
 .binding-select:focus {
   outline: none;
   border-color: #6366f1;
+}
+
+@container settings-area (max-width: 599px) {
+  .field-row {
+    grid-template-columns: 1fr;
+  }
+
+  .field-label {
+    padding-top: 0;
+  }
 }
 </style>
