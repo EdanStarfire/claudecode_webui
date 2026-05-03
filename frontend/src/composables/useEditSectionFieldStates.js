@@ -1,0 +1,55 @@
+import { computed } from 'vue'
+
+function hasValue(v) {
+  if (v === null || v === undefined || v === '') return false
+  if (Array.isArray(v)) return v.length > 0
+  return true
+}
+
+/**
+ * Computes per-field source states ({ kind: 'S'|'P'|'EMPTY' }) for template/profile
+ * edit section components, to drive SourceMarker badges in FieldRenderer.
+ *
+ * In template mode:
+ *   S = value is set on the template itself (or in the current draft)
+ *   P = value is unset on the template but the bound profile for this area has it
+ *   EMPTY = neither template nor bound profile has a value
+ *
+ * In profile mode:
+ *   S = value is set in the profile's config (or in the current draft)
+ *   EMPTY = not set
+ */
+export function useEditSectionFieldStates({ isTemplateMode, baseConfig, draft, boundProfile, schemaFields }) {
+  const fieldStates = computed(() => {
+    const states = {}
+    const fields = typeof schemaFields === 'function' ? schemaFields() : (schemaFields?.value ?? schemaFields ?? [])
+    for (const f of fields) {
+      const key = f.key
+
+      // Draft value = user is actively editing this field → always S
+      if (draft.value && key in draft.value) {
+        states[key] = { kind: 'S' }
+        continue
+      }
+
+      const base = baseConfig.value?.[key]
+      if (hasValue(base)) {
+        states[key] = { kind: 'S' }
+        continue
+      }
+
+      if (isTemplateMode.value && boundProfile.value) {
+        const profileVal = boundProfile.value?.config?.[key] ?? boundProfile.value?.[key]
+        if (hasValue(profileVal)) {
+          states[key] = { kind: 'P', profileName: boundProfile.value?.name || 'Profile' }
+          continue
+        }
+      }
+
+      states[key] = { kind: 'EMPTY' }
+    }
+    return states
+  })
+
+  return { fieldStates }
+}

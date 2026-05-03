@@ -20,8 +20,17 @@
       <label class="form-label small mb-1">
         {{ field.label }}
         <template v-if="showBadges && fieldState">
+          <!-- SourceMarker format: { kind: 'S'|'T'|'P'|'EMPTY', templateName?, profileName? } -->
+          <template v-if="typeof fieldState === 'object' && 'kind' in fieldState">
+            <SourceMarker
+              v-if="fieldState.kind !== 'EMPTY'"
+              :kind="fieldState.kind"
+              :template-name="fieldState.templateName || null"
+              :profile-name="fieldState.profileName || null"
+            />
+          </template>
           <!-- Object fieldState: new 3-tier model (issue #1230) -->
-          <template v-if="typeof fieldState === 'object'">
+          <template v-else-if="typeof fieldState === 'object'">
             <span
               v-if="fieldState.source && fieldState.source !== 'default'"
               class="field-indicator source-label"
@@ -154,6 +163,7 @@ import DirListWidget from './DirListWidget.vue'
 import SandboxSubSectionWidget from './SandboxSubSectionWidget.vue'
 import TagListField from './TagListField.vue'
 import MultiSelectField from './MultiSelectField.vue'
+import SourceMarker from '../../settings/SourceMarker.vue'
 
 const props = defineProps({
   field: { type: Object, required: true },

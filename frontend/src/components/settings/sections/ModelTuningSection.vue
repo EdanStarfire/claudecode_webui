@@ -20,7 +20,8 @@
       <FieldSection
         :fields="FIELD_SCHEMAS.model"
         :config="mergedConfig"
-        :show-badges="false"
+        :show-badges="true"
+        :field-states="fieldStates"
         :show-include-toggle="false"
         @update:config="handleField"
       />
@@ -37,6 +38,7 @@ import { useProfileStore } from '@/stores/profile'
 import SettingsToolbar from '../SettingsToolbar.vue'
 import FieldSection from '../../configuration/fields/FieldSection.vue'
 import { FIELD_SCHEMAS } from '../../configuration/fields/fieldSchemas.js'
+import { useEditSectionFieldStates } from '@/composables/useEditSectionFieldStates'
 
 const PROFILE_AREA = 'model'
 const SECTION_KEY  = 'model-tuning'
@@ -68,11 +70,7 @@ const entity = computed(() => {
 
 const isNotApplicable = computed(() => isProfileMode.value && entity.value?.area !== PROFILE_AREA)
 
-// For template: flat entity fields; for profile: entity.config
-const baseConfig = computed(() => {
-  if (isTemplateMode.value) return entity.value || {}
-  return entity.value?.config || {}
-})
+const baseConfig = computed(() => entity.value?.config || {})
 
 const draft       = computed(() => settingsStore.getDraft(areaKey.value))
 const mergedConfig = computed(() => ({ ...baseConfig.value, ...draft.value }))
@@ -85,6 +83,8 @@ const boundProfileId = computed(() => {
   return entity.value?.profile_ids?.[PROFILE_AREA] || null
 })
 const boundProfile = computed(() => boundProfileId.value ? profileStore.getProfile(boundProfileId.value) : null)
+
+const { fieldStates } = useEditSectionFieldStates({ isTemplateMode, baseConfig, draft, boundProfile, schemaFields: FIELD_SCHEMAS.model })
 
 const toolbarChips = computed(() => {
   if (!isTemplateMode.value || !boundProfileId.value) return []

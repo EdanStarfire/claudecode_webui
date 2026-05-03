@@ -19,7 +19,8 @@
       <FieldSection
         :fields="isolationFields"
         :config="mergedConfig"
-        :show-badges="false"
+        :show-badges="true"
+        :field-states="fieldStates"
         :show-include-toggle="false"
         @update:config="handleIsolationField"
       />
@@ -36,6 +37,7 @@ import { useProfileStore } from '@/stores/profile'
 import SettingsToolbar from '../SettingsToolbar.vue'
 import FieldSection from '../../configuration/fields/FieldSection.vue'
 import { FIELD_SCHEMAS } from '../../configuration/fields/fieldSchemas.js'
+import { useEditSectionFieldStates } from '@/composables/useEditSectionFieldStates'
 
 const PROFILE_AREA = 'isolation'
 const SECTION_KEY  = 'isolation'
@@ -61,10 +63,7 @@ const entity = computed(() => {
 
 const isNotApplicable = computed(() => isProfileMode.value && entity.value?.area !== PROFILE_AREA)
 
-const baseConfig = computed(() => {
-  if (isTemplateMode.value) return entity.value || {}
-  return entity.value?.config || {}
-})
+const baseConfig = computed(() => entity.value?.config || {})
 
 const draft        = computed(() => settingsStore.getDraft(areaKey.value))
 const mergedConfig = computed(() => {
@@ -89,6 +88,8 @@ const boundProfileId = computed(() => {
   return entity.value?.profile_ids?.[PROFILE_AREA] || null
 })
 const boundProfile = computed(() => boundProfileId.value ? profileStore.getProfile(boundProfileId.value) : null)
+
+const { fieldStates } = useEditSectionFieldStates({ isTemplateMode, baseConfig, draft, boundProfile, schemaFields: FIELD_SCHEMAS.isolation })
 
 const toolbarChips = computed(() => {
   if (!isTemplateMode.value || !boundProfileId.value) return []
