@@ -23,6 +23,7 @@
         v-if="isEditMode && (filteredEditItems.length > 0 || !settingsStore.searchQuery)"
         :title="editGroupTitle"
         :short-title="editGroupShort"
+        :tinted="true"
       >
         <SettingsSidebarItem
           v-for="item in filteredEditItems"
@@ -30,6 +31,7 @@
           :to="item.to"
           :icon="item.icon"
           :label="item.label"
+          :tinted="true"
         />
         <div v-if="settingsStore.searchQuery && !filteredEditItems.length" class="no-results">
           No results
