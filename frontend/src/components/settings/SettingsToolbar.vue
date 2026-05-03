@@ -12,12 +12,15 @@
         />
       </div>
     </div>
-    <div v-if="showSaveCancel" class="toolbar-actions">
-      <button class="btn-cancel" @click="$emit('cancel')" :disabled="saving">Cancel</button>
-      <button class="btn-save" @click="$emit('save')" :disabled="saving">
-        <span v-if="saving" class="save-spinner" aria-hidden="true">⟳</span>
-        <span>{{ saving ? 'Saving…' : 'Save' }}</span>
-      </button>
+    <div class="toolbar-actions">
+      <slot name="actions" />
+      <template v-if="showSaveCancel">
+        <button class="btn-cancel" @click="$emit('cancel')" :disabled="saving">Cancel</button>
+        <button class="btn-save" @click="$emit('save')" :disabled="saving">
+          <span v-if="saving" class="save-spinner" aria-hidden="true">⟳</span>
+          <span>{{ saving ? 'Saving…' : 'Save' }}</span>
+        </button>
+      </template>
     </div>
   </div>
 </template>

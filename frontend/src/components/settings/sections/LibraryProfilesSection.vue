@@ -8,63 +8,37 @@
     <div v-else-if="profileStore.error" class="section-error">{{ profileStore.error }}</div>
 
     <div v-else class="section-body">
-      <div class="list-header">
-        <span class="list-count">{{ profileStore.allProfiles.length }} profile{{ profileStore.allProfiles.length === 1 ? '' : 's' }}</span>
-        <button class="btn-action btn-primary-action" @click="openCreate">+ New Profile</button>
-      </div>
-
-      <div v-if="profileStore.allProfiles.length === 0" class="empty-state">
-        No profiles yet. Create a profile to define reusable configuration for a specific area.
-      </div>
-
       <div
-        v-for="profile in sortedProfiles"
-        :key="profile.profile_id"
-        class="profile-row"
-        role="button"
-        tabindex="0"
-        @click="openEdit(profile)"
-        @keydown.enter.prevent="openEdit(profile)"
-        @keydown.space.prevent="openEdit(profile)"
+        v-for="area in PROFILE_AREAS"
+        :key="area.key"
+        class="category-block"
       >
-        <div class="profile-info">
-          <span class="profile-name">{{ profile.name }}</span>
+        <div class="category-header">
+          <span class="category-label">{{ area.label }}</span>
+          <button
+            class="category-add-btn"
+            :title="`New ${area.label} profile`"
+            :disabled="creatingArea === area.key"
+            @click="quickCreate(area.key)"
+          >{{ creatingArea === area.key ? '…' : '+' }}</button>
         </div>
-        <div class="profile-meta">
-          <span class="meta-badge area-badge" :class="`area-${profile.area}`">{{ AREA_LABELS[profile.area] || profile.area }}</span>
-          <span class="row-chevron" aria-hidden="true">›</span>
-        </div>
-      </div>
-    </div>
 
-    <!-- Create modal -->
-    <div v-if="creating" class="create-overlay" @click.self="creating = false">
-      <div class="create-modal">
-        <div class="create-header">New Profile</div>
-        <div class="create-field">
-          <label class="create-label">Name</label>
-          <input
-            ref="nameInputRef"
-            v-model="newName"
-            type="text"
-            class="create-input"
-            placeholder="e.g., Strict Permissions"
-            @keydown.enter="submitCreate"
-            @keydown.escape="creating = false"
-          />
+        <div v-if="profilesByArea(area.key).length === 0" class="empty-state">
+          No {{ area.label.toLowerCase() }} profiles. Click + to create one.
         </div>
-        <div class="create-field">
-          <label class="create-label">Area</label>
-          <select v-model="newArea" class="create-select">
-            <option v-for="(label, key) in AREA_LABELS" :key="key" :value="key">{{ label }}</option>
-          </select>
-        </div>
-        <div v-if="createError" class="create-error">{{ createError }}</div>
-        <div class="create-actions">
-          <button class="btn-action btn-secondary-action" @click="creating = false">Cancel</button>
-          <button class="btn-action btn-primary-action" :disabled="!newName.trim() || saving" @click="submitCreate">
-            {{ saving ? 'Creating…' : 'Create' }}
-          </button>
+
+        <div
+          v-for="profile in profilesByArea(area.key)"
+          :key="profile.profile_id"
+          class="profile-row"
+          role="button"
+          tabindex="0"
+          @click="openEdit(profile)"
+          @keydown.enter.prevent="openEdit(profile)"
+          @keydown.space.prevent="openEdit(profile)"
+        >
+          <span class="profile-name">{{ profile.name }}</span>
+          <span class="row-chevron" aria-hidden="true">›</span>
         </div>
       </div>
     </div>
@@ -72,67 +46,50 @@
 </template>
 
 <script setup>
-import { computed, ref, nextTick, onMounted } from 'vue'
+import { computed, ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useProfileStore } from '@/stores/profile'
 import SettingsToolbar from '../SettingsToolbar.vue'
 
 const router = useRouter()
 const profileStore = useProfileStore()
+const creatingArea = ref(null)
 
-const AREA_LABELS = {
-  model:         'Model',
-  permissions:   'Permissions',
-  system_prompt: 'System Prompt',
-  mcp:           'MCP',
-  isolation:     'Isolation',
-  features:      'Features',
+const PROFILE_AREAS = [
+  { key: 'model',         label: 'Model' },
+  { key: 'permissions',   label: 'Permissions' },
+  { key: 'system_prompt', label: 'System Prompt' },
+  { key: 'mcp',           label: 'MCP Servers' },
+  { key: 'isolation',     label: 'Isolation' },
+  { key: 'features',      label: 'Features' },
+]
+
+function profilesByArea(areaKey) {
+  return profileStore.allProfiles
+    .filter(p => p.area === areaKey)
+    .sort((a, b) => a.name.localeCompare(b.name))
 }
-
-const AREA_ORDER = Object.keys(AREA_LABELS)
-
-const sortedProfiles = computed(() =>
-  [...profileStore.allProfiles].sort((a, b) => {
-    const ai = AREA_ORDER.indexOf(a.area)
-    const bi = AREA_ORDER.indexOf(b.area)
-    if (ai !== bi) return ai - bi
-    return a.name.localeCompare(b.name)
-  })
-)
 
 function openEdit(profile) {
   router.push(`/settings/profile/${profile.profile_id}/general`)
 }
 
-// ── Create ────────────────────────────────────────────────────────────
-const creating = ref(false)
-const newName = ref('')
-const newArea = ref('model')
-const saving = ref(false)
-const createError = ref('')
-const nameInputRef = ref(null)
-
-async function openCreate() {
-  newName.value = ''
-  newArea.value = 'model'
-  createError.value = ''
-  creating.value = true
-  await nextTick()
-  nameInputRef.value?.focus()
-}
-
-async function submitCreate() {
-  if (!newName.value.trim() || saving.value) return
-  saving.value = true
-  createError.value = ''
+async function quickCreate(areaKey) {
+  if (creatingArea.value) return
+  creatingArea.value = areaKey
   try {
-    const profile = await profileStore.createProfile(newName.value.trim(), newArea.value, {})
-    creating.value = false
+    const areaLabel = PROFILE_AREAS.find(a => a.key === areaKey)?.label || areaKey
+    const existing = new Set(profileStore.allProfiles.filter(p => p.area === areaKey).map(p => p.name))
+    const base = `New ${areaLabel} Profile`
+    let name = base
+    let i = 2
+    while (existing.has(name)) name = `${base} ${i++}`
+    const profile = await profileStore.createProfile(name, areaKey, {})
     router.push(`/settings/profile/${profile.profile_id}/general`)
   } catch (err) {
-    createError.value = err.message || 'Failed to create profile'
+    console.error('Create profile failed:', err)
   } finally {
-    saving.value = false
+    creatingArea.value = null
   }
 }
 
@@ -145,7 +102,6 @@ onMounted(() => profileStore.fetchIfEmpty())
   flex-direction: column;
   height: 100%;
   overflow: hidden;
-  position: relative;
 }
 
 .section-status {
@@ -171,63 +127,69 @@ onMounted(() => profileStore.fetchIfEmpty())
   flex: 1;
   overflow-y: auto;
   padding: 16px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
 }
 
-.list-header {
+/* ── Category ─────────────────────────────── */
+.category-block {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.category-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 16px;
+  padding: 0 2px 4px;
+  border-bottom: 1px solid var(--bs-border-color);
 }
 
-.list-count {
-  font-size: 13px;
+.category-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
   color: var(--bs-secondary-color);
 }
 
-.btn-action {
-  padding: 5px 12px;
-  border-radius: 6px;
-  font-size: 13px;
-  cursor: pointer;
-  border: 1px solid;
-  transition: background 0.12s, border-color 0.12s, color 0.12s;
-}
-
-.btn-secondary-action {
+.category-add-btn {
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 5px;
+  border: 1px solid var(--bs-border-color);
   background: none;
-  border-color: var(--bs-border-color);
   color: var(--bs-secondary-color);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
 }
 
-.btn-secondary-action:hover {
-  background: var(--bs-secondary-bg);
-  color: var(--bs-emphasis-color);
-}
-
-.btn-primary-action {
-  background: #6366f1;
-  border-color: #6366f1;
+.category-add-btn:hover:not(:disabled) {
+  background: #3fb950;
+  border-color: #3fb950;
   color: #fff;
 }
 
-.btn-primary-action:hover:not(:disabled) {
-  background: #818cf8;
-  border-color: #818cf8;
-}
-
-.btn-primary-action:disabled {
+.category-add-btn:disabled {
   opacity: 0.5;
   cursor: default;
 }
 
+/* ── Rows ─────────────────────────────────── */
 .empty-state {
-  padding: 32px 16px;
+  padding: 14px 12px;
   text-align: center;
-  color: var(--bs-secondary-color);
-  font-size: 13px;
+  color: var(--bs-tertiary-color);
+  font-size: 12px;
   background: var(--bs-tertiary-bg);
-  border-radius: 8px;
+  border-radius: 7px;
   border: 1px dashed var(--bs-border-color);
 }
 
@@ -236,10 +198,9 @@ onMounted(() => profileStore.fetchIfEmpty())
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 12px 14px;
-  border-radius: 8px;
+  padding: 9px 12px;
+  border-radius: 7px;
   border: 1px solid var(--bs-border-color);
-  margin-bottom: 8px;
   cursor: pointer;
   background: var(--bs-body-bg);
   transition: background 0.12s, border-color 0.12s;
@@ -255,116 +216,21 @@ onMounted(() => profileStore.fetchIfEmpty())
   outline-offset: 1px;
 }
 
-.profile-info {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  min-width: 0;
-}
-
 .profile-name {
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 500;
   color: var(--bs-emphasis-color);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-
-.profile-meta {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-shrink: 0;
-}
-
-.meta-badge {
-  font-size: 11px;
-  padding: 2px 7px;
-  border-radius: 10px;
-  white-space: nowrap;
-}
-
-.area-badge {
-  background: var(--p-tint, rgba(63, 185, 80, 0.12));
-  color: var(--p-fg, #3fb950);
-  border: 1px solid var(--p-border, rgba(63, 185, 80, 0.30));
+  min-width: 0;
 }
 
 .row-chevron {
   font-size: 18px;
   color: var(--bs-tertiary-color);
+  flex-shrink: 0;
   line-height: 1;
-}
-
-/* ── Create modal ──────────────────────────────────────────────────── */
-.create-overlay {
-  position: absolute;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.45);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 20;
-}
-
-.create-modal {
-  background: var(--bs-body-bg);
-  border: 1px solid var(--bs-border-color);
-  border-radius: 10px;
-  padding: 20px;
-  width: 340px;
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-}
-
-.create-header {
-  font-size: 15px;
-  font-weight: 600;
-  color: var(--bs-emphasis-color);
-}
-
-.create-field {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-}
-
-.create-label {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--bs-secondary-color);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-
-.create-input,
-.create-select {
-  background: var(--bs-body-bg);
-  border: 1px solid var(--bs-border-color);
-  border-radius: 6px;
-  padding: 6px 10px;
-  font-size: 13px;
-  color: var(--bs-body-color);
-  width: 100%;
-}
-
-.create-input:focus,
-.create-select:focus {
-  outline: none;
-  border-color: #3fb950;
-}
-
-.create-error {
-  font-size: 12px;
-  color: #f87171;
-}
-
-.create-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
 }
 
 @keyframes spin {

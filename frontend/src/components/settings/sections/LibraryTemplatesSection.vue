@@ -1,40 +1,71 @@
 <template>
   <div class="lib-section">
-    <SettingsToolbar title="Templates" />
+    <SettingsToolbar title="Templates">
+      <template #actions>
+        <button class="toolbar-btn" @click="openImport">Import</button>
+      </template>
+    </SettingsToolbar>
+
     <div v-if="templateStore.loading" class="section-status">
       <span class="status-spinner" aria-hidden="true">⟳</span> Loading…
     </div>
     <div v-else-if="templateStore.error" class="section-error">{{ templateStore.error }}</div>
+
     <div v-else class="section-body">
-      <div class="list-header">
-        <span class="list-count">{{ templateStore.templateList.length }} template{{ templateStore.templateList.length === 1 ? '' : 's' }}</span>
-        <div class="header-actions">
-          <button class="btn-action btn-secondary-action" @click="openImport">Import</button>
-          <button class="btn-action btn-primary-action" @click="openCreate">+ New Template</button>
+      <!-- Custom templates -->
+      <div class="category-block">
+        <div class="category-header">
+          <span class="category-label">Custom</span>
+          <button
+            class="category-add-btn"
+            title="New custom template"
+            :disabled="creating"
+            @click="quickCreate"
+          >{{ creating ? '…' : '+' }}</button>
+        </div>
+
+        <div v-if="customTemplates.length === 0" class="empty-state">
+          No custom templates yet. Click + to create one.
+        </div>
+
+        <div
+          v-for="template in customTemplates"
+          :key="template.template_id"
+          class="template-row"
+          role="button"
+          tabindex="0"
+          @click="openEdit(template)"
+          @keydown.enter.prevent="openEdit(template)"
+          @keydown.space.prevent="openEdit(template)"
+        >
+          <div class="template-info">
+            <span class="template-name">{{ template.name }}</span>
+            <span v-if="template.description" class="template-desc">{{ template.description }}</span>
+          </div>
+          <span class="row-chevron" aria-hidden="true">›</span>
         </div>
       </div>
 
-      <div v-if="templateStore.templateList.length === 0" class="empty-state">
-        No templates yet. Create your first template to define reusable session configurations.
-      </div>
-
-      <div
-        v-for="template in templateStore.templateList"
-        :key="template.template_id"
-        class="template-row"
-        role="button"
-        tabindex="0"
-        @click="openEdit(template)"
-        @keydown.enter.prevent="openEdit(template)"
-        @keydown.space.prevent="openEdit(template)"
-      >
-        <div class="template-info">
-          <span class="template-name">{{ template.name }}</span>
-          <span v-if="template.description" class="template-desc">{{ template.description }}</span>
+      <!-- Default templates -->
+      <div v-if="defaultTemplates.length > 0" class="category-block">
+        <div class="category-header">
+          <span class="category-label">Default</span>
         </div>
-        <div class="template-meta">
-          <span class="meta-badge perm-badge">{{ template.permission_mode || 'default' }}</span>
-          <span class="meta-tools">{{ template.allowed_tools?.length || 0 }} tool{{ (template.allowed_tools?.length || 0) === 1 ? '' : 's' }}</span>
+
+        <div
+          v-for="template in defaultTemplates"
+          :key="template.template_id"
+          class="template-row template-row--default"
+          role="button"
+          tabindex="0"
+          @click="openEdit(template)"
+          @keydown.enter.prevent="openEdit(template)"
+          @keydown.space.prevent="openEdit(template)"
+        >
+          <div class="template-info">
+            <span class="template-name">{{ template.name }}</span>
+            <span v-if="template.description" class="template-desc">{{ template.description }}</span>
+          </div>
           <span class="row-chevron" aria-hidden="true">›</span>
         </div>
       </div>
@@ -43,7 +74,7 @@
 </template>
 
 <script setup>
-import { onMounted } from 'vue'
+import { computed, ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useTemplateStore } from '@/stores/template'
 import { useUIStore } from '@/stores/ui'
@@ -52,11 +83,19 @@ import SettingsToolbar from '../SettingsToolbar.vue'
 const router = useRouter()
 const templateStore = useTemplateStore()
 const uiStore = useUIStore()
+const creating = ref(false)
 
-function openCreate() {
-  // Still use modal for creation (Phase 4 will handle this)
-  uiStore.showModal('configuration', { mode: 'create-template' })
-}
+const customTemplates = computed(() =>
+  templateStore.templateList
+    .filter(t => !t.is_default)
+    .sort((a, b) => a.name.localeCompare(b.name))
+)
+
+const defaultTemplates = computed(() =>
+  templateStore.templateList
+    .filter(t => t.is_default)
+    .sort((a, b) => a.name.localeCompare(b.name))
+)
 
 function openEdit(template) {
   router.push(`/settings/template/${template.template_id}/general`)
@@ -66,9 +105,24 @@ function openImport() {
   uiStore.showModal('template-management')
 }
 
-onMounted(() => {
-  templateStore.fetchTemplates()
-})
+async function quickCreate() {
+  if (creating.value) return
+  creating.value = true
+  try {
+    const names = new Set(templateStore.templateList.map(t => t.name))
+    let name = 'New Template'
+    let i = 2
+    while (names.has(name)) name = `New Template ${i++}`
+    const result = await templateStore.createTemplate({ name, config: {} })
+    router.push(`/settings/template/${result.template_id}/general`)
+  } catch (err) {
+    console.error('Create template failed:', err)
+  } finally {
+    creating.value = false
+  }
+}
+
+onMounted(() => templateStore.fetchTemplates())
 </script>
 
 <style scoped>
@@ -79,9 +133,24 @@ onMounted(() => {
   overflow: hidden;
 }
 
+.toolbar-btn {
+  padding: 3px 10px;
+  border-radius: 5px;
+  font-size: 12px;
+  cursor: pointer;
+  border: 1px solid var(--bs-border-color);
+  background: none;
+  color: var(--bs-secondary-color);
+  transition: background 0.12s, color 0.12s;
+}
+.toolbar-btn:hover {
+  background: var(--bs-secondary-bg);
+  color: var(--bs-emphasis-color);
+}
+
 .section-status {
   padding: 20px;
-  color: #94a3b8;
+  color: var(--bs-secondary-color);
   font-size: 13px;
 }
 
@@ -102,63 +171,69 @@ onMounted(() => {
   flex: 1;
   overflow-y: auto;
   padding: 16px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
 }
 
-.list-header {
+/* ── Category ─────────────────────────────── */
+.category-block {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.category-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 16px;
+  padding: 0 2px 4px;
+  border-bottom: 1px solid var(--bs-border-color);
 }
 
-.list-count {
-  font-size: 13px;
+.category-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
   color: var(--bs-secondary-color);
 }
 
-.header-actions {
+.category-add-btn {
+  width: 22px;
+  height: 22px;
   display: flex;
-  gap: 8px;
-}
-
-.btn-action {
-  padding: 5px 12px;
-  border-radius: 6px;
-  font-size: 13px;
-  cursor: pointer;
-  border: 1px solid;
-  transition: background 0.12s, border-color 0.12s, color 0.12s;
-}
-
-.btn-secondary-action {
+  align-items: center;
+  justify-content: center;
+  border-radius: 5px;
+  border: 1px solid var(--bs-border-color);
   background: none;
-  border-color: var(--bs-border-color);
   color: var(--bs-secondary-color);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
 }
 
-.btn-secondary-action:hover {
-  background: var(--bs-secondary-bg);
-  color: var(--bs-emphasis-color);
-}
-
-.btn-primary-action {
+.category-add-btn:hover:not(:disabled) {
   background: #6366f1;
   border-color: #6366f1;
   color: #fff;
 }
 
-.btn-primary-action:hover {
-  background: #818cf8;
-  border-color: #818cf8;
+.category-add-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 
+/* ── Rows ─────────────────────────────────── */
 .empty-state {
-  padding: 32px 16px;
+  padding: 20px 12px;
   text-align: center;
-  color: var(--bs-secondary-color);
-  font-size: 13px;
+  color: var(--bs-tertiary-color);
+  font-size: 12px;
   background: var(--bs-tertiary-bg);
-  border-radius: 8px;
+  border-radius: 7px;
   border: 1px dashed var(--bs-border-color);
 }
 
@@ -167,10 +242,9 @@ onMounted(() => {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 12px 14px;
-  border-radius: 8px;
+  padding: 10px 12px;
+  border-radius: 7px;
   border: 1px solid var(--bs-border-color);
-  margin-bottom: 8px;
   cursor: pointer;
   background: var(--bs-body-bg);
   transition: background 0.12s, border-color 0.12s;
@@ -186,15 +260,20 @@ onMounted(() => {
   outline-offset: 1px;
 }
 
+.template-row--default:hover {
+  border-color: var(--bs-border-color);
+  background: var(--bs-secondary-bg);
+}
+
 .template-info {
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 2px;
   min-width: 0;
 }
 
 .template-name {
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 500;
   color: var(--bs-emphasis-color);
   white-space: nowrap;
@@ -203,39 +282,17 @@ onMounted(() => {
 }
 
 .template-desc {
-  font-size: 12px;
-  color: var(--bs-secondary-color);
+  font-size: 11px;
+  color: var(--bs-tertiary-color);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.template-meta {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-shrink: 0;
-}
-
-.meta-badge {
-  font-size: 11px;
-  padding: 2px 7px;
-  border-radius: 10px;
-  border: 1px solid var(--bs-border-color);
-  background: var(--bs-secondary-bg);
-  color: var(--bs-secondary-color);
-  white-space: nowrap;
-}
-
-.meta-tools {
-  font-size: 12px;
-  color: var(--bs-tertiary-color);
-  white-space: nowrap;
-}
-
 .row-chevron {
   font-size: 18px;
   color: var(--bs-tertiary-color);
+  flex-shrink: 0;
   line-height: 1;
 }
 
