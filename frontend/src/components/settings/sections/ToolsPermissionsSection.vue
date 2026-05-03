@@ -91,13 +91,8 @@ const permissionsFields = computed(() => {
   return FIELD_SCHEMAS.permissions.map(f => {
     if (f.key === 'allowed_tools')   return { ...f, quickAddItems: COMMON_TOOLS }
     if (f.key === 'disallowed_tools') return { ...f, quickAddItems: COMMON_DENIED_TOOLS }
-    // Show permission_mode for profile mode (it's profileOnly:true in schema)
-    if (f.key === 'permission_mode' && isProfileMode.value) return { ...f, profileOnly: false }
+    if (f.key === 'permission_mode') return { ...f, profileOnly: false }
     return f
-  }).filter(f => {
-    // In template mode, hide profileOnly fields (permission_mode)
-    if (f.profileOnly && isTemplateMode.value) return false
-    return true
   })
 })
 
