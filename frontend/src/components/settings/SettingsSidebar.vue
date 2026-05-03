@@ -128,12 +128,33 @@ const EDIT_SECTIONS = [
   { section: 'isolation',         icon: '⊞', label: 'Isolation',           sectionKey: 'edit-isolation' },
 ]
 
+// Which section corresponds to each profile area
+const AREA_SECTION = {
+  model:         'model-tuning',
+  permissions:   'tools-permissions',
+  mcp:           'mcp-servers',
+  features:      'features',
+  system_prompt: 'system-prompt',
+  isolation:     'isolation',
+}
+
 const editSectionItems = computed(() => {
   if (!editEntityId.value) return []
   const base = isTemplateEdit.value
     ? `/settings/template/${editEntityId.value}`
     : `/settings/profile/${editEntityId.value}`
-  return EDIT_SECTIONS.map(s => ({
+
+  let sections = EDIT_SECTIONS
+  if (isProfileEdit.value) {
+    const area = profileStore.getProfile(editEntityId.value)?.area
+    const areaSection = area ? AREA_SECTION[area] : null
+    // Profiles show only General + the section for their area
+    sections = EDIT_SECTIONS.filter(s =>
+      s.section === 'general' || (areaSection && s.section === areaSection)
+    )
+  }
+
+  return sections.map(s => ({
     to: `${base}/${s.section}`,
     icon: s.icon,
     label: s.label,
