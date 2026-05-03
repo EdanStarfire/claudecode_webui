@@ -18,7 +18,6 @@
       :class="{ 'field-disabled': showIncludeToggle && !included }"
     >
       <label class="form-label small mb-1">
-        {{ field.label }}
         <template v-if="showBadges && fieldState">
           <!-- SourceMarker format: { kind: 'S'|'T'|'P'|'EMPTY', templateName?, profileName? } -->
           <template v-if="typeof fieldState === 'object' && 'kind' in fieldState">
@@ -51,6 +50,7 @@
             <span v-if="fieldState === 'modified'" class="field-indicator modified">*</span>
           </template>
         </template>
+        {{ field.label }}
       </label>
 
       <!-- Widget dispatch -->
@@ -201,6 +201,12 @@ const isDisabled = computed(() => {
 .field-body {
   flex: 1;
   min-width: 0;
+}
+
+:deep(.form-label) {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .field-body.field-disabled {

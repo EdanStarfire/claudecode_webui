@@ -1,20 +1,22 @@
 <template>
-  <div>
+  <div class="field-grid">
     <template v-for="field in visibleFields" :key="field.key">
-      <FieldRenderer
-        :field="field"
-        :value="config[field.key]"
-        :disabled="disabled"
-        :show-badges="showBadges"
-        :show-include-toggle="showIncludeToggle"
-        :field-state="fieldStates[field.key] || 'normal'"
-        :included="included[field.key] !== false"
-        :config="config"
-        @update:value="$emit('update:config', field.key, $event)"
-        @update:included="$emit('update:included', field.key, $event)"
-        @browse="$emit('browse', field.key)"
-        @reset="$emit('reset', field.key)"
-      />
+      <div :class="isNarrowWidget(field) ? 'field-cell' : 'field-cell field-cell--wide'">
+        <FieldRenderer
+          :field="field"
+          :value="config[field.key]"
+          :disabled="disabled"
+          :show-badges="showBadges"
+          :show-include-toggle="showIncludeToggle"
+          :field-state="fieldStates[field.key] || 'normal'"
+          :included="included[field.key] !== false"
+          :config="config"
+          @update:value="$emit('update:config', field.key, $event)"
+          @update:included="$emit('update:included', field.key, $event)"
+          @browse="$emit('browse', field.key)"
+          @reset="$emit('reset', field.key)"
+        />
+      </div>
     </template>
   </div>
 </template>
@@ -46,4 +48,33 @@ const visibleFields = computed(() => {
     return true
   })
 })
+
+// Toggles can share a column; everything else needs full row width
+function isNarrowWidget(field) {
+  return field.widget === 'toggle'
+}
 </script>
+
+<style scoped>
+.field-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px 24px;
+  container-type: inline-size;
+}
+
+.field-cell--wide {
+  grid-column: 1 / -1;
+}
+
+/* Single column on narrow content areas */
+@container (max-width: 480px) {
+  .field-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .field-cell {
+    grid-column: 1 / -1;
+  }
+}
+</style>
