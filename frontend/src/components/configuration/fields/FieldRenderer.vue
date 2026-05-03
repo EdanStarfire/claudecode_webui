@@ -23,7 +23,6 @@
           <!-- SourceMarker format: { kind: 'S'|'T'|'P'|'EMPTY', templateName?, profileName? } -->
           <template v-if="typeof fieldState === 'object' && 'kind' in fieldState">
             <SourceMarker
-              v-if="fieldState.kind !== 'EMPTY'"
               :kind="fieldState.kind"
               :template-name="fieldState.templateName || null"
               :profile-name="fieldState.profileName || null"
