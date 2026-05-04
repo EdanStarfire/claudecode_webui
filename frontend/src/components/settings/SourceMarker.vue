@@ -64,26 +64,26 @@ const tooltip = computed(() => {
 }
 
 .source-marker--s {
-  background: #1e3a5f;
-  color: #58a6ff;
-  border: 1px solid #1f6feb44;
+  background: var(--s-tint, rgba(88, 166, 255, 0.12));
+  color: var(--s-fg, #58a6ff);
+  border: 1px solid var(--s-border, rgba(88, 166, 255, 0.30));
 }
 
 .source-marker--t {
-  background: #2d1f0a;
-  color: #d29922;
-  border: 1px solid #d2992244;
+  background: var(--t-tint, rgba(210, 153, 34, 0.12));
+  color: var(--t-fg, #d29922);
+  border: 1px solid var(--t-border, rgba(210, 153, 34, 0.30));
 }
 
 .source-marker--p {
-  background: #0a2a14;
-  color: #3fb950;
-  border: 1px solid #3fb95044;
+  background: var(--p-tint, rgba(63, 185, 80, 0.12));
+  color: var(--p-fg, #3fb950);
+  border: 1px solid var(--p-border, rgba(63, 185, 80, 0.30));
 }
 
 .source-marker--empty {
-  background: #1e2633;
-  color: #4a5568;
-  border: 1px solid #2d3748;
+  background: var(--bs-secondary-bg, rgba(0,0,0,0.06));
+  color: var(--bs-tertiary-color, #6b7280);
+  border: 1px solid var(--bs-border-color, rgba(0,0,0,0.12));
 }
 </style>

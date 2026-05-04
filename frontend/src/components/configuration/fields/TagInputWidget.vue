@@ -1,6 +1,6 @@
 <template>
   <div>
-    <div class="tag-editor" @click="inputEl && inputEl.focus()">
+    <div class="tag-editor" :class="{ 'tag-editor--default': isShowingDefault }" @click="inputEl && inputEl.focus()">
       <span
         v-for="(tag, index) in tagList"
         :key="index"
@@ -38,11 +38,12 @@
 import { ref, computed } from 'vue'
 
 const props = defineProps({
-  value: { type: String, default: '' },
+  value: { default: null },
   disabled: { type: Boolean, default: false },
   quickAddItems: { type: Array, default: null },
   variant: { type: String, default: 'allowed' }, // 'allowed' | 'disallowed' | 'capability'
   placeholder: { type: String, default: 'Add...' },
+  defaultValue: { default: undefined },
 })
 
 const emit = defineEmits(['update:value'])
@@ -54,6 +55,10 @@ const tagList = computed(() => {
   if (!props.value || !props.value.trim()) return []
   return props.value.split(',').map(t => t.trim()).filter(Boolean)
 })
+
+const isShowingDefault = computed(() =>
+  (props.value === null || props.value === undefined) && props.defaultValue !== undefined
+)
 
 const tagClass = computed(() => {
   if (props.variant === 'disallowed') return 'tag-disallowed'
@@ -95,3 +100,9 @@ function toggleTag(item) {
   }
 }
 </script>
+
+<style scoped>
+.tag-editor--default {
+  opacity: 0.45;
+}
+</style>

@@ -228,6 +228,7 @@ class TemplateManager:
         capabilities: list[str] | None = None,
         profile_ids: dict[str, str] | None = None,
         watchdog: dict[str, Any] | None = None,
+        is_default: bool = False,
         # Deprecated: template_overrides merged into config for backward compat with callers
         template_overrides: dict[str, Any] | None = None,
     ) -> MinionTemplate:
@@ -276,6 +277,7 @@ class TemplateManager:
             profile_ids=profile_ids if profile_ids is not None else {},
             config=config_dict,
             watchdog=watchdog,
+            is_default=is_default,
         )
 
         await self._save_template(template)
@@ -628,17 +630,24 @@ class TemplateManager:
 
                 existing = existing_by_name.get(name)
                 if existing:
-                    # Template exists — seed .md prompt file if missing
+                    # Template exists — mark as default if not already, seed .md if missing
+                    needs_save = False
+                    if not existing.is_default:
+                        existing.is_default = True
+                        needs_save = True
                     if source_prompt and not existing.config.get("system_prompt"):
                         slug = _slugify(existing.name)
                         runtime_md = self.templates_dir / f"{slug}.md"
                         if not runtime_md.exists():
                             runtime_md.write_text(source_prompt, encoding="utf-8")
                             existing.config["system_prompt"] = source_prompt
+                            needs_save = True
                             prompt_seeded_count += 1
                             template_logger.info(
                                 f"Seeded system prompt for existing template: {name}"
                             )
+                    if needs_save:
+                        await self._save_template(existing)
                     continue
 
                 # Migrate default template data → config dict shape
@@ -651,6 +660,7 @@ class TemplateManager:
                     system_prompt=source_prompt,
                     description=data.get("description"),
                     capabilities=data.get("capabilities"),
+                    is_default=True,
                 )
                 existing_by_name[name] = await self.get_template_by_name(name)
                 created_count += 1

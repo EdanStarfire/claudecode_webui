@@ -8,15 +8,19 @@
           :key="chip.type + chip.label"
           :type="chip.type"
           :label="chip.label"
+          :to="chip.to || ''"
         />
       </div>
     </div>
-    <div v-if="showSaveCancel" class="toolbar-actions">
-      <button class="btn-cancel" @click="$emit('cancel')" :disabled="saving">Cancel</button>
-      <button class="btn-save" @click="$emit('save')" :disabled="saving">
-        <span v-if="saving" class="save-spinner" aria-hidden="true">⟳</span>
-        <span>{{ saving ? 'Saving…' : 'Save' }}</span>
-      </button>
+    <div class="toolbar-actions">
+      <slot name="actions" />
+      <template v-if="showSaveCancel">
+        <button class="btn-cancel" @click="$emit('cancel')" :disabled="saving">Cancel</button>
+        <button class="btn-save" @click="$emit('save')" :disabled="saving">
+          <span v-if="saving" class="save-spinner" aria-hidden="true">⟳</span>
+          <span>{{ saving ? 'Saving…' : 'Save' }}</span>
+        </button>
+      </template>
     </div>
   </div>
 </template>
@@ -41,8 +45,9 @@ defineEmits(['save', 'cancel'])
   justify-content: space-between;
   gap: 12px;
   padding: 12px 20px;
-  border-bottom: 1px solid var(--bs-border-color);
-  background: var(--bs-tertiary-bg);
+  min-height: 52px;
+  border-bottom: 1px solid var(--mode-border, var(--bs-border-color));
+  background: var(--mode-tint, var(--bs-tertiary-bg));
   flex-shrink: 0;
 }
 
@@ -58,7 +63,7 @@ defineEmits(['save', 'cancel'])
   margin: 0;
   font-size: 15px;
   font-weight: 600;
-  color: var(--bs-emphasis-color);
+  color: var(--mode-fg, var(--bs-emphasis-color));
   white-space: nowrap;
 }
 
@@ -81,7 +86,7 @@ defineEmits(['save', 'cancel'])
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  padding: 5px 14px;
+  padding: 3px 14px;
   border-radius: 6px;
   font-size: 13px;
   cursor: pointer;

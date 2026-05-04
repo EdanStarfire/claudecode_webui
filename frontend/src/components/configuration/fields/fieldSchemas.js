@@ -4,6 +4,7 @@ export const FIELD_SCHEMAS = {
       key: 'model',
       label: 'Model',
       widget: 'button-group',
+      defaultValue: 'sonnet',
       options: [
         { value: 'sonnet', label: 'Sonnet' },
         { value: 'opus', label: 'Opus' },
@@ -15,6 +16,7 @@ export const FIELD_SCHEMAS = {
       key: 'thinking_mode',
       label: 'Thinking Mode',
       widget: 'button-group',
+      defaultValue: '',
       options: [
         { value: '', label: 'Default' },
         { value: 'adaptive', label: 'Adaptive' },
@@ -36,6 +38,7 @@ export const FIELD_SCHEMAS = {
       key: 'effort',
       label: 'Effort',
       widget: 'button-group',
+      defaultValue: '',
       options: [
         { value: '', label: 'Default' },
         { value: 'low', label: 'Low' },
@@ -50,6 +53,7 @@ export const FIELD_SCHEMAS = {
       key: 'permission_mode',
       label: 'Permission Mode',
       widget: 'button-group',
+      defaultValue: 'acceptEdits',
       options: [
         { value: 'default', label: 'Default' },
         { value: 'acceptEdits', label: 'Accept Edits' },
@@ -66,6 +70,7 @@ export const FIELD_SCHEMAS = {
       widget: 'tag-input',
       variant: 'allowed',
       placeholder: 'Add tool...',
+      defaultValue: null,
     },
     {
       key: 'disallowed_tools',
@@ -73,6 +78,7 @@ export const FIELD_SCHEMAS = {
       widget: 'tag-input',
       variant: 'disallowed',
       placeholder: 'Add tool...',
+      defaultValue: null,
     },
     {
       key: 'setting_sources',
@@ -91,15 +97,9 @@ export const FIELD_SCHEMAS = {
       widget: 'dir-list',
       placeholder: 'Add directory path... Supports {session_id}, {session_data}, {working_dir}',
       showBrowse: true,
+      defaultValue: null,
     },
-    {
-      key: 'capabilities',
-      label: 'Capabilities',
-      widget: 'tag-input',
-      variant: 'capability',
-      placeholder: 'Add capability...',
-      advancedOnly: true,
-    },
+
   ],
 
   system_prompt: [
@@ -113,6 +113,7 @@ export const FIELD_SCHEMAS = {
       key: 'override_system_prompt',
       label: 'Override System Prompt',
       widget: 'toggle',
+      defaultValue: false,
     },
   ],
 
@@ -132,7 +133,7 @@ export const FIELD_SCHEMAS = {
       placeholder: '/path/to/claude-cli',
       disabledWhen: (config) => !!config.docker_enabled,
     },
-    { key: 'sandbox_enabled', label: 'Sandbox Mode', widget: 'toggle' },
+    { key: 'sandbox_enabled', label: 'Sandbox Mode', widget: 'toggle', defaultValue: false },
     {
       key: 'sandbox_config',
       label: 'Sandbox Configuration',
@@ -140,7 +141,7 @@ export const FIELD_SCHEMAS = {
       nested: true,
       showWhen: (config) => !!config.sandbox_enabled,
     },
-    { key: 'docker_enabled', label: 'Docker Isolation', widget: 'toggle' },
+    { key: 'docker_enabled', label: 'Docker Isolation', widget: 'toggle', defaultValue: false },
     {
       key: 'docker_image',
       label: 'Docker Image',
@@ -167,6 +168,7 @@ export const FIELD_SCHEMAS = {
       key: 'docker_proxy_enabled',
       label: 'Network Proxy Sidecar',
       widget: 'toggle',
+      defaultValue: false,
       showWhen: (config) => !!config.docker_enabled,
     },
     {
@@ -197,12 +199,14 @@ export const FIELD_SCHEMAS = {
       key: 'bare_mode',
       label: 'Bare mode',
       widget: 'toggle',
+      defaultValue: false,
       description: 'Skips hooks, LSP, plugin sync, and skill directory walks.',
     },
     {
       key: 'env_scrub_enabled',
       label: 'Scrub subprocess credentials',
       widget: 'toggle',
+      defaultValue: false,
       description: 'Strips API keys and cloud credentials from subprocess environments.',
     },
   ],
@@ -212,12 +216,14 @@ export const FIELD_SCHEMAS = {
       key: 'history_distillation_enabled',
       label: 'History Distillation',
       widget: 'toggle',
+      defaultValue: true,
       description: 'Distills session history to markdown on archive.',
     },
     {
       key: 'auto_memory_mode',
       label: 'Auto-Memory Mode',
       widget: 'button-group',
+      defaultValue: 'claude',
       options: [
         { value: 'claude', label: 'Claude' },
         { value: 'session', label: 'Session' },
@@ -230,12 +236,13 @@ export const FIELD_SCHEMAS = {
       widget: 'text-input',
       monospace: true,
       placeholder: '{session_data}/memory',
-      showWhen: (config) => config.auto_memory_mode === 'claude',
+      showWhen: (config) => (config.auto_memory_mode ?? 'claude') === 'claude',
     },
     {
       key: 'skill_creating_enabled',
       label: 'Skill Creating',
       widget: 'toggle',
+      defaultValue: false,
       description: 'Includes skill-maker guidance in session system prompt.',
     },
   ],

@@ -23,6 +23,7 @@
       <component
         :is="sectionComponent"
         v-if="sectionComponent"
+        :key="route.path"
         ref="sectionHostRef"
         class="section-host"
       />
@@ -56,6 +57,13 @@ import ApplicationMcpSection from './sections/ApplicationMcpSection.vue'
 import LibraryTemplatesSection from './sections/LibraryTemplatesSection.vue'
 import LibraryProfilesSection from './sections/LibraryProfilesSection.vue'
 import LibrarySecretsSection from './sections/LibrarySecretsSection.vue'
+import GeneralSection from './sections/GeneralSection.vue'
+import ModelTuningSection from './sections/ModelTuningSection.vue'
+import ToolsPermissionsSection from './sections/ToolsPermissionsSection.vue'
+import McpServersSection from './sections/McpServersSection.vue'
+import FeaturesSection from './sections/FeaturesSection.vue'
+import SystemPromptSection from './sections/SystemPromptSection.vue'
+import IsolationSection from './sections/IsolationSection.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -69,8 +77,23 @@ const modeTintVars = computed(() => {
   return {}
 })
 
+const EDIT_SECTION_MAP = {
+  'general':           GeneralSection,
+  'model-tuning':      ModelTuningSection,
+  'tools-permissions': ToolsPermissionsSection,
+  'mcp-servers':       McpServersSection,
+  'features':          FeaturesSection,
+  'system-prompt':     SystemPromptSection,
+  'isolation':         IsolationSection,
+}
+
 const sectionComponent = computed(() => {
-  switch (route.path) {
+  const p = route.path
+  if (p.startsWith('/settings/template/') || p.startsWith('/settings/profile/')) {
+    const section = route.params.section || 'general'
+    return EDIT_SECTION_MAP[section] ?? null
+  }
+  switch (p) {
     case '/settings/features':      return ApplicationFeaturesSection
     case '/settings/notifications': return ApplicationNotifsSection
     case '/settings/read-aloud':    return ApplicationReadAloudSection
@@ -150,7 +173,11 @@ watch(sectionComponent, () => {
 })
 // ──────────────────────────────────────────────────────────────────────────
 
-function onGuardApply() {
+async function onGuardApply() {
+  // Save current section before navigating
+  if (sectionHostRef.value?.save) {
+    await sectionHostRef.value.save()
+  }
   const dest = settingsStore.confirmNavigation('apply')
   if (dest) router.push(dest)
 }
@@ -175,6 +202,17 @@ function onGuardCancel() {
   border-top: 2px solid var(--mode-border, transparent);
   /* Named container so @container rules in children can reference it */
   container: settings-area / inline-size;
+
+  /* Per-type marker colors — consumed by SourceMarker regardless of current mode */
+  --s-fg:     #58a6ff;
+  --s-border: rgba(88, 166, 255, 0.30);
+  --s-tint:   rgba(88, 166, 255, 0.12);
+  --t-fg:     #d29922;
+  --t-border: rgba(210, 153, 34, 0.30);
+  --t-tint:   rgba(210, 153, 34, 0.12);
+  --p-fg:     #3fb950;
+  --p-border: rgba(63, 185, 80, 0.30);
+  --p-tint:   rgba(63, 185, 80, 0.12);
 }
 
 /* ── Desktop sidebar (static 240px) ── */

@@ -143,8 +143,8 @@
           @update:claude-ai-enabled="$emit('update:form-data', 'enable_claudeai_mcp_servers', $event)"
           :local-enabled="!formData.strict_mcp_config"
           @update:local-enabled="$emit('update:form-data', 'strict_mcp_config', !$event)"
-          :claude-ai-state="fieldState('enable_claudeai_mcp_servers')"
-          :local-state="fieldState('strict_mcp_config')"
+          :claude-ai-field-state="toMcpFieldStateObj(fieldState('enable_claudeai_mcp_servers'))"
+          :local-field-state="toMcpFieldStateObj(fieldState('strict_mcp_config'))"
           :runtime-servers="mcpServers"
           :session-active="isEditSession && isSessionActive"
           @toggle="handleMcpToggle"
@@ -397,6 +397,12 @@ const aspConfig = computed(() => ({
 // Field state helper
 function fieldState(field) {
   return props.fieldStates?.[field] || 'normal'
+}
+
+function toMcpFieldStateObj(state) {
+  if (state === 'profile' || state === 'autofilled') return { kind: 'P' }
+  if (state === 'modified') return { kind: 'S' }
+  return null
 }
 
 // Permissions card: inject quickAddItems at runtime from toolConstants

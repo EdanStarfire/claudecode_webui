@@ -1,7 +1,7 @@
 <template>
   <button
     class="settings-sidebar-item"
-    :class="{ 'is-active': isActive, 'is-disabled': disabled }"
+    :class="{ 'is-active': isActive, 'is-disabled': disabled, 'is-tinted': tinted }"
     :disabled="disabled"
     :title="label"
     @click="handleClick"
@@ -17,10 +17,11 @@ import { useRoute, useRouter } from 'vue-router'
 import { useSettingsStore } from '@/stores/settings'
 
 const props = defineProps({
-  to: { type: String, default: '' },
-  icon: { type: String, required: true },
-  label: { type: String, required: true },
+  to:       { type: String,  default: '' },
+  icon:     { type: String,  required: true },
+  label:    { type: String,  required: true },
   disabled: { type: Boolean, default: false },
+  tinted:   { type: Boolean, default: false },
 })
 
 const route = useRoute()
@@ -65,6 +66,17 @@ function handleClick() {
   background: rgba(99, 102, 241, 0.15);
   color: #6366f1;
   border-left-color: #6366f1;
+}
+
+.settings-sidebar-item.is-tinted.is-active {
+  background: var(--mode-tint);
+  color: var(--mode-fg);
+  border-left-color: var(--mode-fg);
+}
+
+.settings-sidebar-item.is-tinted:hover:not(.is-disabled):not(.is-active) {
+  background: var(--mode-tint);
+  color: var(--mode-fg);
 }
 
 .settings-sidebar-item.is-disabled {

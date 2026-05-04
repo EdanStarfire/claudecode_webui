@@ -2,7 +2,7 @@
   <div class="sandbox-sub-section">
     <!-- Bash Permissions -->
     <div class="sandbox-section-label">Bash Permissions</div>
-    <div class="form-check mb-1 ms-3">
+    <div class="form-check form-switch mb-1 ms-3">
       <input class="form-check-input" type="checkbox" :id="id('auto-bash')"
         :checked="val.autoAllowBashIfSandboxed"
         :disabled="disabled"
@@ -11,7 +11,7 @@
         Auto-allow Bash when sandboxed
       </label>
     </div>
-    <div class="form-check mb-1 ms-3">
+    <div class="form-check form-switch mb-1 ms-3">
       <input class="form-check-input" type="checkbox" :id="id('unsandboxed')"
         :checked="val.allowUnsandboxedCommands"
         :disabled="disabled"
@@ -28,7 +28,7 @@
         @input="update('excludedCommands', $event.target.value)"
         placeholder="rm, dd, mkfs..." />
     </div>
-    <div class="form-check mb-1 ms-3">
+    <div class="form-check form-switch mb-1 ms-3">
       <input class="form-check-input" type="checkbox" :id="id('weaker')"
         :checked="val.enableWeakerNestedSandbox"
         :disabled="disabled"
@@ -48,7 +48,7 @@
         @input="updateNetwork('allowedDomains', $event.target.value)"
         placeholder="github.com, api.example.com" />
     </div>
-    <div class="form-check mb-1 ms-3">
+    <div class="form-check form-switch mb-1 ms-3">
       <input class="form-check-input" type="checkbox" :id="id('local-binding')"
         :checked="val.network?.allowLocalBinding"
         :disabled="disabled"
@@ -65,7 +65,7 @@
         @input="updateNetwork('allowUnixSockets', $event.target.value)"
         placeholder="/var/run/docker.sock" />
     </div>
-    <div class="form-check mb-1 ms-3">
+    <div class="form-check form-switch mb-1 ms-3">
       <input class="form-check-input" type="checkbox" :id="id('all-unix')"
         :checked="val.network?.allowAllUnixSockets"
         :disabled="disabled"

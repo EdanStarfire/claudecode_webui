@@ -34,6 +34,18 @@
             :class="statusBadgeClass(systemRuntimeStatus(cfg.slug))"
           >{{ systemRuntimeStatus(cfg.slug) }}</span>
           <span class="badge bg-info" style="font-size: 0.65rem;" v-if="!systemRuntimeStatus(cfg.slug)">{{ cfg.type }}</span>
+          <SourceMarker
+            v-if="serverIdFieldStates[cfg.id]?.kind"
+            :kind="serverIdFieldStates[cfg.id].kind"
+            :profile-name="serverIdFieldStates[cfg.id].profileName ?? null"
+          />
+          <button
+            v-if="serverIdFieldStates[cfg.id]?.resettable"
+            type="button"
+            class="field-reset-btn"
+            title="Reset to inherited value"
+            @click="$emit('resetServer', cfg.id)"
+          >↩</button>
           <span class="server-name small">{{ cfg.name }}</span>
           <span v-if="!cfg.enabled" class="text-muted small">(disabled)</span>
         </div>
@@ -60,11 +72,10 @@
     <!-- Claude AI MCP Servers -->
     <div class="mcp-section">
       <div class="mcp-section-header d-flex align-items-center justify-content-between">
-        <span>
+        <span class="d-flex align-items-center gap-1">
+          <SourceMarker v-if="claudeAiFieldState?.kind" :kind="claudeAiFieldState.kind" :profile-name="claudeAiFieldState.profileName ?? null" />
+          <button v-if="claudeAiFieldState?.resettable" type="button" class="field-reset-btn" title="Reset to inherited value" @click="$emit('resetClaudeAi')">↩</button>
           Claude AI MCP Servers
-          <span v-if="claudeAiState === 'profile'" class="field-indicator profile" title="Value from profile">P</span>
-          <span v-if="claudeAiState === 'autofilled'" class="field-indicator autofilled">&lt;</span>
-          <span v-if="claudeAiState === 'modified'" class="field-indicator modified">*</span>
         </span>
         <div class="form-check form-switch mb-0">
           <input
@@ -95,11 +106,10 @@
     <!-- Local MCP Servers -->
     <div class="mcp-section">
       <div class="mcp-section-header d-flex align-items-center justify-content-between">
-        <span>
+        <span class="d-flex align-items-center gap-1">
+          <SourceMarker v-if="localFieldState?.kind" :kind="localFieldState.kind" :profile-name="localFieldState.profileName ?? null" />
+          <button v-if="localFieldState?.resettable" type="button" class="field-reset-btn" title="Reset to inherited value" @click="$emit('resetLocal')">↩</button>
           Local MCP Servers
-          <span v-if="localState === 'profile'" class="field-indicator profile" title="Value from profile">P</span>
-          <span v-if="localState === 'autofilled'" class="field-indicator autofilled">&lt;</span>
-          <span v-if="localState === 'modified'" class="field-indicator modified">*</span>
         </span>
         <div class="form-check form-switch mb-0">
           <input
@@ -138,6 +148,7 @@
 import { computed, onMounted } from 'vue'
 import { useMcpConfigStore } from '@/stores/mcpConfig'
 import McpServerRow from './McpServerRow.vue'
+import SourceMarker from '../settings/SourceMarker.vue'
 
 const configStore = useMcpConfigStore()
 
@@ -162,13 +173,17 @@ const props = defineProps({
     type: Boolean,
     default: false
   },
-  claudeAiState: {
-    type: String,
-    default: 'normal'
+  claudeAiFieldState: {
+    type: Object,
+    default: null
   },
-  localState: {
-    type: String,
-    default: 'normal'
+  localFieldState: {
+    type: Object,
+    default: null
+  },
+  serverIdFieldStates: {
+    type: Object,
+    default: () => ({})
   }
 })
 
@@ -177,7 +192,10 @@ const emit = defineEmits([
   'update:claude-ai-enabled',
   'update:local-enabled',
   'toggle',
-  'reconnect'
+  'reconnect',
+  'resetClaudeAi',
+  'resetLocal',
+  'resetServer',
 ])
 
 onMounted(() => {
@@ -306,13 +324,14 @@ function statusBadgeClass(status) {
   color: #fff;
 }
 
-.field-indicator {
-  margin-left: 0.25rem;
-  font-size: 0.75rem;
-  font-weight: bold;
-  cursor: help;
+.field-reset-btn {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: 0.85rem;
+  color: #6c757d;
+  cursor: pointer;
+  line-height: 1;
 }
-.field-indicator.autofilled { color: #856404; }
-.field-indicator.modified { color: #cc5500; }
-.field-indicator.profile { color: #0a6640; font-weight: bold; }
+.field-reset-btn:hover { color: #dc3545; }
 </style>

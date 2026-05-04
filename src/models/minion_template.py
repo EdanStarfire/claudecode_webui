@@ -29,6 +29,7 @@ class MinionTemplate:
     profile_ids: dict[str, str] = field(default_factory=dict)
     config: dict[str, Any] = field(default_factory=dict)
     watchdog: dict[str, Any] | None = None
+    is_default: bool = False
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
@@ -48,9 +49,10 @@ class MinionTemplate:
         """Convert to dictionary for JSON serialization."""
         return {
             "capabilities": self.capabilities,
-            "config": self.config,
+            "config": dict(self.config),
             "created_at": self.created_at.isoformat(),
             "description": self.description,
+            "is_default": self.is_default,
             "name": self.name,
             "profile_ids": self.profile_ids,
             "role": self.role,
@@ -86,11 +88,13 @@ class MinionTemplate:
         data.setdefault("watchdog", None)
         data.setdefault("config", {})
 
+        data.setdefault("is_default", False)
+
         # Silently drop unknown top-level keys (forward compat + leftover legacy fields
         # that were not fully migrated — migration should have handled them).
         known = {
             "template_id", "name", "role", "description", "capabilities",
-            "profile_ids", "config", "watchdog", "created_at", "updated_at",
+            "profile_ids", "config", "watchdog", "is_default", "created_at", "updated_at",
         }
         for k in list(data.keys()):
             if k not in known:

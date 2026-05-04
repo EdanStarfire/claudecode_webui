@@ -65,4 +65,54 @@ export const settingsIndex = [
   { section: 'secrets', fieldKey: 'secret_inject_file',   label: 'Inject File Path' },
   { section: 'secrets', fieldKey: 'secret_oauth2',        label: 'OAuth2 Refresh' },
   { section: 'secrets', fieldKey: 'secret_ssh_key',       label: 'SSH Key' },
+
+  // Template / Profile edit sections (shared 7-section edit surface)
+  // General section
+  { section: 'edit-general', fieldKey: 'name',            label: 'Name' },
+  { section: 'edit-general', fieldKey: 'description',     label: 'Description' },
+  { section: 'edit-general', fieldKey: 'role',            label: 'Role' },
+  { section: 'edit-general', fieldKey: 'permission_mode', label: 'Permission Mode' },
+  { section: 'edit-general', fieldKey: 'profile_ids',     label: 'Profile Bindings' },
+
+  // Model Tuning section
+  { section: 'edit-model-tuning', fieldKey: 'model',                  label: 'Model' },
+  { section: 'edit-model-tuning', fieldKey: 'thinking_mode',          label: 'Thinking Mode' },
+  { section: 'edit-model-tuning', fieldKey: 'thinking_budget_tokens', label: 'Budget Tokens' },
+  { section: 'edit-model-tuning', fieldKey: 'effort',                 label: 'Effort' },
+
+  // Tools & Permissions section
+  { section: 'edit-tools-permissions', fieldKey: 'allowed_tools',           label: 'Allowed Tools' },
+  { section: 'edit-tools-permissions', fieldKey: 'disallowed_tools',        label: 'Disallowed Tools' },
+  { section: 'edit-tools-permissions', fieldKey: 'setting_sources',         label: 'Settings Sources' },
+  { section: 'edit-tools-permissions', fieldKey: 'additional_directories',  label: 'Additional Directories' },
+  { section: 'edit-tools-permissions', fieldKey: 'capabilities',            label: 'Capabilities' },
+
+  // MCP Servers section
+  { section: 'edit-mcp-servers', fieldKey: 'mcp_server_ids',              label: 'MCP Servers' },
+  { section: 'edit-mcp-servers', fieldKey: 'enable_claudeai_mcp_servers', label: 'Claude AI MCP Servers' },
+  { section: 'edit-mcp-servers', fieldKey: 'strict_mcp_config',           label: 'Strict MCP Config' },
+
+  // Features section
+  { section: 'edit-features', fieldKey: 'history_distillation_enabled', label: 'History Distillation' },
+  { section: 'edit-features', fieldKey: 'auto_memory_mode',             label: 'Auto-Memory Mode' },
+  { section: 'edit-features', fieldKey: 'auto_memory_directory',        label: 'Memory Directory' },
+  { section: 'edit-features', fieldKey: 'skill_creating_enabled',       label: 'Skill Creating' },
+
+  // System Prompt section
+  { section: 'edit-system-prompt', fieldKey: 'system_prompt',          label: 'System Prompt' },
+  { section: 'edit-system-prompt', fieldKey: 'override_system_prompt', label: 'Override System Prompt' },
+
+  // Isolation section
+  { section: 'edit-isolation', fieldKey: 'cli_path',                       label: 'CLI Path' },
+  { section: 'edit-isolation', fieldKey: 'sandbox_enabled',                label: 'Sandbox Mode' },
+  { section: 'edit-isolation', fieldKey: 'docker_enabled',                 label: 'Docker Isolation' },
+  { section: 'edit-isolation', fieldKey: 'docker_image',                   label: 'Docker Image' },
+  { section: 'edit-isolation', fieldKey: 'docker_extra_mounts',            label: 'Mounts' },
+  { section: 'edit-isolation', fieldKey: 'docker_home_directory',          label: 'Home Directory' },
+  { section: 'edit-isolation', fieldKey: 'docker_proxy_enabled',           label: 'Network Proxy Sidecar' },
+  { section: 'edit-isolation', fieldKey: 'docker_proxy_image',             label: 'Proxy Image' },
+  { section: 'edit-isolation', fieldKey: 'docker_proxy_allowlist_domains', label: 'Extra Allowed Domains' },
+  { section: 'edit-isolation', fieldKey: 'assigned_secrets',               label: 'Assigned Secrets' },
+  { section: 'edit-isolation', fieldKey: 'bare_mode',                      label: 'Bare Mode' },
+  { section: 'edit-isolation', fieldKey: 'env_scrub_enabled',              label: 'Scrub Subprocess Credentials' },
 ]

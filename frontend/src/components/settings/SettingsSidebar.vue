@@ -18,6 +18,27 @@
         @update:model-value="settingsStore.setSearchQuery"
       />
 
+      <!-- Edit group: "This Template" or "This Profile" (shown when on an edit route) -->
+      <SettingsSidebarGroup
+        v-if="isEditMode && (filteredEditItems.length > 0 || !settingsStore.searchQuery)"
+        :title="editGroupTitle"
+        :short-title="editGroupShort"
+        :subtitle="editEntityName"
+        :tinted="true"
+      >
+        <SettingsSidebarItem
+          v-for="item in filteredEditItems"
+          :key="item.to"
+          :to="item.to"
+          :icon="item.icon"
+          :label="item.label"
+          :tinted="true"
+        />
+        <div v-if="settingsStore.searchQuery && !filteredEditItems.length" class="no-results">
+          No results
+        </div>
+      </SettingsSidebarGroup>
+
       <!-- Application group -->
       <SettingsSidebarGroup title="Application" short-title="App">
         <SettingsSidebarItem
@@ -51,29 +72,135 @@
 
 <script setup>
 import { computed } from 'vue'
+import { useRoute } from 'vue-router'
 import { useSettingsStore } from '@/stores/settings'
+import { useTemplateStore } from '@/stores/template'
+import { useProfileStore } from '@/stores/profile'
 import SettingsSidebarSearch from './SettingsSidebarSearch.vue'
 import SettingsSidebarGroup from './SettingsSidebarGroup.vue'
 import SettingsSidebarItem from './SettingsSidebarItem.vue'
 import { settingsIndex } from './search/settingsIndex.js'
 
-const settingsStore = useSettingsStore()
+const route = useRoute()
+const settingsStore  = useSettingsStore()
+const templateStore  = useTemplateStore()
+const profileStore   = useProfileStore()
 
 function toggleSidebar() {
   settingsStore.setSidebarExpanded(!settingsStore.sidebarExpanded)
 }
 
+// ── Edit-mode (template / profile) dynamic group ──────────────────────────
+
+const isTemplateEdit = computed(() => route.path.startsWith('/settings/template/'))
+const isProfileEdit  = computed(() => route.path.startsWith('/settings/profile/'))
+const isEditMode     = computed(() => isTemplateEdit.value || isProfileEdit.value)
+
+const editEntityId = computed(() => {
+  return route.params.templateId || route.params.profileId || ''
+})
+
+const editGroupTitle = computed(() => {
+  if (isTemplateEdit.value) return 'Editing Template'
+  if (isProfileEdit.value)  return 'Editing Profile'
+  return ''
+})
+
+const editEntityName = computed(() => {
+  if (editEntityId.value === '__new__') return ''
+  if (isTemplateEdit.value) return templateStore.getTemplate(editEntityId.value)?.name || ''
+  if (isProfileEdit.value)  return profileStore.getProfile(editEntityId.value)?.name || ''
+  return ''
+})
+
+const editGroupShort = computed(() => {
+  if (isTemplateEdit.value) return 'Tmpl'
+  if (isProfileEdit.value)  return 'Prof'
+  return ''
+})
+
+const EDIT_SECTIONS = [
+  { section: 'general',           icon: '◉',  label: 'General',             sectionKey: 'edit-general' },
+  { section: 'model-tuning',      icon: '🧠', label: 'Model Tuning',        sectionKey: 'edit-model-tuning' },
+  { section: 'tools-permissions', icon: '🔧', label: 'Tools & Permissions', sectionKey: 'edit-tools-permissions' },
+  { section: 'mcp-servers',       icon: '🔌', label: 'MCP Servers',         sectionKey: 'edit-mcp-servers' },
+  { section: 'features',          icon: '✨', label: 'Features',            sectionKey: 'edit-features' },
+  { section: 'system-prompt',     icon: '💭', label: 'System Prompt',       sectionKey: 'edit-system-prompt' },
+  { section: 'isolation',         icon: '🛡️', label: 'Isolation',           sectionKey: 'edit-isolation' },
+]
+
+// Which section corresponds to each profile area
+const AREA_SECTION = {
+  model:         'model-tuning',
+  permissions:   'tools-permissions',
+  mcp:           'mcp-servers',
+  features:      'features',
+  system_prompt: 'system-prompt',
+  isolation:     'isolation',
+}
+
+const editSectionItems = computed(() => {
+  if (!editEntityId.value) return []
+
+  if (editEntityId.value === '__new__') {
+    const base = isTemplateEdit.value
+      ? '/settings/template/__new__'
+      : '/settings/profile/__new__'
+    const areaQuery = route.query.area ? `?area=${route.query.area}` : ''
+    return [{
+      to: `${base}/general${areaQuery}`,
+      icon: '◉',
+      label: 'General',
+      sectionKey: 'edit-general',
+    }]
+  }
+
+  const base = isTemplateEdit.value
+    ? `/settings/template/${editEntityId.value}`
+    : `/settings/profile/${editEntityId.value}`
+
+  let sections = EDIT_SECTIONS
+  if (isProfileEdit.value) {
+    const area = profileStore.getProfile(editEntityId.value)?.area
+    const areaSection = area ? AREA_SECTION[area] : null
+    // Profiles show only General + the section for their area
+    sections = EDIT_SECTIONS.filter(s =>
+      s.section === 'general' || (areaSection && s.section === areaSection)
+    )
+  }
+
+  return sections.map(s => ({
+    to: `${base}/${s.section}`,
+    icon: s.icon,
+    label: s.label,
+    sectionKey: s.sectionKey,
+  }))
+})
+
+const filteredEditItems = computed(() => {
+  const q = settingsStore.searchQuery.toLowerCase().trim()
+  if (!q) return editSectionItems.value
+  return editSectionItems.value.filter(item => {
+    if (item.label.toLowerCase().includes(q)) return true
+    return settingsIndex
+      .filter(e => e.section === item.sectionKey)
+      .some(e => e.label.toLowerCase().includes(q))
+  })
+})
+
+// ── Static sidebar groups ─────────────────────────────────────────────────
+
 const APP_ITEMS = [
-  { to: '/settings/features',      icon: '⚡', label: 'Features',      sectionKey: 'features' },
-  { to: '/settings/notifications', icon: '◉',  label: 'Notifications',  sectionKey: 'notifications' },
-  { to: '/settings/read-aloud',    icon: '♪',  label: 'Read Aloud',     sectionKey: 'read-aloud' },
-  { to: '/settings/mcp-servers',   icon: '◈',  label: 'MCP Servers',    sectionKey: 'mcp-servers' },
+  { to: '/settings/features',      icon: '✳️', label: 'Features',      sectionKey: 'features' },
+  { to: '/settings/notifications', icon: '🎵', label: 'Notifications',  sectionKey: 'notifications' },
+  { to: '/settings/read-aloud',    icon: '👄', label: 'Read Aloud',     sectionKey: 'read-aloud' },
+  { to: '/settings/mcp-servers',   icon: '🌐', label: 'MCP Servers',    sectionKey: 'mcp-servers' },
 ]
 
 const libraryItems = [
-  { to: '/settings/templates', icon: '◧', label: 'Templates', sectionKey: 'templates' },
-  { to: '/settings/profiles',  icon: '◎', label: 'Profiles',  sectionKey: 'profiles' },
-  { to: '/settings/secrets',   icon: '◍', label: 'Secrets',   sectionKey: 'secrets' },
+  { to: '/settings/templates', icon: '📄', label: 'Templates', sectionKey: 'templates' },
+  { to: '/settings/profiles',  icon: '📋', label: 'Profiles',  sectionKey: 'profiles' },
+  { to: '/settings/secrets',   icon: '🔑', label: 'Secrets',   sectionKey: 'secrets' },
 ]
 
 const filteredAppItems = computed(() => {
