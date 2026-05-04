@@ -24,6 +24,7 @@
         :show-include-toggle="false"
         @update:config="handleField"
         @reset="handleReset"
+        @browse="handleBrowse"
       />
     </div>
   </div>
@@ -35,6 +36,7 @@ import { useRoute } from 'vue-router'
 import { useSettingsStore } from '@/stores/settings'
 import { useTemplateStore } from '@/stores/template'
 import { useProfileStore } from '@/stores/profile'
+import { useUIStore } from '@/stores/ui'
 import { COMMON_TOOLS, COMMON_DENIED_TOOLS } from '@/utils/toolConstants'
 import SettingsToolbar from '../SettingsToolbar.vue'
 import FieldSection from '../../configuration/fields/FieldSection.vue'
@@ -56,6 +58,7 @@ const route = useRoute()
 const settingsStore = useSettingsStore()
 const templateStore = useTemplateStore()
 const profileStore  = useProfileStore()
+const uiStore       = useUIStore()
 
 const isTemplateMode = computed(() => route.path.startsWith('/settings/template/'))
 const isProfileMode  = computed(() => route.path.startsWith('/settings/profile/'))
@@ -127,6 +130,19 @@ function handleField(key, value) {
   settingsStore.setField(areaKey.value, key, value)
 }
 
+function handleBrowse(fieldKey) {
+  uiStore.showModal('folder-browser', {
+    defaultPath: '',
+    currentPath: '',
+    onSelect: (path) => {
+      const current = mergedConfig.value[fieldKey] || ''
+      const lines = current ? current.split('\n').map(s => s.trim()).filter(Boolean) : []
+      if (!lines.includes(path)) lines.push(path)
+      handleField(fieldKey, lines.join('\n'))
+    },
+  })
+}
+
 async function handleSave() {
   if (!entity.value || !isDirty.value) return
   saving.value = true
@@ -135,7 +151,7 @@ async function handleSave() {
     const keysToDelete = Object.keys(d).filter(k => d[k] === FIELD_RESET)
     for (const k of keysToDelete) delete d[k]
     // Convert widget string formats back to arrays for the API
-    for (const k of ['allowed_tools', 'disallowed_tools', 'capabilities']) {
+    for (const k of ['allowed_tools', 'disallowed_tools']) {
       if (k in d && typeof d[k] === 'string') d[k] = d[k].split(',').map(s => s.trim()).filter(Boolean)
     }
     if ('additional_directories' in d && typeof d.additional_directories === 'string') {

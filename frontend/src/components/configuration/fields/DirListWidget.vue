@@ -8,7 +8,7 @@
     <div class="d-flex gap-2 mt-1">
       <input
         type="text"
-        :class="['form-control', 'form-control-sm', { 'is-invalid': error }]"
+        :class="['form-control', 'form-control-sm', { 'is-invalid': error, 'input--default': isShowingDefault }]"
         v-model="newDir"
         :disabled="disabled"
         :placeholder="placeholder"
@@ -38,10 +38,11 @@ import { ref, computed } from 'vue'
 import { validateTemplatePath } from '@/utils/templateVariables'
 
 const props = defineProps({
-  value: { type: String, default: '' },
+  value: { default: null },
   disabled: { type: Boolean, default: false },
   placeholder: { type: String, default: 'Add directory path...' },
   showBrowse: { type: Boolean, default: false },
+  defaultValue: { default: undefined },
 })
 
 const emit = defineEmits(['update:value', 'browse'])
@@ -53,6 +54,11 @@ const dirList = computed(() => {
   if (!props.value) return []
   return props.value.split('\n').map(d => d.trim()).filter(Boolean)
 })
+
+const isShowingDefault = computed(() =>
+  (props.value === null || props.value === undefined) && props.defaultValue !== undefined
+)
+
 
 function addDir() {
   const dir = newDir.value.trim()
@@ -84,3 +90,9 @@ function addDirectoryPath(dir) {
 
 defineExpose({ addDirectoryPath })
 </script>
+
+<style scoped>
+.input--default {
+  opacity: 0.45;
+}
+</style>

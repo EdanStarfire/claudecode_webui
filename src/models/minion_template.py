@@ -49,7 +49,7 @@ class MinionTemplate:
         """Convert to dictionary for JSON serialization."""
         return {
             "capabilities": self.capabilities,
-            "config": self.config,
+            "config": dict(self.config),
             "created_at": self.created_at.isoformat(),
             "description": self.description,
             "is_default": self.is_default,

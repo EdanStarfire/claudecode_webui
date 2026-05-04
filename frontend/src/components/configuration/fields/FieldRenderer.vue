@@ -76,6 +76,7 @@
         :variant="field.variant || 'allowed'"
         :quick-add-items="field.quickAddItems || null"
         :placeholder="field.placeholder || 'Add...'"
+        :default-value="field.defaultValue !== undefined ? field.defaultValue : undefined"
         @update:value="$emit('update:value', $event)"
       />
 
@@ -122,6 +123,7 @@
         :disabled="isDisabled"
         :placeholder="field.placeholder || ''"
         :show-browse="field.showBrowse || false"
+        :default-value="field.defaultValue !== undefined ? field.defaultValue : undefined"
         @update:value="$emit('update:value', $event)"
         @browse="$emit('browse')"
       />

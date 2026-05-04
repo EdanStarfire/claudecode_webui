@@ -1102,6 +1102,9 @@ button:focus {
     text-align: center;
     border-right: 1px solid #ced4da;
 }
+.model-btn-group--default .model-btn:not(.active):not(.active-default) {
+    color: #6c757d;
+}
 .model-btn-group .model-btn:last-child {
     border-right: none;
 }

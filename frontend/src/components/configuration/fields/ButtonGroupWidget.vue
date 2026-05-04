@@ -1,5 +1,5 @@
 <template>
-  <div class="model-btn-group">
+  <div class="model-btn-group" :class="{ 'model-btn-group--default': isGroupDefault }">
     <button
       v-for="opt in options"
       :key="opt.value"
@@ -16,6 +16,8 @@
 </template>
 
 <script setup>
+import { computed } from 'vue'
+
 const props = defineProps({
   value: { type: [String, Array], default: null },
   disabled: { type: Boolean, default: false },
@@ -52,6 +54,11 @@ function isActiveDefault(optValue) {
   if (props.multiple) return false
   return noExplicitValue() && hasSchemaDefault() && optValue === props.defaultValue
 }
+
+const isGroupDefault = computed(() => {
+  if (props.multiple) return props.value === null || props.value === undefined
+  return noExplicitValue() && hasSchemaDefault()
+})
 
 function handleClick(optValue) {
   if (props.multiple) {

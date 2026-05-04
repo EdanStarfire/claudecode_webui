@@ -45,6 +45,7 @@ defineEmits(['save', 'cancel'])
   justify-content: space-between;
   gap: 12px;
   padding: 12px 20px;
+  min-height: 52px;
   border-bottom: 1px solid var(--mode-border, var(--bs-border-color));
   background: var(--mode-tint, var(--bs-tertiary-bg));
   flex-shrink: 0;
@@ -85,7 +86,7 @@ defineEmits(['save', 'cancel'])
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  padding: 5px 14px;
+  padding: 3px 14px;
   border-radius: 6px;
   font-size: 13px;
   cursor: pointer;

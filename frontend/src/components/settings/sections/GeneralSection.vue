@@ -61,6 +61,20 @@
         </div>
       </div>
 
+      <!-- Capabilities (template only) -->
+      <div v-if="isTemplateMode" class="field-row">
+        <label class="field-label">Capabilities</label>
+        <div class="field-control">
+          <TagInputWidget
+            :value="mergedConfig.capabilities"
+            variant="capability"
+            placeholder="Add capability..."
+            :default-value="null"
+            @update:value="handleField('capabilities', $event)"
+          />
+        </div>
+      </div>
+
       <!-- Profile bindings per area (template only) -->
       <div v-if="isTemplateMode" class="field-row field-row--bindings">
         <label class="field-label field-label--top">Profile Bindings</label>
@@ -100,6 +114,7 @@ import { useSettingsStore } from '@/stores/settings'
 import { useTemplateStore } from '@/stores/template'
 import { useProfileStore } from '@/stores/profile'
 import SettingsToolbar from '../SettingsToolbar.vue'
+import TagInputWidget from '../../configuration/fields/TagInputWidget.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -127,6 +142,13 @@ const entity = computed(() => {
 
 const draft = computed(() => settingsStore.getDraft(areaKey.value))
 
+const capabilitiesStr = computed(() => {
+  if (draft.value && 'capabilities' in draft.value) return draft.value.capabilities
+  const arr = entity.value?.capabilities
+  if (!arr || arr.length === 0) return null
+  return Array.isArray(arr) ? arr.join(', ') : arr
+})
+
 const mergedConfig = computed(() => ({
   ...(entity.value || {}),
   // profile_ids needs deep merge to avoid overwriting all at once
@@ -135,6 +157,7 @@ const mergedConfig = computed(() => ({
     ...((draft.value?.profile_ids) || {}),
   },
   ...draft.value,
+  capabilities: capabilitiesStr.value,
 }))
 
 const isDirty = computed(() => isNew.value || settingsStore.dirtyAreas.has(areaKey.value))
@@ -182,6 +205,10 @@ async function handleSave() {
     if (!entity.value || !isDirty.value) return
     const d = { ...draft.value }
     if (isTemplateMode.value) {
+      // capabilities is a top-level template field (list[str])
+      if ('capabilities' in d && typeof d.capabilities === 'string') {
+        d.capabilities = d.capabilities.split(',').map(s => s.trim().toLowerCase()).filter(Boolean)
+      }
       await templateStore.updateTemplate(entityId.value, d)
     } else {
       await profileStore.updateProfile(entityId.value, { name: d.name })

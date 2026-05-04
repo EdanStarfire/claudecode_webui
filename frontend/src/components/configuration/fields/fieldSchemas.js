@@ -70,6 +70,7 @@ export const FIELD_SCHEMAS = {
       widget: 'tag-input',
       variant: 'allowed',
       placeholder: 'Add tool...',
+      defaultValue: null,
     },
     {
       key: 'disallowed_tools',
@@ -77,6 +78,7 @@ export const FIELD_SCHEMAS = {
       widget: 'tag-input',
       variant: 'disallowed',
       placeholder: 'Add tool...',
+      defaultValue: null,
     },
     {
       key: 'setting_sources',
@@ -95,15 +97,9 @@ export const FIELD_SCHEMAS = {
       widget: 'dir-list',
       placeholder: 'Add directory path... Supports {session_id}, {session_data}, {working_dir}',
       showBrowse: true,
+      defaultValue: null,
     },
-    {
-      key: 'capabilities',
-      label: 'Capabilities',
-      widget: 'tag-input',
-      variant: 'capability',
-      placeholder: 'Add capability...',
-      advancedOnly: true,
-    },
+
   ],
 
   system_prompt: [
@@ -240,7 +236,7 @@ export const FIELD_SCHEMAS = {
       widget: 'text-input',
       monospace: true,
       placeholder: '{session_data}/memory',
-      showWhen: (config) => config.auto_memory_mode === 'claude',
+      showWhen: (config) => (config.auto_memory_mode ?? 'claude') === 'claude',
     },
     {
       key: 'skill_creating_enabled',

@@ -29,22 +29,23 @@ export function useEditSectionFieldStates({ isTemplateMode, baseConfig, draft, b
 
     for (const f of fields) {
       const key = f.key
+      const inDraft = !!(draft.value && key in draft.value)
+      const draftIsReset = inDraft && draft.value[key] === FIELD_RESET
 
-      // Draft value = user is actively editing this field → selfKind (resettable)
-      // FIELD_RESET sentinel = field was reset; fall through to profile/empty check
-      if (draft.value && key in draft.value) {
-        if (draft.value[key] !== FIELD_RESET) {
+      // Non-reset draft value → selfKind (resettable)
+      if (inDraft && !draftIsReset) {
+        states[key] = { kind: selfKind, resettable: true }
+        continue
+      }
+
+      // Saved base config — skipped when draft marks this field as reset,
+      // because the reset intent is to remove it from config on save.
+      if (!draftIsReset) {
+        const base = baseConfig.value || {}
+        if (key in base && base[key] !== null && base[key] !== undefined) {
           states[key] = { kind: selfKind, resettable: true }
           continue
         }
-      }
-
-      // Use key presence (not hasValue) so explicit empty values ([], '')
-      // are treated as "set at this level", not "inherited from profile".
-      const base = baseConfig.value || {}
-      if (key in base && base[key] !== null && base[key] !== undefined) {
-        states[key] = { kind: selfKind, resettable: true }
-        continue
       }
 
       if (isTemplateMode.value && boundProfile.value) {
