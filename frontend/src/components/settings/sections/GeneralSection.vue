@@ -51,16 +51,20 @@
         <div class="field-row">
           <label class="field-label">Working Directory</label>
           <div class="field-control">
-            <div class="dir-input-row">
+            <!-- New session: editable with folder browser -->
+            <div v-if="isNew" class="dir-input-row">
               <input
                 type="text"
                 class="field-input"
                 :value="currentWorkingDir"
-                placeholder="/path/to/project"
+                :placeholder="projectWorkingDir || '/path/to/project'"
                 @input="handleField('working_directory', $event.target.value)"
               />
               <button class="btn-browse" title="Browse…" @click="openWorkingDirBrowser">📁</button>
             </div>
+            <!-- Existing session: read-only -->
+            <span v-else class="field-value-readonly field-value-mono">{{ currentWorkingDir }}</span>
+            <div class="field-helper">The session's working directory (cannot be changed after creation)</div>
           </div>
         </div>
 
@@ -207,6 +211,7 @@ import { useTemplateStore } from '@/stores/template'
 import { useProfileStore } from '@/stores/profile'
 import { useSessionStore } from '@/stores/session'
 import { useUIStore } from '@/stores/ui'
+import { useProjectStore } from '@/stores/project'
 import SettingsToolbar from '../SettingsToolbar.vue'
 import TagInputWidget from '../../configuration/fields/TagInputWidget.vue'
 
@@ -217,6 +222,7 @@ const templateStore = useTemplateStore()
 const profileStore = useProfileStore()
 const sessionStore = useSessionStore()
 const uiStore = useUIStore()
+const projectStore = useProjectStore()
 
 const isTemplateMode = computed(() => route.path.startsWith('/settings/template/'))
 const isProfileMode  = computed(() => route.path.startsWith('/settings/profile/'))
@@ -269,10 +275,20 @@ const currentName = computed(() => {
   return entity.value?.name || ''
 })
 
+// For new sessions: default working directory comes from the project
+const projectWorkingDir = computed(() => {
+  if (!isSessionMode.value || !isNew.value) return ''
+  const pid = route.query.project_id
+  return pid ? (projectStore.getProject(pid)?.working_directory || '') : ''
+})
+
 const currentWorkingDir = computed(() => {
   if (!isSessionMode.value) return ''
   if (draft.value && 'working_directory' in draft.value) return draft.value.working_directory || ''
-  return entity.value?.working_directory || ''
+  // Existing session: always has working_directory set by backend
+  if (!isNew.value) return entity.value?.working_directory || ''
+  // New session: default to project's working directory
+  return projectWorkingDir.value
 })
 
 const currentRole = computed(() => {
@@ -384,7 +400,9 @@ async function handleSave() {
       if (!projectId) return
       const name = (draft.value?.name || '').trim() || 'New Session'
       const templateId = draft.value?.template_id || undefined
-      const workingDir = draft.value?.working_directory?.trim() || undefined
+      // Use draft value, or fall back to project directory (backend also resolves this, but
+      // sending it explicitly ensures it is stored in session.working_directory on first save)
+      const workingDir = (draft.value?.working_directory?.trim() || projectWorkingDir.value) || undefined
       const role = draft.value?.role?.trim() || undefined
       let caps = draft.value?.capabilities
       if (typeof caps === 'string') caps = caps.split(',').map(s => s.trim().toLowerCase()).filter(Boolean)
@@ -405,7 +423,7 @@ async function handleSave() {
       const payload = {}
       if ('name' in d) payload.name = d.name || null
       if ('template_id' in d) payload.template_id = d.template_id || null
-      if ('working_directory' in d) payload.working_directory = d.working_directory?.trim() || null
+      // working_directory is immutable after creation — never PATCH it
       if ('role' in d) payload.role = d.role || null
       if ('capabilities' in d) {
         let caps = d.capabilities
@@ -679,6 +697,19 @@ onMounted(() => {
 
 .chip-create-link:hover {
   text-decoration: underline;
+}
+
+.field-helper {
+  font-size: 11px;
+  color: var(--bs-tertiary-color);
+  margin-top: 5px;
+  line-height: 1.4;
+}
+
+.field-value-mono {
+  font-family: var(--bs-font-monospace);
+  font-size: 12px;
+  word-break: break-all;
 }
 
 .dir-input-row {
