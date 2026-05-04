@@ -1,10 +1,13 @@
 <template>
-  <div class="form-check form-switch mb-0">
+  <div
+    class="form-check form-switch mb-0"
+    :class="{ 'toggle-default': isShowingDefault }"
+  >
     <input
       class="form-check-input"
       type="checkbox"
       :id="inputId"
-      :checked="value"
+      :checked="displayValue"
       :disabled="disabled"
       @change="$emit('update:value', $event.target.checked)"
     />
@@ -18,12 +21,28 @@
 import { computed } from 'vue'
 
 const props = defineProps({
-  value: { type: Boolean, default: false },
+  value: { type: Boolean, default: null },
   disabled: { type: Boolean, default: false },
   label: { type: String, default: '' },
+  defaultValue: { type: Boolean, default: null },
 })
 
 defineEmits(['update:value'])
 
 const inputId = computed(() => `toggle-${Math.random().toString(36).slice(2, 9)}`)
+
+const isShowingDefault = computed(() =>
+  (props.value === null || props.value === undefined) && props.defaultValue !== null
+)
+
+const displayValue = computed(() => {
+  if (props.value !== null && props.value !== undefined) return props.value
+  return props.defaultValue ?? false
+})
 </script>
+
+<style scoped>
+.toggle-default .form-check-input {
+  opacity: 0.45;
+}
+</style>

@@ -51,6 +51,7 @@ export const FIELD_SCHEMAS = {
       key: 'permission_mode',
       label: 'Permission Mode',
       widget: 'button-group',
+      defaultValue: 'acceptEdits',
       options: [
         { value: 'default', label: 'Default' },
         { value: 'acceptEdits', label: 'Accept Edits' },
@@ -213,12 +214,14 @@ export const FIELD_SCHEMAS = {
       key: 'history_distillation_enabled',
       label: 'History Distillation',
       widget: 'toggle',
+      defaultValue: true,
       description: 'Distills session history to markdown on archive.',
     },
     {
       key: 'auto_memory_mode',
       label: 'Auto-Memory Mode',
       widget: 'button-group',
+      defaultValue: 'claude',
       options: [
         { value: 'claude', label: 'Claude' },
         { value: 'session', label: 'Session' },

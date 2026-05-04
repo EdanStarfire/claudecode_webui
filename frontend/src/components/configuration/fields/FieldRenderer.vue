@@ -83,6 +83,7 @@
         v-else-if="field.widget === 'toggle'"
         :value="value"
         :disabled="isDisabled"
+        :default-value="field.defaultValue !== undefined ? field.defaultValue : null"
         @update:value="$emit('update:value', $event)"
       />
 
