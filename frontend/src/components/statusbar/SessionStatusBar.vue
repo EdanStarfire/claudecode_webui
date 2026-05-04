@@ -94,6 +94,7 @@
 
 <script setup>
 import { computed } from 'vue'
+import { useRouter } from 'vue-router'
 import { useSessionStore } from '@/stores/session'
 import { useUIStore } from '@/stores/ui'
 import RateLimitBadge from './RateLimitBadge.vue'
@@ -105,6 +106,7 @@ const props = defineProps({
   }
 })
 
+const router = useRouter()
 const sessionStore = useSessionStore()
 const uiStore = useUIStore()
 
@@ -161,7 +163,7 @@ const showManage = () => {
 }
 
 const showEdit = () => {
-  uiStore.showModal('edit-session', { session: session.value })
+  if (session.value) router.push(`/settings/session/${session.value.session_id}/general`)
 }
 
 const toggleReadAloud = () => {

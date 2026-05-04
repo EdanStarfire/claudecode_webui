@@ -47,6 +47,8 @@ def build_router(webui) -> APIRouter:
             project_id=request.project_id,
             config=config,
             name=request.name,
+            role=request.role,
+            capabilities=request.capabilities,
             permission_callback=webui.permission_service.create_permission_callback(session_id),
         )
 
@@ -298,6 +300,9 @@ def build_router(webui) -> APIRouter:
             updates["strict_mcp_config"] = request.strict_mcp_config
         if request.bare_mode is not None:
             updates["bare_mode"] = request.bare_mode
+
+        if request.working_directory is not None:
+            updates["working_directory"] = request.working_directory.strip() or None
 
         if not updates:
             return {"success": True, "message": "No fields to update"}

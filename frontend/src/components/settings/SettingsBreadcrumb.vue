@@ -27,8 +27,10 @@ const LABELS = {
 const sectionLabel = computed(() => {
   if (LABELS[route.path]) return LABELS[route.path]
   if (route.path.startsWith('/settings/session/')) {
+    const isNew = route.params.sessionId === '__new__'
     const s = route.params.section
-    return s ? `Session › ${humanize(s)}` : 'Session'
+    const prefix = isNew ? 'New Session' : 'Session'
+    return s ? `${prefix} › ${humanize(s)}` : prefix
   }
   if (route.path.startsWith('/settings/template/')) {
     const s = route.params.section
@@ -41,7 +43,12 @@ const sectionLabel = computed(() => {
   return ''
 })
 
+const SECTION_LABELS = {
+  'tools-permissions': 'Tools & Permissions',
+}
+
 function humanize(slug) {
+  if (SECTION_LABELS[slug]) return SECTION_LABELS[slug]
   return slug.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
 }
 </script>

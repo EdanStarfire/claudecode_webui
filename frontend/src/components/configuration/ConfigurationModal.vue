@@ -1984,7 +1984,9 @@ watch(
       modalInstance.show()
     }
 
-    // Handle legacy modal names for backward compatibility
+    // LEGACY: 'create-minion' / 'create-session' modal — replaced by settings-view
+    // /settings/session/__new__/general?project_id=... (Phase 4). Left in place for
+    // Phase 5 removal. Should no longer be triggered by any UI button.
     else if (modal.name === 'create-minion' || modal.name === 'create-session') {
       const data = modal.data || {}
       mode.value = 'create-session'

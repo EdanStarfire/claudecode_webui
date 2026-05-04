@@ -18,7 +18,29 @@
         @update:model-value="settingsStore.setSearchQuery"
       />
 
-      <!-- Edit group: "This Template" or "This Profile" (shown when on an edit route) -->
+      <!-- Edit group: "Editing Session" (shown when on a session edit route) -->
+      <SettingsSidebarGroup
+        v-if="isSessionEdit && (filteredSessionItems.length > 0 || !settingsStore.searchQuery)"
+        title="Editing Session"
+        short-title="Sess"
+        :subtitle="sessionEntityName"
+        :tinted="true"
+      >
+        <SettingsSidebarItem
+          v-for="item in filteredSessionItems"
+          :key="item.to"
+          :to="item.to"
+          :icon="item.icon"
+          :label="item.label"
+          :disabled="item.disabled"
+          :tinted="true"
+        />
+        <div v-if="settingsStore.searchQuery && !filteredSessionItems.length" class="no-results">
+          No results
+        </div>
+      </SettingsSidebarGroup>
+
+      <!-- Edit group: "Editing Template" or "Editing Profile" (shown when on an edit route) -->
       <SettingsSidebarGroup
         v-if="isEditMode && (filteredEditItems.length > 0 || !settingsStore.searchQuery)"
         :title="editGroupTitle"
@@ -32,11 +54,31 @@
           :to="item.to"
           :icon="item.icon"
           :label="item.label"
+          :disabled="item.disabled"
           :tinted="true"
         />
         <div v-if="settingsStore.searchQuery && !filteredEditItems.length" class="no-results">
           No results
         </div>
+      </SettingsSidebarGroup>
+
+      <!-- Ghost edit group: shown on Application/Library routes to prevent sidebar bounce -->
+      <SettingsSidebarGroup
+        v-if="ghostItems.length"
+        :title="ghostGroupTitle"
+        :short-title="ghostGroupShort"
+        :subtitle="ghostEntityName"
+        :tinted="true"
+      >
+        <SettingsSidebarItem
+          v-for="item in ghostItems"
+          :key="item.to"
+          :to="item.to"
+          :icon="item.icon"
+          :label="item.label"
+          :disabled="item.disabled"
+          :tinted="true"
+        />
       </SettingsSidebarGroup>
 
       <!-- Application group -->
@@ -71,11 +113,12 @@
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useSettingsStore } from '@/stores/settings'
 import { useTemplateStore } from '@/stores/template'
 import { useProfileStore } from '@/stores/profile'
+import { useSessionStore } from '@/stores/session'
 import SettingsSidebarSearch from './SettingsSidebarSearch.vue'
 import SettingsSidebarGroup from './SettingsSidebarGroup.vue'
 import SettingsSidebarItem from './SettingsSidebarItem.vue'
@@ -85,16 +128,54 @@ const route = useRoute()
 const settingsStore  = useSettingsStore()
 const templateStore  = useTemplateStore()
 const profileStore   = useProfileStore()
+const sessionStore   = useSessionStore()
 
 function toggleSidebar() {
   settingsStore.setSidebarExpanded(!settingsStore.sidebarExpanded)
 }
+
+// ── Session edit group ─────────────────────────────────────────────────────
+
+const isSessionEdit = computed(() => route.path.startsWith('/settings/session/'))
+
+const sessionEntityId = computed(() => route.params.sessionId || '')
+
+const sessionEntityName = computed(() => {
+  if (sessionEntityId.value === '__new__') return 'New Session'
+  return sessionStore.getSession(sessionEntityId.value)?.name || ''
+})
+
+const sessionSectionItems = computed(() => {
+  if (!sessionEntityId.value) return []
+  const base = `/settings/session/${sessionEntityId.value}`
+  const isNew = sessionEntityId.value === '__new__'
+  const q = isNew && route.query.project_id ? `?project_id=${route.query.project_id}` : ''
+  return EDIT_SECTIONS.map(s => ({
+    to: s.section === 'general' && isNew ? `${base}/general${q}` : `${base}/${s.section}`,
+    icon: s.icon,
+    label: s.label,
+    sectionKey: s.sectionKey,
+    disabled: isNew && s.section !== 'general',
+  }))
+})
+
+const filteredSessionItems = computed(() => {
+  const q = settingsStore.searchQuery.toLowerCase().trim()
+  if (!q) return sessionSectionItems.value
+  return sessionSectionItems.value.filter(item => {
+    if (item.label.toLowerCase().includes(q)) return true
+    return settingsIndex
+      .filter(e => e.section === item.sectionKey)
+      .some(e => e.label.toLowerCase().includes(q))
+  })
+})
 
 // ── Edit-mode (template / profile) dynamic group ──────────────────────────
 
 const isTemplateEdit = computed(() => route.path.startsWith('/settings/template/'))
 const isProfileEdit  = computed(() => route.path.startsWith('/settings/profile/'))
 const isEditMode     = computed(() => isTemplateEdit.value || isProfileEdit.value)
+
 
 const editEntityId = computed(() => {
   return route.params.templateId || route.params.profileId || ''
@@ -142,38 +223,36 @@ const AREA_SECTION = {
 const editSectionItems = computed(() => {
   if (!editEntityId.value) return []
 
-  if (editEntityId.value === '__new__') {
-    const base = isTemplateEdit.value
-      ? '/settings/template/__new__'
-      : '/settings/profile/__new__'
+  const isNew = editEntityId.value === '__new__'
+  const base = isNew
+    ? (isTemplateEdit.value ? '/settings/template/__new__' : '/settings/profile/__new__')
+    : (isTemplateEdit.value ? `/settings/template/${editEntityId.value}` : `/settings/profile/${editEntityId.value}`)
+
+  if (isNew) {
     const areaQuery = route.query.area ? `?area=${route.query.area}` : ''
-    return [{
-      to: `${base}/general${areaQuery}`,
-      icon: '◉',
-      label: 'General',
-      sectionKey: 'edit-general',
-    }]
+    return EDIT_SECTIONS.map(s => ({
+      to: s.section === 'general' ? `${base}/general${areaQuery}` : `${base}/${s.section}`,
+      icon: s.icon,
+      label: s.label,
+      sectionKey: s.sectionKey,
+      disabled: s.section !== 'general',
+    }))
   }
 
-  const base = isTemplateEdit.value
-    ? `/settings/template/${editEntityId.value}`
-    : `/settings/profile/${editEntityId.value}`
-
-  let sections = EDIT_SECTIONS
+  // Profiles: only General + the section for their area are navigable
+  let enabledSections = null
   if (isProfileEdit.value) {
     const area = profileStore.getProfile(editEntityId.value)?.area
     const areaSection = area ? AREA_SECTION[area] : null
-    // Profiles show only General + the section for their area
-    sections = EDIT_SECTIONS.filter(s =>
-      s.section === 'general' || (areaSection && s.section === areaSection)
-    )
+    enabledSections = new Set(['general', ...(areaSection ? [areaSection] : [])])
   }
 
-  return sections.map(s => ({
+  return EDIT_SECTIONS.map(s => ({
     to: `${base}/${s.section}`,
     icon: s.icon,
     label: s.label,
     sectionKey: s.sectionKey,
+    disabled: enabledSections !== null && !enabledSections.has(s.section),
   }))
 })
 
@@ -223,6 +302,85 @@ const filteredLibItems = computed(() => {
       .filter(e => e.section === item.sectionKey)
       .some(e => e.label.toLowerCase().includes(q))
   })
+})
+
+// ── Ghost edit group (sidebar bounce prevention) ──────────────────────────
+// When on Application/Library routes, keep the last-visited edit group visible
+// but with all items disabled, so the sidebar layout stays stable.
+
+const lastEditState = ref({ type: null, id: null })
+
+watch(() => route.path, () => {
+  if (isSessionEdit.value && sessionEntityId.value) {
+    lastEditState.value = { type: 'session', id: sessionEntityId.value }
+  } else if (isTemplateEdit.value && editEntityId.value) {
+    lastEditState.value = { type: 'template', id: editEntityId.value }
+  } else if (isProfileEdit.value && editEntityId.value) {
+    lastEditState.value = { type: 'profile', id: editEntityId.value }
+  }
+}, { immediate: true })
+
+const isOnNonEditRoute = computed(() =>
+  route.path.startsWith('/settings/') && !isSessionEdit.value && !isEditMode.value
+)
+
+const ghostItems = computed(() => {
+  if (!isOnNonEditRoute.value) return []
+  const { type, id } = lastEditState.value
+
+  // No prior edit context: stable disabled placeholder so sidebar height never changes
+  if (!type) {
+    return EDIT_SECTIONS.map(s => ({ to: '', icon: s.icon, label: s.label, sectionKey: s.sectionKey, disabled: true }))
+  }
+
+  const isNew = id === '__new__'
+  const prefix = type === 'session' ? 'session' : (type === 'template' ? 'template' : 'profile')
+  const base = `/settings/${prefix}/${id}`
+
+  if (isNew) {
+    return EDIT_SECTIONS.map(s => ({
+      to: `${base}/${s.section}`,
+      icon: s.icon, label: s.label, sectionKey: s.sectionKey,
+      disabled: s.section !== 'general',
+    }))
+  }
+
+  let enabledSections = null
+  if (type === 'profile') {
+    const area = profileStore.getProfile(id)?.area
+    const areaSection = area ? AREA_SECTION[area] : null
+    enabledSections = new Set(['general', ...(areaSection ? [areaSection] : [])])
+  }
+
+  return EDIT_SECTIONS.map(s => ({
+    to: `${base}/${s.section}`,
+    icon: s.icon, label: s.label, sectionKey: s.sectionKey,
+    disabled: enabledSections !== null && !enabledSections.has(s.section),
+  }))
+})
+
+const ghostGroupTitle = computed(() => {
+  const t = lastEditState.value.type
+  if (t === 'template') return 'Editing Template'
+  if (t === 'profile')  return 'Editing Profile'
+  return 'Editing Session'
+})
+
+const ghostGroupShort = computed(() => {
+  const t = lastEditState.value.type
+  if (t === 'template') return 'Tmpl'
+  if (t === 'profile')  return 'Prof'
+  return 'Sess'
+})
+
+const ghostEntityName = computed(() => {
+  const { type, id } = lastEditState.value
+  if (!type || !id) return 'None selected'
+  if (id === '__new__') return 'New (unsaved)'
+  if (type === 'session')  return sessionStore.getSession(id)?.name || 'None selected'
+  if (type === 'template') return templateStore.getTemplate(id)?.name || 'None selected'
+  if (type === 'profile')  return profileStore.getProfile(id)?.name || 'None selected'
+  return 'None selected'
 })
 </script>
 

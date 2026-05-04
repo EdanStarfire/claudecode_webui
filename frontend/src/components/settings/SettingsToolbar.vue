@@ -2,14 +2,17 @@
   <div class="settings-toolbar">
     <div class="toolbar-left">
       <h2 class="toolbar-title">{{ title }}</h2>
-      <div v-if="chips && chips.length" class="toolbar-chips">
+      <div v-if="(chips && chips.length) || $slots['chips-extra']" class="toolbar-chips">
         <SettingsToolbarChip
           v-for="chip in chips"
           :key="chip.type + chip.label"
           :type="chip.type"
           :label="chip.label"
           :to="chip.to || ''"
+          :disabled="chip.disabled || false"
+          :tooltip="chip.tooltip || ''"
         />
+        <slot name="chips-extra" />
       </div>
     </div>
     <div class="toolbar-actions">

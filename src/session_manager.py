@@ -22,7 +22,7 @@ from typing import Any
 
 from .logging_config import get_logger
 from .models.permission_mode import PermissionMode
-from .session_config import CONFIG_FIELDS, SessionConfig
+from .session_config import CONFIG_FIELDS, DEFAULTS, SessionConfig
 from .slug_utils import slugify_name
 from .template_manager import TemplateManager
 
@@ -440,10 +440,14 @@ class SessionManager:
         if order is None:
             order = 0
 
-        # Build config dict from all CONFIG_FIELDS in the incoming SessionConfig.
-        # For template-linked sessions the resolution chain fills gaps at start time;
-        # session.config holds only what was explicitly configured at session creation.
-        config_dict = {k: v for k, v in config.model_dump().items() if k in CONFIG_FIELDS}
+        # Build config dict: only store CONFIG_FIELDS whose value differs from the
+        # SessionConfig default.  Default values are resolved at runtime from the
+        # template/profile cascade, so storing them here just pollutes session.config
+        # with false S-markers and prevents the cascade from showing T/P sources.
+        config_dict = {
+            k: v for k, v in config.model_dump().items()
+            if k in CONFIG_FIELDS and v != DEFAULTS.get(k)
+        }
 
         session_info = SessionInfo(
             session_id=session_id,
