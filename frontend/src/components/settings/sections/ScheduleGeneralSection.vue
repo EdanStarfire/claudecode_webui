@@ -216,6 +216,7 @@
 import { computed, ref, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useSettingsStore } from '@/stores/settings'
+import { useProjectStore } from '@/stores/project'
 import { useScheduleStore } from '@/stores/schedule'
 import { useSessionStore } from '@/stores/session'
 import SettingsToolbar from '../SettingsToolbar.vue'
@@ -227,6 +228,7 @@ const SECTION_KEY = 'general'
 const route = useRoute()
 const router = useRouter()
 const settingsStore = useSettingsStore()
+const projectStore  = useProjectStore()
 const scheduleStore = useScheduleStore()
 const sessionStore  = useSessionStore()
 
@@ -316,8 +318,10 @@ function handleCancel() {
 
 defineExpose({ save: handleSave, cancel: handleCancel })
 
-onMounted(() => {
+onMounted(async () => {
   sessionStore.fetchSessions?.()
+  await projectStore.fetchProjects()
+  await scheduleStore.loadAllSchedules()
 })
 </script>
 

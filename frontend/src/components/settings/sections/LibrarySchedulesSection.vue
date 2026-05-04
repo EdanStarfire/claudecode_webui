@@ -126,7 +126,7 @@ const pendingDeleteAgent = ref(true)
 const deleting           = ref(false)
 
 const groupedSchedules = computed(() => {
-  const legions = [...projectStore.projects.values()].filter(p => p.is_multi_agent)
+  const legions = [...projectStore.projects.values()]
   return legions
     .map(legion => ({
       legionId: legion.project_id,
@@ -195,6 +195,7 @@ async function executeDelete(schedule) {
 onMounted(async () => {
   loading.value = true
   try {
+    await projectStore.fetchProjects()
     await scheduleStore.loadAllSchedules()
   } finally {
     loading.value = false

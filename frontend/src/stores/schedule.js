@@ -161,9 +161,8 @@ export const useScheduleStore = defineStore('schedule', () => {
    */
   async function loadAllSchedules() {
     const projectStore = useProjectStore()
-    const legionIds = [...projectStore.projects.values()]
-      .filter(p => p.is_multi_agent)
-      .map(p => p.project_id)
+    if (projectStore.projects.size === 0) await projectStore.fetchProjects()
+    const legionIds = [...projectStore.projects.values()].map(p => p.project_id)
     await Promise.all(legionIds.map(id => loadSchedules(id)))
   }
 

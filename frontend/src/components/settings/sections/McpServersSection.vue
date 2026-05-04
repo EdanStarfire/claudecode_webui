@@ -279,6 +279,7 @@ onMounted(() => {
   if (isSessionMode.value)  { templateStore.fetchTemplates(); profileStore.fetchIfEmpty() }
   if (isTemplateMode.value) { templateStore.fetchTemplates(); profileStore.fetchIfEmpty() }
   if (isProfileMode.value)  profileStore.fetchIfEmpty()
+  if (isScheduleMode.value) scheduleStore.loadAllSchedules()
 })
 </script>
 
