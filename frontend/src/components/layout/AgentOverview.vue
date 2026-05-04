@@ -300,7 +300,7 @@ function jumpToActive() {
 
 function editSession() {
   if (session.value) {
-    uiStore.showModal('edit-session', { session: session.value })
+    router.push(`/settings/session/${session.value.session_id}/general`)
   }
 }
 
