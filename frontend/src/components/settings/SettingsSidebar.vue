@@ -32,6 +32,7 @@
           :to="item.to"
           :icon="item.icon"
           :label="item.label"
+          :disabled="item.disabled"
           :tinted="true"
         />
         <div v-if="settingsStore.searchQuery && !filteredSessionItems.length" class="no-results">
@@ -53,6 +54,7 @@
           :to="item.to"
           :icon="item.icon"
           :label="item.label"
+          :disabled="item.disabled"
           :tinted="true"
         />
         <div v-if="settingsStore.searchQuery && !filteredEditItems.length" class="no-results">
@@ -127,16 +129,14 @@ const sessionEntityName = computed(() => {
 const sessionSectionItems = computed(() => {
   if (!sessionEntityId.value) return []
   const base = `/settings/session/${sessionEntityId.value}`
-  // For new session creation, show only General (same pattern as template/__new__)
-  if (sessionEntityId.value === '__new__') {
-    const q = route.query.project_id ? `?project_id=${route.query.project_id}` : ''
-    return [{ to: `${base}/general${q}`, icon: '◉', label: 'General', sectionKey: 'edit-general' }]
-  }
+  const isNew = sessionEntityId.value === '__new__'
+  const q = isNew && route.query.project_id ? `?project_id=${route.query.project_id}` : ''
   return EDIT_SECTIONS.map(s => ({
-    to: `${base}/${s.section}`,
+    to: s.section === 'general' && isNew ? `${base}/general${q}` : `${base}/${s.section}`,
     icon: s.icon,
     label: s.label,
     sectionKey: s.sectionKey,
+    disabled: isNew && s.section !== 'general',
   }))
 })
 
@@ -204,38 +204,36 @@ const AREA_SECTION = {
 const editSectionItems = computed(() => {
   if (!editEntityId.value) return []
 
-  if (editEntityId.value === '__new__') {
-    const base = isTemplateEdit.value
-      ? '/settings/template/__new__'
-      : '/settings/profile/__new__'
+  const isNew = editEntityId.value === '__new__'
+  const base = isNew
+    ? (isTemplateEdit.value ? '/settings/template/__new__' : '/settings/profile/__new__')
+    : (isTemplateEdit.value ? `/settings/template/${editEntityId.value}` : `/settings/profile/${editEntityId.value}`)
+
+  if (isNew) {
     const areaQuery = route.query.area ? `?area=${route.query.area}` : ''
-    return [{
-      to: `${base}/general${areaQuery}`,
-      icon: '◉',
-      label: 'General',
-      sectionKey: 'edit-general',
-    }]
+    return EDIT_SECTIONS.map(s => ({
+      to: s.section === 'general' ? `${base}/general${areaQuery}` : `${base}/${s.section}`,
+      icon: s.icon,
+      label: s.label,
+      sectionKey: s.sectionKey,
+      disabled: s.section !== 'general',
+    }))
   }
 
-  const base = isTemplateEdit.value
-    ? `/settings/template/${editEntityId.value}`
-    : `/settings/profile/${editEntityId.value}`
-
-  let sections = EDIT_SECTIONS
+  // Profiles: only General + the section for their area are navigable
+  let enabledSections = null
   if (isProfileEdit.value) {
     const area = profileStore.getProfile(editEntityId.value)?.area
     const areaSection = area ? AREA_SECTION[area] : null
-    // Profiles show only General + the section for their area
-    sections = EDIT_SECTIONS.filter(s =>
-      s.section === 'general' || (areaSection && s.section === areaSection)
-    )
+    enabledSections = new Set(['general', ...(areaSection ? [areaSection] : [])])
   }
 
-  return sections.map(s => ({
+  return EDIT_SECTIONS.map(s => ({
     to: `${base}/${s.section}`,
     icon: s.icon,
     label: s.label,
     sectionKey: s.sectionKey,
+    disabled: enabledSections !== null && !enabledSections.has(s.section),
   }))
 })
 
