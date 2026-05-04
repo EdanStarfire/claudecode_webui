@@ -414,7 +414,7 @@ async function handleSave() {
         ...(caps?.length ? { capabilities: caps } : {}),
       })
       settingsStore.discardDraft(areaKey.value)
-      await router.replace(`/settings/session/${session.session_id}/general`)
+      router.push(`/session/${session.session_id}`)
       return
     }
     if (isSessionMode.value) {
