@@ -77,7 +77,12 @@ watch(() => route.path, (path) => {
 
 function toggleSettings() {
   if (isSettingsRoute.value) {
-    router.push(lastContentRoute.value)
+    const sessionId = route.params.sessionId
+    if (sessionId && sessionId !== '__new__') {
+      router.push(`/session/${sessionId}`)
+    } else {
+      router.push(lastContentRoute.value)
+    }
     return
   }
   const sessionId = sessionStore.currentSessionId

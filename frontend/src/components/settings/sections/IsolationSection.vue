@@ -102,6 +102,9 @@ const isDirty = computed(() => settingsStore.dirtyAreas.has(areaKey.value))
 const saving  = ref(false)
 
 const isolationFields = computed(() => FIELD_SCHEMAS.isolation.map(f => {
+  if (f.key === 'docker_enabled' && isSessionMode.value && entity.value) {
+    return { ...f, disabledWhen: () => true, description: 'Docker isolation cannot be changed after session creation.' }
+  }
   if (f.key === 'docker_proxy_enabled') return { ...f, description: 'Intercepts outbound traffic via a dedicated proxy sidecar. Requires <code>claude-proxy:local</code> image.' }
   if (f.key === 'docker_extra_mounts')  return { ...f, placeholder: '{session_data}/db:/app/db:ro or /host/path:/container/path:ro (one per line)', description: 'Supports template variables: {session_id}, {session_data}, {working_dir}.' }
   if (f.key === 'bare_mode')            return { ...f, description: 'Skips hooks, LSP, plugin sync, and skill directory walks. Requires ANTHROPIC_API_KEY.' }
