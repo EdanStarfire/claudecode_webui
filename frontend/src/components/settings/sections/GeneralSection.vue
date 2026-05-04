@@ -710,6 +710,7 @@ onMounted(() => {
   font-family: var(--bs-font-monospace);
   font-size: 12px;
   word-break: break-all;
+  text-transform: none;
 }
 
 .dir-input-row {
