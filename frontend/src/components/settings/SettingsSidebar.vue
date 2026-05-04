@@ -119,13 +119,19 @@ const isSessionEdit = computed(() => route.path.startsWith('/settings/session/')
 
 const sessionEntityId = computed(() => route.params.sessionId || '')
 
-const sessionEntityName = computed(() =>
-  sessionStore.getSession(sessionEntityId.value)?.name || ''
-)
+const sessionEntityName = computed(() => {
+  if (sessionEntityId.value === '__new__') return 'New Session'
+  return sessionStore.getSession(sessionEntityId.value)?.name || ''
+})
 
 const sessionSectionItems = computed(() => {
   if (!sessionEntityId.value) return []
   const base = `/settings/session/${sessionEntityId.value}`
+  // For new session creation, show only General (same pattern as template/__new__)
+  if (sessionEntityId.value === '__new__') {
+    const q = route.query.project_id ? `?project_id=${route.query.project_id}` : ''
+    return [{ to: `${base}/general${q}`, icon: '◉', label: 'General', sectionKey: 'edit-general' }]
+  }
   return EDIT_SECTIONS.map(s => ({
     to: `${base}/${s.section}`,
     icon: s.icon,

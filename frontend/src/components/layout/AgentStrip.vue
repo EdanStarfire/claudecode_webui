@@ -207,7 +207,8 @@ function handleStripClick(e) {
 function showCreateSessionModal() {
   const project = browsingProject.value
   if (project) {
-    uiStore.showModal('create-minion', { project })
+    // LEGACY: uiStore.showModal('create-minion', { project }) — replaced by settings-view (Phase 4)
+    router.push(`/settings/session/__new__/general?project_id=${project.project_id}`)
   }
 }
 

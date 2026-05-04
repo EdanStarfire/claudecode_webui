@@ -219,6 +219,8 @@ const mergedConfig = computed(() => ({
 }))
 
 const isDirty = computed(() => {
+  // New-session mode always shows Save (no entity yet to compare against)
+  if (isSessionMode.value && isNew.value) return true
   if (isSessionMode.value) return settingsStore.dirtyAreas.has(areaKey.value)
   return isNew.value || settingsStore.dirtyAreas.has(areaKey.value)
 })
@@ -259,6 +261,20 @@ function handleProfileBinding(area, profileId) {
 async function handleSave() {
   saving.value = true
   try {
+    if (isSessionMode.value && isNew.value) {
+      // Create a brand-new session — only name + template_id, no config defaults
+      const projectId = route.query.project_id
+      if (!projectId) return
+      const name = (draft.value?.name || '').trim() || 'New Session'
+      const templateId = draft.value?.template_id || undefined
+      const session = await sessionStore.createSession(projectId, {
+        name,
+        ...(templateId ? { template_id: templateId } : {}),
+      })
+      settingsStore.discardDraft(areaKey.value)
+      await router.replace(`/settings/session/${session.session_id}/general`)
+      return
+    }
     if (isSessionMode.value) {
       if (!entity.value || !isDirty.value) return
       const d = { ...draft.value }
@@ -305,7 +321,8 @@ async function handleSave() {
 function handleCancel() {
   settingsStore.discardDraft(areaKey.value)
   if (isNew.value) {
-    if (isTemplateMode.value) router.push('/settings/templates')
+    if (isSessionMode.value) router.push('/')
+    else if (isTemplateMode.value) router.push('/settings/templates')
     else router.push('/settings/profiles')
   }
 }
