@@ -61,6 +61,28 @@
             <span class="field-value-muted">No template bound — fields show default values only</span>
           </div>
         </div>
+
+        <!-- Profile bindings inherited from bound template (read-only) -->
+        <div v-if="boundTemplate" class="field-row field-row--bindings">
+          <label class="field-label field-label--top">Profile Bindings</label>
+          <div class="field-control">
+            <div class="bindings-help">Profiles inherited from the bound template.</div>
+            <div class="profile-bindings">
+              <div v-for="area in PROFILE_AREAS" :key="area.key" class="binding-row">
+                <label class="binding-area-label">{{ area.label }}</label>
+                <button
+                  v-if="templateProfileFor(area.key)"
+                  class="profile-link-chip"
+                  :title="`Edit ${templateProfileFor(area.key).name}`"
+                  @click="goToProfile(area.key)"
+                >
+                  {{ templateProfileFor(area.key).name }}
+                </button>
+                <span v-else class="profile-none">—</span>
+              </div>
+            </div>
+          </div>
+        </div>
       </template>
 
       <!-- Template mode fields -->
@@ -234,6 +256,27 @@ const PROFILE_AREAS = [
   { key: 'isolation',     label: 'Isolation' },
   { key: 'features',      label: 'Features' },
 ]
+
+const AREA_TO_SECTION = {
+  model:         'model-tuning',
+  permissions:   'tools-permissions',
+  mcp:           'mcp-servers',
+  features:      'features',
+  system_prompt: 'system-prompt',
+  isolation:     'isolation',
+}
+
+function templateProfileFor(areaKey) {
+  const profileId = boundTemplate.value?.profile_ids?.[areaKey]
+  return profileId ? profileStore.getProfile(profileId) : null
+}
+
+function goToProfile(areaKey) {
+  const profileId = boundTemplate.value?.profile_ids?.[areaKey]
+  if (!profileId) return
+  const section = AREA_TO_SECTION[areaKey] || 'general'
+  router.push(`/settings/profile/${profileId}/${section}`)
+}
 
 function handleField(key, value) {
   settingsStore.setField(areaKey.value, key, value)
@@ -478,6 +521,31 @@ onMounted(() => {
 .binding-select:focus {
   outline: none;
   border-color: #6366f1;
+}
+
+.profile-link-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 10px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 500;
+  border: 1px solid var(--p-border, rgba(63, 185, 80, 0.30));
+  background: var(--p-tint, rgba(63, 185, 80, 0.10));
+  color: var(--p-fg, #3fb950);
+  cursor: pointer;
+  transition: opacity 0.12s;
+}
+
+.profile-link-chip:hover {
+  opacity: 0.8;
+}
+
+.profile-none {
+  font-size: 13px;
+  color: var(--bs-tertiary-color);
+  padding: 3px 0;
 }
 
 /* Editable T: chip for template selector in session General toolbar */
