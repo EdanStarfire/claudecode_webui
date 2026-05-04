@@ -47,6 +47,51 @@
           </div>
         </div>
 
+        <!-- Working Directory -->
+        <div class="field-row">
+          <label class="field-label">Working Directory</label>
+          <div class="field-control">
+            <div class="dir-input-row">
+              <input
+                type="text"
+                class="field-input"
+                :value="currentWorkingDir"
+                placeholder="/path/to/project"
+                @input="handleField('working_directory', $event.target.value)"
+              />
+              <button class="btn-browse" title="Browse…" @click="openWorkingDirBrowser">📁</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Role -->
+        <div class="field-row">
+          <label class="field-label">Role</label>
+          <div class="field-control">
+            <input
+              type="text"
+              class="field-input"
+              :value="currentRole"
+              placeholder="e.g., Code review specialist"
+              @input="handleField('role', $event.target.value)"
+            />
+          </div>
+        </div>
+
+        <!-- Capabilities -->
+        <div class="field-row">
+          <label class="field-label">Capabilities</label>
+          <div class="field-control">
+            <TagInputWidget
+              :value="currentCapabilities"
+              variant="capability"
+              placeholder="Add capability…"
+              :default-value="null"
+              @update:value="handleField('capabilities', $event)"
+            />
+          </div>
+        </div>
+
         <!-- Bound template info (read-only metadata) -->
         <div v-if="boundTemplate" class="field-row">
           <label class="field-label">Template</label>
@@ -161,6 +206,7 @@ import { useSettingsStore } from '@/stores/settings'
 import { useTemplateStore } from '@/stores/template'
 import { useProfileStore } from '@/stores/profile'
 import { useSessionStore } from '@/stores/session'
+import { useUIStore } from '@/stores/ui'
 import SettingsToolbar from '../SettingsToolbar.vue'
 import TagInputWidget from '../../configuration/fields/TagInputWidget.vue'
 
@@ -170,6 +216,7 @@ const settingsStore = useSettingsStore()
 const templateStore = useTemplateStore()
 const profileStore = useProfileStore()
 const sessionStore = useSessionStore()
+const uiStore = useUIStore()
 
 const isTemplateMode = computed(() => route.path.startsWith('/settings/template/'))
 const isProfileMode  = computed(() => route.path.startsWith('/settings/profile/'))
@@ -220,6 +267,26 @@ const currentName = computed(() => {
   if (!isSessionMode.value) return ''
   if (draft.value && 'name' in draft.value) return draft.value.name
   return entity.value?.name || ''
+})
+
+const currentWorkingDir = computed(() => {
+  if (!isSessionMode.value) return ''
+  if (draft.value && 'working_directory' in draft.value) return draft.value.working_directory || ''
+  return entity.value?.working_directory || ''
+})
+
+const currentRole = computed(() => {
+  if (!isSessionMode.value) return ''
+  if (draft.value && 'role' in draft.value) return draft.value.role || ''
+  return entity.value?.role || ''
+})
+
+const currentCapabilities = computed(() => {
+  if (!isSessionMode.value) return null
+  if (draft.value && 'capabilities' in draft.value) return draft.value.capabilities
+  const arr = entity.value?.capabilities
+  if (!arr || arr.length === 0) return null
+  return Array.isArray(arr) ? arr.join(', ') : arr
 })
 
 // Template/profile mode: mergedConfig
@@ -282,6 +349,13 @@ function handleField(key, value) {
   settingsStore.setField(areaKey.value, key, value)
 }
 
+function openWorkingDirBrowser() {
+  uiStore.showModal('folder-browser', {
+    currentPath: currentWorkingDir.value || '',
+    onSelect: (path) => handleField('working_directory', path),
+  })
+}
+
 function handleTemplateChange(event) {
   const value = event.target.value
   if (value === '__create__') {
@@ -305,14 +379,21 @@ async function handleSave() {
   saving.value = true
   try {
     if (isSessionMode.value && isNew.value) {
-      // Create a brand-new session — only name + template_id, no config defaults
+      // Create a brand-new session — only name + template_id + identity fields, no config defaults
       const projectId = route.query.project_id
       if (!projectId) return
       const name = (draft.value?.name || '').trim() || 'New Session'
       const templateId = draft.value?.template_id || undefined
+      const workingDir = draft.value?.working_directory?.trim() || undefined
+      const role = draft.value?.role?.trim() || undefined
+      let caps = draft.value?.capabilities
+      if (typeof caps === 'string') caps = caps.split(',').map(s => s.trim().toLowerCase()).filter(Boolean)
       const session = await sessionStore.createSession(projectId, {
         name,
         ...(templateId ? { template_id: templateId } : {}),
+        ...(workingDir ? { working_directory: workingDir } : {}),
+        ...(role ? { role } : {}),
+        ...(caps?.length ? { capabilities: caps } : {}),
       })
       settingsStore.discardDraft(areaKey.value)
       await router.replace(`/settings/session/${session.session_id}/general`)
@@ -323,8 +404,13 @@ async function handleSave() {
       const d = { ...draft.value }
       const payload = {}
       if ('name' in d) payload.name = d.name || null
-      if ('template_id' in d) {
-        payload.template_id = d.template_id || null
+      if ('template_id' in d) payload.template_id = d.template_id || null
+      if ('working_directory' in d) payload.working_directory = d.working_directory?.trim() || null
+      if ('role' in d) payload.role = d.role || null
+      if ('capabilities' in d) {
+        let caps = d.capabilities
+        if (typeof caps === 'string') caps = caps.split(',').map(s => s.trim().toLowerCase()).filter(Boolean)
+        payload.capabilities = caps || []
       }
       await sessionStore.patchSession(entityId.value, payload)
       settingsStore.markClean(areaKey.value)
@@ -593,6 +679,31 @@ onMounted(() => {
 
 .chip-create-link:hover {
   text-decoration: underline;
+}
+
+.dir-input-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.dir-input-row .field-input {
+  flex: 1;
+}
+
+.btn-browse {
+  flex-shrink: 0;
+  padding: 5px 9px;
+  background: var(--bs-tertiary-bg);
+  border: 1px solid var(--bs-border-color);
+  border-radius: 6px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.12s;
+}
+
+.btn-browse:hover {
+  background: var(--bs-secondary-bg);
 }
 
 @container settings-area (max-width: 599px) {

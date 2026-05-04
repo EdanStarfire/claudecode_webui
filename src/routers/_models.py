@@ -40,6 +40,8 @@ class ProjectReorderRequest(BaseModel):
 class SessionCreateRequest(SessionConfig):
     project_id: str
     name: str | None = None
+    role: str | None = None
+    capabilities: list[str] | None = None
 
 
 class MessageRequest(BaseModel):
@@ -89,6 +91,7 @@ class SessionUpdateRequest(BaseModel):
     enable_claudeai_mcp_servers: bool | None = None
     strict_mcp_config: bool | None = None
     bare_mode: bool | None = None
+    working_directory: str | None = None
     # Issue #1230: reject legacy field that was removed
     session_overrides: dict | None = None
 
