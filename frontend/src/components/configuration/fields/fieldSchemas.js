@@ -115,6 +115,7 @@ export const FIELD_SCHEMAS = {
       key: 'override_system_prompt',
       label: 'Override System Prompt',
       widget: 'toggle',
+      defaultValue: false,
     },
   ],
 
@@ -134,7 +135,7 @@ export const FIELD_SCHEMAS = {
       placeholder: '/path/to/claude-cli',
       disabledWhen: (config) => !!config.docker_enabled,
     },
-    { key: 'sandbox_enabled', label: 'Sandbox Mode', widget: 'toggle' },
+    { key: 'sandbox_enabled', label: 'Sandbox Mode', widget: 'toggle', defaultValue: false },
     {
       key: 'sandbox_config',
       label: 'Sandbox Configuration',
@@ -142,7 +143,7 @@ export const FIELD_SCHEMAS = {
       nested: true,
       showWhen: (config) => !!config.sandbox_enabled,
     },
-    { key: 'docker_enabled', label: 'Docker Isolation', widget: 'toggle' },
+    { key: 'docker_enabled', label: 'Docker Isolation', widget: 'toggle', defaultValue: false },
     {
       key: 'docker_image',
       label: 'Docker Image',
@@ -169,6 +170,7 @@ export const FIELD_SCHEMAS = {
       key: 'docker_proxy_enabled',
       label: 'Network Proxy Sidecar',
       widget: 'toggle',
+      defaultValue: false,
       showWhen: (config) => !!config.docker_enabled,
     },
     {
@@ -199,12 +201,14 @@ export const FIELD_SCHEMAS = {
       key: 'bare_mode',
       label: 'Bare mode',
       widget: 'toggle',
+      defaultValue: false,
       description: 'Skips hooks, LSP, plugin sync, and skill directory walks.',
     },
     {
       key: 'env_scrub_enabled',
       label: 'Scrub subprocess credentials',
       widget: 'toggle',
+      defaultValue: false,
       description: 'Strips API keys and cloud credentials from subprocess environments.',
     },
   ],
@@ -240,6 +244,7 @@ export const FIELD_SCHEMAS = {
       key: 'skill_creating_enabled',
       label: 'Skill Creating',
       widget: 'toggle',
+      defaultValue: false,
       description: 'Includes skill-maker guidance in session system prompt.',
     },
   ],

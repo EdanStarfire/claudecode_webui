@@ -21,10 +21,10 @@
 import { computed } from 'vue'
 
 const props = defineProps({
-  value: { type: Boolean, default: null },
+  value: { default: null },
   disabled: { type: Boolean, default: false },
   label: { type: String, default: '' },
-  defaultValue: { type: Boolean, default: null },
+  defaultValue: { default: null },
 })
 
 defineEmits(['update:value'])
