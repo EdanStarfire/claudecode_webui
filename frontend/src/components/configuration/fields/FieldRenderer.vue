@@ -65,7 +65,7 @@
         :disabled="isDisabled"
         :options="field.options || []"
         :multiple="field.multiple || false"
-        :default-value="field.defaultValue || null"
+        :default-value="field.defaultValue !== undefined ? field.defaultValue : null"
         @update:value="$emit('update:value', $event)"
       />
 
