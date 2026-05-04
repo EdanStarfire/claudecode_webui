@@ -155,8 +155,12 @@ function handleField(key, value) {
 
 function handleProfileBinding(area, profileId) {
   const current = { ...((entity.value?.profile_ids) || {}), ...((draft.value?.profile_ids) || {}) }
-  const updated = { ...current, [area]: profileId }
-  settingsStore.setField(areaKey.value, 'profile_ids', updated)
+  if (profileId) {
+    current[area] = profileId
+  } else {
+    delete current[area]
+  }
+  settingsStore.setField(areaKey.value, 'profile_ids', current)
 }
 
 async function handleSave() {
