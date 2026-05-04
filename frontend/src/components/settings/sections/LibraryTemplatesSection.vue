@@ -19,9 +19,8 @@
           <button
             class="category-add-btn"
             title="New custom template"
-            :disabled="creating"
             @click="quickCreate"
-          >{{ creating ? '…' : '+' }}</button>
+          >+</button>
         </div>
 
         <div v-if="customTemplates.length === 0" class="empty-state">
@@ -74,7 +73,7 @@
 </template>
 
 <script setup>
-import { computed, ref, onMounted } from 'vue'
+import { computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useTemplateStore } from '@/stores/template'
 import { useUIStore } from '@/stores/ui'
@@ -83,7 +82,6 @@ import SettingsToolbar from '../SettingsToolbar.vue'
 const router = useRouter()
 const templateStore = useTemplateStore()
 const uiStore = useUIStore()
-const creating = ref(false)
 
 const customTemplates = computed(() =>
   templateStore.templateList
@@ -105,21 +103,8 @@ function openImport() {
   uiStore.showModal('template-management')
 }
 
-async function quickCreate() {
-  if (creating.value) return
-  creating.value = true
-  try {
-    const names = new Set(templateStore.templateList.map(t => t.name))
-    let name = 'New Template'
-    let i = 2
-    while (names.has(name)) name = `New Template ${i++}`
-    const result = await templateStore.createTemplate({ name, config: {} })
-    router.push(`/settings/template/${result.template_id}/general`)
-  } catch (err) {
-    console.error('Create template failed:', err)
-  } finally {
-    creating.value = false
-  }
+function quickCreate() {
+  router.push('/settings/template/__new__/general')
 }
 
 onMounted(() => templateStore.fetchTemplates())

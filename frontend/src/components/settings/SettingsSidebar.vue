@@ -107,6 +107,7 @@ const editGroupTitle = computed(() => {
 })
 
 const editEntityName = computed(() => {
+  if (editEntityId.value === '__new__') return ''
   if (isTemplateEdit.value) return templateStore.getTemplate(editEntityId.value)?.name || ''
   if (isProfileEdit.value)  return profileStore.getProfile(editEntityId.value)?.name || ''
   return ''
@@ -140,6 +141,20 @@ const AREA_SECTION = {
 
 const editSectionItems = computed(() => {
   if (!editEntityId.value) return []
+
+  if (editEntityId.value === '__new__') {
+    const base = isTemplateEdit.value
+      ? '/settings/template/__new__'
+      : '/settings/profile/__new__'
+    const areaQuery = route.query.area ? `?area=${route.query.area}` : ''
+    return [{
+      to: `${base}/general${areaQuery}`,
+      icon: '◉',
+      label: 'General',
+      sectionKey: 'edit-general',
+    }]
+  }
+
   const base = isTemplateEdit.value
     ? `/settings/template/${editEntityId.value}`
     : `/settings/profile/${editEntityId.value}`

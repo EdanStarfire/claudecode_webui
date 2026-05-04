@@ -18,9 +18,8 @@
           <button
             class="category-add-btn"
             :title="`New ${area.label} profile`"
-            :disabled="creatingArea === area.key"
             @click="quickCreate(area.key)"
-          >{{ creatingArea === area.key ? '…' : '+' }}</button>
+          >+</button>
         </div>
 
         <div v-if="profilesByArea(area.key).length === 0" class="empty-state">
@@ -46,14 +45,13 @@
 </template>
 
 <script setup>
-import { computed, ref, onMounted } from 'vue'
+import { computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useProfileStore } from '@/stores/profile'
 import SettingsToolbar from '../SettingsToolbar.vue'
 
 const router = useRouter()
 const profileStore = useProfileStore()
-const creatingArea = ref(null)
 
 const PROFILE_AREAS = [
   { key: 'model',         label: 'Model' },
@@ -74,23 +72,8 @@ function openEdit(profile) {
   router.push(`/settings/profile/${profile.profile_id}/general`)
 }
 
-async function quickCreate(areaKey) {
-  if (creatingArea.value) return
-  creatingArea.value = areaKey
-  try {
-    const areaLabel = PROFILE_AREAS.find(a => a.key === areaKey)?.label || areaKey
-    const existing = new Set(profileStore.allProfiles.filter(p => p.area === areaKey).map(p => p.name))
-    const base = `New ${areaLabel} Profile`
-    let name = base
-    let i = 2
-    while (existing.has(name)) name = `${base} ${i++}`
-    const profile = await profileStore.createProfile(name, areaKey, {})
-    router.push(`/settings/profile/${profile.profile_id}/general`)
-  } catch (err) {
-    console.error('Create profile failed:', err)
-  } finally {
-    creatingArea.value = null
-  }
+function quickCreate(areaKey) {
+  router.push(`/settings/profile/__new__/general?area=${areaKey}`)
 }
 
 onMounted(() => profileStore.fetchIfEmpty())

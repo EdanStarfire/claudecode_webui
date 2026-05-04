@@ -8,7 +8,7 @@
       @cancel="handleCancel"
     />
 
-    <div v-if="!entity" class="section-loading">Loading…</div>
+    <div v-if="!entity && !isNew" class="section-loading">Loading…</div>
 
     <div v-else class="section-body">
       <!-- Name -->
@@ -43,7 +43,7 @@
       <div v-if="isProfileMode" class="field-row">
         <label class="field-label">Area</label>
         <div class="field-control">
-          <span class="field-value-readonly">{{ entity.area }}</span>
+          <span class="field-value-readonly">{{ isNew ? newArea : entity?.area }}</span>
         </div>
       </div>
 
@@ -95,13 +95,14 @@
 
 <script setup>
 import { computed, ref, onMounted } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { useSettingsStore } from '@/stores/settings'
 import { useTemplateStore } from '@/stores/template'
 import { useProfileStore } from '@/stores/profile'
 import SettingsToolbar from '../SettingsToolbar.vue'
 
 const route = useRoute()
+const router = useRouter()
 const settingsStore = useSettingsStore()
 const templateStore = useTemplateStore()
 const profileStore = useProfileStore()
@@ -114,7 +115,11 @@ const areaKey        = computed(() => {
   return `${prefix}:${entityId.value}:general`
 })
 
+const isNew  = computed(() => entityId.value === '__new__')
+const newArea = computed(() => route.query.area || 'model')
+
 const entity = computed(() => {
+  if (isNew.value) return null
   if (isTemplateMode.value) return templateStore.getTemplate(entityId.value)
   if (isProfileMode.value)  return profileStore.getProfile(entityId.value)
   return null
@@ -132,7 +137,7 @@ const mergedConfig = computed(() => ({
   ...draft.value,
 }))
 
-const isDirty = computed(() => settingsStore.dirtyAreas.has(areaKey.value))
+const isDirty = computed(() => isNew.value || settingsStore.dirtyAreas.has(areaKey.value))
 const saving  = ref(false)
 
 const PROFILE_AREAS = [
@@ -155,14 +160,26 @@ function handleProfileBinding(area, profileId) {
 }
 
 async function handleSave() {
-  if (!entity.value || !isDirty.value) return
   saving.value = true
   try {
+    if (isNew.value) {
+      const name = (draft.value?.name || '').trim() || (isTemplateMode.value ? 'New Template' : 'New Profile')
+      if (isTemplateMode.value) {
+        const result = await templateStore.createTemplate({ name, config: {} })
+        settingsStore.discardDraft(areaKey.value)
+        router.replace(`/settings/template/${result.template_id}/general`)
+      } else {
+        const profile = await profileStore.createProfile(name, newArea.value, {})
+        settingsStore.discardDraft(areaKey.value)
+        router.replace(`/settings/profile/${profile.profile_id}/general`)
+      }
+      return
+    }
+    if (!entity.value || !isDirty.value) return
     const d = { ...draft.value }
     if (isTemplateMode.value) {
       await templateStore.updateTemplate(entityId.value, d)
     } else {
-      // Profile: only name is editable on general section
       await profileStore.updateProfile(entityId.value, { name: d.name })
     }
     settingsStore.markClean(areaKey.value)
@@ -175,6 +192,10 @@ async function handleSave() {
 
 function handleCancel() {
   settingsStore.discardDraft(areaKey.value)
+  if (isNew.value) {
+    if (isTemplateMode.value) router.push('/settings/templates')
+    else router.push('/settings/profiles')
+  }
 }
 
 defineExpose({ save: handleSave })
