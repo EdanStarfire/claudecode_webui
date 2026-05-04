@@ -120,22 +120,6 @@
         </div>
       </div>
 
-      <!-- Timeout seconds -->
-      <div class="field-row">
-        <label class="field-label">Timeout (s)</label>
-        <div class="field-control">
-          <input
-            type="number"
-            class="field-input field-input--narrow"
-            min="0"
-            :value="draft?.timeout_seconds ?? entity.timeout_seconds ?? ''"
-            placeholder="None"
-            @input="handleField('timeout_seconds', $event.target.value ? Number($event.target.value) : null)"
-          />
-          <div class="field-helper">Maximum execution time in seconds (empty = no limit).</div>
-        </div>
-      </div>
-
       <!-- Bound entity (permanent or ephemeral) -->
       <div v-if="entity.minion_id && !entity.session_config" class="field-row">
         <label class="field-label">Bound Session</label>
@@ -300,7 +284,7 @@ async function handleSave() {
     const keysToDelete = Object.keys(d).filter(k => d[k] === FIELD_RESET)
     for (const k of keysToDelete) delete d[k]
     const updates = {}
-    for (const k of ['name', 'cron_expression', 'prompt', 'reset_session', 'max_retries', 'timeout_seconds']) {
+    for (const k of ['name', 'cron_expression', 'prompt', 'reset_session', 'max_retries']) {
       if (k in d) updates[k] = d[k]
     }
     await scheduleStore.updateSchedule(entity.value.legion_id, entity.value.schedule_id, updates)
