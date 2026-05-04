@@ -351,11 +351,13 @@ class PermissionResponseRequest(BaseModel):
     updated_input: dict | None = None
 
 
-def _validate_additional_directories(dirs: list[str] | None, working_directory: str | None) -> list[str]:
-    """Validate additional directories: absolute paths, no duplicates, not same as working_dir."""
+def _validate_additional_directories(dirs: list[str] | None, working_directory: str | None) -> list[str] | None:
+    """Validate additional directories: absolute paths, no duplicates, not same as working_dir.
+    Returns None (not []) when there are no valid entries so callers can distinguish
+    'not set' from 'explicitly cleared' — both mean fall-through to template in cascade."""
     import os
     if not dirs:
-        return []
+        return None
     validated = []
     seen = set()
     for d in dirs:
@@ -371,4 +373,4 @@ def _validate_additional_directories(dirs: list[str] | None, working_directory: 
             continue
         seen.add(normalized)
         validated.append(normalized)
-    return validated
+    return validated or None
