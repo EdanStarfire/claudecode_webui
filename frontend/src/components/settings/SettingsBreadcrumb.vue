@@ -41,7 +41,12 @@ const sectionLabel = computed(() => {
   return ''
 })
 
+const SECTION_LABELS = {
+  'tools-permissions': 'Tools & Permissions',
+}
+
 function humanize(slug) {
+  if (SECTION_LABELS[slug]) return SECTION_LABELS[slug]
   return slug.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
 }
 </script>
