@@ -76,7 +76,7 @@
           :to="item.to"
           :icon="item.icon"
           :label="item.label"
-          :disabled="true"
+          :disabled="item.disabled"
           :tinted="true"
         />
       </SettingsSidebarGroup>
