@@ -30,14 +30,35 @@
           v-for="profile in profilesByArea(area.key)"
           :key="profile.profile_id"
           class="profile-row"
+          :class="{ 'profile-row--confirm': pendingDeleteId === profile.profile_id }"
           role="button"
           tabindex="0"
-          @click="openEdit(profile)"
-          @keydown.enter.prevent="openEdit(profile)"
-          @keydown.space.prevent="openEdit(profile)"
+          @click="pendingDeleteId !== profile.profile_id && openEdit(profile)"
+          @keydown.enter.prevent="pendingDeleteId !== profile.profile_id && openEdit(profile)"
+          @keydown.space.prevent="pendingDeleteId !== profile.profile_id && openEdit(profile)"
         >
-          <span class="profile-name">{{ profile.name }}</span>
-          <span class="row-chevron" aria-hidden="true">›</span>
+          <template v-if="pendingDeleteId === profile.profile_id">
+            <span class="confirm-text">Delete "{{ profile.name }}"?</span>
+            <div class="confirm-btns">
+              <button
+                class="btn-confirm-delete"
+                :disabled="deleting"
+                @click.stop="executeDelete(profile.profile_id)"
+              >{{ deleting ? '…' : 'Delete' }}</button>
+              <button class="btn-confirm-cancel" @click.stop="cancelDelete">Cancel</button>
+            </div>
+          </template>
+          <template v-else>
+            <span class="profile-name">{{ profile.name }}</span>
+            <div class="row-right">
+              <button
+                class="row-delete-btn"
+                title="Delete profile"
+                @click.stop="pendingDeleteId = profile.profile_id"
+              >✕</button>
+              <span class="row-chevron" aria-hidden="true">›</span>
+            </div>
+          </template>
         </div>
       </div>
     </div>
@@ -45,13 +66,16 @@
 </template>
 
 <script setup>
-import { computed, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
+import { ref, onMounted } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { useProfileStore } from '@/stores/profile'
 import SettingsToolbar from '../SettingsToolbar.vue'
 
+const route = useRoute()
 const router = useRouter()
 const profileStore = useProfileStore()
+const pendingDeleteId = ref(null)
+const deleting = ref(false)
 
 const PROFILE_AREAS = [
   { key: 'model',         label: 'Model' },
@@ -74,6 +98,26 @@ function openEdit(profile) {
 
 function quickCreate(areaKey) {
   router.push(`/settings/profile/__new__/general?area=${areaKey}`)
+}
+
+function cancelDelete() {
+  pendingDeleteId.value = null
+}
+
+async function executeDelete(profileId) {
+  if (deleting.value) return
+  deleting.value = true
+  try {
+    await profileStore.deleteProfile(profileId)
+    if (route.params.profileId === profileId) {
+      router.push('/settings/profiles')
+    }
+  } catch (err) {
+    console.error('Delete profile failed:', err)
+  } finally {
+    deleting.value = false
+    pendingDeleteId.value = null
+  }
 }
 
 onMounted(() => profileStore.fetchIfEmpty())
@@ -194,9 +238,24 @@ onMounted(() => profileStore.fetchIfEmpty())
   border-color: #3fb950;
 }
 
+.profile-row:hover .row-delete-btn {
+  opacity: 1;
+}
+
 .profile-row:focus-visible {
   outline: 2px solid #3fb950;
   outline-offset: 1px;
+}
+
+.profile-row--confirm {
+  border-color: rgba(248, 113, 113, 0.5);
+  background: rgba(248, 113, 113, 0.06);
+  cursor: default;
+}
+
+.profile-row--confirm:hover {
+  border-color: rgba(248, 113, 113, 0.7);
+  background: rgba(248, 113, 113, 0.06);
 }
 
 .profile-name {
@@ -206,14 +265,98 @@ onMounted(() => profileStore.fetchIfEmpty())
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  flex: 1;
   min-width: 0;
+}
+
+.row-right {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
 }
 
 .row-chevron {
   font-size: 18px;
   color: var(--bs-tertiary-color);
-  flex-shrink: 0;
   line-height: 1;
+}
+
+.row-delete-btn {
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  border: none;
+  background: none;
+  color: var(--bs-tertiary-color);
+  font-size: 12px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s, background 0.12s, color 0.12s;
+}
+
+.row-delete-btn:hover {
+  background: rgba(248, 113, 113, 0.15);
+  color: #f87171;
+}
+
+/* ── Inline confirm ────────────────────────── */
+.confirm-text {
+  font-size: 12px;
+  color: var(--bs-secondary-color);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
+.confirm-btns {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.btn-confirm-delete,
+.btn-confirm-cancel {
+  padding: 3px 10px;
+  border-radius: 5px;
+  font-size: 12px;
+  cursor: pointer;
+  border: 1px solid;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+}
+
+.btn-confirm-delete {
+  background: rgba(248, 113, 113, 0.15);
+  border-color: rgba(248, 113, 113, 0.4);
+  color: #f87171;
+}
+
+.btn-confirm-delete:hover:not(:disabled) {
+  background: #f87171;
+  border-color: #f87171;
+  color: #fff;
+}
+
+.btn-confirm-delete:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.btn-confirm-cancel {
+  background: none;
+  border-color: var(--bs-border-color);
+  color: var(--bs-secondary-color);
+}
+
+.btn-confirm-cancel:hover {
+  background: var(--bs-secondary-bg);
+  color: var(--bs-emphasis-color);
 }
 
 @keyframes spin {

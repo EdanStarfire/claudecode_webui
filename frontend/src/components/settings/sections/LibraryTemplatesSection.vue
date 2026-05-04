@@ -31,17 +31,38 @@
           v-for="template in customTemplates"
           :key="template.template_id"
           class="template-row"
+          :class="{ 'template-row--confirm': pendingDeleteId === template.template_id }"
           role="button"
           tabindex="0"
-          @click="openEdit(template)"
-          @keydown.enter.prevent="openEdit(template)"
-          @keydown.space.prevent="openEdit(template)"
+          @click="pendingDeleteId !== template.template_id && openEdit(template)"
+          @keydown.enter.prevent="pendingDeleteId !== template.template_id && openEdit(template)"
+          @keydown.space.prevent="pendingDeleteId !== template.template_id && openEdit(template)"
         >
-          <div class="template-info">
-            <span class="template-name">{{ template.name }}</span>
-            <span v-if="template.description" class="template-desc">{{ template.description }}</span>
-          </div>
-          <span class="row-chevron" aria-hidden="true">›</span>
+          <template v-if="pendingDeleteId === template.template_id">
+            <span class="confirm-text">Delete "{{ template.name }}"?</span>
+            <div class="confirm-btns">
+              <button
+                class="btn-confirm-delete"
+                :disabled="deleting"
+                @click.stop="executeDelete(template.template_id)"
+              >{{ deleting ? '…' : 'Delete' }}</button>
+              <button class="btn-confirm-cancel" @click.stop="cancelDelete">Cancel</button>
+            </div>
+          </template>
+          <template v-else>
+            <div class="template-info">
+              <span class="template-name">{{ template.name }}</span>
+              <span v-if="template.description" class="template-desc">{{ template.description }}</span>
+            </div>
+            <div class="row-right">
+              <button
+                class="row-delete-btn"
+                title="Delete template"
+                @click.stop="pendingDeleteId = template.template_id"
+              >✕</button>
+              <span class="row-chevron" aria-hidden="true">›</span>
+            </div>
+          </template>
         </div>
       </div>
 
@@ -73,15 +94,18 @@
 </template>
 
 <script setup>
-import { computed, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
+import { computed, ref, onMounted } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { useTemplateStore } from '@/stores/template'
 import { useUIStore } from '@/stores/ui'
 import SettingsToolbar from '../SettingsToolbar.vue'
 
+const route = useRoute()
 const router = useRouter()
 const templateStore = useTemplateStore()
 const uiStore = useUIStore()
+const pendingDeleteId = ref(null)
+const deleting = ref(false)
 
 const customTemplates = computed(() =>
   templateStore.templateList
@@ -105,6 +129,26 @@ function openImport() {
 
 function quickCreate() {
   router.push('/settings/template/__new__/general')
+}
+
+function cancelDelete() {
+  pendingDeleteId.value = null
+}
+
+async function executeDelete(templateId) {
+  if (deleting.value) return
+  deleting.value = true
+  try {
+    await templateStore.deleteTemplate(templateId)
+    if (route.params.templateId === templateId) {
+      router.push('/settings/templates')
+    }
+  } catch (err) {
+    console.error('Delete template failed:', err)
+  } finally {
+    deleting.value = false
+    pendingDeleteId.value = null
+  }
 }
 
 onMounted(() => templateStore.fetchTemplates())
@@ -240,6 +284,10 @@ onMounted(() => templateStore.fetchTemplates())
   border-color: #6366f1;
 }
 
+.template-row:hover .row-delete-btn {
+  opacity: 1;
+}
+
 .template-row:focus-visible {
   outline: 2px solid #6366f1;
   outline-offset: 1px;
@@ -250,11 +298,23 @@ onMounted(() => templateStore.fetchTemplates())
   background: var(--bs-secondary-bg);
 }
 
+.template-row--confirm {
+  border-color: rgba(248, 113, 113, 0.5);
+  background: rgba(248, 113, 113, 0.06);
+  cursor: default;
+}
+
+.template-row--confirm:hover {
+  border-color: rgba(248, 113, 113, 0.7);
+  background: rgba(248, 113, 113, 0.06);
+}
+
 .template-info {
   display: flex;
   flex-direction: column;
   gap: 2px;
   min-width: 0;
+  flex: 1;
 }
 
 .template-name {
@@ -274,11 +334,94 @@ onMounted(() => templateStore.fetchTemplates())
   text-overflow: ellipsis;
 }
 
+.row-right {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
 .row-chevron {
   font-size: 18px;
   color: var(--bs-tertiary-color);
-  flex-shrink: 0;
   line-height: 1;
+}
+
+.row-delete-btn {
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  border: none;
+  background: none;
+  color: var(--bs-tertiary-color);
+  font-size: 12px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s, background 0.12s, color 0.12s;
+}
+
+.row-delete-btn:hover {
+  background: rgba(248, 113, 113, 0.15);
+  color: #f87171;
+}
+
+/* ── Inline confirm ────────────────────────── */
+.confirm-text {
+  font-size: 12px;
+  color: var(--bs-secondary-color);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
+.confirm-btns {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.btn-confirm-delete,
+.btn-confirm-cancel {
+  padding: 3px 10px;
+  border-radius: 5px;
+  font-size: 12px;
+  cursor: pointer;
+  border: 1px solid;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+}
+
+.btn-confirm-delete {
+  background: rgba(248, 113, 113, 0.15);
+  border-color: rgba(248, 113, 113, 0.4);
+  color: #f87171;
+}
+
+.btn-confirm-delete:hover:not(:disabled) {
+  background: #f87171;
+  border-color: #f87171;
+  color: #fff;
+}
+
+.btn-confirm-delete:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.btn-confirm-cancel {
+  background: none;
+  border-color: var(--bs-border-color);
+  color: var(--bs-secondary-color);
+}
+
+.btn-confirm-cancel:hover {
+  background: var(--bs-secondary-bg);
+  color: var(--bs-emphasis-color);
 }
 
 @keyframes spin {
