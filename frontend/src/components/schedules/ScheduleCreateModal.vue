@@ -104,7 +104,7 @@
             </div>
           </div>
 
-          <!-- Config summary + Review button (shown after seeding) -->
+          <!-- Config summary (shown after seeding) -->
           <div v-if="hasSessionConfig" class="config-summary">
             <div class="config-summary-line">
               <span class="config-label">Working Dir:</span>
@@ -118,11 +118,7 @@
               <span class="config-label">Permissions:</span>
               <span class="config-value">{{ sessionConfig.permission_mode || 'default' }}</span>
             </div>
-            <button
-              type="button"
-              class="btn-review"
-              @click="openConfigModal"
-            >Review & Edit Settings</button>
+            <div class="config-hint">Further configuration available in Schedule Settings after creation.</div>
           </div>
         </template>
 
@@ -189,10 +185,10 @@
 
 <script setup>
 import { ref, computed, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
 import { useSessionStore } from '@/stores/session'
 import { useProjectStore } from '@/stores/project'
 import { useScheduleStore } from '@/stores/schedule'
-import { useUIStore } from '@/stores/ui'
 import { api } from '@/utils/api'
 import cronstrue from 'cronstrue'
 
@@ -200,12 +196,12 @@ const props = defineProps({
   legionId: { type: String, required: true },
 })
 
-const emit = defineEmits(['close', 'created'])
+const emit = defineEmits(['close'])
 
+const router = useRouter()
 const sessionStore = useSessionStore()
 const projectStore = useProjectStore()
 const scheduleStore = useScheduleStore()
-const uiStore = useUIStore()
 
 const submitting = ref(false)
 const error = ref('')
@@ -214,7 +210,6 @@ const configSource = ref('capture')  // 'capture' | 'template'
 const captureSessionId = ref('')
 const configCaptured = ref(false)
 const capturedSessionName = ref('')
-const configReviewed = ref(false)
 
 // Template support
 const templates = ref([])
@@ -366,17 +361,6 @@ function applyTemplate() {
   appliedTemplateName.value = tmpl.name
 }
 
-function openConfigModal() {
-  uiStore.showModal('configuration', {
-    mode: 'configure-ephemeral',
-    seedConfig: { ...sessionConfig.value },
-    onConfigured: (payload) => {
-      sessionConfig.value = payload
-      configReviewed.value = true
-    }
-  })
-}
-
 function buildSessionConfigPayload() {
   const cfg = { ...sessionConfig.value }
   // Remove empty/null values — let server use defaults
@@ -408,7 +392,8 @@ async function submit() {
     }
 
     const schedule = await scheduleStore.createSchedule(props.legionId, payload)
-    emit('created', schedule)
+    router.push(`/settings/schedule/${schedule.schedule_id}/general`)
+    emit('close')
   } catch (e) {
     error.value = e.message || 'Failed to create schedule'
   } finally {

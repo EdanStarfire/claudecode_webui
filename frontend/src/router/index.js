@@ -71,6 +71,17 @@ const routes = [
     props: true
   },
   {
+    path: '/settings/schedules',
+    name: 'settings-schedules',
+    component: SettingsLayout
+  },
+  {
+    path: '/settings/schedule/:scheduleId/:section?',
+    name: 'settings-schedule',
+    component: SettingsLayout,
+    props: true
+  },
+  {
     path: '/settings/templates',
     name: 'settings-templates',
     component: SettingsLayout

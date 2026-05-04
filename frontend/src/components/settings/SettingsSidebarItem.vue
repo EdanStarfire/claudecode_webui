@@ -8,6 +8,7 @@
   >
     <span class="item-icon">{{ icon }}</span>
     <span class="item-label">{{ label }}</span>
+    <span v-if="badge" class="item-badge" aria-label="Alert" />
   </button>
 </template>
 
@@ -22,6 +23,7 @@ const props = defineProps({
   label:    { type: String,  required: true },
   disabled: { type: Boolean, default: false },
   tinted:   { type: Boolean, default: false },
+  badge:    { type: Boolean, default: false },
 })
 
 const route = useRoute()
@@ -93,5 +95,13 @@ function handleClick() {
 
 .item-label {
   flex: 1;
+}
+
+.item-badge {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #f87171;
+  flex-shrink: 0;
 }
 </style>

@@ -11,6 +11,10 @@
 
     <div v-if="!entity" class="section-loading">Loading…</div>
 
+    <div v-else-if="isPermanentScheduleNA" class="section-na">
+      <p>This schedule is bound to a permanent session. Only General settings apply.</p>
+    </div>
+
     <div v-else-if="isNotApplicable" class="section-na">
       <p>Tools & Permissions fields are not applicable for a <strong>{{ entity.area }}</strong> profile.</p>
     </div>
@@ -45,6 +49,8 @@ import { FIELD_SCHEMAS } from '../../configuration/fields/fieldSchemas.js'
 import { useEditSectionFieldStates } from '@/composables/useEditSectionFieldStates'
 import { useEditSectionReset } from '@/composables/useEditSectionReset'
 import { FIELD_RESET } from '@/composables/fieldResetSentinel.js'
+import { useScheduleStore } from '@/stores/schedule'
+import { useScheduleSectionSave } from '@/composables/useScheduleSectionSave'
 
 const PROFILE_AREA = 'permissions'
 const SECTION_KEY  = 'tools-permissions'
@@ -55,29 +61,40 @@ const templateStore = useTemplateStore()
 const profileStore  = useProfileStore()
 const sessionStore  = useSessionStore()
 const uiStore       = useUIStore()
+const scheduleStore = useScheduleStore()
 
 const isTemplateMode = computed(() => route.path.startsWith('/settings/template/'))
 const isProfileMode  = computed(() => route.path.startsWith('/settings/profile/'))
 const isSessionMode  = computed(() => route.path.startsWith('/settings/session/'))
-const entityId       = computed(() => route.params.sessionId || route.params.templateId || route.params.profileId || '')
+const isScheduleMode = computed(() => route.path.startsWith('/settings/schedule/'))
+const entityId       = computed(() => route.params.sessionId || route.params.templateId || route.params.profileId || route.params.scheduleId || '')
 const areaKey        = computed(() => {
+  if (isScheduleMode.value) return `schedule:${entityId.value}:${SECTION_KEY}`
   if (isSessionMode.value) return `session:${entityId.value}:${SECTION_KEY}`
   const prefix = isTemplateMode.value ? 'template' : 'profile'
   return `${prefix}:${entityId.value}:${SECTION_KEY}`
 })
 
 const entity = computed(() => {
-  if (isSessionMode.value)  return sessionStore.getSession(entityId.value)
-  if (isTemplateMode.value) return templateStore.getTemplate(entityId.value)
-  if (isProfileMode.value)  return profileStore.getProfile(entityId.value)
+  if (isScheduleMode.value)  return scheduleStore.getSchedule(entityId.value)
+  if (isSessionMode.value)   return sessionStore.getSession(entityId.value)
+  if (isTemplateMode.value)  return templateStore.getTemplate(entityId.value)
+  if (isProfileMode.value)   return profileStore.getProfile(entityId.value)
   return null
 })
 
-const isNotApplicable = computed(() =>
-  !isSessionMode.value && isProfileMode.value && entity.value?.area !== PROFILE_AREA
+const isPermanentScheduleNA = computed(() =>
+  isScheduleMode.value && entity.value != null && !entity.value.session_config
 )
 
-const baseConfig = computed(() => entity.value?.config || {})
+const isNotApplicable = computed(() =>
+  !isSessionMode.value && !isScheduleMode.value && isProfileMode.value && entity.value?.area !== PROFILE_AREA
+)
+
+const baseConfig = computed(() => {
+  if (isScheduleMode.value) return entity.value?.session_config || {}
+  return entity.value?.config || {}
+})
 
 const boundTemplateId = computed(() => isSessionMode.value ? (entity.value?.template_id || null) : null)
 const boundTemplate   = computed(() => boundTemplateId.value ? templateStore.getTemplate(boundTemplateId.value) : null)
@@ -119,11 +136,17 @@ const permissionsFields = computed(() => {
 })
 
 const { fieldStates } = useEditSectionFieldStates({
-  isTemplateMode, isSessionMode, baseConfig, draft,
+  isTemplateMode, isSessionMode, isScheduleMode, baseConfig, draft,
   boundProfile, boundTemplate,
   schemaFields: FIELD_SCHEMAS.permissions,
 })
 const { handleReset } = useEditSectionReset({ areaKey })
+
+const saveScheduleSessionConfig = useScheduleSectionSave({
+  scheduleId: entityId,
+  legionId: computed(() => entity.value?.legion_id),
+  ephemeralAgentId: computed(() => entity.value?.ephemeral_agent_id),
+})
 
 const toolbarChips = computed(() => {
   if (isSessionMode.value) {
@@ -177,6 +200,13 @@ async function handleSave() {
     }
     if ('additional_directories' in d && typeof d.additional_directories === 'string') {
       d.additional_directories = d.additional_directories.split('\n').map(s => s.trim()).filter(Boolean)
+    }
+    if (isScheduleMode.value) {
+      const newSessionConfig = { ...(entity.value?.session_config || {}), ...d }
+      for (const k of keysToDelete) delete newSessionConfig[k]
+      await saveScheduleSessionConfig(newSessionConfig)
+      settingsStore.markClean(areaKey.value)
+      return
     }
     if (isSessionMode.value) {
       const newConfig = { ...(entity.value?.config || {}), ...d }

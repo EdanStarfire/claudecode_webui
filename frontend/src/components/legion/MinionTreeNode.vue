@@ -138,6 +138,7 @@
 
 <script setup>
 import { computed } from 'vue'
+import { useRouter } from 'vue-router'
 import { useSessionStore } from '@/stores/session'
 import { useMessageStore } from '@/stores/message'
 import { useUIStore } from '@/stores/ui'
@@ -161,6 +162,7 @@ const props = defineProps({
 
 const emit = defineEmits(['minion-click'])
 
+const router = useRouter()
 const sessionStore = useSessionStore()
 const messageStore = useMessageStore()
 const uiStore = useUIStore()
@@ -414,10 +416,7 @@ function handleClick() {
 
 // Action button handlers (Issue #296)
 function showEditModal() {
-  const session = sessionStore.sessions.get(props.minionData.id)
-  if (session) {
-    uiStore.showModal('edit-session', { session })
-  }
+  router.push(`/settings/session/${props.minionData.id}/general`)
 }
 
 function showManageModal() {

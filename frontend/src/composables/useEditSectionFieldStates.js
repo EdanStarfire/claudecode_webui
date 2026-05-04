@@ -26,12 +26,12 @@ function hasValue(v) {
  *   P = value is set in the profile's config (or in the current draft)
  *   EMPTY = not set
  */
-export function useEditSectionFieldStates({ isTemplateMode, isSessionMode, baseConfig, draft, boundProfile, boundTemplate, schemaFields }) {
+export function useEditSectionFieldStates({ isTemplateMode, isSessionMode, isScheduleMode, baseConfig, draft, boundProfile, boundTemplate, schemaFields }) {
   const fieldStates = computed(() => {
     const states = {}
     const fields = typeof schemaFields === 'function' ? schemaFields() : (schemaFields?.value ?? schemaFields ?? [])
-    // "set at this level" kind: S for session, T for template, P for profile
-    const selfKind = isSessionMode?.value ? 'S' : (isTemplateMode.value ? 'T' : 'P')
+    // "set at this level" kind: S for session/schedule, T for template, P for profile
+    const selfKind = (isSessionMode?.value || isScheduleMode?.value) ? 'S' : (isTemplateMode.value ? 'T' : 'P')
 
     for (const f of fields) {
       const key = f.key
