@@ -18,7 +18,7 @@
         @update:model-value="settingsStore.setSearchQuery"
       />
 
-      <!-- Edit group: "This Session" (shown when on a session edit route) -->
+      <!-- Edit group: "Editing Session" (shown when on a session edit route) -->
       <SettingsSidebarGroup
         v-if="isSessionEdit && (filteredSessionItems.length > 0 || !settingsStore.searchQuery)"
         title="Editing Session"
@@ -40,7 +40,7 @@
         </div>
       </SettingsSidebarGroup>
 
-      <!-- Edit group: "This Template" or "This Profile" (shown when on an edit route) -->
+      <!-- Edit group: "Editing Template" or "Editing Profile" (shown when on an edit route) -->
       <SettingsSidebarGroup
         v-if="isEditMode && (filteredEditItems.length > 0 || !settingsStore.searchQuery)"
         :title="editGroupTitle"
@@ -60,6 +60,25 @@
         <div v-if="settingsStore.searchQuery && !filteredEditItems.length" class="no-results">
           No results
         </div>
+      </SettingsSidebarGroup>
+
+      <!-- Ghost edit group: shown on Application/Library routes to prevent sidebar bounce -->
+      <SettingsSidebarGroup
+        v-if="ghostItems.length"
+        :title="ghostGroupTitle"
+        :short-title="ghostGroupShort"
+        :subtitle="ghostEntityName"
+        :tinted="true"
+      >
+        <SettingsSidebarItem
+          v-for="item in ghostItems"
+          :key="item.to"
+          :to="item.to"
+          :icon="item.icon"
+          :label="item.label"
+          :disabled="true"
+          :tinted="true"
+        />
       </SettingsSidebarGroup>
 
       <!-- Application group -->
@@ -94,7 +113,7 @@
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useSettingsStore } from '@/stores/settings'
 import { useTemplateStore } from '@/stores/template'
@@ -283,6 +302,65 @@ const filteredLibItems = computed(() => {
       .filter(e => e.section === item.sectionKey)
       .some(e => e.label.toLowerCase().includes(q))
   })
+})
+
+// ── Ghost edit group (sidebar bounce prevention) ──────────────────────────
+// When on Application/Library routes, keep the last-visited edit group visible
+// but with all items disabled, so the sidebar layout stays stable.
+
+const lastEditState = ref({ type: null, id: null })
+
+watch(() => route.path, () => {
+  if (isSessionEdit.value && sessionEntityId.value) {
+    lastEditState.value = { type: 'session', id: sessionEntityId.value }
+  } else if (isTemplateEdit.value && editEntityId.value) {
+    lastEditState.value = { type: 'template', id: editEntityId.value }
+  } else if (isProfileEdit.value && editEntityId.value) {
+    lastEditState.value = { type: 'profile', id: editEntityId.value }
+  }
+}, { immediate: true })
+
+const isOnNonEditRoute = computed(() =>
+  route.path.startsWith('/settings/') && !isSessionEdit.value && !isEditMode.value
+)
+
+const ghostItems = computed(() => {
+  if (!isOnNonEditRoute.value || !lastEditState.value.type) return []
+  const { type, id } = lastEditState.value
+  const prefix = type === 'session' ? 'session' : (type === 'template' ? 'template' : 'profile')
+  const base = `/settings/${prefix}/${id}`
+  return EDIT_SECTIONS.map(s => ({
+    to: `${base}/${s.section}`,
+    icon: s.icon,
+    label: s.label,
+    sectionKey: s.sectionKey,
+    disabled: true,
+  }))
+})
+
+const ghostGroupTitle = computed(() => {
+  const t = lastEditState.value.type
+  if (t === 'session')  return 'Editing Session'
+  if (t === 'template') return 'Editing Template'
+  if (t === 'profile')  return 'Editing Profile'
+  return ''
+})
+
+const ghostGroupShort = computed(() => {
+  const t = lastEditState.value.type
+  if (t === 'session')  return 'Sess'
+  if (t === 'template') return 'Tmpl'
+  if (t === 'profile')  return 'Prof'
+  return ''
+})
+
+const ghostEntityName = computed(() => {
+  const { type, id } = lastEditState.value
+  if (!id || id === '__new__') return ''
+  if (type === 'session')  return sessionStore.getSession(id)?.name || ''
+  if (type === 'template') return templateStore.getTemplate(id)?.name || ''
+  if (type === 'profile')  return profileStore.getProfile(id)?.name || ''
+  return ''
 })
 </script>
 
