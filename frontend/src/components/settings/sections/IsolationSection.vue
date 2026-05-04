@@ -102,7 +102,7 @@ const isDirty = computed(() => settingsStore.dirtyAreas.has(areaKey.value))
 const saving  = ref(false)
 
 const isolationFields = computed(() => FIELD_SCHEMAS.isolation.map(f => {
-  if (f.key === 'docker_enabled' && isSessionMode.value && entity.value) {
+  if (f.key === 'docker_enabled' && isSessionMode.value && entity.value && entity.value.state !== 'created') {
     return { ...f, disabledWhen: () => true, description: 'Docker isolation cannot be changed after session creation.' }
   }
   if (f.key === 'docker_proxy_enabled') return { ...f, description: 'Intercepts outbound traffic via a dedicated proxy sidecar. Requires <code>claude-proxy:local</code> image.' }
