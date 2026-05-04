@@ -120,13 +120,13 @@ const editGroupShort = computed(() => {
 })
 
 const EDIT_SECTIONS = [
-  { section: 'general',           icon: '◉', label: 'General',             sectionKey: 'edit-general' },
-  { section: 'model-tuning',      icon: '⬡', label: 'Model Tuning',        sectionKey: 'edit-model-tuning' },
-  { section: 'tools-permissions', icon: '⬡', label: 'Tools & Permissions', sectionKey: 'edit-tools-permissions' },
-  { section: 'mcp-servers',       icon: '◈', label: 'MCP Servers',         sectionKey: 'edit-mcp-servers' },
-  { section: 'features',          icon: '⚡', label: 'Features',            sectionKey: 'edit-features' },
-  { section: 'system-prompt',     icon: '☰', label: 'System Prompt',       sectionKey: 'edit-system-prompt' },
-  { section: 'isolation',         icon: '⊞', label: 'Isolation',           sectionKey: 'edit-isolation' },
+  { section: 'general',           icon: '◉',  label: 'General',             sectionKey: 'edit-general' },
+  { section: 'model-tuning',      icon: '🧠', label: 'Model Tuning',        sectionKey: 'edit-model-tuning' },
+  { section: 'tools-permissions', icon: '🔧', label: 'Tools & Permissions', sectionKey: 'edit-tools-permissions' },
+  { section: 'mcp-servers',       icon: '🔌', label: 'MCP Servers',         sectionKey: 'edit-mcp-servers' },
+  { section: 'features',          icon: '✨', label: 'Features',            sectionKey: 'edit-features' },
+  { section: 'system-prompt',     icon: '💭', label: 'System Prompt',       sectionKey: 'edit-system-prompt' },
+  { section: 'isolation',         icon: '🛡️', label: 'Isolation',           sectionKey: 'edit-isolation' },
 ]
 
 // Which section corresponds to each profile area
@@ -191,16 +191,16 @@ const filteredEditItems = computed(() => {
 // ── Static sidebar groups ─────────────────────────────────────────────────
 
 const APP_ITEMS = [
-  { to: '/settings/features',      icon: '⚡', label: 'Features',      sectionKey: 'features' },
-  { to: '/settings/notifications', icon: '◉',  label: 'Notifications',  sectionKey: 'notifications' },
-  { to: '/settings/read-aloud',    icon: '♪',  label: 'Read Aloud',     sectionKey: 'read-aloud' },
-  { to: '/settings/mcp-servers',   icon: '◈',  label: 'MCP Servers',    sectionKey: 'mcp-servers' },
+  { to: '/settings/features',      icon: '✳️', label: 'Features',      sectionKey: 'features' },
+  { to: '/settings/notifications', icon: '🎵', label: 'Notifications',  sectionKey: 'notifications' },
+  { to: '/settings/read-aloud',    icon: '👄', label: 'Read Aloud',     sectionKey: 'read-aloud' },
+  { to: '/settings/mcp-servers',   icon: '🌐', label: 'MCP Servers',    sectionKey: 'mcp-servers' },
 ]
 
 const libraryItems = [
-  { to: '/settings/templates', icon: '◧', label: 'Templates', sectionKey: 'templates' },
-  { to: '/settings/profiles',  icon: '◎', label: 'Profiles',  sectionKey: 'profiles' },
-  { to: '/settings/secrets',   icon: '◍', label: 'Secrets',   sectionKey: 'secrets' },
+  { to: '/settings/templates', icon: '📄', label: 'Templates', sectionKey: 'templates' },
+  { to: '/settings/profiles',  icon: '📋', label: 'Profiles',  sectionKey: 'profiles' },
+  { to: '/settings/secrets',   icon: '🔑', label: 'Secrets',   sectionKey: 'secrets' },
 ]
 
 const filteredAppItems = computed(() => {
