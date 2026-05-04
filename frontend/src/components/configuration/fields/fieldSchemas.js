@@ -16,6 +16,7 @@ export const FIELD_SCHEMAS = {
       key: 'thinking_mode',
       label: 'Thinking Mode',
       widget: 'button-group',
+      defaultValue: '',
       options: [
         { value: '', label: 'Default' },
         { value: 'adaptive', label: 'Adaptive' },
@@ -37,6 +38,7 @@ export const FIELD_SCHEMAS = {
       key: 'effort',
       label: 'Effort',
       widget: 'button-group',
+      defaultValue: '',
       options: [
         { value: '', label: 'Default' },
         { value: 'low', label: 'Low' },

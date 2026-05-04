@@ -17,31 +17,40 @@
 
 <script setup>
 const props = defineProps({
-  value: { type: [String, Array], default: '' },
+  value: { type: [String, Array], default: null },
   disabled: { type: Boolean, default: false },
   options: { type: Array, default: () => [] },
   multiple: { type: Boolean, default: false },
-  defaultValue: { type: String, default: null },
+  defaultValue: { default: null },
 })
 
 const emit = defineEmits(['update:value'])
+
+// True when no explicit value has been set at this level
+function noExplicitValue() {
+  return props.value === null || props.value === undefined || props.value === ''
+}
+
+// True when a schema default is defined (including empty string)
+function hasSchemaDefault() {
+  return props.defaultValue !== null && props.defaultValue !== undefined
+}
 
 function isActive(optValue) {
   if (props.multiple) {
     const arr = Array.isArray(props.value) ? props.value : []
     return arr.includes(optValue)
   }
-  if (props.value) return props.value === optValue
-  // No explicit value: highlight the schema default if one is defined
-  if (props.defaultValue) return optValue === props.defaultValue
-  // Legacy: '' option as Default button
-  return !optValue
+  if (!noExplicitValue()) return props.value === optValue
+  if (hasSchemaDefault()) return optValue === props.defaultValue
+  // Legacy fallback: '' option acts as Default button
+  return optValue === '' || optValue === null || optValue === undefined
 }
 
-// True when the button is active only because it's the schema default (not explicitly set)
+// Dimmed style: button is active only because it's the schema default, not explicitly set
 function isActiveDefault(optValue) {
   if (props.multiple) return false
-  return !props.value && !!props.defaultValue && optValue === props.defaultValue
+  return noExplicitValue() && hasSchemaDefault() && optValue === props.defaultValue
 }
 
 function handleClick(optValue) {
