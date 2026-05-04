@@ -375,11 +375,12 @@ const ghostGroupShort = computed(() => {
 
 const ghostEntityName = computed(() => {
   const { type, id } = lastEditState.value
-  if (!type || !id || id === '__new__') return ''
-  if (type === 'session')  return sessionStore.getSession(id)?.name || ''
-  if (type === 'template') return templateStore.getTemplate(id)?.name || ''
-  if (type === 'profile')  return profileStore.getProfile(id)?.name || ''
-  return ''
+  if (!type || !id) return 'None selected'
+  if (id === '__new__') return 'New (unsaved)'
+  if (type === 'session')  return sessionStore.getSession(id)?.name || 'None selected'
+  if (type === 'template') return templateStore.getTemplate(id)?.name || 'None selected'
+  if (type === 'profile')  return profileStore.getProfile(id)?.name || 'None selected'
+  return 'None selected'
 })
 </script>
 
