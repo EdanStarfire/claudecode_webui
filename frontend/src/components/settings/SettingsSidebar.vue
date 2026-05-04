@@ -327,14 +327,35 @@ const isOnNonEditRoute = computed(() =>
 const ghostItems = computed(() => {
   if (!isOnNonEditRoute.value || !lastEditState.value.type) return []
   const { type, id } = lastEditState.value
+  const isNew = id === '__new__'
   const prefix = type === 'session' ? 'session' : (type === 'template' ? 'template' : 'profile')
   const base = `/settings/${prefix}/${id}`
+
+  // __new__ entities: only General navigable until saved
+  if (isNew) {
+    return EDIT_SECTIONS.map(s => ({
+      to: `${base}/${s.section}`,
+      icon: s.icon,
+      label: s.label,
+      sectionKey: s.sectionKey,
+      disabled: s.section !== 'general',
+    }))
+  }
+
+  // Profiles: only General + area section navigable
+  let enabledSections = null
+  if (type === 'profile') {
+    const area = profileStore.getProfile(id)?.area
+    const areaSection = area ? AREA_SECTION[area] : null
+    enabledSections = new Set(['general', ...(areaSection ? [areaSection] : [])])
+  }
+
   return EDIT_SECTIONS.map(s => ({
     to: `${base}/${s.section}`,
     icon: s.icon,
     label: s.label,
     sectionKey: s.sectionKey,
-    disabled: true,
+    disabled: enabledSections !== null && !enabledSections.has(s.section),
   }))
 })
 
