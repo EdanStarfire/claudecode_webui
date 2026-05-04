@@ -4,6 +4,7 @@ export const FIELD_SCHEMAS = {
       key: 'model',
       label: 'Model',
       widget: 'button-group',
+      defaultValue: 'sonnet',
       options: [
         { value: 'sonnet', label: 'Sonnet' },
         { value: 'opus', label: 'Opus' },

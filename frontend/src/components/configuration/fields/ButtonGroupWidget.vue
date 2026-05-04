@@ -5,7 +5,10 @@
       :key="opt.value"
       type="button"
       class="model-btn"
-      :class="{ active: isActive(opt.value) }"
+      :class="{
+        active: isActive(opt.value),
+        'active-default': isActiveDefault(opt.value),
+      }"
       :disabled="disabled"
       @click="handleClick(opt.value)"
     >{{ opt.label }}</button>
@@ -18,6 +21,7 @@ const props = defineProps({
   disabled: { type: Boolean, default: false },
   options: { type: Array, default: () => [] },
   multiple: { type: Boolean, default: false },
+  defaultValue: { type: String, default: null },
 })
 
 const emit = defineEmits(['update:value'])
@@ -27,8 +31,17 @@ function isActive(optValue) {
     const arr = Array.isArray(props.value) ? props.value : []
     return arr.includes(optValue)
   }
-  // Single-select: treat '' as falsy for Default buttons
-  return props.value === optValue || (!props.value && !optValue)
+  if (props.value) return props.value === optValue
+  // No explicit value: highlight the schema default if one is defined
+  if (props.defaultValue) return optValue === props.defaultValue
+  // Legacy: '' option as Default button
+  return !optValue
+}
+
+// True when the button is active only because it's the schema default (not explicitly set)
+function isActiveDefault(optValue) {
+  if (props.multiple) return false
+  return !props.value && !!props.defaultValue && optValue === props.defaultValue
 }
 
 function handleClick(optValue) {

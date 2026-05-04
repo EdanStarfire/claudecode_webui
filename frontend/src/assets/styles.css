@@ -1113,6 +1113,10 @@ button:focus {
     background: #0d6efd;
     color: #fff;
 }
+.model-btn-group .model-btn.active-default {
+    background: rgba(13, 110, 253, 0.15);
+    color: #0d6efd;
+}
 
 /* Advanced settings link */
 .advanced-link {
