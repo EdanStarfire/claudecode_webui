@@ -325,24 +325,26 @@ const isOnNonEditRoute = computed(() =>
 )
 
 const ghostItems = computed(() => {
-  if (!isOnNonEditRoute.value || !lastEditState.value.type) return []
+  if (!isOnNonEditRoute.value) return []
   const { type, id } = lastEditState.value
+
+  // No prior edit context: stable disabled placeholder so sidebar height never changes
+  if (!type) {
+    return EDIT_SECTIONS.map(s => ({ to: '', icon: s.icon, label: s.label, sectionKey: s.sectionKey, disabled: true }))
+  }
+
   const isNew = id === '__new__'
   const prefix = type === 'session' ? 'session' : (type === 'template' ? 'template' : 'profile')
   const base = `/settings/${prefix}/${id}`
 
-  // __new__ entities: only General navigable until saved
   if (isNew) {
     return EDIT_SECTIONS.map(s => ({
       to: `${base}/${s.section}`,
-      icon: s.icon,
-      label: s.label,
-      sectionKey: s.sectionKey,
+      icon: s.icon, label: s.label, sectionKey: s.sectionKey,
       disabled: s.section !== 'general',
     }))
   }
 
-  // Profiles: only General + area section navigable
   let enabledSections = null
   if (type === 'profile') {
     const area = profileStore.getProfile(id)?.area
@@ -352,32 +354,28 @@ const ghostItems = computed(() => {
 
   return EDIT_SECTIONS.map(s => ({
     to: `${base}/${s.section}`,
-    icon: s.icon,
-    label: s.label,
-    sectionKey: s.sectionKey,
+    icon: s.icon, label: s.label, sectionKey: s.sectionKey,
     disabled: enabledSections !== null && !enabledSections.has(s.section),
   }))
 })
 
 const ghostGroupTitle = computed(() => {
   const t = lastEditState.value.type
-  if (t === 'session')  return 'Editing Session'
   if (t === 'template') return 'Editing Template'
   if (t === 'profile')  return 'Editing Profile'
-  return ''
+  return 'Editing Session'
 })
 
 const ghostGroupShort = computed(() => {
   const t = lastEditState.value.type
-  if (t === 'session')  return 'Sess'
   if (t === 'template') return 'Tmpl'
   if (t === 'profile')  return 'Prof'
-  return ''
+  return 'Sess'
 })
 
 const ghostEntityName = computed(() => {
   const { type, id } = lastEditState.value
-  if (!id || id === '__new__') return ''
+  if (!type || !id || id === '__new__') return ''
   if (type === 'session')  return sessionStore.getSession(id)?.name || ''
   if (type === 'template') return templateStore.getTemplate(id)?.name || ''
   if (type === 'profile')  return profileStore.getProfile(id)?.name || ''
