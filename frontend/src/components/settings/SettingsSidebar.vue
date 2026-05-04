@@ -18,6 +18,27 @@
         @update:model-value="settingsStore.setSearchQuery"
       />
 
+      <!-- Edit group: "This Session" (shown when on a session edit route) -->
+      <SettingsSidebarGroup
+        v-if="isSessionEdit && (filteredSessionItems.length > 0 || !settingsStore.searchQuery)"
+        title="Editing Session"
+        short-title="Sess"
+        :subtitle="sessionEntityName"
+        :tinted="true"
+      >
+        <SettingsSidebarItem
+          v-for="item in filteredSessionItems"
+          :key="item.to"
+          :to="item.to"
+          :icon="item.icon"
+          :label="item.label"
+          :tinted="true"
+        />
+        <div v-if="settingsStore.searchQuery && !filteredSessionItems.length" class="no-results">
+          No results
+        </div>
+      </SettingsSidebarGroup>
+
       <!-- Edit group: "This Template" or "This Profile" (shown when on an edit route) -->
       <SettingsSidebarGroup
         v-if="isEditMode && (filteredEditItems.length > 0 || !settingsStore.searchQuery)"
@@ -76,6 +97,7 @@ import { useRoute } from 'vue-router'
 import { useSettingsStore } from '@/stores/settings'
 import { useTemplateStore } from '@/stores/template'
 import { useProfileStore } from '@/stores/profile'
+import { useSessionStore } from '@/stores/session'
 import SettingsSidebarSearch from './SettingsSidebarSearch.vue'
 import SettingsSidebarGroup from './SettingsSidebarGroup.vue'
 import SettingsSidebarItem from './SettingsSidebarItem.vue'
@@ -85,16 +107,50 @@ const route = useRoute()
 const settingsStore  = useSettingsStore()
 const templateStore  = useTemplateStore()
 const profileStore   = useProfileStore()
+const sessionStore   = useSessionStore()
 
 function toggleSidebar() {
   settingsStore.setSidebarExpanded(!settingsStore.sidebarExpanded)
 }
+
+// ── Session edit group ─────────────────────────────────────────────────────
+
+const isSessionEdit = computed(() => route.path.startsWith('/settings/session/'))
+
+const sessionEntityId = computed(() => route.params.sessionId || '')
+
+const sessionEntityName = computed(() =>
+  sessionStore.getSession(sessionEntityId.value)?.name || ''
+)
+
+const sessionSectionItems = computed(() => {
+  if (!sessionEntityId.value) return []
+  const base = `/settings/session/${sessionEntityId.value}`
+  return EDIT_SECTIONS.map(s => ({
+    to: `${base}/${s.section}`,
+    icon: s.icon,
+    label: s.label,
+    sectionKey: s.sectionKey,
+  }))
+})
+
+const filteredSessionItems = computed(() => {
+  const q = settingsStore.searchQuery.toLowerCase().trim()
+  if (!q) return sessionSectionItems.value
+  return sessionSectionItems.value.filter(item => {
+    if (item.label.toLowerCase().includes(q)) return true
+    return settingsIndex
+      .filter(e => e.section === item.sectionKey)
+      .some(e => e.label.toLowerCase().includes(q))
+  })
+})
 
 // ── Edit-mode (template / profile) dynamic group ──────────────────────────
 
 const isTemplateEdit = computed(() => route.path.startsWith('/settings/template/'))
 const isProfileEdit  = computed(() => route.path.startsWith('/settings/profile/'))
 const isEditMode     = computed(() => isTemplateEdit.value || isProfileEdit.value)
+
 
 const editEntityId = computed(() => {
   return route.params.templateId || route.params.profileId || ''

@@ -44,7 +44,7 @@
 </template>
 
 <script setup>
-import { computed, ref, watch, nextTick } from 'vue'
+import { computed, ref, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useSettingsStore } from '@/stores/settings'
 import SettingsSidebar from './SettingsSidebar.vue'
@@ -89,7 +89,7 @@ const EDIT_SECTION_MAP = {
 
 const sectionComponent = computed(() => {
   const p = route.path
-  if (p.startsWith('/settings/template/') || p.startsWith('/settings/profile/')) {
+  if (p.startsWith('/settings/session/') || p.startsWith('/settings/template/') || p.startsWith('/settings/profile/')) {
     const section = route.params.section || 'general'
     return EDIT_SECTION_MAP[section] ?? null
   }
@@ -190,6 +190,56 @@ function onGuardDiscard() {
 function onGuardCancel() {
   settingsStore.confirmNavigation('cancel')
 }
+
+// ── Keyboard shortcuts ─────────────────────────────────────────────────────
+
+function handleKeydown(e) {
+  const tag = document.activeElement?.tagName?.toLowerCase()
+  const isMeta = e.metaKey || e.ctrlKey
+
+  // Escape: cancel current section (unless focused in input where Escape clears it)
+  if (e.key === 'Escape' && !['input', 'textarea', 'select'].includes(tag)) {
+    e.preventDefault()
+    sectionHostRef.value?.cancel?.()
+    return
+  }
+
+  // Don't fire shortcuts when user is typing
+  if (['input', 'textarea', 'select'].includes(tag)) return
+
+  if (isMeta && e.key === 's') {
+    e.preventDefault()
+    sectionHostRef.value?.save?.()
+    return
+  }
+
+  if (isMeta && e.key === 'k') {
+    e.preventDefault()
+    document.querySelector('.search-input')?.focus()
+    return
+  }
+
+  if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+    const items = Array.from(document.querySelectorAll('.settings-sidebar-item'))
+    if (!items.length) return
+    const active = items.findIndex(el => el.classList.contains('is-active'))
+    if (active === -1) return
+    const next = e.key === 'ArrowDown' ? active + 1 : active - 1
+    const target = items[next]
+    if (target) {
+      e.preventDefault()
+      target.click()
+    }
+  }
+}
+
+onMounted(() => {
+  document.addEventListener('keydown', handleKeydown)
+})
+
+onUnmounted(() => {
+  document.removeEventListener('keydown', handleKeydown)
+})
 </script>
 
 <style scoped>

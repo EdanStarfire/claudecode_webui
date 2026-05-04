@@ -35,17 +35,14 @@
       <button class="header-btn" @click="uiStore.showRestartModal()" title="Restart server" aria-label="Restart server">
         ↻
       </button>
-      <button class="header-btn" @click="uiStore.showModal('global-config')" title="Application Settings (legacy)" aria-label="Application Settings (legacy)">
-        ⚙
-      </button>
       <button
-        class="header-btn settings-new-btn"
+        class="header-btn settings-btn"
         :class="{ 'settings-active': isSettingsRoute }"
-        title="Settings (new UI)"
-        aria-label="Settings (new UI)"
+        title="Settings"
+        aria-label="Settings"
         @click="toggleSettings()"
       >
-        ⚙<sup class="new-badge" aria-hidden="true">new</sup>
+        ⚙
       </button>
     </div>
   </div>
@@ -55,10 +52,12 @@
 import { computed, ref, watch } from 'vue'
 import { useUIStore } from '@/stores/ui'
 import { usePollingStore } from '@/stores/polling'
+import { useSessionStore } from '@/stores/session'
 import { useRoute, useRouter } from 'vue-router'
 
 const uiStore = useUIStore()
 const wsStore = usePollingStore()
+const sessionStore = useSessionStore()
 const route = useRoute()
 const router = useRouter()
 
@@ -77,7 +76,16 @@ watch(() => route.path, (path) => {
 }, { immediate: true })
 
 function toggleSettings() {
-  router.push(isSettingsRoute.value ? lastContentRoute.value : '/settings/features')
+  if (isSettingsRoute.value) {
+    router.push(lastContentRoute.value)
+    return
+  }
+  const sessionId = sessionStore.currentSessionId
+  if (sessionId) {
+    router.push(`/settings/session/${sessionId}/general`)
+  } else {
+    router.push('/settings/features')
+  }
 }
 
 function toggleAnalytics() {
@@ -187,27 +195,14 @@ function toggleAudit() {
   background: rgba(99, 102, 241, 0.1);
 }
 
-.settings-new-btn {
+.settings-btn {
   color: #a5b4fc;
-  position: relative;
 }
 
-.settings-new-btn.settings-active {
+.settings-btn.settings-active {
   border-color: #6366f1;
   color: #a5b4fc;
   background: rgba(99, 102, 241, 0.1);
-}
-
-.new-badge {
-  font-size: 7px;
-  font-weight: 700;
-  background: #6366f1;
-  color: #fff;
-  padding: 1px 3px;
-  border-radius: 2px;
-  vertical-align: super;
-  line-height: 1;
-  letter-spacing: 0;
 }
 
 @keyframes pulse-error {

@@ -2,9 +2,10 @@
   <component
     :is="to ? 'button' : 'span'"
     class="settings-toolbar-chip"
-    :class="[`chip-${type.toLowerCase()}`, { 'chip-clickable': !!to }]"
-    :title="tooltip"
+    :class="[`chip-${type.toLowerCase()}`, { 'chip-clickable': !!to, 'chip-disabled': disabled }]"
+    :title="tooltipText"
     :type="to ? 'button' : undefined"
+    :disabled="disabled && to ? true : undefined"
     @click="handleClick"
   >
     <span class="chip-badge">{{ type }}:</span>
@@ -17,21 +18,24 @@ import { computed } from 'vue'
 import { useRouter } from 'vue-router'
 
 const props = defineProps({
-  type:  { type: String, required: true },
-  label: { type: String, required: true },
-  to:    { type: String, default: '' },
+  type:     { type: String,  required: true },
+  label:    { type: String,  required: true },
+  to:       { type: String,  default: '' },
+  disabled: { type: Boolean, default: false },
+  tooltip:  { type: String,  default: '' },
 })
 
 const router = useRouter()
 
-const tooltip = computed(() => {
+const tooltipText = computed(() => {
+  if (props.tooltip) return props.tooltip
   if (props.type === 'T') return `Template: ${props.label}`
   if (props.type === 'P') return `Profile: ${props.label}`
   return props.label
 })
 
 function handleClick() {
-  if (props.to) router.push(props.to)
+  if (props.to && !props.disabled) router.push(props.to)
 }
 </script>
 
@@ -57,6 +61,11 @@ function handleClick() {
 
 .chip-clickable:hover {
   opacity: 0.8;
+}
+
+.chip-disabled {
+  opacity: 0.45;
+  cursor: default;
 }
 
 .chip-t {

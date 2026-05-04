@@ -8,8 +8,14 @@ function hasValue(v) {
 }
 
 /**
- * Computes per-field source states ({ kind: 'T'|'P'|'EMPTY' }) for template/profile
+ * Computes per-field source states ({ kind: 'S'|'T'|'P'|'EMPTY' }) for template/profile/session
  * edit section components, to drive SourceMarker badges in FieldRenderer.
+ *
+ * In session mode (isSessionMode):
+ *   S = value is set on the session itself (or in the current draft)
+ *   T = value is unset on session but the bound template has it
+ *   P = value is unset on session and template, but the bound profile has it
+ *   EMPTY = none of the above
  *
  * In template mode:
  *   T = value is set on the template itself (or in the current draft)
@@ -20,12 +26,12 @@ function hasValue(v) {
  *   P = value is set in the profile's config (or in the current draft)
  *   EMPTY = not set
  */
-export function useEditSectionFieldStates({ isTemplateMode, baseConfig, draft, boundProfile, schemaFields }) {
+export function useEditSectionFieldStates({ isTemplateMode, isSessionMode, baseConfig, draft, boundProfile, boundTemplate, schemaFields }) {
   const fieldStates = computed(() => {
     const states = {}
     const fields = typeof schemaFields === 'function' ? schemaFields() : (schemaFields?.value ?? schemaFields ?? [])
-    // "set at this level" kind: T when editing a template, P when editing a profile
-    const selfKind = isTemplateMode.value ? 'T' : 'P'
+    // "set at this level" kind: S for session, T for template, P for profile
+    const selfKind = isSessionMode?.value ? 'S' : (isTemplateMode.value ? 'T' : 'P')
 
     for (const f of fields) {
       const key = f.key
@@ -48,7 +54,17 @@ export function useEditSectionFieldStates({ isTemplateMode, baseConfig, draft, b
         }
       }
 
-      if (isTemplateMode.value && boundProfile.value) {
+      // Session mode: check bound template config for 'T' source
+      if (isSessionMode?.value && boundTemplate?.value) {
+        const templateVal = boundTemplate.value?.config?.[key]
+        if (hasValue(templateVal)) {
+          states[key] = { kind: 'T', templateName: boundTemplate.value?.name || 'Template' }
+          continue
+        }
+      }
+
+      // Template mode or session mode: check bound profile config for 'P' source
+      if ((isTemplateMode.value || isSessionMode?.value) && boundProfile.value) {
         const profileVal = boundProfile.value?.config?.[key] ?? boundProfile.value?.[key]
         if (hasValue(profileVal)) {
           states[key] = { kind: 'P', profileName: boundProfile.value?.name || 'Profile' }
