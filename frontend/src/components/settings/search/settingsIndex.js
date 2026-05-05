@@ -45,7 +45,7 @@ export const settingsIndex = [
   { section: 'templates', fieldKey: 'template_capabilities',   label: 'Capabilities' },
   { section: 'templates', fieldKey: 'template_role',           label: 'Role' },
 
-  // Profiles section (LibraryProfilesSection / ProfileManagerTab)
+  // Profiles section (LibraryProfilesSection)
   { section: 'profiles', fieldKey: 'profile_name',        label: 'Profile Name' },
   { section: 'profiles', fieldKey: 'profile_area',        label: 'Area' },
   { section: 'profiles', fieldKey: 'profile_model',       label: 'Model' },

@@ -321,7 +321,6 @@ function showEditModal() {
 }
 
 function showCreateModal() {
-  // LEGACY: uiStore.showModal('create-minion', { project: project.value }) — replaced by settings-view (Phase 4)
   if (project.value) {
     router.push(`/settings/session/__new__/general?project_id=${project.value.project_id}`)
   }

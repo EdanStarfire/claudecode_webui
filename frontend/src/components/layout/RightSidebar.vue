@@ -42,9 +42,6 @@
       <!-- Resources Tab -->
       <ResourceGallery v-show="activeTab === 'resources'" role="tabpanel" aria-label="Resources panel" />
 
-      <!-- Schedules Tab (Issue #495) -->
-      <SchedulePanel v-show="activeTab === 'schedules'" role="tabpanel" aria-label="Schedules panel" />
-
       <!-- Proxy Tab (Issue #1102) -->
       <ProxyPanel v-if="proxyEnabled" v-show="activeTab === 'proxy'" role="tabpanel" aria-label="Proxy panel" />
     </div>
@@ -59,7 +56,7 @@
 </template>
 
 <script setup>
-import { computed, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useUIStore } from '@/stores/ui'
 import { useTaskStore } from '@/stores/task'
 import { useResourceStore } from '@/stores/resource'
@@ -73,9 +70,7 @@ import ResourceFullView from '../common/ResourceFullView.vue'
 import DiffPanel from '../tasks/DiffPanel.vue'
 import DiffFullView from '../common/DiffFullView.vue'
 import EditHistoryPanel from '../tasks/EditHistoryPanel.vue'
-import SchedulePanel from '../schedules/SchedulePanel.vue'
 import ProxyPanel from '../tasks/ProxyPanel.vue'
-import { useScheduleStore } from '@/stores/schedule'
 import { useProxyStore } from '@/stores/proxy'
 
 const uiStore = useUIStore()
@@ -84,7 +79,6 @@ const resourceStore = useResourceStore()
 const diffStore = useDiffStore()
 const sessionStore = useSessionStore()
 const editHistoryStore = useEditHistoryStore()
-const scheduleStore = useScheduleStore()
 const proxyStore = useProxyStore()
 
 const activeTab = computed(() => uiStore.rightSidebarActiveTab)
@@ -96,19 +90,6 @@ const resourceCount = computed(() => {
   return total > 0 ? total : resourceStore.currentResourceCount
 })
 const diffFileCount = computed(() => diffStore.fileCount)
-const schedulesCount = computed(() => {
-  const projectId = sessionStore.currentSession?.project_id
-  if (!projectId) return 0
-  const all = scheduleStore.getSchedules(projectId)
-  return all.filter(s => s.status === 'active').length
-})
-
-const schedulesHasError = computed(() => {
-  const projectId = sessionStore.currentSession?.project_id
-  if (!projectId) return false
-  return scheduleStore.getSchedules(projectId).some(s => s.monitor_error)
-})
-
 const proxyEnabled = computed(() => {
   const session = sessionStore.currentSession
   if (!session) return false
@@ -127,8 +108,7 @@ const tabs = computed(() => {
     { id: 'diff', label: 'Diff', badge: diffFileCount.value },
     { id: 'edits', label: 'Edits', badge: editHistoryCount.value },
     { id: 'tasks', label: 'Tasks', badge: taskStats.value.total > 0 ? taskStats.value.total : 0 },
-    { id: 'resources', label: 'Resources', badge: resourceCount.value },
-    { id: 'schedules', label: 'Sched', badge: schedulesCount.value, badgeError: schedulesHasError.value }
+    { id: 'resources', label: 'Resources', badge: resourceCount.value }
   ]
   if (proxyEnabled.value) {
     list.push({ id: 'proxy', label: 'Proxy', badge: proxyBadge.value })
@@ -139,6 +119,13 @@ const tabs = computed(() => {
 // Fall back to 'diff' if Proxy tab disappears (session switch)
 watch(proxyEnabled, (enabled) => {
   if (!enabled && activeTab.value === 'proxy') {
+    uiStore.setRightSidebarTab('diff')
+  }
+})
+
+// Fall back to 'diff' if localStorage has stale 'schedules' tab (Phase 5 cleanup)
+onMounted(() => {
+  if (activeTab.value === 'schedules') {
     uiStore.setRightSidebarTab('diff')
   }
 })
