@@ -3,7 +3,7 @@
  * src/config_resolution.py PROFILE_AREAS / FIELD_TO_AREA.
  *
  * Single source of truth for the frontend. Used by useFieldState composable
- * and ConfigurationModal to compute per-field resolution metadata.
+ * to compute per-field resolution metadata.
  */
 
 export const CONFIG_FIELDS_LIST = Object.freeze([

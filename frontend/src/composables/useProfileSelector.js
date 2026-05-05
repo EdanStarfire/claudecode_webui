@@ -1,9 +1,8 @@
 /**
  * useProfileSelector composable
  *
- * Shared logic for profile selector dropdowns in AdvancedSettingsPanel
- * and QuickSettingsPanel. Provides area-scoped profile listing, reading,
- * and updating via the profile store.
+ * Shared logic for profile selector dropdowns. Provides area-scoped profile
+ * listing, reading, and updating via the profile store.
  */
 
 import { useProfileStore } from '@/stores/profile'

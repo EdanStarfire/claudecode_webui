@@ -41,13 +41,11 @@
     <FolderBrowserModal />
     <ProjectCreateModal />
     <ProjectEditModal />
-    <ConfigurationModal />
     <SessionManageModal />
     <SessionInfoModal />
     <MinionViewModal />
     <DeletedAgentsModal />
     <RestartModal />
-    <GlobalConfigModal />
     <MermaidFullView />
   </div>
 </template>
@@ -62,13 +60,11 @@ import RightSidebar from './components/layout/RightSidebar.vue'
 import FolderBrowserModal from './components/common/FolderBrowserModal.vue'
 import ProjectCreateModal from './components/project/ProjectCreateModal.vue'
 import ProjectEditModal from './components/project/ProjectEditModal.vue'
-import ConfigurationModal from './components/configuration/ConfigurationModal.vue'
 import SessionManageModal from './components/session/SessionManageModal.vue'
 import SessionInfoModal from './components/session/SessionInfoModal.vue'
 import MinionViewModal from './components/legion/MinionViewModal.vue'
 import DeletedAgentsModal from './components/layout/DeletedAgentsModal.vue'
 import RestartModal from './components/layout/RestartModal.vue'
-import GlobalConfigModal from './components/configuration/GlobalConfigModal.vue'
 import AuthPrompt from './components/common/AuthPrompt.vue'
 import MermaidFullView from './components/common/MermaidFullView.vue'
 import AlertBanner from './components/common/AlertBanner.vue'
