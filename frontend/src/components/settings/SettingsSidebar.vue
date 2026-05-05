@@ -62,6 +62,28 @@
         </div>
       </SettingsSidebarGroup>
 
+      <!-- Edit group: "Editing Schedule" (shown when on a schedule edit route) -->
+      <SettingsSidebarGroup
+        v-if="isScheduleEdit && (filteredScheduleItems.length > 0 || !settingsStore.searchQuery)"
+        title="Editing Schedule"
+        short-title="Sched"
+        :subtitle="scheduleEntityName"
+        :tinted="true"
+      >
+        <SettingsSidebarItem
+          v-for="item in filteredScheduleItems"
+          :key="item.to"
+          :to="item.to"
+          :icon="item.icon"
+          :label="item.label"
+          :disabled="item.disabled"
+          :tinted="true"
+        />
+        <div v-if="settingsStore.searchQuery && !filteredScheduleItems.length" class="no-results">
+          No results
+        </div>
+      </SettingsSidebarGroup>
+
       <!-- Ghost edit group: shown on Application/Library routes to prevent sidebar bounce -->
       <SettingsSidebarGroup
         v-if="ghostItems.length"
@@ -103,6 +125,7 @@
           :to="item.to"
           :icon="item.icon"
           :label="item.label"
+          :badge="getLibItemBadge(item)"
         />
         <div v-if="settingsStore.searchQuery && !filteredLibItems.length" class="no-results">
           No results
@@ -119,6 +142,7 @@ import { useSettingsStore } from '@/stores/settings'
 import { useTemplateStore } from '@/stores/template'
 import { useProfileStore } from '@/stores/profile'
 import { useSessionStore } from '@/stores/session'
+import { useScheduleStore } from '@/stores/schedule'
 import SettingsSidebarSearch from './SettingsSidebarSearch.vue'
 import SettingsSidebarGroup from './SettingsSidebarGroup.vue'
 import SettingsSidebarItem from './SettingsSidebarItem.vue'
@@ -129,6 +153,7 @@ const settingsStore  = useSettingsStore()
 const templateStore  = useTemplateStore()
 const profileStore   = useProfileStore()
 const sessionStore   = useSessionStore()
+const scheduleStore  = useScheduleStore()
 
 function toggleSidebar() {
   settingsStore.setSidebarExpanded(!settingsStore.sidebarExpanded)
@@ -267,6 +292,44 @@ const filteredEditItems = computed(() => {
   })
 })
 
+// ── Schedule edit group ────────────────────────────────────────────────────
+
+const isScheduleEdit = computed(() => route.path.startsWith('/settings/schedule/'))
+
+const scheduleEntityId = computed(() => route.params.scheduleId || '')
+
+const currentSchedule = computed(() => scheduleStore.getSchedule(scheduleEntityId.value))
+
+const scheduleEntityName = computed(() => currentSchedule.value?.name || '')
+
+const scheduleSectionItems = computed(() => {
+  if (!scheduleEntityId.value) return []
+  const base = `/settings/schedule/${scheduleEntityId.value}`
+  const isPermanent = currentSchedule.value?.minion_id && !currentSchedule.value?.session_config
+  return EDIT_SECTIONS.map(s => ({
+    to: `${base}/${s.section}`,
+    icon: s.icon,
+    label: s.label,
+    sectionKey: s.sectionKey,
+    disabled: isPermanent && s.section !== 'general',
+  }))
+})
+
+const filteredScheduleItems = computed(() => {
+  const q = settingsStore.searchQuery.toLowerCase().trim()
+  if (!q) return scheduleSectionItems.value
+  return scheduleSectionItems.value.filter(item => {
+    if (item.label.toLowerCase().includes(q)) return true
+    return settingsIndex
+      .filter(e => e.section === item.sectionKey)
+      .some(e => e.label.toLowerCase().includes(q))
+  })
+})
+
+const scheduleErrorBadge = computed(() =>
+  scheduleStore.allSchedules.some(s => s.monitor_error)
+)
+
 // ── Static sidebar groups ─────────────────────────────────────────────────
 
 const APP_ITEMS = [
@@ -277,9 +340,10 @@ const APP_ITEMS = [
 ]
 
 const libraryItems = [
-  { to: '/settings/templates', icon: '📄', label: 'Templates', sectionKey: 'templates' },
-  { to: '/settings/profiles',  icon: '📋', label: 'Profiles',  sectionKey: 'profiles' },
-  { to: '/settings/secrets',   icon: '🔑', label: 'Secrets',   sectionKey: 'secrets' },
+  { to: '/settings/templates',  icon: '📄', label: 'Templates',  sectionKey: 'templates' },
+  { to: '/settings/profiles',   icon: '📋', label: 'Profiles',   sectionKey: 'profiles' },
+  { to: '/settings/secrets',    icon: '🔑', label: 'Secrets',    sectionKey: 'secrets' },
+  { to: '/settings/schedules',  icon: '⏰', label: 'Schedules',  sectionKey: 'schedules' },
 ]
 
 const filteredAppItems = computed(() => {
@@ -304,6 +368,11 @@ const filteredLibItems = computed(() => {
   })
 })
 
+function getLibItemBadge(item) {
+  if (item.to === '/settings/schedules') return scheduleErrorBadge.value
+  return false
+}
+
 // ── Ghost edit group (sidebar bounce prevention) ──────────────────────────
 // When on Application/Library routes, keep the last-visited edit group visible
 // but with all items disabled, so the sidebar layout stays stable.
@@ -317,11 +386,13 @@ watch(() => route.path, () => {
     lastEditState.value = { type: 'template', id: editEntityId.value }
   } else if (isProfileEdit.value && editEntityId.value) {
     lastEditState.value = { type: 'profile', id: editEntityId.value }
+  } else if (isScheduleEdit.value && scheduleEntityId.value) {
+    lastEditState.value = { type: 'schedule', id: scheduleEntityId.value }
   }
 }, { immediate: true })
 
 const isOnNonEditRoute = computed(() =>
-  route.path.startsWith('/settings/') && !isSessionEdit.value && !isEditMode.value
+  route.path.startsWith('/settings/') && !isSessionEdit.value && !isEditMode.value && !isScheduleEdit.value
 )
 
 const ghostItems = computed(() => {
@@ -334,7 +405,7 @@ const ghostItems = computed(() => {
   }
 
   const isNew = id === '__new__'
-  const prefix = type === 'session' ? 'session' : (type === 'template' ? 'template' : 'profile')
+  const prefix = type === 'session' ? 'session' : (type === 'template' ? 'template' : (type === 'schedule' ? 'schedule' : 'profile'))
   const base = `/settings/${prefix}/${id}`
 
   if (isNew) {
@@ -350,6 +421,11 @@ const ghostItems = computed(() => {
     const area = profileStore.getProfile(id)?.area
     const areaSection = area ? AREA_SECTION[area] : null
     enabledSections = new Set(['general', ...(areaSection ? [areaSection] : [])])
+  } else if (type === 'schedule') {
+    const sched = scheduleStore.getSchedule(id)
+    if (sched?.minion_id && !sched?.session_config) {
+      enabledSections = new Set(['general'])
+    }
   }
 
   return EDIT_SECTIONS.map(s => ({
@@ -363,6 +439,7 @@ const ghostGroupTitle = computed(() => {
   const t = lastEditState.value.type
   if (t === 'template') return 'Editing Template'
   if (t === 'profile')  return 'Editing Profile'
+  if (t === 'schedule') return 'Editing Schedule'
   return 'Editing Session'
 })
 
@@ -370,6 +447,7 @@ const ghostGroupShort = computed(() => {
   const t = lastEditState.value.type
   if (t === 'template') return 'Tmpl'
   if (t === 'profile')  return 'Prof'
+  if (t === 'schedule') return 'Sched'
   return 'Sess'
 })
 
@@ -380,6 +458,7 @@ const ghostEntityName = computed(() => {
   if (type === 'session')  return sessionStore.getSession(id)?.name || 'None selected'
   if (type === 'template') return templateStore.getTemplate(id)?.name || 'None selected'
   if (type === 'profile')  return profileStore.getProfile(id)?.name || 'None selected'
+  if (type === 'schedule') return scheduleStore.getSchedule(id)?.name || 'None selected'
   return 'None selected'
 })
 </script>

@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { api } from '../utils/api'
+import { useProjectStore } from './project'
 
 /**
  * Schedule Store - Manages cron-based schedule state (Issue #495)
@@ -50,6 +51,36 @@ export const useScheduleStore = defineStore('schedule', () => {
   function isRunning(scheduleId) {
     return runningSchedules.value.has(scheduleId)
   }
+
+  /**
+   * Find a schedule by ID across all legions
+   */
+  function getSchedule(scheduleId) {
+    for (const schedules of schedulesByLegion.value.values()) {
+      const found = schedules.find(s => s.schedule_id === scheduleId)
+      if (found) return found
+    }
+    return null
+  }
+
+  /**
+   * All schedules across all legions, sorted by legion name then schedule name
+   */
+  const allSchedules = computed(() => {
+    const projectStore = useProjectStore()
+    const result = []
+    for (const [legionId, schedules] of schedulesByLegion.value.entries()) {
+      const legionName = projectStore.getProject(legionId)?.name || legionId
+      for (const s of schedules) {
+        result.push({ ...s, _legionName: legionName })
+      }
+    }
+    result.sort((a, b) => {
+      const legionCmp = a._legionName.localeCompare(b._legionName)
+      return legionCmp !== 0 ? legionCmp : (a.name || '').localeCompare(b.name || '')
+    })
+    return result
+  })
 
   // ========== ACTIONS ==========
 
@@ -126,10 +157,21 @@ export const useScheduleStore = defineStore('schedule', () => {
   }
 
   /**
-   * Delete a schedule
+   * Load schedules for all multi-agent legions (used by Library Schedules section)
    */
-  async function deleteSchedule(legionId, scheduleId) {
-    await api.delete(`/api/legions/${legionId}/schedules/${scheduleId}`)
+  async function loadAllSchedules() {
+    const projectStore = useProjectStore()
+    if (projectStore.projects.size === 0) await projectStore.fetchProjects()
+    const legionIds = [...projectStore.projects.values()].map(p => p.project_id)
+    await Promise.all(legionIds.map(id => loadSchedules(id)))
+  }
+
+  /**
+   * Delete a schedule. Pass options.delete_agent = true to also delete the bound ephemeral agent.
+   */
+  async function deleteSchedule(legionId, scheduleId, options = {}) {
+    const qs = options.delete_agent != null ? `?delete_agent=${options.delete_agent}` : ''
+    await api.delete(`/api/legions/${legionId}/schedules/${scheduleId}${qs}`)
     _removeSchedule(legionId, scheduleId)
   }
 
@@ -288,8 +330,11 @@ export const useScheduleStore = defineStore('schedule', () => {
     getSchedules,
     getScheduleCount,
     isRunning,
+    getSchedule,
+    allSchedules,
     // Actions
     loadSchedules,
+    loadAllSchedules,
     createSchedule,
     updateSchedule,
     pauseSchedule,

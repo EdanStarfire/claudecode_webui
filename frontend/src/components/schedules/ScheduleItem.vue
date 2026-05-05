@@ -500,27 +500,7 @@ async function savePrompt() {
 }
 
 function openEditConfig() {
-  uiStore.showModal('configuration', {
-    mode: 'configure-ephemeral',
-    data: {
-      seedConfig: props.schedule.session_config || {},
-      onConfigured: async (config) => {
-        try {
-          await scheduleStore.updateSchedule(
-            props.legionId,
-            props.schedule.schedule_id,
-            { session_config: config }
-          )
-          // Patch the ephemeral agent session if it exists
-          if (props.schedule.ephemeral_agent_id) {
-            await sessionStore.patchSession(props.schedule.ephemeral_agent_id, config)
-          }
-        } catch (e) {
-          console.error('Failed to update session config:', e)
-        }
-      }
-    }
-  })
+  router.push(`/settings/schedule/${props.schedule.schedule_id}/general`)
 }
 
 async function navigateToAgent() {
