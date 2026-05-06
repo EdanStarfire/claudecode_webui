@@ -60,8 +60,8 @@ const totalTokens = computed(() => {
 
 <style scoped>
 .summary-card {
-  background: #1e293b;
-  border: 1px solid #334155;
+  background: var(--bs-secondary-bg);
+  border: 1px solid var(--bs-border-color);
   border-radius: 8px;
 }
 .card-body {
@@ -69,7 +69,7 @@ const totalTokens = computed(() => {
 }
 .card-label {
   font-size: 11px;
-  color: #64748b;
+  color: var(--bs-secondary-color);
   text-transform: uppercase;
   letter-spacing: 0.5px;
   margin-bottom: 4px;
@@ -77,7 +77,7 @@ const totalTokens = computed(() => {
 .card-value {
   font-size: 22px;
   font-weight: 700;
-  color: #f1f5f9;
+  color: var(--bs-body-color);
   line-height: 1.2;
 }
 .top-name {
@@ -89,17 +89,17 @@ const totalTokens = computed(() => {
 }
 .card-sub {
   font-size: 11px;
-  color: #94a3b8;
+  color: var(--bs-secondary-color);
   margin-top: 4px;
   display: flex;
   gap: 6px;
   flex-wrap: wrap;
 }
 .token-chip {
-  background: #0f172a;
+  background: var(--bs-tertiary-bg);
   border-radius: 4px;
   padding: 1px 6px;
 }
-.token-chip.input { color: #818cf8; }
-.token-chip.output { color: #4ade80; }
+.token-chip.input { color: var(--chart-color-input-text); }
+.token-chip.output { color: var(--chart-color-output-text); }
 </style>

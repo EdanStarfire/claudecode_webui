@@ -164,6 +164,75 @@
     --table-header-bg: rgba(255, 255, 255, 0.08);
 }
 
+/* ========== ANALYTICS CHART PALETTE (per theme) ========== */
+[data-bs-theme="light"], :root {
+    --chart-color-input:        rgba(99, 102, 241, 0.75);
+    --chart-color-output:       rgba(34, 197,  94, 0.75);
+    --chart-color-cache-write:  rgba(251, 146,  60, 0.75);
+    --chart-color-cache-read:   rgba(148, 163, 184, 0.75);
+    --chart-color-cost:         rgba(99, 102, 241, 0.70);
+    --chart-color-cost-border:  rgba(99, 102, 241, 1.00);
+    --chart-color-input-text:   #4f46e5;
+    --chart-color-output-text:  #16a34a;
+    --chart-model-0: rgba(99,  102, 241, 0.75);
+    --chart-model-1: rgba(34,  197,  94, 0.75);
+    --chart-model-2: rgba(251, 146,  60, 0.75);
+    --chart-model-3: rgba(236,  72, 153, 0.75);
+    --chart-model-4: rgba(14,  165, 233, 0.75);
+    --chart-model-5: rgba(148, 163, 184, 0.75);
+}
+
+[data-bs-theme="dark"] {
+    --chart-color-input:        rgba(129, 140, 248, 0.85);
+    --chart-color-output:       rgba(74,  222, 128, 0.85);
+    --chart-color-cache-write:  rgba(251, 146,  60, 0.85);
+    --chart-color-cache-read:   rgba(148, 163, 184, 0.70);
+    --chart-color-cost:         rgba(129, 140, 248, 0.75);
+    --chart-color-cost-border:  rgba(129, 140, 248, 1.00);
+    --chart-color-input-text:   #818cf8;
+    --chart-color-output-text:  #4ade80;
+    --chart-model-0: rgba(129, 140, 248, 0.85);
+    --chart-model-1: rgba(74,  222, 128, 0.85);
+    --chart-model-2: rgba(251, 146,  60, 0.85);
+    --chart-model-3: rgba(244, 114, 182, 0.85);
+    --chart-model-4: rgba(56,  189, 248, 0.85);
+    --chart-model-5: rgba(148, 163, 184, 0.85);
+}
+
+[data-bs-theme="sensitive-light"] {
+    --chart-color-input:        rgba(198,  40,  40, 0.75);
+    --chart-color-output:       rgba(46,  125,  50, 0.75);
+    --chart-color-cache-write:  rgba(230,  81,   0, 0.75);
+    --chart-color-cache-read:   rgba(239, 154, 154, 0.85);
+    --chart-color-cost:         rgba(198,  40,  40, 0.70);
+    --chart-color-cost-border:  rgba(198,  40,  40, 1.00);
+    --chart-color-input-text:   #c62828;
+    --chart-color-output-text:  #2e7d32;
+    --chart-model-0: rgba(198,  40,  40, 0.75);
+    --chart-model-1: rgba(46,  125,  50, 0.75);
+    --chart-model-2: rgba(230,  81,   0, 0.75);
+    --chart-model-3: rgba(194,  24,  91, 0.75);
+    --chart-model-4: rgba(21,  101, 192, 0.75);
+    --chart-model-5: rgba(239, 154, 154, 0.85);
+}
+
+[data-bs-theme="sensitive-dark"] {
+    --chart-color-input:        rgba(239, 154, 154, 0.85);
+    --chart-color-output:       rgba(165, 214, 167, 0.85);
+    --chart-color-cache-write:  rgba(255, 204, 128, 0.85);
+    --chart-color-cache-read:   rgba(244, 143, 177, 0.70);
+    --chart-color-cost:         rgba(239, 154, 154, 0.75);
+    --chart-color-cost-border:  rgba(239, 154, 154, 1.00);
+    --chart-color-input-text:   #ef9a9a;
+    --chart-color-output-text:  #a5d6a7;
+    --chart-model-0: rgba(239, 154, 154, 0.85);
+    --chart-model-1: rgba(165, 214, 167, 0.85);
+    --chart-model-2: rgba(255, 204, 128, 0.85);
+    --chart-model-3: rgba(244, 143, 177, 0.85);
+    --chart-model-4: rgba(129, 212, 250, 0.85);
+    --chart-model-5: rgba(206, 147, 216, 0.85);
+}
+
 /* ========== AGENT COLOR PALETTE (per theme) ========== */
 /* Slot indices 0-11 match AGENT_COLORS array order in useAgentColor.js         */
 /* 0=amber 1=pink 2=indigo 3=emerald 4=violet 5=red 6=cyan 7=yellow             */

@@ -1,7 +1,7 @@
 <template>
   <div class="session-table-panel">
     <div class="table-responsive">
-      <table class="table table-dark table-sm table-hover analytics-table mb-0">
+      <table class="table table-sm table-hover analytics-table mb-0">
         <thead>
           <tr>
             <th @click="setSort('session_name')" class="sortable">
@@ -102,41 +102,41 @@ function formatLastActive(ts) {
 
 <style scoped>
 .session-table-panel {
-  background: #1e293b;
-  border: 1px solid #334155;
+  background: var(--bs-secondary-bg);
+  border: 1px solid var(--bs-border-color);
   border-radius: 8px;
   overflow: hidden;
 }
 .analytics-table {
   --bs-table-bg: transparent;
-  --bs-table-hover-bg: rgba(99,102,241,0.07);
+  --bs-table-hover-bg: var(--bs-tertiary-bg);
   font-size: 12px;
   margin: 0;
 }
 .analytics-table th {
-  background: #0f172a;
-  color: #94a3b8;
+  background: var(--bs-tertiary-bg);
+  color: var(--bs-secondary-color);
   font-size: 11px;
   font-weight: 500;
-  border-bottom: 1px solid #334155;
+  border-bottom: 1px solid var(--bs-border-color);
   white-space: nowrap;
   padding: 8px 10px;
 }
 .analytics-table td {
-  border-color: #1e293b;
+  border-color: var(--bs-border-color);
   padding: 7px 10px;
   vertical-align: middle;
-  color: #e2e8f0;
+  color: var(--bs-body-color);
 }
 .sortable {
   cursor: pointer;
   user-select: none;
 }
 .sortable:hover {
-  color: #c7d2fe;
+  color: var(--bs-link-hover-color);
 }
 .sort-icon {
-  color: #6366f1;
+  color: var(--bs-link-color);
   font-size: 10px;
 }
 .session-name {
@@ -148,7 +148,7 @@ function formatLastActive(ts) {
   vertical-align: bottom;
 }
 .model-cell {
-  color: #94a3b8;
+  color: var(--bs-secondary-color);
   font-size: 11px;
   max-width: 160px;
   overflow: hidden;
@@ -159,15 +159,15 @@ function formatLastActive(ts) {
   padding-left: 20px;
 }
 .minion-indent {
-  color: #64748b;
+  color: var(--bs-secondary-color);
   margin-right: 4px;
 }
 .cost-cell {
   font-weight: 600;
-  color: #a5b4fc;
+  color: var(--bs-link-color);
 }
 .unknown-rate {
-  color: #64748b;
+  color: var(--bs-secondary-color);
   font-weight: normal;
 }
 </style>

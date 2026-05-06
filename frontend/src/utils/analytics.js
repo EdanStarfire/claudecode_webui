@@ -2,6 +2,12 @@
  * Analytics utility helpers: formatting, bucket-size selection, range presets.
  */
 
+/** Read a CSS custom property value from :root, trimming whitespace. */
+export function readCssVar(name) {
+  if (typeof document === 'undefined') return ''
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim()
+}
+
 /**
  * Select bucket granularity based on time range duration in seconds.
  * < 48 hours → 'hour', >= 48 hours → 'day'

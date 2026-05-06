@@ -1,9 +1,11 @@
 import { ref, computed } from 'vue'
 import { defineStore } from 'pinia'
 import { api } from '@/utils/api'
-import { presetToRange, selectBucketSize, formatBucketLabel, TIME_PRESETS } from '@/utils/analytics'
+import { presetToRange, selectBucketSize, formatBucketLabel, TIME_PRESETS, readCssVar } from '@/utils/analytics'
+import { useUIStore } from '@/stores/ui'
 
 export const useAnalyticsStore = defineStore('analytics', () => {
+  const uiStore = useUIStore()
   // -------------------------------------------------------------------------
   // State
   // -------------------------------------------------------------------------
@@ -49,6 +51,9 @@ export const useAnalyticsStore = defineStore('analytics', () => {
 
   /** Chart series derived from buckets and current grouping/metric. */
   const chartSeries = computed(() => {
+    // eslint-disable-next-line no-unused-expressions
+    uiStore.theme
+
     if (!buckets.value.length) return { labels: [], datasets: [] }
 
     const grouping = filters.value.chartGrouping
@@ -57,21 +62,20 @@ export const useAnalyticsStore = defineStore('analytics', () => {
 
     if (grouping === 'token_type') {
       const tokenTypes = [
-        { key: 'input_tokens', label: 'Input', color: 'rgba(99,102,241,0.8)' },
-        { key: 'output_tokens', label: 'Output', color: 'rgba(34,197,94,0.8)' },
-        { key: 'cache_write_tokens', label: 'Cache Write', color: 'rgba(251,146,60,0.8)' },
-        { key: 'cache_read_tokens', label: 'Cache Read', color: 'rgba(148,163,184,0.8)' },
+        { key: 'input_tokens',       label: 'Input',       color: readCssVar('--chart-color-input') },
+        { key: 'output_tokens',      label: 'Output',      color: readCssVar('--chart-color-output') },
+        { key: 'cache_write_tokens', label: 'Cache Write', color: readCssVar('--chart-color-cache-write') },
+        { key: 'cache_read_tokens',  label: 'Cache Read',  color: readCssVar('--chart-color-cache-read') },
       ]
       const labels = bkts.map(b => b._label)
       if (metric === 'cost') {
-        // cost is a single aggregated value per bucket — one dataset
         return {
           labels,
           datasets: [{
             label: 'Estimated Cost (USD)',
             data: bkts.map(b => b.by_token_type.estimated_cost_usd || 0),
-            backgroundColor: 'rgba(99,102,241,0.7)',
-            borderColor: 'rgba(99,102,241,1)',
+            backgroundColor: readCssVar('--chart-color-cost'),
+            borderColor:     readCssVar('--chart-color-cost-border'),
             borderWidth: 1,
           }],
         }
@@ -92,8 +96,12 @@ export const useAnalyticsStore = defineStore('analytics', () => {
     bkts.forEach(b => b.by_model.forEach(m => allModels.add(m.model)))
     const labels = bkts.map(b => b._label)
     const modelColors = [
-      'rgba(99,102,241,0.8)', 'rgba(34,197,94,0.8)', 'rgba(251,146,60,0.8)',
-      'rgba(236,72,153,0.8)', 'rgba(148,163,184,0.8)', 'rgba(14,165,233,0.8)',
+      readCssVar('--chart-model-0'),
+      readCssVar('--chart-model-1'),
+      readCssVar('--chart-model-2'),
+      readCssVar('--chart-model-3'),
+      readCssVar('--chart-model-4'),
+      readCssVar('--chart-model-5'),
     ]
     let colorIdx = 0
     const datasets = [...allModels].map(modelName => {
