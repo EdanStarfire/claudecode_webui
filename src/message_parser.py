@@ -1303,6 +1303,11 @@ class PermissionRequestHandler(MessageHandler):
                 "has_permission_responses": False,
                 "tool_use_id": message_data.get("tool_use_id"),   # Issue #953
                 "agent_id": message_data.get("agent_id"),          # Issue #953
+                "decision_reason": message_data.get("decision_reason"),  # Issue #1302
+                "blocked_path": message_data.get("blocked_path"),        # Issue #1302
+                "title": message_data.get("title"),                      # Issue #1302
+                "display_name": message_data.get("display_name"),        # Issue #1302
+                "description": message_data.get("description"),          # Issue #1302
             }
         }
 

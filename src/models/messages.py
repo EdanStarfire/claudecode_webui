@@ -72,14 +72,31 @@ class PermissionInfo:
     message: str  # "Allow Edit to modify file.py?"
     suggestions: list[dict[str, Any]] = field(default_factory=list)
     risk_level: str = "medium"  # "low", "medium", "high"
+    # Issue #1302: SDK 0.1.74 enriched context fields
+    decision_reason: Any | None = None
+    blocked_path: str | None = None
+    title: str | None = None
+    display_name: str | None = None
+    description: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to dict for storage/WebSocket."""
-        return {
+        result: dict[str, Any] = {
             "message": self.message,
             "suggestions": self.suggestions,
             "risk_level": self.risk_level,
         }
+        if self.decision_reason is not None:
+            result["decision_reason"] = self.decision_reason
+        if self.blocked_path is not None:
+            result["blocked_path"] = self.blocked_path
+        if self.title is not None:
+            result["title"] = self.title
+        if self.display_name is not None:
+            result["display_name"] = self.display_name
+        if self.description is not None:
+            result["description"] = self.description
+        return result
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "PermissionInfo":
@@ -88,6 +105,11 @@ class PermissionInfo:
             message=data.get("message", ""),
             suggestions=data.get("suggestions", []),
             risk_level=data.get("risk_level", "medium"),
+            decision_reason=data.get("decision_reason"),
+            blocked_path=data.get("blocked_path"),
+            title=data.get("title"),
+            display_name=data.get("display_name"),
+            description=data.get("description"),
         )
 
 
@@ -314,6 +336,12 @@ class PermissionRequestMessage:
     session_id: str | None = None
     tool_use_id: str | None = None  # Issue #953: direct tool invocation ID from SDK v0.1.52+
     agent_id: str | None = None     # Issue #953: sub-agent ID from ToolPermissionContext
+    # Issue #1302: SDK 0.1.74 enriched context fields
+    decision_reason: Any | None = None
+    blocked_path: str | None = None
+    title: str | None = None
+    display_name: str | None = None
+    description: str | None = None
 
     @property
     def content(self) -> str:
@@ -322,7 +350,7 @@ class PermissionRequestMessage:
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to dict for storage."""
-        return {
+        result: dict[str, Any] = {
             'request_id': self.request_id,
             'tool_name': self.tool_name,
             'input_params': self.input_params,
@@ -333,6 +361,17 @@ class PermissionRequestMessage:
             'agent_id': self.agent_id,
             'content': self.content,
         }
+        if self.decision_reason is not None:
+            result['decision_reason'] = self.decision_reason
+        if self.blocked_path is not None:
+            result['blocked_path'] = self.blocked_path
+        if self.title is not None:
+            result['title'] = self.title
+        if self.display_name is not None:
+            result['display_name'] = self.display_name
+        if self.description is not None:
+            result['description'] = self.description
+        return result
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> 'PermissionRequestMessage':
@@ -348,6 +387,13 @@ class PermissionRequestMessage:
             suggestions=suggestions,
             timestamp=data.get('timestamp', 0.0),
             session_id=data.get('session_id'),
+            tool_use_id=data.get('tool_use_id'),
+            agent_id=data.get('agent_id'),
+            decision_reason=data.get('decision_reason'),
+            blocked_path=data.get('blocked_path'),
+            title=data.get('title'),
+            display_name=data.get('display_name'),
+            description=data.get('description'),
         )
 
 

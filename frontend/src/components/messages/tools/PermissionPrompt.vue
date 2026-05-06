@@ -34,8 +34,20 @@
       <!-- Standard Permission UI -->
       <template v-else>
         <div class="detail-banner detail-banner-warning">
-          <strong>Permission Required</strong>
-          <p>Claude wants to use <code>{{ toolCall.name }}</code></p>
+          <strong>{{ headerTitle }}</strong>
+          <p>
+            Claude wants to use
+            <code>{{ permissionDisplayName || toolCall.name }}</code>
+          </p>
+          <p v-if="permissionDescription" class="permission-description">
+            {{ permissionDescription }}
+          </p>
+          <p v-if="permissionBlockedPath" class="permission-blocked-path">
+            Blocked path: <code>{{ permissionBlockedPath }}</code>
+          </p>
+          <p v-if="permissionDecisionReason" class="permission-decision-reason">
+            <em>SDK reason: {{ String(permissionDecisionReason) }}</em>
+          </p>
         </div>
 
         <!-- Suggestions -->
@@ -274,6 +286,14 @@ const selectedSuggestions = computed(() => {
   })
   return result
 })
+
+// Issue #1302: Enriched permission context computed properties
+const permission = computed(() => props.toolCall.permission || {})
+const headerTitle = computed(() => permission.value.title || 'Permission Required')
+const permissionDisplayName = computed(() => permission.value.display_name || null)
+const permissionDescription = computed(() => permission.value.description || null)
+const permissionBlockedPath = computed(() => permission.value.blocked_path || null)
+const permissionDecisionReason = computed(() => permission.value.decision_reason || null)
 
 const isAskUserQuestion = computed(() => props.toolCall.name === 'AskUserQuestion')
 
@@ -520,7 +540,25 @@ function autoResizeGuidance() {
 }
 
 .detail-banner strong { display: block; margin-bottom: 2px; }
-.detail-banner p { margin: 0; opacity: 0.8; }
+.detail-banner p { margin: 2px 0 0; opacity: 0.8; }
+
+.permission-description {
+  margin-top: 4px !important;
+  max-height: 5em;
+  overflow-y: auto;
+  opacity: 0.85 !important;
+}
+
+.permission-blocked-path {
+  margin-top: 4px !important;
+  font-size: 11px;
+}
+
+.permission-decision-reason {
+  margin-top: 4px !important;
+  font-size: 11px;
+  opacity: 0.7 !important;
+}
 
 .detail-banner-warning {
   background: #fef3c7;
