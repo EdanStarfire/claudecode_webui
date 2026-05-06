@@ -4,13 +4,13 @@
       <span class="outbound-comm-recipient" :style="{ color: recipientColor.accent }">
         → {{ recipientName }}
       </span>
-      <span v-if="commType" class="outbound-comm-type-badge" :class="'comm-type-' + commType">
+      <span v-if="commType" class="badge outbound-comm-type-badge" :class="commTypeBadgeClass">
         {{ commType }}
       </span>
-      <span v-if="interruptPriority && interruptPriority !== 'none'" class="outbound-comm-priority">
+      <span v-if="interruptPriority && interruptPriority !== 'none'" class="badge bg-danger outbound-comm-priority">
         {{ interruptPriority }}
       </span>
-      <span v-if="attachments.length > 0" class="outbound-comm-attach-badge">
+      <span v-if="attachments.length > 0" class="badge text-bg-info outbound-comm-attach-badge">
         📎 {{ attachments.length }}
       </span>
     </div>
@@ -65,6 +65,17 @@ const content = computed(() => props.toolCall.input?.content || '')
 const summaryText = computed(() => props.toolCall.input?.summary || '')
 const commType = computed(() => props.toolCall.input?.comm_type || '')
 const interruptPriority = computed(() => props.toolCall.input?.interrupt_priority || '')
+
+const commTypeBadgeClass = computed(() => {
+  const map = {
+    task: 'bg-primary',
+    question: 'bg-info',
+    info: 'bg-secondary',
+    report: 'bg-success',
+    system: 'bg-dark',
+  }
+  return map[commType.value] || 'bg-secondary'
+})
 
 const sessionStore = useSessionStore()
 const resourceStore = useResourceStore()
@@ -154,33 +165,11 @@ defineExpose({ summary, params, result })
   letter-spacing: 0.3px;
 }
 
-.comm-type-task {
-  background: #dbeafe;
-  color: #1e40af;
-}
-
-.comm-type-question {
-  background: #fef3c7;
-  color: #92400e;
-}
-
-.comm-type-report {
-  background: #d1fae5;
-  color: #065f46;
-}
-
-.comm-type-info {
-  background: #f1f5f9;
-  color: #475569;
-}
-
 .outbound-comm-priority {
   font-size: 10px;
   font-weight: 700;
   padding: 1px 6px;
   border-radius: 8px;
-  background: #fee2e2;
-  color: #991b1b;
   text-transform: uppercase;
 }
 
@@ -196,7 +185,7 @@ defineExpose({ summary, params, result })
 .outbound-comm-content {
   font-size: 14px;
   line-height: 1.5;
-  color: #1e293b;
+  color: var(--bs-body-color);
   white-space: pre-wrap;
   word-wrap: break-word;
 }
@@ -215,7 +204,7 @@ defineExpose({ summary, params, result })
 }
 
 .outbound-comm-content :deep(pre) {
-  background: rgba(0, 0, 0, 0.04);
+  background: var(--bs-tertiary-bg);
   padding: 0.75rem;
   border-radius: 6px;
   overflow-x: auto;
@@ -223,7 +212,7 @@ defineExpose({ summary, params, result })
 }
 
 .outbound-comm-content :deep(code) {
-  background: rgba(0, 0, 0, 0.06);
+  background: var(--bs-secondary-bg);
   padding: 0.15rem 0.35rem;
   border-radius: 3px;
   font-family: 'Courier New', monospace;
@@ -243,11 +232,11 @@ defineExpose({ summary, params, result })
 }
 
 .outbound-comm-result.result-success {
-  color: #16a34a;
+  color: var(--bs-success);
 }
 
 .outbound-comm-result.result-error {
-  color: #dc2626;
+  color: var(--bs-danger);
 }
 
 .outbound-comm-attach-badge {
@@ -255,8 +244,6 @@ defineExpose({ summary, params, result })
   font-weight: 600;
   padding: 1px 6px;
   border-radius: 8px;
-  background: #e0f2fe;
-  color: #0369a1;
 }
 
 .outbound-comm-attachments {
@@ -265,6 +252,6 @@ defineExpose({ summary, params, result })
   gap: 6px;
   margin-top: 0.75rem;
   padding-top: 0.5rem;
-  border-top: 1px solid rgba(0, 0, 0, 0.1);
+  border-top: 1px solid var(--bs-border-color-translucent);
 }
 </style>
