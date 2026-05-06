@@ -339,9 +339,12 @@ class SystemMessageHandler(MessageHandler):
                 if subtype == "hook_started":
                     extracted["content"] = f"Hook: {hook_name} ({hook_event})" if hook_event else f"Hook: {hook_name}"
                 else:
-                    outcome = hook_data.get("outcome", hook_data.get("output", "done"))
                     exit_code = hook_data.get("exit_code", hook_data.get("exitCode"))
-                    extracted["content"] = f"Hook: {hook_name} \u2192 {outcome}"
+                    if exit_code == 0:
+                        display = hook_data.get("stdout") or hook_data.get("outcome", "success")
+                    else:
+                        display = hook_data.get("stderr") or hook_data.get("outcome", "failed")
+                    extracted["content"] = f"Hook: {hook_name} \u2192 {display}"
                     if exit_code is not None:
                         extracted["metadata"]["exit_code"] = exit_code
 
@@ -395,9 +398,12 @@ class SystemMessageHandler(MessageHandler):
                 if subtype == "hook_started":
                     extracted["content"] = f"Hook: {hook_name} ({hook_event})" if hook_event else f"Hook: {hook_name}"
                 else:
-                    outcome = init_data.get("outcome", init_data.get("output", "done"))
                     exit_code = init_data.get("exit_code", init_data.get("exitCode"))
-                    extracted["content"] = f"Hook: {hook_name} \u2192 {outcome}"
+                    if exit_code == 0:
+                        display = init_data.get("stdout") or init_data.get("outcome", "success")
+                    else:
+                        display = init_data.get("stderr") or init_data.get("outcome", "failed")
+                    extracted["content"] = f"Hook: {hook_name} \u2192 {display}"
                     if exit_code is not None:
                         extracted["metadata"]["exit_code"] = exit_code
 

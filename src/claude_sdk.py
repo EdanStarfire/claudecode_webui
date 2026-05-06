@@ -962,6 +962,10 @@ class ClaudeSDK:
         # (e.g., Chrome DevTools screenshots/snapshots). SDK default is 1MB which is too small.
         options_kwargs["max_buffer_size"] = 10 * 1024 * 1024
 
+        # Issue #1299: Emit hook lifecycle events (hook_started/hook_response) into the message
+        # stream as HookEventMessage objects. Without this flag, hook events are silently dropped.
+        options_kwargs["include_hook_events"] = True
+
         options_kwargs["env"] = self._resolve_env_vars()
 
         # Add stderr handler to capture SDK CLI errors (issue #517)
