@@ -998,7 +998,7 @@ class LegionMCPTools:
                     'history_distillation_enabled',
                     _pc.get('history_distillation_enabled', _SESSION_DEFAULTS['history_distillation_enabled']),
                 )
-                auto_memory_mode = resolved.get('auto_memory_mode') or _pc.get('auto_memory_mode')
+                auto_memory_mode = resolved.get('auto_memory_mode') or _pc.get('auto_memory_mode') or _SESSION_DEFAULTS['auto_memory_mode']
                 skill_creating_enabled = resolved.get(
                     'skill_creating_enabled',
                     _pc.get('skill_creating_enabled', _SESSION_DEFAULTS['skill_creating_enabled']),
@@ -1042,7 +1042,7 @@ class LegionMCPTools:
             sandbox_config = _pc.get('sandbox_config')
             docker_home_directory = _pc.get('docker_home_directory')
             history_distillation_enabled = _pc.get('history_distillation_enabled', _SESSION_DEFAULTS['history_distillation_enabled'])
-            auto_memory_mode = _pc.get('auto_memory_mode')
+            auto_memory_mode = _pc.get('auto_memory_mode') or _SESSION_DEFAULTS['auto_memory_mode']
             skill_creating_enabled = _pc.get('skill_creating_enabled', _SESSION_DEFAULTS['skill_creating_enabled'])
             mcp_server_ids = _pc.get('mcp_server_ids')
             enable_claudeai_mcp_servers = _pc.get('enable_claudeai_mcp_servers', _SESSION_DEFAULTS['enable_claudeai_mcp_servers'])
@@ -1753,7 +1753,8 @@ class LegionMCPTools:
 
             for template in templates:
                 # Format allowed tools
-                tools_str = ", ".join(template.allowed_tools) if template.allowed_tools else "None"
+                _allowed = template.config.get("allowed_tools", [])
+                tools_str = ", ".join(_allowed) if _allowed else "None"
                 if len(tools_str) > 60:  # Truncate if too long
                     tools_str = tools_str[:60] + "..."
 
@@ -1761,7 +1762,7 @@ class LegionMCPTools:
                 result_lines.append(
                     f"• **{template.name}**\n"
                     f"  - Description: {template.description or 'No description'}\n"
-                    f"  - Permission Mode: {template.permission_mode}\n"
+                    f"  - Permission Mode: {template.config.get('permission_mode', 'default')}\n"
                     f"  - Allowed Tools: {tools_str}\n"
                     f"  - Role: {template.role or 'Not specified'}\n"
                 )
@@ -1995,7 +1996,7 @@ class LegionMCPTools:
             "session_id": session.session_id,
             # Configuration
             "permission_mode": session.current_permission_mode,
-            "model": session.model,
+            "model": session.config.get('model'),
             "can_spawn_minions": session.can_spawn_minions,
         }
 
