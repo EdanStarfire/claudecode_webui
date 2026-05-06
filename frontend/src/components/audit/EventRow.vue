@@ -3,7 +3,7 @@
     <span class="event-dot flex-shrink-0 mt-1" :class="dotClass" title="event type"></span>
     <div class="event-body flex-grow-1 min-w-0">
       <div class="d-flex align-items-baseline gap-2 flex-wrap">
-        <span class="event-type badge" :class="badgeClass">{{ event.event_type }}</span>
+        <span class="event-type btn btn-sm py-0 px-2" :class="badgeBtnClass">{{ event.event_type }}</span>
         <span v-if="event.tool_name" class="text-muted small">{{ event.tool_name }}</span>
         <span v-if="event.status" class="text-muted small fst-italic">{{ event.status }}</span>
         <span class="event-time text-muted small ms-auto flex-shrink-0">
@@ -19,6 +19,7 @@
 
 <script setup>
 import { computed } from 'vue'
+import { getEventTypeBtnClass, getEventTypeBgClass } from '../../utils/auditColors.js'
 
 const props = defineProps({
   event: { type: Object, required: true },
@@ -29,25 +30,12 @@ const isFallback = computed(() => !props.event.source_ts && props.event.timestam
 
 const dotClass = computed(() => {
   const s = props.event.status
-  const t = props.event.event_type
   if (s === 'error') return 'bg-danger'
   if (s === 'denied' || s === 'halted') return 'bg-warning'
-  if (t === 'comm') return 'bg-primary'
-  if (t === 'lifecycle') return 'bg-secondary'
-  if (t === 'watchdog') return 'bg-warning'
-  if (t === 'permission') return 'bg-info'
-  return 'bg-success'
+  return getEventTypeBgClass(props.event.event_type)
 })
 
-const badgeClass = computed(() => {
-  const t = props.event.event_type
-  if (t === 'tool_call') return 'bg-success text-dark'
-  if (t === 'permission') return 'bg-info text-dark'
-  if (t === 'lifecycle') return 'bg-secondary'
-  if (t === 'comm') return 'bg-primary'
-  if (t === 'watchdog') return 'bg-warning text-dark'
-  return 'bg-light text-dark'
-})
+const badgeBtnClass = computed(() => getEventTypeBtnClass(props.event.event_type))
 
 const rowClass = computed(() => {
   const s = props.event.status
@@ -70,4 +58,5 @@ function formatTime(ts) {
 .event-row:hover { background: rgba(255,255,255,0.05); }
 .event-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
 .event-summary { color: var(--bs-secondary-color); }
+.event-type.btn { cursor: default; pointer-events: none; font-size: 0.75rem; line-height: 1.4; }
 </style>
