@@ -125,8 +125,8 @@ defineExpose({ summary, params, result })
 }
 
 .agent-type-badge {
-  background: #6f42c1;
-  color: white;
+  background: var(--agent-badge-bg);
+  color: var(--agent-badge-text);
   padding: 0.2rem 0.6rem;
   border-radius: var(--tool-radius, 4px);
   font-size: 0.8rem;
@@ -222,8 +222,8 @@ defineExpose({ summary, params, result })
 }
 
 .output-count-badge {
-  background: #6f42c1;
-  color: white;
+  background: var(--agent-badge-bg);
+  color: var(--agent-badge-text);
   padding: 0.2rem 0.5rem;
   border-radius: var(--tool-radius, 4px);
   font-size: 0.8rem;
@@ -262,7 +262,7 @@ defineExpose({ summary, params, result })
   margin-left: auto;
   font-size: 11px;
   font-weight: 500;
-  color: #0d6efd;
+  color: var(--bs-link-color);
   cursor: pointer;
   text-decoration: none;
 }
