@@ -44,7 +44,9 @@ export const FIELD_SCHEMAS = {
         { value: 'low', label: 'Low' },
         { value: 'medium', label: 'Med' },
         { value: 'high', label: 'High' },
+        { value: 'xhigh', label: 'XHigh' },
       ],
+      description: 'XHigh requires Opus 4.7.',
     },
   ],
 
