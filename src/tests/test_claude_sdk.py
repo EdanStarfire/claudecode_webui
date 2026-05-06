@@ -191,6 +191,27 @@ class TestClaudeSDK:
         assert "timestamp" in converted
         # No conversion_error since this is handled gracefully, not as an exception
 
+    def test_get_sdk_options_strict_mcp_config_enabled(self, temp_dir, session_id):
+        """Issue #1301: strict_mcp_config flows through as a typed kwarg, not extra_args."""
+        sdk = ClaudeSDK(
+            session_id=session_id,
+            working_directory=temp_dir,
+            config=SessionConfig(strict_mcp_config=True),
+        )
+        opts = sdk._get_sdk_options()
+        assert opts.strict_mcp_config is True
+        assert "strict-mcp-config" not in (opts.extra_args or {})
+
+    def test_get_sdk_options_strict_mcp_config_disabled(self, temp_dir, session_id):
+        """Issue #1301: default strict_mcp_config=False leaves the typed kwarg unset and extra_args clean."""
+        sdk = ClaudeSDK(
+            session_id=session_id,
+            working_directory=temp_dir,
+            config=SessionConfig(strict_mcp_config=False),
+        )
+        opts = sdk._get_sdk_options()
+        assert opts.strict_mcp_config is False
+        assert "strict-mcp-config" not in (opts.extra_args or {})
 
 
 class TestSessionInfo:
