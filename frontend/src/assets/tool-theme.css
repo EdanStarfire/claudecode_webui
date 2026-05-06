@@ -35,6 +35,10 @@
   --tool-badge-bg: #3b82f6;
   --tool-badge-text: white;
 
+  /* Subagent badge purple — used by AgentToolHandler badges */
+  --agent-badge-bg: #6f42c1;
+  --agent-badge-text: #ffffff;
+
   /* File path tokens */
   --tool-path-bg: var(--bs-tertiary-bg);
   --tool-path-color: var(--bs-link-color);
@@ -50,6 +54,9 @@
   --tool-success-bg: rgba(34, 197, 94, 0.12);
   --tool-success-border: rgba(34, 197, 94, 0.4);
   --tool-success-text: #86efac;
+
+  --agent-badge-bg: #5b21b6;
+  --agent-badge-text: #ede9fe;
 }
 
 /* Shared section container */
@@ -128,7 +135,8 @@
 }
 
 .tool-badge-purple {
-  background: #7c3aed;
+  background: var(--agent-badge-bg);
+  color: var(--agent-badge-text);
 }
 
 .tool-badge-amber {
