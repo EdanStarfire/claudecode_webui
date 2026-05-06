@@ -2708,7 +2708,7 @@ class SessionCoordinator:
                 )
 
             # Handle SystemMessage subtypes (including Task* subclasses)
-            if _type in ("SystemMessage", "TaskStartedMessage", "TaskProgressMessage", "TaskNotificationMessage"):
+            if _type in ("SystemMessage", "HookEventMessage", "TaskStartedMessage", "TaskProgressMessage", "TaskNotificationMessage"):
                 subtype = data.get("subtype")
                 if subtype:
                     metadata["subtype"] = subtype
@@ -2763,9 +2763,12 @@ class SessionCoordinator:
                     if subtype == "hook_started":
                         content = f"Hook: {hook_name} ({hook_event})" if hook_event else f"Hook: {hook_name}"
                     else:
-                        outcome = hook_data.get("outcome", hook_data.get("output", "done"))
                         exit_code = hook_data.get("exit_code", hook_data.get("exitCode"))
-                        content = f"Hook: {hook_name} \u2192 {outcome}"
+                        if exit_code == 0:
+                            display = hook_data.get("stdout") or hook_data.get("outcome", "success")
+                        else:
+                            display = hook_data.get("stderr") or hook_data.get("outcome", "failed")
+                        content = f"Hook: {hook_name} \u2192 {display}"
                         if exit_code is not None:
                             metadata["exit_code"] = exit_code
 

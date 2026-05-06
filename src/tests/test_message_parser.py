@@ -628,6 +628,54 @@ class TestHookMessageHandling:
         assert "my-hook" in parsed.content
         assert "Stop" in parsed.content
 
+    def test_hook_response_uses_stdout_on_success(self):
+        """Test hook_response prefers stdout over outcome string when exit_code == 0."""
+        handler = SystemMessageHandler()
+        message_data = {
+            "type": "system",
+            "content": "",
+            "metadata": {
+                "subtype": "hook_response",
+                "init_data": {
+                    "hook_name": "my-hook",
+                    "hook_event": "PreToolUse",
+                    "hook_id": "hook-003",
+                    "outcome": "success",
+                    "exit_code": 0,
+                    "stdout": "hook ran OK",
+                },
+            },
+            "session_id": "test-hooks",
+            "timestamp": time.time(),
+        }
+        parsed = handler.parse(message_data)
+        assert "hook ran OK" in parsed.content
+        assert "success" not in parsed.content
+
+    def test_hook_response_uses_stderr_on_failure(self):
+        """Test hook_response prefers stderr over outcome string when exit_code != 0."""
+        handler = SystemMessageHandler()
+        message_data = {
+            "type": "system",
+            "content": "",
+            "metadata": {
+                "subtype": "hook_response",
+                "init_data": {
+                    "hook_name": "my-hook",
+                    "hook_event": "PostToolUse",
+                    "hook_id": "hook-004",
+                    "outcome": "failed",
+                    "exit_code": 2,
+                    "stderr": "permission denied",
+                },
+            },
+            "session_id": "test-hooks",
+            "timestamp": time.time(),
+        }
+        parsed = handler.parse(message_data)
+        assert "permission denied" in parsed.content
+        assert "failed" not in parsed.content
+
     def test_hook_parser_integration(self):
         """Test hook messages through the full MessageParser pipeline."""
         parser = MessageParser()
