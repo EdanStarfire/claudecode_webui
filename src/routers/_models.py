@@ -77,7 +77,7 @@ class SessionUpdateRequest(BaseModel):
     # Thinking and effort configuration (issue #540)
     thinking_mode: str | None = None  # "adaptive", "enabled", "disabled"
     thinking_budget_tokens: int | None = None  # Token budget (min 1024)
-    effort: str | None = None  # "low", "medium", "high"
+    effort: str | None = None  # "low", "medium", "high", "xhigh" (Opus 4.7)
     # History distillation toggle (issue #710, renamed #736)
     history_distillation_enabled: bool | None = None
     # Auto-memory mode (issue #709)
@@ -216,7 +216,7 @@ class TemplateUpdateRequest(BaseModel):
     # Thinking and effort configuration (issue #580)
     thinking_mode: str | None = None
     thinking_budget_tokens: int | None = None
-    effort: str | None = None
+    effort: str | None = None  # "low", "medium", "high", "xhigh" (Opus 4.7)
     # History distillation toggle (issue #710, renamed #736)
     history_distillation_enabled: bool | None = None
     # Auto-memory mode (issue #709)
