@@ -46,7 +46,7 @@
                   <code>{{ commitInfo.short_hash }}</code>
                   <span class="commit-ref-msg">{{ commitInfo.message }}</span>
                 </span>
-                <span v-if="currentFileInfo" class="meta-badge" :class="'status-' + currentFileInfo.status">
+                <span v-if="currentFileInfo" class="meta-badge" :class="statusBadgeClass">
                   {{ currentFileInfo.status }}
                 </span>
                 <span v-if="currentFileInfo && !currentFileInfo.is_binary" class="meta-item">
@@ -153,6 +153,12 @@ const currentFileIndex = computed(() => {
 const currentFileInfo = computed(() => {
   if (!diffStore.currentFilePath || !diffStore.currentDiff?.files) return null
   return diffStore.currentDiff.files[diffStore.currentFilePath] || null
+})
+
+const statusBadgeClass = computed(() => {
+  const map = { added: 'text-bg-success', deleted: 'text-bg-danger',
+                modified: 'text-bg-warning', renamed: 'text-bg-primary' }
+  return map[currentFileInfo.value?.status] || 'text-bg-secondary'
 })
 
 const commitInfo = computed(() => {
@@ -352,7 +358,7 @@ onUnmounted(() => {
   width: 1000px;
   display: flex;
   flex-direction: column;
-  background: #f8f9fa;
+  background: var(--bs-body-bg);
   border-radius: 8px;
   box-shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
   overflow: hidden;
@@ -363,8 +369,8 @@ onUnmounted(() => {
   align-items: center;
   justify-content: space-between;
   padding: 12px 16px;
-  border-bottom: 1px solid #dee2e6;
-  background: #fff;
+  border-bottom: 1px solid var(--bs-border-color);
+  background: var(--bs-secondary-bg);
   flex-shrink: 0;
 }
 
@@ -377,7 +383,7 @@ onUnmounted(() => {
   margin: 0;
   font-size: 0.95rem;
   font-weight: 600;
-  color: #212529;
+  color: var(--bs-emphasis-color);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -400,23 +406,18 @@ onUnmounted(() => {
   text-transform: uppercase;
 }
 
-.meta-badge.status-added { background: #d4edda; color: #155724; }
-.meta-badge.status-deleted { background: #f8d7da; color: #721c24; }
-.meta-badge.status-modified { background: #fff3cd; color: #856404; }
-.meta-badge.status-renamed { background: #cce5ff; color: #004085; }
-
 .commit-ref-badge {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   font-size: 0.78rem;
-  color: #495057;
+  color: var(--bs-secondary-color, #495057);
 }
 
 .commit-ref-badge code {
   font-size: 0.72rem;
-  color: #0d6efd;
-  background: #e7f1ff;
+  color: var(--bs-link-color);
+  background: rgba(var(--bs-link-color-rgb, 13,110,253), 0.12);
   padding: 1px 4px;
   border-radius: 3px;
 }
@@ -431,7 +432,7 @@ onUnmounted(() => {
 .meta-item {
   font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
   font-size: 0.78rem;
-  color: #6c757d;
+  color: var(--bs-secondary-color, #6c757d);
 }
 
 .copy-btn {
@@ -439,10 +440,10 @@ onUnmounted(() => {
   align-items: center;
   gap: 6px;
   padding: 6px 12px;
-  background: #e9ecef;
-  border: 1px solid #ced4da;
+  background: var(--bs-secondary-bg);
+  border: 1px solid var(--bs-border-color);
   border-radius: 6px;
-  color: #495057;
+  color: var(--bs-body-color);
   font-size: 0.8rem;
   cursor: pointer;
   transition: background-color 0.2s, color 0.2s;
@@ -451,8 +452,8 @@ onUnmounted(() => {
 }
 
 .copy-btn:hover:not(:disabled) {
-  background: #dee2e6;
-  color: #212529;
+  background: var(--bs-tertiary-bg);
+  color: var(--bs-emphasis-color);
 }
 
 .copy-btn:disabled {
@@ -475,19 +476,19 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   gap: 8px;
-  color: #6c757d;
+  color: var(--bs-secondary-color, #6c757d);
   padding: 24px;
   justify-content: center;
 }
 
 .diff-error {
-  color: #dc3545;
+  color: var(--bs-danger);
   padding: 24px;
   text-align: center;
 }
 
 .diff-empty {
-  color: #6c757d;
+  color: var(--bs-secondary-color, #6c757d);
   padding: 24px;
   text-align: center;
   font-style: italic;
@@ -513,9 +514,9 @@ onUnmounted(() => {
   width: 50px;
   min-width: 50px;
   text-align: right;
-  color: #adb5bd;
+  color: var(--bs-secondary-color, #adb5bd);
   user-select: none;
-  border-right: 1px solid #dee2e6;
+  border-right: 1px solid var(--bs-border-color);
   padding-right: 8px;
   font-size: 0.75rem;
 }
@@ -531,21 +532,21 @@ onUnmounted(() => {
 }
 
 /* Line type colors */
-.diff-line-context { background: #fff; }
-.diff-line-add { background: #e6ffec; }
-.diff-line-add .line-num { background: #ccffd8; }
-.diff-line-remove { background: #ffebe9; }
-.diff-line-remove .line-num { background: #ffd7d5; }
+.diff-line-context { background: var(--diff-line-context-bg); }
+.diff-line-add { background: var(--diff-line-add-bg); }
+.diff-line-add .line-num { background: var(--diff-line-add-num-bg); }
+.diff-line-remove { background: var(--diff-line-remove-bg); }
+.diff-line-remove .line-num { background: var(--diff-line-remove-num-bg); }
 .diff-line-hunk {
-  background: #ddf4ff;
-  color: #0969da;
+  background: var(--diff-line-hunk-bg);
+  color: var(--diff-line-hunk-color);
   font-style: italic;
 }
-.diff-line-hunk .line-num { background: #ddf4ff; }
+.diff-line-hunk .line-num { background: var(--diff-line-hunk-bg); }
 .diff-line-hunk .line-content { padding: 4px 8px; }
 .diff-line-info {
-  background: #f6f8fa;
-  color: #6c757d;
+  background: var(--diff-line-info-bg);
+  color: var(--diff-line-info-color);
   font-style: italic;
 }
 

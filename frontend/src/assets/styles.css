@@ -29,6 +29,15 @@
     --bs-emphasis-color: #000;
     --bs-border-color: #dee2e6;
     --bs-link-color: #0d6efd;
+    --diff-line-context-bg:    var(--bs-body-bg);
+    --diff-line-add-bg:        #e6ffec;
+    --diff-line-add-num-bg:    #ccffd8;
+    --diff-line-remove-bg:     #ffebe9;
+    --diff-line-remove-num-bg: #ffd7d5;
+    --diff-line-hunk-bg:       #ddf4ff;
+    --diff-line-hunk-color:    #0969da;
+    --diff-line-info-bg:       #f6f8fa;
+    --diff-line-info-color:    #6c757d;
 }
 
 /* ========== STANDARD DARK — slate/navy palette ========== */
@@ -64,6 +73,15 @@
 
     /* Code */
     --bs-code-color: #a78bfa;   /* violet-400 */
+    --diff-line-context-bg:    var(--bs-body-bg);
+    --diff-line-add-bg:        rgba(46, 160, 67, 0.15);
+    --diff-line-add-num-bg:    rgba(46, 160, 67, 0.30);
+    --diff-line-remove-bg:     rgba(248, 81, 73, 0.15);
+    --diff-line-remove-num-bg: rgba(248, 81, 73, 0.30);
+    --diff-line-hunk-bg:       rgba(56, 139, 253, 0.15);
+    --diff-line-hunk-color:    #79c0ff;
+    --diff-line-info-bg:       var(--bs-secondary-bg);
+    --diff-line-info-color:    var(--bs-secondary-color);
 }
 
 /* ========== SENSITIVE LIGHT (red-tinted light) ========== */
@@ -82,6 +100,15 @@
     --bs-link-hover-color: #b71c1c;
     --bs-primary: #d32f2f;
     --bs-primary-rgb: 211,47,47;
+    --diff-line-context-bg:    var(--bs-body-bg);
+    --diff-line-add-bg:        #e6ffec;
+    --diff-line-add-num-bg:    #ccffd8;
+    --diff-line-remove-bg:     #ffebe9;
+    --diff-line-remove-num-bg: #ffd7d5;
+    --diff-line-hunk-bg:       #ddf4ff;
+    --diff-line-hunk-color:    #0969da;
+    --diff-line-info-bg:       #f6f8fa;
+    --diff-line-info-color:    #6c757d;
 }
 
 /* ========== SENSITIVE DARK (red-tinted dark) ========== */
@@ -118,6 +145,15 @@
     --bs-danger-rgb: 239,83,80;
     --bs-secondary: #ef9a9a;
     --bs-secondary-rgb: 239,154,154;
+    --diff-line-context-bg:    var(--bs-body-bg);
+    --diff-line-add-bg:        rgba(165, 214, 167, 0.12);
+    --diff-line-add-num-bg:    rgba(165, 214, 167, 0.25);
+    --diff-line-remove-bg:     rgba(239, 83, 80, 0.18);
+    --diff-line-remove-num-bg: rgba(239, 83, 80, 0.32);
+    --diff-line-hunk-bg:       rgba(244, 143, 177, 0.15);
+    --diff-line-hunk-color:    #f48fb1;
+    --diff-line-info-bg:       var(--bs-secondary-bg);
+    --diff-line-info-color:    var(--bs-secondary-color);
 }
 
 /* ========== AGENT COLOR PALETTE (per theme) ========== */
