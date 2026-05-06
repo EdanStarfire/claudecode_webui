@@ -57,6 +57,12 @@ class PermissionService:
             # Issue #953: Extract tool_use_id and agent_id from SDK v0.1.52+ context
             tool_use_id = getattr(context, 'tool_use_id', None) if context else None
             agent_id = getattr(context, 'agent_id', None) if context else None
+            # Issue #1302: Extract enriched context fields from SDK 0.1.74+
+            decision_reason = getattr(context, 'decision_reason', None) if context else None
+            blocked_path    = getattr(context, 'blocked_path', None) if context else None
+            title           = getattr(context, 'title', None) if context else None
+            display_name    = getattr(context, 'display_name', None) if context else None
+            description     = getattr(context, 'description', None) if context else None
 
             logger.info(
                 f"PERMISSION CALLBACK TRIGGERED: tool={tool_name}, session={session_id}, "
@@ -97,8 +103,13 @@ class PermissionService:
                     suggestions=suggestion_objects,
                     timestamp=request_time,
                     session_id=session_id,
-                    tool_use_id=tool_use_id,   # Issue #953
-                    agent_id=agent_id,          # Issue #953
+                    tool_use_id=tool_use_id,       # Issue #953
+                    agent_id=agent_id,              # Issue #953
+                    decision_reason=decision_reason, # Issue #1302
+                    blocked_path=blocked_path,       # Issue #1302
+                    title=title,                     # Issue #1302
+                    display_name=display_name,       # Issue #1302
+                    description=description,         # Issue #1302
                 )
 
                 # Wrap in StoredMessage for triggering_message data (Issue #494: no longer stored separately)
@@ -169,6 +180,11 @@ class PermissionService:
                             message=f"Allow {tool_name}?",
                             suggestions=[s.to_dict() for s in suggestion_objects],
                             risk_level="medium",
+                            decision_reason=decision_reason, # Issue #1302
+                            blocked_path=blocked_path,       # Issue #1302
+                            title=title,                     # Issue #1302
+                            display_name=display_name,       # Issue #1302
+                            description=description,         # Issue #1302
                         )
 
                         # Update tool call status
