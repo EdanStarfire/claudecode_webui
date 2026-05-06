@@ -47,8 +47,11 @@ export const useUIStore = defineStore('ui', () => {
   // Auto-scroll state
   const autoScrollEnabled = ref(true)
 
-  // Background color toggle state (for differentiating multiple instances)
-  const isRedBackground = ref(false)
+  // Theme: cycles through light → dark → sensitive-light → sensitive-dark
+  const THEMES = ['light', 'dark', 'sensitive-light', 'sensitive-dark']
+  const theme = ref('light')
+  // Backward-compat computed for components using isRedBackground
+  const isRedBackground = computed(() => theme.value === 'sensitive-light' || theme.value === 'sensitive-dark')
 
   // Modal state
   const activeModal = ref(null) // 'create-project', 'create-session', 'edit-session', etc.
@@ -162,14 +165,17 @@ export const useUIStore = defineStore('ui', () => {
     writeStorage('queuePanelHeight', queuePanelHeight.value)
   }
 
-  function initBackgroundColor() {
-    const stored = localStorage.getItem('webui-background-color')
-    isRedBackground.value = stored === 'red'
+  function initTheme() {
+    const stored = localStorage.getItem('webui-theme') || localStorage.getItem('dev-theme') || 'light'
+    theme.value = THEMES.includes(stored) ? stored : 'light'
+    document.documentElement.setAttribute('data-bs-theme', theme.value)
   }
 
-  function toggleBackgroundColor() {
-    isRedBackground.value = !isRedBackground.value
-    localStorage.setItem('webui-background-color', isRedBackground.value ? 'red' : 'gray')
+  function cycleTheme() {
+    const idx = THEMES.indexOf(theme.value)
+    theme.value = THEMES[(idx + 1) % THEMES.length]
+    localStorage.setItem('webui-theme', theme.value)
+    document.documentElement.setAttribute('data-bs-theme', theme.value)
   }
 
   function showModal(modalName, data = null) {
@@ -260,6 +266,7 @@ export const useUIStore = defineStore('ui', () => {
     windowWidth,
     isMobile,
     autoScrollEnabled,
+    theme,
     isRedBackground,
     activeModal,
     modalData,
@@ -289,8 +296,8 @@ export const useUIStore = defineStore('ui', () => {
     setSuppressAutoShow,
     setQueuePanelHeight,
     commitQueuePanelHeight,
-    initBackgroundColor,
-    toggleBackgroundColor,
+    initTheme,
+    cycleTheme,
     showModal,
     hideModal,
     showLoading,

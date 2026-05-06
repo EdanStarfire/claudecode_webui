@@ -171,8 +171,8 @@ function stopResize() {
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  background: #ffffff;
-  border-left: 1px solid #e2e8f0;
+  background: var(--bs-secondary-bg);
+  border-left: 1px solid var(--bs-border-color);
   position: relative;
   transition: width 0.3s ease;
 }
@@ -181,14 +181,11 @@ function stopResize() {
   transition: none;
 }
 
-.right-sidebar.theme-red-panel {
-  background: #fef2f2;
-}
 
 /* Tabs */
 .sidebar-tabs {
   display: flex;
-  border-bottom: 1px solid #e2e8f0;
+  border-bottom: 1px solid var(--bs-border-color);
   flex-shrink: 0;
 }
 
@@ -200,7 +197,7 @@ function stopResize() {
   background: transparent;
   font-size: 12px;
   font-weight: 500;
-  color: #64748b;
+  color: var(--bs-secondary-color);
   cursor: pointer;
   text-align: center;
   transition: all 0.15s;
@@ -211,18 +208,18 @@ function stopResize() {
 }
 
 .sidebar-tab:hover {
-  color: #334155;
-  background: #f8fafc;
+  color: var(--bs-body-color);
+  background: var(--bs-tertiary-bg);
 }
 
 .sidebar-tab.active {
-  color: #3b82f6;
-  border-bottom-color: #3b82f6;
+  color: var(--bs-link-color);
+  border-bottom-color: var(--bs-link-color);
 }
 
 .tab-badge {
   font-size: 10px;
-  background: #94a3b8;
+  background: var(--bs-secondary-color);
   color: white;
   padding: 0 5px;
   border-radius: 8px;
@@ -231,11 +228,11 @@ function stopResize() {
 }
 
 .sidebar-tab.active .tab-badge {
-  background: #3b82f6;
+  background: var(--bs-link-color);
 }
 
 .tab-badge.tab-badge-error {
-  background: #dc3545;
+  background: var(--bs-danger);
 }
 
 /* Tab content */
@@ -258,6 +255,6 @@ function stopResize() {
 }
 
 .sidebar-resize-handle:hover {
-  background-color: rgba(0, 0, 0, 0.1);
+  background-color: var(--bs-border-color);
 }
 </style>

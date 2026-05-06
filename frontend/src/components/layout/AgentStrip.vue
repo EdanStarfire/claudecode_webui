@@ -242,8 +242,8 @@ function handleGhostDismiss(agentId) {
 <style scoped>
 .agent-strip {
   min-height: 56px;
-  background: #f8fafc;
-  border-bottom: 1px solid #e2e8f0;
+  background: var(--bs-secondary-bg);
+  border-bottom: 1px solid var(--bs-border-color);
   display: flex;
   align-items: center;
   gap: 6px;
@@ -257,7 +257,7 @@ function handleGhostDismiss(agentId) {
 }
 
 .agent-strip::-webkit-scrollbar-thumb {
-  background: #cbd5e1;
+  background: var(--bs-border-color);
   border-radius: 3px;
 }
 
@@ -269,15 +269,15 @@ function handleGhostDismiss(agentId) {
   font-size: 10px;
   font-weight: 600;
   text-transform: uppercase;
-  color: #94a3b8;
+  color: var(--bs-secondary-color);
   letter-spacing: 0.3px;
   padding-right: 8px;
   flex-shrink: 0;
 }
 
 .strip-viewing-badge {
-  background: #f1f5f9;
-  color: #64748b;
+  background: var(--bs-tertiary-bg);
+  color: var(--bs-secondary-color);
   font-size: 9px;
   font-weight: 600;
   padding: 1px 6px;
@@ -288,7 +288,7 @@ function handleGhostDismiss(agentId) {
 
 .strip-empty {
   font-size: 12px;
-  color: #94a3b8;
+  color: var(--bs-secondary-color);
   font-style: italic;
 }
 
@@ -296,9 +296,9 @@ function handleGhostDismiss(agentId) {
   width: 34px;
   height: 34px;
   border-radius: 10px;
-  border: 1px dashed #cbd5e1;
+  border: 1px dashed var(--bs-border-color);
   background: transparent;
-  color: #94a3b8;
+  color: var(--bs-secondary-color);
   font-size: 16px;
   font-weight: 300;
   cursor: pointer;
@@ -312,16 +312,16 @@ function handleGhostDismiss(agentId) {
 .strip-add-btn:hover {
   border-color: #3b82f6;
   color: #3b82f6;
-  background: #eff6ff;
+  background: rgba(59, 130, 246, 0.1);
 }
 
 .strip-archive-btn {
   width: 30px;
   height: 30px;
   border-radius: 8px;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--bs-border-color);
   background: transparent;
-  color: #94a3b8;
+  color: var(--bs-secondary-color);
   cursor: pointer;
   transition: all 0.15s;
   flex-shrink: 0;
@@ -331,18 +331,18 @@ function handleGhostDismiss(agentId) {
 }
 
 .strip-archive-btn:hover {
-  border-color: #94a3b8;
-  color: #64748b;
-  background: #f1f5f9;
+  border-color: var(--bs-secondary-color);
+  color: var(--bs-body-color);
+  background: var(--bs-tertiary-bg);
 }
 
 .strip-panel-btn {
   width: 30px;
   height: 30px;
   border-radius: 8px;
-  border: 1px solid #e2e8f0;
-  background: #f8fafc;
-  color: #94a3b8;
+  border: 1px solid var(--bs-border-color);
+  background: var(--bs-secondary-bg);
+  color: var(--bs-secondary-color);
   font-size: 14px;
   cursor: pointer;
   transition: all 0.15s;
@@ -356,21 +356,17 @@ function handleGhostDismiss(agentId) {
 }
 
 .strip-panel-btn:hover {
-  border-color: #94a3b8;
-  color: #64748b;
-  background: #f1f5f9;
+  border-color: var(--bs-secondary-color);
+  color: var(--bs-body-color);
+  background: var(--bs-tertiary-bg);
 }
 
 .strip-panel-btn.panel-open {
-  background: #ede9fe;
-  border-color: #6366f1;
-  color: #6366f1;
+  background: rgba(var(--bs-link-color-rgb), 0.2);
+  border-color: var(--bs-link-color);
+  color: var(--bs-link-color);
 }
 
-.agent-strip.theme-red {
-  background: #fef2f2;
-  border-bottom-color: #fecaca;
-}
 
 @media (max-width: 767px) {
   .agent-strip {

@@ -124,7 +124,7 @@ watch(() => taskStore.currentHasTasks, (hasTasks, hadTasks) => {
 
 // Initialize app on mount
 onMounted(async () => {
-  uiStore.initBackgroundColor()
+  uiStore.initTheme()
 
   if (typeof marked !== 'undefined') {
     marked.setOptions({
@@ -239,7 +239,7 @@ function handlePopState() {
   flex-direction: column;
   min-width: 0;
   overflow: hidden;
-  background: #fff;
+  background: var(--bs-body-bg);
 }
 
 /* Overlay backdrop for responsive right panel — matches panel vertical extent */

@@ -245,7 +245,7 @@ async function doLoadMore() {
 
 <style scoped>
 .queue-section {
-  border-top: 1px solid #dee2e6;
+  border-top: 1px solid var(--bs-border-color);
   contain: layout;
 }
 
@@ -258,11 +258,11 @@ async function doLoadMore() {
   user-select: none;
   font-size: 0.85rem;
   font-weight: 600;
-  color: #495057;
+  color: var(--bs-body-color);
 }
 
 .queue-header:hover {
-  background-color: #f8f9fa;
+  background-color: var(--bs-tertiary-bg);
 }
 
 .section-title {
@@ -270,7 +270,7 @@ async function doLoadMore() {
 }
 
 .chevron-icon {
-  color: #6c757d;
+  color: var(--bs-secondary-color);
   flex-shrink: 0;
   transition: transform 0.2s ease;
 }
@@ -287,7 +287,7 @@ async function doLoadMore() {
 
 .queue-item {
   font-size: 0.85rem;
-  border-bottom: 1px solid #f0f0f0;
+  border-bottom: 1px solid var(--bs-border-color);
 }
 
 .queue-item:last-child {
@@ -304,19 +304,19 @@ async function doLoadMore() {
 }
 
 .status-icon.icon-sent {
-  color: #198754;
+  color: var(--bs-success);
 }
 
 .status-icon.icon-pending {
-  color: #0d6efd;
+  color: var(--bs-link-color);
 }
 
 .status-icon.icon-failed {
-  color: #dc3545;
+  color: var(--bs-danger);
 }
 
 .status-icon.icon-cancelled {
-  color: #6c757d;
+  color: var(--bs-secondary-color);
 }
 
 .action-btn {
@@ -330,15 +330,15 @@ async function doLoadMore() {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: #495057;
+  color: var(--bs-body-color);
 }
 
 .status-sent .item-content {
-  color: #6c757d;
+  color: var(--bs-secondary-color);
 }
 
 .status-failed .item-content {
-  color: #dc3545;
+  color: var(--bs-danger);
 }
 
 .status-cancelled {
@@ -363,6 +363,6 @@ async function doLoadMore() {
 }
 
 .load-more-row {
-  border-top: 1px solid #f0f0f0;
+  border-top: 1px solid var(--bs-border-color);
 }
 </style>

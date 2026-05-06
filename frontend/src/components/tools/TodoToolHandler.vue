@@ -148,11 +148,11 @@ defineExpose({ summary, params, result })
 
 .todo-count-pending {
   background: var(--tool-bg-header, #f1f5f9);
-  color: #495057;
+  color: var(--bs-secondary-color);
 }
 
 .todo-checklist {
-  background: white;
+  background: var(--bs-body-bg);
   border: 1px solid var(--tool-border, #e2e8f0);
   border-radius: 0 0 var(--tool-radius, 4px) var(--tool-radius, 4px);
   overflow: hidden;
@@ -191,12 +191,12 @@ defineExpose({ summary, params, result })
 }
 
 .todo-in_progress {
-  background: #f0f7ff;
+  background: rgba(59, 130, 246, 0.12);
   font-weight: 500;
 }
 
 .todo-in_progress:hover {
-  background: #e7f1ff;
+  background: rgba(59, 130, 246, 0.18);
 }
 
 .todo-completed {

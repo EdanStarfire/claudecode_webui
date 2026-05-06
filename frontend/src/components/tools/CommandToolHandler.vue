@@ -89,7 +89,7 @@ defineExpose({ summary, params, result })
   align-items: center;
   gap: 0.5rem;
   padding: 0.5rem;
-  background: white;
+  background: var(--bs-body-bg);
   border-radius: var(--tool-radius, 4px);
 }
 
@@ -110,7 +110,7 @@ defineExpose({ summary, params, result })
 .prompt-info {
   margin-top: 0.5rem;
   padding: 0.5rem;
-  background: white;
+  background: var(--bs-body-bg);
   border-radius: var(--tool-radius, 4px);
 }
 

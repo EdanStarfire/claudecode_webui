@@ -8,16 +8,11 @@
       </div>
       <button
         class="header-btn theme-toggle-btn"
-        :class="{ 'theme-active': uiStore.isRedBackground }"
-        @click="uiStore.toggleBackgroundColor()"
-        :title="uiStore.isRedBackground ? 'Disable sensitive environment mode' : 'Enable sensitive environment mode'"
-        :aria-label="uiStore.isRedBackground ? 'Disable sensitive environment mode' : 'Enable sensitive environment mode'"
-        :aria-pressed="uiStore.isRedBackground"
-      >
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
-        </svg>
-      </button>
+        :class="`theme-btn-${uiStore.theme}`"
+        @click="uiStore.cycleTheme()"
+        :title="`Theme: ${themeLabel} — click to cycle`"
+        :aria-label="`Theme: ${themeLabel} — click to cycle`"
+      >●</button>
       <button
         class="header-btn analytics-nav-btn"
         :class="{ 'nav-active': isAnalyticsRoute }"
@@ -62,6 +57,14 @@ const route = useRoute()
 const router = useRouter()
 
 const uiConnected = computed(() => wsStore.uiConnected)
+
+const THEME_LABELS = {
+  'light':           'Light',
+  'dark':            'Dark',
+  'sensitive-light': 'Sensitive Light',
+  'sensitive-dark':  'Sensitive Dark',
+}
+const themeLabel = computed(() => THEME_LABELS[uiStore.theme] || 'Light')
 const isSettingsRoute  = computed(() => route.path.startsWith('/settings/'))
 const isAnalyticsRoute = computed(() => route.path === '/analytics')
 const isAuditRoute     = computed(() => route.path === '/audit')
@@ -105,7 +108,7 @@ function toggleAudit() {
 <style scoped>
 .header-row1 {
   height: 42px;
-  background: #1e293b;
+  background: var(--bs-tertiary-bg);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -117,7 +120,7 @@ function toggleAudit() {
 .header-title {
   font-size: 14px;
   font-weight: 600;
-  color: #f1f5f9;
+  color: var(--bs-emphasis-color);
   margin: 0;
   letter-spacing: 0.3px;
 }
@@ -133,11 +136,11 @@ function toggleAudit() {
   align-items: center;
   gap: 6px;
   font-size: 11px;
-  color: #94a3b8;
+  color: var(--bs-secondary-color);
 }
 
 .header-indicator.connected {
-  color: #94a3b8;
+  color: var(--bs-secondary-color);
 }
 
 .header-indicator.disconnected {
@@ -148,7 +151,7 @@ function toggleAudit() {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: #94a3b8;
+  background: var(--bs-secondary-color);
 }
 
 .header-indicator.connected .indicator-dot {
@@ -162,31 +165,30 @@ function toggleAudit() {
 
 .header-btn {
   background: none;
-  border: 1px solid #334155;
+  border: 1px solid var(--bs-border-color);
   border-radius: 6px;
-  color: #e2e8f0;
+  color: var(--bs-body-color);
   font-size: 14px;
-  padding: 4px 8px;
+  width: 28px;
+  height: 28px;
+  padding: 0;
   cursor: pointer;
   transition: all 0.15s;
   display: flex;
   align-items: center;
-  gap: 4px;
+  justify-content: center;
+  flex-shrink: 0;
 }
 
 .header-btn:hover {
-  background: #334155;
-  border-color: #475569;
+  background: var(--bs-secondary-bg);
+  border-color: var(--bs-border-color);
 }
 
-.theme-toggle-btn svg {
-  display: block;
-}
-
-.header-btn.theme-active {
-  border-color: #ef4444;
-  color: #f87171;
-}
+.theme-btn-light      { color: #94a3b8; }
+.theme-btn-dark       { color: #818cf8; border-color: #818cf8; }
+.theme-btn-sensitive-light { color: #ef4444; border-color: #fca5a5; }
+.theme-btn-sensitive-dark  { color: #f87171; border-color: #f87171; }
 
 .analytics-nav-btn,
 .audit-nav-btn {
@@ -196,17 +198,17 @@ function toggleAudit() {
 .analytics-nav-btn.nav-active,
 .audit-nav-btn.nav-active {
   border-color: #6366f1;
-  color: #a5b4fc;
+  color: var(--bs-link-color);
   background: rgba(99, 102, 241, 0.1);
 }
 
 .settings-btn {
-  color: #a5b4fc;
+  color: var(--bs-link-color);
 }
 
 .settings-btn.settings-active {
   border-color: #6366f1;
-  color: #a5b4fc;
+  color: var(--bs-link-color);
   background: rgba(99, 102, 241, 0.1);
 }
 

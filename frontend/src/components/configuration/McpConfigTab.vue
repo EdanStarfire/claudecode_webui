@@ -664,7 +664,7 @@ function cancelImport() {
 }
 
 .config-form {
-  background: var(--bs-gray-100, #f8f9fa);
+  background: var(--bs-secondary-bg);
 }
 
 .config-action-btn {

@@ -120,7 +120,7 @@ defineExpose({ summary, params, result })
   align-items: center;
   gap: 0.5rem;
   padding: 0.5rem;
-  background: white;
+  background: var(--bs-body-bg);
   border-radius: var(--tool-radius, 4px);
 }
 
@@ -147,7 +147,7 @@ defineExpose({ summary, params, result })
   align-items: center;
   gap: 0.5rem;
   padding: 0.25rem 0.5rem;
-  background: white;
+  background: var(--bs-body-bg);
   border-radius: var(--tool-radius, 4px);
 }
 
@@ -156,7 +156,7 @@ defineExpose({ summary, params, result })
 }
 
 .source-preview {
-  background: white;
+  background: var(--bs-body-bg);
   border-radius: var(--tool-radius, 4px);
   overflow: hidden;
 }

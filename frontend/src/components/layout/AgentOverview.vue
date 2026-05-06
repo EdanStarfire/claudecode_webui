@@ -320,7 +320,7 @@ function showInfo() {
 <style scoped>
 .agent-overview {
   padding: 12px;
-  border-bottom: 1px solid #e2e8f0;
+  border-bottom: 1px solid var(--bs-border-color);
   flex-shrink: 0;
 }
 
@@ -369,7 +369,7 @@ function showInfo() {
 .overview-name {
   font-size: 16px;
   font-weight: 700;
-  color: #1e293b;
+  color: var(--bs-emphasis-color);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -401,7 +401,7 @@ function showInfo() {
 .stat-item {
   text-align: center;
   padding: 4px 2px;
-  background: #f8fafc;
+  background: var(--bs-secondary-bg);
   border-radius: 4px;
 }
 
@@ -409,7 +409,7 @@ function showInfo() {
   display: block;
   font-size: 14px;
   font-weight: 700;
-  color: #1e293b;
+  color: var(--bs-emphasis-color);
 }
 
 .stat-label {
@@ -429,10 +429,10 @@ function showInfo() {
 .btn-overview {
   flex: 1;
   padding: 4px 8px;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--bs-border-color);
   border-radius: 6px;
-  background: white;
-  color: #475569;
+  background: var(--bs-body-bg);
+  color: var(--bs-secondary-color);
   font-size: 11px;
   font-weight: 500;
   cursor: pointer;
@@ -441,8 +441,8 @@ function showInfo() {
 }
 
 .btn-overview:hover {
-  background: #f1f5f9;
-  border-color: #cbd5e1;
+  background: var(--bs-secondary-bg);
+  border-color: var(--bs-border-color);
 }
 
 .btn-overview:disabled {
@@ -451,9 +451,9 @@ function showInfo() {
 }
 
 .btn-overview-primary {
-  background: #eff6ff;
-  border-color: #3b82f6;
-  color: #1d4ed8;
+  background: rgba(var(--bs-link-color-rgb), 0.15);
+  border-color: var(--bs-link-color);
+  color: var(--bs-link-color);
 }
 
 

@@ -1,5 +1,5 @@
 <template>
-  <div class="session-status-bar border-top p-2" :class="uiStore.isRedBackground ? 'theme-red-panel' : 'bg-light'">
+  <div class="session-status-bar border-top p-2" :class="uiStore.isRedBackground ? 'theme-red-panel' : 'bg-body-secondary'">
     <div class="d-flex justify-content-between align-items-center gap-2">
       <!-- Left side: Mode, Info, Manage -->
       <div class="d-flex gap-2">
@@ -210,7 +210,7 @@ const hasRateLimitData = computed(() =>
 
 <style scoped>
 .session-status-bar {
-  background-color: #f8f9fa;
+  background-color: var(--bs-secondary-bg);
 }
 
 /* Hide button labels on mobile */

@@ -282,6 +282,10 @@ function truncate(text, maxLength) {
   border-top-right-radius: 4px;
 }
 
+.msg-bubble-user .msg-text {
+  color: #1e293b;
+}
+
 /* Comm-injected messages: right-aligned with agent-colored right border */
 .msg-bubble-comm {
   border: 1px solid;
@@ -291,7 +295,7 @@ function truncate(text, maxLength) {
 .msg-text {
   font-size: 14px;
   line-height: 1.5;
-  color: #1e293b;
+  color: var(--bs-body-color);
   white-space: pre-wrap;
   word-wrap: break-word;
 }
@@ -336,10 +340,10 @@ function truncate(text, maxLength) {
 }
 
 .msg-text :deep(blockquote) {
-  border-left: 3px solid #cbd5e1;
+  border-left: 3px solid var(--bs-border-color);
   padding-left: 1rem;
   margin-left: 0;
-  color: #64748b;
+  color: var(--bs-secondary-color);
 }
 
 .msg-text :deep(table) {
@@ -350,7 +354,7 @@ function truncate(text, maxLength) {
 
 .msg-text :deep(table th),
 .msg-text :deep(table td) {
-  border: 1px solid #94a3b8;
+  border: 1px solid var(--bs-border-color);
   padding: 0.5rem;
   text-align: left;
 }

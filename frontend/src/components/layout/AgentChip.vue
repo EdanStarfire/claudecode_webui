@@ -184,8 +184,8 @@ function handleClick() {
   gap: 8px;
   padding: 6px 12px;
   border-radius: 10px;
-  border: 1px solid #e2e8f0;
-  background: #fff;
+  border: 1px solid var(--bs-border-color);
+  background: var(--bs-body-bg);
   cursor: pointer;
   transition: all 0.15s;
   position: relative;
@@ -194,23 +194,23 @@ function handleClick() {
 
 .agent-chip:hover {
   border-color: #93c5fd;
-  background: #f0f7ff;
+  background: var(--bs-secondary-bg);
 }
 
 .agent-chip.active {
   border-color: #3b82f6;
-  background: #eff6ff;
+  background: var(--bs-secondary-bg);
   box-shadow: 0 0 0 1px #3b82f6;
 }
 
 .agent-chip.child {
-  border-color: #e2e8f0;
-  background: #f8fafc;
+  border-color: var(--bs-border-color);
+  background: var(--bs-tertiary-bg);
 }
 
 .agent-chip.child.active {
   border-color: #3b82f6;
-  background: #eff6ff;
+  background: var(--bs-secondary-bg);
   box-shadow: 0 0 0 1px #3b82f6;
 }
 
@@ -249,7 +249,7 @@ function handleClick() {
 .ac-name {
   font-size: 12px;
   font-weight: 600;
-  color: #1e293b;
+  color: var(--bs-emphasis-color);
   line-height: 1.2;
   white-space: nowrap;
 }
@@ -257,7 +257,7 @@ function handleClick() {
 /* Subtitle lines truncate within the name-determined width */
 .ac-sdk-title {
   font-size: 10px;
-  color: #475569;
+  color: var(--bs-body-color);
   font-style: italic;
   line-height: 1.3;
   white-space: nowrap;
@@ -269,7 +269,7 @@ function handleClick() {
 
 .ac-desc-line {
   font-size: 10px;
-  color: #94a3b8;
+  color: var(--bs-secondary-color);
   line-height: 1.3;
   white-space: nowrap;
   overflow: hidden;
@@ -337,19 +337,19 @@ function handleClick() {
 .agent-chip.ghost {
   opacity: 0.6;
   border-style: dashed;
-  border-color: #cbd5e1;
-  background: #f8fafc;
+  border-color: var(--bs-border-color);
+  background: var(--bs-tertiary-bg);
 }
 
 .agent-chip.ghost:hover {
   opacity: 0.8;
-  border-color: #94a3b8;
+  border-color: var(--bs-secondary-color);
 }
 
 .ac-dismiss {
   background: none;
   border: none;
-  color: #94a3b8;
+  color: var(--bs-secondary-color);
   font-size: 16px;
   line-height: 1;
   padding: 0 2px;

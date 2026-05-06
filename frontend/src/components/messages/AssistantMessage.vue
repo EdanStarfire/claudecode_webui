@@ -274,12 +274,12 @@ const hasAnythingToShow = computed(() => {
 .msg-role {
   font-size: 12px;
   font-weight: 600;
-  color: #64748b;
+  color: var(--bs-secondary-color);
 }
 
 .msg-time {
   font-size: 11px;
-  color: #94a3b8;
+  color: var(--bs-secondary-color);
 }
 
 .msg-bubble {
@@ -290,16 +290,16 @@ const hasAnythingToShow = computed(() => {
 }
 
 .msg-bubble-assistant {
-  background: #f8fafc;
-  border: 1px solid #94a3b8;
-  border-left: 3px solid #94a3b8;
+  background: var(--bs-secondary-bg);
+  border: 1px solid var(--bs-border-color);
+  border-left: 3px solid var(--bs-border-color);
   border-top-left-radius: 4px;
 }
 
 .msg-text {
   font-size: 14px;
   line-height: 1.5;
-  color: #1e293b;
+  color: var(--bs-body-color);
   white-space: pre-wrap;
   word-wrap: break-word;
 }
@@ -344,10 +344,10 @@ const hasAnythingToShow = computed(() => {
 }
 
 .msg-text :deep(blockquote) {
-  border-left: 3px solid #cbd5e1;
+  border-left: 3px solid var(--bs-border-color);
   padding-left: 1rem;
   margin-left: 0;
-  color: #64748b;
+  color: var(--bs-secondary-color);
 }
 
 .msg-text :deep(table) {
@@ -358,7 +358,7 @@ const hasAnythingToShow = computed(() => {
 
 .msg-text :deep(table th),
 .msg-text :deep(table td) {
-  border: 1px solid #94a3b8;
+  border: 1px solid var(--bs-border-color);
   padding: 0.5rem;
   text-align: left;
 }
@@ -414,11 +414,6 @@ const hasAnythingToShow = computed(() => {
 
   .msg-bubble.has-permission-prompt {
     width: 95%;
-  }
-
-  .copy-markdown-btn,
-  .tts-play-icon {
-    opacity: 0.5;
   }
 }
 </style>

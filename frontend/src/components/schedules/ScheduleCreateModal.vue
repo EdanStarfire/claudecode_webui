@@ -414,13 +414,14 @@ async function submit() {
 }
 
 .modal-content {
-  background: #fff;
+  background: var(--bs-body-bg);
   border-radius: 12px;
   width: 480px;
   max-width: 95vw;
   max-height: 85vh;
   overflow-y: auto;
   box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+  border: 1px solid var(--bs-border-color);
 }
 
 .modal-header {
@@ -428,20 +429,20 @@ async function submit() {
   justify-content: space-between;
   align-items: center;
   padding: 16px 20px;
-  border-bottom: 1px solid #e2e8f0;
+  border-bottom: 1px solid var(--bs-border-color);
 }
 
 .modal-header h3 {
   margin: 0;
   font-size: 16px;
-  color: #1e293b;
+  color: var(--bs-emphasis-color);
 }
 
 .close-btn {
   background: none;
   border: none;
   font-size: 20px;
-  color: #94a3b8;
+  color: var(--bs-secondary-color);
   cursor: pointer;
   padding: 0 4px;
 }
@@ -458,7 +459,7 @@ form {
   display: block;
   font-size: 12px;
   font-weight: 600;
-  color: #334155;
+  color: var(--bs-body-color);
   margin-bottom: 4px;
 }
 
@@ -468,10 +469,10 @@ form {
   width: 100%;
   font-size: 13px;
   padding: 8px 10px;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--bs-border-color);
   border-radius: 6px;
-  background: #fff;
-  color: #1e293b;
+  background: var(--bs-body-bg);
+  color: var(--bs-body-color);
   box-sizing: border-box;
 }
 
@@ -483,7 +484,7 @@ form {
 .mode-toggle {
   display: flex;
   gap: 0;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--bs-border-color);
   border-radius: 6px;
   overflow: hidden;
 }
@@ -493,15 +494,15 @@ form {
   padding: 7px 12px;
   font-size: 12px;
   border: none;
-  background: #f8fafc;
-  color: #64748b;
+  background: var(--bs-secondary-bg);
+  color: var(--bs-secondary-color);
   cursor: pointer;
   font-weight: 500;
   transition: all 0.15s;
 }
 
 .mode-btn:not(:last-child) {
-  border-right: 1px solid #e2e8f0;
+  border-right: 1px solid var(--bs-border-color);
 }
 
 .mode-btn.active {
@@ -516,7 +517,7 @@ form {
 
 .mode-hint {
   font-size: 11px;
-  color: #94a3b8;
+  color: var(--bs-secondary-color);
   margin-top: 4px;
 }
 
@@ -534,15 +535,15 @@ form {
   font-size: 12px;
   border: 1px solid #6366f1;
   border-radius: 6px;
-  background: #eef2ff;
-  color: #4338ca;
+  background: rgba(99, 102, 241, 0.15);
+  color: var(--bs-link-color);
   cursor: pointer;
   white-space: nowrap;
   font-weight: 500;
 }
 
 .btn-capture:hover:not(:disabled) {
-  background: #e0e7ff;
+  background: rgba(99, 102, 241, 0.25);
 }
 
 .btn-capture:disabled {
@@ -552,19 +553,19 @@ form {
 
 .capture-success {
   font-size: 11px;
-  color: #16a34a;
+  color: var(--bs-success);
   margin-top: 4px;
   padding: 4px 6px;
-  background: #f0fdf4;
+  background: rgba(25, 135, 84, 0.15);
   border-radius: 4px;
 }
 
 .config-summary {
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--bs-border-color);
   border-radius: 8px;
   padding: 10px 12px;
   margin-bottom: 14px;
-  background: #f8fafc;
+  background: var(--bs-secondary-bg);
 }
 
 .config-summary-line {
@@ -575,12 +576,12 @@ form {
 }
 
 .config-label {
-  color: #64748b;
+  color: var(--bs-secondary-color);
   font-weight: 500;
 }
 
 .config-value {
-  color: #1e293b;
+  color: var(--bs-body-color);
   font-family: monospace;
   font-size: 11px;
 }
@@ -593,29 +594,29 @@ form {
   font-size: 12px;
   border: 1px solid #6366f1;
   border-radius: 6px;
-  background: #eef2ff;
-  color: #4338ca;
+  background: rgba(99, 102, 241, 0.15);
+  color: var(--bs-link-color);
   cursor: pointer;
   font-weight: 500;
   text-align: center;
 }
 
 .btn-review:hover {
-  background: #e0e7ff;
+  background: rgba(99, 102, 241, 0.25);
 }
 
 .cron-preview {
   font-size: 11px;
-  color: #64748b;
+  color: var(--bs-secondary-color);
   margin-top: 4px;
   padding: 4px 6px;
-  background: #f1f5f9;
+  background: var(--bs-secondary-bg);
   border-radius: 4px;
 }
 
 .cron-preview.error {
-  color: #dc2626;
-  background: #fef2f2;
+  color: var(--bs-danger);
+  background: rgba(220, 53, 69, 0.15);
 }
 
 .cron-presets {
@@ -628,15 +629,16 @@ form {
 .cron-presets button {
   font-size: 10px;
   padding: 3px 8px;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--bs-border-color);
   border-radius: 12px;
-  background: #f8fafc;
-  color: #475569;
+  background: var(--bs-secondary-bg);
+  color: var(--bs-secondary-color);
   cursor: pointer;
 }
 
 .cron-presets button:hover {
-  background: #e2e8f0;
+  background: var(--bs-tertiary-bg);
+  color: var(--bs-body-color);
 }
 
 .toggle-group {
@@ -648,7 +650,7 @@ form {
   align-items: center;
   gap: 8px;
   font-size: 13px;
-  color: #334155;
+  color: var(--bs-body-color);
   cursor: pointer;
 }
 
@@ -659,17 +661,17 @@ form {
 
 .toggle-hint {
   font-size: 11px;
-  color: #94a3b8;
+  color: var(--bs-secondary-color);
   margin-top: 2px;
   padding-left: 24px;
 }
 
 .error-msg {
-  color: #dc2626;
+  color: var(--bs-danger);
   font-size: 12px;
   margin-bottom: 10px;
   padding: 6px 8px;
-  background: #fef2f2;
+  background: rgba(220, 53, 69, 0.15);
   border-radius: 4px;
 }
 
@@ -683,10 +685,10 @@ form {
 .btn-secondary {
   font-size: 13px;
   padding: 8px 16px;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--bs-border-color);
   border-radius: 6px;
-  background: #fff;
-  color: #475569;
+  background: var(--bs-body-bg);
+  color: var(--bs-body-color);
   cursor: pointer;
 }
 

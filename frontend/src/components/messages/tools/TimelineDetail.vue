@@ -192,21 +192,21 @@ function formatSuggestion(suggestion) {
 .detail-banner p { margin: 0; opacity: 0.8; }
 
 .detail-banner-warning {
-  background: #fef3c7;
-  border: 1px solid #fbbf24;
-  color: #92400e;
+  background: rgba(245, 158, 11, 0.15);
+  border: 1px solid rgba(245, 158, 11, 0.45);
+  color: var(--bs-body-color);
 }
 
 .detail-banner-info {
-  background: #dbeafe;
-  border: 1px solid #60a5fa;
-  color: #1e40af;
+  background: rgba(59, 130, 246, 0.12);
+  border: 1px solid rgba(59, 130, 246, 0.4);
+  color: var(--bs-body-color);
 }
 
 .detail-banner-error {
-  background: #fee2e2;
-  border: 1px solid #f87171;
-  color: #991b1b;
+  background: rgba(239, 68, 68, 0.12);
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  color: var(--bs-body-color);
 }
 
 /* Permission Details (post-decision) */
@@ -219,17 +219,17 @@ function formatSuggestion(suggestion) {
 }
 
 .permission-approved {
-  background: #f0fdf4;
+  background: rgba(34, 197, 94, 0.1);
   border-left-color: #22c55e;
 }
 
 .permission-denied {
-  background: #fef2f2;
+  background: rgba(239, 68, 68, 0.1);
   border-left-color: #ef4444;
 }
 
 .permission-auto-approved {
-  background: #f5f3ff;
+  background: rgba(167, 139, 250, 0.1);
   border-left-color: #a78bfa;
 }
 
@@ -238,7 +238,7 @@ function formatSuggestion(suggestion) {
   align-items: center;
   gap: 4px;
   font-weight: 500;
-  color: #334155;
+  color: var(--bs-body-color);
 }
 
 .permission-status-icon {
@@ -255,14 +255,14 @@ function formatSuggestion(suggestion) {
 .permission-changes .changes-label {
   font-size: 10px;
   font-weight: 600;
-  color: #64748b;
+  color: var(--bs-secondary-color);
 }
 
 .permission-changes ul {
   margin: 2px 0 0;
   padding-left: 16px;
   font-size: 11px;
-  color: #475569;
+  color: var(--bs-body-color);
 }
 
 .permission-changes li {
@@ -273,8 +273,8 @@ function formatSuggestion(suggestion) {
 .view-full-bar {
   text-align: right;
   padding: 4px 8px;
-  border-top: 1px solid #e2e8f0;
-  background: #f8fafc;
+  border-top: 1px solid var(--bs-border-color);
+  background: var(--bs-secondary-bg);
 }
 
 .view-full-link {

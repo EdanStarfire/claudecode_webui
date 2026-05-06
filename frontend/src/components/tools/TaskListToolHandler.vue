@@ -131,7 +131,7 @@ defineExpose({ summary, params, result })
 }
 
 .task-list-result {
-  background: #fff;
+  background: var(--bs-body-bg);
   border: 1px solid var(--tool-border, #e2e8f0);
   border-top: none;
   border-radius: 0 0 var(--tool-radius, 4px) var(--tool-radius, 4px);

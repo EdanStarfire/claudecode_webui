@@ -8,12 +8,12 @@
  */
 
 :root {
-  /* Slate palette tokens */
-  --tool-bg: #f8fafc;
-  --tool-bg-header: #f1f5f9;
-  --tool-border: #e2e8f0;
-  --tool-text: #334155;
-  --tool-text-muted: #64748b;
+  /* Slate palette tokens — backed by Bootstrap theme vars */
+  --tool-bg: var(--bs-secondary-bg);
+  --tool-bg-header: var(--bs-tertiary-bg);
+  --tool-border: var(--bs-border-color);
+  --tool-text: var(--bs-body-color);
+  --tool-text-muted: var(--bs-secondary-color);
   --tool-font-size: 13px;
   --tool-code-font-size: 11px;
   --tool-padding: 6px 8px;
@@ -36,8 +36,20 @@
   --tool-badge-text: white;
 
   /* File path tokens */
-  --tool-path-bg: #f1f5f9;
-  --tool-path-color: #2563eb;
+  --tool-path-bg: var(--bs-tertiary-bg);
+  --tool-path-color: var(--bs-link-color);
+}
+
+/* Dark-mode overrides for semantic status colors */
+[data-bs-theme="dark"],
+[data-bs-theme="sensitive-dark"] {
+  --tool-error-bg: rgba(239, 68, 68, 0.15);
+  --tool-error-border: rgba(239, 68, 68, 0.45);
+  --tool-error-text: #fca5a5;
+
+  --tool-success-bg: rgba(34, 197, 94, 0.12);
+  --tool-success-border: rgba(34, 197, 94, 0.4);
+  --tool-success-text: #86efac;
 }
 
 /* Shared section container */
@@ -212,8 +224,8 @@
 
 /* Filter/info badge (for search filters etc.) */
 .tool-filter-badge {
-  background: #dbeafe;
-  color: #1e40af;
+  background: rgba(59, 130, 246, 0.15);
+  color: var(--bs-link-color);
   padding: 1px 6px;
   border-radius: 2px;
   font-size: 10px;

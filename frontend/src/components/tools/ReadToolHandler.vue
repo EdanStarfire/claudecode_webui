@@ -263,7 +263,7 @@ defineExpose({ summary, params, result })
   display: flex;
   justify-content: center;
   align-items: center;
-  background: #fff;
+  background: var(--bs-body-bg);
 }
 
 .preview-image {

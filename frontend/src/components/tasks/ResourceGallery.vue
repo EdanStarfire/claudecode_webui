@@ -369,7 +369,7 @@ function loadMoreResources() {
 .empty-placeholder {
   text-align: center;
   padding: 24px 16px;
-  color: #94a3b8;
+  color: var(--bs-secondary-color);
   font-size: 12px;
   font-style: italic;
 }
@@ -391,8 +391,8 @@ function loadMoreResources() {
   display: flex;
   flex-direction: column;
   border-radius: 6px;
-  background-color: #f8f9fa;
-  border: 1px solid #dee2e6;
+  background-color: var(--bs-secondary-bg);
+  border: 1px solid var(--bs-border-color);
   overflow: hidden;
   transition: box-shadow 0.15s ease;
 }
@@ -443,7 +443,7 @@ function loadMoreResources() {
   aspect-ratio: 1;
   overflow: hidden;
   cursor: pointer;
-  background-color: #e9ecef;
+  background-color: var(--bs-tertiary-bg);
 }
 
 .resource-thumbnail:hover {
@@ -462,7 +462,7 @@ function loadMoreResources() {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  background-color: #e9ecef;
+  background-color: var(--bs-tertiary-bg);
   gap: 4px;
   cursor: pointer;
 }
@@ -478,7 +478,7 @@ function loadMoreResources() {
 .file-ext {
   font-size: 0.65rem;
   font-weight: 600;
-  color: #6c757d;
+  color: var(--bs-secondary-color);
   text-transform: uppercase;
   letter-spacing: 0.5px;
 }
@@ -492,7 +492,7 @@ function loadMoreResources() {
 
 .resource-title {
   font-size: 0.75rem;
-  color: #495057;
+  color: var(--bs-body-color);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -522,7 +522,7 @@ function loadMoreResources() {
   align-items: center;
   gap: 4px;
   padding: 6px 8px;
-  border-bottom: 1px solid #e2e8f0;
+  border-bottom: 1px solid var(--bs-border-color);
   flex-shrink: 0;
 }
 
@@ -531,41 +531,49 @@ function loadMoreResources() {
   min-width: 0;
   padding: 3px 6px;
   font-size: 0.75rem;
-  border: 1px solid #dee2e6;
+  border: 1px solid var(--bs-border-color);
   border-radius: 4px;
   background: transparent;
   color: inherit;
   outline: none;
 }
 
+.gallery-search:hover {
+  border-color: var(--bs-secondary-color);
+}
+
 .gallery-search:focus {
-  border-color: #3b82f6;
-  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
+  border-color: var(--bs-link-color);
+  box-shadow: 0 0 0 2px rgba(var(--bs-link-color-rgb), 0.2);
 }
 
 .gallery-sort {
   flex-shrink: 0;
   padding: 3px 4px;
   font-size: 0.7rem;
-  border: 1px solid #dee2e6;
+  border: 1px solid var(--bs-border-color);
   border-radius: 4px;
-  background: transparent;
-  color: inherit;
+  background: var(--bs-body-bg);
+  color: var(--bs-body-color);
   cursor: pointer;
   max-width: 72px;
   outline: none;
 }
 
+.gallery-sort:hover {
+  border-color: var(--bs-secondary-color);
+}
+
 .gallery-sort:focus {
-  border-color: #3b82f6;
+  border-color: var(--bs-link-color);
 }
 
 /* Issue #523: View toggle */
 .toggle-btn {
   padding: 4px 8px;
-  border: 1px solid #dee2e6;
+  border: 1px solid var(--bs-border-color);
   background: transparent;
-  color: #64748b;
+  color: var(--bs-secondary-color);
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -576,14 +584,14 @@ function loadMoreResources() {
 }
 
 .toggle-btn:hover {
-  background: #f1f5f9;
-  color: #334155;
+  background: var(--bs-secondary-bg);
+  color: var(--bs-body-color);
 }
 
 .toggle-btn.active {
-  background: #3b82f6;
-  border-color: #3b82f6;
-  color: #fff;
+  background: var(--bs-link-color);
+  border-color: var(--bs-link-color);
+  color: var(--bs-body-bg);
 }
 
 /* Issue #523: List view */
@@ -597,13 +605,13 @@ function loadMoreResources() {
   align-items: center;
   gap: 8px;
   padding: 8px;
-  border-bottom: 1px solid #f1f5f9;
+  border-bottom: 1px solid var(--bs-border-color);
   cursor: pointer;
   transition: background-color 0.15s ease;
 }
 
 .resource-list-item:hover {
-  background-color: #f8fafc;
+  background-color: var(--bs-secondary-bg);
 }
 
 .resource-list-item:last-child {
@@ -621,7 +629,7 @@ function loadMoreResources() {
   flex: 1;
   min-width: 0;
   font-size: 0.8rem;
-  color: #334155;
+  color: var(--bs-body-color);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
