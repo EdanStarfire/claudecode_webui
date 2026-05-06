@@ -15,7 +15,7 @@
   align-items: center;
   justify-content: center;
   padding: 64px 24px;
-  color: #94a3b8;
+  color: var(--bs-secondary-color);
   text-align: center;
 }
 .empty-icon {
@@ -26,7 +26,7 @@
 .empty-title {
   font-size: 16px;
   font-weight: 600;
-  color: #cbd5e1;
+  color: var(--bs-body-color);
   margin: 0 0 8px;
 }
 .empty-body {

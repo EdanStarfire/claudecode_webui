@@ -41,8 +41,11 @@
 <script setup>
 import { computed, ref, onMounted } from 'vue'
 import { useAnalyticsStore } from '@/stores/analytics'
+import { useUIStore } from '@/stores/ui'
+import { readCssVar } from '@/utils/analytics'
 
 const store = useAnalyticsStore()
+const uiStore = useUIStore()
 const chartReady = ref(false)
 let Bar = null
 
@@ -58,47 +61,54 @@ onMounted(async () => {
   }
 })
 
-const chartOptions = computed(() => ({
-  responsive: true,
-  maintainAspectRatio: false,
-  plugins: {
-    legend: {
-      labels: { color: '#94a3b8', font: { size: 11 } },
+const chartOptions = computed(() => {
+  // eslint-disable-next-line no-unused-expressions
+  uiStore.theme
+  const tickColor  = readCssVar('--bs-secondary-color')
+  const gridColor  = readCssVar('--bs-border-color')
+
+  return {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+      legend: {
+        labels: { color: tickColor, font: { size: 11 } },
+      },
+      tooltip: { mode: 'index', intersect: false },
     },
-    tooltip: { mode: 'index', intersect: false },
-  },
-  scales: {
-    x: {
-      stacked: true,
-      ticks: { color: '#64748b', maxRotation: 45, font: { size: 10 } },
-      grid: { color: '#1e293b' },
-    },
-    y: {
-      stacked: true,
-      ticks: { color: '#64748b', font: { size: 10 } },
-      grid: { color: '#334155' },
-      title: {
-        display: true,
-        text: store.filters.chartMetric === 'cost' ? 'USD' : 'Tokens',
-        color: '#64748b',
-        font: { size: 10 },
+    scales: {
+      x: {
+        stacked: true,
+        ticks: { color: tickColor, maxRotation: 45, font: { size: 10 } },
+        grid: { color: gridColor },
+      },
+      y: {
+        stacked: true,
+        ticks: { color: tickColor, font: { size: 10 } },
+        grid: { color: gridColor },
+        title: {
+          display: true,
+          text: store.filters.chartMetric === 'cost' ? 'USD' : 'Tokens',
+          color: tickColor,
+          font: { size: 10 },
+        },
       },
     },
-  },
-}))
+  }
+})
 </script>
 
 <style scoped>
 .chart-panel {
-  background: #1e293b;
-  border: 1px solid #334155;
+  background: var(--bs-secondary-bg);
+  border: 1px solid var(--bs-border-color);
   border-radius: 8px;
   padding: 16px;
   margin-bottom: 16px;
 }
 .chart-label {
   font-size: 11px;
-  color: #64748b;
+  color: var(--bs-secondary-color);
 }
 .chart-container {
   height: 260px;
@@ -107,7 +117,7 @@ const chartOptions = computed(() => ({
 .chart-fallback {
   padding: 32px;
   text-align: center;
-  color: #64748b;
+  color: var(--bs-secondary-color);
   font-size: 13px;
 }
 </style>
