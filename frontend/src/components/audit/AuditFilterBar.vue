@@ -25,10 +25,10 @@
     <!-- Event type filter chips -->
     <div class="d-flex gap-1 flex-wrap">
       <button
-        v-for="et in eventTypeOptions"
+        v-for="et in AUDIT_EVENT_TYPES"
         :key="et.value"
         class="btn btn-sm px-2 py-0"
-        :class="isEtActive(et.value) ? et.activeClass : 'btn-outline-secondary'"
+        :class="isEtActive(et.value) ? getEventTypeBtnClass(et.value) : 'btn-outline-secondary'"
         style="font-size:0.75rem"
         @click="toggleEventType(et.value)"
       >{{ et.label }}</button>
@@ -45,6 +45,7 @@
 import { ref, computed } from 'vue'
 import { useAuditStore } from '../../stores/audit.js'
 import { useProjectStore } from '../../stores/project.js'
+import { AUDIT_EVENT_TYPES, getEventTypeBtnClass } from '../../utils/auditColors.js'
 
 const emit = defineEmits(['refresh'])
 
@@ -59,14 +60,6 @@ const timePresets = [
   { label: '1h', seconds: 3600 },
   { label: '6h', seconds: 21600 },
   { label: '24h', seconds: 86400 },
-]
-
-const eventTypeOptions = [
-  { value: 'tool_call', label: 'Tools', activeClass: 'btn-success' },
-  { value: 'permission', label: 'Perms', activeClass: 'btn-info' },
-  { value: 'lifecycle', label: 'Lifecycle', activeClass: 'btn-secondary' },
-  { value: 'comm', label: 'Comms', activeClass: 'btn-primary' },
-  { value: 'watchdog', label: 'Watchdog', activeClass: 'btn-warning' },
 ]
 
 const activePreset = ref(3600)
@@ -91,13 +84,13 @@ function toggleEventType(value) {
   const current = [...filters.value.eventTypes]
   if (current.length === 0) {
     // All active → deactivate all except this one
-    auditStore.setFilters({ eventTypes: eventTypeOptions.map(e => e.value).filter(e => e !== value) })
+    auditStore.setFilters({ eventTypes: AUDIT_EVENT_TYPES.map(e => e.value).filter(e => e !== value) })
   } else if (current.includes(value)) {
     const next = current.filter(e => e !== value)
-    auditStore.setFilters({ eventTypes: next.length === eventTypeOptions.length ? [] : next })
+    auditStore.setFilters({ eventTypes: next.length === AUDIT_EVENT_TYPES.length ? [] : next })
   } else {
     const next = [...current, value]
-    auditStore.setFilters({ eventTypes: next.length === eventTypeOptions.length ? [] : next })
+    auditStore.setFilters({ eventTypes: next.length === AUDIT_EVENT_TYPES.length ? [] : next })
   }
   emit('refresh')
 }
