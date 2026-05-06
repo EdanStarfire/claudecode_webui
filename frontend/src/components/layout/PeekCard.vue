@@ -71,8 +71,8 @@ const alertClass = computed(() => {
   top: 0;
   bottom: 0;
   width: 34px;
-  background: #f1f5f9;
-  border: 1px solid #cbd5e1;
+  background: var(--bs-body-bg);
+  border: 1px solid var(--bs-border-color);
   border-radius: 8px;
   cursor: pointer;
   display: flex;
@@ -86,7 +86,7 @@ const alertClass = computed(() => {
 
 .peek-card:hover {
   border-color: #93c5fd;
-  background: #eff6ff;
+  background: var(--bs-secondary-bg);
 }
 
 .peek-dot {
@@ -104,7 +104,7 @@ const alertClass = computed(() => {
 .peek-letter {
   font-size: 10px;
   font-weight: 700;
-  color: #475569;
+  color: var(--bs-secondary-color);
   line-height: 1;
 }
 
@@ -115,7 +115,7 @@ const alertClass = computed(() => {
   width: 10px;
   height: 10px;
   border-radius: 50%;
-  border: 1px solid white;
+  border: 1px solid var(--bs-body-bg);
 }
 
 .alert-permission { background: #f59e0b; }
