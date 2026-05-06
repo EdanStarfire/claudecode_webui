@@ -260,12 +260,12 @@ function truncate(text, maxLength) {
 .msg-role {
   font-size: 12px;
   font-weight: 600;
-  color: #3b82f6;
+  color: var(--agent-color-user-accent);
 }
 
 .msg-time {
   font-size: 11px;
-  color: #94a3b8;
+  color: var(--bs-secondary-color);
 }
 
 .msg-bubble {
@@ -276,14 +276,10 @@ function truncate(text, maxLength) {
 }
 
 .msg-bubble-user {
-  background: #eef2ff;
-  border: 1px solid #a5b4fc;
-  border-right: 3px solid #818cf8;
+  background: var(--agent-color-user-bg);
+  border: 1px solid var(--agent-color-user-accent);
+  border-right: 3px solid var(--agent-color-user-accent);
   border-top-right-radius: 4px;
-}
-
-.msg-bubble-user .msg-text {
-  color: #1e293b;
 }
 
 /* Comm-injected messages: right-aligned with agent-colored right border */
@@ -314,7 +310,7 @@ function truncate(text, maxLength) {
 }
 
 .msg-text :deep(pre) {
-  background: rgba(0, 0, 0, 0.04);
+  background: var(--bs-tertiary-bg);
   padding: 0.75rem;
   border-radius: 6px;
   overflow-x: auto;
@@ -322,7 +318,7 @@ function truncate(text, maxLength) {
 }
 
 .msg-text :deep(code) {
-  background: rgba(0, 0, 0, 0.06);
+  background: var(--bs-tertiary-bg);
   padding: 0.15rem 0.35rem;
   border-radius: 3px;
   font-family: 'Courier New', monospace;
@@ -360,7 +356,7 @@ function truncate(text, maxLength) {
 }
 
 .msg-text :deep(table th) {
-  background-color: rgba(0, 0, 0, 0.04);
+  background-color: var(--bs-secondary-bg);
   font-weight: 600;
 }
 
@@ -371,7 +367,7 @@ function truncate(text, maxLength) {
   gap: 6px;
   margin-top: 8px;
   padding-top: 6px;
-  border-top: 1px dashed rgba(0, 0, 0, 0.12);
+  border-top: 1px dashed var(--bs-border-color);
 }
 
 /* Tool results */
@@ -383,13 +379,13 @@ function truncate(text, maxLength) {
 }
 
 .result-error {
-  background: rgba(239, 68, 68, 0.08);
-  border: 1px solid rgba(239, 68, 68, 0.15);
+  background: var(--tool-error-bg);
+  border: 1px solid var(--tool-error-border);
 }
 
 .result-success {
-  background: rgba(34, 197, 94, 0.08);
-  border: 1px solid rgba(34, 197, 94, 0.15);
+  background: var(--tool-success-bg);
+  border: 1px solid var(--tool-success-border);
 }
 
 /* Copy markdown button */
@@ -403,12 +399,12 @@ function truncate(text, maxLength) {
   top: 6px;
   opacity: 0;
   transition: opacity 0.15s ease;
-  background: var(--bs-body-bg, #fff);
-  border: 1px solid #e2e8f0;
+  background: var(--bs-body-bg);
+  border: 1px solid var(--bs-border-color);
   border-radius: 6px;
   padding: 3px 5px;
   cursor: pointer;
-  color: #64748b;
+  color: var(--bs-secondary-color);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -417,9 +413,9 @@ function truncate(text, maxLength) {
 }
 
 .copy-markdown-btn:hover {
-  background: #f1f5f9;
-  color: #334155;
-  border-color: #cbd5e1;
+  background: var(--bs-tertiary-bg);
+  color: var(--bs-body-color);
+  border-color: var(--bs-border-color);
 }
 
 .msg-bubble:hover .copy-markdown-btn {
