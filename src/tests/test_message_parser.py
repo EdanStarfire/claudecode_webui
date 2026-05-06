@@ -202,6 +202,41 @@ class TestMessageHandlers:
         parsed = handler.parse(message_data)
         assert parsed.metadata["errors"] is None
 
+    def test_result_message_handler_deferred_tool_use(self):
+        """Test ResultMessageHandler extracts deferred_tool_use into metadata."""
+        handler = ResultMessageHandler()
+
+        message_data = {
+            "type": "result",
+            "subtype": "deferred",
+            "result": None,
+            "session_id": "test-123",
+            "timestamp": time.time(),
+            "deferred_tool_use": {"id": "tool-1", "name": "bash", "input": {"command": "ls"}},
+        }
+
+        parsed = handler.parse(message_data)
+        assert parsed.metadata["deferred_tool_use"] == {
+            "id": "tool-1",
+            "name": "bash",
+            "input": {"command": "ls"},
+        }
+
+    def test_result_message_handler_no_deferred_tool_use(self):
+        """Test ResultMessageHandler sets deferred_tool_use to None when absent."""
+        handler = ResultMessageHandler()
+
+        message_data = {
+            "type": "result",
+            "subtype": "conversation_completed",
+            "result": "Done",
+            "session_id": "test-123",
+            "timestamp": time.time()
+        }
+
+        parsed = handler.parse(message_data)
+        assert parsed.metadata["deferred_tool_use"] is None
+
     def test_tool_use_handler(self):
         """Test ToolUseHandler."""
         handler = ToolUseHandler()

@@ -1033,7 +1033,8 @@ class ResultMessageHandler(MessageHandler):
                 "has_tool_results": False,
                 "has_thinking": False,
                 "has_permission_requests": False,
-                "has_permission_responses": False
+                "has_permission_responses": False,
+                "deferred_tool_use": message_data.get("deferred_tool_use"),
             }
         }
 

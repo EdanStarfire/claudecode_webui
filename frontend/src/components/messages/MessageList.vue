@@ -34,6 +34,13 @@
 
       <!-- Issue #662: Truncation banner after last assistant message when response was truncated -->
       <TruncationBanner v-if="showTruncationBanner" :key="'truncation-' + sessionStore.currentSessionId" />
+
+      <!-- Issue #1300: Deferred tool banner when a PreToolUse hook deferred a tool -->
+      <DeferredToolBanner
+        v-if="deferredToolUse"
+        :deferredToolUse="deferredToolUse"
+        :key="'deferred-' + sessionStore.currentSessionId"
+      />
     </div>
 
     <!-- TTS Floating Controls (issue #735) — outside scroll container to avoid layout shift -->
@@ -62,6 +69,7 @@ import { useUIStore } from '@/stores/ui'
 import MessageItem from './MessageItem.vue'
 import CompactionEventGroup from './CompactionEventGroup.vue'
 import TruncationBanner from './TruncationBanner.vue'
+import DeferredToolBanner from './DeferredToolBanner.vue'
 import { useTTSReadAloud } from '@/composables/useTTSReadAloud'
 import { parseTimestamp, formatDateSeparatorLabel } from '@/utils/time'
 
@@ -357,6 +365,11 @@ const showTruncationBanner = computed(() => {
   const stopReason = messageStore.lastStopReasonBySession.get(sessionStore.currentSessionId)
   return stopReason === 'max_tokens'
 })
+
+// Issue #1300: Deferred tool use for deferral banner
+const deferredToolUse = computed(() =>
+  messageStore.deferredToolUseBySession.get(sessionStore.currentSessionId) || null
+)
 
 /**
  * Capture current scroll position as a message index + isAtBottom flag.

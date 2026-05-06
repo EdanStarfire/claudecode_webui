@@ -49,6 +49,10 @@ export const useMessageStore = defineStore('message', () => {
   // Issue #662: Track last stop_reason per session for truncation banner
   const lastStopReasonBySession = ref(new Map())
 
+  // Issue #1300: Track deferred tool use per session for deferral banner
+  // Map<sessionId, { id, name, input } | null>
+  const deferredToolUseBySession = ref(new Map())
+
   // Issue #689: Latest task activity per tool_use_id for SubagentTimeline display
   // Map<tool_use_id, { subtype, description, last_tool_name, status, summary, timestamp }>
   const taskActivityByToolUseId = ref(new Map())
@@ -295,6 +299,17 @@ export const useMessageStore = defineStore('message', () => {
       const stopReason = message.metadata?.stop_reason || message.stop_reason || null
       lastStopReasonBySession.value.set(sessionId, stopReason)
       lastStopReasonBySession.value = new Map(lastStopReasonBySession.value)
+
+      // Issue #1300: Track deferred_tool_use for deferral banner
+      const dtu = message.metadata?.deferred_tool_use || null
+      deferredToolUseBySession.value.set(sessionId, dtu)
+      deferredToolUseBySession.value = new Map(deferredToolUseBySession.value)
+    }
+
+    // Issue #1300: Clear deferred tool use when user sends a new message
+    if (message.type === 'user' && !message.metadata?.has_tool_results) {
+      deferredToolUseBySession.value.set(sessionId, null)
+      deferredToolUseBySession.value = new Map(deferredToolUseBySession.value)
     }
 
     // Issue #662: Clear stop_reason when user sends a new message
@@ -1123,6 +1138,9 @@ export const useMessageStore = defineStore('message', () => {
 
     // Issue #662: Stop reason tracking for truncation banner
     lastStopReasonBySession: readonly(lastStopReasonBySession),
+
+    // Issue #1300: Deferred tool use tracking for deferral banner
+    deferredToolUseBySession: readonly(deferredToolUseBySession),
 
     // Issue #689: Task activity tracking for SubagentTimeline
     taskActivityByToolUseId: readonly(taskActivityByToolUseId),

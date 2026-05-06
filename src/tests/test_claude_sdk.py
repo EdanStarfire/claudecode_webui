@@ -213,6 +213,55 @@ class TestClaudeSDK:
         assert opts.strict_mcp_config is False
         assert "strict-mcp-config" not in (opts.extra_args or {})
 
+    def test_convert_sdk_message_deferred_tool_use(self, sdk_instance):
+        """Test that ResultMessage.deferred_tool_use is serialized to a plain dict."""
+        from claude_agent_sdk import DeferredToolUse, ResultMessage
+
+        deferred = DeferredToolUse(id="tool-1", name="bash", input={"command": "ls"})
+        result_msg = ResultMessage(
+            subtype="deferred",
+            duration_ms=100,
+            duration_api_ms=80,
+            is_error=False,
+            num_turns=1,
+            session_id="test-session",
+            total_cost_usd=0.0,
+            usage={},
+            result=None,
+            deferred_tool_use=deferred,
+        )
+
+        converted = sdk_instance._convert_sdk_message(result_msg)
+
+        assert converted["type"] == "result"
+        assert "deferred_tool_use" in converted
+        dtu = converted["deferred_tool_use"]
+        assert dtu["id"] == "tool-1"
+        assert dtu["name"] == "bash"
+        assert dtu["input"] == {"command": "ls"}
+
+    def test_convert_sdk_message_no_deferred_tool_use(self, sdk_instance):
+        """Test that ResultMessage without deferred_tool_use omits the field."""
+        from claude_agent_sdk import ResultMessage
+
+        result_msg = ResultMessage(
+            subtype="success",
+            duration_ms=100,
+            duration_api_ms=80,
+            is_error=False,
+            num_turns=1,
+            session_id="test-session",
+            total_cost_usd=0.0,
+            usage={},
+            result="Done",
+            deferred_tool_use=None,
+        )
+
+        converted = sdk_instance._convert_sdk_message(result_msg)
+
+        assert converted["type"] == "result"
+        assert "deferred_tool_use" not in converted
+
 
 class TestSessionInfo:
     """Test cases for SessionInfo dataclass."""

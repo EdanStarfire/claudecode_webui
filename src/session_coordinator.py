@@ -2786,6 +2786,9 @@ class SessionCoordinator:
                     metadata["errors"] = data["errors"]
                 if "permission_denials" in data:
                     metadata["permission_denials"] = data["permission_denials"]
+                # Copy deferred_tool_use for frontend deferral banner
+                if "deferred_tool_use" in data:
+                    metadata["deferred_tool_use"] = data["deferred_tool_use"]
 
             # Handle PermissionRequestMessage
             if _type == "PermissionRequestMessage":
