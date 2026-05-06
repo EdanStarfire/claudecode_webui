@@ -210,12 +210,12 @@ function openAttachmentPreview(att) {
 }
 
 .message-row-comm {
-  background-color: #E8F5E9; /* Light green for comms */
+  background-color: var(--comm-row-bg);
 }
 
 /* System comm styling - muted background */
 .system-comm {
-  background-color: #f5f5f5;
+  background-color: var(--comm-system-bg);
   opacity: 0.9;
 }
 

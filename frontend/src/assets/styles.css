@@ -120,6 +120,86 @@
     --bs-secondary-rgb: 239,154,154;
 }
 
+/* ========== AGENT COLOR PALETTE (per theme) ========== */
+/* Slot indices 0-11 match AGENT_COLORS array order in useAgentColor.js         */
+/* 0=amber 1=pink 2=indigo 3=emerald 4=violet 5=red 6=cyan 7=yellow             */
+/* 8=sky 9=purple 10=orange 11=green                                             */
+
+:root, [data-bs-theme="light"] {
+    --agent-color-0-bg: #fef3c7;  --agent-color-0-border: #f59e0b;  --agent-color-0-accent: #d97706;
+    --agent-color-1-bg: #fce7f3;  --agent-color-1-border: #ec4899;  --agent-color-1-accent: #db2777;
+    --agent-color-2-bg: #e0e7ff;  --agent-color-2-border: #6366f1;  --agent-color-2-accent: #4f46e5;
+    --agent-color-3-bg: #d1fae5;  --agent-color-3-border: #10b981;  --agent-color-3-accent: #059669;
+    --agent-color-4-bg: #ede9fe;  --agent-color-4-border: #8b5cf6;  --agent-color-4-accent: #7c3aed;
+    --agent-color-5-bg: #fee2e2;  --agent-color-5-border: #ef4444;  --agent-color-5-accent: #dc2626;
+    --agent-color-6-bg: #cffafe;  --agent-color-6-border: #06b6d4;  --agent-color-6-accent: #0891b2;
+    --agent-color-7-bg: #fef9c3;  --agent-color-7-border: #eab308;  --agent-color-7-accent: #ca8a04;
+    --agent-color-8-bg: #e0f2fe;  --agent-color-8-border: #0ea5e9;  --agent-color-8-accent: #0284c7;
+    --agent-color-9-bg: #f3e8ff;  --agent-color-9-border: #a855f7;  --agent-color-9-accent: #9333ea;
+    --agent-color-10-bg: #ffedd5; --agent-color-10-border: #f97316; --agent-color-10-accent: #ea580c;
+    --agent-color-11-bg: #dcfce7; --agent-color-11-border: #22c55e; --agent-color-11-accent: #16a34a;
+    --agent-color-system-bg: #f1f5f9; --agent-color-system-border: #e2e8f0; --agent-color-system-accent: #94a3b8;
+    --agent-color-user-bg: #eef2ff;   --agent-color-user-border: #e0e7ff;   --agent-color-user-accent: #6366f1;
+    --comm-row-bg: #E8F5E9;
+    --comm-system-bg: #f5f5f5;
+}
+
+[data-bs-theme="dark"] {
+    --agent-color-0-bg: #2d1f00;  --agent-color-0-border: #f59e0b;  --agent-color-0-accent: #fbbf24;
+    --agent-color-1-bg: #2d0f1f;  --agent-color-1-border: #ec4899;  --agent-color-1-accent: #f9a8d4;
+    --agent-color-2-bg: #1a1d3d;  --agent-color-2-border: #6366f1;  --agent-color-2-accent: #a5b4fc;
+    --agent-color-3-bg: #0a2419;  --agent-color-3-border: #10b981;  --agent-color-3-accent: #6ee7b7;
+    --agent-color-4-bg: #1f1530;  --agent-color-4-border: #8b5cf6;  --agent-color-4-accent: #c4b5fd;
+    --agent-color-5-bg: #2d0f0f;  --agent-color-5-border: #ef4444;  --agent-color-5-accent: #fca5a5;
+    --agent-color-6-bg: #0a2429;  --agent-color-6-border: #06b6d4;  --agent-color-6-accent: #67e8f9;
+    --agent-color-7-bg: #2a1f00;  --agent-color-7-border: #eab308;  --agent-color-7-accent: #fde047;
+    --agent-color-8-bg: #0a1f33;  --agent-color-8-border: #0ea5e9;  --agent-color-8-accent: #7dd3fc;
+    --agent-color-9-bg: #241433;  --agent-color-9-border: #a855f7;  --agent-color-9-accent: #d8b4fe;
+    --agent-color-10-bg: #2d1500; --agent-color-10-border: #f97316; --agent-color-10-accent: #fdba74;
+    --agent-color-11-bg: #0a2914; --agent-color-11-border: #22c55e; --agent-color-11-accent: #86efac;
+    --agent-color-system-bg: #1e293b; --agent-color-system-border: #334155; --agent-color-system-accent: #94a3b8;
+    --agent-color-user-bg: #1a1d3d;   --agent-color-user-border: #334155;   --agent-color-user-accent: #a5b4fc;
+    --comm-row-bg: #0f2419;
+    --comm-system-bg: #1e293b;
+}
+
+[data-bs-theme="sensitive-light"] {
+    --agent-color-0-bg: #fef3c7;  --agent-color-0-border: #f59e0b;  --agent-color-0-accent: #d97706;
+    --agent-color-1-bg: #fce7f3;  --agent-color-1-border: #ec4899;  --agent-color-1-accent: #db2777;
+    --agent-color-2-bg: #e0e7ff;  --agent-color-2-border: #6366f1;  --agent-color-2-accent: #4f46e5;
+    --agent-color-3-bg: #d1fae5;  --agent-color-3-border: #10b981;  --agent-color-3-accent: #059669;
+    --agent-color-4-bg: #ede9fe;  --agent-color-4-border: #8b5cf6;  --agent-color-4-accent: #7c3aed;
+    --agent-color-5-bg: #fee2e2;  --agent-color-5-border: #ef4444;  --agent-color-5-accent: #dc2626;
+    --agent-color-6-bg: #cffafe;  --agent-color-6-border: #06b6d4;  --agent-color-6-accent: #0891b2;
+    --agent-color-7-bg: #fef9c3;  --agent-color-7-border: #eab308;  --agent-color-7-accent: #ca8a04;
+    --agent-color-8-bg: #e0f2fe;  --agent-color-8-border: #0ea5e9;  --agent-color-8-accent: #0284c7;
+    --agent-color-9-bg: #f3e8ff;  --agent-color-9-border: #a855f7;  --agent-color-9-accent: #9333ea;
+    --agent-color-10-bg: #ffedd5; --agent-color-10-border: #f97316; --agent-color-10-accent: #ea580c;
+    --agent-color-11-bg: #dcfce7; --agent-color-11-border: #22c55e; --agent-color-11-accent: #16a34a;
+    --agent-color-system-bg: #f1f5f9; --agent-color-system-border: #e2e8f0; --agent-color-system-accent: #94a3b8;
+    --agent-color-user-bg: #eef2ff;   --agent-color-user-border: #e0e7ff;   --agent-color-user-accent: #6366f1;
+    --comm-row-bg: #E8F5E9;
+    --comm-system-bg: #f5f5f5;
+}
+
+[data-bs-theme="sensitive-dark"] {
+    --agent-color-0-bg: #2d1810;  --agent-color-0-border: #f59e0b;  --agent-color-0-accent: #fbbf24;
+    --agent-color-1-bg: #2d1018;  --agent-color-1-border: #ec4899;  --agent-color-1-accent: #f9a8d4;
+    --agent-color-2-bg: #1f1525;  --agent-color-2-border: #818cf8;  --agent-color-2-accent: #a5b4fc;
+    --agent-color-3-bg: #1a1f15;  --agent-color-3-border: #10b981;  --agent-color-3-accent: #6ee7b7;
+    --agent-color-4-bg: #1f1525;  --agent-color-4-border: #8b5cf6;  --agent-color-4-accent: #c4b5fd;
+    --agent-color-5-bg: #2d1010;  --agent-color-5-border: #ef5350;  --agent-color-5-accent: #fca5a5;
+    --agent-color-6-bg: #152025;  --agent-color-6-border: #06b6d4;  --agent-color-6-accent: #67e8f9;
+    --agent-color-7-bg: #2a1f10;  --agent-color-7-border: #eab308;  --agent-color-7-accent: #fde047;
+    --agent-color-8-bg: #15202a;  --agent-color-8-border: #0ea5e9;  --agent-color-8-accent: #7dd3fc;
+    --agent-color-9-bg: #241425;  --agent-color-9-border: #a855f7;  --agent-color-9-accent: #d8b4fe;
+    --agent-color-10-bg: #2d1810; --agent-color-10-border: #f97316; --agent-color-10-accent: #fdba74;
+    --agent-color-11-bg: #152015; --agent-color-11-border: #22c55e; --agent-color-11-accent: #86efac;
+    --agent-color-system-bg: #2a1010; --agent-color-system-border: #4a1c1c; --agent-color-system-accent: #ef9a9a;
+    --agent-color-user-bg: #1f1525;   --agent-color-user-border: #4a1c1c;   --agent-color-user-accent: #a5b4fc;
+    --comm-row-bg: #15201a;
+    --comm-system-bg: #2a1010;
+}
 
 /* Bootstrap 5.3 compiles button CSS vars to hardcoded values — they don't inherit from theme vars.
    Each custom theme must explicitly override component-level button CSS vars. */

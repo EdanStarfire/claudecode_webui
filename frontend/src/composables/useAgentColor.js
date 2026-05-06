@@ -4,23 +4,23 @@
  */
 
 const AGENT_COLORS = [
-  { bg: '#fef3c7', border: '#f59e0b', accent: '#d97706' },  // amber
-  { bg: '#fce7f3', border: '#ec4899', accent: '#db2777' },  // pink
-  { bg: '#e0e7ff', border: '#6366f1', accent: '#4f46e5' },  // indigo
-  { bg: '#d1fae5', border: '#10b981', accent: '#059669' },  // emerald
-  { bg: '#ede9fe', border: '#8b5cf6', accent: '#7c3aed' },  // violet
-  { bg: '#fee2e2', border: '#ef4444', accent: '#dc2626' },  // red
-  { bg: '#cffafe', border: '#06b6d4', accent: '#0891b2' },  // cyan
-  { bg: '#fef9c3', border: '#eab308', accent: '#ca8a04' },  // yellow
-  { bg: '#e0f2fe', border: '#0ea5e9', accent: '#0284c7' },  // sky
-  { bg: '#f3e8ff', border: '#a855f7', accent: '#9333ea' },  // purple
-  { bg: '#ffedd5', border: '#f97316', accent: '#ea580c' },  // orange
-  { bg: '#dcfce7', border: '#22c55e', accent: '#16a34a' },  // green
+  { bg: 'var(--agent-color-0-bg)',  border: 'var(--agent-color-0-border)',  accent: 'var(--agent-color-0-accent)'  },
+  { bg: 'var(--agent-color-1-bg)',  border: 'var(--agent-color-1-border)',  accent: 'var(--agent-color-1-accent)'  },
+  { bg: 'var(--agent-color-2-bg)',  border: 'var(--agent-color-2-border)',  accent: 'var(--agent-color-2-accent)'  },
+  { bg: 'var(--agent-color-3-bg)',  border: 'var(--agent-color-3-border)',  accent: 'var(--agent-color-3-accent)'  },
+  { bg: 'var(--agent-color-4-bg)',  border: 'var(--agent-color-4-border)',  accent: 'var(--agent-color-4-accent)'  },
+  { bg: 'var(--agent-color-5-bg)',  border: 'var(--agent-color-5-border)',  accent: 'var(--agent-color-5-accent)'  },
+  { bg: 'var(--agent-color-6-bg)',  border: 'var(--agent-color-6-border)',  accent: 'var(--agent-color-6-accent)'  },
+  { bg: 'var(--agent-color-7-bg)',  border: 'var(--agent-color-7-border)',  accent: 'var(--agent-color-7-accent)'  },
+  { bg: 'var(--agent-color-8-bg)',  border: 'var(--agent-color-8-border)',  accent: 'var(--agent-color-8-accent)'  },
+  { bg: 'var(--agent-color-9-bg)',  border: 'var(--agent-color-9-border)',  accent: 'var(--agent-color-9-accent)'  },
+  { bg: 'var(--agent-color-10-bg)', border: 'var(--agent-color-10-border)', accent: 'var(--agent-color-10-accent)' },
+  { bg: 'var(--agent-color-11-bg)', border: 'var(--agent-color-11-border)', accent: 'var(--agent-color-11-accent)' },
 ]
 
 const SPECIAL_COLORS = {
-  system: { bg: '#f1f5f9', border: '#e2e8f0', accent: '#94a3b8' },
-  user: { bg: '#eef2ff', border: '#e0e7ff', accent: '#6366f1' },
+  system: { bg: 'var(--agent-color-system-bg)', border: 'var(--agent-color-system-border)', accent: 'var(--agent-color-system-accent)' },
+  user:   { bg: 'var(--agent-color-user-bg)',   border: 'var(--agent-color-user-border)',   accent: 'var(--agent-color-user-accent)'   },
 }
 
 export function slugifyAgentName(name) {
