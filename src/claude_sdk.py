@@ -27,6 +27,7 @@ try:
         AssistantMessage,
         ClaudeAgentOptions,
         ClaudeSDKClient,
+        DeferredToolUse,
         PermissionResultAllow,
         PermissionResultDeny,
         RateLimitEvent,
@@ -43,6 +44,7 @@ except ImportError:
     # Fallback for development/testing environments
     ClaudeSDKClient = None
     ClaudeAgentOptions = None
+    DeferredToolUse = None
     PermissionResultAllow = None
     PermissionResultDeny = None
     ToolPermissionContext = None
@@ -1386,6 +1388,15 @@ class ClaudeSDK:
                         except (TypeError, ValueError):
                             # If not serializable, skip it
                             pass
+
+            # Serialize DeferredToolUse dataclass (not JSON-serializable by the loop above)
+            if ResultMessage and isinstance(sdk_message, ResultMessage) and sdk_message.deferred_tool_use:
+                dt = sdk_message.deferred_tool_use
+                message_dict["deferred_tool_use"] = {
+                    "id": dt.id,
+                    "name": dt.name,
+                    "input": dt.input,
+                }
 
             # For unknown objects, add string representation as content
             if message_type == "unknown":
