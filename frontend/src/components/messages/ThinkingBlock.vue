@@ -14,7 +14,7 @@
       <small class="text-muted ms-auto">{{ contentLength }} characters</small>
     </div>
 
-    <div v-if="isExpanded" class="thinking-content mt-2 p-3 bg-light rounded border">
+    <div v-if="isExpanded" class="thinking-content mt-2 p-3 rounded">
       <div class="thinking-text" ref="thinkingRef" v-html="renderedThinking"></div>
     </div>
   </div>
@@ -56,9 +56,15 @@ function toggleExpanded() {
 
 <style scoped>
 .thinking-block {
-  border: 1px solid rgba(13, 202, 240, 0.25);
+  border: 1px solid rgba(var(--bs-info-rgb), 0.25);
   border-radius: 0.375rem;
   overflow: hidden;
+}
+
+.thinking-content {
+  background: var(--bs-secondary-bg);
+  border: 1px solid var(--bs-border-color);
+  border-radius: 0.375rem;
 }
 
 .thinking-header {
@@ -67,7 +73,7 @@ function toggleExpanded() {
 }
 
 .thinking-header:hover {
-  background-color: rgba(13, 202, 240, 0.15) !important;
+  background-color: rgba(var(--bs-info-rgb), 0.15) !important;
 }
 
 .cursor-pointer {
@@ -76,7 +82,7 @@ function toggleExpanded() {
 
 .thinking-label {
   font-weight: 500;
-  color: #0dcaf0;
+  color: var(--bs-info);
 }
 
 .thinking-text {
@@ -85,18 +91,18 @@ function toggleExpanded() {
   font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
   font-size: 0.95rem;
   line-height: 1.6;
-  color: #495057;
+  color: var(--bs-body-color);
 }
 
 .thinking-text :deep(pre) {
-  background: #f8f9fa;
+  background: var(--bs-tertiary-bg);
   padding: 0.75rem;
   border-radius: 0.25rem;
   overflow-x: auto;
 }
 
 .thinking-text :deep(code) {
-  background: #e9ecef;
+  background: var(--bs-tertiary-bg);
   padding: 0.2rem 0.4rem;
   border-radius: 0.2rem;
   font-family: 'Courier New', monospace;

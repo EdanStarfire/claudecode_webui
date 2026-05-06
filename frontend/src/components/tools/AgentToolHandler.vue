@@ -137,7 +137,7 @@ defineExpose({ summary, params, result })
 
 .task-description {
   padding: 0.75rem;
-  background: #fff;
+  background: var(--bs-body-bg);
   border-left: 1px solid var(--tool-border, #e2e8f0);
   border-right: 1px solid var(--tool-border, #e2e8f0);
 }
@@ -156,7 +156,7 @@ defineExpose({ summary, params, result })
 }
 
 .task-prompt-container {
-  background: #fff;
+  background: var(--bs-body-bg);
   border: 1px solid var(--tool-border, #e2e8f0);
   border-radius: 0 0 var(--tool-radius, 4px) var(--tool-radius, 4px);
   border-top: none;

@@ -247,8 +247,8 @@ function toggleExpand() {
   align-items: center;
   gap: 6px;
   padding: 4px 14px;
-  background: #f1f5f9;
-  border: 1px solid #e2e8f0;
+  background: var(--bs-secondary-bg);
+  border: 1px solid var(--bs-border-color);
   border-radius: 20px;
   max-width: 80%;
 }

@@ -603,11 +603,8 @@ function normalizeMessage(message) {
 .messages-area {
   flex: 1;
   overflow: auto;
-  background: #ffffff;
+  background: var(--bs-body-bg);
   padding: 8px 0;
 }
 
-.messages-area.theme-red {
-  background: #fff5f5;
-}
 </style>

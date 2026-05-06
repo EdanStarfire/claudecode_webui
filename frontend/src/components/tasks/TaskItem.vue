@@ -135,7 +135,7 @@ const statusClass = computed(() => {
 }
 
 .task-item:hover {
-  background-color: #f8f9fa;
+  background-color: var(--bs-secondary-bg);
 }
 
 .task-row {
@@ -164,7 +164,7 @@ const statusClass = computed(() => {
 }
 
 .chevron-icon {
-  color: #6c757d;
+  color: var(--bs-secondary-color);
   flex-shrink: 0;
   transition: transform 0.2s ease;
 }
@@ -175,9 +175,9 @@ const statusClass = computed(() => {
 
 .task-details {
   padding: 0.5rem 0.75rem 0.5rem 2.5rem;
-  background: #f8f9fa;
+  background: var(--bs-tertiary-bg);
   font-size: 0.85rem;
-  border-left: 3px solid #0d6efd;
+  border-left: 3px solid var(--bs-link-color);
   margin-left: 0.75rem;
 }
 
@@ -188,16 +188,16 @@ const statusClass = computed(() => {
 
 /* Status-based styling */
 .status-pending .task-text {
-  color: #495057;
+  color: var(--bs-body-color);
 }
 
 .status-in-progress .task-text {
-  color: #0d6efd;
+  color: var(--bs-link-color);
   font-style: italic;
 }
 
 .status-in-progress .spinner-border {
-  color: #0d6efd;
+  color: var(--bs-link-color);
 }
 
 .status-completed {
@@ -206,6 +206,6 @@ const statusClass = computed(() => {
 
 .status-completed .task-text {
   text-decoration: line-through;
-  color: #6c757d;
+  color: var(--bs-secondary-color);
 }
 </style>

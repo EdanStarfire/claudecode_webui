@@ -411,7 +411,7 @@ defineExpose({
 }
 
 .question-text {
-  color: #1e293b;
+  color: var(--bs-body-color);
   font-size: var(--tool-font-size, 13px);
 }
 
@@ -425,23 +425,23 @@ defineExpose({
   padding: 0.5rem 0.75rem;
   border: 1px solid var(--tool-border, #e2e8f0);
   border-radius: var(--tool-radius, 4px);
-  background: #fff;
+  background: var(--bs-body-bg);
   transition: all 0.15s ease;
 }
 
 .option-item:hover {
-  background: #f0f7ff;
+  background: var(--bs-secondary-bg);
   border-color: #0d6efd;
 }
 
 .option-item.selected {
-  background: #e7f1ff;
+  background: rgba(59, 130, 246, 0.15);
   border-color: #0d6efd;
 }
 
 .option-label {
   font-weight: 500;
-  color: #1e293b;
+  color: var(--bs-body-color);
 }
 
 .option-description {

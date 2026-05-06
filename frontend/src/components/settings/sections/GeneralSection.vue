@@ -673,16 +673,17 @@ onMounted(() => {
 }
 
 .chip-select-input {
-  background: transparent;
+  background: var(--bs-body-bg);
+  color: var(--bs-body-color);
   border: none;
   outline: none;
-  color: inherit;
   font-size: 11px;
   font-weight: 500;
   cursor: pointer;
   padding: 0 2px;
   appearance: auto;
   max-width: 140px;
+  border-radius: 4px;
 }
 
 .chip-no-templates {

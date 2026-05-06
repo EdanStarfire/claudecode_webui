@@ -119,7 +119,7 @@ function removeAttachment(index) {
   flex-wrap: wrap;
   gap: 0.5rem;
   padding: 0.5rem;
-  background: var(--bs-gray-100);
+  background: var(--bs-tertiary-bg);
   border-radius: 4px;
   margin-bottom: 0.25rem;
 }
@@ -129,8 +129,8 @@ function removeAttachment(index) {
   align-items: center;
   gap: 0.5rem;
   padding: 0.375rem 0.5rem;
-  background: white;
-  border: 1px solid var(--bs-gray-300);
+  background: var(--bs-body-bg);
+  border: 1px solid var(--bs-border-color);
   border-radius: 4px;
   font-size: 0.875rem;
   max-width: 200px;
@@ -173,12 +173,12 @@ function removeAttachment(index) {
   text-overflow: ellipsis;
   white-space: nowrap;
   font-weight: 500;
-  color: var(--bs-gray-700);
+  color: var(--bs-body-color);
 }
 
 .attachment-size {
   font-size: 0.75rem;
-  color: var(--bs-gray-500);
+  color: var(--bs-secondary-color);
 }
 
 .btn-remove {
@@ -188,7 +188,7 @@ function removeAttachment(index) {
   padding: 0;
   border: none;
   background: transparent;
-  color: var(--bs-gray-500);
+  color: var(--bs-secondary-color);
   cursor: pointer;
   display: flex;
   align-items: center;

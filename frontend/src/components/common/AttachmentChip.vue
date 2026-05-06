@@ -60,12 +60,12 @@ function handleClick() {
   align-items: center;
   gap: 4px;
   padding: 3px 8px;
-  background: rgba(255, 255, 255, 0.7);
-  border: 1px solid #c7d2fe;
+  background: var(--bs-secondary-bg);
+  border: 1px solid var(--bs-border-color);
   border-radius: 12px;
   font-size: 12px;
   font-family: 'Courier New', monospace;
-  color: #374151;
+  color: var(--bs-body-color);
   white-space: nowrap;
   max-width: 200px;
   overflow: hidden;
@@ -74,12 +74,12 @@ function handleClick() {
 
 .attachment-chip.clickable {
   cursor: pointer;
-  color: #3730a3;
+  color: var(--bs-link-color);
 }
 
 .attachment-chip.clickable:hover {
-  background: rgba(238, 242, 255, 0.9);
-  border-color: #818cf8;
+  background: var(--bs-tertiary-bg);
+  border-color: var(--bs-link-color);
 }
 
 .attachment-chip-name {
@@ -88,18 +88,18 @@ function handleClick() {
 }
 
 .attachment-chip-size {
-  color: #94a3b8;
+  color: var(--bs-secondary-color);
   font-size: 10px;
   flex-shrink: 0;
 }
 
 .attachment-chip-dl {
   text-decoration: none;
-  color: #3730a3;
+  color: var(--bs-link-color);
   flex-shrink: 0;
 }
 
 .attachment-chip-dl:hover {
-  color: #1e1b8a;
+  color: var(--bs-link-hover-color);
 }
 </style>

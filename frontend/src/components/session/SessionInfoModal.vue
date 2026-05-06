@@ -168,7 +168,7 @@
             <!-- System Prompt -->
             <div v-if="displayData.systemPrompt" class="mb-3">
               <h6 class="text-muted">System Prompt</h6>
-              <pre class="bg-light p-2 rounded small" style="max-height: 200px; overflow-y: auto;">{{ formatSystemPrompt(displayData.systemPrompt) }}</pre>
+              <pre class="bg-body-secondary p-2 rounded small" style="max-height: 200px; overflow-y: auto;">{{ formatSystemPrompt(displayData.systemPrompt) }}</pre>
             </div>
 
             <!-- SDK Session Info (git branch, summary) -->
@@ -196,7 +196,7 @@
               </h6>
               <pre
                 v-if="showRawData"
-                class="bg-light p-2 rounded small"
+                class="bg-body-secondary p-2 rounded small"
                 style="max-height: 300px; overflow-y: auto;"
               >{{ JSON.stringify(sessionData, null, 2) }}</pre>
             </div>
@@ -444,16 +444,16 @@ pre {
 
 /* Read-only path input styling */
 .path-input {
-  background-color: #f8f9fa;
+  background-color: var(--bs-tertiary-bg);
   cursor: text;
-  color: #495057;
+  color: var(--bs-body-color);
   overflow-x: auto;
   white-space: nowrap;
   font-size: 0.875rem;
 }
 
 .path-input:focus {
-  background-color: #f8f9fa;
+  background-color: var(--bs-tertiary-bg);
   outline: 2px solid #0d6efd;
   outline-offset: 2px;
 }

@@ -308,7 +308,7 @@ function statusBadgeClass(status) {
 
 .mcp-server-row {
   border-radius: 0.25rem;
-  background: var(--bs-gray-100, #f8f9fa);
+  background: var(--bs-tertiary-bg);
 }
 
 .mcp-server-row + .mcp-server-row {

@@ -141,12 +141,12 @@ defineExpose({ summary, params, result })
 }
 
 .bash-description {
-  color: #495057;
+  color: var(--bs-body-color);
 }
 
 .bash-flags {
   font-size: var(--tool-code-font-size, 11px);
-  color: #6c757d;
+  color: var(--bs-secondary-color);
   font-family: 'Courier New', monospace;
   background: var(--tool-bg-header, #f1f5f9);
   padding: 0.25rem 0.5rem;

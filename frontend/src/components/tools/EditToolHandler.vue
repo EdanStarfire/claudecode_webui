@@ -156,7 +156,7 @@ defineExpose({ summary, params, result })
 }
 
 .edit-diff-container {
-  background: #fff;
+  background: var(--bs-body-bg);
   border: 1px solid var(--tool-border, #e2e8f0);
   border-radius: 0 0 var(--tool-radius, 4px) var(--tool-radius, 4px);
   overflow: hidden;
@@ -212,43 +212,43 @@ defineExpose({ summary, params, result })
 }
 
 .diff-line-removed {
-  background: #ffebe9;
-  color: #24292f;
+  background: rgba(220, 38, 38, 0.12);
+  color: var(--bs-body-color);
 }
 
 .diff-line-removed .diff-marker {
-  background: #ffcecb;
+  background: rgba(220, 38, 38, 0.25);
   color: #dc3545;
 }
 
 .diff-line-added {
-  background: #dafbe1;
-  color: #24292f;
+  background: rgba(34, 197, 94, 0.1);
+  color: var(--bs-body-color);
 }
 
 .diff-line-added .diff-marker {
-  background: #abf2bc;
+  background: rgba(34, 197, 94, 0.25);
   color: #198754;
 }
 
 .diff-line-context {
-  background: #fff;
-  color: #57606a;
+  background: var(--bs-body-bg);
+  color: var(--bs-body-color);
 }
 
 .diff-line-context .diff-marker {
-  background: #f6f8fa;
-  color: #57606a;
+  background: var(--bs-secondary-bg);
+  color: var(--bs-secondary-color);
 }
 
 .diff-line-hunk {
-  background: #f6f8fa;
-  color: #57606a;
+  background: var(--bs-tertiary-bg);
+  color: var(--bs-secondary-color);
   font-weight: 600;
 }
 
 .diff-line-hunk .diff-marker {
-  background: #e1e4e8;
+  background: var(--bs-tertiary-bg);
   color: #0969da;
 }
 

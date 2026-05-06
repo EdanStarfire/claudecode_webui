@@ -89,7 +89,7 @@ function showEditModal() {
   gap: 6px;
   padding: 6px 12px;
   border-radius: 10px;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--bs-border-color);
   cursor: pointer;
   transition: all 0.15s;
   white-space: nowrap;
@@ -100,16 +100,16 @@ function showEditModal() {
 }
 
 .project-pill:hover {
-  background: #f1f5f9;
+  background: var(--bs-secondary-bg);
 }
 
 .project-pill.browsing {
-  background: #f1f5f9;
-  border-color: #e2e8f0;
+  background: var(--bs-secondary-bg);
+  border-color: var(--bs-border-color);
 }
 
 .project-pill.active {
-  background: #eff6ff;
+  background: rgba(59, 130, 246, 0.15);
   border-color: #3b82f6;
 }
 
@@ -121,7 +121,7 @@ function showEditModal() {
 .pill-name {
   font-size: 12px;
   font-weight: 500;
-  color: #1e293b;
+  color: var(--bs-emphasis-color);
   max-width: 120px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -129,14 +129,14 @@ function showEditModal() {
 
 .project-pill.active .pill-name {
   font-weight: 600;
-  color: #1d4ed8;
+  color: var(--bs-link-color);
 }
 
 .pill-count {
   font-size: 10px;
   font-weight: 600;
-  color: #64748b;
-  background: #e2e8f0;
+  color: var(--bs-secondary-color);
+  background: var(--bs-tertiary-bg);
   padding: 0 5px;
   border-radius: 8px;
   line-height: 1.6;
@@ -144,16 +144,16 @@ function showEditModal() {
 }
 
 .pill-count:hover {
-  background: #cbd5e1;
+  background: var(--bs-secondary-bg);
 }
 
 .project-pill.active .pill-count {
-  background: #bfdbfe;
-  color: #1d4ed8;
+  background: rgba(59, 130, 246, 0.2);
+  color: var(--bs-link-color);
 }
 
 .project-pill.active .pill-count:hover {
-  background: #93c5fd;
+  background: rgba(59, 130, 246, 0.3);
 }
 
 .pill-status-bar {
@@ -177,5 +177,5 @@ function showEditModal() {
 .seg.idle { background: #22c55e; }
 .seg.waiting { background: #ffc107; }
 .seg.error { background: #ef4444; }
-.seg.none { background: #e2e8f0; }
+.seg.none { background: var(--bs-border-color); }
 </style>

@@ -89,7 +89,13 @@ const statusBadgeClass = computed(() => {
 
 .tool-item {
   border-radius: 0.25rem;
-  background: var(--bs-gray-100, #f8f9fa);
+  background: var(--bs-tertiary-bg);
+  color: var(--bs-body-color);
+}
+
+.tool-item code {
+  color: var(--bs-code-color);
+  background: transparent;
 }
 
 .tool-item + .tool-item {

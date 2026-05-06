@@ -56,8 +56,8 @@ function showCreateProjectModal() {
 <style scoped>
 .project-pill-bar {
   height: 44px;
-  background: #fff;
-  border-bottom: 1px solid #e2e8f0;
+  background: var(--bs-body-bg);
+  border-bottom: 1px solid var(--bs-border-color);
   display: flex;
   align-items: center;
   gap: 4px;
@@ -71,7 +71,7 @@ function showCreateProjectModal() {
 }
 
 .project-pill-bar::-webkit-scrollbar-thumb {
-  background: #cbd5e1;
+  background: var(--bs-border-color);
   border-radius: 3px;
 }
 
@@ -79,9 +79,9 @@ function showCreateProjectModal() {
   width: 28px;
   height: 28px;
   border-radius: 8px;
-  border: 1px dashed #cbd5e1;
+  border: 1px dashed var(--bs-border-color);
   background: transparent;
-  color: #94a3b8;
+  color: var(--bs-secondary-color);
   font-size: 16px;
   font-weight: 300;
   cursor: pointer;
@@ -95,13 +95,9 @@ function showCreateProjectModal() {
 .pill-add-btn:hover {
   border-color: #3b82f6;
   color: #3b82f6;
-  background: #eff6ff;
+  background: rgba(59, 130, 246, 0.1);
 }
 
-.project-pill-bar.theme-red {
-  background: #fff5f5;
-  border-bottom-color: #fecaca;
-}
 
 @media (max-width: 767px) {
   .project-pill-bar {

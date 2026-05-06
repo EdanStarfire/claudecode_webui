@@ -267,7 +267,7 @@ onUnmounted(() => {
 .folder-list {
   max-height: 400px;
   overflow-y: auto;
-  border: 1px solid #dee2e6;
+  border: 1px solid var(--bs-border-color);
   border-radius: 0.25rem;
 }
 
@@ -277,10 +277,10 @@ onUnmounted(() => {
 }
 
 .folder-item:hover {
-  background-color: #f8f9fa;
+  background-color: var(--bs-secondary-bg);
 }
 
 .folder-item.selected {
-  background-color: #e7f3ff;
+  background-color: rgba(59, 130, 246, 0.15);
 }
 </style>

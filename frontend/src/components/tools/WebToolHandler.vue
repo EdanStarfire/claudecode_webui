@@ -171,7 +171,7 @@ defineExpose({ summary, params, result })
 
 .web-prompt-container {
   padding: 0.75rem;
-  background: #fff;
+  background: var(--bs-body-bg);
   border-left: 1px solid var(--tool-border, #e2e8f0);
   border-right: 1px solid var(--tool-border, #e2e8f0);
 }
@@ -186,7 +186,7 @@ defineExpose({ summary, params, result })
 .prompt-content {
   font-family: 'Courier New', monospace;
   font-size: var(--tool-code-font-size, 11px);
-  color: #495057;
+  color: var(--bs-body-color);
   line-height: 1.4;
 }
 
@@ -196,7 +196,7 @@ defineExpose({ summary, params, result })
   gap: 0.5rem;
   flex-wrap: wrap;
   padding: 0.75rem;
-  background: #fff;
+  background: var(--bs-body-bg);
   border: 1px solid var(--tool-border, #e2e8f0);
   border-radius: 0 0 var(--tool-radius, 4px) var(--tool-radius, 4px);
   border-top: none;
@@ -209,8 +209,8 @@ defineExpose({ summary, params, result })
 }
 
 .domain-badge {
-  background: #e7f1ff;
-  color: #084298;
+  background: rgba(59, 130, 246, 0.15);
+  color: var(--bs-link-color);
   padding: 0.2rem 0.5rem;
   border-radius: var(--tool-radius, 4px);
   font-size: 0.75rem;
