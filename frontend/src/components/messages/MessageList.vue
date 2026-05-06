@@ -20,6 +20,16 @@
           v-else-if="item.type === 'compaction'"
           :messages="item.messages"
         />
+
+        <!-- Date separator -->
+        <div
+          v-else-if="item.type === 'date_separator'"
+          class="date-separator"
+          role="separator"
+          aria-label="Date divider"
+        >
+          <span class="date-separator-label">{{ item.label }}</span>
+        </div>
       </template>
 
       <!-- Issue #662: Truncation banner after last assistant message when response was truncated -->
@@ -53,6 +63,7 @@ import MessageItem from './MessageItem.vue'
 import CompactionEventGroup from './CompactionEventGroup.vue'
 import TruncationBanner from './TruncationBanner.vue'
 import { useTTSReadAloud } from '@/composables/useTTSReadAloud'
+import { parseTimestamp, formatDateSeparatorLabel } from '@/utils/time'
 
 const messageStore = useMessageStore()
 const sessionStore = useSessionStore()
@@ -115,8 +126,34 @@ const displayableItems = computed(() => {
   }
 
   // Second pass: Group tools to parent assistant messages
-  return groupToolsToParentMessages(items)
+  // Third pass: Inject date separators between items on different calendar dates
+  return injectDateSeparators(groupToolsToParentMessages(items))
 })
+
+function timestampForItem(item) {
+  if (item.type === 'compaction') return item.messages[0]?.timestamp
+  return item.message?.timestamp
+}
+
+function localDateKey(timestamp) {
+  return parseTimestamp(timestamp).toDateString()
+}
+
+function injectDateSeparators(items) {
+  if (items.length === 0) return items
+  const out = []
+  let prevKey = null
+  for (const item of items) {
+    const ts = timestampForItem(item)
+    const key = ts ? localDateKey(ts) : null
+    if (prevKey !== null && key !== null && key !== prevKey) {
+      out.push({ type: 'date_separator', label: formatDateSeparatorLabel(ts) })
+    }
+    out.push(item)
+    if (key !== null) prevKey = key
+  }
+  return out
+}
 
 /**
  * Group tools from content-less assistant messages to the most recent
@@ -607,4 +644,28 @@ function normalizeMessage(message) {
   padding: 8px 0;
 }
 
+.date-separator {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 12px 0;
+  position: relative;
+}
+
+.date-separator::before,
+.date-separator::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--bs-border-color, rgba(0, 0, 0, 0.1));
+}
+
+.date-separator-label {
+  padding: 0 12px;
+  font-size: 0.8125rem;
+  color: var(--bs-secondary-color, #6c757d);
+  text-transform: none;
+  white-space: nowrap;
+  user-select: none;
+}
 </style>

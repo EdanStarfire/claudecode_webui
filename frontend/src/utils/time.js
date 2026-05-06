@@ -60,6 +60,26 @@ export function formatFullTimestamp(timestamp) {
 }
 
 /**
+ * Format timestamp as a calendar-date label using local timezone.
+ * Returns "Today" / "Yesterday" for the last two days, otherwise
+ * a long absolute date like "Thursday, May 1, 2026".
+ */
+export function formatDateSeparatorLabel(timestamp) {
+  const date = parseTimestamp(timestamp)
+  const today = new Date()
+  const yesterday = new Date()
+  yesterday.setDate(today.getDate() - 1)
+
+  const sameLocalDate = (a, b) => a.toDateString() === b.toDateString()
+
+  if (sameLocalDate(date, today)) return 'Today'
+  if (sameLocalDate(date, yesterday)) return 'Yesterday'
+  return date.toLocaleDateString(undefined, {
+    weekday: 'long', year: 'numeric', month: 'long', day: 'numeric'
+  })
+}
+
+/**
  * Get relative time (e.g., "2 minutes ago")
  *
  * @param {number|string} timestamp - Timestamp from backend
