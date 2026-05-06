@@ -38,6 +38,8 @@
     --diff-line-hunk-color:    #0969da;
     --diff-line-info-bg:       #f6f8fa;
     --diff-line-info-color:    #6c757d;
+    --table-stripe-bg: rgba(0, 0, 0, 0.035);
+    --table-header-bg: rgba(0, 0, 0, 0.06);
 }
 
 /* ========== STANDARD DARK — slate/navy palette ========== */
@@ -82,6 +84,8 @@
     --diff-line-hunk-color:    #79c0ff;
     --diff-line-info-bg:       var(--bs-secondary-bg);
     --diff-line-info-color:    var(--bs-secondary-color);
+    --table-stripe-bg: rgba(255, 255, 255, 0.05);
+    --table-header-bg: rgba(255, 255, 255, 0.09);
 }
 
 /* ========== SENSITIVE LIGHT (red-tinted light) ========== */
@@ -109,6 +113,8 @@
     --diff-line-hunk-color:    #0969da;
     --diff-line-info-bg:       #f6f8fa;
     --diff-line-info-color:    #6c757d;
+    --table-stripe-bg: rgba(0, 0, 0, 0.035);
+    --table-header-bg: rgba(0, 0, 0, 0.06);
 }
 
 /* ========== SENSITIVE DARK (red-tinted dark) ========== */
@@ -154,6 +160,8 @@
     --diff-line-hunk-color:    #f48fb1;
     --diff-line-info-bg:       var(--bs-secondary-bg);
     --diff-line-info-color:    var(--bs-secondary-color);
+    --table-stripe-bg: rgba(255, 255, 255, 0.04);
+    --table-header-bg: rgba(255, 255, 255, 0.08);
 }
 
 /* ========== AGENT COLOR PALETTE (per theme) ========== */
@@ -1291,12 +1299,12 @@ button:focus {
 }
 
 .markdown-content th {
-    background: var(--bs-secondary-bg);
+    background: var(--table-header-bg);
     font-weight: 600;
 }
 
 .markdown-content tr:nth-child(even) {
-    background: var(--bs-tertiary-bg);
+    background: var(--table-stripe-bg);
 }
 
 /* Horizontal rules */

@@ -375,14 +375,18 @@ function openAttachmentPreview(att) {
 
 .message-text :deep(table th),
 .message-text :deep(table td) {
-  border: 1px solid #6c757d;
+  border: 1px solid var(--bs-border-color);
   padding: 0.5rem;
   text-align: left;
 }
 
 .message-text :deep(table th) {
-  background-color: rgba(0, 0, 0, 0.05);
+  background-color: var(--table-header-bg);
   font-weight: 600;
+}
+
+.message-text :deep(table tr:nth-child(even)) {
+  background: var(--table-stripe-bg);
 }
 
 /* File Attachments */

@@ -364,8 +364,12 @@ const hasAnythingToShow = computed(() => {
 }
 
 .msg-text :deep(table th) {
-  background-color: rgba(0, 0, 0, 0.04);
+  background-color: var(--table-header-bg);
   font-weight: 600;
+}
+
+.msg-text :deep(table tr:nth-child(even)) {
+  background: var(--table-stripe-bg);
 }
 
 /* TTS content row layout */

@@ -895,8 +895,12 @@ function handleImageError(event) {
 }
 
 .markdown-content :deep(th) {
-  background: var(--bs-tertiary-bg);
+  background: var(--table-header-bg);
   font-weight: 600;
+}
+
+.markdown-content :deep(tr:nth-child(even)) {
+  background: var(--table-stripe-bg);
 }
 
 .markdown-content :deep(hr) {

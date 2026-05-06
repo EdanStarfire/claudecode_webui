@@ -356,8 +356,12 @@ function truncate(text, maxLength) {
 }
 
 .msg-text :deep(table th) {
-  background-color: var(--bs-secondary-bg);
+  background-color: var(--table-header-bg);
   font-weight: 600;
+}
+
+.msg-text :deep(table tr:nth-child(even)) {
+  background: var(--table-stripe-bg);
 }
 
 /* Attachment chips */
