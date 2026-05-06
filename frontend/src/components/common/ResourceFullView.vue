@@ -447,6 +447,8 @@ function printContent() {
 
   const doc = iframe.contentDocument || iframe.contentWindow.document
   doc.open()
+  // Print stylesheet runs in an isolated iframe with no access to CSS variables.
+  // Hex values here are intentional — print output is always paper/light regardless of theme.
   doc.write(`<!DOCTYPE html>
 <html>
 <head>
@@ -654,7 +656,7 @@ function handleImageError(event) {
   width: 900px;
   display: flex;
   flex-direction: column;
-  background: #f8f9fa;
+  background: var(--bs-body-bg);
   border-radius: 8px;
   box-shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
   overflow: hidden;
@@ -665,8 +667,8 @@ function handleImageError(event) {
   align-items: center;
   justify-content: space-between;
   padding: 12px 16px;
-  border-bottom: 1px solid #dee2e6;
-  background: #fff;
+  border-bottom: 1px solid var(--bs-border-color);
+  background: var(--bs-secondary-bg);
   flex-shrink: 0;
 }
 
@@ -679,14 +681,14 @@ function handleImageError(event) {
   margin: 0;
   font-size: 0.95rem;
   font-weight: 600;
-  color: #212529;
+  color: var(--bs-emphasis-color);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
 .text-header .resource-meta {
-  color: #6c757d;
+  color: var(--bs-secondary-color, #6c757d);
   justify-content: flex-start;
   gap: 12px;
   margin-top: 2px;
@@ -697,10 +699,10 @@ function handleImageError(event) {
   align-items: center;
   gap: 6px;
   padding: 6px 12px;
-  background: #e9ecef;
-  border: 1px solid #ced4da;
+  background: var(--bs-secondary-bg);
+  border: 1px solid var(--bs-border-color);
   border-radius: 6px;
-  color: #495057;
+  color: var(--bs-body-color);
   font-size: 0.8rem;
   cursor: pointer;
   transition: background-color 0.2s, color 0.2s;
@@ -709,8 +711,8 @@ function handleImageError(event) {
 }
 
 :deep(.copy-btn:hover:not(:disabled)) {
-  background: #dee2e6;
-  color: #212529;
+  background: var(--bs-tertiary-bg);
+  color: var(--bs-emphasis-color);
 }
 
 :deep(.copy-btn:disabled) {
@@ -735,7 +737,7 @@ function handleImageError(event) {
   font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
   font-size: 0.85rem;
   line-height: 1.5;
-  color: #212529;
+  color: var(--bs-body-color);
   white-space: pre-wrap;
   word-wrap: break-word;
   background: transparent;
@@ -746,19 +748,19 @@ function handleImageError(event) {
   display: flex;
   align-items: center;
   gap: 8px;
-  color: #6c757d;
+  color: var(--bs-secondary-color, #6c757d);
   padding: 24px;
   justify-content: center;
 }
 
 .text-error {
-  color: #dc3545;
+  color: var(--bs-danger);
   padding: 24px;
   text-align: center;
 }
 
 .text-unavailable {
-  color: #6c757d;
+  color: var(--bs-secondary-color, #6c757d);
   padding: 24px;
   text-align: center;
   font-style: italic;
@@ -768,7 +770,7 @@ function handleImageError(event) {
 
 .display-mode-toggle {
   display: flex;
-  border: 1px solid #ced4da;
+  border: 1px solid var(--bs-border-color);
   border-radius: 6px;
   overflow: hidden;
   flex-shrink: 0;
@@ -777,24 +779,24 @@ function handleImageError(event) {
 
 .toggle-btn {
   padding: 5px 12px;
-  background: #e9ecef;
+  background: var(--bs-secondary-bg);
   border: none;
-  color: #495057;
+  color: var(--bs-body-color);
   font-size: 0.8rem;
   cursor: pointer;
   transition: background-color 0.15s, color 0.15s;
 }
 
 .toggle-btn:first-child {
-  border-right: 1px solid #ced4da;
+  border-right: 1px solid var(--bs-border-color);
 }
 
 .toggle-btn:hover:not(.active) {
-  background: #dee2e6;
+  background: var(--bs-tertiary-bg);
 }
 
 .toggle-btn.active {
-  background: #0d6efd;
+  background: var(--bs-primary, var(--bs-link-color));
   color: #fff;
 }
 
@@ -803,7 +805,7 @@ function handleImageError(event) {
 .markdown-content {
   font-size: 0.9rem;
   line-height: 1.6;
-  color: #212529;
+  color: var(--bs-body-color);
   word-wrap: break-word;
 }
 
@@ -816,11 +818,11 @@ function handleImageError(event) {
   margin-top: 1.2em;
   margin-bottom: 0.6em;
   font-weight: 600;
-  color: #1a1a1a;
+  color: var(--bs-emphasis-color);
 }
 
-.markdown-content :deep(h1) { font-size: 1.6rem; border-bottom: 1px solid #dee2e6; padding-bottom: 0.3em; }
-.markdown-content :deep(h2) { font-size: 1.35rem; border-bottom: 1px solid #dee2e6; padding-bottom: 0.3em; }
+.markdown-content :deep(h1) { font-size: 1.6rem; border-bottom: 1px solid var(--bs-border-color); padding-bottom: 0.3em; }
+.markdown-content :deep(h2) { font-size: 1.35rem; border-bottom: 1px solid var(--bs-border-color); padding-bottom: 0.3em; }
 .markdown-content :deep(h3) { font-size: 1.15rem; }
 
 .markdown-content :deep(p) {
@@ -838,13 +840,15 @@ function handleImageError(event) {
 }
 
 .markdown-content :deep(code) {
-  background: #e9ecef;
+  background: var(--bs-tertiary-bg);
+  color: var(--bs-code-color, var(--bs-body-color));
   padding: 0.15em 0.4em;
   border-radius: 3px;
   font-size: 0.85em;
   font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
 }
 
+/* OneDark code block — intentionally always-dark for syntax legibility; keep hardcoded */
 .markdown-content :deep(pre) {
   background: #282c34;
   color: #abb2bf;
@@ -861,15 +865,15 @@ function handleImageError(event) {
 }
 
 .markdown-content :deep(blockquote) {
-  border-left: 3px solid #ced4da;
+  border-left: 3px solid var(--bs-border-color);
   padding-left: 1em;
   margin-left: 0;
   margin-bottom: 0.8em;
-  color: #6c757d;
+  color: var(--bs-secondary-color, #6c757d);
 }
 
 .markdown-content :deep(a) {
-  color: #0d6efd;
+  color: var(--bs-link-color);
   text-decoration: none;
 }
 
@@ -885,19 +889,19 @@ function handleImageError(event) {
 
 .markdown-content :deep(th),
 .markdown-content :deep(td) {
-  border: 1px solid #dee2e6;
+  border: 1px solid var(--bs-border-color);
   padding: 6px 12px;
   text-align: left;
 }
 
 .markdown-content :deep(th) {
-  background: #f1f3f5;
+  background: var(--bs-tertiary-bg);
   font-weight: 600;
 }
 
 .markdown-content :deep(hr) {
   border: none;
-  border-top: 1px solid #dee2e6;
+  border-top: 1px solid var(--bs-border-color);
   margin: 1.2em 0;
 }
 
