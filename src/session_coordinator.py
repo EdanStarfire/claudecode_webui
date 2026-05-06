@@ -106,6 +106,46 @@ def _apply_resource_filters(
     return result
 
 
+def _normalize_result_usage(
+    usage: dict | None,
+    model_usage: dict | None,
+) -> tuple[dict, float | None]:
+    """Return (snake_case usage dict, aggregate cost from model_usage or None).
+
+    Prefers SDK 'usage' when it carries non-zero token counts. Otherwise
+    aggregates per-model 'model_usage' entries (camelCase keys, keyed by
+    model name) into the snake_case shape that AnalyticsStore.record_turn
+    already understands.
+    """
+    snake_keys = (
+        "input_tokens",
+        "output_tokens",
+        "cache_creation_input_tokens",
+        "cache_read_input_tokens",
+    )
+    if isinstance(usage, dict) and any(int(usage.get(k) or 0) for k in snake_keys):
+        return dict(usage), None
+
+    if not isinstance(model_usage, dict) or not model_usage:
+        return (dict(usage) if isinstance(usage, dict) else {}), None
+
+    agg = {k: 0 for k in snake_keys}
+    cost = 0.0
+    has_cost = False
+    for entry in model_usage.values():
+        if not isinstance(entry, dict):
+            continue
+        agg["input_tokens"] += int(entry.get("inputTokens") or 0)
+        agg["output_tokens"] += int(entry.get("outputTokens") or 0)
+        agg["cache_creation_input_tokens"] += int(entry.get("cacheCreationInputTokens") or 0)
+        agg["cache_read_input_tokens"] += int(entry.get("cacheReadInputTokens") or 0)
+        c = entry.get("costUSD")
+        if c is not None:
+            cost += float(c)
+            has_cost = True
+    return agg, (cost if has_cost else None)
+
+
 def _tail_read_lines(path: "Path", limit: int) -> list[str]:
     """Read the last `limit` lines from a file efficiently using a deque."""
     from collections import deque
@@ -2735,7 +2775,7 @@ class SessionCoordinator:
                 if subtype:
                     metadata["subtype"] = subtype
                 # Copy usage data
-                for key in ["usage", "duration_ms", "duration_api_ms", "total_cost_usd", "num_turns"]:
+                for key in ["usage", "model_usage", "duration_ms", "duration_api_ms", "total_cost_usd", "num_turns"]:
                     if key in data:
                         metadata[key] = data[key]
                 # Copy stop_reason for truncation detection
@@ -3957,8 +3997,12 @@ class SessionCoordinator:
                     if self.analytics_store:
                         try:
                             meta = parsed_message.metadata or {}
-                            usage = meta.get("usage") or {}
+                            usage, model_usage_cost = _normalize_result_usage(
+                                meta.get("usage"), meta.get("model_usage")
+                            )
                             sdk_cost = meta.get("total_cost_usd")
+                            if sdk_cost is None:
+                                sdk_cost = model_usage_cost
                             # Resolve model from session info
                             _sinfo = await self.session_manager.get_session_info(session_id)
                             _model = _sinfo.model if _sinfo else None

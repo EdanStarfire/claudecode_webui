@@ -1025,6 +1025,7 @@ class ResultMessageHandler(MessageHandler):
                 "num_turns": message_data.get("num_turns"),
                 "total_cost_usd": message_data.get("total_cost_usd"),
                 "usage": message_data.get("usage", {}),
+                "model_usage": message_data.get("model_usage"),
                 "stop_reason": message_data.get("stop_reason"),
                 "permission_denials": message_data.get("permission_denials", []),
                 "errors": message_data.get("errors"),
