@@ -242,7 +242,7 @@ watch(
 }
 
 .refresh-btn {
-  color: #6c757d;
+  color: var(--bs-secondary-color);
   text-decoration: none;
   display: flex;
   align-items: center;
@@ -252,7 +252,7 @@ watch(
 }
 
 .refresh-btn:hover {
-  color: #495057;
+  color: var(--bs-body-color);
 }
 
 .refresh-btn .spin {
@@ -273,7 +273,7 @@ watch(
 .empty-placeholder {
   text-align: center;
   padding: 32px 16px;
-  color: #94a3b8;
+  color: var(--bs-secondary-color);
   font-size: 12px;
   font-style: italic;
   display: flex;
@@ -287,19 +287,19 @@ watch(
   align-items: center;
   gap: 4px;
   background: none;
-  border: 1px solid #e2e8f0;
+  border: 1px solid var(--bs-border-color);
   border-radius: 4px;
   padding: 4px 10px;
   font-size: 11px;
   font-style: normal;
-  color: #64748b;
+  color: var(--bs-secondary-color);
   cursor: pointer;
 }
 
 .refresh-inline:hover {
-  color: #334155;
-  border-color: #cbd5e1;
-  background: #f8fafc;
+  color: var(--bs-body-color);
+  border-color: var(--bs-border-color);
+  background: var(--bs-tertiary-bg);
 }
 
 .refresh-inline:disabled {
@@ -313,7 +313,7 @@ watch(
 }
 
 .stats-bar {
-  background-color: #f8f9fa;
+  background-color: var(--bs-secondary-bg);
   font-size: 0.78rem;
 }
 
@@ -323,7 +323,7 @@ watch(
 }
 
 .file-item:hover {
-  background-color: #f0f0f0;
+  background-color: var(--bs-secondary-bg);
 }
 
 .status-icon {
@@ -335,10 +335,10 @@ watch(
   flex-shrink: 0;
 }
 
-.status-added { color: #198754; }
-.status-deleted { color: #dc3545; }
-.status-modified { color: #fd7e14; }
-.status-renamed { color: #0d6efd; }
+.status-added { color: var(--bs-success-text-emphasis, #198754); }
+.status-deleted { color: var(--bs-danger-text-emphasis, #dc3545); }
+.status-modified { color: var(--bs-warning-text-emphasis, #fd7e14); }
+.status-renamed { color: var(--bs-link-color); }
 
 .file-path {
   font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
@@ -364,13 +364,13 @@ watch(
 }
 
 .commit-header:hover {
-  background-color: #f0f0f0;
+  background-color: var(--bs-secondary-bg);
 }
 
 .commit-hash {
   font-size: 0.72rem;
-  color: #0d6efd;
-  background: #e7f1ff;
+  color: var(--bs-link-color);
+  background: var(--bs-tertiary-bg);
   padding: 1px 4px;
   border-radius: 3px;
   flex-shrink: 0;
@@ -379,8 +379,8 @@ watch(
 .wip-badge {
   font-size: 0.68rem;
   font-weight: 700;
-  color: #856404;
-  background: #fff3cd;
+  color: var(--bs-warning-text-emphasis, #664d03);
+  background: var(--bs-warning-bg-subtle, #fff3cd);
   padding: 1px 6px;
   border-radius: 3px;
   flex-shrink: 0;
@@ -397,7 +397,7 @@ watch(
 }
 
 .commit-files {
-  background-color: #fafafa;
+  background-color: var(--bs-secondary-bg);
 }
 
 .commit-files .file-item {
@@ -406,6 +406,6 @@ watch(
 }
 
 .commit-files .file-item:hover {
-  background-color: #f0f0f0;
+  background-color: var(--bs-secondary-bg);
 }
 </style>
