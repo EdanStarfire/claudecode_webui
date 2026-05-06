@@ -6,6 +6,7 @@ import { useMessageStore } from './message'
 import { useResourceStore } from './resource'
 import { useQueueStore } from './queue'
 import { useUIStore } from './ui'
+import { useEditHistoryStore } from './editHistory'
 import { notify } from '@/composables/useNotifications'
 import { getAuthToken, api } from '@/utils/api'
 
@@ -340,6 +341,8 @@ export const usePollingStore = defineStore('polling', () => {
           messageStore.clearMessages(resetSessionId)
           const resourceStore = useResourceStore()
           resourceStore.clearResources(resetSessionId)
+          const editHistoryStore = useEditHistoryStore()
+          editHistoryStore.clearHistory(resetSessionId)
           const uiStore = useUIStore()
           uiStore.setRateLimits(null)
           const sessionStore2 = useSessionStore()
