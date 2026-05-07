@@ -280,7 +280,7 @@ function formatSuggestion(suggestion) {
 .view-full-link {
   font-size: 11px;
   font-weight: 500;
-  color: #0d6efd;
+  color: var(--bs-link-color);
   cursor: pointer;
   text-decoration: none;
 }
