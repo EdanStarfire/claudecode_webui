@@ -215,18 +215,18 @@ function handleClick() {
 
 .agent-chip.active {
   border-color: #3b82f6;
-  background: var(--bs-secondary-bg);
+  background: var(--bs-tertiary-bg);
   box-shadow: 0 0 0 1px #3b82f6;
 }
 
 .agent-chip.child {
   border-color: var(--bs-border-color);
-  background: var(--bs-tertiary-bg);
+  background: var(--bs-secondary-bg);
 }
 
 .agent-chip.child.active {
   border-color: #3b82f6;
-  background: var(--bs-secondary-bg);
+  background: var(--bs-tertiary-bg);
   box-shadow: 0 0 0 1px #3b82f6;
 }
 
