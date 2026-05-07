@@ -1041,6 +1041,7 @@ class ResultMessageHandler(MessageHandler):
                 "has_permission_requests": False,
                 "has_permission_responses": False,
                 "deferred_tool_use": message_data.get("deferred_tool_use"),
+                "api_error_status": message_data.get("api_error_status"),
             }
         }
 
