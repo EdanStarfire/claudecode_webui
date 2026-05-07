@@ -281,38 +281,38 @@ function captureConfig() {
 
   sessionConfig.value = {
     working_directory: session.working_directory || '',
-    model: session.model || '',
+    model: session.config?.model || '',
     permission_mode: session.current_permission_mode || 'acceptEdits',
-    system_prompt: session.system_prompt || '',
-    override_system_prompt: session.override_system_prompt || false,
-    sandbox_enabled: session.sandbox_enabled || false,
+    system_prompt: session.config?.system_prompt || '',
+    override_system_prompt: session.config?.override_system_prompt || false,
+    sandbox_enabled: session.config?.sandbox_enabled || false,
   }
-  if (session.allowed_tools) {
-    sessionConfig.value.allowed_tools = [...session.allowed_tools]
+  if (session.config?.allowed_tools) {
+    sessionConfig.value.allowed_tools = [...session.config.allowed_tools]
   }
-  if (session.disallowed_tools) {
-    sessionConfig.value.disallowed_tools = [...session.disallowed_tools]
+  if (session.config?.disallowed_tools) {
+    sessionConfig.value.disallowed_tools = [...session.config.disallowed_tools]
   }
-  if (session.setting_sources) {
-    sessionConfig.value.setting_sources = [...session.setting_sources]
+  if (session.config?.setting_sources) {
+    sessionConfig.value.setting_sources = [...session.config.setting_sources]
   }
-  if (session.sandbox_config) {
-    sessionConfig.value.sandbox_config = { ...session.sandbox_config }
+  if (session.config?.sandbox_config) {
+    sessionConfig.value.sandbox_config = { ...session.config.sandbox_config }
   }
-  if (session.docker_enabled) {
+  if (session.config?.docker_enabled) {
     sessionConfig.value.docker_enabled = true
-    sessionConfig.value.docker_image = session.docker_image || null
-    sessionConfig.value.docker_extra_mounts = session.docker_extra_mounts || null
+    sessionConfig.value.docker_image = session.config?.docker_image || null
+    sessionConfig.value.docker_extra_mounts = session.config?.docker_extra_mounts || null
   }
-  if (session.thinking_mode) {
-    sessionConfig.value.thinking_mode = session.thinking_mode
-    sessionConfig.value.thinking_budget_tokens = session.thinking_budget_tokens || null
+  if (session.config?.thinking_mode) {
+    sessionConfig.value.thinking_mode = session.config.thinking_mode
+    sessionConfig.value.thinking_budget_tokens = session.config?.thinking_budget_tokens || null
   }
-  if (session.effort) {
-    sessionConfig.value.effort = session.effort
+  if (session.config?.effort) {
+    sessionConfig.value.effort = session.config.effort
   }
-  if (session.cli_path) {
-    sessionConfig.value.cli_path = session.cli_path
+  if (session.config?.cli_path) {
+    sessionConfig.value.cli_path = session.config.cli_path
   }
 
   configCaptured.value = true

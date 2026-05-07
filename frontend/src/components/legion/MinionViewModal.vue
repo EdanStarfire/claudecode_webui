@@ -74,10 +74,10 @@
             <div class="mb-3">
               <h6 class="text-muted">System Prompt</h6>
               <div
-                v-if="session.system_prompt"
+                v-if="session.config?.system_prompt"
                 class="bg-light p-2 rounded small"
                 style="max-height: 200px; overflow-y: auto; white-space: pre-wrap;"
-              >{{ session.system_prompt }}</div>
+              >{{ session.config?.system_prompt }}</div>
               <div v-else class="text-muted small">Not specified</div>
             </div>
 
