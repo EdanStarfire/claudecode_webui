@@ -177,7 +177,7 @@ const chipTooltip = computed(() => {
   if (props.session.role && props.session.role !== displayName.value) parts.push(`Role: ${props.session.role}`)
   if (props.session.sdk_generated_name) parts.push(`Title: ${props.session.sdk_generated_name}`)
   parts.push(`Status: ${statusText.value}`)
-  if (props.session.model) parts.push(`Model: ${props.session.model}`)
+  if (props.session.config?.model) parts.push(`Model: ${props.session.config.model}`)
   if (effectiveDockerEnabled.value) parts.push('Docker isolated')
   if (proxyMode.value === 'permit-all') parts.push('Network proxy: permit-all outbound')
   else if (proxyMode.value === 'restricted') parts.push('Network proxy: restricted to allowlist')

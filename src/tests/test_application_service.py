@@ -477,7 +477,7 @@ async def test_create_template_returns_dict(service, mock_coordinator):
 
 def _make_session_with_secrets(assigned_secrets=None, secret_placeholders=None):
     s = MagicMock()
-    s.assigned_secrets = assigned_secrets
+    s.config = {"assigned_secrets": assigned_secrets} if assigned_secrets is not None else {}
     s.secret_placeholders = secret_placeholders
     return s
 
@@ -494,6 +494,9 @@ async def test_issue_1219_resolves_from_placeholder_when_assigned_empty(service,
     mock_coordinator.credential_vault.resolve_secrets_for_assignment = AsyncMock(
         return_value=[{"name": "claudecode_token", "value": "tok123"}]
     )
+
+    # Verify production read path returns the expected names before the async call
+    assert service._resolve_writeable_secret_names(session) == ["claudecode_token"]
 
     result = await service.resolve_secrets_for_session("s1")
 
