@@ -8,6 +8,7 @@ import json
 
 import pytest
 
+from src.config_resolution import resolve_effective_config
 from src.session_manager import SessionState
 
 pytestmark = pytest.mark.slow
@@ -182,25 +183,26 @@ async def test_spawn_minion_with_template(legion_test_env):
 
     # Verify template was applied (system_prompt should include template)
     # Note: Template application affects permissions and system prompt
-    assert child_info.system_prompt is not None
+    effective = await resolve_effective_config(child_info, template_manager)
+    assert effective.system_prompt is not None
     # The system prompt should include the system_prompt we provided
-    assert "Test child with template" in child_info.system_prompt
+    assert "Test child with template" in effective.system_prompt
 
     # SECURITY CRITICAL: Verify template permissions were applied
     # Templates are a security mechanism to prevent privilege escalation
     template = await template_manager.get_template_by_name(template_name)
-    if template.permission_mode:
-        assert child_info.current_permission_mode == template.permission_mode, \
-            f"Child permission_mode should match template: {template.permission_mode}"
-    if template.allowed_tools:
+    if template.config.get("permission_mode"):
+        assert child_info.current_permission_mode == template.config["permission_mode"], \
+            f"Child permission_mode should match template: {template.config['permission_mode']}"
+    if template.config.get("allowed_tools"):
         # Verify template's allowed_tools are in child's allowed_tools
-        child_tools = set(child_info.allowed_tools or [])
-        template_tools = set(template.allowed_tools)
+        child_tools = set(effective.allowed_tools or [])
+        template_tools = set(template.config.get("allowed_tools"))
         assert template_tools.issubset(child_tools), \
-            f"Child should have template's allowed_tools: {template.allowed_tools}"
+            f"Child should have template's allowed_tools: {template.config.get('allowed_tools')}"
     # Verify template's system_prompt was prepended
-    if template.system_prompt:
-        assert template.system_prompt in child_info.system_prompt, \
+    if template.config.get("system_prompt"):
+        assert template.config["system_prompt"] in effective.system_prompt, \
             "Child system_prompt should include template's system_prompt"
 
 
