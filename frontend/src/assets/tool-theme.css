@@ -38,6 +38,8 @@
   /* Subagent badge purple — used by AgentToolHandler badges */
   --agent-badge-bg: #6f42c1;
   --agent-badge-text: #ffffff;
+  /* Lighter purple for foreground text on light backgrounds */
+  --agent-badge-accent: #6f42c1;
 
   /* File path tokens */
   --tool-path-bg: var(--bs-tertiary-bg);
@@ -57,6 +59,8 @@
 
   --agent-badge-bg: #5b21b6;
   --agent-badge-text: #ede9fe;
+  /* Light purple for foreground text on dark backgrounds */
+  --agent-badge-accent: #a78bfa;
 }
 
 /* Shared section container */

@@ -212,11 +212,11 @@ function openFullResult() {
 <style scoped>
 .subagent-timeline-bubble {
   margin-top: 8px;
-  border: 1px solid var(--bs-border-color);
+  border: 1px solid var(--agent-badge-bg);
+  border-left: 3px solid var(--agent-badge-bg);
   border-radius: 8px;
   background: var(--bs-secondary-bg);
   overflow: hidden;
-  box-shadow: inset 3px 0 0 var(--agent-badge-bg);
 }
 
 .subagent-header {
@@ -472,7 +472,7 @@ function openFullResult() {
   padding: 4px 12px;
   font-size: 11px;
   font-weight: 600;
-  color: var(--agent-badge-bg);
+  color: var(--agent-badge-accent);
   background: var(--bs-tertiary-bg);
   cursor: pointer;
   user-select: none;
@@ -486,7 +486,7 @@ function openFullResult() {
 }
 
 .prompt-chevron {
-  color: var(--agent-badge-bg);
+  color: var(--agent-badge-accent);
   flex-shrink: 0;
   transition: transform 0.2s ease;
 }
@@ -522,7 +522,6 @@ function openFullResult() {
 }
 
 .subagent-completed {
-  border-color: var(--tool-success-border);
 }
 
 .subagent-error {
