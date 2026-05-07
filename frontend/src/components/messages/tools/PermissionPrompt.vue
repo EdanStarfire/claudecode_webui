@@ -647,8 +647,8 @@ function autoResizeGuidance() {
 .suggestions-section {
   margin: 8px 0;
   padding: 8px 10px;
-  background: #eff6ff;
-  border: 1px solid #bfdbfe;
+  background: var(--perm-suggestion-bg);
+  border: 1px solid var(--perm-suggestion-border);
   border-radius: 4px;
   width: 100%;
   box-sizing: border-box;
@@ -657,13 +657,13 @@ function autoResizeGuidance() {
 .suggestions-label {
   font-size: 11px;
   font-weight: 600;
-  color: #1e40af;
+  color: var(--bs-link-color);
   margin-bottom: 4px;
 }
 
 .suggestion-group {
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
+  background: var(--bs-secondary-bg);
+  border: 1px solid var(--bs-border-color);
   border-radius: 4px;
   padding: 6px 8px;
   margin-bottom: 4px;
@@ -690,7 +690,7 @@ function autoResizeGuidance() {
 
 .suggestion-item code {
   font-size: 11px;
-  background: white;
+  background: var(--bs-body-bg);
   padding: 1px 4px;
   border-radius: 2px;
 }
@@ -709,7 +709,7 @@ function autoResizeGuidance() {
 
 .rule-label {
   font-size: 11px;
-  color: #1e40af;
+  color: var(--bs-link-color);
   font-weight: 500;
 }
 

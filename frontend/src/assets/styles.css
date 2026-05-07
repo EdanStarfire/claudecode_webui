@@ -40,6 +40,11 @@
     --diff-line-info-color:    #6c757d;
     --table-stripe-bg: rgba(0, 0, 0, 0.035);
     --table-header-bg: rgba(0, 0, 0, 0.06);
+    --perm-suggestion-bg: #eff6ff;
+    --perm-suggestion-border: #bfdbfe;
+    --perm-amber-suggestion-bg: #fffbf0;
+    --perm-amber-suggestion-border: #ffd666;
+    --perm-amber-suggestion-strong: #996600;
 }
 
 /* ========== STANDARD DARK — slate/navy palette ========== */
@@ -86,6 +91,11 @@
     --diff-line-info-color:    var(--bs-secondary-color);
     --table-stripe-bg: rgba(255, 255, 255, 0.05);
     --table-header-bg: rgba(255, 255, 255, 0.09);
+    --perm-suggestion-bg: rgba(59, 130, 246, 0.10);
+    --perm-suggestion-border: rgba(59, 130, 246, 0.30);
+    --perm-amber-suggestion-bg: rgba(245, 158, 11, 0.08);
+    --perm-amber-suggestion-border: rgba(245, 158, 11, 0.30);
+    --perm-amber-suggestion-strong: #fcd34d;
 }
 
 /* ========== SENSITIVE LIGHT (red-tinted light) ========== */
@@ -115,6 +125,11 @@
     --diff-line-info-color:    #6c757d;
     --table-stripe-bg: rgba(0, 0, 0, 0.035);
     --table-header-bg: rgba(0, 0, 0, 0.06);
+    --perm-suggestion-bg: #eff6ff;
+    --perm-suggestion-border: #bfdbfe;
+    --perm-amber-suggestion-bg: #fffbf0;
+    --perm-amber-suggestion-border: #ffd666;
+    --perm-amber-suggestion-strong: #996600;
 }
 
 /* ========== SENSITIVE DARK (red-tinted dark) ========== */
@@ -162,6 +177,11 @@
     --diff-line-info-color:    var(--bs-secondary-color);
     --table-stripe-bg: rgba(255, 255, 255, 0.04);
     --table-header-bg: rgba(255, 255, 255, 0.08);
+    --perm-suggestion-bg: rgba(59, 130, 246, 0.10);
+    --perm-suggestion-border: rgba(59, 130, 246, 0.30);
+    --perm-amber-suggestion-bg: rgba(245, 158, 11, 0.08);
+    --perm-amber-suggestion-border: rgba(245, 158, 11, 0.30);
+    --perm-amber-suggestion-strong: #fcd34d;
 }
 
 /* ========== ANALYTICS CHART PALETTE (per theme) ========== */
@@ -1088,8 +1108,8 @@ button:focus {
     display: flex;
     align-items: start;
     gap: 0.75rem;
-    background: #fffbf0;
-    border: 1px solid #ffd666;
+    background: var(--perm-amber-suggestion-bg);
+    border: 1px solid var(--perm-amber-suggestion-border);
     border-radius: 6px;
     padding: 0.75rem;
     margin: 0.75rem 0;
@@ -1108,11 +1128,11 @@ button:focus {
 .suggestion-content strong {
     display: block;
     margin-bottom: 0.25rem;
-    color: #996600;
+    color: var(--perm-amber-suggestion-strong);
 }
 
 .suggestion-content small {
-    color: #666;
+    color: var(--bs-secondary-color);
     font-size: 0.875rem;
 }
 
