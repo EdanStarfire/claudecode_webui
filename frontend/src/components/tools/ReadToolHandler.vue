@@ -21,6 +21,7 @@
         <div class="content-header">
           <span class="content-label">Image Preview:</span>
           <span class="image-badge">{{ imageMimeType }}</span>
+          <a class="view-full-link" @click.stop="openFullImage">View Full</a>
         </div>
         <div class="image-container">
           <img
@@ -135,6 +136,11 @@ const previewContent = computed(() => {
 
 function openFullContent() {
   resourceStore.openWithDirectContent(`Read: ${fileName.value}`, resultContent.value)
+}
+
+function openFullImage() {
+  if (!imageData.value) return
+  resourceStore.openWithDirectImage(`Read: ${fileName.value}`, imageData.value, imageMimeType.value)
 }
 
 const summary = computed(() => `Read: ${filePath.value}`)
