@@ -24,7 +24,7 @@
 
         <!-- Navigation - Previous -->
         <button
-          v-if="!isDirectContent && totalResources > 1"
+          v-if="!isDirectContent && !isDirectImage && totalResources > 1"
           class="nav-btn nav-prev"
           @click.stop="prevResource"
           title="Previous (Left Arrow)"
@@ -34,8 +34,28 @@
           </svg>
         </button>
 
+        <!-- Direct Image Container (e.g. Read tool image result) -->
+        <div v-if="isDirectImage" class="image-container" @click.stop>
+          <img
+            :src="`data:${resourceStore.directImageMime};base64,${resourceStore.directImageData}`"
+            :alt="resourceStore.directTitle || 'Image'"
+            class="full-image"
+            @error="handleImageError"
+          />
+          <div class="resource-info">
+            <h5 v-if="resourceStore.directTitle" class="resource-title">
+              {{ resourceStore.directTitle }}
+            </h5>
+            <div class="resource-meta">
+              <span v-if="resourceStore.directImageMime" class="meta-item">
+                {{ resourceStore.directImageMime.toUpperCase() }}
+              </span>
+            </div>
+          </div>
+        </div>
+
         <!-- Direct Content Container (for tool output full view) -->
-        <div v-if="isDirectContent" class="text-container" @click.stop>
+        <div v-else-if="isDirectContent" class="text-container" @click.stop>
           <div class="text-header">
             <div class="text-header-info">
               <h5 class="text-filename">{{ resourceStore.directTitle || 'Full Content' }}</h5>
@@ -174,7 +194,7 @@
 
         <!-- Navigation - Next -->
         <button
-          v-if="!isDirectContent && totalResources > 1"
+          v-if="!isDirectContent && !isDirectImage && totalResources > 1"
           class="nav-btn nav-next"
           @click.stop="nextResource"
           title="Next (Right Arrow)"
@@ -185,12 +205,12 @@
         </button>
 
         <!-- Position Indicator -->
-        <div v-if="!isDirectContent && totalResources > 1" class="position-indicator">
+        <div v-if="!isDirectContent && !isDirectImage && totalResources > 1" class="position-indicator">
           {{ currentIndex + 1 }} / {{ totalResources }}
         </div>
 
         <!-- Thumbnail Strip (for multiple resources) -->
-        <div v-if="!isDirectContent && totalResources > 1" class="thumbnail-strip">
+        <div v-if="!isDirectContent && !isDirectImage && totalResources > 1" class="thumbnail-strip">
           <div
             v-for="(resource, index) in resources"
             :key="resource.resource_id || resource.image_id"
@@ -248,9 +268,10 @@ const resources = computed(() => {
 })
 
 const isDirectContent = computed(() => resourceStore.isDirectContentMode)
+const isDirectImage = computed(() => resourceStore.isDirectImageMode)
 
 const isCurrentImage = computed(() => {
-  return !isDirectContent.value && resourceStore.isImageResource(currentResource.value)
+  return !isDirectContent.value && !isDirectImage.value && resourceStore.isImageResource(currentResource.value)
 })
 
 const isCurrentText = computed(() => {
@@ -366,7 +387,7 @@ function handleKeydown(event) {
     case 'm':
       if (isDirectContent.value && directTextContent.value) {
         displayMode.value = displayMode.value === 'raw' ? 'markdown' : 'raw'
-      } else if (!isCurrentImage.value && textContent.value) {
+      } else if (!isCurrentImage.value && !isDirectImage.value && textContent.value) {
         displayMode.value = displayMode.value === 'raw' ? 'markdown' : 'raw'
       }
       break

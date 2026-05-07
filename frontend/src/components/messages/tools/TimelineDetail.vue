@@ -94,8 +94,29 @@ const hasLongResult = computed(() => {
   return resultContent.value.length > 500 || resultContent.value.split('\n').length > 15
 })
 
+const imageBlock = computed(() => {
+  const content = props.toolCall?.result?.content
+  if (!Array.isArray(content)) return null
+  for (const block of content) {
+    if (block?.type === 'image' && block?.source?.type === 'base64' && block?.source?.data) {
+      return {
+        data: block.source.data,
+        mime: block.source.media_type || 'image/png',
+      }
+    }
+  }
+  return null
+})
+
 function openFullResult() {
   const toolName = props.toolCall.name || 'Tool'
+  if (imageBlock.value) {
+    const filePath = props.toolCall.input?.file_path
+    const fileName = filePath ? filePath.split('/').pop() : null
+    const title = fileName ? `${toolName}: ${fileName}` : `${toolName} Result`
+    resourceStore.openWithDirectImage(title, imageBlock.value.data, imageBlock.value.mime)
+    return
+  }
   resourceStore.openWithDirectContent(`${toolName} Result`, resultContent.value)
 }
 

@@ -38,6 +38,8 @@ export const useResourceStore = defineStore('resource', () => {
   // Direct content mode (for viewing tool output in full screen)
   const directContent = ref(null)
   const directTitle = ref(null)
+  const directImageData = ref(null)
+  const directImageMime = ref(null)
 
   // Loading state (legacy global; per-session loading is in paginationBySession)
   const loading = ref(false)
@@ -453,6 +455,8 @@ export const useResourceStore = defineStore('resource', () => {
     fullViewOpen.value = false
     directContent.value = null
     directTitle.value = null
+    directImageData.value = null
+    directImageMime.value = null
   }
 
   /**
@@ -462,6 +466,20 @@ export const useResourceStore = defineStore('resource', () => {
   function openWithDirectContent(title, content) {
     directTitle.value = title
     directContent.value = content
+    directImageData.value = null
+    directImageMime.value = null
+    fullViewOpen.value = true
+  }
+
+  /**
+   * Open full view with a direct base64 image (no resource required).
+   * Used by ReadToolHandler and TimelineDetail when tool result contains image content.
+   */
+  function openWithDirectImage(title, base64Data, mimeType) {
+    directTitle.value = title
+    directContent.value = null
+    directImageData.value = base64Data
+    directImageMime.value = mimeType || 'image/png'
     fullViewOpen.value = true
   }
 
@@ -469,6 +487,11 @@ export const useResourceStore = defineStore('resource', () => {
    * Whether the full view is showing direct content (not a resource)
    */
   const isDirectContentMode = computed(() => directContent.value != null)
+
+  /**
+   * Whether the full view is showing a direct image (not a resource)
+   */
+  const isDirectImageMode = computed(() => directImageData.value != null)
 
   /**
    * Navigate to next resource in full view
@@ -684,6 +707,8 @@ export const useResourceStore = defineStore('resource', () => {
     textContentCache,
     directContent,
     directTitle,
+    directImageData,
+    directImageMime,
 
     // Computed - Resources
     currentResources,
@@ -693,6 +718,7 @@ export const useResourceStore = defineStore('resource', () => {
     currentFullViewResource,
     fullViewTotalResources,
     isDirectContentMode,
+    isDirectImageMode,
 
     // Computed - Images (backward compatibility)
     currentImages,
@@ -735,6 +761,7 @@ export const useResourceStore = defineStore('resource', () => {
     handleResourceRemoved,
     openFullView,
     openWithDirectContent,
+    openWithDirectImage,
     closeFullView,
     nextResource,
     prevResource,
