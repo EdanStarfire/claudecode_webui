@@ -68,13 +68,17 @@
                   {{ currentProxyStatus.sidecar_running ? 'Running' : 'Stopped' }}
                 </span>
               </div>
+              <div v-if="isPermitAllProxy" class="alert alert-warning py-2 px-3 mb-2 small">
+                <strong>Permit-all outbound mode.</strong> Any destination is reachable.
+                Secret injection remains scoped per-secret via <code>target_hosts</code>.
+              </div>
               <div v-if="currentProxyStatus.effective_domains?.length" class="mb-1">
                 <small class="text-muted">Allowed Domains ({{ currentProxyStatus.effective_domains.length }}):</small>
                 <div class="d-flex flex-wrap gap-1 mt-1">
                   <span
                     v-for="d in currentProxyStatus.effective_domains"
                     :key="d"
-                    class="badge bg-success-subtle text-success-emphasis"
+                    :class="d === '*' ? 'badge bg-warning-subtle text-warning-emphasis' : 'badge bg-success-subtle text-success-emphasis'"
                   >{{ d }}</span>
                 </div>
               </div>
@@ -282,6 +286,10 @@ const currentBlockedLog = computed(() => {
   if (!sessionId.value) return []
   return proxyStore.blockedLog(sessionId.value)
 })
+
+const isPermitAllProxy = computed(() =>
+  currentProxyStatus.value?.effective_domains?.includes('*') ?? false
+)
 
 // Filter out mcp__* tools from pre-authorized list (shown in MCP section instead)
 const nonMcpTools = computed(() => {

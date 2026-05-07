@@ -186,7 +186,7 @@ export const FIELD_SCHEMAS = {
       widget: 'tag-list',
       showWhen: (config) => !!config.docker_enabled && !!config.docker_proxy_enabled,
       placeholder: 'e.g., api.example.com',
-      description: 'Additional domains allowed through the proxy (added to global defaults).',
+      description: 'Additional domains allowed through the proxy (added to global defaults). Use "*" to permit any outbound destination (secret injection still scoped per-secret via target_hosts).',
     },
     {
       key: 'assigned_secrets',

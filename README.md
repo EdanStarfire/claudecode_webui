@@ -142,6 +142,29 @@ Its three main pillars are:
 
 ---
 
+## Docker Proxy — Outbound Operating Modes
+
+When `docker_proxy_enabled` is `true`, the session's outbound traffic passes through a
+mitmproxy sidecar. Three modes control how destinations are filtered:
+
+1. **Proxy disabled** — unrestricted outbound, no injection, no response scrubbing.
+2. **Proxy enabled with `"*"` in `docker_proxy_allowlist_domains`** — any outbound destination
+   is reachable through the proxy. Credential injection is still scoped per-secret via each
+   secret's `target_hosts` list (empty `target_hosts` means unconstrained injection). Full
+   response-side scrubbing remains active. Use this mode when agents need broad internet
+   access (browsing, arbitrary API calls) while keeping credentials safe. Note: a secret
+   with an empty `target_hosts` will be injected on every destination — `target_hosts` is
+   the only restriction in this mode.
+3. **Proxy enabled with an explicit domain list** — only destinations that suffix-match an
+   entry in the combined allowlist (global defaults + `docker_proxy_allowlist_domains`) can
+   be reached. Requests to unlisted hosts receive NXDOMAIN from CoreDNS and a 403 from
+   mitmproxy. Per-secret scoped injection and response scrubbing remain active.
+
+The AgentChip 🛡️ badge tooltip and the Session Info modal Proxy Status section indicate
+which mode is active for a given session.
+
+---
+
 ## Configuration & Customization
 
 - ⚡ Per-session MCP server configuration (STDIO / SSE / HTTP, OAuth 2.1, enable/disable)

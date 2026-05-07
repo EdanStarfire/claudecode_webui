@@ -61,7 +61,13 @@
     </div>
 
     <!-- Proxy badge -->
-    <div v-if="effectiveDockerProxyEnabled" class="ac-proxy-badge" title="Network proxy active" aria-label="Network proxy active">
+    <div
+      v-if="effectiveDockerProxyEnabled"
+      class="ac-proxy-badge"
+      :class="proxyMode === 'permit-all' ? 'ac-proxy-badge--permit-all' : ''"
+      :title="proxyMode === 'permit-all' ? 'Network proxy: permit-all outbound' : 'Network proxy: restricted to allowlist'"
+      :aria-label="proxyMode === 'permit-all' ? 'Network proxy: permit-all outbound' : 'Network proxy: restricted to allowlist'"
+    >
       🛡️
     </div>
   </div>
@@ -111,6 +117,15 @@ const effectiveDockerProxyEnabled = computed(() => {
   if (props.session.config?.docker_proxy_enabled === true) return true
   const ec = sessionStore.effectiveConfigBySession.get(props.session.session_id)
   return ec?.docker_proxy_enabled === true
+})
+
+const proxyMode = computed(() => {
+  if (!effectiveDockerProxyEnabled.value) return null
+  const domains = props.session.config?.docker_proxy_allowlist_domains
+  if (Array.isArray(domains) && domains.includes('*')) return 'permit-all'
+  const ec = sessionStore.effectiveConfigBySession.get(props.session.session_id)
+  if (Array.isArray(ec?.docker_proxy_allowlist_domains) && ec.docker_proxy_allowlist_domains.includes('*')) return 'permit-all'
+  return 'restricted'
 })
 
 const displayName = computed(() =>
@@ -164,7 +179,8 @@ const chipTooltip = computed(() => {
   parts.push(`Status: ${statusText.value}`)
   if (props.session.model) parts.push(`Model: ${props.session.model}`)
   if (effectiveDockerEnabled.value) parts.push('Docker isolated')
-  if (effectiveDockerProxyEnabled.value) parts.push('Network proxy active')
+  if (proxyMode.value === 'permit-all') parts.push('Network proxy: permit-all outbound')
+  else if (proxyMode.value === 'restricted') parts.push('Network proxy: restricted to allowlist')
   return parts.join('\n')
 })
 
@@ -331,6 +347,10 @@ function handleClick() {
   top: -4px;
   font-size: 0.9rem;
   line-height: 1;
+}
+
+.ac-proxy-badge--permit-all {
+  filter: sepia(1) saturate(3) hue-rotate(10deg);
 }
 
 /* Ghost chip variant */
