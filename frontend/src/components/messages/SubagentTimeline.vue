@@ -212,10 +212,11 @@ function openFullResult() {
 <style scoped>
 .subagent-timeline-bubble {
   margin-top: 8px;
-  border: 1px solid #d8b4fe;
+  border: 1px solid var(--bs-border-color);
   border-radius: 8px;
-  background: #faf5ff;
+  background: var(--bs-secondary-bg);
   overflow: hidden;
+  box-shadow: inset 3px 0 0 var(--agent-badge-bg);
 }
 
 .subagent-header {
@@ -223,14 +224,14 @@ function openFullResult() {
   align-items: center;
   gap: 8px;
   padding: 8px 12px;
-  background: #f3e8ff;
+  background: var(--bs-tertiary-bg);
   cursor: pointer;
   user-select: none;
   flex-wrap: wrap;
 }
 
 .subagent-header:hover {
-  background: #ede4fb;
+  background: var(--bs-secondary-bg);
 }
 
 .subagent-icon {
@@ -239,8 +240,8 @@ function openFullResult() {
 }
 
 .subagent-type-badge {
-  background: #7c3aed;
-  color: white;
+  background: var(--agent-badge-bg);
+  color: var(--agent-badge-text);
   padding: 2px 8px;
   border-radius: 4px;
   font-size: 11px;
@@ -252,7 +253,7 @@ function openFullResult() {
 
 .subagent-description {
   font-size: 13px;
-  color: #4c1d95;
+  color: var(--bs-body-color);
   flex: 1;
   min-width: 0;
   overflow: hidden;
@@ -300,18 +301,18 @@ function openFullResult() {
   align-items: center;
   gap: 8px;
   padding: 6px 12px;
-  background: #ede9fe;
-  border-top: 1px solid #d8b4fe;
+  background: var(--bs-tertiary-bg);
+  border-top: 1px solid var(--bs-border-color);
   font-size: 12px;
-  color: #4c1d95;
+  color: var(--bs-body-color);
   min-height: 30px;
 }
 
 .activity-spinner {
   width: 12px;
   height: 12px;
-  border: 2px solid #d8b4fe;
-  border-top-color: #7c3aed;
+  border: 2px solid var(--bs-border-color);
+  border-top-color: var(--agent-badge-bg);
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
   flex-shrink: 0;
@@ -332,8 +333,8 @@ function openFullResult() {
 }
 
 .activity-tool-badge {
-  background: #7c3aed;
-  color: white;
+  background: var(--agent-badge-bg);
+  color: var(--agent-badge-text);
   padding: 1px 6px;
   border-radius: 3px;
   font-size: 10px;
@@ -343,7 +344,7 @@ function openFullResult() {
 }
 
 .activity-timestamp {
-  color: #7c3aed;
+  color: var(--agent-badge-bg);
   font-size: 11px;
   flex-shrink: 0;
   opacity: 0.7;
@@ -370,8 +371,8 @@ function openFullResult() {
 .placeholder-spinner {
   width: 14px;
   height: 14px;
-  border: 2px solid #d8b4fe;
-  border-top-color: #7c3aed;
+  border: 2px solid var(--bs-border-color);
+  border-top-color: var(--agent-badge-bg);
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
 }
@@ -517,18 +518,18 @@ function openFullResult() {
 
 /* Status-specific border colors */
 .subagent-executing {
-  border-color: #93c5fd;
+  border-color: var(--bs-primary-border-subtle);
 }
 
 .subagent-completed {
-  border-color: #86efac;
+  border-color: var(--tool-success-border);
 }
 
 .subagent-error {
-  border-color: #fca5a5;
+  border-color: var(--tool-error-border);
 }
 
 .subagent-orphaned {
-  border-color: #fcd34d;
+  border-color: var(--bs-warning-border-subtle);
 }
 </style>
