@@ -239,6 +239,7 @@ iptables -A OUTPUT -p udp -j DROP
 # Issue #1214: Truncate SOCKS5 log at sidecar start so each session begins clean.
 if [ -d "$LOG_DIR" ]; then
     : > "$LOG_DIR/socks5.log"
+    chown 9999:9999 "$LOG_DIR/socks5.log"
 fi
 
 echo "Starting mitmdump (transparent + SOCKS5) on :8080 / 127.0.0.1:1080..."
