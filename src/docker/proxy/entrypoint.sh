@@ -16,6 +16,9 @@ cat > "$COREFILE" <<'HEADER'
 HEADER
 
 for domain in $DOMAINS; do
+    if [ "$domain" = "*" ]; then
+        continue
+    fi
     if echo "$domain" | grep -q '\.internal$'; then
         # .internal names are resolved via /etc/hosts (--add-host injection).
         # 8.8.8.8 cannot resolve Docker/WebUI-internal names; skip forward zone.
@@ -30,7 +33,18 @@ ${domain} {
 EOF
 done
 
-cat >> "$COREFILE" <<'CATCHALL'
+# Catch-all: forwarding when sentinel present, NXDOMAIN otherwise.
+if echo "$DOMAINS" | grep -qx '\*'; then
+    cat >> "$COREFILE" <<'PERMITALL'
+
+. {
+    forward . 8.8.8.8 8.8.4.4
+    log
+}
+PERMITALL
+    echo "Corefile generated in PERMIT-ALL mode (sentinel present)"
+else
+    cat >> "$COREFILE" <<'CATCHALL'
 
 . {
     template IN A {
@@ -42,8 +56,8 @@ cat >> "$COREFILE" <<'CATCHALL'
     log
 }
 CATCHALL
-
-echo "Corefile generated with $(echo "$DOMAINS" | wc -w) domains"
+    echo "Corefile generated with $(echo "$DOMAINS" | wc -w) domains"
+fi
 
 # --- Start CoreDNS in background ---
 # Run as uid 9998 so the UDP default-deny OUTPUT rule can exempt it.

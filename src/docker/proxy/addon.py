@@ -552,6 +552,8 @@ class ProxyAddon:
             ctx.log.warn(f"[proxy] Failed to emit UI event {event_type}: {exc}")
 
     def _is_allowed(self, host: str) -> bool:
+        if "*" in self.allowed_domains:
+            return True
         return any(
             host == domain or host.endswith("." + domain)
             for domain in self.allowed_domains
