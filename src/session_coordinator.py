@@ -4009,9 +4009,15 @@ class SessionCoordinator:
                             sdk_cost = meta.get("total_cost_usd")
                             if sdk_cost is None:
                                 sdk_cost = model_usage_cost
-                            # Resolve model from session info
+                            # Resolve model via effective config (supports template-linked sessions)
                             _sinfo = await self.session_manager.get_session_info(session_id)
-                            _model = _sinfo.model if _sinfo else None
+                            if _sinfo:
+                                _eff = await resolve_effective_config(
+                                    _sinfo, self.template_manager, self.profile_manager
+                                )
+                                _model = _eff.model
+                            else:
+                                _model = None
                             # Lazily initialise turn_seq from DB on first use after restart
                             if session_id not in self._turn_seq_by_session:
                                 db_count = await self.analytics_store.get_turn_count(session_id)
