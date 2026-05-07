@@ -29,7 +29,7 @@
               <span class="ms-2">Loading git status...</span>
             </div>
 
-            <div v-else-if="gitStatus" class="card bg-light mb-3">
+            <div v-else-if="gitStatus" class="card bg-body-secondary mb-3">
               <div class="card-body py-2 px-3">
                 <div class="small">
                   <div><strong>Branch:</strong> {{ gitStatus.branch }}</div>
