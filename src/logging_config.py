@@ -108,7 +108,18 @@ class StandardizedFormatter(logging.Formatter):
         category = getattr(record, 'category', record.name.upper())
 
         # Format: YYYY-MM-DDTHH:mm:ss.mmm LEVEL - [CATEGORY] Message
-        return f"{timestamp}.{ms} {record.levelname} - [{category}] {record.getMessage()}"
+        formatted = f"{timestamp}.{ms} {record.levelname} - [{category}] {record.getMessage()}"
+
+        # Append exception traceback when present (preserves logger.exception() behavior)
+        if record.exc_info:
+            if not record.exc_text:
+                record.exc_text = self.formatException(record.exc_info)
+        if record.exc_text:
+            formatted = formatted + "\n" + record.exc_text
+        if record.stack_info:
+            formatted = formatted + "\n" + self.formatStack(record.stack_info)
+
+        return formatted
 
 
 class CategoryAdapter(logging.LoggerAdapter):
