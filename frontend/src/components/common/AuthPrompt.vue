@@ -75,7 +75,9 @@ async function handleSubmit() {
 }
 
 .auth-card {
-  background: #fff;
+  background: var(--bs-body-bg);
+  color: var(--bs-body-color);
+  border: 1px solid var(--bs-border-color);
   border-radius: 8px;
   padding: 2rem;
   width: 100%;
