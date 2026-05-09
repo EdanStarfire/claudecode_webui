@@ -7,18 +7,23 @@ due prompts to owning minions through SessionCoordinator.enqueue_message().
 
 import asyncio
 import json
+import shlex
+import time
 import uuid
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
+from src.docker_utils import find_session_container, run_command_in_container, run_command_on_host
 from src.logging_config import get_logger
 from src.models.schedule_models import (
     Schedule,
     ScheduleExecution,
     ScheduleStatus,
+    cap_stream,
     get_next_run,
     validate_cron_expression,
 )
+from src.session_manager import SessionState
 from src.task_utils import task_done_log_exception
 
 if TYPE_CHECKING:
@@ -38,6 +43,8 @@ class SchedulerService:
         self._task: asyncio.Task | None = None
         self._running = False
         self._schedule_broadcast_callback = None
+        # Per-session inflight script tracking (issue #1356)
+        self._inflight_scripts_by_session: dict[str, set[str]] = {}  # session_id -> {schedule_id}
 
     def set_schedule_broadcast_callback(self, callback):
         """Set callback for broadcasting schedule events to WebSocket clients.
@@ -87,7 +94,23 @@ class SchedulerService:
                 continue
             if schedule.next_run is None:
                 continue
-            if now >= schedule.next_run:
+            if now < schedule.next_run:
+                continue
+
+            if schedule.schedule_type == "script":
+                target_id = schedule.minion_id or schedule.ephemeral_agent_id
+                # Same-schedule overlap guard: skip if previous fire still in-flight
+                if schedule.schedule_id in self._inflight_scripts_by_session.get(target_id, set()):
+                    legion_logger.info(
+                        f"Skipping script schedule {schedule.schedule_id} — "
+                        "previous run still in progress"
+                    )
+                    schedule.next_run = get_next_run(schedule.cron_expression)
+                    continue
+                self._inflight_scripts_by_session.setdefault(target_id, set()).add(schedule.schedule_id)
+                t = asyncio.create_task(self._fire_script_with_cleanup(schedule, target_id, now))
+                t.add_done_callback(task_done_log_exception)
+            else:
                 await self._fire_schedule(schedule, now)
 
     # ── CRUD Operations ──
@@ -97,7 +120,7 @@ class SchedulerService:
         legion_id: str,
         name: str,
         cron_expression: str,
-        prompt: str,
+        prompt: str = "",
         minion_id: str | None = None,
         minion_name: str | None = None,
         reset_session: bool = False,
@@ -105,6 +128,9 @@ class SchedulerService:
         timeout_seconds: int = 3600,
         session_config: dict | None = None,
         ephemeral_agent_id: str | None = None,
+        schedule_type: str = "prompt",
+        script_command: str | None = None,
+        script_timeout_seconds: int = 60,
     ) -> Schedule:
         """Create a new schedule.
 
@@ -135,6 +161,9 @@ class SchedulerService:
             next_run=get_next_run(cron_expression),
             session_config=session_config,
             ephemeral_agent_id=ephemeral_agent_id,
+            schedule_type=schedule_type,
+            script_command=script_command,
+            script_timeout_seconds=script_timeout_seconds,
         )
 
         self._schedules[schedule.schedule_id] = schedule
@@ -185,7 +214,10 @@ class SchedulerService:
             if not validate_cron_expression(fields["cron_expression"]):
                 raise ValueError(f"Invalid cron expression: {fields['cron_expression']}")
 
-        allowed = {"name", "cron_expression", "prompt", "max_retries", "timeout_seconds", "session_config"}
+        allowed = {
+            "name", "cron_expression", "prompt", "max_retries", "timeout_seconds",
+            "session_config", "script_command", "script_timeout_seconds",
+        }
         for key, value in fields.items():
             if key in allowed:
                 setattr(schedule, key, value)
@@ -374,7 +406,15 @@ class SchedulerService:
         # Save next_run before firing (fire methods recalculate it for cron)
         saved_next_run = schedule.next_run
 
-        await self._fire_schedule(schedule, now, trigger="manual")
+        if schedule.schedule_type == "script":
+            target_id = schedule.minion_id or schedule.ephemeral_agent_id
+            self._inflight_scripts_by_session.setdefault(target_id, set()).add(schedule.schedule_id)
+            t = asyncio.create_task(
+                self._fire_script_with_cleanup(schedule, target_id, now, trigger="manual")
+            )
+            t.add_done_callback(task_done_log_exception)
+        else:
+            await self._fire_schedule(schedule, now, trigger="manual")
 
         # Restore next_run to preserve cron schedule
         schedule.next_run = saved_next_run
@@ -749,6 +789,236 @@ class SchedulerService:
             schedule.updated_at = datetime.now(UTC).timestamp()
             await self._persist_schedules(schedule.legion_id)
             await self._broadcast_schedule_event(schedule.legion_id, schedule)
+
+    # ── Script Schedule Helpers (issue #1356) ──
+
+    async def _ensure_session_active(self, session_id: str, timeout: float = 30.0) -> bool:
+        """Ensure the target session is ACTIVE before script execution.
+
+        Mirrors queue_processor.py auto-start pattern. start_session() is non-blocking;
+        polls session state until ACTIVE or timeout.
+        """
+        session_info = await self.system.session_coordinator.session_manager.get_session_info(session_id)
+        if not session_info:
+            return False
+        if session_info.state == SessionState.ERROR:
+            return False
+        if session_info.state == SessionState.ACTIVE:
+            return True
+
+        started = await self.system.session_coordinator.start_session(session_id)
+        if not started:
+            return False
+
+        deadline = asyncio.get_event_loop().time() + timeout
+        while asyncio.get_event_loop().time() < deadline:
+            info = await self.system.session_coordinator.session_manager.get_session_info(session_id)
+            if info and info.state == SessionState.ACTIVE:
+                return True
+            if info and info.state == SessionState.ERROR:
+                return False
+            await asyncio.sleep(0.5)
+        return False
+
+    def has_inflight_scripts(self, session_id: str) -> bool:
+        """Return True if any script schedule is currently running against this session.
+
+        Used by the queue processor to gate its post-item idle wait — the queue
+        must not advance to the next item while a script that may be about to
+        enqueue is still running.
+        """
+        return bool(self._inflight_scripts_by_session.get(session_id))
+
+    def _build_command_argv(
+        self,
+        schedule: "Schedule",
+        session_info,
+        docker_enabled: bool,
+    ) -> list[str]:
+        """Expand template variables in script_command and return shlex.split argv."""
+        import json as _json
+        import tempfile
+        from pathlib import Path
+
+        class _SafeFormatDict(dict):
+            def __missing__(self, key):
+                return "{" + key + "}"
+
+        session_data_payload = {
+            "session_id": session_info.session_id,
+            "name": session_info.name,
+            "state": session_info.state.value,
+            "working_directory": session_info.working_directory,
+            "config": session_info.config if hasattr(session_info, "config") else {},
+        }
+
+        # Build session_data_path on host for writing
+        data_dir = self.system.session_coordinator.data_dir
+        session_dir = data_dir / "sessions" / session_info.session_id
+        if session_dir.exists():
+            tmp_dir = session_dir / "tmp"
+            tmp_dir.mkdir(exist_ok=True, parents=True)
+            host_data_path = tmp_dir / f"schedule_{schedule.schedule_id}_data.json"
+        else:
+            # Fallback for defensive case
+            tf = tempfile.NamedTemporaryFile(delete=False, suffix=".json")
+            host_data_path = Path(tf.name)
+            tf.close()
+
+        host_data_path.write_text(_json.dumps(session_data_payload))
+
+        # Path as seen from inside the command
+        if docker_enabled:
+            cmd_data_path = f"/tmp/schedule_{schedule.schedule_id}_data.json"
+        else:
+            cmd_data_path = str(host_data_path)
+
+        expanded = (schedule.script_command or "").format_map(
+            _SafeFormatDict(
+                session_id=session_info.session_id,
+                working_dir=session_info.working_directory or "",
+                session_data=cmd_data_path,
+            )
+        )
+        return shlex.split(expanded)
+
+    async def _fire_script_with_cleanup(
+        self,
+        schedule: "Schedule",
+        target_id: str,
+        now: float,
+        trigger: str = "cron",
+    ):
+        """Wrapper that fires a script schedule and always removes from inflight set."""
+        try:
+            await self._fire_script_schedule(schedule, now, trigger=trigger)
+        finally:
+            session_set = self._inflight_scripts_by_session.get(target_id, set())
+            session_set.discard(schedule.schedule_id)
+            if not session_set:
+                self._inflight_scripts_by_session.pop(target_id, None)
+
+    async def _fire_script_schedule(self, schedule: "Schedule", now: float, trigger: str = "cron"):
+        """Fire a script schedule: auto-start session, run command, route outcome."""
+        target_id = schedule.minion_id or schedule.ephemeral_agent_id
+        started_clock = time.monotonic()
+
+        execution = ScheduleExecution(
+            execution_id=str(uuid.uuid4()),
+            schedule_id=schedule.schedule_id,
+            scheduled_time=schedule.next_run or now,
+            actual_time=now,
+            status="error",
+            minion_state="unknown",
+            trigger=trigger,
+            schedule_type="script",
+        )
+
+        stdout = stderr = ""
+        exit_code: int | None = None
+
+        try:
+            # 1. Auto-start (self-healing)
+            ok = await self._ensure_session_active(target_id)
+            if not ok:
+                raise RuntimeError(f"Could not start session {target_id}")
+
+            session_info = await self.system.session_coordinator.session_manager.get_session_info(target_id)
+            execution.minion_state = session_info.state.value
+            docker_enabled = bool(session_info.config.get("docker_enabled") if hasattr(session_info, "config") and session_info.config else False)
+            workdir = session_info.working_directory or None
+
+            # 2. Render template variables
+            try:
+                argv = self._build_command_argv(schedule, session_info, docker_enabled)
+            except Exception as e:
+                raise RuntimeError(f"Failed to parse script_command: {e}") from e
+
+            # 3. Execute
+            if docker_enabled:
+                container_id = None
+                for _ in range(3):
+                    container_id = await find_session_container(target_id)
+                    if container_id:
+                        break
+                    await asyncio.sleep(0.5)
+                if not container_id:
+                    raise RuntimeError("Container did not appear after session start")
+                exit_code, stdout, stderr, timed_out = await run_command_in_container(
+                    container_id, argv, schedule.script_timeout_seconds, workdir,
+                )
+            else:
+                exit_code, stdout, stderr, timed_out = await run_command_on_host(
+                    argv, schedule.script_timeout_seconds, workdir,
+                )
+
+            # 4. Outcome routing
+            if timed_out:
+                execution.status = "error"
+                execution.error_message = (
+                    f"Script exceeded timeout ({schedule.script_timeout_seconds}s)"
+                )
+            elif exit_code != 0:
+                execution.status = "error"
+                execution.error_message = f"Script exited with code {exit_code}"
+            elif stdout.strip() == "":
+                execution.status = "discarded"
+            else:
+                formatted = f"**[Scheduled Task: {schedule.name}]**\n\n{stdout.rstrip()}"
+
+                # Always enqueue immediately — no pre-enqueue wait.
+                # Cross-schedule serialization is on the dequeue side via
+                # queue_processor._wait_for_idle + has_inflight_scripts (§6.3).
+                result = await self.system.session_coordinator.enqueue_message(
+                    session_id=target_id,
+                    content=formatted,
+                    reset_session=schedule.reset_session,
+                    metadata={
+                        "source": trigger,
+                        "schedule_id": schedule.schedule_id,
+                        "schedule_name": schedule.name,
+                        "trigger_time": now,
+                        "script_filtered": True,
+                    },
+                )
+                execution.queue_id = result.get("queue_id")
+                execution.status = "delivered"
+
+        except Exception as e:
+            execution.status = "error"
+            execution.error_message = str(e)
+            if not stderr:
+                stderr = str(e)
+
+        # 5. Persist execution + schedule state
+        execution.exit_code = exit_code
+        execution.stdout = cap_stream(stdout)
+        execution.stderr = cap_stream(stderr)
+        execution.duration_ms = int((time.monotonic() - started_clock) * 1000)
+
+        schedule.last_run = now
+        schedule.last_status = execution.status
+        schedule.last_exit_code = exit_code
+        schedule.last_stdout = cap_stream(stdout)
+        schedule.last_stderr = cap_stream(stderr)
+        schedule.execution_count += 1
+
+        if execution.status == "error":
+            schedule.failure_count += 1
+            if schedule.failure_count > schedule.max_retries:
+                schedule.status = ScheduleStatus.PAUSED
+                schedule.next_run = None
+        else:
+            schedule.failure_count = 0
+
+        if schedule.status == ScheduleStatus.ACTIVE:
+            schedule.next_run = get_next_run(schedule.cron_expression)
+        schedule.updated_at = datetime.now(UTC).timestamp()
+
+        await self._persist_schedules(schedule.legion_id)
+        await self._append_execution(schedule.legion_id, execution)
+        await self._broadcast_execution_event(schedule.legion_id, execution)
+        await self._broadcast_schedule_event(schedule.legion_id, schedule)
 
     async def _handle_retry(self, schedule: Schedule):
         """Apply exponential backoff for retry: 60s, 120s, 240s, ..."""

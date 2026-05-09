@@ -51,6 +51,9 @@ IMAGE_NAME="${CLAUDE_DOCKER_IMAGE:-$DEFAULT_IMAGE}"
 CONTAINER_NAME="claude-code-$$"
 DOCKER_HOME="${CLAUDE_DOCKER_HOME:-/home/claude}"
 
+# Issue #1356: Session ID for container label (enables script schedule lookup)
+CLAUDE_SESSION_ID="${CLAUDE_DOCKER_SESSION_ID:-}"
+
 # Issue #781: Configurable resource limits
 MEMORY_LIMIT="${CLAUDE_DOCKER_MEMORY_LIMIT:-}"
 SHM_SIZE="${CLAUDE_DOCKER_SHM_SIZE:-256m}"
@@ -347,11 +350,18 @@ if [ -z "$PROXY_IMAGE" ]; then
     CRED_MOUNT_FLAGS="-v $HOME/.claude/.credentials.json:$DOCKER_HOME/.claude/.credentials.json"
 fi
 
+# Issue #1356: Session label flag for script schedule container lookup
+SESSION_LABEL_FLAGS=""
+if [ -n "$CLAUDE_SESSION_ID" ]; then
+    SESSION_LABEL_FLAGS="--label cc-webui-session-id=$CLAUDE_SESSION_ID"
+fi
+
 # Run the container (capture exit code for diagnostics)
 docker run \
     --rm \
     $DOCKER_FLAGS \
     --name "$CONTAINER_NAME" \
+    $SESSION_LABEL_FLAGS \
     -v "$WORKSPACE:$WORKSPACE" \
     -w "$WORKSPACE" \
     $CRED_MOUNT_FLAGS \

@@ -122,6 +122,25 @@
           </div>
         </template>
 
+        <!-- Schedule Type -->
+        <div class="form-group">
+          <label>Schedule Type</label>
+          <div class="mode-toggle">
+            <button
+              type="button"
+              class="mode-btn"
+              :class="{ active: form.schedule_type === 'prompt' }"
+              @click="form.schedule_type = 'prompt'"
+            >Prompt</button>
+            <button
+              type="button"
+              class="mode-btn"
+              :class="{ active: form.schedule_type === 'script' }"
+              @click="form.schedule_type = 'script'"
+            >Script</button>
+          </div>
+        </div>
+
         <!-- Name -->
         <div class="form-group">
           <label>Schedule Name</label>
@@ -148,8 +167,8 @@
           </div>
         </div>
 
-        <!-- Prompt -->
-        <div class="form-group">
+        <!-- Prompt (prompt type only) -->
+        <div v-if="form.schedule_type === 'prompt'" class="form-group">
           <label>Prompt</label>
           <textarea
             v-model="form.prompt"
@@ -158,6 +177,41 @@
             required
           ></textarea>
         </div>
+
+        <!-- Script command (script type only) -->
+        <template v-if="form.schedule_type === 'script'">
+          <div class="form-group">
+            <label>Command</label>
+            <textarea
+              v-model="form.script_command"
+              rows="2"
+              class="script-command-input"
+              placeholder="/path/to/script.sh {working_dir}"
+              required
+            ></textarea>
+            <div class="script-helper">
+              Available template variables: <code>{session_id}</code>, <code>{working_dir}</code>,
+              <code>{session_data}</code> (path to a JSON file written at fire time with session metadata).
+              stdout will be sent to the agent if exit 0 + non-empty; stderr is captured for debugging.
+            </div>
+          </div>
+          <div class="form-group">
+            <label>Script Timeout (seconds)</label>
+            <input
+              v-model.number="form.script_timeout_seconds"
+              type="number"
+              min="1"
+              max="3600"
+              class="timeout-input"
+            />
+          </div>
+          <!-- Auto-start hint (permanent mode only — ephemeral always auto-starts) -->
+          <div v-if="mode === 'permanent'" class="form-group">
+            <div class="autostart-hint">
+              The target session will be started automatically when this schedule fires if it is not currently running.
+            </div>
+          </div>
+        </template>
 
         <!-- Reset session toggle (only for permanent mode) -->
         <div v-if="mode === 'permanent'" class="form-group toggle-group">
@@ -223,6 +277,9 @@ const form = ref({
   cron_expression: '',
   prompt: '',
   reset_session: false,
+  schedule_type: 'prompt',
+  script_command: '',
+  script_timeout_seconds: 60,
 })
 
 const sessionConfig = ref({})
@@ -255,6 +312,10 @@ const cronError = computed(() => {
 })
 
 const isValid = computed(() => {
+  // Script type requires script_command
+  if (form.value.schedule_type === 'script' && !form.value.script_command.trim()) {
+    return false
+  }
   if (mode.value === 'permanent') {
     return !!form.value.minion_id
   }
@@ -383,6 +444,9 @@ async function submit() {
       cron_expression: form.value.cron_expression,
       prompt: form.value.prompt,
       reset_session: form.value.reset_session,
+      schedule_type: form.value.schedule_type,
+      script_command: form.value.schedule_type === 'script' ? form.value.script_command : null,
+      script_timeout_seconds: form.value.script_timeout_seconds,
     }
 
     if (mode.value === 'permanent') {
@@ -709,5 +773,44 @@ form {
 
 .btn-primary:hover:not(:disabled) {
   background: #4f46e5;
+}
+
+.script-command-input {
+  font-family: monospace;
+  font-size: 12px;
+}
+
+.script-helper {
+  font-size: 11px;
+  color: var(--bs-secondary-color);
+  margin-top: 4px;
+  line-height: 1.5;
+}
+
+.script-helper code {
+  font-family: monospace;
+  background: var(--bs-secondary-bg);
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-size: 11px;
+}
+
+.timeout-input {
+  width: 100px;
+  font-size: 13px;
+  padding: 6px 8px;
+  border: 1px solid var(--bs-border-color);
+  border-radius: 6px;
+  background: var(--bs-body-bg);
+  color: var(--bs-body-color);
+}
+
+.autostart-hint {
+  font-size: 11px;
+  color: var(--bs-secondary-color);
+  padding: 6px 8px;
+  background: var(--bs-secondary-bg);
+  border-radius: 4px;
+  border-left: 3px solid #6366f1;
 }
 </style>

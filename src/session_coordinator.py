@@ -1381,6 +1381,8 @@ class SessionCoordinator:
                     proxy_allowlist_file=proxy_allowlist_file,
                     # Issue #1179: Proxy-sidecar-only mounts
                     docker_proxy_extra_mounts=proxy_extra_mounts or None,
+                    # Issue #1356: label container for script schedule lookup
+                    session_id=session_id,
                 )
                 # Issue #1052: Tell claude-docker where the two SSH tmpdirs live.
                 # key_dir  → proxy-only mount at /run/ssh-private:ro
