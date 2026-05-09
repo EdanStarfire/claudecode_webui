@@ -25,15 +25,7 @@
           :disabled="!session"
           aria-label="Manage session"
         >
-          ⚙️ <span class="button-label">Manage</span>
-        </button>
-        <button
-          class="btn btn-sm btn-outline-secondary"
-          @click="showEdit"
-          :disabled="!session"
-          aria-label="Edit session"
-        >
-          🖊️ <span class="button-label">Edit</span>
+          🛠 <span class="button-label">Manage</span>
         </button>
       </div>
 
@@ -94,7 +86,6 @@
 
 <script setup>
 import { computed } from 'vue'
-import { useRouter } from 'vue-router'
 import { useSessionStore } from '@/stores/session'
 import { useUIStore } from '@/stores/ui'
 import RateLimitBadge from './RateLimitBadge.vue'
@@ -106,7 +97,6 @@ const props = defineProps({
   }
 })
 
-const router = useRouter()
 const sessionStore = useSessionStore()
 const uiStore = useUIStore()
 
@@ -160,10 +150,6 @@ const showInfo = () => {
 
 const showManage = () => {
   uiStore.showModal('manage-session', { session: session.value })
-}
-
-const showEdit = () => {
-  if (session.value) router.push(`/settings/session/${session.value.session_id}/general`)
 }
 
 const toggleReadAloud = () => {
