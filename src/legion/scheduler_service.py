@@ -829,37 +829,6 @@ class SchedulerService:
         """
         return bool(self._inflight_scripts_by_session.get(session_id))
 
-    async def _wait_for_reset_enqueue_safe(
-        self,
-        session_id: str,
-        exclude_schedule_id: str,
-        timeout: float = 10.0,
-    ) -> bool:
-        """Wait until it is safe to perform a reset-enqueue against session_id.
-
-        Two conditions must hold simultaneously:
-          1. session.is_processing == False  (no live agent run)
-          2. No OTHER script schedules are in flight against this session
-             (excludes exclude_schedule_id — the caller)
-
-        The FIFO queue's own reset mechanism handles dequeue serialization; Script B
-        can safely enqueue even if Script A's reset-enqueue is already in the queue.
-        """
-        deadline = asyncio.get_event_loop().time() + timeout
-        while True:
-            info = await self.system.session_coordinator.session_manager.get_session_info(session_id)
-            is_processing = bool(info.is_processing) if info else True
-
-            inflight = self._inflight_scripts_by_session.get(session_id, set())
-            other_scripts = bool(inflight - {exclude_schedule_id})
-
-            if (not is_processing) and (not other_scripts):
-                return True
-
-            if asyncio.get_event_loop().time() >= deadline:
-                return False
-            await asyncio.sleep(0.5)
-
     def _build_command_argv(
         self,
         schedule: "Schedule",
