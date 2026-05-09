@@ -6,8 +6,6 @@ reset-enqueue guard (2-condition variant), inflight tracking, migration.
 """
 
 import asyncio
-import json
-import uuid
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -17,13 +15,11 @@ from src.legion.scheduler_service import SchedulerService
 from src.models.schedule_models import (
     MAX_STREAM_BYTES,
     Schedule,
-    ScheduleExecution,
     ScheduleStatus,
     cap_stream,
     get_next_run,
 )
 from src.session_manager import SessionState
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
