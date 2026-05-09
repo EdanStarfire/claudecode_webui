@@ -101,7 +101,7 @@
             <!-- Hierarchy tree with User root node -->
             <div v-else class="hierarchy-tree">
               <!-- User Root Node -->
-              <div class="user-root-node mb-3 border rounded bg-white">
+              <div class="user-root-node mb-3 border rounded">
                 <div class="node-row">
                   <!-- Left Column: Status + Name (30%) -->
                   <div class="node-left">
@@ -189,7 +189,7 @@
     </div>
 
     <!-- Status bar -->
-    <div class="project-overview-statusbar border-top p-2 bg-light d-flex align-items-center justify-content-between">
+    <div class="project-overview-statusbar border-top p-2 bg-body-tertiary d-flex align-items-center justify-content-between">
       <small class="text-muted">
         Project Overview
       </small>
@@ -429,15 +429,15 @@ onUnmounted(() => {
 
 <style scoped>
 .project-overview {
-  background-color: #fff;
+  background-color: var(--bs-body-bg);
 }
 
 .project-overview-header {
-  background-color: #f8f9fa;
+  background-color: var(--bs-secondary-bg);
 }
 
 .project-overview-content {
-  background-color: #fff;
+  background-color: var(--bs-body-bg);
 }
 
 .project-overview-statusbar {
@@ -445,23 +445,23 @@ onUnmounted(() => {
 }
 
 .card {
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  box-shadow: 0 1px 3px rgba(var(--bs-emphasis-color-rgb, 0, 0, 0), 0.1);
 }
 
 .list-group-item-action:hover {
-  background-color: #f8f9fa;
+  background-color: var(--bs-secondary-bg);
 }
 
 /* Hierarchy tree styles */
 .hierarchy-tree {
-  background-color: #f8f9fa;
+  background-color: var(--bs-secondary-bg);
   padding: 0.5rem;
   border-radius: 0.25rem;
 }
 
 .user-root-node {
-  background-color: #ffffff;
-  border-color: #0d6efd !important;
+  background-color: var(--bs-body-bg);
+  border-color: var(--bs-link-color) !important;
   border-width: 2px !important;
   padding: 0.75rem;
 }
@@ -485,7 +485,7 @@ onUnmounted(() => {
   flex: 1;
   min-width: 0; /* Allow text truncation */
   padding-left: 1rem;
-  border-left: 1px solid #dee2e6;
+  border-left: 1px solid var(--bs-border-color);
 }
 
 .last-comm-preview {
@@ -494,12 +494,12 @@ onUnmounted(() => {
 }
 
 .comm-direction {
-  color: #6c757d;
+  color: var(--bs-secondary-color);
   font-size: 0.85rem;
 }
 
 .comm-content {
-  color: #212529;
+  color: var(--bs-body-color);
   word-wrap: break-word;
   cursor: help;
 }

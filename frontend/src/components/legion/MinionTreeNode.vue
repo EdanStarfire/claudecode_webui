@@ -3,7 +3,7 @@
     <!-- Sidebar Layout (vertical, single column) -->
     <div v-if="layout === 'sidebar'" class="minion-card minion-card-clickable border-start border-2 mb-2 d-flex align-items-center p-2" :class="{ active: isSelected }" @click="handleClick">
       <!-- Status Indicator Dot -->
-      <div class="status-dot me-2" :class="statusDotClass" :style="statusDotStyle"></div>
+      <div class="status-dot me-2" :class="statusDotClass"></div>
 
       <!-- Minion Info (Name + Latest Activity) -->
       <div class="minion-info flex-grow-1">
@@ -62,7 +62,7 @@
         <!-- Left Column: Status + Name (30%) -->
         <div class="node-left">
           <!-- Status Dot -->
-          <div class="status-dot me-2" :class="statusDotClass" :style="statusDotStyle"></div>
+          <div class="status-dot me-2" :class="statusDotClass"></div>
 
           <!-- Overseer Icon -->
           <span v-if="isOverseerWithChildren" class="me-2">👑</span>
@@ -143,7 +143,7 @@ import { useSessionStore } from '@/stores/session'
 import { useMessageStore } from '@/stores/message'
 import { useUIStore } from '@/stores/ui'
 import { compareAgents } from '@/utils/agentSort'
-import { getDisplayState, getStatusColor } from '@/composables/useSessionState'
+import { getDisplayState } from '@/composables/useSessionState'
 
 const props = defineProps({
   minionData: {
@@ -334,11 +334,6 @@ const statusDotClass = computed(() => {
   return classMap[state] || 'status-dot-grey'
 })
 
-// Status dot inline styles (matches SessionItem)
-const statusDotStyle = computed(() => ({
-  backgroundColor: getStatusColor(minionWithLiveData.value)
-}))
-
 // Latest message display (issue #291) - now uses live data
 const messagePrefix = computed(() => {
   const data = minionWithLiveData.value
@@ -440,8 +435,8 @@ function showManageModal() {
 
 <style scoped>
 .minion-card {
-  background-color: white;
-  border-color: #dee2e6;
+  background-color: var(--bs-body-bg);
+  border-color: var(--bs-border-color);
 }
 
 .minion-tree-node {
@@ -472,7 +467,7 @@ function showManageModal() {
 }
 
 .activity-prefix {
-  color: #6c757d;
+  color: var(--bs-secondary-color);
   font-size: 0.8rem;
 }
 
@@ -481,7 +476,7 @@ function showManageModal() {
 }
 
 .activity-time {
-  color: #6c757d;
+  color: var(--bs-secondary-color);
   font-size: 0.75rem;
   opacity: 0.8;
 }
@@ -506,7 +501,7 @@ function showManageModal() {
   flex: 1;
   min-width: 0; /* Allow text truncation */
   padding-left: 1rem;
-  border-left: 1px solid #dee2e6;
+  border-left: 1px solid var(--bs-border-color);
 }
 
 .node-actions {
@@ -524,20 +519,20 @@ function showManageModal() {
 }
 
 .message-prefix {
-  color: #6c757d;
+  color: var(--bs-secondary-color);
   font-size: 0.85rem;
   font-weight: 500;
 }
 
 .message-content {
-  color: #212529;
+  color: var(--bs-body-color);
   word-wrap: break-word;
   font-style: italic;
   cursor: help;
 }
 
 .message-time {
-  color: #6c757d;
+  color: var(--bs-secondary-color);
   font-size: 0.8rem;
   opacity: 0.8;
 }
@@ -549,12 +544,12 @@ function showManageModal() {
 }
 
 .comm-direction {
-  color: #6c757d;
+  color: var(--bs-secondary-color);
   font-size: 0.85rem;
 }
 
 .comm-content {
-  color: #212529;
+  color: var(--bs-body-color);
   word-wrap: break-word;
   cursor: help;
 }
@@ -569,28 +564,28 @@ function showManageModal() {
 }
 
 .status-dot-grey {
-  background-color: #d3d3d3;
-  border-color: #6c757d;
+  background-color: var(--bs-secondary-bg-subtle);
+  border-color: var(--bs-secondary);
 }
 
 .status-dot-green {
-  background-color: #90ee90;
-  border-color: #28a745;
+  background-color: var(--bs-success-bg-subtle);
+  border-color: var(--bs-success);
 }
 
 .status-dot-purple {
-  background-color: #dda0dd;
-  border-color: #6f42c1;
+  background-color: var(--bs-info-bg-subtle);
+  border-color: var(--bs-info);
 }
 
 .status-dot-red {
-  background-color: #ffb3b3;
-  border-color: #dc3545;
+  background-color: var(--bs-danger-bg-subtle);
+  border-color: var(--bs-danger);
 }
 
 .status-dot-yellow {
-  background-color: #ffc107;
-  border-color: #e0a800;
+  background-color: var(--bs-warning-bg-subtle);
+  border-color: var(--bs-warning);
 }
 
 .status-blinking {
@@ -613,11 +608,11 @@ function showManageModal() {
 }
 
 .minion-card-clickable:hover {
-  background-color: rgba(13, 110, 253, 0.1);
+  background-color: rgba(var(--bs-link-color-rgb, 13, 110, 253), 0.1);
 }
 
 .minion-card-clickable.active {
-  background-color: #0d6efd;
+  background-color: var(--bs-link-color);
   color: white;
 }
 
