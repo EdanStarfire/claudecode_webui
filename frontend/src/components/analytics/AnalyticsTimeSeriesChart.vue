@@ -53,6 +53,7 @@ onMounted(async () => {
   try {
     const { Bar: BarComponent } = await import('vue-chartjs')
     const { Chart, registerables } = await import('chart.js')
+    await import('chartjs-adapter-date-fns')
     Chart.register(...registerables)
     Bar = BarComponent
     chartReady.value = true
@@ -78,8 +79,23 @@ const chartOptions = computed(() => {
     },
     scales: {
       x: {
+        type: 'time',
         stacked: true,
-        ticks: { color: tickColor, maxRotation: 45, font: { size: 10 } },
+        time: {
+          unit: store.timeUnit,
+          tooltipFormat: store.timeUnit === 'hour' ? 'MMM d, HH:mm' : 'MMM d',
+          displayFormats: {
+            hour: 'MMM d HH:mm',
+            day: 'MMM d',
+          },
+        },
+        ticks: {
+          color: tickColor,
+          maxRotation: 45,
+          autoSkip: true,
+          autoSkipPadding: 8,
+          font: { size: 10 },
+        },
         grid: { color: gridColor },
       },
       y: {
