@@ -97,6 +97,15 @@ export const useUIStore = defineStore('ui', () => {
   // Issue #1130: Watchdog alert queue (session_watchdog_alert events from UI poll)
   const watchdogAlerts = ref([])
 
+  // Agent sort preference ('alpha' | 'creation') — persisted
+  const agentSort = ref(readStorage('agentSort', 'alpha'))
+
+  function setAgentSort(mode) {
+    if (mode !== 'alpha' && mode !== 'creation') return
+    agentSort.value = mode
+    writeStorage('agentSort', mode)
+  }
+
   // ========== ACTIONS ==========
 
   function toggleRightSidebar() {
@@ -280,6 +289,7 @@ export const useUIStore = defineStore('ui', () => {
     ttsReadAloudEnabled,
     rateLimits,
     watchdogAlerts,
+    agentSort,
 
     // Actions
     toggleRightSidebar,
@@ -307,5 +317,6 @@ export const useUIStore = defineStore('ui', () => {
     setRateLimits,
     pushAlert,
     dismissAlert,
+    setAgentSort,
   }
 })
