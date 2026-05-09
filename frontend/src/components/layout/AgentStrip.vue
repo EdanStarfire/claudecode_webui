@@ -75,6 +75,7 @@ import { useScheduleStore } from '@/stores/schedule'
 import { useMessageStore } from '@/stores/message'
 import { useUIStore } from '@/stores/ui'
 import { useRouter } from 'vue-router'
+import { compareAgents } from '@/utils/agentSort'
 
 const projectStore = useProjectStore()
 const sessionStore = useSessionStore()
@@ -141,10 +142,16 @@ const projectSessions = computed(() => {
   const project = browsingProject.value
   if (!project || !project.session_ids) return []
 
-  return project.session_ids
+  const list = project.session_ids
     .map(sid => sessionStore.getSession(sid))
     .filter(s => s && !s.is_ephemeral)
-    .sort((a, b) => (a.order || 0) - (b.order || 0))
+
+  const mode = uiStore.agentSort
+  return list.sort((a, b) => compareAgents(mode, a, b, {
+    nameOf: s => s.name,
+    orderOf: s => s.order,
+    idOf: s => s.session_id
+  }))
 })
 
 // Set of all child IDs so we can exclude them from top-level rendering

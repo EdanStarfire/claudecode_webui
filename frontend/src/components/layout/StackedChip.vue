@@ -65,6 +65,7 @@
 import { computed } from 'vue'
 import { useSessionStore } from '@/stores/session'
 import { useUIStore } from '@/stores/ui'
+import { compareAgents } from '@/utils/agentSort'
 import AgentChip from './AgentChip.vue'
 import PeekCard from './PeekCard.vue'
 import ChipConnector from './ChipConnector.vue'
@@ -86,7 +87,17 @@ const uiStore = useUIStore()
 const currentSessionId = computed(() => sessionStore.currentSessionId)
 
 const childIds = computed(() => {
-  return (props.session.child_minion_ids || []).filter(id => sessionStore.getSession(id))
+  const rawIds = (props.session.child_minion_ids || []).filter(id => sessionStore.getSession(id))
+  const mode = uiStore.agentSort
+  return rawIds.sort((a, b) => {
+    const sa = sessionStore.getSession(a)
+    const sb = sessionStore.getSession(b)
+    return compareAgents(mode, sa, sb, {
+      nameOf: s => s.name,
+      orderOf: s => s.order,
+      idOf: s => s.session_id
+    })
+  })
 })
 
 // Compute max depth of the subtree rooted at this session

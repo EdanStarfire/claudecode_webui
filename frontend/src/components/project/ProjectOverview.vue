@@ -132,10 +132,30 @@
                 </div>
               </div>
 
+              <!-- Sort toggle -->
+              <div class="d-flex justify-content-end mb-2 me-4">
+                <div class="btn-group btn-group-sm" role="group" aria-label="Agent sort order">
+                  <button
+                    type="button"
+                    class="btn"
+                    :class="uiStore.agentSort === 'alpha' ? 'btn-primary' : 'btn-outline-secondary'"
+                    @click="uiStore.setAgentSort('alpha')"
+                    title="Sort alphabetically"
+                  >A–Z</button>
+                  <button
+                    type="button"
+                    class="btn"
+                    :class="uiStore.agentSort === 'creation' ? 'btn-primary' : 'btn-outline-secondary'"
+                    @click="uiStore.setAgentSort('creation')"
+                    title="Sort by creation order"
+                  >Created</button>
+                </div>
+              </div>
+
               <!-- Root Minions (user-spawned) -->
               <div class="root-minions ms-4">
                 <MinionTreeNode
-                  v-for="minion in minionHierarchy.children"
+                  v-for="minion in sortedRootMinions"
                   :key="minion.id"
                   :minion-data="minion"
                   :level="1"
@@ -186,6 +206,7 @@ import { useRouter } from 'vue-router'
 import { useProjectStore } from '@/stores/project'
 import { useSessionStore } from '@/stores/session'
 import { useUIStore } from '@/stores/ui'
+import { compareAgents } from '@/utils/agentSort'
 import { api } from '@/utils/api'
 import MinionTreeNode from '../legion/MinionTreeNode.vue'
 
@@ -276,6 +297,16 @@ async function loadMinionHierarchy() {
     loadingHierarchy.value = false
   }
 }
+
+const sortedRootMinions = computed(() => {
+  const children = minionHierarchy.value?.children || []
+  const mode = uiStore.agentSort
+  return [...children].sort((a, b) => compareAgents(mode, a, b, {
+    nameOf: n => n.name,
+    orderOf: n => sessionStore.getSession(n.id)?.order,
+    idOf: n => n.id
+  }))
+})
 
 // Helper: Find minion node in hierarchy tree recursively
 function findMinionInTree(node, minionId) {

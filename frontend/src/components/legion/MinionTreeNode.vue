@@ -120,7 +120,7 @@
     <!-- Recursively Render Children -->
     <div v-if="hasChildren" class="minion-children">
       <MinionTreeNode
-        v-for="child in minionData.children"
+        v-for="child in sortedChildren"
         :key="child.id"
         :minion-data="child"
         :level="level + 1"
@@ -142,6 +142,7 @@ import { useRouter } from 'vue-router'
 import { useSessionStore } from '@/stores/session'
 import { useMessageStore } from '@/stores/message'
 import { useUIStore } from '@/stores/ui'
+import { compareAgents } from '@/utils/agentSort'
 import { getDisplayState, getStatusColor } from '@/composables/useSessionState'
 
 const props = defineProps({
@@ -291,6 +292,16 @@ const hasChildren = computed(() => {
     props.minionData.children &&
     props.minionData.children.length > 0
   )
+})
+
+const sortedChildren = computed(() => {
+  const children = props.minionData?.children || []
+  const mode = uiStore.agentSort
+  return [...children].sort((a, b) => compareAgents(mode, a, b, {
+    nameOf: n => n.name,
+    orderOf: n => sessionStore.getSession(n.id)?.order,
+    idOf: n => n.id
+  }))
 })
 
 // Check if minion is an overseer with children
