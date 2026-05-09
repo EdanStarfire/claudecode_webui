@@ -5,7 +5,7 @@ import { api, getAuthToken } from '@/utils/api'
 export const useTemplateStore = defineStore('template', () => {
   // templates Map: template_id → template object
   const templates = ref(new Map())
-  const loading = ref(false)
+  const loading = ref(true)
   const error = ref(null)
 
   // ---- computed ----

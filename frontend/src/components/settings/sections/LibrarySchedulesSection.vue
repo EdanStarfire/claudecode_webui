@@ -119,7 +119,7 @@ const router = useRouter()
 const scheduleStore = useScheduleStore()
 const projectStore  = useProjectStore()
 
-const loading = ref(false)
+const loading = ref(true)
 const createModalLegionId = ref(null)
 const pendingDeleteId    = ref(null)
 const pendingDeleteAgent = ref(true)
