@@ -12,7 +12,7 @@ import { api } from '@/utils/api'
 export const useProfileStore = defineStore('profile', () => {
   // ---- State ----
   const profiles = ref(new Map()) // profile_id -> profile object
-  const loading = ref(false)
+  const loading = ref(true)
   const error = ref(null)
   const loaded = ref(false)
 
