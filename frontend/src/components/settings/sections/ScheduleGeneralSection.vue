@@ -238,10 +238,14 @@
         <div class="field-row">
           <label class="field-label">Executions</label>
           <div class="field-control">
-            <span class="field-value-readonly">
-              {{ entity.execution_count ?? 0 }} total,
-              {{ entity.failure_count ?? 0 }} failures
-            </span>
+            <span class="field-value-readonly">{{ entity.execution_count ?? 0 }} total</span>
+          </div>
+        </div>
+
+        <div class="field-row">
+          <label class="field-label">Consecutive errors</label>
+          <div class="field-control">
+            <span class="field-value-readonly" title="Resets to 0 after a successful run">{{ entity.failure_count ?? 0 }}</span>
           </div>
         </div>
       </div>
