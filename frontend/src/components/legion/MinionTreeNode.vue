@@ -44,7 +44,7 @@
         aria-label="Edit minion"
         @click.stop="showEditModal"
       >
-        ✏️
+        ⚙️
       </button>
       <button
         class="btn btn-sm btn-outline-secondary"
@@ -52,7 +52,7 @@
         aria-label="Manage minion"
         @click.stop="showManageModal"
       >
-        ⚙️
+        🛠
       </button>
     </div>
 
@@ -103,7 +103,7 @@
             aria-label="Edit minion"
             @click.stop="showEditModal"
           >
-            ✏️
+            ⚙️
           </button>
           <button
             class="btn btn-sm btn-outline-secondary"
@@ -111,7 +111,7 @@
             aria-label="Manage minion"
             @click.stop="showManageModal"
           >
-            ⚙️
+            🛠
           </button>
         </div>
       </div>
