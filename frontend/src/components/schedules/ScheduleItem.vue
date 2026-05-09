@@ -22,6 +22,7 @@
         />
       </template>
       <div class="header-badges">
+        <span v-if="schedule.schedule_type === 'script'" class="type-badge script" title="Script schedule — runs a command and routes stdout">Script</span>
         <span v-if="isEphemeral" class="type-badge ephemeral" title="Ephemeral — dedicated agent for this schedule">Ephemeral</span>
         <span v-if="isAgentRunning" class="type-badge running" title="Agent session currently active">Running</span>
         <span
@@ -658,6 +659,11 @@ watch(() => scheduleStore.executionHistory, (storeHistory) => {
   font-weight: 600;
 }
 
+.type-badge.script {
+  background: #f3e8ff;
+  color: #6b21a8;
+}
+
 .type-badge.ephemeral {
   background: #dbeafe;
   color: #1e40af;
@@ -755,8 +761,13 @@ watch(() => scheduleStore.executionHistory, (storeHistory) => {
   color: #16a34a;
 }
 
-.last-status.failed {
+.last-status.failed,
+.last-status.error {
   color: #dc2626;
+}
+
+.last-status.discarded {
+  color: #94a3b8;
 }
 
 .schedule-stats {

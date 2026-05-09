@@ -305,8 +305,21 @@ class QueueProcessor:
             # next item is picked up.  Pause only prevents the next item
             # from being picked up (checked at the top of the main loop).
 
-            if info.is_processing:
-                # Still processing — reset idle timer
+            # Treat in-flight script schedules the same as is_processing: do not
+            # advance to the next queue item while a script that may be about to
+            # enqueue is still running. Reaches into legion_system.scheduler_service
+            # (the only back-pointer from coordinator → scheduler).
+            scheduler = (
+                self._coordinator.legion_system.scheduler_service
+                if self._coordinator.legion_system is not None
+                else None
+            )
+            scripts_inflight = (
+                scheduler.has_inflight_scripts(session_id) if scheduler is not None else False
+            )
+
+            if info.is_processing or scripts_inflight:
+                # Still busy — reset idle timer.
                 idle_start = None
             else:
                 # Not processing — start/continue idle timer

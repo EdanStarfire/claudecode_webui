@@ -54,6 +54,17 @@ def build_router(webui) -> APIRouter:
         if not await webui.service.validate_project_exists(legion_id):
             raise HTTPException(status_code=404, detail="Project not found")
 
+        # Validate schedule_type-specific required fields
+        schedule_type = request.schedule_type
+        if schedule_type not in ("prompt", "script"):
+            raise HTTPException(status_code=400, detail="schedule_type must be 'prompt' or 'script'")
+        if schedule_type == "script":
+            if not (request.script_command or "").strip():
+                raise HTTPException(status_code=400, detail="script_command is required for script schedules")
+        else:
+            if not (request.prompt or "").strip():
+                raise HTTPException(status_code=400, detail="prompt is required for prompt schedules")
+
         # Determine mode: permanent (minion_id) or ephemeral (session_config)
         minion_id = request.minion_id
         minion_name = None
@@ -93,6 +104,9 @@ def build_router(webui) -> APIRouter:
             timeout_seconds=request.timeout_seconds,
             session_config=request.session_config,
             ephemeral_agent_id=ephemeral_agent_id,
+            schedule_type=schedule_type,
+            script_command=request.script_command,
+            script_timeout_seconds=request.script_timeout_seconds,
         )
         return {"schedule": schedule.to_dict()}
 
@@ -119,7 +133,15 @@ def build_router(webui) -> APIRouter:
         if not schedule or schedule.legion_id != legion_id:
             raise HTTPException(status_code=404, detail="Schedule not found")
 
-        fields = {k: v for k, v in request.model_dump().items() if v is not None}
+        # Reject schedule_type changes (immutable post-create)
+        raw = request.model_dump()
+        if "schedule_type" in raw and raw["schedule_type"] is not None:
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot change schedule type after creation. Delete and recreate.",
+            )
+
+        fields = {k: v for k, v in raw.items() if v is not None}
         updated = await webui.coordinator.legion_system.scheduler_service.update_schedule(
             schedule_id, **fields
         )

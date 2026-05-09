@@ -140,19 +140,23 @@ class MinionCreateRequest(SessionConfig):
 
 
 class ScheduleCreateRequest(BaseModel):
-    """Request to create a cron schedule (issue #495, #578)."""
+    """Request to create a cron schedule (issue #495, #578, #1356)."""
     minion_id: str | None = None  # Optional for ephemeral schedules (issue #578)
     name: str
     cron_expression: str
-    prompt: str
+    prompt: str = ""
     reset_session: bool = False
     max_retries: int = 3
     timeout_seconds: int = 3600
     session_config: dict | None = None  # Ephemeral session configuration (issue #578)
+    # Script schedule fields (issue #1356)
+    schedule_type: str = "prompt"            # "prompt" | "script"
+    script_command: str | None = None
+    script_timeout_seconds: int = 60
 
 
 class ScheduleUpdateRequest(BaseModel):
-    """Request to update a schedule (issue #495, #578)."""
+    """Request to update a schedule (issue #495, #578, #1356)."""
     name: str | None = None
     cron_expression: str | None = None
     prompt: str | None = None
@@ -162,6 +166,9 @@ class ScheduleUpdateRequest(BaseModel):
     sandbox_enabled: bool = False  # Enable OS-level sandboxing (issue #319)
     sandbox_config: dict | None = None  # Issue #458: sandbox configuration settings
     setting_sources: list[str] | None = None  # Issue #36: which settings files to load
+    # Script schedule fields (issue #1356) — schedule_type is intentionally absent (immutable post-create)
+    script_command: str | None = None
+    script_timeout_seconds: int | None = None
 
 
 class TemplateCreateRequest(SessionConfig):

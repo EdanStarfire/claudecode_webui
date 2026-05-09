@@ -12,6 +12,21 @@ from typing import Any
 
 from croniter import croniter
 
+# Maximum bytes of stdout/stderr persisted per run. Larger streams are truncated
+# with a "[truncated: N bytes]" marker. Bounds schedules.json + schedule_history.jsonl.
+MAX_STREAM_BYTES = 64 * 1024
+
+
+def cap_stream(s: str) -> str:
+    """Cap a stdout/stderr string to MAX_STREAM_BYTES, appending a truncation marker."""
+    if not s:
+        return s
+    encoded = s.encode("utf-8", errors="replace")
+    if len(encoded) <= MAX_STREAM_BYTES:
+        return s
+    truncated = encoded[:MAX_STREAM_BYTES].decode("utf-8", errors="replace")
+    return truncated + f"\n[truncated: {len(encoded)} bytes]"
+
 
 class ScheduleStatus(Enum):
     """Status of a schedule."""
@@ -46,6 +61,13 @@ class Schedule:
     # Ephemeral session support (issue #578)
     session_config: dict | None = None  # Stored session configuration for ephemeral schedules
     ephemeral_agent_id: str | None = None  # Fixed agent session ID for ephemeral schedules
+    # Script schedule support (issue #1356)
+    schedule_type: str = "prompt"            # "prompt" | "script"
+    script_command: str | None = None        # required when schedule_type == "script"
+    script_timeout_seconds: int = 60         # wall-clock kill timer for script runs
+    last_stdout: str | None = None           # most recent run's stdout (capped)
+    last_stderr: str | None = None           # most recent run's stderr (capped)
+    last_exit_code: int | None = None        # null when no run yet, -1 on timeout
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization."""
@@ -68,6 +90,12 @@ class Schedule:
             "last_status": self.last_status,
             "execution_count": self.execution_count,
             "failure_count": self.failure_count,
+            "schedule_type": self.schedule_type,
+            "script_command": self.script_command,
+            "script_timeout_seconds": self.script_timeout_seconds,
+            "last_stdout": self.last_stdout,
+            "last_stderr": self.last_stderr,
+            "last_exit_code": self.last_exit_code,
         }
         # Ephemeral fields (issue #578) - only include when set
         if self.session_config is not None:
@@ -85,6 +113,13 @@ class Schedule:
         # Ephemeral fields (issue #578) - default to None if missing
         data.setdefault("session_config", None)
         data.setdefault("ephemeral_agent_id", None)
+        # Script schedule fields (issue #1356) - backwards-compatible defaults
+        data.setdefault("schedule_type", "prompt")
+        data.setdefault("script_command", None)
+        data.setdefault("script_timeout_seconds", 60)
+        data.setdefault("last_stdout", None)
+        data.setdefault("last_stderr", None)
+        data.setdefault("last_exit_code", None)
         # Discard legacy field from old data
         data.pop("current_ephemeral_session_id", None)
         return cls(**data)
@@ -100,12 +135,18 @@ class ScheduleExecution:
     schedule_id: str
     scheduled_time: float
     actual_time: float
-    status: str  # "queued" | "failed" | "timeout" | "retry"
+    status: str  # "queued" | "failed" | "timeout" | "retry" | "delivered" | "discarded" | "error"
     minion_state: str
     error_message: str | None = None
     retry_number: int = 0
     queue_id: str | None = None
     trigger: str = "cron"  # "cron" or "manual"
+    # Script schedule fields (issue #1356)
+    schedule_type: str = "prompt"
+    exit_code: int | None = None
+    stdout: str | None = None     # capped
+    stderr: str | None = None     # capped
+    duration_ms: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization."""
@@ -120,6 +161,11 @@ class ScheduleExecution:
             "retry_number": self.retry_number,
             "queue_id": self.queue_id,
             "trigger": self.trigger,
+            "schedule_type": self.schedule_type,
+            "exit_code": self.exit_code,
+            "stdout": self.stdout,
+            "stderr": self.stderr,
+            "duration_ms": self.duration_ms,
         }
 
     @classmethod
@@ -133,6 +179,12 @@ class ScheduleExecution:
             data.pop("comm_id")
         # Backward compat: default trigger to "cron" for old records
         data.setdefault("trigger", "cron")
+        # Script schedule fields (issue #1356)
+        data.setdefault("schedule_type", "prompt")
+        data.setdefault("exit_code", None)
+        data.setdefault("stdout", None)
+        data.setdefault("stderr", None)
+        data.setdefault("duration_ms", None)
         return cls(**data)
 
 

@@ -92,6 +92,8 @@ def resolve_docker_cli_path(
     proxy_allowlist_file: str | None = None,
     # Issue #1179: Proxy-sidecar-only mounts (session_token, session_id, etc.)
     docker_proxy_extra_mounts: list[str] | None = None,
+    # Issue #1356: Session ID for container label lookup
+    session_id: str | None = None,
 ) -> tuple[str, dict[str, str]]:
     """
     Resolve the cli_path and environment variables for Docker mode.
@@ -113,6 +115,8 @@ def resolve_docker_cli_path(
                        forwards these as -e flags to the agent container.
         docker_proxy_extra_mounts: Additional volume mount specs applied exclusively to the
                                    proxy sidecar container (never the agent container).
+        session_id: Session UUID; when set, emits CLAUDE_DOCKER_SESSION_ID so that
+                    claude-docker can label the container for later lookup.
 
     Returns:
         Tuple of (cli_path_string, env_vars_dict)
@@ -149,7 +153,103 @@ def resolve_docker_cli_path(
     if docker_proxy_extra_mounts:
         env_vars["CLAUDE_DOCKER_PROXY_EXTRA_MOUNTS"] = ",".join(docker_proxy_extra_mounts)
 
+    if session_id:
+        env_vars["CLAUDE_DOCKER_SESSION_ID"] = session_id
+
     return wrapper_path, env_vars
+
+
+async def find_session_container(session_id: str, timeout: float = 5.0) -> str | None:
+    """Return the running container ID for a session, or None if not running.
+
+    Looks up by the cc-webui-session-id label set by claude-docker at session start.
+    """
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "docker", "ps", "-q",
+            "--filter", f"label=cc-webui-session-id={session_id}",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        if proc.returncode != 0:
+            return None
+        ids = stdout.decode().strip().splitlines()
+        return ids[0] if ids else None
+    except (TimeoutError, FileNotFoundError, OSError):
+        return None
+
+
+async def run_command_in_container(
+    container_id: str,
+    command_argv: list[str],
+    timeout_seconds: float,
+    workdir: str | None = None,
+) -> tuple[int, str, str, bool]:
+    """Run an argv command inside a running container.
+
+    Returns (exit_code, stdout, stderr, timed_out).
+    On timeout, exit_code=-1 and timed_out=True.
+    """
+    import contextlib
+
+    args = ["docker", "exec"]
+    if workdir:
+        args.extend(["--workdir", workdir])
+    args.append(container_id)
+    args.extend(command_argv)
+
+    proc = await asyncio.create_subprocess_exec(
+        *args,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout_seconds)
+        return (
+            proc.returncode if proc.returncode is not None else -1,
+            stdout.decode("utf-8", errors="replace"),
+            stderr.decode("utf-8", errors="replace"),
+            False,
+        )
+    except TimeoutError:
+        proc.kill()
+        with contextlib.suppress(Exception):
+            await proc.wait()
+        return (-1, "", "Script exceeded timeout", True)
+
+
+async def run_command_on_host(
+    command_argv: list[str],
+    timeout_seconds: float,
+    workdir: str | None = None,
+) -> tuple[int, str, str, bool]:
+    """Run an argv command on the host.
+
+    Returns (exit_code, stdout, stderr, timed_out).
+    On timeout, exit_code=-1 and timed_out=True.
+    """
+    import contextlib
+
+    proc = await asyncio.create_subprocess_exec(
+        *command_argv,
+        cwd=workdir,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout_seconds)
+        return (
+            proc.returncode if proc.returncode is not None else -1,
+            stdout.decode(errors="replace"),
+            stderr.decode(errors="replace"),
+            False,
+        )
+    except TimeoutError:
+        proc.kill()
+        with contextlib.suppress(Exception):
+            await proc.wait()
+        return (-1, "", "Script exceeded timeout", True)
 
 
 # SSH config mounted into the shared dir (agent container at /run/ssh).

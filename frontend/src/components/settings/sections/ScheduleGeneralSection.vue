@@ -74,8 +74,17 @@
         </div>
       </div>
 
-      <!-- Prompt -->
+      <!-- Schedule Type (read-only — immutable post-create) -->
       <div class="field-row">
+        <label class="field-label">Type</label>
+        <div class="field-control">
+          <span class="field-value-readonly">{{ entity.schedule_type === 'script' ? 'Script' : 'Prompt' }}</span>
+          <div class="field-helper">Schedule type cannot be changed after creation.</div>
+        </div>
+      </div>
+
+      <!-- Prompt (prompt type only) -->
+      <div v-if="entity.schedule_type !== 'script'" class="field-row">
         <label class="field-label">Prompt</label>
         <div class="field-control">
           <textarea
@@ -87,6 +96,39 @@
           />
         </div>
       </div>
+
+      <!-- Script command (script type only) -->
+      <template v-if="entity.schedule_type === 'script'">
+        <div class="field-row">
+          <label class="field-label">Command</label>
+          <div class="field-control">
+            <textarea
+              class="field-input field-textarea field-textarea--mono"
+              :value="draft?.script_command ?? entity.script_command ?? ''"
+              rows="2"
+              placeholder="/path/to/script.sh {working_dir}"
+              @input="handleField('script_command', $event.target.value)"
+            />
+            <div class="field-helper">
+              Available template variables: <code>&#123;session_id&#125;</code>, <code>&#123;working_dir&#125;</code>,
+              <code>&#123;session_data&#125;</code>. stdout is sent to the agent on exit 0 + non-empty.
+            </div>
+          </div>
+        </div>
+        <div class="field-row">
+          <label class="field-label">Script Timeout (s)</label>
+          <div class="field-control">
+            <input
+              type="number"
+              class="field-input field-input--narrow"
+              min="1"
+              max="3600"
+              :value="draft?.script_timeout_seconds ?? entity.script_timeout_seconds ?? 60"
+              @input="handleField('script_timeout_seconds', Number($event.target.value))"
+            />
+          </div>
+        </div>
+      </template>
 
       <!-- Reset session toggle -->
       <div class="field-row">
@@ -178,7 +220,18 @@
               <span v-if="entity.last_status" class="last-status-chip" :class="entity.last_status">
                 {{ entity.last_status }}
               </span>
+              <span v-if="entity.last_exit_code !== null && entity.last_exit_code !== undefined" class="last-exit-code">
+                exit {{ entity.last_exit_code }}
+              </span>
             </span>
+            <details v-if="entity.last_stdout" class="stream-details">
+              <summary>stdout ({{ entity.last_stdout.length }} bytes)</summary>
+              <pre class="stream-pre">{{ entity.last_stdout }}</pre>
+            </details>
+            <details v-if="entity.last_stderr" class="stream-details">
+              <summary>stderr ({{ entity.last_stderr.length }} bytes)</summary>
+              <pre class="stream-pre">{{ entity.last_stderr }}</pre>
+            </details>
           </div>
         </div>
 
@@ -284,7 +337,7 @@ async function handleSave() {
     const keysToDelete = Object.keys(d).filter(k => d[k] === FIELD_RESET)
     for (const k of keysToDelete) delete d[k]
     const updates = {}
-    for (const k of ['name', 'cron_expression', 'prompt', 'reset_session', 'max_retries']) {
+    for (const k of ['name', 'cron_expression', 'prompt', 'reset_session', 'max_retries', 'script_command', 'script_timeout_seconds']) {
       if (k in d) updates[k] = d[k]
     }
     await scheduleStore.updateSchedule(entity.value.legion_id, entity.value.schedule_id, updates)
@@ -552,4 +605,55 @@ onMounted(async () => {
 .last-status-chip.delivered { background: rgba(63, 185, 80, 0.2); color: #3fb950; }
 .last-status-chip.failed    { background: rgba(248, 113, 113, 0.2); color: #f87171; }
 .last-status-chip.queued    { background: rgba(210, 153, 34, 0.2); color: #d29922; }
+.last-status-chip.discarded { background: rgba(148, 163, 184, 0.2); color: #94a3b8; }
+.last-status-chip.error     { background: rgba(248, 113, 113, 0.2); color: #f87171; }
+
+.last-exit-code {
+  font-size: 11px;
+  color: var(--bs-secondary-color);
+  font-family: monospace;
+}
+
+.stream-details {
+  margin-top: 6px;
+  font-size: 12px;
+}
+
+.stream-details summary {
+  cursor: pointer;
+  color: var(--bs-secondary-color);
+  user-select: none;
+  padding: 2px 0;
+}
+
+.stream-details summary:hover {
+  color: var(--bs-body-color);
+}
+
+.stream-pre {
+  margin: 4px 0 0 0;
+  padding: 8px;
+  background: var(--bs-secondary-bg);
+  border: 1px solid var(--bs-border-color);
+  border-radius: 4px;
+  font-size: 11px;
+  font-family: monospace;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.field-textarea--mono {
+  font-family: monospace;
+  font-size: 12px;
+}
+
+.field-control code {
+  font-family: monospace;
+  background: var(--bs-secondary-bg);
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-size: 11px;
+}
 </style>
