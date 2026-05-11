@@ -15,6 +15,10 @@ cat > "$COREFILE" <<'HEADER'
 # Auto-generated from allowlist.json
 HEADER
 
+# Disable glob expansion: $DOMAINS is intentionally unquoted for word-splitting,
+# but an unquoted "*" would otherwise expand to filenames in the cwd before the
+# sentinel guard below can detect it (issue #1380).
+set -f
 for domain in $DOMAINS; do
     if [ "$domain" = "*" ]; then
         continue
@@ -32,6 +36,7 @@ ${domain} {
 }
 EOF
 done
+set +f
 
 # Catch-all: forwarding when sentinel present, NXDOMAIN otherwise.
 if echo "$DOMAINS" | grep -qx '\*'; then
