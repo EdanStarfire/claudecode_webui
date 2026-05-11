@@ -9,19 +9,19 @@
     <!-- Row 3: Agent strip (hidden in settings routes) -->
     <AgentStrip v-show="!isSettingsRoute" />
 
-    <!-- Overlay backdrop for responsive right panel -->
-    <div
-      id="right-panel-backdrop"
-      :class="{ 'show': rightPanelVisible && isTabletOrMobile }"
-      @click="uiStore.setRightPanelVisible(false)"
-    ></div>
-
     <!-- Main Content (chat + right panel) -->
     <div class="main-layout">
       <!-- Center Panel (router view) -->
       <main class="center-panel">
         <router-view />
       </main>
+
+      <!-- Overlay backdrop for responsive right panel — inside .main-layout so it is anchored to the flex container -->
+      <div
+        id="right-panel-backdrop"
+        :class="{ 'show': rightPanelVisible && isTabletOrMobile }"
+        @click="uiStore.setRightPanelVisible(false)"
+      ></div>
 
       <!-- Right Panel: On desktop, v-show controls in-flow visibility;
            on mobile/tablet, overlay CSS handles transform-based slide -->
@@ -231,6 +231,7 @@ function handlePopState() {
   display: flex;
   min-height: 0;
   overflow: hidden;
+  position: relative;
 }
 
 .center-panel {
@@ -242,14 +243,11 @@ function handlePopState() {
   background: var(--bs-body-bg);
 }
 
-/* Overlay backdrop for responsive right panel — matches panel vertical extent */
+/* Overlay backdrop for responsive right panel — anchored to .main-layout (position: relative) */
 #right-panel-backdrop {
   display: none;
-  position: fixed;
-  top: 142px;
-  left: 0;
-  width: 100vw;
-  bottom: 0;
+  position: absolute;
+  inset: 0;
   background-color: rgba(0, 0, 0, 0.4);
   z-index: 1040;
   transition: opacity 0.2s;
@@ -263,9 +261,9 @@ function handlePopState() {
    Uses #right-sidebar ID to override scoped styles (position: relative) */
 @media (max-width: 767px) {
   #right-sidebar.panel-overlay {
-    position: fixed;
+    position: absolute;
     right: 0;
-    top: 142px;
+    top: 0;
     bottom: 0;
     width: min(380px, 90vw);
     z-index: 1050;
