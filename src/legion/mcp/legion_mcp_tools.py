@@ -371,6 +371,31 @@ class LegionMCPTools:
             args["_from_minion_id"] = session_id
             return await self._handle_cancel_schedule(args)
 
+        @tool(
+            "update_schedule",
+            "Update one or more attributes of your own schedule. You can change "
+            "the schedule's name, its prompt (for prompt-type schedules), and/or "
+            "its cron expression. You cannot change a schedule's type, the minion "
+            "it is bound to, or its session configuration via this tool. You can "
+            "only update schedules that belong to you."
+            "\n\nParameters:"
+            "\n- schedule_id: The ID of the schedule to update"
+            "\n- name (optional): New display name for the schedule"
+            "\n- prompt (optional): New prompt text. Only valid for prompt-type schedules. Must be non-empty"
+            "\n- cron_expression (optional): New cron expression (5-field standard cron). "
+            "Examples: '0 8 * * 1-5' (weekdays 8am), '*/30 * * * *' (every 30 min)",
+            {
+                "schedule_id": str,
+                "name": str,
+                "prompt": str,
+                "cron_expression": str,
+            }
+        )
+        async def update_schedule_tool(args: dict[str, Any]) -> dict[str, Any]:
+            """Update a schedule owned by the calling minion."""
+            args["_from_minion_id"] = session_id
+            return await self._handle_update_schedule(args)
+
         # ── Session lifecycle tools (Issue #680) ──
 
         @tool(
@@ -437,6 +462,7 @@ class LegionMCPTools:
                 pause_schedule_tool,
                 resume_schedule_tool,
                 cancel_schedule_tool,
+                update_schedule_tool,
                 restart_session_tool,
                 queue_task_tool,
             ]
@@ -2366,6 +2392,96 @@ class LegionMCPTools:
                 "content": [{"type": "text", "text": f"Unexpected error cancelling schedule: {e}"}],
                 "is_error": True,
             }
+
+    async def _handle_update_schedule(self, args: dict[str, Any]) -> dict[str, Any]:
+        """Handle update_schedule tool call."""
+        from_minion_id = args.get("_from_minion_id")
+        schedule_id = args.get("schedule_id", "").strip()
+
+        if not from_minion_id:
+            return {
+                "content": [{"type": "text", "text": "Error: Unable to determine minion ID"}],
+                "is_error": True,
+            }
+        if not schedule_id:
+            return {
+                "content": [{"type": "text", "text": "Error: schedule_id is required"}],
+                "is_error": True,
+            }
+
+        schedule = await self.system.scheduler_service.get_schedule(schedule_id)
+        if not schedule:
+            return {
+                "content": [{"type": "text", "text": f"Error: Schedule {schedule_id} not found"}],
+                "is_error": True,
+            }
+        if schedule.minion_id != from_minion_id:
+            return {
+                "content": [{"type": "text", "text": "Error: You can only update your own schedules"}],
+                "is_error": True,
+            }
+
+        name = args.get("name")
+        prompt = args.get("prompt")
+        cron_expression = args.get("cron_expression")
+
+        if name is None and prompt is None and cron_expression is None:
+            return {
+                "content": [{"type": "text", "text": "Error: Must provide at least one of: name, prompt, cron_expression"}],
+                "is_error": True,
+            }
+
+        if prompt is not None:
+            if schedule.schedule_type == "script":
+                return {
+                    "content": [{"type": "text", "text": "Error: This schedule is script-type; prompt cannot be set"}],
+                    "is_error": True,
+                }
+            if not prompt.strip():
+                return {
+                    "content": [{"type": "text", "text": "Error: Prompt cannot be empty"}],
+                    "is_error": True,
+                }
+
+        fields: dict = {}
+        if name is not None:
+            fields["name"] = name
+        if prompt is not None:
+            fields["prompt"] = prompt
+        if cron_expression is not None:
+            fields["cron_expression"] = cron_expression
+
+        try:
+            updated = await self.system.scheduler_service.update_schedule(schedule_id, **fields)
+        except ValueError as e:
+            return {
+                "content": [{"type": "text", "text": f"Error: {e}"}],
+                "is_error": True,
+            }
+
+        from datetime import datetime
+        next_run_str = "N/A"
+        if updated.next_run:
+            next_run_str = datetime.fromtimestamp(updated.next_run).astimezone().strftime(
+                "%Y-%m-%d %H:%M %Z"
+            )
+
+        updated_fields = ", ".join(fields.keys())
+        return {
+            "content": [{
+                "type": "text",
+                "text": (
+                    f"Schedule '{updated.name}' updated successfully.\n\n"
+                    f"Updated fields: {updated_fields}\n"
+                    f"- **ID**: {updated.schedule_id}\n"
+                    f"- **Name**: {updated.name}\n"
+                    f"- **Cron**: {updated.cron_expression}\n"
+                    f"- **Next run**: {next_run_str}\n"
+                    f"- **Status**: {updated.status.value}"
+                ),
+            }],
+            "is_error": False,
+        }
 
     # ── Session Lifecycle Handlers (Issue #680) ──
 
