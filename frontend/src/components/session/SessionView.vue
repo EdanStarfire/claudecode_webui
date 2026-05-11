@@ -1,17 +1,5 @@
 <template>
   <div class="d-flex flex-column flex-grow-1 overflow-hidden position-relative">
-    <!-- Loading Overlay -->
-    <div
-      v-if="isLoading"
-      class="position-absolute top-0 start-0 w-100 h-100 bg-white bg-opacity-75 d-flex flex-column justify-content-center align-items-center"
-      style="z-index: 1000;"
-    >
-      <div class="spinner-border text-primary mb-3" role="status">
-        <span class="visually-hidden">Loading...</span>
-      </div>
-      <p class="text-secondary">{{ loadingMessage }}</p>
-    </div>
-
     <!-- Archive Banner -->
     <div v-if="isArchiveMode" class="archive-banner">
       <span class="archive-badge">ARCHIVED</span>
@@ -76,8 +64,6 @@ const resourceStore = useResourceStore()
 const uiStore = useUIStore()
 
 const currentSession = computed(() => sessionStore.currentSession)
-const isLoading = computed(() => uiStore.isLoading)
-const loadingMessage = computed(() => uiStore.loadingMessage)
 
 function focusInputWhenReady() {
   nextTick(() => inputAreaRef.value?.focusInput())
@@ -123,12 +109,7 @@ onMounted(async () => {
     sessionStore.lastViewedArchive.set(props.sessionId, effectiveArchiveId.value)
     await loadArchiveMessages()
   } else if (props.sessionId !== sessionStore.currentSessionId) {
-    uiStore.showLoading('Loading session...')
-    try {
-      await sessionStore.selectSession(props.sessionId)
-    } finally {
-      uiStore.hideLoading()
-    }
+    await sessionStore.selectSession(props.sessionId)
   }
   focusInputWhenReady()
 })
@@ -150,20 +131,10 @@ watch([() => props.sessionId, () => effectiveArchiveId.value], async ([newSessio
     // Force selectSession to run by clearing currentSessionId first
     // (otherwise it bails out because the ID hasn't changed)
     sessionStore.currentSessionId = null
-    uiStore.showLoading('Loading session...')
-    try {
-      await sessionStore.selectSession(newSessionId)
-    } finally {
-      uiStore.hideLoading()
-    }
+    await sessionStore.selectSession(newSessionId)
     focusInputWhenReady()
   } else if (newSessionId !== oldSessionId && newSessionId !== sessionStore.currentSessionId) {
-    uiStore.showLoading('Loading session...')
-    try {
-      await sessionStore.selectSession(newSessionId)
-    } finally {
-      uiStore.hideLoading()
-    }
+    await sessionStore.selectSession(newSessionId)
     focusInputWhenReady()
   }
 })
