@@ -38,9 +38,8 @@
           </span>
         </div>
         <div class="d-flex gap-1 align-items-center">
-          <!-- Issue #1387: Reconnect button when vault token is in failed/expired state -->
           <button
-            v-if="vaultBaseName(config) && (vaultHealth(config) === 'refresh_failed' || vaultHealth(config) === 'expired')"
+            v-if="vaultBaseName(config)"
             class="btn btn-xs btn-outline-warning"
             :disabled="reconnectingId === config.id"
             @click="reconnectVault(config)"
