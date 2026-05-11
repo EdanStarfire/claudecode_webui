@@ -635,10 +635,10 @@ async function saveForm() {
     if (form.type === 'stdio') {
       data.command = form.command
       data.args = rawArgs.value.split(/\s+/).filter(Boolean)
-      data.env = Object.keys(form.env).length > 0 ? form.env : null
+      data.env = form.env
     } else {
       data.url = form.url
-      data.headers = Object.keys(form.headers).length > 0 ? form.headers : null
+      data.headers = form.headers
       data.oauth_enabled = form.oauth_enabled
       if (form.oauth_enabled && form.oauth_scope.trim()) {
         data.oauth_scope = form.oauth_scope.trim()
