@@ -443,6 +443,148 @@ class ApplicationService:
             "has_refresh_token": bool(token.refresh_token),
         }
 
+    async def import_oauth_as_secret(self, config_id: str, base_name: str) -> dict:
+        """Import stored OAuth 2.1 tokens as proxy-injectable vault secrets.
+
+        Creates up to 3 vault secrets (primary oauth2, refresh, client_secret) and
+        updates the MCP config's Authorization header to ${secret:<base_name>}.
+
+        Raises:
+            ValueError: 400 — invalid base_name, STDIO config, or missing token_url.
+            LookupError: 404 — config not found or no stored tokens.
+            KeyError: 409 — vault name collision on any of the prospective secrets.
+        """
+        import re
+        from datetime import UTC, datetime
+        from urllib.parse import urlparse
+
+        from .models.secret_record import (
+            RefreshSpec,
+            ScrubSpec,
+            SecretRecord,
+            SecretType,
+        )
+
+        base_name_re = re.compile(r"^[a-z0-9][a-z0-9_-]{0,62}$")
+        if not base_name_re.match(base_name):
+            raise ValueError(
+                "base_name must match ^[a-z0-9][a-z0-9_-]{0,62}$"
+            )
+
+        config = await self.coordinator.mcp_config_manager.get_config(config_id)
+        if not config:
+            raise LookupError("404: MCP configuration not found")
+
+        if not config.url:
+            raise ValueError("Cannot import OAuth tokens from STDIO MCP server")
+
+        store = self.coordinator.oauth_manager.get_token_store(config_id)
+        tokens = await store.get_tokens()
+        if tokens is None:
+            raise LookupError("404: No OAuth tokens stored for this MCP server")
+
+        expiry_ts = await store.get_token_expiry()
+        client_info = await store.get_client_info()
+        token_url = store.get_token_endpoint()
+        if not token_url:
+            raise ValueError("OAuth token endpoint not recorded; re-authenticate to refresh it")
+
+        # Determine sibling secret names
+        refresh_token_name = f"{base_name}_refresh" if tokens.refresh_token else None
+        client_secret_value = client_info.client_secret if client_info else None
+        client_secret_name = f"{base_name}_client_secret" if client_secret_value else None
+
+        # Pre-check vault collisions
+        vault = self.coordinator.credential_vault
+        for name in filter(None, [base_name, refresh_token_name, client_secret_name]):
+            existing = await vault.get_secret(name)
+            if existing is not None:
+                raise KeyError(f"409: Secret '{name}' already exists; choose a different base_name")
+
+        now = datetime.now(UTC)
+        host = urlparse(config.url).netloc
+        token_path = urlparse(token_url).path
+
+        scrub = ScrubSpec(
+            url_path=token_path,
+            matcher_jsonpath="$.access_token",
+            update_on_change=True,
+        )
+
+        refresh_spec = None
+        if tokens.refresh_token and refresh_token_name:
+            client_id = (client_info.client_id if client_info else None) or config.oauth_client_id or ""
+            expires_at = datetime.fromtimestamp(expiry_ts, tz=UTC) if expiry_ts else None
+            refresh_spec = RefreshSpec(
+                token_url=token_url,
+                client_id=client_id,
+                refresh_token_secret_name=refresh_token_name,
+                client_secret_secret_name=client_secret_name,
+                expires_at=expires_at,
+                buffer_seconds=300,
+            )
+
+        # Create secrets: siblings first, primary last; rollback on failure
+        created: list[str] = []
+        try:
+            if refresh_token_name:
+                refresh_record = SecretRecord(
+                    name=refresh_token_name,
+                    type=SecretType.GENERIC,
+                    target_hosts=[host],
+                    created_at=now,
+                    updated_at=now,
+                )
+                await vault.create_secret(refresh_record, tokens.refresh_token)
+                created.append(refresh_token_name)
+
+            if client_secret_name and client_secret_value:
+                cs_record = SecretRecord(
+                    name=client_secret_name,
+                    type=SecretType.GENERIC,
+                    target_hosts=[host],
+                    created_at=now,
+                    updated_at=now,
+                )
+                await vault.create_secret(cs_record, client_secret_value)
+                created.append(client_secret_name)
+
+            primary_record = SecretRecord(
+                name=base_name,
+                type=SecretType.OAUTH2,
+                target_hosts=[host],
+                scrub=scrub,
+                refresh=refresh_spec,
+                created_at=now,
+                updated_at=now,
+            )
+            await vault.create_secret(primary_record, tokens.access_token)
+            created.append(base_name)
+        except Exception:
+            for n in created:
+                await vault.delete_secret(n)
+            raise
+
+        # Update MCP config headers — rollback all secrets if this fails
+        try:
+            new_headers = {**(config.headers or {}), "Authorization": f"${{secret:{base_name}}}"}
+            await self.coordinator.mcp_config_manager.update_config(config_id, headers=new_headers)
+        except Exception:
+            for n in created:
+                await vault.delete_secret(n)
+            raise
+
+        expires_at_iso = None
+        if expiry_ts:
+            expires_at_iso = datetime.fromtimestamp(expiry_ts, tz=UTC).isoformat()
+
+        return {
+            "secrets_created": created,
+            "header_injected": f"Authorization: ${{secret:{base_name}}}",
+            "expires_at": expires_at_iso,
+            "auto_refresh_enabled": refresh_spec is not None,
+        }
+
     # =========================================================================
     # Templates
     # =========================================================================
