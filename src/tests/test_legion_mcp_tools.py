@@ -588,3 +588,167 @@ async def test_issue_1114_queue_task_handler_passes_reset_session():
         content="reset and do",
         reset_session=True,
     )
+
+
+# ── create_schedule handler tests (Issue #1371) ──
+
+
+def _make_create_schedule_tools(create_schedule_side_effect=None, create_schedule_return=None):
+    """Build LegionMCPTools with mocked scheduler_service.create_schedule."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from src.legion.mcp.legion_mcp_tools import LegionMCPTools
+    from src.session_manager import SessionState
+
+    session_info = MagicMock()
+    session_info.project_id = "legion-abc"
+    session_info.name = "TestMinion"
+    session_info.state = SessionState.ACTIVE
+
+    session_manager = MagicMock()
+    session_manager.get_session_info = AsyncMock(return_value=session_info)
+
+    session_coordinator = MagicMock()
+    session_coordinator.session_manager = session_manager
+
+    schedule_mock = MagicMock()
+    schedule_mock.schedule_id = "sched-001"
+    schedule_mock.name = "Test Schedule"
+    schedule_mock.cron_expression = "0 * * * *"
+    schedule_mock.next_run = None
+    schedule_mock.status = MagicMock()
+    schedule_mock.status.value = "active"
+
+    scheduler_service = MagicMock()
+    if create_schedule_side_effect is not None:
+        scheduler_service.create_schedule = AsyncMock(side_effect=create_schedule_side_effect)
+    else:
+        scheduler_service.create_schedule = AsyncMock(
+            return_value=create_schedule_return or schedule_mock
+        )
+
+    mock_system = MagicMock()
+    mock_system.session_coordinator = session_coordinator
+    mock_system.scheduler_service = scheduler_service
+
+    return LegionMCPTools(mock_system), scheduler_service
+
+
+_CREATE_SCHEDULE_BASE_ARGS = {
+    "_from_minion_id": "minion-xyz",
+    "name": "Test Schedule",
+    "cron_expression": "0 * * * *",
+}
+
+
+@pytest.mark.asyncio
+async def test_issue_1371_create_schedule_script_mode_passes_through():
+    """Issue #1371: script param invokes service with schedule_type='script', script_command set."""
+    tools, svc = _make_create_schedule_tools()
+
+    result = await tools._handle_create_schedule({
+        **_CREATE_SCHEDULE_BASE_ARGS,
+        "script": "echo hello",
+    })
+
+    assert result.get("is_error") is False
+    svc.create_schedule.assert_awaited_once()
+    call_kwargs = svc.create_schedule.call_args.kwargs
+    assert call_kwargs["schedule_type"] == "script"
+    assert call_kwargs["script_command"] == "echo hello"
+    assert call_kwargs.get("prompt", "") == ""
+    assert "Type**: script" in result["content"][0]["text"]
+
+
+@pytest.mark.asyncio
+async def test_issue_1371_create_schedule_rejects_both_prompt_and_script():
+    """Issue #1371: supplying both prompt and script returns descriptive error, service not called."""
+    tools, svc = _make_create_schedule_tools()
+
+    result = await tools._handle_create_schedule({
+        **_CREATE_SCHEDULE_BASE_ARGS,
+        "prompt": "do the thing",
+        "script": "echo hello",
+    })
+
+    assert result.get("is_error") is True
+    assert "exactly one" in result["content"][0]["text"].lower()
+    svc.create_schedule.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_issue_1371_create_schedule_rejects_neither_prompt_nor_script():
+    """Issue #1371: omitting both prompt and script returns descriptive error, service not called."""
+    tools, svc = _make_create_schedule_tools()
+
+    result = await tools._handle_create_schedule({**_CREATE_SCHEDULE_BASE_ARGS})
+
+    assert result.get("is_error") is True
+    assert "required" in result["content"][0]["text"].lower()
+    svc.create_schedule.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_issue_1371_create_schedule_rejects_empty_script():
+    """Issue #1371: whitespace-only script treated as missing — 'neither provided' error."""
+    tools, svc = _make_create_schedule_tools()
+
+    result = await tools._handle_create_schedule({
+        **_CREATE_SCHEDULE_BASE_ARGS,
+        "script": "   ",
+    })
+
+    assert result.get("is_error") is True
+    assert "required" in result["content"][0]["text"].lower()
+    svc.create_schedule.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_issue_1371_create_schedule_prompt_mode_unchanged():
+    """Issue #1371: prompt-only call still passes schedule_type='prompt' and script_command=None."""
+    tools, svc = _make_create_schedule_tools()
+
+    result = await tools._handle_create_schedule({
+        **_CREATE_SCHEDULE_BASE_ARGS,
+        "prompt": "summarize today",
+    })
+
+    assert result.get("is_error") is False
+    call_kwargs = svc.create_schedule.call_args.kwargs
+    assert call_kwargs["schedule_type"] == "prompt"
+    assert call_kwargs["script_command"] is None
+    assert call_kwargs["prompt"] == "summarize today"
+    assert "Type**: script" not in result["content"][0]["text"]
+
+
+@pytest.mark.asyncio
+async def test_issue_1371_create_schedule_script_timeout_seconds_propagated():
+    """Issue #1371: script_timeout_seconds flows through; default=60 when omitted; string coercion works."""
+    tools, svc = _make_create_schedule_tools()
+
+    # Explicit integer value
+    await tools._handle_create_schedule({
+        **_CREATE_SCHEDULE_BASE_ARGS,
+        "script": "check.sh",
+        "script_timeout_seconds": 120,
+    })
+    assert svc.create_schedule.call_args.kwargs["script_timeout_seconds"] == 120
+
+    svc.create_schedule.reset_mock()
+
+    # String form (MCP may pass as string)
+    await tools._handle_create_schedule({
+        **_CREATE_SCHEDULE_BASE_ARGS,
+        "script": "check.sh",
+        "script_timeout_seconds": "90",
+    })
+    assert svc.create_schedule.call_args.kwargs["script_timeout_seconds"] == 90
+
+    svc.create_schedule.reset_mock()
+
+    # Omitted — default 60
+    await tools._handle_create_schedule({
+        **_CREATE_SCHEDULE_BASE_ARGS,
+        "script": "check.sh",
+    })
+    assert svc.create_schedule.call_args.kwargs["script_timeout_seconds"] == 60

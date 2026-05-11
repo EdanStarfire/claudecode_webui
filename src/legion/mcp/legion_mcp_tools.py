@@ -281,15 +281,19 @@ class LegionMCPTools:
 
         @tool(
             "create_schedule",
-            "Create a recurring cron schedule for yourself. The system will automatically "
-            "deliver the specified prompt to you at the scheduled times. If you are terminated "
-            "when a schedule fires, the system will auto-start you."
+            "Create a recurring cron schedule for yourself. Provide exactly one of 'prompt' or 'script'."
+            "\n\nPrompt mode: The specified prompt text is delivered to you when the schedule fires."
+            "\nScript mode: A shell script is run at each tick; stdout becomes the delivered message."
+            " Silent exits (no stdout) are discarded and no message is delivered."
+            " If you are terminated when a schedule fires, the system will auto-start you."
             "\n\nParameters:"
             "\n- name: Human-readable name (e.g., 'Daily status report')"
             "\n- cron_expression: Standard 5-field cron (min hour dom mon dow). "
             "Examples: '0 8 * * 1-5' (weekdays 8am), '0 */2 * * *' (every 2 hours), "
             "'30 9 1 * *' (1st of month at 9:30am)"
-            "\n- prompt: The prompt text delivered to you when the schedule fires"
+            "\n- prompt (optional): Prompt mode — text delivered to you when the schedule fires. XOR with script."
+            "\n- script (optional): Script mode — shell command/script run at each tick. XOR with prompt."
+            "\n- script_timeout_seconds (optional, default 60): Script mode only — max seconds before script is killed."
             "\n- reset_session (optional, default false): Reset session before each execution for clean context"
             "\n- max_retries (optional, default 3): Max delivery retries on failure"
             "\n- timeout_seconds (optional, default 3600): Delivery timeout",
@@ -297,6 +301,8 @@ class LegionMCPTools:
                 "name": str,
                 "cron_expression": str,
                 "prompt": str,
+                "script": str,
+                "script_timeout_seconds": int,
                 "reset_session": bool,
                 "max_retries": int,
                 "timeout_seconds": int,
@@ -2023,12 +2029,38 @@ class LegionMCPTools:
         name = args.get("name", "").strip()
         cron_expression = args.get("cron_expression", "").strip()
         prompt = args.get("prompt", "").strip()
+        script = args.get("script", "").strip()
 
-        if not name or not cron_expression or not prompt:
+        if not name or not cron_expression:
             return {
-                "content": [{"type": "text", "text": "Error: name, cron_expression, and prompt are all required"}],
+                "content": [{"type": "text", "text": "Error: name and cron_expression are required"}],
                 "is_error": True,
             }
+
+        if prompt and script:
+            return {
+                "content": [{"type": "text", "text": "Error: Provide exactly one of 'prompt' or 'script', not both"}],
+                "is_error": True,
+            }
+        if not prompt and not script:
+            return {
+                "content": [{"type": "text", "text": "Error: Either 'prompt' or 'script' is required"}],
+                "is_error": True,
+            }
+
+        if script:
+            schedule_type = "script"
+            script_command = script
+            script_timeout_seconds = args.get("script_timeout_seconds", 60)
+            if isinstance(script_timeout_seconds, str):
+                try:
+                    script_timeout_seconds = int(script_timeout_seconds)
+                except ValueError:
+                    script_timeout_seconds = 60
+        else:
+            schedule_type = "prompt"
+            script_command = None
+            script_timeout_seconds = 60
 
         # Get minion info for legion_id and name
         session = await self.system.session_coordinator.session_manager.get_session_info(from_minion_id)
@@ -2074,6 +2106,9 @@ class LegionMCPTools:
                 reset_session=reset_session,
                 max_retries=max_retries,
                 timeout_seconds=timeout_seconds,
+                schedule_type=schedule_type,
+                script_command=script_command,
+                script_timeout_seconds=script_timeout_seconds,
             )
 
             from datetime import datetime
@@ -2083,18 +2118,28 @@ class LegionMCPTools:
                     "%Y-%m-%d %H:%M %Z"
                 )
 
+            if schedule_type == "script":
+                msg = (
+                    f"Schedule created successfully.\n\n"
+                    f"- **ID**: {schedule.schedule_id}\n"
+                    f"- **Name**: {schedule.name}\n"
+                    f"- **Type**: script\n"
+                    f"- **Cron**: {schedule.cron_expression}\n"
+                    f"- **Next run**: {next_run_str}\n"
+                    f"- **Status**: {schedule.status.value}"
+                )
+            else:
+                msg = (
+                    f"Schedule created successfully.\n\n"
+                    f"- **ID**: {schedule.schedule_id}\n"
+                    f"- **Name**: {schedule.name}\n"
+                    f"- **Cron**: {schedule.cron_expression}\n"
+                    f"- **Next run**: {next_run_str}\n"
+                    f"- **Status**: {schedule.status.value}"
+                )
+
             return {
-                "content": [{
-                    "type": "text",
-                    "text": (
-                        f"Schedule created successfully.\n\n"
-                        f"- **ID**: {schedule.schedule_id}\n"
-                        f"- **Name**: {schedule.name}\n"
-                        f"- **Cron**: {schedule.cron_expression}\n"
-                        f"- **Next run**: {next_run_str}\n"
-                        f"- **Status**: {schedule.status.value}"
-                    ),
-                }],
+                "content": [{"type": "text", "text": msg}],
                 "is_error": False,
             }
         except ValueError as e:
