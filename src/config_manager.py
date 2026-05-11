@@ -218,6 +218,17 @@ class SecretsConfig:
 
 
 @dataclass
+class HistoryRetentionConfig:
+    """Retention policy for schedule_history.jsonl rotation."""
+
+    max_entries: int = 500
+    max_age_days: int = 30
+    rotation_interval_seconds: int = 300
+    rotation_trigger_count: int = 100
+    enabled: bool = True
+
+
+@dataclass
 class AppConfig:
     networking: NetworkingConfig = field(default_factory=NetworkingConfig)
     features: FeaturesConfig = field(default_factory=FeaturesConfig)
@@ -227,6 +238,7 @@ class AppConfig:
     watchdog: WatchdogConfig = field(default_factory=WatchdogConfig)
     secrets: SecretsConfig = field(default_factory=SecretsConfig)
     pricing: PricingConfig = field(default_factory=PricingConfig)
+    history_retention: HistoryRetentionConfig = field(default_factory=HistoryRetentionConfig)
 
     @classmethod
     def from_dict(cls, data: dict) -> "AppConfig":
@@ -285,6 +297,14 @@ class AppConfig:
         )
         pricing_data = data.get("pricing", {})
         pricing = PricingConfig.from_dict(pricing_data) if pricing_data else PricingConfig()
+        hr_data = data.get("history_retention", {})
+        history_retention = HistoryRetentionConfig(
+            max_entries=hr_data.get("max_entries", 500),
+            max_age_days=hr_data.get("max_age_days", 30),
+            rotation_interval_seconds=hr_data.get("rotation_interval_seconds", 300),
+            rotation_trigger_count=hr_data.get("rotation_trigger_count", 100),
+            enabled=hr_data.get("enabled", True),
+        )
         return cls(
             networking=networking,
             features=features,
@@ -294,6 +314,7 @@ class AppConfig:
             watchdog=watchdog,
             secrets=secrets,
             pricing=pricing,
+            history_retention=history_retention,
         )
 
     def to_dict(self) -> dict:
@@ -352,6 +373,17 @@ class AppConfig:
                 "keyring_service_name": self.secrets.keyring_service_name,
             },
             "pricing": self.pricing.to_dict(),
+            "history_retention": {
+                "_comment": (
+                    "Rotation policy for schedule_history.jsonl. Set enabled=false to disable "
+                    "rotation (log grows unbounded). Metrics are maintained regardless."
+                ),
+                "max_entries": self.history_retention.max_entries,
+                "max_age_days": self.history_retention.max_age_days,
+                "rotation_interval_seconds": self.history_retention.rotation_interval_seconds,
+                "rotation_trigger_count": self.history_retention.rotation_trigger_count,
+                "enabled": self.history_retention.enabled,
+            },
         }
 
 

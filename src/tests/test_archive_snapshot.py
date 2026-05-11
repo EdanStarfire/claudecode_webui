@@ -249,6 +249,36 @@ class TestSnapshotArtifactsDisposal:
         assert (archive_dir / "schedule_history.jsonl").exists()
 
     @pytest.mark.asyncio
+    async def test_archive_includes_metrics_file(self, mock_system, tmp_data):
+        """Disposal archive includes schedule_metrics.json when present (issue #1372)."""
+        system, _ = mock_system
+        session_id = "sess-metrics"
+        legion_id = "legion-metrics-001"
+        session_dir = _make_session_dir(tmp_data, session_id)
+
+        legion_dir = tmp_data / "legions" / legion_id
+        legion_dir.mkdir(parents=True)
+        (legion_dir / "schedules.json").write_text(json.dumps([]))
+        (legion_dir / "schedule_history.jsonl").write_text("")
+        (legion_dir / "schedule_metrics.json").write_text(
+            json.dumps({"sched-1": {"schedule_id": "sched-1", "total_runs": 42}})
+        )
+
+        archive_dir = tmp_data / "archives" / "minions" / session_id / "ts-metrics"
+        archive_dir.mkdir(parents=True)
+        ctx = SnapshotContext(
+            session_id=session_id, legion_id=legion_id, auto_memory_directory=None,
+            docker_enabled=False, proxy_enabled=False, is_reset=False, will_be_deleted=True,
+        )
+        manager = ArchiveManager(system)
+        archived = await manager.snapshot_artifacts(session_dir, archive_dir, ctx)
+
+        assert "schedule_metrics.json" in archived
+        assert (archive_dir / "schedule_metrics.json").exists()
+        saved = json.loads((archive_dir / "schedule_metrics.json").read_text())
+        assert saved["sched-1"]["total_runs"] == 42
+
+    @pytest.mark.asyncio
     async def test_disposal_external_memory_not_deleted(self, mock_system, tmp_data):
         """Out-of-tree auto_memory_directory is copied but source preserved."""
         system, _ = mock_system

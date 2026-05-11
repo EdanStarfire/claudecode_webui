@@ -201,7 +201,7 @@ class ArchiveManager:
     ) -> None:
         data_dir = self.system.session_coordinator.session_manager.data_dir
         legion_dir = data_dir / "legions" / legion_id
-        for fname in ("schedules.json", "schedule_history.jsonl"):
+        for fname in ("schedules.json", "schedule_history.jsonl", "schedule_metrics.json"):
             src = legion_dir / fname
             if src.exists():
                 shutil.copy2(src, archive_dir / fname)
