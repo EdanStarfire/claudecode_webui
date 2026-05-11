@@ -123,6 +123,10 @@ export const useMcpConfigStore = defineStore('mcpConfig', () => {
     oauthStatus.value = new Map(oauthStatus.value.set(configId, OAUTH_STATUS.UNAUTHENTICATED))
   }
 
+  async function importOAuthAsSecret(configId, baseName) {
+    return await api.post(`/api/mcp-configs/${configId}/oauth/import-as-secret`, { base_name: baseName })
+  }
+
   return {
     configs,
     loading,
@@ -138,5 +142,6 @@ export const useMcpConfigStore = defineStore('mcpConfig', () => {
     fetchOAuthStatus,
     initiateOAuth,
     disconnectOAuth,
+    importOAuthAsSecret,
   }
 })

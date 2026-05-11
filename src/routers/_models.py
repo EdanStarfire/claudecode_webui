@@ -304,6 +304,10 @@ class McpOAuthInitiateRequest(BaseModel):
     redirect_uri: str
 
 
+class McpOAuthImportAsSecretRequest(BaseModel):
+    base_name: str
+
+
 class McpConfigExportRequest(BaseModel):
     ids: list[str] | None = None  # If None, export all
 

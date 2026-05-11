@@ -13,6 +13,7 @@ from ._models import (
     McpConfigExportRequest,
     McpConfigImportRequest,
     McpConfigUpdateRequest,
+    McpOAuthImportAsSecretRequest,
     McpOAuthInitiateRequest,
 )
 
@@ -212,6 +213,27 @@ def build_router(webui) -> APIRouter:
         if not success:
             raise HTTPException(status_code=404, detail="MCP config not found")
         return {"disconnected": True}
+
+    @router.post("/api/mcp-configs/{config_id}/oauth/import-as-secret")
+    @handle_exceptions("import OAuth as secret", value_error_status=400)
+    async def import_oauth_as_secret(config_id: str, request: McpOAuthImportAsSecretRequest):
+        """Import stored OAuth 2.1 tokens as proxy-injectable vault secrets (issue #1381).
+
+        Creates up to 3 vault secrets (oauth2 primary, refresh token, client secret) and
+        updates the MCP server's Authorization header to ${secret:<base_name>}.
+        """
+        from fastapi.responses import JSONResponse
+        try:
+            result = await webui.service.import_oauth_as_secret(config_id, request.base_name)
+        except LookupError as e:
+            msg = str(e)
+            detail = msg[5:].strip() if msg.startswith("404:") else msg
+            raise HTTPException(status_code=404, detail=detail) from e
+        except KeyError as e:
+            msg = str(e).strip("'")
+            detail = msg[5:].strip() if msg.startswith("409:") else msg
+            raise HTTPException(status_code=409, detail=detail) from e
+        return JSONResponse(status_code=201, content=result)
 
     @router.get("/api/mcp-configs/{config_id}/oauth/status")
     @handle_exceptions("get MCP OAuth status")

@@ -32,7 +32,7 @@
           <!-- OAuth Connect/Disconnect buttons -->
           <template v-if="config.oauth_enabled && (config.type === 'http' || config.type === 'sse')">
             <button
-              v-if="oauthStatusFor(config.id) !== OAUTH_STATUS.AUTHENTICATED"
+              v-if="oauthStatusFor(config.id) !== OAUTH_STATUS.AUTHENTICATED && oauthStatusFor(config.id) !== OAUTH_STATUS.EXPIRING_SOON"
               class="btn btn-xs btn-outline-success"
               :disabled="connectingId === config.id"
               @click="connectOAuth(config)"
@@ -40,15 +40,24 @@
             >
               {{ connectingId === config.id ? '…' : 'Connect' }}
             </button>
-            <button
-              v-else
-              class="btn btn-xs btn-outline-secondary"
-              :disabled="disconnectingId === config.id"
-              @click="disconnectOAuth(config)"
-              title="Disconnect OAuth"
-            >
-              {{ disconnectingId === config.id ? '…' : 'Disconnect' }}
-            </button>
+            <template v-else>
+              <button
+                class="btn btn-xs btn-outline-info"
+                :disabled="importingId === config.id"
+                @click="openImportModal(config)"
+                title="Import OAuth tokens to vault as proxy-injectable secret"
+              >
+                {{ importingId === config.id ? '…' : 'Import as Proxy Secret' }}
+              </button>
+              <button
+                class="btn btn-xs btn-outline-secondary"
+                :disabled="disconnectingId === config.id"
+                @click="disconnectOAuth(config)"
+                title="Disconnect OAuth"
+              >
+                {{ disconnectingId === config.id ? '…' : 'Disconnect' }}
+              </button>
+            </template>
           </template>
           <button class="btn btn-sm btn-outline-secondary config-action-btn" @click="copyServer(config)" :title="copiedId === config.id ? 'Copied!' : 'Copy JSON'">
             {{ copiedId === config.id ? '✓' : '⎘' }}
@@ -331,6 +340,42 @@
         <button class="btn btn-secondary btn-sm" @click="deletingConfig = null">Cancel</button>
       </div>
     </div>
+
+    <!-- Import as Proxy Secret modal -->
+    <div v-if="oauthImportConfig" class="mt-2 p-2 border border-info rounded">
+      <h6 class="mb-2">Import as Proxy Secret</h6>
+      <p class="text-muted small mb-2">
+        Creates vault secrets from the stored OAuth tokens for <strong>{{ oauthImportConfig.name }}</strong>.
+        The <code>Authorization</code> header will be set to <code>${secret:&lt;base_name&gt;}</code>.
+      </p>
+      <div class="mb-2">
+        <label class="form-label mb-1">Secret base name</label>
+        <input
+          type="text"
+          class="form-control form-control-sm font-monospace"
+          :class="{ 'is-invalid': oauthImportNameError }"
+          v-model="oauthImportBaseName"
+          @input="validateImportName"
+          placeholder="e.g. jira_oauth"
+        />
+        <div v-if="oauthImportNameError" class="invalid-feedback">{{ oauthImportNameError }}</div>
+        <div class="form-text small text-muted">
+          Must match <code>^[a-z0-9][a-z0-9_-]{0,62}$</code>
+        </div>
+      </div>
+      <div v-if="oauthImportError" class="alert alert-danger py-1 small mb-2">{{ oauthImportError }}</div>
+      <div v-if="oauthImportWarning" class="alert alert-warning py-1 small mb-2">{{ oauthImportWarning }}</div>
+      <div class="d-flex gap-2">
+        <button
+          class="btn btn-info btn-sm"
+          @click="doImport"
+          :disabled="importingId !== null || !!oauthImportNameError || !oauthImportBaseName.trim()"
+        >
+          {{ importingId ? 'Importing…' : 'Import' }}
+        </button>
+        <button class="btn btn-secondary btn-sm" @click="cancelImportModal">Cancel</button>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -381,6 +426,73 @@ const importPreview = ref(null)
 // OAuth state
 const connectingId = ref(null)
 const disconnectingId = ref(null)
+const importingId = ref(null)
+
+// OAuth import-as-secret modal state
+const oauthImportConfig = ref(null)
+const oauthImportBaseName = ref('')
+const oauthImportNameError = ref(null)
+const oauthImportError = ref(null)
+const oauthImportWarning = ref(null)
+
+const _IMPORT_NAME_RE = /^[a-z0-9][a-z0-9_-]{0,62}$/
+
+function _slugify(name) {
+  return name.toLowerCase().replace(/[^a-z0-9_-]/g, '_').replace(/^[^a-z0-9]+/, '').slice(0, 64)
+}
+
+function validateImportName() {
+  const v = oauthImportBaseName.value.trim()
+  if (!v) {
+    oauthImportNameError.value = 'Name is required'
+  } else if (!_IMPORT_NAME_RE.test(v)) {
+    oauthImportNameError.value = 'Must match ^[a-z0-9][a-z0-9_-]{0,62}$'
+  } else {
+    oauthImportNameError.value = null
+  }
+}
+
+function openImportModal(config) {
+  oauthImportConfig.value = config
+  oauthImportBaseName.value = _slugify(config.name) + '_oauth'
+  oauthImportNameError.value = null
+  oauthImportError.value = null
+  oauthImportWarning.value = null
+}
+
+function cancelImportModal() {
+  oauthImportConfig.value = null
+  oauthImportBaseName.value = ''
+  oauthImportNameError.value = null
+  oauthImportError.value = null
+  oauthImportWarning.value = null
+}
+
+async function doImport() {
+  validateImportName()
+  if (oauthImportNameError.value) return
+
+  const config = oauthImportConfig.value
+  importingId.value = config.id
+  oauthImportError.value = null
+  oauthImportWarning.value = null
+  try {
+    const result = await configStore.importOAuthAsSecret(config.id, oauthImportBaseName.value.trim())
+    if (!result.auto_refresh_enabled) {
+      oauthImportWarning.value = 'No refresh token was stored; auto-refresh is disabled for this secret.'
+    }
+    // Refresh configs to show updated Authorization header
+    await configStore.fetchConfigs()
+    if (!oauthImportWarning.value) {
+      cancelImportModal()
+    }
+  } catch (e) {
+    oauthImportError.value = e?.data?.detail || e.message || 'Import failed'
+    // Keep modal open on 409 so user can retry with different name
+  } finally {
+    importingId.value = null
+  }
+}
 
 onMounted(async () => {
   await configStore.fetchConfigs()
