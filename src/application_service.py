@@ -7,10 +7,41 @@ coordinator attributes directly.
 from __future__ import annotations
 
 import time
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from src.session_coordinator import SessionCoordinator
+
+
+def _compute_secret_health(refresh: dict | None) -> str:
+    """Issue #1387: Derive token health state from refresh metadata.
+
+    Returns one of: "valid", "expiring_soon", "expired", "refresh_failed".
+    """
+    if not refresh:
+        return "valid"
+
+    if refresh.get("last_refresh_error"):
+        return "refresh_failed"
+
+    expires_at_str = refresh.get("expires_at")
+    if not expires_at_str:
+        return "valid"
+
+    try:
+        expires_at = datetime.fromisoformat(expires_at_str)
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=UTC)
+        buffer = int(refresh.get("buffer_seconds", 300))
+        now = datetime.now(tz=UTC)
+        if now >= expires_at:
+            return "expired"
+        if now >= expires_at - timedelta(seconds=buffer):
+            return "expiring_soon"
+        return "valid"
+    except Exception:
+        return "valid"
 
 
 class ApplicationService:
@@ -443,16 +474,22 @@ class ApplicationService:
             "has_refresh_token": bool(token.refresh_token),
         }
 
-    async def import_oauth_as_secret(self, config_id: str, base_name: str) -> dict:
+    async def import_oauth_as_secret(
+        self, config_id: str, base_name: str, replace: bool = False
+    ) -> dict:
         """Import stored OAuth 2.1 tokens as proxy-injectable vault secrets.
 
         Creates up to 3 vault secrets (primary oauth2, refresh, client_secret) and
         updates the MCP config's Authorization header to ${secret:<base_name>}.
 
+        When replace=True (Reconnect flow): updates existing records in-place after
+        verifying sibling ownership. Skips the 409 collision pre-check.
+
         Raises:
             ValueError: 400 — invalid base_name, STDIO config, or missing token_url.
             LookupError: 404 — config not found or no stored tokens.
-            KeyError: 409 — vault name collision on any of the prospective secrets.
+            KeyError: 409 — vault name collision (replace=False) or sibling ownership
+                           guard failure (replace=True).
         """
         import re
         from datetime import UTC, datetime
@@ -494,16 +531,12 @@ class ApplicationService:
         client_secret_value = client_info.client_secret if client_info else None
         client_secret_name = f"{base_name}_client_secret" if client_secret_value else None
 
-        # Pre-check vault collisions
         vault = self.coordinator.credential_vault
-        for name in filter(None, [base_name, refresh_token_name, client_secret_name]):
-            existing = await vault.get_secret(name)
-            if existing is not None:
-                raise KeyError(f"409: Secret '{name}' already exists; choose a different base_name")
-
         now = datetime.now(UTC)
         host = urlparse(config.url).netloc
         token_path = urlparse(token_url).path
+        client_id = (client_info.client_id if client_info else None) or config.oauth_client_id or ""
+        expires_at_dt = datetime.fromtimestamp(expiry_ts, tz=UTC) if expiry_ts else None
 
         scrub = ScrubSpec(
             url_path=token_path,
@@ -513,16 +546,39 @@ class ApplicationService:
 
         refresh_spec = None
         if tokens.refresh_token and refresh_token_name:
-            client_id = (client_info.client_id if client_info else None) or config.oauth_client_id or ""
-            expires_at = datetime.fromtimestamp(expiry_ts, tz=UTC) if expiry_ts else None
             refresh_spec = RefreshSpec(
                 token_url=token_url,
                 client_id=client_id,
                 refresh_token_secret_name=refresh_token_name,
                 client_secret_secret_name=client_secret_name,
-                expires_at=expires_at,
+                expires_at=expires_at_dt,
                 buffer_seconds=300,
             )
+
+        expires_at_iso = expires_at_dt.isoformat() if expires_at_dt else None
+
+        if replace:
+            return await self._replace_oauth_secret_bundle(
+                vault=vault,
+                base_name=base_name,
+                refresh_token_name=refresh_token_name,
+                client_secret_name=client_secret_name,
+                tokens=tokens,
+                client_secret_value=client_secret_value,
+                refresh_spec=refresh_spec,
+                scrub=scrub,
+                host=host,
+                now=now,
+                expires_at_iso=expires_at_iso,
+                SecretRecord=SecretRecord,
+                SecretType=SecretType,
+            )
+
+        # Pre-check vault collisions (replace=False only)
+        for name in filter(None, [base_name, refresh_token_name, client_secret_name]):
+            existing = await vault.get_secret(name)
+            if existing is not None:
+                raise KeyError(f"409: Secret '{name}' already exists; choose a different base_name")
 
         # Create secrets: siblings first, primary last; rollback on failure
         created: list[str] = []
@@ -574,12 +630,95 @@ class ApplicationService:
                 await vault.delete_secret(n)
             raise
 
-        expires_at_iso = None
-        if expiry_ts:
-            expires_at_iso = datetime.fromtimestamp(expiry_ts, tz=UTC).isoformat()
+        # Issue #1387: schedule background refresh for the new oauth2 secret
+        self.coordinator.vault_refresh_manager.schedule_secret(base_name)
 
         return {
             "secrets_created": created,
+            "header_injected": f"Authorization: ${{secret:{base_name}}}",
+            "expires_at": expires_at_iso,
+            "auto_refresh_enabled": refresh_spec is not None,
+        }
+
+    async def _replace_oauth_secret_bundle(
+        self,
+        *,
+        vault,
+        base_name: str,
+        refresh_token_name: str | None,
+        client_secret_name: str | None,
+        tokens,
+        client_secret_value: str | None,
+        refresh_spec,
+        scrub,
+        host: str,
+        now,
+        expires_at_iso: str | None,
+    ) -> dict:
+        """Replace existing vault oauth2 secret bundle in-place (Reconnect flow).
+
+        Enforces sibling ownership guard: refuses to replace if the existing primary
+        record's refresh metadata doesn't point to the expected sibling names.
+        """
+        from .models.secret_record import SecretRecord
+
+        # Verify primary record exists
+        primary_meta = await vault.get_secret(base_name)
+        if primary_meta is None:
+            raise LookupError(f"404: Primary secret '{base_name}' not found for replace")
+
+        # Sibling ownership guard
+        existing_refresh = primary_meta.get("refresh") or {}
+        if refresh_token_name:
+            expected = existing_refresh.get("refresh_token_secret_name")
+            if expected and expected != refresh_token_name:
+                raise KeyError(
+                    f"409: Sibling ownership guard: refresh sibling '{expected}' "
+                    f"doesn't match expected '{refresh_token_name}'"
+                )
+        if client_secret_name:
+            expected_cs = existing_refresh.get("client_secret_secret_name")
+            if expected_cs and expected_cs != client_secret_name:
+                raise KeyError(
+                    f"409: Sibling ownership guard: client_secret sibling '{expected_cs}' "
+                    f"doesn't match expected '{client_secret_name}'"
+                )
+
+        updated: list[str] = []
+
+        # Update refresh token sibling value
+        if refresh_token_name and tokens.refresh_token:
+            rt_meta = await vault.get_secret(refresh_token_name)
+            if rt_meta:
+                rt_record = SecretRecord.from_dict({**rt_meta, "updated_at": now.isoformat()})
+                await vault.update_secret(refresh_token_name, rt_record, tokens.refresh_token)
+                updated.append(refresh_token_name)
+
+        # Update client_secret sibling value
+        if client_secret_name and client_secret_value:
+            cs_meta = await vault.get_secret(client_secret_name)
+            if cs_meta:
+                cs_record = SecretRecord.from_dict({**cs_meta, "updated_at": now.isoformat()})
+                await vault.update_secret(client_secret_name, cs_record, client_secret_value)
+                updated.append(client_secret_name)
+
+        # Update primary record: new access_token value + reset refresh metadata
+        primary_record = SecretRecord.from_dict({**primary_meta, "updated_at": now.isoformat()})
+        if primary_record.refresh and refresh_spec:
+            primary_record.refresh.expires_at = refresh_spec.expires_at
+            primary_record.refresh.last_refresh_at = None
+            primary_record.refresh.last_refresh_status = None
+            primary_record.refresh.last_refresh_error = None
+        elif refresh_spec:
+            primary_record.refresh = refresh_spec
+        await vault.update_secret(base_name, primary_record, tokens.access_token)
+        updated.append(base_name)
+
+        # Reschedule background refresh with fresh expiry
+        self.coordinator.vault_refresh_manager.schedule_secret(base_name)
+
+        return {
+            "secrets_updated": updated,
             "header_injected": f"Authorization: ${{secret:{base_name}}}",
             "expires_at": expires_at_iso,
             "auto_refresh_enabled": refresh_spec is not None,
@@ -668,6 +807,10 @@ class ApplicationService:
     async def list_secrets(self) -> dict:
         """List all secret metadata. Never includes secret values."""
         secrets = await self.coordinator.credential_vault.list_secrets()
+        # Issue #1387: enrich OAUTH2 secrets with a computed health field
+        for s in secrets:
+            if s.get("type") == "oauth2":
+                s["health"] = _compute_secret_health(s.get("refresh"))
         return {"secrets": secrets}
 
     async def create_secret(
@@ -796,7 +939,20 @@ class ApplicationService:
         refresh_token if present) back to the keyring, and updates expires_at.
         Returns updated metadata, or None if the secret does not exist / is not oauth2.
         Raises RuntimeError on refresh failure.
+
+        Issue #1387: Acquires the VaultRefreshManager per-secret lock to prevent
+        concurrent refresh races with the background task.
         """
+        # Issue #1387: acquire per-secret lock to deduplicate concurrent refreshes
+        mgr = getattr(self.coordinator, "vault_refresh_manager", None)
+        if mgr:
+            lock = mgr.get_lock(name)
+            async with lock:
+                return await self._refresh_secret_impl(name)
+        return await self._refresh_secret_impl(name)
+
+    async def _refresh_secret_impl(self, name: str) -> dict | None:
+        """Core refresh logic — caller must hold per-secret lock if dedup is needed."""
         from .models.secret_record import SecretType
         from .secret_types.oauth2 import OAuth2Handler
         from .secrets_keyring import get_secret_value, set_secret_value

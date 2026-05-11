@@ -257,6 +257,10 @@ class SessionCoordinator:
         # Issue #976/#989: OAuth token refresh lifecycle (extracted to OAuthRefreshManager)
         self.oauth_refresh_manager = OAuthRefreshManager(self.oauth_manager)
 
+        # Issue #1387: Proactive vault OAuth2 secret refresh
+        from .vault_refresh_manager import VaultRefreshManager
+        self.vault_refresh_manager = VaultRefreshManager(self.credential_vault)
+
         # Event callbacks
         self._message_callbacks: dict[str, list[Callable]] = {}
         self._error_callbacks: dict[str, list[Callable]] = {}

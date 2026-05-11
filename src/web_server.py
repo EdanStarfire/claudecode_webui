@@ -229,6 +229,11 @@ class ClaudeWebUI:
         self.coordinator.oauth_refresh_manager.set_broadcast_callback(self._broadcast_mcp_oauth_refreshed)
         logger.info("OAuth refresh broadcast callback injected into OAuthRefreshManager")
 
+        # Issue #1387: Wire vault refresh manager service + broadcast callback
+        self.coordinator.vault_refresh_manager.set_service(self.service)
+        self.coordinator.vault_refresh_manager.set_broadcast_callback(self._broadcast_vault_secret_event)
+        logger.info("VaultRefreshManager wired")
+
         # Setup static files (Vue 3 production build)
         static_dir = Path(__file__).parent.parent / "frontend" / "dist"
         if not static_dir.exists():
@@ -385,6 +390,20 @@ class ClaudeWebUI:
         except Exception:
             logger.exception("Error appending mcp_oauth_complete")
 
+    def _broadcast_vault_secret_event(self, secret_name: str, error: str | None) -> None:
+        """Issue #1387: Emit secret_refreshed or secret_refresh_failed to the UI poll queue."""
+        try:
+            if error is None:
+                self.ui_queue.append({"type": "secret_refreshed", "secret_name": secret_name})
+            else:
+                self.ui_queue.append({
+                    "type": "secret_refresh_failed",
+                    "secret_name": secret_name,
+                    "error": error,
+                })
+        except Exception:
+            logger.exception("Error appending vault secret event for %s", secret_name)
+
     def _broadcast_mcp_oauth_refreshed(self, server_id: str) -> None:
         """Issue #976: Emit mcp_oauth_refreshed to the global UI poll queue."""
         try:
@@ -509,6 +528,10 @@ class ClaudeWebUI:
                     f"Default proxy image '{startup_config.proxy.proxy_image}' not found locally. "
                     f"It will be auto-built on first proxy-enabled session start."
                 )
+
+        # Issue #1387: Start vault OAuth2 background refresh manager
+        await self.coordinator.vault_refresh_manager.start()
+        logger.info("VaultRefreshManager started")
 
         # Issue #1130: Start session watchdog service
         await self._watchdog.start()
@@ -772,6 +795,8 @@ class ClaudeWebUI:
 
     async def cleanup(self):
         """Cleanup resources"""
+        # Issue #1387: Stop vault refresh manager
+        await self.coordinator.vault_refresh_manager.stop()
         # Issue #1130: Stop session watchdog service
         if hasattr(self, '_watchdog') and self._watchdog is not None:
             await self._watchdog.stop()

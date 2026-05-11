@@ -102,6 +102,10 @@ export const useMcpConfigStore = defineStore('mcpConfig', () => {
   // Per-server OAuth status cache: configId → OAUTH_STATUS value
   const oauthStatus = ref(new Map())
 
+  // Issue #1387: pending reconnect map — configId → baseName
+  // Set before opening OAuth popup; cleared and acted on in mcp_oauth_complete handler.
+  const pendingReconnect = ref(new Map())
+
   async function fetchOAuthStatus(configId) {
     try {
       const data = await api.get(`/api/mcp-configs/${configId}/oauth/status`)
@@ -127,10 +131,35 @@ export const useMcpConfigStore = defineStore('mcpConfig', () => {
     return await api.post(`/api/mcp-configs/${configId}/oauth/import-as-secret`, { base_name: baseName })
   }
 
+  // Issue #1387: Reconnect flow helpers
+
+  /** Register a pending reconnect before opening the OAuth popup. */
+  function startReconnect(configId, baseName) {
+    pendingReconnect.value = new Map(pendingReconnect.value.set(configId, baseName))
+  }
+
+  /**
+   * Complete a pending reconnect by calling import-as-secret with replace=true.
+   * Called by the mcp_oauth_complete polling handler when a reconnect is pending.
+   * Returns the API result or null if no pending reconnect for this configId.
+   */
+  async function completeReconnect(configId) {
+    const baseName = pendingReconnect.value.get(configId)
+    if (!baseName) return null
+    const next = new Map(pendingReconnect.value)
+    next.delete(configId)
+    pendingReconnect.value = next
+    return await api.post(
+      `/api/mcp-configs/${configId}/oauth/import-as-secret`,
+      { base_name: baseName, replace: true }
+    )
+  }
+
   return {
     configs,
     loading,
     oauthStatus,
+    pendingReconnect,
     configList,
     getConfig,
     fetchConfigs,
@@ -143,5 +172,7 @@ export const useMcpConfigStore = defineStore('mcpConfig', () => {
     initiateOAuth,
     disconnectOAuth,
     importOAuthAsSecret,
+    startReconnect,
+    completeReconnect,
   }
 })

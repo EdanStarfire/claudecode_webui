@@ -379,7 +379,16 @@ export const usePollingStore = defineStore('polling', () => {
         const serverId = payload.server_id
         if (serverId) {
           import('./mcpConfig').then(({ useMcpConfigStore }) => {
-            useMcpConfigStore().fetchOAuthStatus(serverId)
+            const mcpStore = useMcpConfigStore()
+            mcpStore.fetchOAuthStatus(serverId)
+            // Issue #1387: complete any pending Reconnect flow for this server
+            if (mcpStore.pendingReconnect.get(serverId)) {
+              mcpStore.completeReconnect(serverId).then(() => {
+                import('./secrets').then(({ useSecretsStore }) => {
+                  useSecretsStore().fetchSecrets()
+                })
+              }).catch(e => console.error('[Reconnect] import-as-secret failed:', e))
+            }
           })
         }
         break
@@ -391,6 +400,28 @@ export const usePollingStore = defineStore('polling', () => {
         if (serverId) {
           import('./mcpConfig').then(({ useMcpConfigStore }) => {
             useMcpConfigStore().fetchOAuthStatus(serverId)
+          })
+        }
+        break
+      }
+
+      case 'secret_refreshed': {
+        // Issue #1387: VaultRefreshManager background refresh succeeded
+        const secretName = payload.secret_name
+        if (secretName) {
+          import('./secrets').then(({ useSecretsStore }) => {
+            useSecretsStore().handleSecretRefreshed(secretName)
+          })
+        }
+        break
+      }
+
+      case 'secret_refresh_failed': {
+        // Issue #1387: VaultRefreshManager background refresh permanently failed
+        const secretName = payload.secret_name
+        if (secretName) {
+          import('./secrets').then(({ useSecretsStore }) => {
+            useSecretsStore().handleSecretRefreshFailed(secretName, payload.error || '')
           })
         }
         break

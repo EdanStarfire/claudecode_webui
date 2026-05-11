@@ -110,4 +110,9 @@ class OAuth2Handler(SecretTypeHandler):
             new_expires = datetime.now(tz=UTC) + timedelta(seconds=int(expires_in))
             updated_refresh["expires_at"] = new_expires.isoformat()
 
+        # Issue #1387: record success in refresh metadata
+        updated_refresh["last_refresh_at"] = datetime.now(tz=UTC).isoformat()
+        updated_refresh["last_refresh_status"] = "success"
+        updated_refresh["last_refresh_error"] = None
+
         return {"value": new_access_token, "refresh": updated_refresh}

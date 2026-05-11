@@ -306,6 +306,7 @@ class McpOAuthInitiateRequest(BaseModel):
 
 class McpOAuthImportAsSecretRequest(BaseModel):
     base_name: str
+    replace: bool = False  # Issue #1387: in-place replacement for Reconnect flow
 
 
 class McpConfigExportRequest(BaseModel):
