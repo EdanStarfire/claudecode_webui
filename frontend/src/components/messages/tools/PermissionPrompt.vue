@@ -731,9 +731,10 @@ function autoResizeGuidance() {
   font-family: monospace;
   font-size: 11px;
   padding: 1px 4px;
-  border: 1px solid #cbd5e1;
+  border: 1px solid var(--bs-border-color);
   border-radius: 2px;
-  background: white;
+  background: var(--bs-body-bg);
+  color: var(--bs-body-color);
   flex: 1;
   min-width: 180px;
 }
@@ -745,13 +746,13 @@ function autoResizeGuidance() {
 }
 
 .rule-input-dirty {
-  border-color: #22c55e;
-  background: #f0fdf4;
+  border-color: var(--bs-success-border-subtle);
+  background: var(--bs-success-bg-subtle);
 }
 
 .rule-input-error {
-  border-color: #ef4444;
-  background: #fef2f2;
+  border-color: var(--bs-danger-border-subtle);
+  background: var(--bs-danger-bg-subtle);
 }
 
 .reset-btn {
@@ -792,13 +793,15 @@ function autoResizeGuidance() {
 
 .guidance-textarea {
   width: 100%;
-  border: 1px solid #cbd5e1;
+  border: 1px solid var(--bs-border-color);
   border-radius: 4px;
   padding: 4px 8px;
   font-size: 12px;
   resize: none;
   min-height: 28px;
   margin-top: 4px;
+  background: var(--bs-body-bg);
+  color: var(--bs-body-color);
 }
 
 /* Issue #716: Responsive overrides for small screens */
