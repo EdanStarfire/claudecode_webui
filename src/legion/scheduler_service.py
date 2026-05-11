@@ -7,6 +7,7 @@ due prompts to owning minions through SessionCoordinator.enqueue_message().
 
 import asyncio
 import json
+import os
 import shlex
 import time
 import uuid
@@ -18,9 +19,11 @@ from src.logging_config import get_logger
 from src.models.schedule_models import (
     Schedule,
     ScheduleExecution,
+    ScheduleMetrics,
     ScheduleStatus,
     cap_stream,
     get_next_run,
+    is_error_status,
     validate_cron_expression,
 )
 from src.session_manager import SessionState
@@ -45,6 +48,9 @@ class SchedulerService:
         self._schedule_broadcast_callback = None
         # Per-session inflight script tracking (issue #1356)
         self._inflight_scripts_by_session: dict[str, set[str]] = {}  # session_id -> {schedule_id}
+        # Issue #1372: Per-legion metrics cache and rotation trigger counter
+        self._metrics_cache: dict[str, dict[str, ScheduleMetrics]] = {}  # legion_id -> {schedule_id -> ScheduleMetrics}
+        self._appends_since_rotation: dict[str, int] = {}  # legion_id -> count
 
     def set_schedule_broadcast_callback(self, callback):
         """Set callback for broadcasting schedule events to WebSocket clients.
@@ -517,7 +523,7 @@ class SchedulerService:
 
         schedule.updated_at = datetime.now(UTC).timestamp()
         await self._persist_schedules(schedule.legion_id)
-        await self._append_execution(schedule.legion_id, execution)
+        await self._record_execution(schedule, execution)
         await self._broadcast_execution_event(schedule.legion_id, execution)
         await self._broadcast_schedule_event(schedule.legion_id, schedule)
 
@@ -658,7 +664,7 @@ class SchedulerService:
 
         schedule.updated_at = datetime.now(UTC).timestamp()
         await self._persist_schedules(schedule.legion_id)
-        await self._append_execution(schedule.legion_id, execution)
+        await self._record_execution(schedule, execution)
         await self._broadcast_execution_event(schedule.legion_id, execution)
         await self._broadcast_schedule_event(schedule.legion_id, schedule)
 
@@ -1016,7 +1022,7 @@ class SchedulerService:
         schedule.updated_at = datetime.now(UTC).timestamp()
 
         await self._persist_schedules(schedule.legion_id)
-        await self._append_execution(schedule.legion_id, execution)
+        await self._record_execution(schedule, execution)
         await self._broadcast_execution_event(schedule.legion_id, execution)
         await self._broadcast_schedule_event(schedule.legion_id, schedule)
 
@@ -1028,6 +1034,158 @@ class SchedulerService:
             f"Schedule {schedule.schedule_id} retry #{schedule.failure_count} "
             f"in {backoff}s"
         )
+
+    # ── Metrics (issue #1372) ──
+
+    def _metrics_file(self, legion_id: str):
+        data_dir = self.system.session_coordinator.data_dir
+        return data_dir / "legions" / legion_id / "schedule_metrics.json"
+
+    async def _load_metrics(self, legion_id: str) -> dict[str, ScheduleMetrics]:
+        """Load (or return cached) metrics for a legion. Creates empty cache on miss."""
+        if legion_id in self._metrics_cache:
+            return self._metrics_cache[legion_id]
+
+        metrics_file = self._metrics_file(legion_id)
+        cache: dict[str, ScheduleMetrics] = {}
+        if metrics_file.exists():
+            try:
+                raw = json.loads(metrics_file.read_text())
+                for sid, entry in raw.items():
+                    cache[sid] = ScheduleMetrics.from_dict(entry)
+            except Exception as e:
+                legion_logger.warning(f"Failed to read metrics for legion {legion_id}: {e}")
+        self._metrics_cache[legion_id] = cache
+        return cache
+
+    async def _persist_metrics(self, legion_id: str):
+        """Write metrics cache for a legion atomically (tmp + os.replace)."""
+        cache = self._metrics_cache.get(legion_id, {})
+        metrics_file = self._metrics_file(legion_id)
+        metrics_file.parent.mkdir(parents=True, exist_ok=True)
+        tmp_file = metrics_file.with_suffix(".tmp")
+        try:
+            payload = {sid: m.to_dict() for sid, m in cache.items()}
+            tmp_file.write_text(json.dumps(payload, indent=2))
+            os.replace(tmp_file, metrics_file)
+        except Exception as e:
+            legion_logger.error(f"Failed to persist metrics for legion {legion_id}: {e}")
+            tmp_file.unlink(missing_ok=True)
+
+    async def _update_metrics(self, legion_id: str, execution: ScheduleExecution):
+        """Update in-memory ScheduleMetrics for one execution and persist."""
+        if execution.status == "retry":
+            return  # intermediate state — the retried fire generates its own record
+
+        cache = await self._load_metrics(legion_id)
+        schedule_id = execution.schedule_id
+        if schedule_id not in cache:
+            cache[schedule_id] = ScheduleMetrics(schedule_id=schedule_id)
+        m = cache[schedule_id]
+
+        now_ts = execution.actual_time
+        m.last_run = now_ts
+        m.last_status = execution.status
+        m.updated_at = datetime.now(UTC).timestamp()
+
+        if is_error_status(execution.status):
+            m.total_runs += 1
+            m.total_errors += 1
+            m.consecutive_errors += 1
+            m.last_error_time = now_ts
+            m.last_error_message = execution.error_message
+        else:
+            m.total_runs += 1
+            m.consecutive_errors = 0
+            m.last_success_time = now_ts
+
+        await self._persist_metrics(legion_id)
+
+    async def _seed_metrics_from_history(self, legion_id: str):
+        """Seed schedule_metrics.json from schedule_history.jsonl if metrics file is absent."""
+        metrics_file = self._metrics_file(legion_id)
+        if metrics_file.exists():
+            await self._load_metrics(legion_id)
+            return
+
+        data_dir = self.system.session_coordinator.data_dir
+        history_file = data_dir / "legions" / legion_id / "schedule_history.jsonl"
+        if not history_file.exists():
+            self._metrics_cache.setdefault(legion_id, {})
+            return
+
+        cache: dict[str, ScheduleMetrics] = {}
+        try:
+            with open(history_file) as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        data = json.loads(line)
+                        ex = ScheduleExecution.from_dict(data)
+                    except Exception:
+                        continue
+                    if ex.status == "retry":
+                        continue
+                    sid = ex.schedule_id
+                    if sid not in cache:
+                        cache[sid] = ScheduleMetrics(schedule_id=sid)
+                    m = cache[sid]
+                    m.last_run = ex.actual_time
+                    m.last_status = ex.status
+                    if is_error_status(ex.status):
+                        m.total_runs += 1
+                        m.total_errors += 1
+                        m.consecutive_errors += 1
+                        m.last_error_time = ex.actual_time
+                        m.last_error_message = ex.error_message
+                    else:
+                        m.total_runs += 1
+                        m.consecutive_errors = 0
+                        m.last_success_time = ex.actual_time
+        except Exception as e:
+            legion_logger.error(f"Failed to seed metrics from history for legion {legion_id}: {e}")
+
+        self._metrics_cache[legion_id] = cache
+        await self._persist_metrics(legion_id)
+        legion_logger.info(
+            f"Seeded metrics for {len(cache)} schedules from history for legion {legion_id}"
+        )
+
+        # Queue an immediate rotation to prune the file to the retention window
+        rotator = getattr(self.system, "history_rotator", None)
+        if rotator is not None:
+            asyncio.ensure_future(rotator.request_rotation(legion_id))
+
+    async def get_schedule_metrics(self, legion_id: str, schedule_id: str) -> ScheduleMetrics | None:
+        """Return cached ScheduleMetrics for one schedule (or None if never fired)."""
+        cache = await self._load_metrics(legion_id)
+        return cache.get(schedule_id)
+
+    async def schedule_to_api_dict(self, schedule: Schedule) -> dict:
+        """Return schedule.to_dict() enriched with aggregate metrics for API responses."""
+        metrics = await self.get_schedule_metrics(schedule.legion_id, schedule.schedule_id)
+        return schedule.to_dict(metrics=metrics)
+
+    def _maybe_trigger_rotation(self, legion_id: str):
+        """Increment append counter and queue rotation when threshold crossed."""
+        from src.legion.history_rotator import HistoryRotator
+
+        rotator = getattr(self.system, "history_rotator", None)
+        if not isinstance(rotator, HistoryRotator) or not rotator.config.enabled:
+            return
+        count = self._appends_since_rotation.get(legion_id, 0) + 1
+        self._appends_since_rotation[legion_id] = count
+        if count >= rotator.config.rotation_trigger_count:
+            self._appends_since_rotation[legion_id] = 0
+            asyncio.ensure_future(rotator.request_rotation(legion_id))
+
+    async def _record_execution(self, schedule: Schedule, execution: ScheduleExecution):
+        """Update metrics, append execution record, and trigger rotation if needed."""
+        await self._update_metrics(schedule.legion_id, execution)
+        await self._append_execution(schedule.legion_id, execution)
+        self._maybe_trigger_rotation(schedule.legion_id)
 
     # ── Persistence ──
 
@@ -1080,15 +1238,21 @@ class SchedulerService:
         if not legions_dir.exists():
             return
 
+        legion_ids = []
         for legion_dir in legions_dir.iterdir():
             if legion_dir.is_dir():
                 await self._load_schedules(legion_dir.name)
+                legion_ids.append(legion_dir.name)
 
         total = len(self._schedules)
         active = sum(
             1 for s in self._schedules.values() if s.status == ScheduleStatus.ACTIVE
         )
         legion_logger.info(f"Loaded {total} schedules ({active} active) from all legions")
+
+        # Issue #1372: Seed metrics from history for legions that don't have metrics yet
+        for legion_id in legion_ids:
+            await self._seed_metrics_from_history(legion_id)
 
         # Issue #578: Recover orphaned ephemeral sessions on startup
         await self._recover_orphaned_ephemeral_sessions()
@@ -1148,15 +1312,28 @@ class SchedulerService:
             legion_logger.info(f"Recovered {recovered} orphaned ephemeral agents")
 
     async def _append_execution(self, legion_id: str, execution: ScheduleExecution):
-        """Append execution record to schedule_history.jsonl."""
+        """Append execution record to schedule_history.jsonl.
+
+        Acquires the per-legion HistoryRotator lock to prevent write-during-rotation races.
+        """
         data_dir = self.system.session_coordinator.data_dir
         legion_dir = data_dir / "legions" / legion_id
         legion_dir.mkdir(parents=True, exist_ok=True)
         history_file = legion_dir / "schedule_history.jsonl"
 
+        from src.legion.history_rotator import HistoryRotator
+
+        rotator = getattr(self.system, "history_rotator", None)
+        lock = rotator.appender_lock(legion_id) if isinstance(rotator, HistoryRotator) else None
+
         try:
-            with open(history_file, "a") as f:
-                f.write(json.dumps(execution.to_dict()) + "\n")
+            if lock is not None:
+                async with lock:
+                    with open(history_file, "a") as f:
+                        f.write(json.dumps(execution.to_dict()) + "\n")
+            else:
+                with open(history_file, "a") as f:
+                    f.write(json.dumps(execution.to_dict()) + "\n")
         except Exception as e:
             legion_logger.error(f"Failed to append execution history: {e}")
 
@@ -1171,7 +1348,7 @@ class SchedulerService:
 
         event = {
             "type": "schedule_updated",
-            "schedule": schedule.to_dict(),
+            "schedule": await self.schedule_to_api_dict(schedule),
             "deleted": deleted,
             "timestamp": datetime.now(UTC).isoformat(),
         }

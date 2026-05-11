@@ -16,9 +16,11 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from src.config_manager import HistoryRetentionConfig
     from src.data_storage import DataStorageManager
     from src.legion.archive_manager import ArchiveManager
     from src.legion.comm_router import CommRouter
+    from src.legion.history_rotator import HistoryRotator
     from src.legion.legion_coordinator import LegionCoordinator
     from src.legion.mcp.legion_mcp_tools import LegionMCPTools
     from src.legion.memory_manager import MemoryManager
@@ -53,6 +55,7 @@ class LegionSystem:
     template_manager: 'TemplateManager'
     ui_queue: Any | None = None  # EventQueue (optional, for broadcasting project updates to poll clients)
     default_max_minions: int = 20  # Global default max concurrent minions (from app config)
+    history_retention: 'HistoryRetentionConfig | None' = None  # Retention config for HistoryRotator
 
     # Permission callback factory (injected after creation by web_server via session_coordinator)
     # Allows legion components to create permission callbacks for spawned minions
@@ -69,6 +72,7 @@ class LegionSystem:
     memory_manager: 'MemoryManager' = field(init=False)
     archive_manager: 'ArchiveManager' = field(init=False)
     scheduler_service: 'SchedulerService' = field(init=False)
+    history_rotator: 'HistoryRotator' = field(init=False)
     mcp_tools: 'LegionMCPTools' = field(init=False)
 
     def broadcast_ui_event(self, event: dict) -> None:
@@ -92,8 +96,10 @@ class LegionSystem:
         Order matters: components with fewer dependencies first.
         """
         # Import here to avoid circular imports at module level
+        from src.config_manager import HistoryRetentionConfig
         from src.legion.archive_manager import ArchiveManager
         from src.legion.comm_router import CommRouter
+        from src.legion.history_rotator import HistoryRotator
         from src.legion.legion_coordinator import LegionCoordinator
         from src.legion.mcp.legion_mcp_tools import LegionMCPTools
         from src.legion.memory_manager import MemoryManager
@@ -106,6 +112,8 @@ class LegionSystem:
         self.memory_manager = MemoryManager(self)
         self.archive_manager = ArchiveManager(self)
         self.scheduler_service = SchedulerService(self)
+        retention = self.history_retention if self.history_retention is not None else HistoryRetentionConfig()
+        self.history_rotator = HistoryRotator(self, retention)
         self.overseer_controller = OverseerController(self)
 
         # Higher-level components (depend on above)

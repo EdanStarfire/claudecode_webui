@@ -34,13 +34,14 @@ def build_router(webui) -> APIRouter:
                     detail=f"Invalid status: {status}. Use active, paused, or cancelled",
                 ) from None
 
-        all_schedules = await webui.coordinator.legion_system.scheduler_service.list_schedules(
+        svc = webui.coordinator.legion_system.scheduler_service
+        all_schedules = await svc.list_schedules(
             legion_id=legion_id, minion_id=minion_id, status=status_filter
         )
         total = len(all_schedules)
         sliced = all_schedules[offset : offset + limit]
         return {
-            "schedules": [s.to_dict() for s in sliced],
+            "schedules": [await svc.schedule_to_api_dict(s) for s in sliced],
             "total": total,
             "limit": limit,
             "offset": offset,
@@ -92,7 +93,8 @@ def build_router(webui) -> APIRouter:
                 detail="Either minion_id or session_config is required",
             )
 
-        schedule = await webui.coordinator.legion_system.scheduler_service.create_schedule(
+        svc = webui.coordinator.legion_system.scheduler_service
+        schedule = await svc.create_schedule(
             legion_id=legion_id,
             name=request.name,
             cron_expression=request.cron_expression,
@@ -108,18 +110,17 @@ def build_router(webui) -> APIRouter:
             script_command=request.script_command,
             script_timeout_seconds=request.script_timeout_seconds,
         )
-        return {"schedule": schedule.to_dict()}
+        return {"schedule": await svc.schedule_to_api_dict(schedule)}
 
     @router.get("/api/legions/{legion_id}/schedules/{schedule_id}")
     @handle_exceptions("get schedule")
     async def get_schedule(legion_id: str, schedule_id: str):
         """Get a single schedule."""
-        schedule = await webui.coordinator.legion_system.scheduler_service.get_schedule(
-            schedule_id
-        )
+        svc = webui.coordinator.legion_system.scheduler_service
+        schedule = await svc.get_schedule(schedule_id)
         if not schedule or schedule.legion_id != legion_id:
             raise HTTPException(status_code=404, detail="Schedule not found")
-        return {"schedule": schedule.to_dict()}
+        return {"schedule": await svc.schedule_to_api_dict(schedule)}
 
     @router.put("/api/legions/{legion_id}/schedules/{schedule_id}")
     @handle_exceptions("update schedule", value_error_status=400)
@@ -142,10 +143,9 @@ def build_router(webui) -> APIRouter:
             )
 
         fields = {k: v for k, v in raw.items() if v is not None}
-        updated = await webui.coordinator.legion_system.scheduler_service.update_schedule(
-            schedule_id, **fields
-        )
-        return {"schedule": updated.to_dict()}
+        svc = webui.coordinator.legion_system.scheduler_service
+        updated = await svc.update_schedule(schedule_id, **fields)
+        return {"schedule": await svc.schedule_to_api_dict(updated)}
 
     @router.post("/api/legions/{legion_id}/schedules/{schedule_id}/pause")
     @handle_exceptions("pause schedule", value_error_status=400)
@@ -157,10 +157,9 @@ def build_router(webui) -> APIRouter:
         if not schedule or schedule.legion_id != legion_id:
             raise HTTPException(status_code=404, detail="Schedule not found")
 
-        updated = await webui.coordinator.legion_system.scheduler_service.pause_schedule(
-            schedule_id
-        )
-        return {"schedule": updated.to_dict()}
+        svc = webui.coordinator.legion_system.scheduler_service
+        updated = await svc.pause_schedule(schedule_id)
+        return {"schedule": await svc.schedule_to_api_dict(updated)}
 
     @router.post("/api/legions/{legion_id}/schedules/{schedule_id}/resume")
     @handle_exceptions("resume schedule", value_error_status=400)
@@ -172,10 +171,9 @@ def build_router(webui) -> APIRouter:
         if not schedule or schedule.legion_id != legion_id:
             raise HTTPException(status_code=404, detail="Schedule not found")
 
-        updated = await webui.coordinator.legion_system.scheduler_service.resume_schedule(
-            schedule_id
-        )
-        return {"schedule": updated.to_dict()}
+        svc = webui.coordinator.legion_system.scheduler_service
+        updated = await svc.resume_schedule(schedule_id)
+        return {"schedule": await svc.schedule_to_api_dict(updated)}
 
     @router.post("/api/legions/{legion_id}/schedules/{schedule_id}/cancel")
     @handle_exceptions("cancel schedule", value_error_status=400)
@@ -187,10 +185,9 @@ def build_router(webui) -> APIRouter:
         if not schedule or schedule.legion_id != legion_id:
             raise HTTPException(status_code=404, detail="Schedule not found")
 
-        updated = await webui.coordinator.legion_system.scheduler_service.cancel_schedule(
-            schedule_id
-        )
-        return {"schedule": updated.to_dict()}
+        svc = webui.coordinator.legion_system.scheduler_service
+        updated = await svc.cancel_schedule(schedule_id)
+        return {"schedule": await svc.schedule_to_api_dict(updated)}
 
     @router.post("/api/legions/{legion_id}/schedules/{schedule_id}/run-now")
     @handle_exceptions("run schedule now", value_error_status=400)

@@ -69,8 +69,13 @@ class Schedule:
     last_stderr: str | None = None           # most recent run's stderr (capped)
     last_exit_code: int | None = None        # null when no run yet, -1 on timeout
 
-    def to_dict(self) -> dict[str, Any]:
-        """Convert to dictionary for serialization."""
+    def to_dict(self, metrics: "ScheduleMetrics | None" = None) -> dict[str, Any]:
+        """Convert to dictionary for serialization.
+
+        Pass metrics to include the aggregate metrics sub-object in API responses.
+        When called without metrics (e.g. from _persist_schedules), the key is omitted
+        so schedules.json stays lean.
+        """
         data = {
             "schedule_id": self.schedule_id,
             "legion_id": self.legion_id,
@@ -102,6 +107,17 @@ class Schedule:
             data["session_config"] = self.session_config
         if self.ephemeral_agent_id is not None:
             data["ephemeral_agent_id"] = self.ephemeral_agent_id
+        if metrics is not None:
+            data["metrics"] = {
+                "total_runs": metrics.total_runs,
+                "total_errors": metrics.total_errors,
+                "consecutive_errors": metrics.consecutive_errors,
+                "last_success_time": metrics.last_success_time,
+                "last_error_time": metrics.last_error_time,
+                "last_error_message": metrics.last_error_message,
+                "last_status": metrics.last_status,
+                "last_run": metrics.last_run,
+            }
         return data
 
     @classmethod
@@ -186,6 +202,64 @@ class ScheduleExecution:
         data.setdefault("stderr", None)
         data.setdefault("duration_ms", None)
         return cls(**data)
+
+
+def is_error_status(status: str) -> bool:
+    """Return True if status counts as an error for metric purposes.
+
+    Error: failed, timeout, error
+    Success: queued, delivered, discarded
+    Ignored: retry (intermediate — the retried fire generates its own record)
+    """
+    return status in {"failed", "timeout", "error"}
+
+
+@dataclass
+class ScheduleMetrics:
+    """Aggregate lifetime metrics for one schedule, stored in schedule_metrics.json.
+
+    Retained indefinitely; never pruned with schedule_history.jsonl.
+    """
+
+    schedule_id: str
+    total_runs: int = 0
+    total_errors: int = 0
+    consecutive_errors: int = 0
+    last_success_time: float | None = None
+    last_error_time: float | None = None
+    last_error_message: str | None = None
+    last_status: str | None = None
+    last_run: float | None = None
+    updated_at: float = field(default_factory=lambda: datetime.now(UTC).timestamp())
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schedule_id": self.schedule_id,
+            "total_runs": self.total_runs,
+            "total_errors": self.total_errors,
+            "consecutive_errors": self.consecutive_errors,
+            "last_success_time": self.last_success_time,
+            "last_error_time": self.last_error_time,
+            "last_error_message": self.last_error_message,
+            "last_status": self.last_status,
+            "last_run": self.last_run,
+            "updated_at": self.updated_at,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "ScheduleMetrics":
+        return cls(
+            schedule_id=data["schedule_id"],
+            total_runs=data.get("total_runs", 0),
+            total_errors=data.get("total_errors", 0),
+            consecutive_errors=data.get("consecutive_errors", 0),
+            last_success_time=data.get("last_success_time"),
+            last_error_time=data.get("last_error_time"),
+            last_error_message=data.get("last_error_message"),
+            last_status=data.get("last_status"),
+            last_run=data.get("last_run"),
+            updated_at=data.get("updated_at", datetime.now(UTC).timestamp()),
+        )
 
 
 def validate_cron_expression(expression: str) -> bool:

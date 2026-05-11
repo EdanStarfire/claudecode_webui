@@ -316,6 +316,7 @@ class SessionCoordinator:
             data_storage_manager=dummy_storage,
             template_manager=self.template_manager,
             default_max_minions=_app_config.legion.max_concurrent_minions,
+            history_retention=_app_config.history_retention,
         )
 
         # Issue #500: Message queue system
@@ -551,6 +552,7 @@ class SessionCoordinator:
             if hasattr(self, 'legion_system') and self.legion_system is not None:
                 await self.legion_system.scheduler_service.load_all_schedules()
                 await self.legion_system.scheduler_service.start()
+                await self.legion_system.history_rotator.start()
 
             coord_logger.info("Session coordinator initialized successfully")
         except Exception:
@@ -4736,8 +4738,9 @@ class SessionCoordinator:
     async def cleanup(self):
         """Cleanup all resources"""
         try:
-            # Stop scheduler service (issue #495)
+            # Stop scheduler service and history rotator (issue #495, #1372)
             if hasattr(self, 'legion_system') and self.legion_system is not None:
+                await self.legion_system.history_rotator.stop()
                 await self.legion_system.scheduler_service.stop()
 
             # Terminate all active sessions
