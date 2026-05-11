@@ -57,6 +57,9 @@ logger = logging.getLogger(__name__)
 _DOCKER_WRAPPER_PREFIX = '[claude-docker] '
 _DOCKER_ERROR_KEYWORDS = ('exited with code', 'was killed', 'crashed')
 
+# Issue #1375: Regex for ${secret:<name>} references in MCP server header values.
+_SECRET_REF_RE = re.compile(r"\$\{secret:([^}]+)\}")
+
 # Resource format groups for filtering
 _TEXT_RESOURCE_FORMATS = {
     "py", "js", "ts", "json", "md", "txt", "yaml", "yml",
@@ -368,7 +371,9 @@ class SessionCoordinator:
         if self._audit_writer.on_message_append not in storage_manager.on_append:
             storage_manager.on_append.append(self._audit_writer.on_message_append)
 
-    async def _get_mcp_sdk_config(self, mcp_cfg) -> dict:
+    async def _get_mcp_sdk_config(
+        self, mcp_cfg, name_to_placeholder: "dict[str, str] | None" = None
+    ) -> dict:
         """Return SDK config for an MCP server, injecting OAuth Bearer token when applicable.
 
         For HTTP/SSE servers with oauth_enabled=True, reads the stored encrypted token
@@ -378,6 +383,10 @@ class SessionCoordinator:
         Issue #976: Proactively refreshes tokens that are expired or expiring within
         _OAUTH_REFRESH_BUFFER_SECONDS. On refresh failure the original token is still
         injected (if present) so mid-session MCP calls have the best available credentials.
+
+        Issue #1375: name_to_placeholder maps secret name → CC_SECRET_* placeholder.
+        After OAuth injection, any ${secret:<name>} references in header values are
+        replaced with the corresponding placeholder for HTTP/SSE servers.
         """
         import time as _time
 
@@ -439,7 +448,68 @@ class SessionCoordinator:
             coord_logger.debug(
                 "[MCP config] server=%s oauth=False config=%s", mcp_cfg.id, config
             )
+        # Issue #1375: Substitute ${secret:<name>} references in HTTP/SSE header values.
+        if name_to_placeholder and mcp_cfg.type in (McpServerType.SSE, McpServerType.HTTP):
+            headers = dict(config.get("headers") or {})
+            if headers:
+                headers = self._substitute_secret_refs(headers, name_to_placeholder, mcp_cfg.name)
+                config["headers"] = headers
         return config
+
+    async def _generate_secret_placeholders(
+        self,
+        session_id: str,
+        session_info: Any,
+        resolved_metas: list[dict],
+    ) -> dict[str, str]:
+        """Generate CC_SECRET_* placeholders for assigned secrets and persist them.
+
+        Returns name_to_placeholder (name → placeholder) for MCP header substitution.
+        Stores the inverse (placeholder → name) on session_info.secret_placeholders.
+        """
+        new_placeholders: dict[str, str] = {}
+        name_to_placeholder: dict[str, str] = {}
+        for secret in resolved_metas:
+            name = secret.get("name", "unnamed")
+            placeholder = f"CC_SECRET_{name}_{secrets.token_hex(4)}"
+            new_placeholders[placeholder] = name
+            name_to_placeholder[name] = placeholder
+        session_info.secret_placeholders = new_placeholders
+        await self.session_manager._persist_session_state(session_id)
+        coord_logger.info(
+            "Generated %d placeholder(s) for session %s: names=%s",
+            len(new_placeholders),
+            session_id,
+            list(new_placeholders.values()),
+        )
+        return name_to_placeholder
+
+    def _substitute_secret_refs(
+        self,
+        headers: dict[str, str],
+        name_to_placeholder: dict[str, str],
+        mcp_server_name: str,
+    ) -> dict[str, str]:
+        """Replace ${secret:<name>} in header values with session-scoped CC_SECRET_* placeholders.
+
+        Raises ValueError (fail closed) when a referenced secret is not assigned/known.
+        Header values with no references are passed through unchanged.
+        """
+        out: dict[str, str] = {}
+        for hname, hval in headers.items():
+            new_val = hval
+            for match in _SECRET_REF_RE.finditer(hval):
+                name = match.group(1).strip()
+                placeholder = name_to_placeholder.get(name)
+                if not placeholder:
+                    raise ValueError(
+                        f"MCP server '{mcp_server_name}' header '{hname}' references "
+                        f"secret '{name}' which is not assigned to this session "
+                        f"(or does not exist in the vault)."
+                    )
+                new_val = new_val.replace(match.group(0), placeholder)
+            out[hname] = new_val
+        return out
 
     async def initialize(self):
         """Initialize the session coordinator"""
@@ -1080,6 +1150,18 @@ class SessionCoordinator:
             if session_info.claude_code_session_id:
                 resume_sdk_session = session_id  # Use WebUI session ID as resume identifier
 
+            # Issue #1375: Resolve secret placeholders early so MCP header substitution
+            # can use them before the mcp_servers dict is built.
+            name_to_placeholder: dict[str, str] = {}
+            resolved_metas: list[dict] = []
+            if effective_config.assigned_secrets:
+                resolved_metas = await self.credential_vault.resolve_secrets_for_assignment(
+                    effective_config.assigned_secrets
+                )
+                name_to_placeholder = await self._generate_secret_placeholders(
+                    session_id, session_info, resolved_metas
+                )
+
             # Issue #313: Attach MCP tools based on can_spawn_minions flag (universal Legion)
             # All sessions with can_spawn_minions=True get Legion MCP tools
             mcp_servers = {}
@@ -1107,8 +1189,22 @@ class SessionCoordinator:
                 selected_configs = self.mcp_config_manager.get_configs_by_ids(
                     effective_config.mcp_server_ids
                 )
+                # Issue #1375: Fail closed if ${secret:...} refs exist but proxy is disabled.
+                has_secret_refs = any(
+                    _SECRET_REF_RE.search(v or "")
+                    for cfg in selected_configs
+                    if cfg.type in (McpServerType.SSE, McpServerType.HTTP)
+                    for v in (cfg.headers or {}).values()
+                )
+                if has_secret_refs and not effective_config.docker_proxy_enabled:
+                    raise ValueError(
+                        "MCP header secret references (${secret:...}) require docker_proxy_enabled=True. "
+                        "Enable the proxy sidecar in session/profile/template config, or remove the references."
+                    )
                 for mcp_cfg in selected_configs:
-                    mcp_servers[mcp_cfg.slug] = await self._get_mcp_sdk_config(mcp_cfg)
+                    mcp_servers[mcp_cfg.slug] = await self._get_mcp_sdk_config(
+                        mcp_cfg, name_to_placeholder
+                    )
                     mcp_tools_list.append(f"mcp__{mcp_cfg.slug}")
                     coord_logger.info(
                         f"Attaching global MCP server '{mcp_cfg.name}' to session {session_id}"
@@ -1270,17 +1366,15 @@ class SessionCoordinator:
                             f"{len(effective_domains)} domains"
                         )
 
-                    # Issue #1134: Generate CC_SECRET_* placeholders for assigned secrets.
-                    # Resolve full metadata (no values needed here — proxy fetches them).
-                    if effective_config.assigned_secrets:
-                        resolved_metas = await self.credential_vault.resolve_secrets_for_assignment(
-                            effective_config.assigned_secrets
-                        )
-                        new_placeholders: dict[str, str] = {}
+                    # Issue #1134 / #1375: Secret delivery — placeholders were already
+                    # generated early (before mcp_servers build). Reuse them here to
+                    # populate inject_env / inject_file delivery channels.
+                    if resolved_metas:
                         for secret in resolved_metas:
                             name = secret.get("name", "unnamed")
-                            placeholder = f"CC_SECRET_{name}_{secrets.token_hex(4)}"
-                            new_placeholders[placeholder] = name
+                            placeholder = name_to_placeholder.get(name)
+                            if not placeholder:
+                                continue
 
                             # inject_env: deliver placeholder via environment variable
                             inject_env = secret.get("inject_env")
@@ -1301,13 +1395,6 @@ class SessionCoordinator:
                                     host_file.write_text(content)
                                     os.chmod(host_file, int(perms_str, 8))
                                     extra_mounts.append(f"{host_file}:{file_path}:ro")
-
-                        session_info.secret_placeholders = new_placeholders
-                        await self.session_manager._persist_session_state(session_id)
-                        coord_logger.info(
-                            f"Generated {len(new_placeholders)} placeholder(s) for session "
-                            f"{session_id}: names={list(new_placeholders.values())}"
-                        )
 
                         # Issue #1052: SSH key isolation via two-dir design.
                         # key_dir  → proxy-only mount at /run/ssh-private:ro (key bytes

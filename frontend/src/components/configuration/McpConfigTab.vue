@@ -186,6 +186,12 @@
               +
             </button>
           </div>
+          <div class="form-text small text-muted mt-1">
+            Tip: use <code>${secret:&lt;name&gt;}</code> in a header value to inject an
+            assigned secret via the proxy. The secret must be assigned to the session
+            and <code>docker_proxy_enabled</code> must be on. Use the <em>generic</em>
+            secret type for literal substitution (other types replace the entire header value).
+          </div>
         </div>
 
         <!-- OAuth 2.1 section (HTTP/SSE only) -->
