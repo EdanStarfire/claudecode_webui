@@ -27,8 +27,27 @@
           >
             {{ oauthStatusLabel(config.id) }}
           </span>
+          <!-- Issue #1387: vault token health badge for OAuth-imported configs -->
+          <span
+            v-if="vaultBaseName(config)"
+            class="badge vault-health-badge"
+            :class="vaultHealthClass(config)"
+            :title="vaultHealthTooltip(config)"
+          >
+            {{ vaultHealthLabel(config) }}
+          </span>
         </div>
         <div class="d-flex gap-1 align-items-center">
+          <!-- Issue #1387: Reconnect button when vault token is in failed/expired state -->
+          <button
+            v-if="vaultBaseName(config) && (vaultHealth(config) === 'refresh_failed' || vaultHealth(config) === 'expired')"
+            class="btn btn-xs btn-outline-warning"
+            :disabled="reconnectingId === config.id"
+            @click="reconnectVault(config)"
+            title="Re-run OAuth flow and update vault secret in place"
+          >
+            {{ reconnectingId === config.id ? '…' : 'Reconnect' }}
+          </button>
           <!-- OAuth Connect/Disconnect buttons -->
           <template v-if="config.oauth_enabled && (config.type === 'http' || config.type === 'sse')">
             <button
@@ -382,8 +401,10 @@
 <script setup>
 import { ref, reactive, onMounted } from 'vue'
 import { useMcpConfigStore, OAUTH_STATUS } from '@/stores/mcpConfig'
+import { useSecretsStore } from '@/stores/secrets'
 
 const configStore = useMcpConfigStore()
+const secretsStore = useSecretsStore()
 
 const showForm = ref(false)
 const editingId = ref(null)
@@ -427,6 +448,7 @@ const importPreview = ref(null)
 const connectingId = ref(null)
 const disconnectingId = ref(null)
 const importingId = ref(null)
+const reconnectingId = ref(null)  // Issue #1387: tracks in-progress Reconnect
 
 // OAuth import-as-secret modal state
 const oauthImportConfig = ref(null)
@@ -502,7 +524,79 @@ onMounted(async () => {
       configStore.fetchOAuthStatus(cfg.id)
     }
   }
+  // Issue #1387: load secrets to populate vault health badges
+  await secretsStore.fetchIfEmpty()
 })
+
+// Issue #1387: Vault health helpers — derive baseName from Authorization header
+function vaultBaseName(config) {
+  const auth = (config.headers || {}).Authorization || (config.headers || {}).authorization || ''
+  const m = auth.match(/^\$\{secret:([^}]+)\}$/)
+  return m ? m[1] : null
+}
+
+function vaultHealth(config) {
+  const baseName = vaultBaseName(config)
+  if (!baseName) return null
+  return secretsStore.healthFor(baseName)
+}
+
+const _VAULT_HEALTH_LABELS = {
+  valid: '● token ok',
+  expiring_soon: '⚡ expiring',
+  expired: '⚠ expired',
+  refresh_failed: '✗ refresh failed',
+}
+
+const _VAULT_HEALTH_CLASSES = {
+  valid: 'bg-success',
+  expiring_soon: 'bg-warning text-dark',
+  expired: 'bg-warning text-dark',
+  refresh_failed: 'bg-danger',
+}
+
+function vaultHealthLabel(config) {
+  return _VAULT_HEALTH_LABELS[vaultHealth(config)] || '● token ok'
+}
+
+function vaultHealthClass(config) {
+  return _VAULT_HEALTH_CLASSES[vaultHealth(config)] || 'bg-success'
+}
+
+function vaultHealthTooltip(config) {
+  const baseName = vaultBaseName(config)
+  if (!baseName) return ''
+  const secret = secretsStore.secrets.find(s => s.name === baseName)
+  if (!secret) return baseName
+  const refresh = secret.refresh || {}
+  const parts = [`Secret: ${baseName}`]
+  if (refresh.last_refresh_at) parts.push(`Last refresh: ${refresh.last_refresh_at}`)
+  if (refresh.last_refresh_error) parts.push(`Error: ${refresh.last_refresh_error}`)
+  if (secret.refresh?.expires_at) parts.push(`Expires: ${refresh.expires_at}`)
+  return parts.join('\n')
+}
+
+async function reconnectVault(config) {
+  const baseName = vaultBaseName(config)
+  if (!baseName) return
+  reconnectingId.value = config.id
+  try {
+    // Register pending reconnect so polling.js completes it on mcp_oauth_complete
+    configStore.startReconnect(config.id, baseName)
+    const result = await configStore.initiateOAuth(config.id)
+    if (result?.auth_url) {
+      window.open(result.auth_url, '_blank', 'noopener,noreferrer')
+    }
+  } catch (e) {
+    console.error('Reconnect OAuth initiate failed:', e)
+    // Clear the pending reconnect if initiate failed
+    const next = new Map(configStore.pendingReconnect)
+    next.delete(config.id)
+    configStore.pendingReconnect = next
+  } finally {
+    reconnectingId.value = null
+  }
+}
 
 // OAuth helpers
 function oauthStatusFor(configId) {
@@ -800,6 +894,12 @@ function cancelImport() {
   padding: 0.1rem 0.4rem;
   font-size: 0.75rem;
   line-height: 1.2;
+}
+
+.vault-health-badge {
+  font-size: 0.7rem;
+  cursor: default;
+  white-space: pre;
 }
 
 .preview-item {

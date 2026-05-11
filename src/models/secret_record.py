@@ -71,6 +71,10 @@ class RefreshSpec:
     client_secret_secret_name: str | None = None
     expires_at: datetime | None = None         # mutable; updated by proxy after each refresh
     buffer_seconds: int = 60                   # refresh this many seconds before expiry
+    # Issue #1387: refresh lifecycle tracking (optional — absent fields load as null)
+    last_refresh_at: str | None = None         # ISO8601 timestamp of last refresh attempt
+    last_refresh_status: str | None = None     # "success" | "failed" | null
+    last_refresh_error: str | None = None      # error string when last_refresh_status == "failed"
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -80,6 +84,9 @@ class RefreshSpec:
             "client_secret_secret_name": self.client_secret_secret_name,
             "expires_at": self.expires_at.isoformat() if self.expires_at else None,
             "buffer_seconds": self.buffer_seconds,
+            "last_refresh_at": self.last_refresh_at,
+            "last_refresh_status": self.last_refresh_status,
+            "last_refresh_error": self.last_refresh_error,
         }
 
     @classmethod
@@ -94,6 +101,9 @@ class RefreshSpec:
             client_secret_secret_name=data.get("client_secret_secret_name"),
             expires_at=expires_at,
             buffer_seconds=data.get("buffer_seconds", 60),
+            last_refresh_at=data.get("last_refresh_at"),
+            last_refresh_status=data.get("last_refresh_status"),
+            last_refresh_error=data.get("last_refresh_error"),
         )
 
 

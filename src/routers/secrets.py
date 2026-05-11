@@ -60,7 +60,7 @@ def build_router(webui) -> APIRouter:
     @handle_exceptions("create secret", value_error_status=400)
     async def create_secret(request: SecretCreateRequest):
         """Create a named secret. Returns metadata only (value not in response)."""
-        return await webui.service.create_secret(
+        result = await webui.service.create_secret(
             name=request.name,
             secret_type=request.type,
             target_hosts=request.target_hosts,
@@ -72,6 +72,10 @@ def build_router(webui) -> APIRouter:
             injection=request.injection,
             refresh=request.refresh,
         )
+        # Issue #1387: schedule background refresh if new secret is oauth2 with refresh config
+        if result.get("type") == "oauth2" and result.get("refresh"):
+            webui.coordinator.vault_refresh_manager.schedule_secret(request.name)
+        return result
 
     @router.patch("/api/secrets/{name}")
     @handle_exceptions("update secret", value_error_status=400)
@@ -91,6 +95,9 @@ def build_router(webui) -> APIRouter:
         )
         if result is None:
             raise HTTPException(status_code=404, detail="Secret not found")
+        # Issue #1387: reschedule refresh on update (refresh config may have changed)
+        if result.get("type") == "oauth2" and result.get("refresh"):
+            webui.coordinator.vault_refresh_manager.schedule_secret(name)
         return result
 
     @router.delete("/api/secrets/{name}")
@@ -100,6 +107,8 @@ def build_router(webui) -> APIRouter:
         deleted = await webui.service.delete_secret(name)
         if not deleted:
             raise HTTPException(status_code=404, detail="Secret not found")
+        # Issue #1387: cancel any background refresh task for this secret
+        webui.coordinator.vault_refresh_manager.unschedule_secret(name)
         return {"deleted": True}
 
     @router.post("/api/secrets/{name}/refresh")

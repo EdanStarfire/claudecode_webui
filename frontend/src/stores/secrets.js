@@ -6,6 +6,7 @@ import { api } from '../utils/api'
  * Secrets Store — host-level secrets vault CRUD + backend status.
  *
  * Issue #827: Host-level secrets storage via keyring.
+ * Issue #1387: Token health tracking + event handlers for vault OAuth2 refresh.
  */
 export const useSecretsStore = defineStore('secrets', () => {
   // ========== STATE ==========
@@ -73,6 +74,51 @@ export const useSecretsStore = defineStore('secrets', () => {
     return result
   }
 
+  // ========== Issue #1387: Health helpers + event handlers ==========
+
+  /**
+   * Derive token health state for a vault oauth2 secret by name.
+   * Returns "valid" | "expiring_soon" | "expired" | "refresh_failed" | null (non-oauth2).
+   */
+  function healthFor(name) {
+    const secret = secrets.value.find(s => s.name === name)
+    if (!secret || secret.type !== 'oauth2') return null
+    return secret.health || 'valid'
+  }
+
+  /** Handle secret_refreshed UI poll event — optimistic update + background refetch. */
+  function handleSecretRefreshed(secretName) {
+    const idx = secrets.value.findIndex(s => s.name === secretName)
+    if (idx >= 0) {
+      const updated = { ...secrets.value[idx], health: 'valid' }
+      const refresh = updated.refresh ? { ...updated.refresh, last_refresh_error: null } : updated.refresh
+      updated.refresh = refresh
+      secrets.value = [
+        ...secrets.value.slice(0, idx),
+        updated,
+        ...secrets.value.slice(idx + 1),
+      ]
+    }
+    fetchSecrets()
+  }
+
+  /** Handle secret_refresh_failed UI poll event — mark health as failed. */
+  function handleSecretRefreshFailed(secretName, errorMsg) {
+    const idx = secrets.value.findIndex(s => s.name === secretName)
+    if (idx >= 0) {
+      const updated = { ...secrets.value[idx], health: 'refresh_failed' }
+      if (updated.refresh) {
+        updated.refresh = { ...updated.refresh, last_refresh_error: errorMsg }
+      }
+      secrets.value = [
+        ...secrets.value.slice(0, idx),
+        updated,
+        ...secrets.value.slice(idx + 1),
+      ]
+    }
+    fetchSecrets()
+  }
+
   return {
     secrets,
     activeBackend,
@@ -87,5 +133,8 @@ export const useSecretsStore = defineStore('secrets', () => {
     deleteSecret,
     fetchBackendStatus,
     refreshSecret,
+    healthFor,
+    handleSecretRefreshed,
+    handleSecretRefreshFailed,
   }
 })

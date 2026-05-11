@@ -224,7 +224,9 @@ def build_router(webui) -> APIRouter:
         """
         from fastapi.responses import JSONResponse
         try:
-            result = await webui.service.import_oauth_as_secret(config_id, request.base_name)
+            result = await webui.service.import_oauth_as_secret(
+                config_id, request.base_name, replace=request.replace
+            )
         except LookupError as e:
             msg = str(e)
             detail = msg[5:].strip() if msg.startswith("404:") else msg
