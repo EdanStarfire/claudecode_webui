@@ -752,3 +752,205 @@ async def test_issue_1371_create_schedule_script_timeout_seconds_propagated():
         "script": "check.sh",
     })
     assert svc.create_schedule.call_args.kwargs["script_timeout_seconds"] == 60
+
+
+# ── update_schedule handler tests (Issue #1370) ──
+
+
+_SENTINEL = object()
+
+
+def _make_update_schedule_tools(
+    schedule=None,
+    get_schedule_return=_SENTINEL,
+    update_side_effect=None,
+    update_return=None,
+):
+    """Build LegionMCPTools with mocked scheduler_service for update_schedule tests."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from src.legion.mcp.legion_mcp_tools import LegionMCPTools
+    from src.models.schedule_models import ScheduleStatus
+
+    if schedule is None:
+        schedule = MagicMock()
+        schedule.schedule_id = "sched-abc"
+        schedule.minion_id = "minion-123"
+        schedule.schedule_type = "prompt"
+        schedule.name = "My Schedule"
+        schedule.cron_expression = "0 8 * * *"
+        schedule.next_run = None
+        schedule.status = ScheduleStatus.ACTIVE
+
+    mock_svc = MagicMock()
+    resolved_get = schedule if get_schedule_return is _SENTINEL else get_schedule_return
+    mock_svc.get_schedule = AsyncMock(return_value=resolved_get)
+
+    if update_side_effect is not None:
+        mock_svc.update_schedule = AsyncMock(side_effect=update_side_effect)
+    else:
+        returned = update_return if update_return is not None else schedule
+        mock_svc.update_schedule = AsyncMock(return_value=returned)
+
+    mock_system = MagicMock()
+    mock_system.scheduler_service = mock_svc
+    return LegionMCPTools(mock_system), mock_svc, schedule
+
+
+@pytest.mark.asyncio
+async def test_issue_1370_update_schedule_handler_requires_minion_id():
+    """Issue #1370: missing from_minion_id returns is_error=True."""
+    tools, svc, _ = _make_update_schedule_tools()
+
+    result = await tools._handle_update_schedule({
+        "schedule_id": "sched-abc",
+        "name": "New Name",
+    })
+
+    assert result.get("is_error") is True
+    assert "minion id" in result["content"][0]["text"].lower()
+    svc.update_schedule.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_issue_1370_update_schedule_handler_rejects_missing_schedule():
+    """Issue #1370: get_schedule returns None → is_error=True."""
+    tools, svc, _ = _make_update_schedule_tools(get_schedule_return=None)
+
+    result = await tools._handle_update_schedule({
+        "_from_minion_id": "minion-123",
+        "schedule_id": "no-such-id",
+        "name": "New Name",
+    })
+
+    assert result.get("is_error") is True
+    assert "not found" in result["content"][0]["text"].lower()
+    svc.update_schedule.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_issue_1370_update_schedule_handler_rejects_foreign_schedule():
+    """Issue #1370: schedule.minion_id != from_minion_id → is_error=True; service not called."""
+    tools, svc, _ = _make_update_schedule_tools()
+
+    result = await tools._handle_update_schedule({
+        "_from_minion_id": "minion-OTHER",
+        "schedule_id": "sched-abc",
+        "name": "Steal Name",
+    })
+
+    assert result.get("is_error") is True
+    assert "own schedules" in result["content"][0]["text"].lower()
+    svc.update_schedule.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_issue_1370_update_schedule_handler_requires_at_least_one_field():
+    """Issue #1370: all three optional fields absent → is_error=True."""
+    tools, svc, _ = _make_update_schedule_tools()
+
+    result = await tools._handle_update_schedule({
+        "_from_minion_id": "minion-123",
+        "schedule_id": "sched-abc",
+    })
+
+    assert result.get("is_error") is True
+    assert "at least one" in result["content"][0]["text"].lower()
+    svc.update_schedule.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_issue_1370_update_schedule_handler_rejects_prompt_on_script_type():
+    """Issue #1370: prompt arg on script-type schedule → is_error=True; service not called."""
+    from unittest.mock import MagicMock
+
+    from src.models.schedule_models import ScheduleStatus
+
+    script_schedule = MagicMock()
+    script_schedule.schedule_id = "sched-script"
+    script_schedule.minion_id = "minion-123"
+    script_schedule.schedule_type = "script"
+    script_schedule.name = "Script Schedule"
+    script_schedule.cron_expression = "0 * * * *"
+    script_schedule.next_run = None
+    script_schedule.status = ScheduleStatus.ACTIVE
+
+    tools, svc, _ = _make_update_schedule_tools(schedule=script_schedule)
+
+    result = await tools._handle_update_schedule({
+        "_from_minion_id": "minion-123",
+        "schedule_id": "sched-script",
+        "prompt": "new prompt text",
+    })
+
+    assert result.get("is_error") is True
+    assert "script-type" in result["content"][0]["text"].lower()
+    svc.update_schedule.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_issue_1370_update_schedule_handler_rejects_empty_prompt():
+    """Issue #1370: prompt='   ' (whitespace-only) → is_error=True."""
+    tools, svc, _ = _make_update_schedule_tools()
+
+    result = await tools._handle_update_schedule({
+        "_from_minion_id": "minion-123",
+        "schedule_id": "sched-abc",
+        "prompt": "   ",
+    })
+
+    assert result.get("is_error") is True
+    assert "prompt cannot be empty" in result["content"][0]["text"].lower()
+    svc.update_schedule.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_issue_1370_update_schedule_handler_propagates_invalid_cron():
+    """Issue #1370: service raises ValueError('Invalid cron') → handler returns error envelope."""
+    tools, svc, _ = _make_update_schedule_tools(
+        update_side_effect=ValueError("Invalid cron expression: bad-cron")
+    )
+
+    result = await tools._handle_update_schedule({
+        "_from_minion_id": "minion-123",
+        "schedule_id": "sched-abc",
+        "cron_expression": "bad-cron",
+    })
+
+    assert result.get("is_error") is True
+    assert "Invalid cron expression" in result["content"][0]["text"]
+    svc.update_schedule.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_issue_1370_update_schedule_handler_returns_full_schedule_on_success():
+    """Issue #1370: success path returns is_error=False and updated schedule info."""
+    from unittest.mock import MagicMock
+
+    from src.models.schedule_models import ScheduleStatus
+
+    updated = MagicMock()
+    updated.schedule_id = "sched-abc"
+    updated.name = "Renamed Schedule"
+    updated.cron_expression = "0 9 * * 1-5"
+    updated.next_run = None
+    updated.status = ScheduleStatus.ACTIVE
+
+    tools, svc, _ = _make_update_schedule_tools(update_return=updated)
+
+    result = await tools._handle_update_schedule({
+        "_from_minion_id": "minion-123",
+        "schedule_id": "sched-abc",
+        "name": "Renamed Schedule",
+        "cron_expression": "0 9 * * 1-5",
+    })
+
+    assert result.get("is_error") is False
+    text = result["content"][0]["text"]
+    assert "Renamed Schedule" in text
+    assert "0 9 * * 1-5" in text
+    svc.update_schedule.assert_awaited_once_with(
+        "sched-abc",
+        name="Renamed Schedule",
+        cron_expression="0 9 * * 1-5",
+    )
