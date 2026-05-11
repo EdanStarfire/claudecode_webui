@@ -18,10 +18,7 @@
       <template v-else-if="hasData">
         <AnalyticsSummaryCards />
 
-        <!-- Chart: hidden on mobile -->
-        <div class="d-none d-md-block">
-          <AnalyticsTimeSeriesChart />
-        </div>
+        <AnalyticsTimeSeriesChart />
 
         <AnalyticsSessionTable />
       </template>
