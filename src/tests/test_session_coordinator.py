@@ -1342,3 +1342,116 @@ class TestIssue1396GhMountRemoved:
             f"~/.config/gh must not be bind-mounted in Docker sessions (issue #1396). "
             f"Found: {gh_mounts}"
         )
+
+
+class TestIssue1402ListSessionsEffectiveConfig:
+    """Tests for issue #1402 — list_sessions must include effective_config for template-linked sessions."""
+
+    @pytest.mark.asyncio
+    async def test_list_sessions_includes_effective_config_for_template_linked(self, temp_coordinator):
+        """Template-linked sessions in list response carry effective_config with resolved flags."""
+        import uuid
+
+        coordinator = temp_coordinator
+
+        project = await coordinator.project_manager.create_project(
+            name="Test Project", working_directory="/tmp/test_1402"
+        )
+
+        # Create a template with docker_enabled=True
+        template = await coordinator.template_manager.create_template(
+            name="Docker Template",
+            config=SessionConfig(docker_enabled=True, permission_mode="bypassPermissions"),
+        )
+
+        session_id = str(uuid.uuid4())
+        await coordinator.create_session(
+            session_id=session_id,
+            project_id=project.project_id,
+            config=SessionConfig(template_id=template.template_id),
+        )
+
+        result = await coordinator.list_sessions()
+
+        session_entries = {s["session_id"]: s for s in result["sessions"]}
+        assert session_id in session_entries
+        entry = session_entries[session_id]
+        assert "effective_config" in entry, "template-linked session must have effective_config key"
+        assert entry["effective_config"] is not None
+        assert entry["effective_config"]["docker_enabled"] is True
+
+    @pytest.mark.asyncio
+    async def test_list_sessions_omits_effective_config_for_standalone(self, temp_coordinator):
+        """Standalone sessions (no template) must not have an effective_config key."""
+        import uuid
+
+        coordinator = temp_coordinator
+
+        project = await coordinator.project_manager.create_project(
+            name="Test Project", working_directory="/tmp/test_1402_standalone"
+        )
+
+        session_id = str(uuid.uuid4())
+        await coordinator.create_session(
+            session_id=session_id,
+            project_id=project.project_id,
+            config=SessionConfig(),
+        )
+
+        result = await coordinator.list_sessions()
+
+        session_entries = {s["session_id"]: s for s in result["sessions"]}
+        assert session_id in session_entries
+        entry = session_entries[session_id]
+        assert "effective_config" not in entry, (
+            "standalone session must not have an effective_config key in list response"
+        )
+
+    @pytest.mark.asyncio
+    async def test_list_sessions_handles_resolution_failure(self, temp_coordinator):
+        """When effective_config resolution fails for one session, that entry gets effective_config=None
+        and other sessions in the list are still returned."""
+        import uuid
+
+        coordinator = temp_coordinator
+
+        project = await coordinator.project_manager.create_project(
+            name="Test Project", working_directory="/tmp/test_1402_failure"
+        )
+
+        template = await coordinator.template_manager.create_template(
+            name="Docker Template 2",
+            config=SessionConfig(docker_enabled=True, permission_mode="bypassPermissions"),
+        )
+
+        session_id_bad = str(uuid.uuid4())
+        session_id_good = str(uuid.uuid4())
+
+        await coordinator.create_session(
+            session_id=session_id_bad,
+            project_id=project.project_id,
+            config=SessionConfig(template_id=template.template_id),
+        )
+        await coordinator.create_session(
+            session_id=session_id_good,
+            project_id=project.project_id,
+            config=SessionConfig(),
+        )
+
+        # Patch resolve_effective_config to raise for all calls (simulates resolution failure).
+        # _build_effective_config_payload catches the exception and returns (None, None),
+        # so list_sessions must still return all sessions with effective_config=None for the
+        # template-linked one.
+        with patch("src.session_coordinator.resolve_effective_config", side_effect=RuntimeError("simulated")):
+            result = await coordinator.list_sessions()
+
+        assert result["total"] == 2
+        session_entries = {s["session_id"]: s for s in result["sessions"]}
+
+        # bad session: effective_config=None (failure handled gracefully)
+        assert session_id_bad in session_entries
+        assert session_entries[session_id_bad].get("effective_config") is None
+
+        # good session (standalone): still returned normally, no effective_config key
+        assert session_id_good in session_entries
+        assert "effective_config" not in session_entries[session_id_good]
