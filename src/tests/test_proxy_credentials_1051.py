@@ -146,6 +146,41 @@ def test_resolve_docker_cli_path_delivery_envs_none_omitted():
 
 
 # ---------------------------------------------------------------------------
+# 7-8. docker_utils extra_env logic (issue #1396: non-secret direct passthrough)
+# ---------------------------------------------------------------------------
+
+def test_resolve_docker_cli_path_extra_env_dict_set():
+    """extra_env dict serialises to CLAUDE_DOCKER_EXTRA_ENV as JSON string."""
+    extra = {"GIT_AUTHOR_NAME": "Alice", "GIT_AUTHOR_EMAIL": "alice@example.test"}
+    _, env = resolve_docker_cli_path(extra_env=extra)
+    assert "CLAUDE_DOCKER_EXTRA_ENV" in env
+    assert json.loads(env["CLAUDE_DOCKER_EXTRA_ENV"]) == extra
+
+
+def test_resolve_docker_cli_path_extra_env_none_omitted():
+    """extra_env=None omits CLAUDE_DOCKER_EXTRA_ENV."""
+    _, env = resolve_docker_cli_path(extra_env=None)
+    assert "CLAUDE_DOCKER_EXTRA_ENV" not in env
+
+
+def test_resolve_docker_cli_path_extra_env_empty_dict_omitted():
+    """extra_env={} (empty) omits CLAUDE_DOCKER_EXTRA_ENV."""
+    _, env = resolve_docker_cli_path(extra_env={})
+    assert "CLAUDE_DOCKER_EXTRA_ENV" not in env
+
+
+def test_resolve_docker_cli_path_extra_env_and_delivery_both_set():
+    """extra_env and delivery_envs can both be set simultaneously."""
+    extra = {"GIT_AUTHOR_NAME": "Bob"}
+    delivery = {"GH_TOKEN": "CC_SECRET_gh_abc123"}
+    _, env = resolve_docker_cli_path(extra_env=extra, delivery_envs=delivery)
+    assert "CLAUDE_DOCKER_EXTRA_ENV" in env
+    assert "CLAUDE_DOCKER_DELIVERY_ENVS" in env
+    assert json.loads(env["CLAUDE_DOCKER_EXTRA_ENV"]) == extra
+    assert json.loads(env["CLAUDE_DOCKER_DELIVERY_ENVS"]) == delivery
+
+
+# ---------------------------------------------------------------------------
 # Addon test helpers — minimal mitmproxy stubs
 # ---------------------------------------------------------------------------
 

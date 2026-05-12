@@ -41,7 +41,7 @@ PROFILE_AREAS: dict[str, set[str]] = {
         "docker_home_directory", "docker_proxy_enabled", "docker_proxy_image",
         "docker_proxy_allowlist_domains",
         "bare_mode", "env_scrub_enabled",
-        "assigned_secrets",
+        "assigned_secrets", "extra_env",
     },
     "features": {
         "history_distillation_enabled", "auto_memory_mode", "auto_memory_directory",

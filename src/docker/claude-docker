@@ -29,6 +29,9 @@ set -euo pipefail
 #                                   Default when set: claude-proxy:local
 #   CLAUDE_DOCKER_DELIVERY_ENVS   - JSON string mapping env var names to placeholder values;
 #                                   forwarded as -e flags to the agent container (issue #1134)
+#   CLAUDE_DOCKER_EXTRA_ENV       - JSON string mapping env var names to literal values;
+#                                   non-secret direct passthrough, no proxy substitution (issue #1396).
+#                                   Placed before DELIVERY_ENV_FLAGS so vault secrets win on conflicts.
 #   CLAUDE_DOCKER_SSH_DIR         - Host dir with SSH key/config for SOCKS5-tunnelled SSH
 #                                   (issue #1052); mounted at /run/ssh:ro, sets GIT_SSH_COMMAND
 #
@@ -328,6 +331,20 @@ if [ -n "$PROXY_IMAGE" ]; then
     PROXY_FLAGS="$PROXY_FLAGS -e GIT_SSL_CAINFO=/run/proxy-ca/ca.crt"
 fi
 
+# Issue #1396: Build extra env flags — non-secret literal env vars from session template.
+# No proxy substitution. Placed BEFORE DELIVERY_ENV_FLAGS so vault secrets win on conflicts.
+EXTRA_ENV_FLAGS=""
+if [ -n "${CLAUDE_DOCKER_EXTRA_ENV:-}" ]; then
+    while IFS=$'\t' read -r key value; do
+        [ -n "$key" ] && EXTRA_ENV_FLAGS="$EXTRA_ENV_FLAGS -e ${key}=${value}"
+    done < <(python3 -c "
+import json, sys
+d = json.loads(sys.argv[1])
+for k, v in d.items():
+    print(k + '\t' + v)
+" "$CLAUDE_DOCKER_EXTRA_ENV" 2>/dev/null || true)
+fi
+
 # Issue #1134: Build delivery env flags — env vars carrying placeholder values for
 # credential injection. The agent container receives placeholder values (not real secrets);
 # the proxy sidecar replaces placeholders with real values on matching outgoing requests.
@@ -375,6 +392,7 @@ docker run \
     $SSH_DIR_FLAGS \
     $RESOURCE_FLAGS \
     $PROXY_FLAGS \
+    $EXTRA_ENV_FLAGS \
     $DELIVERY_ENV_FLAGS \
     "$IMAGE_NAME" \
     "$@"

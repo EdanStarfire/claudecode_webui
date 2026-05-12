@@ -241,6 +241,8 @@ class TemplateUpdateRequest(BaseModel):
     setting_sources: list[str] | None = None
     bare_mode: bool | None = None
     env_scrub_enabled: bool | None = None
+    # Non-secret direct env passthrough (issue #1396)
+    extra_env: dict[str, str] | None = None
     # Composable profiles (issue #1062)
     profile_ids: dict[str, str] | None = None
     # Issue #1230: full config dict (preferred over flat fields above)

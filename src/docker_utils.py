@@ -88,6 +88,8 @@ def resolve_docker_cli_path(
     proxy_image: str | None = None,
     # Issue #1134: delivery env vars passed inline (replaces file-based approach)
     delivery_envs: dict[str, str] | None = None,
+    # Issue #1396: non-secret direct env passthrough (no proxy substitution)
+    extra_env: dict[str, str] | None = None,
     # Issue #1053: Dynamic allowlist override
     proxy_allowlist_file: str | None = None,
     # Issue #1179: Proxy-sidecar-only mounts (session_token, session_id, etc.)
@@ -112,7 +114,13 @@ def resolve_docker_cli_path(
                      the agent into its network namespace automatically.
         delivery_envs: Dict of env_var_name → placeholder string. Passed inline to
                        claude-docker via CLAUDE_DOCKER_DELIVERY_ENVS (JSON). The wrapper
-                       forwards these as -e flags to the agent container.
+                       forwards these as -e flags to the agent container. Vault secrets
+                       win over extra_env when the same key appears in both (delivery_envs
+                       is placed after EXTRA_ENV_FLAGS in the docker run argv).
+        extra_env: Dict of env_var_name → literal value. Non-secret direct passthrough;
+                   no proxy substitution. Serialised into CLAUDE_DOCKER_EXTRA_ENV (JSON).
+                   Placed before DELIVERY_ENV_FLAGS in docker run so vault secrets win
+                   on key conflicts. Do not put secrets here — use assigned_secrets.
         docker_proxy_extra_mounts: Additional volume mount specs applied exclusively to the
                                    proxy sidecar container (never the agent container).
         session_id: Session UUID; when set, emits CLAUDE_DOCKER_SESSION_ID so that
@@ -143,6 +151,9 @@ def resolve_docker_cli_path(
 
     if proxy_image:
         env_vars["CLAUDE_DOCKER_PROXY_IMAGE"] = proxy_image
+
+    if extra_env:
+        env_vars["CLAUDE_DOCKER_EXTRA_ENV"] = _json.dumps(extra_env)
 
     if delivery_envs:
         env_vars["CLAUDE_DOCKER_DELIVERY_ENVS"] = _json.dumps(delivery_envs)

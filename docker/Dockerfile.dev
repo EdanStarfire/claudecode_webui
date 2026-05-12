@@ -19,8 +19,8 @@
 # Port forwarding example:
 #   docker run -p 8001:8001 -p 5173:5173 -v $(pwd):/workspace -w /workspace ...
 #
-# GitHub CLI auth (mount host config):
-#   -v ~/.config/gh:/home/claude/.config/gh:ro
+# GitHub CLI auth: assign a vault secret with inject_env="GH_TOKEN" to the session.
+# The proxy pipeline delivers it as GH_TOKEN inside the container (issue #1396).
 #
 # SSH agent forwarding (default — keys stay on host):
 #   -v $SSH_AUTH_SOCK:/ssh-agent -e SSH_AUTH_SOCK=/ssh-agent

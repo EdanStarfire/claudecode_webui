@@ -1257,3 +1257,46 @@ class TestIssue1115SessionConfigStorage:
             )
 
             await coordinator.cleanup()
+
+
+class TestIssue1396GhMountRemoved:
+    """Regression test for issue #1396 — ~/.config/gh must not be bind-mounted."""
+
+    @pytest.mark.asyncio
+    async def test_no_gh_config_mount_in_docker_session(self, temp_coordinator):
+        """start_session() must not include any ~/.config/gh mount for Docker sessions."""
+        import uuid
+
+        coordinator = temp_coordinator
+
+        project = await coordinator.project_manager.create_project(
+            name="Test Project", working_directory="/tmp/test_gh"
+        )
+        session_id = str(uuid.uuid4())
+        await coordinator.create_session(
+            session_id=session_id,
+            project_id=project.project_id,
+            config=SessionConfig(docker_enabled=True, docker_image="claude-code:local"),
+        )
+
+        captured_mounts = []
+
+        def fake_resolve(docker_image, docker_extra_mounts, workspace, session_data_dir, docker_home_directory, **kwargs):
+            captured_mounts.extend(docker_extra_mounts or [])
+            return "/usr/bin/docker", {}
+
+        mock_sdk = AsyncMock()
+        mock_sdk.start.return_value = True
+        mock_sdk.is_running.return_value = False
+        coordinator.set_sdk_factory(Mock(return_value=mock_sdk))
+
+        with patch("src.docker_utils.resolve_docker_cli_path", fake_resolve):
+            with patch("src.skill_manager.NEW_GLOBAL_SKILLS_DIR") as mock_skills_dir:
+                mock_skills_dir.exists.return_value = False
+                await coordinator.start_session(session_id)
+
+        gh_mounts = [m for m in captured_mounts if ".config/gh" in m]
+        assert not gh_mounts, (
+            f"~/.config/gh must not be bind-mounted in Docker sessions (issue #1396). "
+            f"Found: {gh_mounts}"
+        )
