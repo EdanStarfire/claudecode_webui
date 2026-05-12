@@ -1017,7 +1017,7 @@ class ClaudeSDK:
 
         # Per-session opt-back-in: remove suppression keys when session expresses preference
         # Issues #709, #906: auto-memory
-        if self.auto_memory_mode == "claude":
+        if self.auto_memory_mode in ("claude", "session"):
             env_vars.pop("CLAUDE_CODE_DISABLE_AUTO_MEMORY", None)
         elif self.auto_memory_mode == "disabled":
             env_vars["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "1"

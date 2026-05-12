@@ -74,10 +74,12 @@ class TestResolveEnvVars:
         assert "CLAUDE_CODE_DISABLE_AUTO_MEMORY" not in env
 
     def test_auto_memory_session_mode_does_not_set_disable_var(self):
-        # Issue #1401: session mode uses built-in memory scoped to session dir; disable flag must be unset.
+        # Issue #1408: session mode must clear CLAUDE_CODE_DISABLE_AUTO_MEMORY even when global
+        # suppression (disable_auto_memory=True) has already set it. Using _suppression_off_config()
+        # was vacuous — the var was never set in the first place.
         config = SessionConfig(auto_memory_mode="session")
         sdk = _make_sdk(config=config)
-        with patch("src.config_manager.load_config", return_value=_suppression_off_config()):
+        with patch("src.config_manager.load_config", return_value=_all_suppressed_config()):
             env = sdk._resolve_env_vars()
         assert "CLAUDE_CODE_DISABLE_AUTO_MEMORY" not in env
 
