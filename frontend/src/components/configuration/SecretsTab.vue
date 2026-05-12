@@ -191,7 +191,7 @@
           <!-- ssh_key: derived public key display (shown when editing a stored key) -->
           <template v-if="form.type === 'ssh_key' && editingName">
             <div class="col-12" v-if="sshKeyMeta">
-              <div class="border rounded p-2 bg-light">
+              <div class="border rounded p-2 bg-body-secondary">
                 <div class="small fw-semibold mb-2 text-secondary">Derived Key Info</div>
                 <div class="row g-2">
                   <div class="col-12">
@@ -233,7 +233,7 @@
           <!-- api_key: injection spec -->
           <template v-if="form.type === 'api_key'">
             <div class="col-12">
-              <div class="border rounded p-2 bg-light">
+              <div class="border rounded p-2 bg-body-secondary">
                 <div class="small fw-semibold mb-2 text-secondary">Injection Config</div>
                 <div class="row g-2">
                   <div class="col-4">
@@ -283,7 +283,7 @@
           <!-- oauth2: refresh + scrub blocks -->
           <template v-if="form.type === 'oauth2'">
             <div class="col-12">
-              <div class="border rounded p-2 bg-light mb-2">
+              <div class="border rounded p-2 bg-body-secondary mb-2">
                 <div class="small fw-semibold mb-2 text-secondary">OAuth2 Refresh</div>
                 <div class="row g-2">
                   <div class="col-12">
@@ -340,7 +340,7 @@
                 </div>
               </div>
 
-              <div class="border rounded p-2 bg-light">
+              <div class="border rounded p-2 bg-body-secondary">
                 <div class="small fw-semibold mb-2 text-secondary">Response Capture (scrub)</div>
                 <div class="row g-2">
                   <div class="col-12">
