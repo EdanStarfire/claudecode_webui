@@ -882,3 +882,44 @@ class TestIssue1170AssignedSecretsInIsolation:
         result = await resolve_effective_config(session, tm, pm)
 
         assert result.assigned_secrets == ["my-secret"]
+
+
+class TestIssue1396ExtraEnvResolution:
+    """Tests for extra_env config resolution (issue #1396)."""
+
+    @pytest.mark.asyncio
+    async def test_template_extra_env_merges_to_config(self):
+        """Template extra_env is reflected in the resolved SessionConfig."""
+        template_env = {"GIT_AUTHOR_NAME": "Alice", "GIT_AUTHOR_EMAIL": "alice@example.test"}
+        template = _make_template(extra_env=template_env)
+        session = _make_session(template_id="tmpl-001")
+        tm = _make_template_manager(template)
+
+        result = await resolve_effective_config(session, tm)
+
+        assert result.extra_env == template_env
+
+    @pytest.mark.asyncio
+    async def test_session_extra_env_overrides_template(self):
+        """Session-level extra_env overrides (not merges with) the template's value."""
+        template_env = {"GIT_AUTHOR_NAME": "Template"}
+        session_env = {"GIT_AUTHOR_NAME": "Session", "CUSTOM_VAR": "value"}
+
+        template = _make_template(extra_env=template_env)
+        session = _make_session(template_id="tmpl-001", extra_env=session_env)
+        tm = _make_template_manager(template)
+
+        result = await resolve_effective_config(session, tm)
+
+        assert result.extra_env == session_env
+
+    @pytest.mark.asyncio
+    async def test_template_missing_extra_env_defaults_none(self):
+        """Template without extra_env produces None on the resolved config."""
+        template = _make_template()  # no extra_env set
+        session = _make_session(template_id="tmpl-001")
+        tm = _make_template_manager(template)
+
+        result = await resolve_effective_config(session, tm)
+
+        assert result.extra_env is None

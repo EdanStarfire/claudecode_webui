@@ -93,6 +93,8 @@ def build_router(webui) -> APIRouter:
             setting_sources=request.setting_sources,
             bare_mode=request.bare_mode,
             env_scrub_enabled=request.env_scrub_enabled,
+            # Non-secret direct env passthrough (issue #1396)
+            extra_env=request.extra_env,
             profile_ids=request.profile_ids,
         )
 

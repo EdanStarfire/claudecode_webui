@@ -407,7 +407,7 @@
               v-model="form.inject_file_path"
               type="text"
               class="form-control form-control-sm font-monospace"
-              placeholder="/root/.config/gh/hosts.yml"
+              placeholder="/etc/credentials/example.yml"
             />
           </div>
 

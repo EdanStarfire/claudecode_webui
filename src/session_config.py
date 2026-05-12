@@ -73,6 +73,12 @@ class SessionConfig(BaseModel):
     bare_mode: bool = False  # Pass --bare to skip hooks, LSP, plugin sync, skill walks
     env_scrub_enabled: bool = False  # Issue #957: Strip credentials from subprocess envs
 
+    # Non-secret direct env passthrough (issue #1396)
+    # Plain key=value pairs emitted as -e flags by claude-docker BEFORE delivery_envs,
+    # so vault secrets win on key conflicts. No proxy substitution — keep secrets
+    # in assigned_secrets / vault instead.
+    extra_env: dict[str, str] | None = None
+
     # Template linkage (issue #1059)
     template_id: str | None = None
 
@@ -93,7 +99,7 @@ CONFIG_FIELDS: set[str] = {
     "history_distillation_enabled", "auto_memory_mode", "auto_memory_directory",
     "skill_creating_enabled",
     "mcp_server_ids", "enable_claudeai_mcp_servers", "strict_mcp_config",
-    "bare_mode", "env_scrub_enabled",
+    "bare_mode", "env_scrub_enabled", "extra_env",
 }
 
 # Default values for all CONFIG_FIELDS — derived from a fresh SessionConfig instance.

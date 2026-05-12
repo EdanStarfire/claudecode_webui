@@ -1330,10 +1330,6 @@ class SessionCoordinator:
                     extra_mounts.append(
                         f"{NEW_GLOBAL_SKILLS_DIR}:{docker_home}/.claude/skills:ro"
                     )
-                # Issue #789: Mount host gh CLI config for GitHub auth passthrough
-                gh_config = Path.home() / ".config" / "gh"
-                if gh_config.exists():
-                    extra_mounts.append(f"{gh_config}:{docker_home}/.config/gh:ro")
                 # Issue #820: Mount session-specific /tmp dir so container /tmp is host-accessible
                 # IMPORTANT: mkdir must happen BEFORE adding to extra_mounts — Docker bind-mount
                 # fails at container start if the host source path does not already exist.
@@ -1471,6 +1467,8 @@ class SessionCoordinator:
                     ),
                     # Issue #1134: pass delivery env vars inline (no file); keep allowlist path
                     delivery_envs=delivery_envs or None,
+                    # Issue #1396: non-secret direct env passthrough
+                    extra_env=effective_config.extra_env or None,
                     proxy_allowlist_file=proxy_allowlist_file,
                     # Issue #1179: Proxy-sidecar-only mounts
                     docker_proxy_extra_mounts=proxy_extra_mounts or None,
