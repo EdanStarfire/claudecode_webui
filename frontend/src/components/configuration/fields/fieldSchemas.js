@@ -227,9 +227,9 @@ export const FIELD_SCHEMAS = {
       widget: 'button-group',
       defaultValue: 'claude',
       options: [
-        { value: 'claude', label: 'Claude' },
-        { value: 'session', label: 'Session' },
-        { value: 'disabled', label: 'Disabled' },
+        { value: 'claude', label: 'Claude Memory' },
+        { value: 'session', label: 'Session Specific' },
+        { value: 'disabled', label: 'None' },
       ],
     },
     {

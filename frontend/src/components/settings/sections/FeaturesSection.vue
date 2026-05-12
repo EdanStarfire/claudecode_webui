@@ -117,8 +117,8 @@ const isDirty = computed(() => settingsStore.dirtyAreas.has(areaKey.value))
 const saving  = ref(false)
 
 const featuresFields = computed(() => FIELD_SCHEMAS.features.map(f => {
-  if (f.key === 'auto_memory_mode')              return { ...f, description: 'Claude: built-in working-directory memory. Session-Specific: per-session guidance file. Disabled: no auto-memory.' }
-  if (f.key === 'auto_memory_directory')         return { ...f, description: 'Custom directory for auto-memory storage. Supports template variables: {session_id}, {session_data}, {working_dir}.' }
+  if (f.key === 'auto_memory_mode')              return { ...f, description: 'Claude Memory: built-in memory in the working directory (default). Session Specific: built-in memory isolated to this session\'s data dir. None: memory disabled.' }
+  if (f.key === 'auto_memory_directory')         return { ...f, description: 'Advanced override for Claude Memory only. Supports template variables: {session_id}, {session_data}, {working_dir}.' }
   if (f.key === 'skill_creating_enabled')        return { ...f, description: "When enabled, the session's system prompt includes guidance on creating custom local skills." }
   if (f.key === 'history_distillation_enabled')  return { ...f, description: 'When enabled, session history is distilled to markdown on archive for context continuity.' }
   return f

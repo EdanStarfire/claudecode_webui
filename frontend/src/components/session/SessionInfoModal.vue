@@ -102,10 +102,14 @@
               </div>
             </div>
 
-            <!-- Memory Directory (when custom directory is configured) -->
-            <div v-if="displayData.auto_memory_directory" class="mb-3">
+            <!-- Memory Directory (session-specific or custom claude-mode path) -->
+            <div v-if="displayData.auto_memory_mode === 'session' || (displayData.auto_memory_mode === 'claude' && displayData.auto_memory_directory)" class="mb-3">
               <h6 class="text-muted">Memory Directory</h6>
+              <div v-if="displayData.auto_memory_mode === 'session'" class="small text-muted font-monospace">
+                {session_data}/memory <span class="text-body-secondary">(isolated per session)</span>
+              </div>
               <input
+                v-else
                 type="text"
                 class="form-control form-control-sm font-monospace path-input"
                 :value="displayData.auto_memory_directory"
