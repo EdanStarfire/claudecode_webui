@@ -333,10 +333,15 @@ fi
 
 # Issue #1396: Build extra env flags — non-secret literal env vars from session template.
 # No proxy substitution. Placed BEFORE DELIVERY_ENV_FLAGS so vault secrets win on conflicts.
+# Values are exported into the wrapper's environment and passed via --env KEY (no =VALUE)
+# so that word-splitting on $EXTRA_ENV_FLAGS cannot break values that contain spaces.
 EXTRA_ENV_FLAGS=""
 if [ -n "${CLAUDE_DOCKER_EXTRA_ENV:-}" ]; then
     while IFS=$'\t' read -r key value; do
-        [ -n "$key" ] && EXTRA_ENV_FLAGS="$EXTRA_ENV_FLAGS -e ${key}=${value}"
+        if [ -n "$key" ]; then
+            export "${key}=${value}"
+            EXTRA_ENV_FLAGS="$EXTRA_ENV_FLAGS --env ${key}"
+        fi
     done < <(python3 -c "
 import json, sys
 d = json.loads(sys.argv[1])
