@@ -276,6 +276,92 @@ def _scrub_everywhere(
 
 
 # ---------------------------------------------------------------------------
+# Streaming chunk-filter helpers (issue #1400)
+# ---------------------------------------------------------------------------
+
+def _make_chunk_filter(pairs: list[tuple[bytes, bytes]]):
+    """Return a stateful per-chunk replacement callable for mitmproxy stream hooks.
+
+    The callable accepts bytes chunks from mitmproxy's stream interface.
+    The end-of-stream sentinel is b"" (per mitmproxy proxy/layers/http/__init__.py).
+    Pairs are sorted longest-needle-first so greedy bytes.replace doesn't leave
+    prefix remnants when two needles overlap (e.g. b"AB" shadowed by b"ABC").
+
+    Performance note: uses N bytes.replace() calls per emit (one per pair).
+    For typical 1-10 secrets this is dominated by network I/O. Aho-Corasick
+    is the deferred optimisation if profiling reveals a hot path.
+    """
+    if not pairs:
+        raise ValueError("pairs must be non-empty")
+    # Longest needle first — prevents prefix-needle from eating bytes that
+    # should match a longer needle.
+    pairs = sorted(pairs, key=lambda p: len(p[0]), reverse=True)
+    max_needle_len = max(len(needle) for needle, _ in pairs)
+    overlap = max(0, max_needle_len - 1)
+    carry = bytearray()
+
+    def _filter_chunk(chunk: bytes) -> bytes:
+        if chunk == b"":
+            # End-of-stream: flush whatever remains in the carry buffer.
+            result = bytes(carry)
+            carry.clear()
+            for needle, replacement in pairs:
+                result = result.replace(needle, replacement)
+            return result
+        # Apply replacements to the full buf (carry + chunk) before splitting.
+        # This ensures needles that span the carry/chunk boundary are caught.
+        buf = bytes(carry) + chunk
+        for needle, replacement in pairs:
+            buf = buf.replace(needle, replacement)
+        split_at = len(buf) - overlap
+        if split_at > 0:
+            carry[:] = buf[split_at:]
+            return buf[:split_at]
+        carry[:] = buf
+        return b""
+
+    return _filter_chunk
+
+
+def _build_request_pairs(records: dict, host: str) -> list[tuple[bytes, bytes]]:
+    """Build (placeholder_bytes, value_bytes) pairs for outbound body injection.
+
+    Only record types present in _INJECT_BODY_DISPATCH are eligible — the same
+    gate that governs the buffered body path in request(). Currently "generic" only;
+    adding a new body-injectable type to _INJECT_BODY_DISPATCH automatically
+    includes it here.
+    """
+    result = []
+    for ph, record in records.items():
+        if not _host_matches_targets(host, record.get("target_hosts") or []):
+            continue
+        if record.get("type", "generic") not in _INJECT_BODY_DISPATCH:
+            continue
+        value = record.get("value", "")
+        if not value:
+            continue
+        result.append((ph.encode(), value.encode()))
+    return result
+
+
+def _build_response_pairs(records: dict, host: str) -> list[tuple[bytes, bytes]]:
+    """Build (value_bytes, placeholder_bytes) pairs for inbound body scrub.
+
+    All record types are eligible — defense-in-depth: any secret value that
+    reaches a response body (regardless of type) is replaced with its placeholder.
+    """
+    result = []
+    for ph, record in records.items():
+        if not _host_matches_targets(host, record.get("target_hosts") or []):
+            continue
+        value = record.get("value", "")
+        if not value:
+            continue
+        result.append((value.encode(), ph.encode()))
+    return result
+
+
+# ---------------------------------------------------------------------------
 # OAuth2 refresh helpers
 # ---------------------------------------------------------------------------
 
@@ -467,6 +553,14 @@ class ProxyAddon:
         else:
             ctx.log.info(f"[proxy] ALLOW {client_ip} -> {host}{flow.request.path}")
 
+        # Install per-chunk body-injection filter for streamed requests (#1400).
+        # Header-side substitution above already covers headers/query; this covers
+        # bodies that mitmproxy streams (flow.request.content will be None in
+        # request() under stream_large_bodies).
+        request_pairs = _build_request_pairs(self._records, host)
+        if request_pairs:
+            flow.request.stream = _make_chunk_filter(request_pairs)
+
     async def request(self, flow: http.HTTPFlow) -> None:
         """Body-only injection phase. Allowlist and OAuth refresh already handled in requestheaders()."""
         if flow.metadata.get("denied"):
@@ -479,6 +573,26 @@ class ProxyAddon:
             if inject_fn is None:
                 continue
             inject_fn(flow, record, ph)
+
+    def responseheaders(self, flow: http.HTTPFlow) -> None:
+        """Install per-chunk scrub filter for streamed responses (#1400).
+
+        Fires when response headers arrive, before body streaming begins.
+        Skips installation for:
+          - denied flows (set in requestheaders())
+          - binary responses (Content-Type in _BINARY_CONTENT_TYPES)
+          - flows with no records targeting this host
+        """
+        if flow.metadata.get("denied"):
+            return
+        if _is_binary_response(flow):
+            return
+        response_pairs = _build_response_pairs(
+            self._records, flow.request.pretty_host
+        )
+        if not response_pairs:
+            return
+        flow.response.stream = _make_chunk_filter(response_pairs)
 
     async def response(self, flow: http.HTTPFlow) -> None:
         if flow.metadata.get("denied"):

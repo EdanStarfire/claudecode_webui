@@ -49,7 +49,7 @@ class _FakeQuery:
 class _FakeRequest:
     __slots__ = (
         "pretty_host", "path", "method", "scheme", "port",
-        "headers", "query", "url", "content",
+        "headers", "query", "url", "content", "stream",
     )
 
     def __init__(self, host="api.anthropic.com", headers=None, content=None):
@@ -62,6 +62,7 @@ class _FakeRequest:
         self.headers = dict(headers or {})
         self.query = _FakeQuery()
         self.content = content
+        self.stream = None
 
 
 # ---------------------------------------------------------------------------
