@@ -264,7 +264,7 @@ def test_1245_inject_api_key_header_location_default():
 
 @pytest.mark.asyncio
 async def test_1245_request_end_to_end_sets_credential_used():
-    """Full ProxyAddon.request() with generic secret + placeholder in Authorization.
+    """Full ProxyAddon.requestheaders() with generic secret + placeholder in Authorization.
 
     Pre-fix: _inject_generic raised AttributeError on query_string, the exception
     propagated to request(), and credential_used was never set (remained None).
@@ -282,10 +282,36 @@ async def test_1245_request_end_to_end_sets_credential_used():
         host="api.anthropic.com",
         headers={"Authorization": f"Bearer {ph}"},
     )
-    await addon.request(flow)
+    await addon.requestheaders(flow)
 
     assert flow.request.headers["Authorization"] == f"Bearer {VALUE}"
     assert flow.metadata["credential_used"] == "oauth_token"
+
+
+@pytest.mark.asyncio
+async def test_1245_request_body_substitution_via_request_hook():
+    """Body placeholder is replaced by request() (body phase) after requestheaders() sets metadata."""
+    ph = "CC_SECRET_oauth_abcd1234"
+    addon = _make_addon([{
+        "placeholder": ph,
+        "name": "oauth_token",
+        "type": "generic",
+        "value": VALUE,
+        "target_hosts": [],
+    }])
+    body = f'{{"token": "{ph}"}}'.encode()
+    flow = _flow(
+        host="api.anthropic.com",
+        headers={"Authorization": "Bearer already-replaced"},
+        content=body,
+    )
+    # Simulate requestheaders() already having run (sets metadata)
+    await addon.requestheaders(flow)
+    # request() should replace the body placeholder
+    await addon.request(flow)
+
+    assert ph.encode() not in flow.request.content
+    assert VALUE.encode() in flow.request.content
 
 
 def test_1245_inject_generic_empty_query_no_crash():

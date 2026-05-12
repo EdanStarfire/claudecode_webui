@@ -4,9 +4,12 @@ Proxy addon for Claude WebUI (issue #1134).
 Replaces the static credentials.json model with a REST-fetch approach:
   - load(): reads session_token + session_id from mounted files, fetches secrets
             from the WebUI resolve endpoint via httpx.
-  - request(): blocks non-allowlisted hosts; refreshes expiring OAuth2 tokens
-               (per-placeholder asyncio.Lock prevents parallel refresh);
-               injects placeholder → real-value via type-specific handler.
+  - requestheaders(): fires after client headers arrive, before upstream forwarding.
+                      Enforces allowlist, refreshes expiring OAuth2 tokens, and
+                      injects placeholder → real-value for all header/query locations.
+  - request(): body-only injection (when flow.request.content is buffered). Under
+               mitmproxy stream_large_bodies, content may be None — body injection
+               no-ops in that case (companion issue tracks streamed-body scrub).
   - response(): scrubs raw values from inbound responses (defense-in-depth,
                 all types); writes back captured tokens via session-scoped PATCH.
 
@@ -50,8 +53,8 @@ _BINARY_CONTENT_TYPES = frozenset({
 # Injection helpers — one function per secret type
 # ---------------------------------------------------------------------------
 
-def _inject_generic(flow: http.HTTPFlow, record: dict, placeholder: str) -> bool:
-    """Replace placeholder anywhere in headers, query string, and body."""
+def _inject_generic_headers(flow: http.HTTPFlow, record: dict, placeholder: str) -> bool:
+    """Replace placeholder in headers and query string (header phase only)."""
     value = record.get("value", "")
     if not value:
         return False
@@ -64,11 +67,28 @@ def _inject_generic(flow: http.HTTPFlow, record: dict, placeholder: str) -> bool
         if placeholder in v:
             flow.request.query[k] = v.replace(placeholder, value)
             modified = True
+    return modified
+
+
+def _inject_generic_body(flow: http.HTTPFlow, record: dict, placeholder: str) -> bool:
+    """Replace placeholder in request body bytes (body phase only)."""
+    value = record.get("value", "")
+    if not value:
+        return False
     if flow.request.content and placeholder.encode() in flow.request.content:
         flow.request.content = flow.request.content.replace(
             placeholder.encode(), value.encode()
         )
-        modified = True
+        return True
+    return False
+
+
+# Keep the original name as an alias so existing unit tests that import
+# _inject_generic directly continue to work without modification.
+def _inject_generic(flow: http.HTTPFlow, record: dict, placeholder: str) -> bool:
+    """Replace placeholder anywhere in headers, query string, and body."""
+    modified = _inject_generic_headers(flow, record, placeholder)
+    modified |= _inject_generic_body(flow, record, placeholder)
     return modified
 
 
@@ -101,7 +121,7 @@ def _inject_basic_auth(flow: http.HTTPFlow, record: dict, placeholder: str) -> b
     return modified
 
 
-def _inject_api_key(flow: http.HTTPFlow, record: dict, placeholder: str) -> bool:
+def _inject_api_key_headers(flow: http.HTTPFlow, record: dict, placeholder: str) -> bool:
     """Inject at the configured location (header or query_param) per InjectionSpec."""
     value = record.get("value", "")
     if not value:
@@ -125,13 +145,31 @@ def _inject_api_key(flow: http.HTTPFlow, record: dict, placeholder: str) -> bool
     return modified
 
 
-_INJECT_DISPATCH: dict = {
-    "generic": _inject_generic,
-    "api_key": _inject_api_key,
-    "bearer": _inject_bearer,
+# Keep original name as alias for tests that import _inject_api_key directly.
+_inject_api_key = _inject_api_key_headers
+
+_INJECT_HEADERS_DISPATCH: dict = {
+    "generic":    _inject_generic_headers,
+    "api_key":    _inject_api_key_headers,
+    "bearer":     _inject_bearer,
     "basic_auth": _inject_basic_auth,
-    "oauth2": _inject_bearer,   # OAuth2 access token injects same as bearer
-    "ssh": lambda _f, _r, _p: False,
+    "oauth2":     _inject_bearer,   # OAuth2 access token injects same as bearer
+    "ssh":        lambda _f, _r, _p: False,
+}
+
+_INJECT_BODY_DISPATCH: dict = {
+    "generic": _inject_generic_body,
+    # other types are header-only; absent here is intentional
+}
+
+# Legacy alias — keeps _inject_credentials shim and any external callers working.
+_INJECT_DISPATCH: dict = {
+    "generic":    _inject_generic,
+    "api_key":    _inject_api_key_headers,
+    "bearer":     _inject_bearer,
+    "basic_auth": _inject_basic_auth,
+    "oauth2":     _inject_bearer,
+    "ssh":        lambda _f, _r, _p: False,
 }
 
 
@@ -359,7 +397,13 @@ class ProxyAddon:
         except Exception as exc:
             ctx.log.error(f"[proxy] Failed to fetch secrets for session {self._session_id}: {exc}")
 
-    async def request(self, flow: http.HTTPFlow) -> None:
+    async def requestheaders(self, flow: http.HTTPFlow) -> None:
+        """Fires after client headers arrive, before upstream forwarding.
+
+        Performs allowlist enforcement, OAuth2 refresh, and all header/query
+        injection. Body injection is deferred to request() where content is
+        available (or no-ops when streaming).
+        """
         host = flow.request.pretty_host
         client_ip = (
             flow.client_conn.peername[0] if flow.client_conn.peername else "unknown"
@@ -411,7 +455,7 @@ class ProxyAddon:
                                     "error": str(exc),
                                 })
 
-            inject_fn = _INJECT_DISPATCH.get(secret_type, _inject_generic)
+            inject_fn = _INJECT_HEADERS_DISPATCH.get(secret_type, _inject_generic_headers)
             if inject_fn(flow, record, ph):
                 credential_used = record.get("name")
 
@@ -422,6 +466,19 @@ class ProxyAddon:
             )
         else:
             ctx.log.info(f"[proxy] ALLOW {client_ip} -> {host}{flow.request.path}")
+
+    async def request(self, flow: http.HTTPFlow) -> None:
+        """Body-only injection phase. Allowlist and OAuth refresh already handled in requestheaders()."""
+        if flow.metadata.get("denied"):
+            return
+        host = flow.request.pretty_host
+        for ph, record in self._records.items():
+            if not _host_matches_targets(host, record.get("target_hosts") or []):
+                continue
+            inject_fn = _INJECT_BODY_DISPATCH.get(record.get("type", "generic"))
+            if inject_fn is None:
+                continue
+            inject_fn(flow, record, ph)
 
     async def response(self, flow: http.HTTPFlow) -> None:
         if flow.metadata.get("denied"):
@@ -560,11 +617,15 @@ class ProxyAddon:
         )
 
     def _inject_credentials(self, flow: http.HTTPFlow) -> str | None:
-        """Compatibility shim for tests — dispatches to typed inject handler."""
+        """Compatibility shim for tests — dispatches through both header and body maps."""
         for ph, record in self._records.items():
             secret_type = record.get("type", "generic")
-            inject_fn = _INJECT_DISPATCH.get(secret_type, _inject_generic)
-            if inject_fn(flow, record, ph):
+            header_fn = _INJECT_HEADERS_DISPATCH.get(secret_type, _inject_generic_headers)
+            body_fn = _INJECT_BODY_DISPATCH.get(secret_type)
+            modified = header_fn(flow, record, ph)
+            if body_fn:
+                modified |= body_fn(flow, record, ph)
+            if modified:
                 return record.get("name")
         return None
 

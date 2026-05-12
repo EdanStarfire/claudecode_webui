@@ -1,14 +1,14 @@
 """
-Tests for issue #1216 — enforce target_hosts scoping in ProxyAddon.request().
+Tests for issue #1216 — enforce target_hosts scoping in ProxyAddon.requestheaders().
 
-Verifies that the per-record host gate added to request() correctly:
+Verifies that the per-record host gate added to requestheaders() correctly:
 - Injects only when the request host matches target_hosts.
 - Skips injection (and OAuth refresh) for non-matching hosts.
 - Retains match-all semantics when target_hosts is empty or absent.
 - Uses subdomain-aware matching (same as _is_allowed()).
 - Handles multiple records with independent scopes simultaneously.
 
-Tests call request() directly via the mitmproxy stub fixture pattern from
+Tests call requestheaders() directly via the mitmproxy stub fixture pattern from
 test_proxy_credentials_1051.py. No live proxy or Docker is required.
 """
 
@@ -126,9 +126,12 @@ async def test_issue_1216_request_injects_when_host_matches_target():
         "target_hosts": ["api.anthropic.com"],
     }])
     flow = _flow("api.anthropic.com", {"Authorization": f"Bearer {ph}"})
-    await addon.request(flow)
+    await addon.requestheaders(flow)
     assert flow.request.headers["Authorization"] == "Bearer sk-ant-real"
     assert flow.metadata["credential_used"] == "anthropic_key"
+    # request() after requestheaders() must not re-mutate the header (no-op guard)
+    await addon.request(flow)
+    assert flow.request.headers["Authorization"] == "Bearer sk-ant-real"
 
 
 @pytest.mark.asyncio
@@ -143,7 +146,7 @@ async def test_issue_1216_request_skips_injection_when_host_does_not_match():
         "target_hosts": ["api.anthropic.com"],
     }])
     flow = _flow("api.github.com", {"Authorization": f"Bearer {ph}"})
-    await addon.request(flow)
+    await addon.requestheaders(flow)
     assert flow.request.headers["Authorization"] == f"Bearer {ph}"
     assert flow.metadata["credential_used"] is None
 
@@ -160,7 +163,7 @@ async def test_issue_1216_request_injects_when_target_hosts_empty():
         "target_hosts": [],
     }])
     flow = _flow("api.github.com", {"Authorization": f"Bearer {ph}"})
-    await addon.request(flow)
+    await addon.requestheaders(flow)
     assert flow.request.headers["Authorization"] == "Bearer real-value"
     assert flow.metadata["credential_used"] == "generic_secret"
 
@@ -189,7 +192,7 @@ async def test_issue_1216_request_injects_when_target_hosts_missing():
     f.logger = MagicMock()
 
     flow = _flow("api.github.com", {"Authorization": f"Bearer {ph}"})
-    await f.request(flow)
+    await f.requestheaders(flow)
     assert flow.request.headers["Authorization"] == "Bearer real-value"
     assert flow.metadata["credential_used"] == "old_record"
 
@@ -206,7 +209,7 @@ async def test_issue_1216_request_subdomain_match():
         "target_hosts": ["github.com"],
     }])
     flow = _flow("api.github.com", {"Authorization": f"Bearer {ph}"})
-    await addon.request(flow)
+    await addon.requestheaders(flow)
     assert flow.request.headers["Authorization"] == "Bearer ghp-real"
     assert flow.metadata["credential_used"] == "github_token"
 
@@ -223,7 +226,7 @@ async def test_issue_1216_request_subdomain_non_match_substring():
         "target_hosts": ["github.com"],
     }])
     flow = _flow("notgithub.com", {"Authorization": f"Bearer {ph}"})
-    await addon.request(flow)
+    await addon.requestheaders(flow)
     assert flow.request.headers["Authorization"] == f"Bearer {ph}"
     assert flow.metadata["credential_used"] is None
 
@@ -255,7 +258,7 @@ async def test_issue_1216_request_multiple_records_independent_scoping():
         "Authorization": f"Bearer {ph_a}",
         "X-GitHub-Token": f"Bearer {ph_b}",
     })
-    await addon.request(flow_a)
+    await addon.requestheaders(flow_a)
     assert flow_a.request.headers["Authorization"] == "Bearer sk-ant-real"
     assert flow_a.request.headers["X-GitHub-Token"] == f"Bearer {ph_b}"
     assert flow_a.metadata["credential_used"] == "anthropic_key"
@@ -265,7 +268,7 @@ async def test_issue_1216_request_multiple_records_independent_scoping():
         "Authorization": f"Bearer {ph_b}",
         "X-Anthropic-Key": f"Bearer {ph_a}",
     })
-    await addon.request(flow_b)
+    await addon.requestheaders(flow_b)
     assert flow_b.request.headers["Authorization"] == "Bearer ghp-real"
     assert flow_b.request.headers["X-Anthropic-Key"] == f"Bearer {ph_a}"
     assert flow_b.metadata["credential_used"] == "github_token"
