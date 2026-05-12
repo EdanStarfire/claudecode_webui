@@ -892,10 +892,11 @@ class ClaudeSDK:
         if extra_args:
             options_kwargs["extra_args"] = extra_args
 
-        # Issue #906: Custom auto-memory directory via settings JSON (claude mode + directory set)
-        if self.auto_memory_mode == "claude" and self.auto_memory_directory:
+        # Issue #906/#1401: Auto-memory directory via settings JSON.
+        # "claude" + optional user-set dir, or "session" (dir forced upstream in session_coordinator).
+        if self.auto_memory_directory and self.auto_memory_mode in ("claude", "session"):
             options_kwargs["settings"] = json.dumps({"autoMemoryDirectory": self.auto_memory_directory})
-            sdk_logger.info(f"Custom auto-memory directory for session {self.session_id}: {self.auto_memory_directory}")
+            sdk_logger.info(f"Auto-memory directory for session {self.session_id}: {self.auto_memory_directory}")
 
         # Only add can_use_tool callback if permission callback is provided and SDK classes are available
         perm_logger.debug("Callback registration check:")
@@ -1018,7 +1019,7 @@ class ClaudeSDK:
         # Issues #709, #906: auto-memory
         if self.auto_memory_mode == "claude":
             env_vars.pop("CLAUDE_CODE_DISABLE_AUTO_MEMORY", None)
-        elif self.auto_memory_mode in ("session", "disabled"):
+        elif self.auto_memory_mode == "disabled":
             env_vars["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "1"
 
         # Issue #676: Claude AI MCP servers

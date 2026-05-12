@@ -136,6 +136,48 @@ class TestSessionCoordinator:
         )
 
     @pytest.mark.asyncio
+    async def test_issue_1401_session_mode_memory_dir_and_sdk_config(self, temp_coordinator):
+        """Issue #1401: session mode creates memory/ dir, skips agent-guidance.md, wires auto_memory_directory."""
+        import uuid
+        coordinator = temp_coordinator
+
+        project = await coordinator.project_manager.create_project(
+            name="Test Project", working_directory="/test/project"
+        )
+        session_id = str(uuid.uuid4())
+        await coordinator.create_session(
+            session_id=session_id,
+            project_id=project.project_id,
+            config=SessionConfig(auto_memory_mode="session"),
+        )
+
+        mock_sdk_instance = AsyncMock()
+        mock_sdk_instance.start.return_value = True
+        mock_sdk_instance.is_running.return_value = False
+        mock_factory = Mock(return_value=mock_sdk_instance)
+        coordinator.set_sdk_factory(mock_factory)
+
+        await coordinator.start_session(session_id)
+
+        session_dir = coordinator.data_dir / "sessions" / session_id
+        assert (session_dir / "memory").exists(), "memory/ dir must be created for session mode"
+        assert not (session_dir / "memory" / "agent-guidance.md").exists(), (
+            "agent-guidance.md must not be created (removed in issue #1401)"
+        )
+
+        call_kwargs = mock_factory.call_args.kwargs
+        sdk_config = call_kwargs["config"]
+        assert sdk_config.auto_memory_directory == str(session_dir / "memory"), (
+            "auto_memory_directory must be forced to {session_dir}/memory in session mode"
+        )
+        assert "Agent Guidance" not in (sdk_config.system_prompt or ""), (
+            "system prompt must not contain guidance-file vocabulary"
+        )
+        assert "guidance file" not in (sdk_config.system_prompt or ""), (
+            "system prompt must not reference guidance files"
+        )
+
+    @pytest.mark.asyncio
     async def test_start_session(self, temp_coordinator, sample_session_config):
         """Test starting a session through coordinator."""
         coordinator = temp_coordinator

@@ -1243,20 +1243,6 @@ class SessionCoordinator:
             else:
                 history_note = ""
 
-            # Issue #709: Agent guidance file reference (session-specific memory mode)
-            if effective_config.auto_memory_mode == "session":
-                guidance_file = session_dir / "memory" / "agent-guidance.md"
-                guidance_note = (
-                    f"\n\n## Agent Guidance\n"
-                    f"You have a personal guidance file at `{guidance_file}` for this session.\n"
-                    f"Use it to document key learnings, important patterns, rules discovered, "
-                    f"and context that should persist across session resets.\n"
-                    f"You can read it with the Read tool and update it with the Edit or Write tool.\n"
-                    f"Review it at session start to recover previous context."
-                )
-            else:
-                guidance_note = ""
-
             # Issue #749: Skill creating context
             if effective_config.skill_creating_enabled:
                 skill_creating_note = (
@@ -1273,9 +1259,9 @@ class SessionCoordinator:
                 skill_creating_note = ""
 
             if effective_config.system_prompt:
-                minion_system_prompt = f"{legion_guide}{history_note}{guidance_note}{skill_creating_note}\n\n---\n\n{effective_config.system_prompt}"
+                minion_system_prompt = f"{legion_guide}{history_note}{skill_creating_note}\n\n---\n\n{effective_config.system_prompt}"
             else:
-                minion_system_prompt = f"{legion_guide}{history_note}{guidance_note}{skill_creating_note}"
+                minion_system_prompt = f"{legion_guide}{history_note}{skill_creating_note}"
             coord_logger.info(f"Built minion system prompt for start (guide + context): {len(minion_system_prompt)} chars")
 
             # Escape special characters in system_prompt for subprocess command-line safety
@@ -1489,6 +1475,16 @@ class SessionCoordinator:
             # Create/recreate SDK instance with session parameters (uses factory for testability — issue #559)
             # (effective_config already resolved early in this method — issue #1059)
 
+            # Issue #1401: For session mode, force auto_memory_directory to the session-scoped subdir
+            # so the SDK's built-in memory is isolated per session. Ensure dir exists for both
+            # docker (docker mount section above already ran mkdir) and non-docker paths.
+            if effective_config.auto_memory_mode == "session":
+                _session_memory_dir = session_dir / "memory"
+                _session_memory_dir.mkdir(parents=True, exist_ok=True)
+                effective_config = effective_config.model_copy(
+                    update={"auto_memory_directory": str(_session_memory_dir)}
+                )
+
             # Override 3 fields computed earlier in this method:
             #   system_prompt — assembled above (includes legion guide, history ref, etc.)
             #   allowed_tools — merged MCP + session tools list built above
@@ -1498,15 +1494,6 @@ class SessionCoordinator:
                 "allowed_tools": all_tools,
                 "cli_path": effective_cli_path,
             })
-
-            # Issue #709: Create session-specific memory directory and guidance file
-            if effective_config.auto_memory_mode == "session":
-                memory_dir = session_dir / "memory"
-                memory_dir.mkdir(exist_ok=True)
-                guidance_file = memory_dir / "agent-guidance.md"
-                if not guidance_file.exists():
-                    guidance_file.touch()
-                    coord_logger.debug(f"Created memory/agent-guidance.md for session {session_id}")
 
             # Issue #906: Custom auto-memory directory (claude mode + directory set) — create dir
             if effective_config.auto_memory_mode == "claude" and effective_config.auto_memory_directory:
