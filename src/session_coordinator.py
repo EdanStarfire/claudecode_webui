@@ -2572,6 +2572,35 @@ class SessionCoordinator:
             except OSError:
                 logger.exception(f"Failed to remove tmp/ for {session_id}")
 
+    async def _build_effective_config_payload(
+        self, session_info
+    ) -> tuple[dict | None, dict | None]:
+        """Return (effective_config_dict, template_meta) for template-linked sessions.
+
+        Returns (None, None) for standalone sessions or on resolution failure.
+        """
+        if not session_info.template_id:
+            return None, None
+        try:
+            eff = await resolve_effective_config(
+                session_info, self.template_manager, self.profile_manager
+            )
+            effective_config_dict = eff.model_dump()
+            tmpl = await self.template_manager.get_template(session_info.template_id)
+            template_meta = None
+            if tmpl:
+                template_meta = {
+                    "template_id": tmpl.template_id,
+                    "name": tmpl.name,
+                    "profile_ids": tmpl.profile_ids or {},
+                }
+            return effective_config_dict, template_meta
+        except Exception:
+            logger.warning(
+                f"Failed to build effective_config for session {session_info.session_id}"
+            )
+            return None, None
+
     async def get_session_info(self, session_id: str) -> dict[str, Any] | None:
         """Get comprehensive session information"""
         try:
@@ -2620,24 +2649,9 @@ class SessionCoordinator:
                 except Exception:
                     logger.warning(f"SDK get_session_info failed for {session_id}")
 
-            # Issue #1059: Enrich with effective_config and template for template-linked sessions.
-            effective_config_dict = None
-            template_meta = None
-            if session_info.template_id:
-                try:
-                    eff = await resolve_effective_config(
-                        session_info, self.template_manager, self.profile_manager
-                    )
-                    effective_config_dict = eff.model_dump()
-                    tmpl = await self.template_manager.get_template(session_info.template_id)
-                    if tmpl:
-                        template_meta = {
-                            "template_id": tmpl.template_id,
-                            "name": tmpl.name,
-                            "profile_ids": tmpl.profile_ids or {},
-                        }
-                except Exception:
-                    logger.warning(f"Failed to build effective_config for session {session_id}")
+            effective_config_dict, template_meta = await self._build_effective_config_payload(
+                session_info
+            )
 
             return {
                 "session": session_info.to_dict(),
@@ -2656,7 +2670,13 @@ class SessionCoordinator:
         """List all sessions with their current status, paginated."""
         try:
             sessions = await self.session_manager.list_sessions()
-            all_sessions = [session.to_dict() for session in sessions]
+            all_sessions = []
+            for session_info in sessions:
+                entry = session_info.to_dict()
+                if session_info.template_id:
+                    eff, _tmpl = await self._build_effective_config_payload(session_info)
+                    entry["effective_config"] = eff
+                all_sessions.append(entry)
             total = len(all_sessions)
             sliced = all_sessions[offset : offset + limit]
             return {

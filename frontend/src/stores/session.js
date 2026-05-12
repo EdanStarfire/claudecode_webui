@@ -128,6 +128,14 @@ export const useSessionStore = defineStore('session', () => {
       // Trigger reactivity
       sessions.value = new Map(sessions.value)
 
+      // Issue #1402: Seed effectiveConfigBySession from list response so badges
+      // render on unvisited chips without requiring a session selection first.
+      for (const s of data.sessions || []) {
+        if (s.effective_config) {
+          effectiveConfigBySession.value.set(s.session_id, s.effective_config)
+        }
+      }
+
       console.log(`Loaded ${sessions.value.size} sessions`)
       return data.sessions
     } catch (error) {
