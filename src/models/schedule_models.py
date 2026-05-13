@@ -32,7 +32,6 @@ class ScheduleStatus(Enum):
     """Status of a schedule."""
     ACTIVE = "active"
     PAUSED = "paused"
-    CANCELLED = "cancelled"
 
 
 @dataclass
@@ -124,6 +123,9 @@ class Schedule:
     def from_dict(cls, data: dict[str, Any]) -> "Schedule":
         """Create from dictionary."""
         data = data.copy()
+        # Migrate legacy "cancelled" status — enum value removed in #1416
+        if data.get("status") == "cancelled":
+            data["status"] = "paused"
         data["status"] = ScheduleStatus(data["status"])
         data.setdefault("reset_session", False)
         # Ephemeral fields (issue #578) - default to None if missing

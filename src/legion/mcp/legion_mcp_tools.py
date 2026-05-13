@@ -358,18 +358,18 @@ class LegionMCPTools:
             return await self._handle_resume_schedule(args)
 
         @tool(
-            "cancel_schedule",
-            "Cancel one of your schedules permanently. Cancelled schedules cannot be resumed."
+            "delete_schedule",
+            "Delete one of your schedules permanently."
             "\n\nParameters:"
-            "\n- schedule_id: The ID of the schedule to cancel",
+            "\n- schedule_id: The ID of the schedule to delete",
             {
                 "schedule_id": str,
             }
         )
-        async def cancel_schedule_tool(args: dict[str, Any]) -> dict[str, Any]:
-            """Cancel a schedule owned by the calling minion."""
+        async def delete_schedule_tool(args: dict[str, Any]) -> dict[str, Any]:
+            """Delete a schedule owned by the calling minion."""
             args["_from_minion_id"] = session_id
-            return await self._handle_cancel_schedule(args)
+            return await self._handle_delete_schedule(args)
 
         @tool(
             "update_schedule",
@@ -461,7 +461,7 @@ class LegionMCPTools:
                 list_schedules_tool,
                 pause_schedule_tool,
                 resume_schedule_tool,
-                cancel_schedule_tool,
+                delete_schedule_tool,
                 update_schedule_tool,
                 restart_session_tool,
                 queue_task_tool,
@@ -2348,8 +2348,8 @@ class LegionMCPTools:
                 "is_error": True,
             }
 
-    async def _handle_cancel_schedule(self, args: dict[str, Any]) -> dict[str, Any]:
-        """Handle cancel_schedule tool call."""
+    async def _handle_delete_schedule(self, args: dict[str, Any]) -> dict[str, Any]:
+        """Handle delete_schedule tool call."""
         from_minion_id = args.get("_from_minion_id")
         schedule_id = args.get("schedule_id", "").strip()
 
@@ -2372,14 +2372,14 @@ class LegionMCPTools:
             }
         if schedule.minion_id != from_minion_id:
             return {
-                "content": [{"type": "text", "text": "Error: You can only cancel your own schedules"}],
+                "content": [{"type": "text", "text": "Error: You can only delete your own schedules"}],
                 "is_error": True,
             }
 
         try:
-            await self.system.scheduler_service.cancel_schedule(schedule_id)
+            await self.system.scheduler_service.delete_schedule(schedule_id)
             return {
-                "content": [{"type": "text", "text": f"Schedule '{schedule.name}' cancelled permanently."}],
+                "content": [{"type": "text", "text": f"Schedule '{schedule.name}' deleted."}],
                 "is_error": False,
             }
         except ValueError as e:
@@ -2389,7 +2389,7 @@ class LegionMCPTools:
             }
         except Exception as e:
             return {
-                "content": [{"type": "text", "text": f"Unexpected error cancelling schedule: {e}"}],
+                "content": [{"type": "text", "text": f"Unexpected error deleting schedule: {e}"}],
                 "is_error": True,
             }
 

@@ -598,17 +598,17 @@ class TestSessionCoordinator:
 
 
 class TestDeleteSessionScheduleCancellation:
-    """Tests for schedule cancellation when deleting sessions (Issue #671)."""
+    """Tests for schedule deletion when deleting sessions (Issue #671)."""
 
     @pytest.mark.asyncio
-    async def test_issue_671_delete_session_cancels_schedules(self, temp_coordinator, sample_session_config):
-        """Deleting a session with active schedules cancels them."""
+    async def test_issue_671_delete_session_deletes_schedules(self, temp_coordinator, sample_session_config):
+        """Deleting a session with active schedules deletes them."""
         coordinator = temp_coordinator
         session_id = await coordinator.create_session(**sample_session_config)
 
         # Mock the legion system with scheduler_service
         mock_scheduler = AsyncMock()
-        mock_scheduler.cancel_schedules_for_minion = AsyncMock(return_value=2)
+        mock_scheduler.delete_schedules_for_minion = AsyncMock(return_value=2)
         mock_legion = MagicMock()
         mock_legion.scheduler_service = mock_scheduler
         mock_legion.legion_coordinator = MagicMock()
@@ -622,7 +622,7 @@ class TestDeleteSessionScheduleCancellation:
         result = await coordinator.delete_session(session_id)
 
         assert result["success"] is True
-        mock_scheduler.cancel_schedules_for_minion.assert_awaited_once_with(session_id)
+        mock_scheduler.delete_schedules_for_minion.assert_awaited_once_with(session_id)
 
     @pytest.mark.asyncio
     async def test_issue_671_delete_session_no_schedules(self, temp_coordinator, sample_session_config):
@@ -630,9 +630,9 @@ class TestDeleteSessionScheduleCancellation:
         coordinator = temp_coordinator
         session_id = await coordinator.create_session(**sample_session_config)
 
-        # Mock legion system where cancel returns 0 (no schedules)
+        # Mock legion system where delete returns 0 (no schedules)
         mock_scheduler = AsyncMock()
-        mock_scheduler.cancel_schedules_for_minion = AsyncMock(return_value=0)
+        mock_scheduler.delete_schedules_for_minion = AsyncMock(return_value=0)
         mock_legion = MagicMock()
         mock_legion.scheduler_service = mock_scheduler
         mock_legion.legion_coordinator = MagicMock()
@@ -646,17 +646,17 @@ class TestDeleteSessionScheduleCancellation:
         result = await coordinator.delete_session(session_id)
 
         assert result["success"] is True
-        mock_scheduler.cancel_schedules_for_minion.assert_awaited_once_with(session_id)
+        mock_scheduler.delete_schedules_for_minion.assert_awaited_once_with(session_id)
 
     @pytest.mark.asyncio
     async def test_issue_671_delete_session_schedule_error_non_blocking(self, temp_coordinator, sample_session_config):
-        """Schedule cancellation failure does not block session deletion."""
+        """Schedule deletion failure does not block session deletion."""
         coordinator = temp_coordinator
         session_id = await coordinator.create_session(**sample_session_config)
 
-        # Mock legion system where cancel raises an exception
+        # Mock legion system where delete raises an exception
         mock_scheduler = AsyncMock()
-        mock_scheduler.cancel_schedules_for_minion = AsyncMock(
+        mock_scheduler.delete_schedules_for_minion = AsyncMock(
             side_effect=RuntimeError("Scheduler unavailable")
         )
         mock_legion = MagicMock()

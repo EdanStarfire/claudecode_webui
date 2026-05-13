@@ -74,7 +74,6 @@
                 <span class="kind-chip" :class="isEphemeral(s) ? 'ephemeral' : 'permanent'">
                   {{ isEphemeral(s) ? 'ephemeral' : 'permanent' }}
                 </span>
-                <span class="status-chip" :class="s.status">{{ s.status }}</span>
               </div>
               <span class="cron-text">{{ humanizeCron(s.cron_expression) }}</span>
             </div>
@@ -85,6 +84,20 @@
                 class="monitor-error-icon"
                 :title="s.monitor_error"
               >⚠</span>
+              <button
+                class="row-state-btn row-state-btn--play"
+                :class="{ 'is-active': s.status === 'active' }"
+                :aria-label="s.status === 'active' ? 'Active' : 'Activate schedule'"
+                :title="s.status === 'active' ? 'Active' : 'Activate'"
+                @click.stop="setActive(s)"
+              >▶</button>
+              <button
+                class="row-state-btn row-state-btn--pause"
+                :class="{ 'is-active': s.status === 'paused' }"
+                :aria-label="s.status === 'paused' ? 'Paused' : 'Pause schedule'"
+                :title="s.status === 'paused' ? 'Paused' : 'Pause'"
+                @click.stop="setPaused(s)"
+              >⏸</button>
               <button
                 class="row-delete-btn"
                 title="Delete schedule"
@@ -158,6 +171,16 @@ function formatRelativeTime(ts) {
   if (absDiff < 3600) return `${prefix}${Math.ceil(absDiff / 60)}m${suffix}`
   if (absDiff < 86400) return `${prefix}${Math.ceil(absDiff / 3600)}h${suffix}`
   return `${prefix}${Math.ceil(absDiff / 86400)}d${suffix}`
+}
+
+async function setActive(s) {
+  if (s.status === 'active') return
+  await scheduleStore.resumeSchedule(s.legion_id, s.schedule_id)
+}
+
+async function setPaused(s) {
+  if (s.status === 'paused') return
+  await scheduleStore.pauseSchedule(s.legion_id, s.schedule_id)
 }
 
 function openEdit(schedule) {
@@ -350,7 +373,7 @@ onMounted(async () => {
   flex-wrap: wrap;
 }
 
-.kind-chip, .status-chip {
+.kind-chip {
   display: inline-block;
   padding: 1px 7px;
   border-radius: 4px;
@@ -361,10 +384,6 @@ onMounted(async () => {
 
 .kind-chip.ephemeral { background: rgba(124, 58, 237, 0.15); color: #7c3aed; }
 .kind-chip.permanent { background: rgba(88, 166, 255, 0.15); color: #58a6ff; }
-
-.status-chip.active   { background: rgba(63, 185, 80, 0.2);  color: #3fb950; }
-.status-chip.paused   { background: rgba(210, 153, 34, 0.2); color: #d29922; }
-.status-chip.cancelled{ background: rgba(139, 148, 158, 0.2); color: #8b949e; }
 
 .cron-text {
   font-size: 11px;
@@ -418,6 +437,36 @@ onMounted(async () => {
 .row-delete-btn:hover {
   background: rgba(248, 113, 113, 0.15);
   color: #f87171;
+}
+
+.row-state-btn {
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  border: none;
+  background: none;
+  color: var(--bs-tertiary-color);
+  font-size: 11px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s, background 0.12s, color 0.12s;
+}
+
+.schedule-row:hover .row-state-btn {
+  opacity: 1;
+}
+
+.row-state-btn.is-active {
+  opacity: 1;
+  color: #7c3aed;
+}
+
+.row-state-btn:hover {
+  background: rgba(124, 58, 237, 0.12);
+  color: #7c3aed;
 }
 
 /* ── Inline confirm ────────────────────────────────────────── */

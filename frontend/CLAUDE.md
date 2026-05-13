@@ -37,7 +37,7 @@ frontend/
 │   │   ├── legion/        (2)     # MinionTreeNode, MinionViewModal
 │   │   ├── header/        (1)     # TimelineHeader
 │   │   ├── statusbar/     (3)     # SessionStatusBar, TimelineStatusBar, RateLimitBadge
-│   │   ├── schedules/     (3)     # SchedulePanel, ScheduleItem, ScheduleCreateModal
+│   │   ├── schedules/     (2)     # SchedulePanel, ScheduleCreateModal
 │   │   ├── tasks/         (6)     # TaskListPanel, TaskItem, DiffPanel, ResourceGallery, QueueSection, etc.
 │   │   └── common/        (6)     # FolderBrowserModal, CommCard, DiffFullView, ResourceFullView, AttachmentChip, AuthPrompt
 │   └── assets/
@@ -101,7 +101,7 @@ Hash-based routing (`createWebHashHistory`):
 
 #### `schedule.js` — Cron schedules per legion
 - **State**: `schedulesByLegion` (Map), `scheduleCountByMinion` (Map), `selectedScheduleId`, `executionHistory`
-- **Key actions**: `loadSchedules()`, `createSchedule()`, `updateSchedule()`, `pauseSchedule()`, `resumeSchedule()`, `cancelSchedule()`, `deleteSchedule()`, `loadHistory()`, `handleScheduleEvent()`
+- **Key actions**: `loadSchedules()`, `createSchedule()`, `updateSchedule()`, `pauseSchedule()`, `resumeSchedule()`, `deleteSchedule()`, `loadHistory()`, `handleScheduleEvent()`
 
 #### `resource.js` — Resource gallery per session
 - **State**: `resourcesBySession` (Map), `fullViewOpen`, `currentResourceIndex`, `textContentCache` (Map)
@@ -280,12 +280,11 @@ See [TOOL_HANDLERS.md](../TOOL_HANDLERS.md) for detailed documentation.
 | `ImageGallery` | Legacy image gallery (deprecated) |
 | `QueueSection` | Message queue display |
 
-### Schedules (`schedules/`) — 3 components
+### Schedules (`schedules/`) — 2 components
 
 | Component | Purpose |
 |-----------|---------|
 | `SchedulePanel` | Schedule list for a legion |
-| `ScheduleItem` | Individual schedule with status |
 | `ScheduleCreateModal` | Create/edit cron schedule |
 
 ### Session (`session/`) — 7 components

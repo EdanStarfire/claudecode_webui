@@ -356,13 +356,13 @@ class OverseerController:
         # 5. Knowledge transfer to parent (stub for now - Phase 7)
         # await self.system.memory_manager.transfer_knowledge(child_minion_id, parent_overseer_id)
 
-        # 5b. Cancel active schedules for disposed minion (Issue #495)
+        # 5b. Delete schedules for disposed minion (Issue #495)
         try:
-            cancelled = await self.system.scheduler_service.cancel_schedules_for_minion(child_minion_id)
-            if cancelled:
-                coord_logger.info(f"Cancelled {cancelled} schedules for disposed minion {child_minion_id}")
+            deleted = await self.system.scheduler_service.delete_schedules_for_minion(child_minion_id)
+            if deleted:
+                coord_logger.info(f"Deleted {deleted} schedules for disposed minion {child_minion_id}")
         except Exception as e:
-            coord_logger.warning(f"Failed to cancel schedules for minion {child_minion_id}: {e}")
+            coord_logger.warning(f"Failed to delete schedules for minion {child_minion_id}: {e}")
 
         # 6. Terminate SDK session
         await self.system.session_coordinator.terminate_session(child_minion_id)

@@ -146,17 +146,6 @@ export const useScheduleStore = defineStore('schedule', () => {
   }
 
   /**
-   * Cancel a schedule permanently
-   */
-  async function cancelSchedule(legionId, scheduleId) {
-    const data = await api.post(
-      `/api/legions/${legionId}/schedules/${scheduleId}/cancel`
-    )
-    _upsertSchedule(legionId, data.schedule)
-    return data.schedule
-  }
-
-  /**
    * Load schedules for all multi-agent legions (used by Library Schedules section)
    */
   async function loadAllSchedules() {
@@ -339,7 +328,6 @@ export const useScheduleStore = defineStore('schedule', () => {
     updateSchedule,
     pauseSchedule,
     resumeSchedule,
-    cancelSchedule,
     deleteSchedule,
     loadHistory,
     runNow,
