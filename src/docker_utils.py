@@ -191,22 +191,52 @@ async def find_session_container(session_id: str, timeout: float = 5.0) -> str |
         return None
 
 
+async def find_session_container_any_state(session_id: str, timeout: float = 5.0) -> str | None:
+    """Return container ID for a session including stopped/exited containers.
+
+    Unlike find_session_container (which uses docker ps), this uses docker ps -a
+    so it can detect containers that have exited since session start.
+    """
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "docker", "ps", "-a", "-q",
+            "--filter", f"label=cc-webui-session-id={session_id}",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        if proc.returncode != 0:
+            return None
+        ids = stdout.decode().strip().splitlines()
+        return ids[0] if ids else None
+    except (TimeoutError, FileNotFoundError, OSError):
+        return None
+
+
 async def run_command_in_container(
     container_id: str,
     command_argv: list[str],
     timeout_seconds: float,
     workdir: str | None = None,
+    env: dict[str, str] | None = None,
 ) -> tuple[int, str, str, bool]:
     """Run an argv command inside a running container.
 
     Returns (exit_code, stdout, stderr, timed_out).
     On timeout, exit_code=-1 and timed_out=True.
+
+    Args:
+        env: Optional dict of environment variables to pass via --env KEY=value
+             flags. Values are passed directly to docker exec (no shell parsing).
     """
     import contextlib
 
     args = ["docker", "exec"]
     if workdir:
         args.extend(["--workdir", workdir])
+    if env:
+        for k, v in env.items():
+            args.extend(["--env", f"{k}={v}"])
     args.append(container_id)
     args.extend(command_argv)
 

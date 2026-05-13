@@ -14,7 +14,13 @@ import uuid
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
-from src.docker_utils import find_session_container, run_command_in_container, run_command_on_host
+from src.config_resolution import resolve_effective_config
+from src.docker_utils import (
+    find_session_container,
+    find_session_container_any_state,
+    run_command_in_container,
+    run_command_on_host,
+)
 from src.logging_config import get_logger
 from src.models.schedule_models import (
     Schedule,
@@ -931,7 +937,12 @@ class SchedulerService:
 
             session_info = await self.system.session_coordinator.session_manager.get_session_info(target_id)
             execution.minion_state = session_info.state.value
-            docker_enabled = bool(session_info.config.get("docker_enabled") if hasattr(session_info, "config") and session_info.config else False)
+
+            sc = self.system.session_coordinator
+            effective_config = await resolve_effective_config(
+                session_info, sc.template_manager, sc.profile_manager,
+            )
+            docker_enabled = bool(effective_config.docker_enabled)
             workdir = session_info.working_directory or None
 
             # 2. Render template variables
@@ -949,9 +960,36 @@ class SchedulerService:
                         break
                     await asyncio.sleep(0.5)
                 if not container_id:
-                    raise RuntimeError("Container did not appear after session start")
+                    stopped_id = await find_session_container_any_state(target_id)
+                    if stopped_id:
+                        raise RuntimeError(
+                            f"Container for session {target_id} has exited; cannot run script via docker exec"
+                        )
+                    raise RuntimeError(
+                        f"Container did not appear after session start for {target_id}"
+                    )
+
+                # Build env dict: extra_env first, then vault secrets (secrets win on conflict)
+                script_env: dict[str, str] = {}
+                if effective_config.extra_env:
+                    script_env.update(effective_config.extra_env)
+                if effective_config.assigned_secrets:
+                    resolved = await sc.credential_vault.resolve_secrets_for_assignment(
+                        effective_config.assigned_secrets
+                    )
+                    for secret in resolved:
+                        inject_env = secret.get("inject_env")
+                        value = secret.get("value")
+                        if inject_env and value is not None:
+                            script_env[inject_env] = value
+                    legion_logger.debug(
+                        f"Script env for {target_id}: {len(script_env)} vars "
+                        f"(keys: {sorted(script_env)})"
+                    )
+
                 exit_code, stdout, stderr, timed_out = await run_command_in_container(
                     container_id, argv, schedule.script_timeout_seconds, workdir,
+                    env=script_env or None,
                 )
             else:
                 exit_code, stdout, stderr, timed_out = await run_command_on_host(

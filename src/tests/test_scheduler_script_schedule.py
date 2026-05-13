@@ -40,6 +40,7 @@ def _make_session_info(
     info.is_processing = is_processing
     info.config = {"docker_enabled": docker_enabled}
     info.working_directory = working_directory
+    info.template_id = None  # no template by default; prevents template lookup in resolve_effective_config
     return info
 
 
@@ -61,6 +62,13 @@ def _make_system(session_info=None, data_dir: Path | None = None, enqueue_result
     coordinator.start_session = AsyncMock(return_value=True)
     coordinator.enqueue_message = AsyncMock(return_value=enqueue_result)
     coordinator.data_dir = data_dir or Path("/nonexistent")
+    # Required by resolve_effective_config
+    coordinator.template_manager = MagicMock()
+    coordinator.template_manager.get_template = AsyncMock(return_value=None)
+    coordinator.profile_manager = MagicMock()
+    coordinator.profile_manager.get_profile = AsyncMock(return_value=None)
+    coordinator.credential_vault = MagicMock()
+    coordinator.credential_vault.resolve_secrets_for_assignment = AsyncMock(return_value=[])
 
     system = MagicMock()
     system.session_coordinator = coordinator
@@ -730,3 +738,327 @@ def test_schedule_type_immutable_in_update_request():
     raw = req.model_dump()
     # schedule_type should not be a field in ScheduleUpdateRequest
     assert "schedule_type" not in raw
+
+
+# ---------------------------------------------------------------------------
+# Helpers for effective-config + secrets tests (issue #1414)
+# ---------------------------------------------------------------------------
+
+
+def _make_effective_config(
+    docker_enabled: bool = False,
+    assigned_secrets: list[str] | None = None,
+    extra_env: dict[str, str] | None = None,
+):
+    """Return a SessionConfig-like mock with the given docker + secret settings."""
+    from src.session_config import SessionConfig
+
+    return SessionConfig(
+        docker_enabled=docker_enabled,
+        assigned_secrets=assigned_secrets,
+        extra_env=extra_env,
+    )
+
+
+def _make_system_with_vault(
+    session_info=None,
+    data_dir=None,
+    enqueue_result=None,
+    vault_resolved: list[dict] | None = None,
+):
+    """Build a system mock that includes template_manager, profile_manager, credential_vault."""
+    system = _make_system(session_info=session_info, data_dir=data_dir, enqueue_result=enqueue_result)
+    sc = system.session_coordinator
+    sc.template_manager = MagicMock()
+    sc.profile_manager = MagicMock()
+    sc.credential_vault = MagicMock()
+    sc.credential_vault.resolve_secrets_for_assignment = AsyncMock(
+        return_value=vault_resolved or []
+    )
+    return system
+
+
+# ---------------------------------------------------------------------------
+# 23. Template-only Docker config → routes through docker exec
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_template_only_docker_config_uses_container(tmp_session_dir):
+    """Session has no direct docker_enabled; template provides it via resolve_effective_config."""
+    session_info = _make_session_info(docker_enabled=False)
+    system = _make_system_with_vault(session_info=session_info, data_dir=tmp_session_dir)
+    svc = SchedulerService(system)
+    svc._persist_schedules = AsyncMock()
+    svc._append_execution = AsyncMock()
+    svc._broadcast_execution_event = AsyncMock()
+    svc._broadcast_schedule_event = AsyncMock()
+
+    schedule = _make_schedule()
+    effective = _make_effective_config(docker_enabled=True)
+
+    with (
+        patch("src.legion.scheduler_service.resolve_effective_config", new=AsyncMock(return_value=effective)),
+        patch("src.legion.scheduler_service.find_session_container", new=AsyncMock(return_value="ctr-template")),
+        patch("src.legion.scheduler_service.run_command_in_container", new=AsyncMock(return_value=(0, "ok\n", "", False))) as mock_exec,
+        patch("src.legion.scheduler_service.run_command_on_host") as mock_host,
+    ):
+        await svc._fire_script_schedule(schedule, 1000.0)
+
+    mock_exec.assert_awaited_once()
+    mock_host.assert_not_called()
+    assert schedule.last_status == "delivered"
+
+
+# ---------------------------------------------------------------------------
+# 24. Profile-only Docker config → routes through docker exec
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_profile_only_docker_config_uses_container(tmp_session_dir):
+    """Docker flag originates from a profile; effective config resolves it to True."""
+    session_info = _make_session_info(docker_enabled=False)
+    system = _make_system_with_vault(session_info=session_info, data_dir=tmp_session_dir)
+    svc = SchedulerService(system)
+    svc._persist_schedules = AsyncMock()
+    svc._append_execution = AsyncMock()
+    svc._broadcast_execution_event = AsyncMock()
+    svc._broadcast_schedule_event = AsyncMock()
+
+    schedule = _make_schedule()
+    effective = _make_effective_config(docker_enabled=True)
+
+    with (
+        patch("src.legion.scheduler_service.resolve_effective_config", new=AsyncMock(return_value=effective)),
+        patch("src.legion.scheduler_service.find_session_container", new=AsyncMock(return_value="ctr-profile")),
+        patch("src.legion.scheduler_service.run_command_in_container", new=AsyncMock(return_value=(0, "ok\n", "", False))) as mock_exec,
+        patch("src.legion.scheduler_service.run_command_on_host") as mock_host,
+    ):
+        await svc._fire_script_schedule(schedule, 1000.0)
+
+    mock_exec.assert_awaited_once()
+    mock_host.assert_not_called()
+    assert schedule.last_status == "delivered"
+
+
+# ---------------------------------------------------------------------------
+# 25. Non-containerized regression — run_command_on_host, not in_container
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_non_containerized_session_runs_on_host(tmp_session_dir):
+    """When effective config has docker_enabled=False, host path is used unchanged."""
+    session_info = _make_session_info(docker_enabled=False)
+    system = _make_system_with_vault(session_info=session_info, data_dir=tmp_session_dir)
+    svc = SchedulerService(system)
+    svc._persist_schedules = AsyncMock()
+    svc._append_execution = AsyncMock()
+    svc._broadcast_execution_event = AsyncMock()
+    svc._broadcast_schedule_event = AsyncMock()
+
+    schedule = _make_schedule()
+    effective = _make_effective_config(docker_enabled=False)
+
+    with (
+        patch("src.legion.scheduler_service.resolve_effective_config", new=AsyncMock(return_value=effective)),
+        patch("src.legion.scheduler_service.run_command_on_host", new=AsyncMock(return_value=(0, "host output\n", "", False))) as mock_host,
+        patch("src.legion.scheduler_service.run_command_in_container") as mock_exec,
+    ):
+        await svc._fire_script_schedule(schedule, 1000.0)
+
+    mock_host.assert_awaited_once()
+    mock_exec.assert_not_called()
+    assert schedule.last_status == "delivered"
+
+
+# ---------------------------------------------------------------------------
+# 26. Secrets injection — env dict passed to run_command_in_container
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_secrets_injected_into_docker_exec_env(tmp_session_dir):
+    """Vault secrets are resolved and passed as env to run_command_in_container."""
+    session_info = _make_session_info(docker_enabled=True)
+    vault_secrets = [
+        {"name": "my_token", "inject_env": "MY_TOKEN", "value": "secret_abc"},
+        {"name": "other_key", "inject_env": "OTHER_KEY", "value": "val_xyz"},
+    ]
+    system = _make_system_with_vault(
+        session_info=session_info,
+        data_dir=tmp_session_dir,
+        vault_resolved=vault_secrets,
+    )
+    svc = SchedulerService(system)
+    svc._persist_schedules = AsyncMock()
+    svc._append_execution = AsyncMock()
+    svc._broadcast_execution_event = AsyncMock()
+    svc._broadcast_schedule_event = AsyncMock()
+
+    schedule = _make_schedule()
+    effective = _make_effective_config(
+        docker_enabled=True,
+        assigned_secrets=["my_token", "other_key"],
+    )
+
+    with (
+        patch("src.legion.scheduler_service.resolve_effective_config", new=AsyncMock(return_value=effective)),
+        patch("src.legion.scheduler_service.find_session_container", new=AsyncMock(return_value="ctr-sec")),
+        patch("src.legion.scheduler_service.run_command_in_container", new=AsyncMock(return_value=(0, "output\n", "", False))) as mock_exec,
+    ):
+        await svc._fire_script_schedule(schedule, 1000.0)
+
+    mock_exec.assert_awaited_once()
+    passed_env = mock_exec.call_args.kwargs.get("env")
+    assert passed_env is not None
+    assert passed_env["MY_TOKEN"] == "secret_abc"
+    assert passed_env["OTHER_KEY"] == "val_xyz"
+
+
+# ---------------------------------------------------------------------------
+# 27. Post-rotation freshness — env reflects vault value at fire time
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_post_rotation_vault_value_reflected_at_fire_time(tmp_session_dir):
+    """Each fire reads the vault fresh; post-rotation values are picked up."""
+    session_info = _make_session_info(docker_enabled=True)
+    # Vault returns current (rotated) value
+    vault_secrets = [{"name": "api_key", "inject_env": "API_KEY", "value": "rotated_value_999"}]
+    system = _make_system_with_vault(
+        session_info=session_info,
+        data_dir=tmp_session_dir,
+        vault_resolved=vault_secrets,
+    )
+    svc = SchedulerService(system)
+    svc._persist_schedules = AsyncMock()
+    svc._append_execution = AsyncMock()
+    svc._broadcast_execution_event = AsyncMock()
+    svc._broadcast_schedule_event = AsyncMock()
+
+    schedule = _make_schedule()
+    effective = _make_effective_config(docker_enabled=True, assigned_secrets=["api_key"])
+
+    with (
+        patch("src.legion.scheduler_service.resolve_effective_config", new=AsyncMock(return_value=effective)),
+        patch("src.legion.scheduler_service.find_session_container", new=AsyncMock(return_value="ctr-rot")),
+        patch("src.legion.scheduler_service.run_command_in_container", new=AsyncMock(return_value=(0, "done\n", "", False))) as mock_exec,
+    ):
+        await svc._fire_script_schedule(schedule, 1000.0)
+
+    passed_env = mock_exec.call_args.kwargs.get("env")
+    assert passed_env is not None
+    assert passed_env["API_KEY"] == "rotated_value_999"
+    system.session_coordinator.credential_vault.resolve_secrets_for_assignment.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# 28. No secret values in logs
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_no_secret_values_appear_in_logs(tmp_session_dir, caplog):
+    """Plaintext secret values must never appear in log output."""
+    import logging
+
+    session_info = _make_session_info(docker_enabled=True)
+    plaintext = "SUPERSECRET_PLAINTEXT_12345"
+    vault_secrets = [{"name": "tok", "inject_env": "TOKEN", "value": plaintext}]
+    system = _make_system_with_vault(
+        session_info=session_info,
+        data_dir=tmp_session_dir,
+        vault_resolved=vault_secrets,
+    )
+    svc = SchedulerService(system)
+    svc._persist_schedules = AsyncMock()
+    svc._append_execution = AsyncMock()
+    svc._broadcast_execution_event = AsyncMock()
+    svc._broadcast_schedule_event = AsyncMock()
+
+    schedule = _make_schedule()
+    effective = _make_effective_config(docker_enabled=True, assigned_secrets=["tok"])
+
+    with (
+        caplog.at_level(logging.DEBUG),
+        patch("src.legion.scheduler_service.resolve_effective_config", new=AsyncMock(return_value=effective)),
+        patch("src.legion.scheduler_service.find_session_container", new=AsyncMock(return_value="ctr-log")),
+        patch("src.legion.scheduler_service.run_command_in_container", new=AsyncMock(return_value=(0, "x\n", "", False))),
+    ):
+        await svc._fire_script_schedule(schedule, 1000.0)
+
+    for record in caplog.records:
+        assert plaintext not in record.getMessage(), (
+            f"Secret plaintext found in log record: {record.getMessage()!r}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# 29. Conflicting config: session direct docker_enabled=False overrides template
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_session_direct_docker_false_overrides_template(tmp_session_dir):
+    """Session direct config wins: docker_enabled=False beats template docker_enabled=True."""
+    session_info = _make_session_info(docker_enabled=False)
+    system = _make_system_with_vault(session_info=session_info, data_dir=tmp_session_dir)
+    svc = SchedulerService(system)
+    svc._persist_schedules = AsyncMock()
+    svc._append_execution = AsyncMock()
+    svc._broadcast_execution_event = AsyncMock()
+    svc._broadcast_schedule_event = AsyncMock()
+
+    schedule = _make_schedule()
+    # resolve_effective_config honours session direct > template precedence
+    effective = _make_effective_config(docker_enabled=False)
+
+    with (
+        patch("src.legion.scheduler_service.resolve_effective_config", new=AsyncMock(return_value=effective)),
+        patch("src.legion.scheduler_service.run_command_on_host", new=AsyncMock(return_value=(0, "host\n", "", False))) as mock_host,
+        patch("src.legion.scheduler_service.run_command_in_container") as mock_exec,
+    ):
+        await svc._fire_script_schedule(schedule, 1000.0)
+
+    mock_host.assert_awaited_once()
+    mock_exec.assert_not_called()
+    assert schedule.last_status == "delivered"
+
+
+# ---------------------------------------------------------------------------
+# 30. Container exited → error with "exited" message, no host fallback
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_container_exited_surfaces_error_no_host_fallback(tmp_session_dir):
+    """When container has stopped, execution is error with 'exited' message; no host run."""
+    session_info = _make_session_info(docker_enabled=True)
+    system = _make_system_with_vault(session_info=session_info, data_dir=tmp_session_dir)
+    svc = SchedulerService(system)
+    svc._persist_schedules = AsyncMock()
+    svc._append_execution = AsyncMock()
+    svc._broadcast_execution_event = AsyncMock()
+    svc._broadcast_schedule_event = AsyncMock()
+
+    schedule = _make_schedule()
+    effective = _make_effective_config(docker_enabled=True)
+
+    with (
+        patch("src.legion.scheduler_service.resolve_effective_config", new=AsyncMock(return_value=effective)),
+        # Running container not found; stopped container IS found
+        patch("src.legion.scheduler_service.find_session_container", new=AsyncMock(return_value=None)),
+        patch("src.legion.scheduler_service.find_session_container_any_state", new=AsyncMock(return_value="ctr-stopped")),
+        patch("src.legion.scheduler_service.run_command_in_container") as mock_exec,
+        patch("src.legion.scheduler_service.run_command_on_host") as mock_host,
+    ):
+        await svc._fire_script_schedule(schedule, 1000.0)
+
+    assert schedule.last_status == "error"
+    execution = svc._append_execution.call_args.args[1]
+    assert "exited" in execution.error_message.lower()
+    mock_exec.assert_not_called()
+    mock_host.assert_not_called()
