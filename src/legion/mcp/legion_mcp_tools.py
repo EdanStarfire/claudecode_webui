@@ -2433,11 +2433,14 @@ class LegionMCPTools:
 
         if prompt is not None:
             if schedule.schedule_type == "script":
-                return {
-                    "content": [{"type": "text", "text": "Error: This schedule is script-type; prompt cannot be set"}],
-                    "is_error": True,
-                }
-            if not prompt.strip():
+                if prompt.strip():
+                    return {
+                        "content": [{"type": "text", "text": "Error: This schedule is script-type; prompt cannot be set"}],
+                        "is_error": True,
+                    }
+                else:
+                    prompt = None  # empty/whitespace prompt is a no-op for script-type schedules
+            elif not prompt.strip():
                 return {
                     "content": [{"type": "text", "text": "Error: Prompt cannot be empty"}],
                     "is_error": True,
@@ -2450,6 +2453,12 @@ class LegionMCPTools:
             fields["prompt"] = prompt
         if cron_expression is not None:
             fields["cron_expression"] = cron_expression
+
+        if not fields:
+            return {
+                "content": [{"type": "text", "text": "Error: Must provide at least one of: name, prompt, cron_expression"}],
+                "is_error": True,
+            }
 
         try:
             updated = await self.system.scheduler_service.update_schedule(schedule_id, **fields)

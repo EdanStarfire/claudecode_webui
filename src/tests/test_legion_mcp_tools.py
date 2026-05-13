@@ -954,3 +954,123 @@ async def test_issue_1370_update_schedule_handler_returns_full_schedule_on_succe
         name="Renamed Schedule",
         cron_expression="0 9 * * 1-5",
     )
+
+
+# ── update_schedule handler tests (Issue #1419) ──
+
+
+def _make_script_schedule():
+    from unittest.mock import MagicMock
+
+    from src.models.schedule_models import ScheduleStatus
+
+    schedule = MagicMock()
+    schedule.schedule_id = "sched-script"
+    schedule.minion_id = "minion-123"
+    schedule.schedule_type = "script"
+    schedule.name = "Script Schedule"
+    schedule.cron_expression = "0 * * * *"
+    schedule.next_run = None
+    schedule.status = ScheduleStatus.ACTIVE
+    return schedule
+
+
+@pytest.mark.asyncio
+async def test_issue_1419_update_schedule_handler_script_type_ignores_empty_prompt():
+    """Issue #1419: script-type + name + prompt='' + cron_expression → success; prompt not passed to service."""
+    from unittest.mock import MagicMock
+
+    from src.models.schedule_models import ScheduleStatus
+
+    script_schedule = _make_script_schedule()
+    updated = MagicMock()
+    updated.schedule_id = "sched-script"
+    updated.name = "Renamed Script"
+    updated.cron_expression = "*/5 * * * *"
+    updated.next_run = None
+    updated.status = ScheduleStatus.ACTIVE
+
+    tools, svc, _ = _make_update_schedule_tools(schedule=script_schedule, update_return=updated)
+
+    result = await tools._handle_update_schedule({
+        "_from_minion_id": "minion-123",
+        "schedule_id": "sched-script",
+        "name": "Renamed Script",
+        "prompt": "",
+        "cron_expression": "*/5 * * * *",
+    })
+
+    assert result.get("is_error") is False
+    svc.update_schedule.assert_awaited_once_with(
+        "sched-script",
+        name="Renamed Script",
+        cron_expression="*/5 * * * *",
+    )
+
+
+@pytest.mark.asyncio
+async def test_issue_1419_update_schedule_handler_script_type_ignores_whitespace_prompt():
+    """Issue #1419: script-type + name + prompt='   ' + cron_expression → success; prompt not passed to service."""
+    from unittest.mock import MagicMock
+
+    from src.models.schedule_models import ScheduleStatus
+
+    script_schedule = _make_script_schedule()
+    updated = MagicMock()
+    updated.schedule_id = "sched-script"
+    updated.name = "Renamed Script"
+    updated.cron_expression = "*/5 * * * *"
+    updated.next_run = None
+    updated.status = ScheduleStatus.ACTIVE
+
+    tools, svc, _ = _make_update_schedule_tools(schedule=script_schedule, update_return=updated)
+
+    result = await tools._handle_update_schedule({
+        "_from_minion_id": "minion-123",
+        "schedule_id": "sched-script",
+        "name": "Renamed Script",
+        "prompt": "   ",
+        "cron_expression": "*/5 * * * *",
+    })
+
+    assert result.get("is_error") is False
+    svc.update_schedule.assert_awaited_once_with(
+        "sched-script",
+        name="Renamed Script",
+        cron_expression="*/5 * * * *",
+    )
+
+
+@pytest.mark.asyncio
+async def test_issue_1419_update_schedule_handler_script_type_only_empty_prompt():
+    """Issue #1419: script-type + only prompt='' (no other fields) → is_error=True; service not called."""
+    script_schedule = _make_script_schedule()
+    tools, svc, _ = _make_update_schedule_tools(schedule=script_schedule)
+
+    result = await tools._handle_update_schedule({
+        "_from_minion_id": "minion-123",
+        "schedule_id": "sched-script",
+        "prompt": "",
+    })
+
+    assert result.get("is_error") is True
+    assert "at least one" in result["content"][0]["text"].lower()
+    svc.update_schedule.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_issue_1419_update_schedule_handler_rejects_non_empty_prompt_on_script_type():
+    """Issue #1419: script-type + non-empty prompt → is_error=True; service not called."""
+    script_schedule = _make_script_schedule()
+    tools, svc, _ = _make_update_schedule_tools(schedule=script_schedule)
+
+    result = await tools._handle_update_schedule({
+        "_from_minion_id": "minion-123",
+        "schedule_id": "sched-script",
+        "name": "Renamed Script",
+        "prompt": "do something",
+    })
+
+    assert result.get("is_error") is True
+    assert "script-type" in result["content"][0]["text"].lower()
+    svc.update_schedule.assert_not_called()
