@@ -27,6 +27,10 @@ git diff --name-only HEAD~1 | grep -q "^frontend/" && echo "Frontend changed"
 
 If frontend code changed, build it:
 ```bash
+# Clean stale build artifacts so old hashed chunks don't linger across worktree checkouts
+rm -rf frontend/dist
+
+# Build fresh
 cd frontend && npm run build
 ```
 
