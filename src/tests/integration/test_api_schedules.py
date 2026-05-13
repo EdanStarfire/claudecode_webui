@@ -1,5 +1,5 @@
 """
-Stage 6: Integration tests for Schedule endpoints (10 routes).
+Stage 6: Integration tests for Schedule endpoints (9 routes).
 
 Tests:
 - GET /api/legions/{legion_id}/schedules — list (with filters)
@@ -8,7 +8,6 @@ Tests:
 - PUT /api/legions/{legion_id}/schedules/{schedule_id} — update
 - POST /api/legions/{legion_id}/schedules/{schedule_id}/pause — pause
 - POST /api/legions/{legion_id}/schedules/{schedule_id}/resume — resume
-- POST /api/legions/{legion_id}/schedules/{schedule_id}/cancel — cancel
 - POST /api/legions/{legion_id}/schedules/{schedule_id}/run-now — manual trigger
 - DELETE /api/legions/{legion_id}/schedules/{schedule_id} — delete
 - GET /api/legions/{legion_id}/schedules/{schedule_id}/history — execution history
@@ -188,15 +187,14 @@ class TestScheduleLifecycle:
         assert resp.status_code == 200
         assert resp.json()["schedule"]["status"] == "active"
 
-    async def test_cancel_schedule(self, api_integration_env):
+    async def test_cancel_endpoint_removed(self, api_integration_env):
         client = api_integration_env["client"]
         lid, minion_id = await _setup_legion_with_minion(api_integration_env)
         schedule = await _create_schedule(client, lid, minion_id)
         sched_id = schedule["schedule_id"]
 
         resp = await client.post(f"/api/legions/{lid}/schedules/{sched_id}/cancel")
-        assert resp.status_code == 200
-        assert resp.json()["schedule"]["status"] == "cancelled"
+        assert resp.status_code == 404
 
     async def test_pause_nonexistent(self, api_integration_env):
         client = api_integration_env["client"]

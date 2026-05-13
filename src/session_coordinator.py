@@ -1883,17 +1883,17 @@ class SessionCoordinator:
                 else:
                     coord_logger.warning(f"Parent overseer {parent_id} not found for minion {session_id}")
 
-            # Step 1.55: Cancel active schedules for deleted session (Issue #671)
+            # Step 1.55: Delete schedules for deleted session (Issue #671)
             if self.legion_system:
                 try:
-                    cancelled = await self.legion_system.scheduler_service.cancel_schedules_for_minion(session_id)
-                    if cancelled:
+                    deleted = await self.legion_system.scheduler_service.delete_schedules_for_minion(session_id)
+                    if deleted:
                         coord_logger.info(
-                            f"Cancelled {cancelled} schedules for deleted session {session_id}"
+                            f"Deleted {deleted} schedules for deleted session {session_id}"
                         )
                 except Exception as e:
                     coord_logger.warning(
-                        f"Failed to cancel schedules for session {session_id}: {e}"
+                        f"Failed to delete schedules for session {session_id}: {e}"
                     )
 
             # Step 1.6: Clean up capability registry if session has capabilities (issue #349: all sessions are minions)

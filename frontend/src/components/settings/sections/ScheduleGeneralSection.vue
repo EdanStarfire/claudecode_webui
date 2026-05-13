@@ -25,33 +25,6 @@
         </div>
       </div>
 
-      <!-- Status (direct API call — not a draft field) -->
-      <div class="field-row">
-        <label class="field-label">Status</label>
-        <div class="field-control">
-          <div class="status-btn-group">
-            <button
-              class="status-btn"
-              :class="{ active: entity.status === 'active' }"
-              :disabled="entity.status === 'cancelled'"
-              @click="setStatus('active')"
-            >Active</button>
-            <button
-              class="status-btn"
-              :class="{ active: entity.status === 'paused' }"
-              :disabled="entity.status === 'cancelled'"
-              @click="setStatus('paused')"
-            >Paused</button>
-            <button
-              class="status-btn status-btn--cancel"
-              :class="{ active: entity.status === 'cancelled' }"
-              @click="setStatus('cancelled')"
-            >Cancelled</button>
-          </div>
-          <div v-if="entity.status === 'cancelled'" class="field-helper">Cancelled schedules cannot be reactivated.</div>
-        </div>
-      </div>
-
       <!-- Cron expression -->
       <div class="field-row">
         <label class="field-label">Cron Expression</label>
@@ -318,21 +291,6 @@ function setCron(expr) {
   handleField('cron_expression', expr)
 }
 
-async function setStatus(newStatus) {
-  if (!entity.value || entity.value.status === newStatus) return
-  try {
-    if (newStatus === 'active') {
-      await scheduleStore.resumeSchedule(entity.value.legion_id, entity.value.schedule_id)
-    } else if (newStatus === 'paused') {
-      await scheduleStore.pauseSchedule(entity.value.legion_id, entity.value.schedule_id)
-    } else if (newStatus === 'cancelled') {
-      await scheduleStore.cancelSchedule(entity.value.legion_id, entity.value.schedule_id)
-    }
-  } catch (err) {
-    console.error('Status change failed:', err)
-  }
-}
-
 async function handleSave() {
   if (!entity.value || !isDirty.value) return
   saving.value = true
@@ -468,45 +426,6 @@ onMounted(async () => {
   font-size: 13px;
   color: var(--bs-tertiary-color);
   font-style: italic;
-}
-
-/* ── Status buttons ─────────────────────────────────────── */
-.status-btn-group {
-  display: flex;
-  gap: 6px;
-}
-
-.status-btn {
-  padding: 4px 14px;
-  border-radius: 6px;
-  border: 1px solid var(--bs-border-color);
-  background: none;
-  color: var(--bs-secondary-color);
-  font-size: 12px;
-  cursor: pointer;
-  transition: background 0.12s, color 0.12s, border-color 0.12s;
-}
-
-.status-btn:hover:not(:disabled):not(.active) {
-  background: var(--bs-secondary-bg);
-  color: var(--bs-emphasis-color);
-}
-
-.status-btn.active {
-  background: #7c3aed;
-  border-color: #7c3aed;
-  color: #fff;
-}
-
-.status-btn--cancel.active {
-  background: rgba(248, 113, 113, 0.2);
-  border-color: #f87171;
-  color: #f87171;
-}
-
-.status-btn:disabled {
-  opacity: 0.4;
-  cursor: default;
 }
 
 /* ── Cron ────────────────────────────────────────────────── */

@@ -31,7 +31,7 @@ def build_router(webui) -> APIRouter:
             except ValueError:
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Invalid status: {status}. Use active, paused, or cancelled",
+                    detail=f"Invalid status: {status}. Use active or paused",
                 ) from None
 
         svc = webui.coordinator.legion_system.scheduler_service
@@ -173,20 +173,6 @@ def build_router(webui) -> APIRouter:
 
         svc = webui.coordinator.legion_system.scheduler_service
         updated = await svc.resume_schedule(schedule_id)
-        return {"schedule": await svc.schedule_to_api_dict(updated)}
-
-    @router.post("/api/legions/{legion_id}/schedules/{schedule_id}/cancel")
-    @handle_exceptions("cancel schedule", value_error_status=400)
-    async def cancel_schedule(legion_id: str, schedule_id: str):
-        """Cancel a schedule permanently."""
-        schedule = await webui.coordinator.legion_system.scheduler_service.get_schedule(
-            schedule_id
-        )
-        if not schedule or schedule.legion_id != legion_id:
-            raise HTTPException(status_code=404, detail="Schedule not found")
-
-        svc = webui.coordinator.legion_system.scheduler_service
-        updated = await svc.cancel_schedule(schedule_id)
         return {"schedule": await svc.schedule_to_api_dict(updated)}
 
     @router.post("/api/legions/{legion_id}/schedules/{schedule_id}/run-now")

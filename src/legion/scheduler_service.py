@@ -285,26 +285,6 @@ class SchedulerService:
         legion_logger.info(f"Schedule resumed: {schedule_id}")
         return schedule
 
-    async def cancel_schedule(self, schedule_id: str) -> Schedule:
-        """Cancel a schedule permanently.
-
-        Raises:
-            ValueError: If schedule not found or already cancelled.
-        """
-        schedule = self._schedules.get(schedule_id)
-        if not schedule:
-            raise ValueError(f"Schedule {schedule_id} not found")
-        if schedule.status == ScheduleStatus.CANCELLED:
-            raise ValueError(f"Schedule {schedule_id} is already cancelled")
-
-        schedule.status = ScheduleStatus.CANCELLED
-        schedule.next_run = None
-        schedule.updated_at = datetime.now(UTC).timestamp()
-        await self._persist_schedules(schedule.legion_id)
-        await self._broadcast_schedule_event(schedule.legion_id, schedule)
-        legion_logger.info(f"Schedule cancelled: {schedule_id}")
-        return schedule
-
     async def delete_schedule(self, schedule_id: str) -> bool:
         """Remove a schedule entirely.
 
@@ -322,33 +302,30 @@ class SchedulerService:
         legion_logger.info(f"Schedule deleted: {schedule_id}")
         return True
 
-    async def cancel_schedules_for_minion(self, minion_id: str) -> int:
-        """Cancel all active/paused schedules for a minion (used on disposal).
+    async def delete_schedules_for_minion(self, minion_id: str) -> int:
+        """Delete all schedules owned by a minion (used on disposal / session delete).
 
         Returns:
-            Number of schedules cancelled.
+            Number of schedules deleted.
         """
-        cancelled = 0
+        deleted = 0
         affected_legions = set()
-        for schedule in list(self._schedules.values()):
+        for schedule_id, schedule in list(self._schedules.items()):
             if schedule.minion_id != minion_id:
                 continue
-            if schedule.status == ScheduleStatus.CANCELLED:
-                continue
-            schedule.status = ScheduleStatus.CANCELLED
-            schedule.next_run = None
-            schedule.updated_at = datetime.now(UTC).timestamp()
             affected_legions.add(schedule.legion_id)
-            cancelled += 1
+            del self._schedules[schedule_id]
+            await self._broadcast_schedule_event(schedule.legion_id, schedule, deleted=True)
+            deleted += 1
 
         for legion_id in affected_legions:
             await self._persist_schedules(legion_id)
 
-        if cancelled > 0:
+        if deleted > 0:
             legion_logger.info(
-                f"Cancelled {cancelled} schedules for disposed minion {minion_id}"
+                f"Deleted {deleted} schedules for disposed minion {minion_id}"
             )
-        return cancelled
+        return deleted
 
     async def get_schedule_history(
         self,
@@ -397,9 +374,6 @@ class SchedulerService:
         schedule = self._schedules.get(schedule_id)
         if not schedule:
             raise ValueError(f"Schedule {schedule_id} not found")
-
-        if schedule.status == ScheduleStatus.CANCELLED:
-            raise ValueError(f"Schedule {schedule_id} is cancelled")
 
         # For ephemeral schedules, check if agent is currently active
         if schedule.session_config is not None and schedule.ephemeral_agent_id:
@@ -1255,13 +1229,24 @@ class SchedulerService:
         try:
             with open(schedules_file) as f:
                 data = json.load(f)
+            migrated = 0
             for item in data:
+                had_cancelled = item.get("status") == "cancelled"
                 schedule = Schedule.from_dict(item)
                 self._schedules[schedule.schedule_id] = schedule
+
+                if had_cancelled:
+                    migrated += 1
 
                 # Recalculate next_run for active schedules (skip missed windows)
                 if schedule.status == ScheduleStatus.ACTIVE:
                     schedule.next_run = get_next_run(schedule.cron_expression)
+
+            if migrated:
+                legion_logger.info(
+                    f"Migrated {migrated} cancelled schedules to paused for legion {legion_id}"
+                )
+                await self._persist_schedules(legion_id)
 
             legion_logger.info(
                 f"Loaded {len(data)} schedules for legion {legion_id}"
