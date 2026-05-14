@@ -50,9 +50,14 @@
         <span class="stat-label">Children</span>
       </div>
       <div class="stat-item">
-        <span class="stat-value">{{ uptime }}</span>
-        <span class="stat-label">Uptime</span>
+        <span class="stat-value">{{ estimatedCost }}</span>
+        <span class="stat-label">Est. Cost</span>
       </div>
+    </div>
+
+    <!-- Rates unknown notice -->
+    <div v-if="!isArchiveMode && session && !ratesKnown && usageStore.currentUsage" class="rates-unknown-notice">
+      <RouterLink to="/settings/pricing">Add pricing rates</RouterLink> to estimate cost.
     </div>
 
     <!-- Action Buttons (hidden in archive mode) -->
@@ -74,11 +79,13 @@
 </template>
 
 <script setup>
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
+import { RouterLink } from 'vue-router'
 import { useRoute, useRouter } from 'vue-router'
 import { useSessionStore } from '@/stores/session'
 import { useMessageStore } from '@/stores/message'
 import { useUIStore } from '@/stores/ui'
+import { useUsageStore } from '@/stores/usage'
 import { apiGet } from '@/utils/api'
 
 const route = useRoute()
@@ -86,19 +93,9 @@ const router = useRouter()
 const sessionStore = useSessionStore()
 const messageStore = useMessageStore()
 const uiStore = useUIStore()
+const usageStore = useUsageStore()
 
 const archives = ref([])
-
-const now = ref(Date.now())
-let interval = null
-
-onMounted(() => {
-  interval = setInterval(() => { now.value = Date.now() }, 10000)
-})
-
-onUnmounted(() => {
-  if (interval) clearInterval(interval)
-})
 
 const session = computed(() => {
   const id = sessionStore.currentSessionId
@@ -157,31 +154,18 @@ const childCount = computed(() => {
   return session.value.child_minion_ids?.length || 0
 })
 
-const uptime = computed(() => {
-  const id = sessionStore.currentSessionId
-  if (!id) return '--'
-  const launchTs = messageStore.launchTimestampBySession.get(id)
-  if (!launchTs) return '--'
-  const startMs = launchTs * 1000
-  const _ = now.value // trigger reactivity
-  let endMs
-  const state = session.value?.state
-  if (state === 'terminated' || state === 'error') {
-    // Frozen duration: use updated_at as termination time
-    endMs = session.value?.updated_at
-      ? new Date(session.value.updated_at).getTime()
-      : Date.now()
-  } else {
-    endMs = Date.now()
-  }
-  const diff = endMs - startMs
-  if (diff < 0) return '--'
-  if (diff < 60000) return '< 1m'
-  const mins = Math.floor(diff / 60000)
-  if (mins < 60) return `${mins}m`
-  const hours = Math.floor(mins / 60)
-  if (hours < 24) return `${hours}h ${mins % 60}m`
-  return `${Math.floor(hours / 24)}d ${hours % 24}h`
+const estimatedCost = computed(() => {
+  const usage = usageStore.currentUsage
+  if (!usage) return '--'
+  const cost = usage.estimated_cost_usd
+  if (cost == null || !usage.rates_known) return '~$?'
+  return `~$${cost.toFixed(3)}`
+})
+
+const ratesKnown = computed(() => {
+  const usage = usageStore.currentUsage
+  if (!usage) return true
+  return !!usage.rates_known
 })
 
 const isArchiveMode = computed(() => !!route.params.archiveId)
@@ -456,6 +440,18 @@ function showInfo() {
   color: var(--bs-link-color);
 }
 
+
+/* Rates unknown notice */
+.rates-unknown-notice {
+  font-size: 11px;
+  color: #94a3b8;
+  margin-bottom: 8px;
+  text-align: center;
+}
+
+.rates-unknown-notice a {
+  color: var(--bs-link-color);
+}
 
 /* Archive Navigation */
 .archive-nav {
