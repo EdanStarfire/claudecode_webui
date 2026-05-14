@@ -28,17 +28,17 @@
         <thead>
           <tr class="small text-muted">
             <th class="ps-0">Model</th>
-            <th class="text-end" style="min-width:85px">Input</th>
-            <th class="text-end" style="min-width:85px">Output</th>
-            <th class="text-end" style="min-width:95px">Cache write</th>
-            <th class="text-end" style="min-width:85px">Cache read</th>
+            <th class="text-center" style="min-width:85px">Input</th>
+            <th class="text-center" style="min-width:85px">Output</th>
+            <th class="text-center" style="min-width:95px">Cache write</th>
+            <th class="text-center" style="min-width:85px">Cache read</th>
             <th></th>
           </tr>
         </thead>
         <tbody>
           <tr v-for="(rates, modelId) in config?.rates" :key="modelId">
             <td class="ps-0 font-monospace small text-nowrap align-top pt-2">{{ modelId }}</td>
-            <td v-for="field in RATE_FIELDS" :key="field" class="py-1">
+            <td v-for="field in RATE_FIELDS" :key="field" class="py-1 text-center">
               <input
                 type="number"
                 class="form-control form-control-sm text-end rate-input"
@@ -83,7 +83,7 @@
                 {{ newModelIdError }}
               </div>
             </td>
-            <td v-for="field in RATE_FIELDS" :key="field" class="py-1">
+            <td v-for="field in RATE_FIELDS" :key="field" class="py-1 text-center">
               <input
                 type="number"
                 class="form-control form-control-sm text-end rate-input"
@@ -250,6 +250,7 @@ function cancelAddModel() {
 .rate-input {
   width: 80px;
   min-width: 70px;
+  margin: 0 auto;
 }
 
 .small-feedback {
