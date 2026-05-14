@@ -32,6 +32,7 @@ def _make_session_info(
     is_processing: bool = False,
     docker_enabled: bool = False,
     working_directory: str = "/work",
+    secret_placeholders: dict | None = None,
 ):
     info = MagicMock()
     info.session_id = session_id
@@ -41,6 +42,8 @@ def _make_session_info(
     info.config = {"docker_enabled": docker_enabled}
     info.working_directory = working_directory
     info.template_id = None  # no template by default; prevents template lookup in resolve_effective_config
+    # Issue #1425: explicit dict so placeholder lookup doesn't see a MagicMock.
+    info.secret_placeholders = secret_placeholders if secret_placeholders is not None else {}
     return info
 
 
@@ -880,8 +883,13 @@ async def test_non_containerized_session_runs_on_host(tmp_session_dir):
 
 @pytest.mark.asyncio
 async def test_secrets_injected_into_docker_exec_env(tmp_session_dir):
-    """Vault secrets are resolved and passed as env to run_command_in_container."""
-    session_info = _make_session_info(docker_enabled=True)
+    """Vault secrets are passed as CC_SECRET_* placeholders to run_command_in_container (#1425 B1)."""
+    # Placeholders are stored as placeholder→name in session_info.secret_placeholders.
+    secret_placeholders = {
+        "CC_SECRET_my_token_aabb0011": "my_token",
+        "CC_SECRET_other_key_ccdd0022": "other_key",
+    }
+    session_info = _make_session_info(docker_enabled=True, secret_placeholders=secret_placeholders)
     vault_secrets = [
         {"name": "my_token", "inject_env": "MY_TOKEN", "value": "secret_abc"},
         {"name": "other_key", "inject_env": "OTHER_KEY", "value": "val_xyz"},
@@ -913,8 +921,11 @@ async def test_secrets_injected_into_docker_exec_env(tmp_session_dir):
     mock_exec.assert_awaited_once()
     passed_env = mock_exec.call_args.kwargs.get("env")
     assert passed_env is not None
-    assert passed_env["MY_TOKEN"] == "secret_abc"
-    assert passed_env["OTHER_KEY"] == "val_xyz"
+    # Issue #1425: placeholders, not plaintext values, must be passed.
+    assert passed_env["MY_TOKEN"] == "CC_SECRET_my_token_aabb0011"
+    assert passed_env["OTHER_KEY"] == "CC_SECRET_other_key_ccdd0022"
+    assert "secret_abc" not in str(passed_env)
+    assert "val_xyz" not in str(passed_env)
 
 
 # ---------------------------------------------------------------------------
@@ -924,9 +935,13 @@ async def test_secrets_injected_into_docker_exec_env(tmp_session_dir):
 
 @pytest.mark.asyncio
 async def test_post_rotation_vault_value_reflected_at_fire_time(tmp_session_dir):
-    """Each fire reads the vault fresh; post-rotation values are picked up."""
-    session_info = _make_session_info(docker_enabled=True)
-    # Vault returns current (rotated) value
+    """Each fire reads the vault fresh; env receives the placeholder (not the rotated plaintext).
+
+    The placeholder itself is stable across rotations; the vault replaces the value behind it.
+    Vault is still called fresh each fire so metadata is current (#1425 B1 / regression guard).
+    """
+    secret_placeholders = {"CC_SECRET_api_key_eeff0033": "api_key"}
+    session_info = _make_session_info(docker_enabled=True, secret_placeholders=secret_placeholders)
     vault_secrets = [{"name": "api_key", "inject_env": "API_KEY", "value": "rotated_value_999"}]
     system = _make_system_with_vault(
         session_info=session_info,
@@ -951,7 +966,9 @@ async def test_post_rotation_vault_value_reflected_at_fire_time(tmp_session_dir)
 
     passed_env = mock_exec.call_args.kwargs.get("env")
     assert passed_env is not None
-    assert passed_env["API_KEY"] == "rotated_value_999"
+    # Issue #1425: placeholder, not plaintext rotated value.
+    assert passed_env["API_KEY"] == "CC_SECRET_api_key_eeff0033"
+    assert "rotated_value_999" not in str(passed_env)
     system.session_coordinator.credential_vault.resolve_secrets_for_assignment.assert_awaited_once()
 
 
@@ -962,10 +979,11 @@ async def test_post_rotation_vault_value_reflected_at_fire_time(tmp_session_dir)
 
 @pytest.mark.asyncio
 async def test_no_secret_values_appear_in_logs(tmp_session_dir, caplog):
-    """Plaintext secret values must never appear in log output."""
+    """Plaintext secret values must never appear in log output (#1425: now using placeholders)."""
     import logging
 
-    session_info = _make_session_info(docker_enabled=True)
+    secret_placeholders = {"CC_SECRET_tok_ff001122": "tok"}
+    session_info = _make_session_info(docker_enabled=True, secret_placeholders=secret_placeholders)
     plaintext = "SUPERSECRET_PLAINTEXT_12345"
     vault_secrets = [{"name": "tok", "inject_env": "TOKEN", "value": plaintext}]
     system = _make_system_with_vault(
@@ -1062,3 +1080,173 @@ async def test_container_exited_surfaces_error_no_host_fallback(tmp_session_dir)
     assert "exited" in execution.error_message.lower()
     mock_exec.assert_not_called()
     mock_host.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Issue #1425 — Problem B: scheduler script credential bypass (5 scenarios)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_issue_1425_b1_docker_env_uses_placeholder_not_plaintext(tmp_session_dir):
+    """B1: docker schedule fires with vault secret → run_command_in_container receives CC_SECRET_*,
+    NOT the plaintext value."""
+    secret_placeholders = {"CC_SECRET_vault_tok_11223344": "vault_tok"}
+    session_info = _make_session_info(docker_enabled=True, secret_placeholders=secret_placeholders)
+    vault_secrets = [{"name": "vault_tok", "inject_env": "VAULT_TOKEN", "value": "plaintext-real-value"}]
+    system = _make_system_with_vault(
+        session_info=session_info,
+        data_dir=tmp_session_dir,
+        vault_resolved=vault_secrets,
+    )
+    svc = SchedulerService(system)
+    svc._persist_schedules = AsyncMock()
+    svc._append_execution = AsyncMock()
+    svc._broadcast_execution_event = AsyncMock()
+    svc._broadcast_schedule_event = AsyncMock()
+
+    schedule = _make_schedule()
+    effective = _make_effective_config(docker_enabled=True, assigned_secrets=["vault_tok"])
+
+    with (
+        patch("src.legion.scheduler_service.resolve_effective_config", new=AsyncMock(return_value=effective)),
+        patch("src.legion.scheduler_service.find_session_container", new=AsyncMock(return_value="ctr-b1")),
+        patch("src.legion.scheduler_service.run_command_in_container", new=AsyncMock(return_value=(0, "ok\n", "", False))) as mock_exec,
+    ):
+        await svc._fire_script_schedule(schedule, 1000.0)
+
+    passed_env = mock_exec.call_args.kwargs.get("env")
+    assert passed_env["VAULT_TOKEN"] == "CC_SECRET_vault_tok_11223344"
+    assert "plaintext-real-value" not in str(passed_env)
+
+
+@pytest.mark.asyncio
+async def test_issue_1425_b2_host_schedule_uses_plaintext(tmp_session_dir):
+    """B2: host-only schedule (docker_enabled=False) → run_command_on_host does NOT receive env
+    (proxy unavailable; documented limitation — host path uses resolved values at OS level)."""
+    session_info = _make_session_info(docker_enabled=False)
+    system = _make_system_with_vault(session_info=session_info, data_dir=tmp_session_dir)
+    svc = SchedulerService(system)
+    svc._persist_schedules = AsyncMock()
+    svc._append_execution = AsyncMock()
+    svc._broadcast_execution_event = AsyncMock()
+    svc._broadcast_schedule_event = AsyncMock()
+
+    schedule = _make_schedule()
+    effective = _make_effective_config(docker_enabled=False)
+
+    with (
+        patch("src.legion.scheduler_service.resolve_effective_config", new=AsyncMock(return_value=effective)),
+        patch("src.legion.scheduler_service.run_command_on_host", new=AsyncMock(return_value=(0, "host-out\n", "", False))) as mock_host,
+        patch("src.legion.scheduler_service.run_command_in_container") as mock_exec,
+    ):
+        await svc._fire_script_schedule(schedule, 1000.0)
+
+    mock_host.assert_awaited_once()
+    mock_exec.assert_not_called()
+    assert schedule.last_status == "delivered"
+
+
+@pytest.mark.asyncio
+async def test_issue_1425_b3_missing_placeholder_raises_runtime_error(tmp_session_dir):
+    """B3: docker schedule with assigned_secrets whose placeholder is absent from
+    session_info.secret_placeholders → raises RuntimeError, docker exec not invoked."""
+    # No placeholder registered for "missing_secret"
+    session_info = _make_session_info(docker_enabled=True, secret_placeholders={})
+    vault_secrets = [{"name": "missing_secret", "inject_env": "MISSING", "value": "plaintext"}]
+    system = _make_system_with_vault(
+        session_info=session_info,
+        data_dir=tmp_session_dir,
+        vault_resolved=vault_secrets,
+    )
+    svc = SchedulerService(system)
+    svc._persist_schedules = AsyncMock()
+    svc._append_execution = AsyncMock()
+    svc._broadcast_execution_event = AsyncMock()
+    svc._broadcast_schedule_event = AsyncMock()
+
+    schedule = _make_schedule()
+    effective = _make_effective_config(docker_enabled=True, assigned_secrets=["missing_secret"])
+
+    with (
+        patch("src.legion.scheduler_service.resolve_effective_config", new=AsyncMock(return_value=effective)),
+        patch("src.legion.scheduler_service.find_session_container", new=AsyncMock(return_value="ctr-b3")),
+        patch("src.legion.scheduler_service.run_command_in_container") as mock_exec,
+    ):
+        await svc._fire_script_schedule(schedule, 1000.0)
+
+    assert schedule.last_status == "error"
+    mock_exec.assert_not_called()
+    execution = svc._append_execution.call_args.args[1]
+    assert "missing_secret" in (execution.error_message or "")
+
+
+@pytest.mark.asyncio
+async def test_issue_1425_b4_extra_env_merges_correctly_with_placeholder(tmp_session_dir):
+    """B4: extra_env values merge with placeholder-replaced secrets; secret wins on key collision."""
+    secret_placeholders = {"CC_SECRET_my_key_aabbccdd": "my_key"}
+    session_info = _make_session_info(docker_enabled=True, secret_placeholders=secret_placeholders)
+    vault_secrets = [{"name": "my_key", "inject_env": "SHARED_KEY", "value": "plaintext-val"}]
+    system = _make_system_with_vault(
+        session_info=session_info,
+        data_dir=tmp_session_dir,
+        vault_resolved=vault_secrets,
+    )
+    svc = SchedulerService(system)
+    svc._persist_schedules = AsyncMock()
+    svc._append_execution = AsyncMock()
+    svc._broadcast_execution_event = AsyncMock()
+    svc._broadcast_schedule_event = AsyncMock()
+
+    schedule = _make_schedule()
+    # extra_env has SHARED_KEY set; secret should win (overwrite it with placeholder)
+    effective = _make_effective_config(
+        docker_enabled=True,
+        assigned_secrets=["my_key"],
+        extra_env={"SHARED_KEY": "extra-env-value", "EXTRA_ONLY": "only-from-extra"},
+    )
+
+    with (
+        patch("src.legion.scheduler_service.resolve_effective_config", new=AsyncMock(return_value=effective)),
+        patch("src.legion.scheduler_service.find_session_container", new=AsyncMock(return_value="ctr-b4")),
+        patch("src.legion.scheduler_service.run_command_in_container", new=AsyncMock(return_value=(0, "ok\n", "", False))) as mock_exec,
+    ):
+        await svc._fire_script_schedule(schedule, 1000.0)
+
+    passed_env = mock_exec.call_args.kwargs.get("env")
+    # Secret placeholder wins over extra_env on collision
+    assert passed_env["SHARED_KEY"] == "CC_SECRET_my_key_aabbccdd"
+    # Non-conflicting extra_env key is preserved
+    assert passed_env["EXTRA_ONLY"] == "only-from-extra"
+    assert "plaintext-val" not in str(passed_env)
+
+
+@pytest.mark.asyncio
+async def test_issue_1425_b5_no_assigned_secrets_no_placeholder_lookup(tmp_session_dir):
+    """B5: docker schedule with no assigned_secrets → placeholder lookup skipped, env is empty
+    or only extra_env, no RuntimeError raised."""
+    session_info = _make_session_info(docker_enabled=True, secret_placeholders={})
+    system = _make_system_with_vault(
+        session_info=session_info,
+        data_dir=tmp_session_dir,
+        vault_resolved=[],
+    )
+    svc = SchedulerService(system)
+    svc._persist_schedules = AsyncMock()
+    svc._append_execution = AsyncMock()
+    svc._broadcast_execution_event = AsyncMock()
+    svc._broadcast_schedule_event = AsyncMock()
+
+    schedule = _make_schedule()
+    effective = _make_effective_config(docker_enabled=True, assigned_secrets=None)
+
+    with (
+        patch("src.legion.scheduler_service.resolve_effective_config", new=AsyncMock(return_value=effective)),
+        patch("src.legion.scheduler_service.find_session_container", new=AsyncMock(return_value="ctr-b5")),
+        patch("src.legion.scheduler_service.run_command_in_container", new=AsyncMock(return_value=(0, "fine\n", "", False))) as mock_exec,
+    ):
+        await svc._fire_script_schedule(schedule, 1000.0)
+
+    mock_exec.assert_awaited_once()
+    assert schedule.last_status == "delivered"
+    system.session_coordinator.credential_vault.resolve_secrets_for_assignment.assert_not_awaited()
